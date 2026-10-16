@@ -118,25 +118,44 @@ private struct StoryNotifyBar: View {
     let name: String
 
     private var message: Text {
-        on ? Text("You will receive a notification whenever ") + Text(name).bold() + Text(" posts a story.")
-           : Text("You will no longer receive a notification when ") + Text(name).bold() + Text(" posts a story.")
+        on ? Text("You will receive a notification whenever ") + Text(name).fontWeight(.semibold) + Text(" posts a story.")
+           : Text("You will no longer receive a notification when ") + Text(name).fontWeight(.semibold) + Text(" posts a story.")
+    }
+
+    /// ⛔ THE REFERENCE APP'S UNDO TOAST, BY ITS NUMBERS — owner 2026-10-16: "wrong size and wrong
+    /// position, make it exactly like theirs". Read from its `UndoOverlayControllerNode`: 12 from
+    /// each screen edge (`margin`), at least 50 tall with the text centred (`contentHeight = 20 +
+    /// text`, `max(50, …)`), corner 25 continuous, the icon centred in the first 50 (`leftInset`),
+    /// text from 50 to 16 short of the right (`rightInset`), 14pt regular white with the name
+    /// semibold, on a dark blur. Bottom-anchored `margin` above the bottom inset, which in the story
+    /// viewer is the message bar: 12 above it.
+    private static var bottomInset: CGFloat {
+        let w = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+        return max(10, w?.safeAreaInsets.bottom ?? 0)
     }
 
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 0) {
             Image(systemName: on ? "bell.fill" : "bell.slash.fill")
-                .font(.system(size: 22))
+                .font(.system(size: 20))
                 .foregroundStyle(.white)
-                .frame(width: 28)
+                .frame(width: 50)
             message
-                .font(.subheadline)
+                .font(.system(size: 14))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.trailing, 16)
+                .padding(.vertical, 10)
         }
-        .padding(.horizontal, 20).padding(.vertical, 12)
-        .background(Color(white: 0.17).opacity(0.95), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .frame(minHeight: 50)
+        .background {
+            RoundedRectangle(cornerRadius: 25, style: .continuous)
+                .fill(.regularMaterial)
+                .environment(\.colorScheme, .dark)
+        }
         .padding(.horizontal, 12)
-        .padding(.bottom, 120)
+        // The message bar: 44 tall, 16 above the bottom inset (`MessageView`), then 12 more.
+        .padding(.bottom, Self.bottomInset + 16 + 44 + 12)
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }
