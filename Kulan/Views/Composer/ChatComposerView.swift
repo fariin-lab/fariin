@@ -440,11 +440,15 @@ final class ChatComposerView: UIView {
         totalLabel.textColor = .secondaryLabel
         onceButton.addAction(UIAction { [weak self] _ in self?.actions.toggleVoiceOnce() }, for: .touchUpInside)
         // 2026-10-15 redesign: X · live waveform · ① · send while recording; X · play · waveform ·
-        // time · ① · send while paused. The mic, timer and "Cancel" words of the old locked bar go.
+        // time · ① · send while paused. The mic and "Cancel" words of the old locked bar go.
+        // ⛔ THE TIMER STAYS — owner 2026-10-16: locked recording showed no minutes. It sits between
+        // the X and the live wave, in the paused bar's time style.
         strip.addSubview(stripX)
         strip.addSubview(stripSend)
         stripRecording.addSubview(liveWave)
-        for v in [stripMic, stripTimer, cancelButton] as [UIView] { v.isHidden = true }
+        for v in [stripMic, cancelButton] as [UIView] { v.isHidden = true }
+        stripTimer.font = .monospacedDigitSystemFont(ofSize: 15, weight: .regular)
+        stripTimer.textColor = .secondaryLabel
         stripX.addAction(UIAction { [weak self] _ in self?.actions.cancelRecording() }, for: .touchUpInside)
         stripSend.addAction(UIAction { [weak self] _ in self?.actions.sendRecording() }, for: .touchUpInside)
 
@@ -1140,8 +1144,10 @@ final class ChatComposerView: UIView {
         stripSend.frame = CGRect(x: pw - M.stripInset - c, y: cy, width: c, height: c)
         let onceW: CGFloat = 24
         onceButton.frame = CGRect(x: stripSend.frame.minX - 12 - onceW, y: 0, width: onceW, height: sh)
-        liveWave.frame = CGRect(x: stripX.frame.maxX + 12, y: (sh - 22) / 2,
-                                width: max(0, onceButton.frame.minX - 12 - (stripX.frame.maxX + 12)), height: 22)
+        let timerW = ceil(stripTimer.intrinsicContentSize.width)
+        stripTimer.frame = CGRect(x: stripX.frame.maxX + 12, y: 0, width: timerW, height: sh)
+        liveWave.frame = CGRect(x: stripTimer.frame.maxX + 12, y: (sh - 22) / 2,
+                                width: max(0, onceButton.frame.minX - 12 - (stripTimer.frame.maxX + 12)), height: 22)
         // ⛔ A 44pt TARGET — owner 2026-10-15: "play / pause lags, the button doesn't work well". The
         // control was the 26pt icon box, so a tap a little off it went to nothing. The icon stays
         // 26pt where it was; the control around it is 44 (Apple's minimum), centred on it.
