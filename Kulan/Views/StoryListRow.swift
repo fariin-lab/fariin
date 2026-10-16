@@ -50,6 +50,8 @@ struct StoryListRow: View {
     var authorName: String = ""
     var authorPhoto: String? = nil
     var showsFace = true
+    /// The person whose verified tick goes after the name. nil = no tick (My Story, Add Story).
+    var badgeUid: String? = nil
     /// ⛔ NO STORY YET — owner, 2026-10-11, with a mockup: the tile shows MY profile picture and
     /// wears the + badge instead of the face. The badge is the grid card's own (black, white bold
     /// plus), not the reference's blue.
@@ -85,7 +87,7 @@ struct StoryListRow: View {
     var body: some View {
         HStack(spacing: 18) {
             thumbStack
-            Self.textBlock(title: title, subtitle: subtitle)
+            Self.textBlock(title: title, subtitle: subtitle, badgeUid: badgeUid)
                 // Audit #11: while the long press lifts a copy of the name and time, the row's own
                 // step aside — the face already does (`HidesWithSource`).
                 .modifier(HidesWithSource(id: rectKey ?? "", labelOnly: true))
@@ -118,12 +120,18 @@ struct StoryListRow: View {
     }
 
     /// Name over time — one builder, so the long press lifts exactly the text the row draws.
-    static func textBlock(title: String, subtitle: String) -> some View {
+    /// ⛔ `badgeUid` — owner 2026-10-16: verified people had no tick in this list, though the chat
+    /// list, profiles and the story viewer all draw one. The list layout (10-11) was built without
+    /// it. Same `VerifiedMark` as the chat list, at its 15pt.
+    static func textBlock(title: String, subtitle: String, badgeUid: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.system(size: 17, weight: .semibold))   // the reference app's name size
-                .foregroundStyle(.primary)
-                .lineLimit(1)
+            HStack(spacing: 4) {
+                Text(title)
+                    .font(.system(size: 17, weight: .semibold))   // the reference app's name size
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                if let badgeUid, !badgeUid.isEmpty { VerifiedMark(uid: badgeUid, size: 15) }
+            }
             Text(subtitle)
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)

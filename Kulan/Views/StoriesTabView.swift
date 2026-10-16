@@ -983,6 +983,7 @@ struct StoriesTabView: View {
                          subtitle: g.stories.last.map { StoryListRow.ago($0.createdAt) } ?? "",
                          authorName: g.name,
                          authorPhoto: g.photoUrl,
+                         badgeUid: g.authorUid,
                          seen: !g.hasUnseen,
                          seenFlags: StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt),
                          rectKey: g.id,
@@ -1017,14 +1018,14 @@ struct StoriesTabView: View {
         for g in visibleFriends {
             if let t = listLift(row: g.id, title: g.name,
                                 subtitle: g.stories.last.map { StoryListRow.ago($0.createdAt) } ?? "",
-                                badge: false, at: p, actions: friendActions(g)) { return t }
+                                badge: false, badgeUid: g.authorUid, at: p, actions: friendActions(g)) { return t }
         }
         // Hidden Stories rows: the menu the archive page's strip had, which is where unhiding lived
         // until that strip went (owner, 2026-10-11) — the friend menu with Unhide in Hide's place.
         for g in hiddenFriends {
             if let t = listLift(row: g.id, title: g.name,
                                 subtitle: g.stories.last.map { StoryListRow.ago($0.createdAt) } ?? "",
-                                badge: false, at: p, actions: [
+                                badge: false, badgeUid: g.authorUid, at: p, actions: [
                 CMAction(title: "Send Message", icon: "ic_menu_chat") { openStoryChat(g) },
                 CMAction(title: "View Profile", icon: "ic_account") { profileGroup = g },
                 CMAction(title: "Unhide Story", icon: "tray.and.arrow.up") {
@@ -1041,7 +1042,7 @@ struct StoriesTabView: View {
     /// face are one window crop cut to their two shapes (`StoryMenuTarget.liftShape`), transparent
     /// between them; the text is drawn fresh on a clear background (`labelImage`), so no page colour
     /// rides along anywhere.
-    private func listLift(row id: String, title: String, subtitle: String, badge: Bool,
+    private func listLift(row id: String, title: String, subtitle: String, badge: Bool, badgeUid: String? = nil,
                           at p: CGPoint, actions: [CMAction]) -> StoryMenuTarget? {
         // Main-thread by construction (a UIKit gesture callback) — same assertion as `GlowCardPress`.
         MainActor.assumeIsolated { () -> StoryMenuTarget? in
@@ -1083,7 +1084,7 @@ struct StoriesTabView: View {
             if let tr = MediaOpenRects.liveViewRect(textKey) {
                 let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
                 let dark = scene?.windows.first?.traitCollection.userInterfaceStyle == .dark
-                let renderer = ImageRenderer(content: StoryListRow.textBlock(title: title, subtitle: subtitle)
+                let renderer = ImageRenderer(content: StoryListRow.textBlock(title: title, subtitle: subtitle, badgeUid: badgeUid)
                     .frame(width: tr.width, height: tr.height, alignment: .leading)
                     .environment(\.colorScheme, dark ? .dark : .light))
                 renderer.scale = scene?.screen.scale ?? 3
