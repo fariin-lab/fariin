@@ -1,4 +1,3 @@
-                            storyType: plainOnly
 import SwiftUI
 import PhotosUI
 import Photos
