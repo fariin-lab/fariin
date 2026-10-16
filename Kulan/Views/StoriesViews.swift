@@ -3597,7 +3597,22 @@ struct StoryViewer: View {
     /// spellings go out together so the row can scroll to him and the flight can land on him without
     /// either having to derive the other.
     private func publishActive(_ uid: String) {
-        guard heroDismiss, !heroSourcePinned else { return }
+        guard heroDismiss else { return }
+        // ⛔ THE UPLOADING DOOR FOLLOWS A FRIEND — owner 2026-10-16: open my story while it is still
+        // uploading, swipe to a friend, pull down, and the friend's story flew into MY card wearing
+        // my picture. That door is pinned (its only card for me is the uploading one), and the pin
+        // used to cover every person in the pager. Now it holds only on my own stories: on anybody
+        // else the door follows them exactly as the row's door does, and swiping back to me puts
+        // the anchor back on my card. Every other pinned door is unchanged (they never page).
+        if heroSourcePinned {
+            guard StoryDoorState.shared.uploadingOpen else { return }
+            if uid == me {
+                StoryDoorState.shared.setActive(sourceKey: "", authorUid: uid)
+                guard !hero.live, !hero.committing else { return }
+                StoryDoor.retarget(to: pinnedKey())
+                return
+            }
+        }
         guard let g = groups.first(where: { $0.authorUid == uid }) else { return }
         StoryDoorState.shared.setActive(sourceKey: g.id, authorUid: g.authorUid)
         // The hole and the cover move to him too, so the close he gets is the same close the
@@ -3620,17 +3635,24 @@ struct StoryViewer: View {
     /// The on-screen test has gone with it. It was never this function's question — `heroEndpoints`
     /// asks it, which is the place that has to answer "is there anywhere to fly", and it now gets a
     /// yes because `StoriesRow` scrolls the row to whoever is active while the viewer is up.
+    /// The pinned door's anchor. The uploading door's post has landed: its card is the real My
+    /// Story card now. Read from shared state, not `heroSourceKey`, because the multi-person pager
+    /// calls the drag on a frozen copy of this view. See `StoryDoorState.uploadingLandedKey`.
+    private func pinnedKey() -> String {
+        if StoryDoorState.shared.uploadingOpen,
+           let landed = StoryDoorState.shared.uploadingLandedKey, !landed.isEmpty { return landed }
+        return heroSourceKey
+    }
+
     private func heroKeyNow() -> String {
         guard heroDismiss else { return "" }
-        // A pinned door has one anchor and it does not move — see `heroSourcePinned`.
-        guard !heroSourcePinned else {
-            // The uploading door's post has landed: its card is the real My Story card now. Read
-            // from shared state, not `heroSourceKey`, because the multi-person pager calls the drag
-            // on a frozen copy of this view. See `StoryDoorState.uploadingLandedKey`.
-            if StoryDoorState.shared.uploadingOpen,
-               let landed = StoryDoorState.shared.uploadingLandedKey, !landed.isEmpty { return landed }
-            return heroSourceKey
-        }
+        // A pinned door has one anchor and it does not move — see `heroSourcePinned` — EXCEPT the
+        // uploading door while it is on a friend (see `publishActive`). Read from shared state for
+        // the frozen-copy reason below.
+        let door = StoryDoorState.shared
+        let uploadingOnFriend = door.uploadingOpen
+            && !(door.activeAuthorUid ?? "").isEmpty && door.activeAuthorUid != me
+        guard !heroSourcePinned || uploadingOnFriend else { return pinnedKey() }
         if let key = StoryDoorState.shared.activeSourceKey, !key.isEmpty { return key }
         // Only before the library has reported a first person — the same instant `currentBucketUid`
         // is still empty. That IS the opening person, so it is not a special case for him, it is the
