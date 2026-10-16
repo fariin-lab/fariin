@@ -1270,14 +1270,6 @@ struct StoryViewer: View {
     @State private var editViewers: Story?
     @State private var ownRepostGone = false            // the repost's original was mine and is gone
     @State private var profileSheet: StoryGroup?        // tap the header → profile sheet OVER the story (paused)
-    /// The short person sheet's height (it grows to full for Contact info) and the pick that runs
-    /// once it has gone. See `StoryPersonSheet`.
-    @State private var personDetent: PresentationDetent = .height(StoryPersonSheet.height)
-    @State private var personPick: (StoryGroup, StoryPersonSheet.Action)?
-    /// A chat opened from the person sheet is up over the stage: hold the story still.
-    @State private var storyChatUp = false
-    /// "…" → Hide Stories is asking first; the author it would hide.
-    @State private var hideAskUid: String?
     @State private var toastText = "Sent"               // reused for "Sent" (reply) and "Saved"
     @State private var dragDown: CGFloat = 0            // swipe-down amount → fade my overlays with the card
     // ⚠️ `carouselInteracting` IS DELETED. It said "a swipe is in flight, so stand the real story
@@ -1706,7 +1698,7 @@ struct StoryViewer: View {
     // the composer that was the whole "repost is frozen" report (see `StoryComposerPresenter`).
     private var sheetUp: Bool {
         shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || editViewers != nil
-            || repostUp || repostLoading || shareURL != nil || ownRepostGone || storyChatUp || hideAskUid != nil
+            || repostUp || repostLoading || shareURL != nil || ownRepostGone
         // ⛔ `repostLoading` (owner, 2026-10-12: "I tap Repost on a video story and the original
         // keeps playing, I can hear it"). The story was held only once the composer was up, but the
         // clip is copied (or downloaded) and the poster and face fetched BEFORE that, and for those
@@ -2001,38 +1993,23 @@ struct StoryViewer: View {
         .sheet(item: $editViewers) { s in
             ShareStorySheet(editing: s, onPosted: { flashSentToast("Viewers updated") })
         }
-        .sheet(item: $profileSheet, onDismiss: runPersonPick) { g in
-            let cid = [me, g.authorUid].sorted().joined(separator: "_")
-            if g.authorUid == me {
-                // My own name: no one to message or call, so my profile as before.
-                NavigationStack {
-                    ContactInfoView(cid: cid, name: g.name, photoUrl: g.photoUrl,
-                                    source: .story,   // no chat underneath → no Search/Wallpaper (audit)
-                                    isSelf: true)
-                }
-                // FULL HEIGHT, not half (owner 2026-08-03: "open FULL profile sheet"). At `.medium`
-                // the photo header loses its room and the story stack is drawn through the name.
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-            } else {
-                // ⛔ SHORT FIRST — owner 2026-10-15, see `StoryPersonSheet`. The full profile is one
-                // tap in (Contact info), at full height, for the 2026-08-03 reason above.
-                NavigationStack {
-                    StoryPersonSheet(cid: cid, name: g.name, photoUrl: g.photoUrl,
-                                     detent: $personDetent,
-                                     onAction: { a in
-                                         personPick = (g, a)
-                                         // Held from the tap, not from onDismiss: the story must not
-                                         // run on under the sheet's way down.
-                                         if a == .message { storyChatUp = true }
-                                     })
-                }
-                .presentationDetents([.height(StoryPersonSheet.height), .large], selection: $personDetent)
-                .presentationDragIndicator(.hidden)
-                .environment(\.colorScheme, AppWindowScheme.colorScheme)
-                // The stage is always dark; this sheet wears the phone's own theme (owner 2026-10-12).
-                .presentationBackground(AppWindowScheme.background)
+        .sheet(item: $profileSheet) { g in
+            NavigationStack {
+                ContactInfoView(cid: [me, g.authorUid].sorted().joined(separator: "_"),
+                                name: g.name, photoUrl: g.photoUrl,
+                                source: .story,   // no chat underneath → no Search/Wallpaper (audit)
+                                isSelf: g.authorUid == me)
             }
+            // FULL HEIGHT, not half (owner 2026-08-03: "if someone upload story then i open, then i
+            // click his profile — open FULL profile sheet"). At `.medium` this profile has half a
+            // screen to fit a page built around a full-width photo header: the header loses its room,
+            // the name lands in the navigation bar's strip, and the story stack that lives in that
+            // strip is drawn straight through it. That is the overlap in his screenshot, and it is
+            // the symptom of the height rather than a bug in either piece.
+            //
+            // The drag indicator stays: pulling this down is how you get back to the story.
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
         }
         // REAL native delete confirmation (user request: no custom sheet). An alert, not a
         // confirmationDialog: over these full-screen covers dialogs render as centered popovers
@@ -2170,23 +2147,8 @@ struct StoryViewer: View {
                   let url = URL(string: KulanApp.storyLink(id: s.id)) else { return }
             shareURL = StoryLinkPayload(url: url)
         }
-        // ⛔ ASK FIRST — owner 2026-10-15: "hide is a silent action, no confirmation". The Stories
-        // list has always asked ("Hide Stories?", StoriesTabView); this menu hid on the tap. Same
-        // words here. The story holds still while it asks (`sheetUp`).
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionHide"))) { _ in
-            if !currentIsMine { hideAskUid = currentBucketUid }
-        }
-        .alert("Hide Stories?", isPresented: Binding(get: { hideAskUid != nil },
-                                                     set: { if !$0 { hideAskUid = nil } })) {
-            Button("Hide Stories", role: .destructive) {
-                if let uid = hideAskUid { StoryPrefs.setHidden(uid, true); isPresented = false }
-                hideAskUid = nil
-            }
-            Button("Cancel", role: .cancel) { hideAskUid = nil }
-        } message: {
-            let n = groups.first(where: { $0.authorUid == hideAskUid })?.name ?? ""
-            Text("New story updates from \(n.isEmpty ? "this person" : n) "
-                 + "won't appear at the top of the stories list anymore.")
+            if !currentIsMine { StoryPrefs.setHidden(currentBucketUid, true); isPresented = false }
         }
         // "…" → Report (friend stories only): files a report doc for review (App Store 1.2).
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionReport"))) { _ in
@@ -2715,8 +2677,7 @@ struct StoryViewer: View {
                 handle(storyId: story.id, message: message, emoji: emoji, isLiked: isLiked)
             },
             onProfile: { user in
-                // ⚠️ NOT MY OWN PROFILE (still true; since 2026-10-15 my own tap adds a story, below).
-                // Tapping the header on my own story opened MY profile over my story,
+                // ⚠️ NOT MY OWN. Tapping the header on my own story opened MY profile over my story,
                 // which is a screen nobody navigated towards — his 2026-08-07 report, with the sheet
                 // half-raised over his own face. The header is there to say WHO this is, and on my
                 // own story I already know; the tap only means something when it is somebody else.
@@ -2724,17 +2685,7 @@ struct StoryViewer: View {
                 // Tested against the signed-in uid rather than `g.isMine`, because a mixed feed can
                 // page onto my own bucket mid-visit and the tap has to answer for the story that is
                 // on screen at that moment, not the one the viewer was opened with.
-                // ⛔ ON MY OWN STORY THE TAP ADDS ANOTHER — owner 2026-10-15, with the reference app's
-                // header ("tap your own name: act like adding a story"). The header shows a "+ Add"
-                // pill there (StoryUI `UserView`), and the pill, my name and my photo all land here.
-                // The viewer closes first: the camera and the day's-limit alerts belong to the shell.
-                if user.id == AuthService.shared.uid {
-                    isPresented = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                        NotificationCenter.default.post(name: .init("storyComposeRequested"), object: nil)
-                    }
-                    return
-                }
+                guard user.id != AuthService.shared.uid else { return }
                 // Open the profile OVER the story (paused) — do NOT close the viewer.
                 if let g = groups.first(where: { $0.authorUid == user.id }) { profileSheet = g }
             },
@@ -4936,24 +4887,6 @@ struct StoryViewer: View {
                                         id: r.authorUid,
                                         name: r.authorName.isEmpty ? "Reposted" : r.authorName,
                                         photoURL: authorPhoto(r.authorUid).flatMap(URL.init(string:))))]
-    }
-
-    /// The person sheet's pick, run once the sheet is gone (presenting from a sheet still on its way
-    /// down is the "nothing happens" bug). Message opens the chat OVER the story, so Back lands on
-    /// the story; a call goes through the one call presentation as from anywhere else.
-    private func runPersonPick() {
-        personDetent = .height(StoryPersonSheet.height)
-        guard let (g, action) = personPick else { return }
-        personPick = nil
-        switch action {
-        case .message:
-            StoryPersonSheet.openChat(cid: [me, g.authorUid].sorted().joined(separator: "_"),
-                                      otherUid: g.authorUid, name: g.name, photoUrl: g.photoUrl,
-                                      onClosed: { storyChatUp = false })
-        case .voice, .video:
-            CallService.shared.startCall(to: g.authorUid, name: g.name, photo: g.photoUrl,
-                                         video: action == .video)
-        }
     }
 
     /// The bubble's tap: the original author's profile, in the same sheet the header's tap uses.

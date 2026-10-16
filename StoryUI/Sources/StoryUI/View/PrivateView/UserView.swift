@@ -235,27 +235,6 @@ struct UserView: View {
             }
             .buttonStyle(StoryPressStyle())
 
-            // ⛔ "+ ADD" ON MY OWN STORY — owner 2026-10-15: show that another story can be added
-            // from here, and not as a copy of the reference app's badge on the photo. A small glass
-            // pill after my name, the app's own button shape. Same action as my name: the host
-            // reads `onProfile` on my own story as "add a story".
-            if isMyStory {
-                Button { onProfile?() } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus").font(.system(size: 12, weight: .bold))
-                        Text("Add").font(.system(size: 13, weight: .semibold))
-                    }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 11)
-                    .frame(height: 28)
-                    .addPillGlass()
-                    .frame(height: 44)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(StoryPressStyle())
-                .accessibilityLabel("Add story")
-            }
-
             Spacer()
 
             // The "more" button sits directly left of the X, same row, so they auto-align (no
@@ -573,17 +552,5 @@ struct StoryMoreMenu: UIViewRepresentable {
             action.subtitle = item.subtitle
             return action
         })
-    }
-}
-
-private extension View {
-    /// The "+ Add" pill's glass: interactive Liquid Glass on iOS 26, a thin material before it
-    /// (this package still builds for iOS 16).
-    @ViewBuilder func addPillGlass() -> some View {
-        if #available(iOS 26.0, *) {
-            self.glassEffect(.regular.interactive(), in: Capsule())
-        } else {
-            self.background(.ultraThinMaterial, in: Capsule())
-        }
     }
 }
