@@ -2477,7 +2477,8 @@ enum MessageRowLayout {
             // ⛔ THE APP'S OWN STORY CARD, NOT A RINGED CIRCLE — owner 2026-10-16: "my story is not a
             // circle, use my card design, no ring". The Stories list's card (`StoryListRow`: 66x94,
             // continuous corner 14), scaled to 100 wide with the same proportions and corner.
-            let imgW: CGFloat = 100, imgH = (100 * 94 / 66).rounded()
+            let imgW: CGFloat = 100
+            let imgH: CGFloat = (imgW * 94 / 66).rounded()
             let image = CGRect(x: (cardW - imgW) / 2, y: pad, width: imgW, height: imgH)
             let textW = cardW - pad * 2
             let size = BubbleText.size(attr, width: textW)
