@@ -605,6 +605,9 @@ struct NameStoryView: View {
                 }
             }
         }
+        // The circle sits under the bar, not a whole section gap below it (owner 2026-10-16), the
+        // same 4pt Settings uses above its avatar.
+        .contentMargins(.top, 4, for: .scrollContent)
         .navigationTitle("Choose name & emoji")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $pickingEmoji) { EmojiMorePicker { emoji = $0 } }
@@ -1217,6 +1220,9 @@ struct CustomStoryDetailView: View {
         // grouped List opens with its own top margin before the first section, and the first
         // section here is the emoji, so it floated ~45pt below the bar.
         .contentMargins(.top, 8, for: .scrollContent)
+        // The circle sits under the bar, not a whole section gap below it (owner 2026-10-16), the
+        // same 4pt Settings uses above its avatar.
+        .contentMargins(.top, 4, for: .scrollContent)
         // The name sits under the picture now, not in the bar (owner 2026-10-16).
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
@@ -1293,6 +1299,9 @@ struct CustomStoryEditView: View {
                 Text("Only you can see the name of this story.")
             }
         }
+        // The circle sits under the bar, not a whole section gap below it (owner 2026-10-16), the
+        // same 4pt Settings uses above its avatar.
+        .contentMargins(.top, 4, for: .scrollContent)
         .navigationTitle("Edit")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
