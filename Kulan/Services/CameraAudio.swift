@@ -36,6 +36,11 @@ enum CameraAudio {
         if before == nil { before = (s.category, s.mode, s.categoryOptions) }
         lock.unlock()
         try? s.setCategory(category, mode: mode, options: [.defaultToSpeaker, .allowBluetoothA2DP])
+        // ⛔ KEYBOARD TAPS STILL BUZZ — owner 2026-10-16: typing a story caption had no keyboard
+        // vibration. The camera keeps its mic while the editor is up, and iOS mutes system haptics
+        // (the keyboard's included) for a recording session unless it is told otherwise. Same line
+        // the voice recorder has (`AudioRecorder`).
+        try? s.setAllowHapticsAndSystemSoundsDuringRecording(true)
         try? s.setActive(true)
     }
 
