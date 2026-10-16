@@ -1734,6 +1734,8 @@ private extension StoryDetailView {
                       let ar = Range(sr, in: a),
                       a[ar].link == nil,   // already part of a url (an email's tail) — leave it alone
                       let nr = Range(m.range(at: 1), in: text),
+                      // My own name stays plain text (see `StoryMention.selfUsername`).
+                      String(text[nr]).lowercased() != StoryMention.selfUsername,
                       let url = StoryMention.url(for: String(text[nr]).lowercased())
                 else { continue }
                 a[ar].link = url

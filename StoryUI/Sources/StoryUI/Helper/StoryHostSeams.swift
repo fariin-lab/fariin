@@ -35,6 +35,11 @@ import UIKit
 /// @username use — so a caption mention needs NO new host code and cannot drift from what a mention
 /// means everywhere else in the app: one route, one meaning.
 public enum StoryMention {
+    /// ⛔ MY OWN @NAME IS PLAIN TEXT — owner 2026-10-16: "when the mention is my username I can't
+    /// click it". The host sets the signed-in user's username (lowercased); a caption mention that
+    /// matches it is drawn as ordinary text, not a link, so there is nothing to tap.
+    public static var selfUsername: String = ""
+
     public static func url(for username: String) -> URL? {
         URL(string: "kulan://u/\(username)")
     }

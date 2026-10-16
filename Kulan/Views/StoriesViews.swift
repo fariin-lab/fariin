@@ -1747,6 +1747,9 @@ struct StoryViewer: View {
         self.heroDismiss = heroDismiss
         self.heroSourceKey = heroSourceKey
         self.heroSourcePinned = heroSourcePinned
+        // My own @name in a caption is plain text, not a link (owner 2026-10-16). The library only
+        // knows the string; set before the first caption draws.
+        StoryMention.selfUsername = (ProfileStore.shared.me?.handle ?? "").lowercased()
         self.deliveredToMe = deliveredToMe
         self.startStoryId = startStoryId
         self.heroStageOpen = heroStageOpen
@@ -2220,6 +2223,15 @@ struct StoryViewer: View {
         // a tap on the header opens, found by username the way a profile link is.
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionMention"))) { note in
             guard let handle = note.object as? String else { return }
+            // Already looked up as the story appeared (`prefetchMentions`): open now.
+            // My own name is not a link (`StoryMention.selfUsername`); a stale caption that still
+            // carries one opens nothing.
+            guard handle.lowercased() != StoryMention.selfUsername else { return }
+            if let u = Self.mentionCache[handle.lowercased()] {
+                profileSheet = StoryGroup(authorUid: u.id, name: u.name, photoUrl: u.photoUrl,
+                                          stories: [], lastViewedAt: nil, isMine: u.id == me)
+                return
+            }
             Task {
                 guard let u = await ChatService.findByHandle(handle, allowSelf: true) else {
                     await MainActor.run { flashSentToast("No Fariin user found") }
@@ -2840,6 +2852,7 @@ struct StoryViewer: View {
             // published immediately.
             onItemChanged: { id in
                 currentStoryId = id
+                prefetchMentions(id)
                 publishOwnerBar()
                 // The synthetic still-uploading item has no real doc, so there are no viewers to
                 // fetch — but it MUST still become `currentStoryId`, because that is exactly how the
@@ -3639,6 +3652,28 @@ struct StoryViewer: View {
         if StoryDoorState.shared.uploadingOpen,
            let landed = StoryDoorState.shared.uploadingLandedKey, !landed.isEmpty { return landed }
         return heroSourceKey
+    }
+
+    /// ⛔ A CAPTION'S @NAMES ARE LOOKED UP AS THE STORY APPEARS — owner 2026-10-16: tapping one
+    /// waited for two server reads (`usernames/<name>` then the user) before the profile opened.
+    /// Resolved here in the background, kept for the app's life, so the tap opens at once; a miss
+    /// still looks up on the tap as before. Same pattern the caption itself uses to draw them.
+    private static var mentionCache: [String: UserProfile] = [:]
+    private func prefetchMentions(_ storyId: String) {
+        guard let caption = groups.lazy.flatMap(\.stories).first(where: { $0.id == storyId })?.caption,
+              caption.contains("@"),
+              let re = try? NSRegularExpression(pattern: "@([A-Za-z][A-Za-z0-9_.]{0,29})") else { return }
+        let ns = caption as NSString
+        let handles = Set(re.matches(in: caption, range: NSRange(location: 0, length: ns.length))
+            .map { ns.substring(with: $0.range(at: 1)).lowercased() })
+            .filter { Self.mentionCache[$0] == nil }
+        for h in handles {
+            Task {
+                if let u = await ChatService.findByHandle(h, allowSelf: true) {
+                    await MainActor.run { Self.mentionCache[h] = u }
+                }
+            }
+        }
     }
 
     private func heroKeyNow() -> String {
