@@ -2108,6 +2108,23 @@ struct StoryViewer: View {
             if !wasLast {
                 StoriesRepository.shared.removeLocally(id)
                 StoryDoor.refreshCover(of: heroKeyNow())
+            } else {
+                // ⛔ MY ONLY STORY: CLOSE NOW, THE NORMAL WAY, INTO "ADD STORY" — owner 2026-10-16:
+                // the viewer sat on the deleted story while the server worked (several calls), then
+                // vanished through `onClose`, which skips the flight entirely. As the reference app
+                // does, it closes at once with the usual flight. My card is gone the moment the
+                // story is, so the card forgets it now (the row draws "Add Story"), the landing is
+                // pointed at that row, re-photographed once it has drawn, and the close flies home
+                // to it. The server delete carries on behind; a failure reloads the story back.
+                StoriesRepository.shared.removeLocally(id)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    let add = StoriesTabView.addRowKey
+                    StoryDoorState.shared.landingOverride = add
+                    StoryDoor.retarget(to: add)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        if !beginHeroCloseFromRest() { isPresented = false }
+                    }
+                }
             }
             Task {
                 let gone = await StoriesService.shared.deleteStory(id)
@@ -2122,7 +2139,7 @@ struct StoryViewer: View {
                     return
                 }
                 await StoriesRepository.shared.load(force: true)
-                if wasLast { onClose() }
+                // The last story's close has already run (above), through the flight.
             }
         }
         // "…" dropdown menu actions (posted from the library header Menu) — run on LIVE state here.
@@ -3615,6 +3632,7 @@ struct StoryViewer: View {
 
     private func heroKeyNow() -> String {
         guard heroDismiss else { return "" }
+        if let o = StoryDoorState.shared.landingOverride, !o.isEmpty { return o }
         // A pinned door has one anchor and it does not move — see `heroSourcePinned` — EXCEPT the
         // uploading door while it is on a friend (see `publishActive`). Read from shared state for
         // the frozen-copy reason below.

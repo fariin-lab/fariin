@@ -149,8 +149,13 @@ import StoryUI
     /// new order is drawn. Once: this is cleared on use, so an unrelated re-sort an hour later can
     /// never yank the row somewhere he did not ask for.
     var restoreRowToUid: String?
+    /// ⛔ WHERE THE CLOSE LANDS AFTER MY LAST STORY IS DELETED — owner 2026-10-16. My story card is
+    /// gone the moment the story is (the row draws "Add Story" in its place, under its own key), so
+    /// the close is pointed there. Beats every other answer while set; dies with the visit.
+    var landingOverride: String?
 
     func clearActive() {
+        landingOverride = nil
         // The row still has to be put back on him after the re-sort, so the person outlives the
         // session by exactly one reorder. `activeSourceKey` is the flight's, and dies with it.
         restoreRowToUid = activeAuthorUid
