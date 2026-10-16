@@ -953,7 +953,10 @@ struct ThreadView: View {
             // the reference apps put a lock notice where the first message will go, a third fills the
             // same space with an empty-state line. Ours takes the lock notice, and states what is
             // actually protected (messages AND calls) rather than naming the app that protects it.
-            .overlay(alignment: .center) { encryptionNotice }
+            // ⛔ AT THE TOP, UNDER THE HEADER — owner 2026-10-16: "make it top". It sat in the
+            // middle of an empty screen; the reference app puts it first, where the conversation
+            // starts. Same inset the loading skeleton uses to clear the header.
+            .overlay(alignment: .top) { encryptionNotice.padding(.top, Self.skeletonTopInset + 8) }
             // Brief centered toast (e.g. reply to a deleted original).
             .overlay(alignment: .center) {
                 if let t = jumpToast {
