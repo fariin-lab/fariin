@@ -96,6 +96,16 @@ final class InAppBrowserViewController: UIViewController {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    /// Called once when the browser has been closed (a story caption link resumes its story).
+    var onClose: (() -> Void)?
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if isBeingDismissed || presentingViewController == nil {
+            let done = onClose; onClose = nil; done?()
+        }
+    }
+
     // MARK: - Setup
 
     override func viewDidLoad() {

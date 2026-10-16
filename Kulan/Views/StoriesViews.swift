@@ -1750,6 +1750,14 @@ struct StoryViewer: View {
         // My own @name in a caption is plain text, not a link (owner 2026-10-16). The library only
         // knows the string; set before the first caption draws.
         StoryMention.selfUsername = (ProfileStore.shared.me?.handle ?? "").lowercased()
+        // A caption link opens in the app's browser over the story, which holds still meanwhile
+        // (owner 2026-10-16). Tagged "browser" so only the browser's own close lifts that pause.
+        StoryLinkOpener.handler = { url in
+            NotificationCenter.default.post(name: .init("pauseStory"), object: "browser")
+            WebLink.open(url) {
+                NotificationCenter.default.post(name: .init("resumeStory"), object: "browser")
+            }
+        }
         self.deliveredToMe = deliveredToMe
         self.startStoryId = startStoryId
         self.heroStageOpen = heroStageOpen
@@ -2473,6 +2481,7 @@ struct StoryViewer: View {
             // rule: nothing this viewer held may outlive it.
             NotificationCenter.default.post(name: .init("resumeStory"), object: "sheet")
             NotificationCenter.default.post(name: .init("resumeStory"), object: "upload")
+            NotificationCenter.default.post(name: .init("resumeStory"), object: "browser")
             NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)
             // Same reason the chrome is restored here: a viewer torn down with the sheet still up
             // must not hand the next one a caption that is already faded out.

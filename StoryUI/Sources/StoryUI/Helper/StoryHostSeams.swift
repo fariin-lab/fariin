@@ -34,6 +34,13 @@ import UIKit
 /// already the app's "open this person" route — the same one a shared profile link and a chat
 /// @username use — so a caption mention needs NO new host code and cannot drift from what a mention
 /// means everywhere else in the app: one route, one meaning.
+/// ⛔ A CAPTION LINK OPENS IN THE APP'S OWN BROWSER — owner 2026-10-16: "it opens a browser but not
+/// mine". The library knows no browser; the host installs this and the caption hands links to it.
+/// Nil = the system (the old behaviour).
+public enum StoryLinkOpener {
+    public static var handler: ((URL) -> Void)?
+}
+
 public enum StoryMention {
     /// ⛔ MY OWN @NAME IS PLAIN TEXT — owner 2026-10-16: "when the mention is my username I can't
     /// click it". The host sets the signed-in user's username (lowercased); a caption mention that

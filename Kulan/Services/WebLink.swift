@@ -14,19 +14,22 @@ import UIKit
 enum WebLink {
 
     /// Opens `url` in the way that suits what it actually is.
+    /// `onClose`: called when the in-app browser closes, or at once when the link went to another
+    /// app instead (a story caption link pauses its story and resumes it here).
     @MainActor
-    static func open(_ url: URL) {
+    static func open(_ url: URL, onClose: (() -> Void)? = nil) {
         // ⛔ A YOUTUBE LINK OPENS THE YOUTUBE APP WHEN IT IS INSTALLED — owner 2026-10-13 ("open the
         // YouTube app automatically, the browser if he does not have it", as the reference app does).
         // `.universalLinksOnly` asks iOS to hand the link to the app that claims it and reports whether
         // one did; only when none did does it open here in the in-app browser, as every other page does.
         if isYouTube(url) {
             UIApplication.shared.open(url, options: [.universalLinksOnly: true]) { opened in
-                if !opened { Task { @MainActor in presentSheet(url) } }
+                if !opened { Task { @MainActor in presentSheet(url, onClose: onClose) } }
+                else { onClose?() }
             }
             return
         }
-        presentSheet(url)
+        presentSheet(url, onClose: onClose)
     }
 
     private static func isYouTube(_ url: URL) -> Bool {
@@ -35,16 +38,20 @@ enum WebLink {
     }
 
     @MainActor
-    private static func presentSheet(_ url: URL) {
+    private static func presentSheet(_ url: URL, onClose: (() -> Void)? = nil) {
         guard useSheet(for: url) else {
             UIApplication.shared.open(url)   // let iOS route it to whichever app owns this
+            onClose?()
             return
         }
         guard let host = topViewController() else {
             UIApplication.shared.open(url)   // nothing to present from; better out than nowhere
+            onClose?()
             return
         }
-        host.present(InAppBrowserViewController(url: url), animated: true)
+        let browser = InAppBrowserViewController(url: url)
+        browser.onClose = onClose
+        host.present(browser, animated: true)
     }
 
     /// ⚠️ THE EXCLUSIONS ARE THE INTERESTING PART. A sheet is right for a WEB PAGE and wrong for

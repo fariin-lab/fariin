@@ -1691,7 +1691,7 @@ private extension StoryDetailView {
         withAnimation(.easeOut(duration: 0.08)) { pressedCaptionLink = url }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
             withAnimation(.easeOut(duration: 0.18)) { pressedCaptionLink = nil }
-            inheritedOpenURL(url)
+            if let open = StoryLinkOpener.handler { open(url) } else { inheritedOpenURL(url) }
         }
     }
 
