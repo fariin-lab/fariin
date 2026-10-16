@@ -490,6 +490,9 @@ struct CustomStoryEmojiHeader: View {
     let emoji: String?
     /// nil = no button (the story's own page, where Edit is the way in).
     var onChange: (() -> Void)? = nil
+    /// The story's name under the circle (its own page, owner 2026-10-16: "under the circle, not in
+    /// the header"). nil on the create and edit pages, where the name is the field below.
+    var title: String? = nil
 
     var body: some View {
         VStack(spacing: 12) {
@@ -506,6 +509,13 @@ struct CustomStoryEmojiHeader: View {
                 }
             }
             .frame(width: 112, height: 112)
+            if let title, !title.isEmpty {
+                Text(title)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .padding(.horizontal, 24)
+            }
             if let onChange {
                 Button("Change Emoji", action: onChange)
                     .font(.system(size: 17, weight: .medium))
@@ -1148,7 +1158,7 @@ struct CustomStoryDetailView: View {
         // then Replies, Delete, and the viewers last. The rows themselves are unchanged.
         List {
             Section {
-                CustomStoryEmojiHeader(emoji: a.emoji)
+                CustomStoryEmojiHeader(emoji: a.emoji, title: a.name)
             }
             .emojiHeaderRow()
 
@@ -1207,7 +1217,8 @@ struct CustomStoryDetailView: View {
         // grouped List opens with its own top margin before the first section, and the first
         // section here is the emoji, so it floated ~45pt below the bar.
         .contentMargins(.top, 8, for: .scrollContent)
-        .navigationTitle(a.name)
+        // The name sits under the picture now, not in the bar (owner 2026-10-16).
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
