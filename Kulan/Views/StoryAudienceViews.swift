@@ -1235,22 +1235,33 @@ struct CustomStoryDetailView: View {
 }
 
 /// ⛔ EDIT A CUSTOM STORY — owner 2026-10-16, his mockup: the emoji with Change Emoji, the name
-/// field with its "only you can see" line, keyboard up. It replaces the rename alert. The emoji is
-/// saved the moment it is picked; the name when you go back, if it is not empty (same ceiling as
-/// the create page, clamped as typed).
+/// field with its "only you can see" line, keyboard up. It replaces the rename alert.
+/// ⛔ DONE SAVES, BACK LEAVES — owner 2026-10-16, circled: "add the blue Done button on the right".
+/// Name and emoji are a draft until Done (the same blue capsule as Create); Back changes nothing.
+/// Done is off while the name is empty or nothing has changed.
 struct CustomStoryEditView: View {
     let audienceId: String
     @State private var store = StoryAudienceStore.shared
     @State private var name = ""
+    @State private var emoji = ""
+    @State private var loaded = false
     @State private var pickingEmoji = false
     @FocusState private var nameFocused: Bool
+    @Environment(\.dismiss) private var dismiss
 
     private var a: StoryAudience? { store.custom.first { $0.id == audienceId } }
+    private var trimmed: String {
+        String(name.trimmingCharacters(in: .whitespaces).prefix(StoryAudience.nameLimit))
+    }
+    private var changed: Bool {
+        guard let a else { return false }
+        return trimmed != a.name || emoji != (a.emoji ?? "")
+    }
 
     var body: some View {
         List {
             Section {
-                CustomStoryEmojiHeader(emoji: a?.emoji) { pickingEmoji = true }
+                CustomStoryEmojiHeader(emoji: emoji) { pickingEmoji = true }
             }
             .emojiHeaderRow()
 
@@ -1269,23 +1280,31 @@ struct CustomStoryEditView: View {
         }
         .navigationTitle("Edit")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { name = a?.name ?? "" }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Done") {
+                    guard var n = a else { return }
+                    n.name = trimmed
+                    n.emoji = emoji.isEmpty ? nil : emoji
+                    store.update(n)
+                    dismiss()
+                }
+                .fontWeight(.semibold)
+                .buttonStyle(.glassProminent)
+                .tint(.blue)
+                .disabled(trimmed.isEmpty || !changed)
+            }
+        }
+        .onAppear {
+            guard !loaded, let a else { return }
+            loaded = true
+            name = a.name
+            emoji = a.emoji ?? ""
+        }
         // After the push has landed, as on the create page (`NameStoryView`), so the keyboard runs
         // its own upward curve instead of riding the push sideways.
         .background(DidAppear { DispatchQueue.main.async { nameFocused = true } })
-        .onDisappear {
-            let t = name.trimmingCharacters(in: .whitespaces).prefix(StoryAudience.nameLimit)
-            guard var n = a, !t.isEmpty, String(t) != n.name else { return }
-            n.name = String(t)
-            store.update(n)
-        }
-        .sheet(isPresented: $pickingEmoji) {
-            EmojiMorePicker { e in
-                guard var n = a else { return }
-                n.emoji = e
-                store.update(n)
-            }
-        }
+        .sheet(isPresented: $pickingEmoji) { EmojiMorePicker { emoji = $0 } }
     }
 }
 
