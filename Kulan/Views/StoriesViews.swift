@@ -1279,6 +1279,8 @@ struct StoryViewer: View {
     @State private var editViewers: Story?
     @State private var ownRepostGone = false            // the repost's original was mine and is gone
     @State private var profileSheet: StoryGroup?        // tap the header → profile sheet OVER the story (paused)
+    /// Fariin's header tapped (official stories, owner 2026-10-16): the channel's own info page.
+    @State private var officialInfoUp = false
     @State private var toastText = "Sent"               // reused for "Sent" (reply) and "Saved"
     @State private var dragDown: CGFloat = 0            // swipe-down amount → fade my overlays with the card
     // ⚠️ `carouselInteracting` IS DELETED. It said "a swipe is in flight, so stand the real story
@@ -1706,7 +1708,7 @@ struct StoryViewer: View {
     // with the 09-11 pass-on work and neither was added here, so the story ran on under them; under
     // the composer that was the whole "repost is frozen" report (see `StoryComposerPresenter`).
     private var sheetUp: Bool {
-        shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || editViewers != nil
+        shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || officialInfoUp || editViewers != nil
             || repostUp || repostLoading || shareURL != nil || ownRepostGone
         // ⛔ `repostLoading` (owner, 2026-10-12: "I tap Repost on a video story and the original
         // keeps playing, I can hear it"). The story was held only once the composer was up, but the
@@ -2010,6 +2012,21 @@ struct StoryViewer: View {
         // itself once the write lands; this only says so.
         .sheet(item: $editViewers) { s in
             ShareStorySheet(editing: s, onPosted: { flashSentToast("Viewers updated") })
+        }
+        .sheet(isPresented: $officialInfoUp) {
+            NavigationStack {
+                OfficialChatInfoView()
+                    // Root of a sheet: its own way back, as the person profile from a story has.
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button { officialInfoUp = false } label: {
+                                Image(systemName: "chevron.backward").font(.system(size: 17, weight: .semibold))
+                            }
+                            .accessibilityLabel("Back")
+                        }
+                    }
+            }
+            .presentationDetents([.large])
         }
         .sheet(item: $profileSheet) { g in
             NavigationStack {
@@ -2713,8 +2730,9 @@ struct StoryViewer: View {
                 // page onto my own bucket mid-visit and the tap has to answer for the story that is
                 // on screen at that moment, not the one the viewer was opened with.
                 guard user.id != AuthService.shared.uid else { return }
-                // Fariin has no profile to open (it is not an account); its chat is the place for it.
-                guard !OfficialChannel.isOfficial(user.id) else { return }
+                // Fariin is not an account: its "profile" is the official chat's own info page,
+                // over the story like anybody's (owner 2026-10-16: "click profile, show profile").
+                if OfficialChannel.isOfficial(user.id) { officialInfoUp = true; return }
                 // Open the profile OVER the story (paused) — do NOT close the viewer.
                 if let g = groups.first(where: { $0.authorUid == user.id }) { profileSheet = g }
             },
@@ -2985,7 +3003,11 @@ struct StoryViewer: View {
                     // pushes the like button to the trailing edge in the same strip, so a capsule
                     // that still ran to a 16pt trailing margin would sit under it. 60 is the
                     // heart's 44pt target plus the 16 the capsule used to have.
-                    .padding(.trailing, 60)
+                    //
+                    // ⛔ ONLY WHEN THERE IS A HEART — owner 2026-10-16, circled: on a Fariin story the
+                    // gaps were 16 left and 60 right around nothing. No heart (Fariin's stories, or
+                    // view receipts off, the same two tests `storyType` uses) = 16 both sides.
+                    .padding(.trailing, StoryPrefs.viewReceiptsOn && !OfficialChannel.isOfficial(currentBucketUid) ? 60 : 16)
                     // The library's own `.padding()` is 16 on top of the window inset — see above.
                     .padding(.bottom, max(10, bottomInset) + 16)
                     // Steps aside for the same three things every other piece of chrome does: the
