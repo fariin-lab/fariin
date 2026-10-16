@@ -109,6 +109,12 @@ struct StoryAudienceRow<Trailing: View>: View {
                        size: 40)
         } else {
             ZStack {
+                // A custom list with its own emoji (owner 2026-10-16) sits on a light circle, like
+                // its page's header; everything else keeps its tinted badge.
+                if let e = audience.emoji, !e.isEmpty, audience.kind == .custom {
+                    Circle().fill(Color(.systemGray5))
+                    Text(e).font(.system(size: 22))
+                } else {
                 Circle().fill(badgeTint.gradient)
                 // A custom list wears the owner's own folder drawing (2026-08-07), FILLED: it is a
                 // white glyph on a solid tinted circle, which is exactly where the filled weight
@@ -144,6 +150,7 @@ struct StoryAudienceRow<Trailing: View>: View {
                 } else {
                     Image(systemName: badgeIcon).font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(badgeGlyph)
+                }
                 }
             }
             .frame(width: 40, height: 40)
@@ -476,18 +483,69 @@ struct SelectViewersView: View {
 // MARK: - Name Story
 
 /// Step two: the name, the reply setting, and a last look at who is in it.
+/// ⛔ A CUSTOM STORY'S PICTURE — owner 2026-10-16, three mockups (create, the story's page, Edit): a
+/// large white circle holding the list's emoji, or the owner's folder drawing when it has none, and
+/// "Change Emoji" under it where it can be changed. One view for all three pages.
+struct CustomStoryEmojiHeader: View {
+    let emoji: String?
+    /// nil = no button (the story's own page, where Edit is the way in).
+    var onChange: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(spacing: 12) {
+            ZStack {
+                Circle().fill(Color(.systemBackground))
+                Circle().strokeBorder(Color(.separator), lineWidth: 0.5)
+                if let e = emoji, !e.isEmpty {
+                    Text(e).font(.system(size: 52))
+                } else {
+                    Image("ic_story_folder_fill")
+                        .renderingMode(.template).resizable().scaledToFit()
+                        .frame(width: 46, height: 46)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 112, height: 112)
+            if let onChange {
+                Button("Change Emoji", action: onChange)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(.blue)
+                    .buttonStyle(.borderless)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 4)
+    }
+}
+
+extension View {
+    /// The header's row in a grouped List: no card behind it, full width.
+    func emojiHeaderRow() -> some View {
+        listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
+    }
+}
+
 struct NameStoryView: View {
     @Binding var name: String
     @Binding var allowReplies: Bool
+    /// Empty = the default folder icon (owner 2026-10-16).
+    @Binding var emoji: String
     let viewers: [StoryContact]
     let onCreate: () -> Void
 
     @FocusState private var nameFocused: Bool
     /// The pending raise, held so leaving the page can cancel it. See the `.onAppear` below.
     @State private var focusWork: DispatchWorkItem?
+    @State private var pickingEmoji = false
 
     var body: some View {
         List {
+            Section {
+                CustomStoryEmojiHeader(emoji: emoji) { pickingEmoji = true }
+            }
+            .emojiHeaderRow()
+
             Section {
                 TextField("Story Name (Required)", text: $name)
                     .focused($nameFocused)
@@ -537,8 +595,9 @@ struct NameStoryView: View {
                 }
             }
         }
-        .navigationTitle("Name Story")
+        .navigationTitle("Choose name & emoji")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $pickingEmoji) { EmojiMorePicker { emoji = $0 } }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Create") { onCreate() }
@@ -1061,7 +1120,6 @@ struct CustomStoryDetailView: View {
     @State private var adding = false
     @State private var addSelection: Set<String> = []
     @State private var renaming = false
-    @State private var draftName = ""
     @State private var confirmDelete = false
     @Environment(\.dismiss) private var dismiss
 
@@ -1086,7 +1144,31 @@ struct CustomStoryDetailView: View {
     }
 
     @ViewBuilder private func list(_ a: StoryAudience) -> some View {
+        // ⛔ THE ORDER OF HIS MOCKUP — owner 2026-10-16: the story's emoji (or the folder) on top,
+        // then Replies, Delete, and the viewers last. The rows themselves are unchanged.
         List {
+            Section {
+                CustomStoryEmojiHeader(emoji: a.emoji)
+            }
+            .emojiHeaderRow()
+
+            // ⛔ REPLIES ONLY — owner, 2026-09-05. The reasoning, and why there was no second stored
+            // setting to remove, is written once on the same control in `NameStoryView`.
+            Section {
+                Toggle("Allow Replies", isOn: Binding(
+                    get: { a.allowReplies },
+                    set: { v in var n = a; n.allowReplies = v; store.update(n) }
+                )).tint(.green)
+            } header: {
+                Text("Replies")
+            } footer: {
+                Text("Let people who can view your story reply.")
+            }
+
+            Section {
+                Button("Delete Custom Story", role: .destructive) { confirmDelete = true }
+            }
+
             Section {
                 Button { addSelection = []; adding = true } label: {
                     HStack(spacing: 12) {
@@ -1120,45 +1202,16 @@ struct CustomStoryDetailView: View {
             } footer: {
                 Text("Choose which of your chats can view your story. Changes won't affect stories you've already sent.")
             }
-
-            // ⛔ REPLIES ONLY — owner, 2026-09-05. The reasoning, and why there was no second stored
-            // setting to remove, is written once on the same control in `NameStoryView`.
-            Section {
-                Toggle("Allow Replies", isOn: Binding(
-                    get: { a.allowReplies },
-                    set: { v in var n = a; n.allowReplies = v; store.update(n) }
-                )).tint(.green)
-            } header: {
-                Text("Replies")
-            } footer: {
-                Text("Let people who can view your story reply.")
-            }
-
-            Section {
-                Button("Delete Custom Story", role: .destructive) { confirmDelete = true }
-            }
         }
         .navigationTitle(a.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Edit") { draftName = a.name; renaming = true }
+                Button("Edit") { renaming = true }
             }
         }
-        .alert("Rename story", isPresented: $renaming) {
-            TextField("Story Name", text: $draftName)
-            Button("Cancel", role: .cancel) {}
-            Button("Save") {
-                // The same ceiling as the create screen. An alert's TextField cannot be clamped as
-                // it is typed (there is no `onChange` inside an alert builder), so it is trimmed
-                // here — the one place a rename can be committed.
-                let t = draftName.trimmingCharacters(in: .whitespaces).prefix(StoryAudience.nameLimit)
-                guard !t.isEmpty else { return }
-                var n = a; n.name = String(t); store.update(n)
-            }
-        } message: {
-            Text("Only you can see the name of this story.")
-        }
+        // Edit is a page now (his mockup): the emoji with Change Emoji, and the name.
+        .navigationDestination(isPresented: $renaming) { CustomStoryEditView(audienceId: a.id) }
         .alert("Delete \"\(a.name)\"?", isPresented: $confirmDelete) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) { store.delete(a); dismiss() }
@@ -1181,6 +1234,61 @@ struct CustomStoryDetailView: View {
     }
 }
 
+/// ⛔ EDIT A CUSTOM STORY — owner 2026-10-16, his mockup: the emoji with Change Emoji, the name
+/// field with its "only you can see" line, keyboard up. It replaces the rename alert. The emoji is
+/// saved the moment it is picked; the name when you go back, if it is not empty (same ceiling as
+/// the create page, clamped as typed).
+struct CustomStoryEditView: View {
+    let audienceId: String
+    @State private var store = StoryAudienceStore.shared
+    @State private var name = ""
+    @State private var pickingEmoji = false
+    @FocusState private var nameFocused: Bool
+
+    private var a: StoryAudience? { store.custom.first { $0.id == audienceId } }
+
+    var body: some View {
+        List {
+            Section {
+                CustomStoryEmojiHeader(emoji: a?.emoji) { pickingEmoji = true }
+            }
+            .emojiHeaderRow()
+
+            Section {
+                TextField("Story Name (Required)", text: $name)
+                    .focused($nameFocused)
+                    .submitLabel(.done)
+                    .onChange(of: name) { _, new in
+                        if new.count > StoryAudience.nameLimit {
+                            name = String(new.prefix(StoryAudience.nameLimit))
+                        }
+                    }
+            } footer: {
+                Text("Only you can see the name of this story.")
+            }
+        }
+        .navigationTitle("Edit")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { name = a?.name ?? "" }
+        // After the push has landed, as on the create page (`NameStoryView`), so the keyboard runs
+        // its own upward curve instead of riding the push sideways.
+        .background(DidAppear { DispatchQueue.main.async { nameFocused = true } })
+        .onDisappear {
+            let t = name.trimmingCharacters(in: .whitespaces).prefix(StoryAudience.nameLimit)
+            guard var n = a, !t.isEmpty, String(t) != n.name else { return }
+            n.name = String(t)
+            store.update(n)
+        }
+        .sheet(isPresented: $pickingEmoji) {
+            EmojiMorePicker { e in
+                guard var n = a else { return }
+                n.emoji = e
+                store.update(n)
+            }
+        }
+    }
+}
+
 // ⛔ `MembersEditor` IS GONE — 2026-09-11. It was the My Friends except/only list, a flat tick-list
 // with Cancel and Done. `StoryPeoplePicker` replaced it for both of its callers, and keeping a
 // second, nearly identical editor around is exactly the drift he is asking to have removed.
@@ -1198,17 +1306,19 @@ struct CreateCustomStoryFlow: View {
     @State private var toName = false
     @State private var name = ""
     @State private var allowReplies = true
+    @State private var emoji = ""
     @State private var contacts: [StoryContact] = []
 
     var body: some View {
         NavigationStack {
             SelectViewersView(selected: $selected, onAction: { toName = true }, onCancel: onCancel)
                 .navigationDestination(isPresented: $toName) {
-                    NameStoryView(name: $name, allowReplies: $allowReplies,
+                    NameStoryView(name: $name, allowReplies: $allowReplies, emoji: $emoji,
                                   viewers: contacts.filter { selected.contains($0.id) },
                                   onCreate: {
                                       let a = StoryAudienceStore.shared.createCustom(
-                                          name: name, members: Array(selected), allowReplies: allowReplies)
+                                          name: name, members: Array(selected), allowReplies: allowReplies,
+                                          emoji: emoji.isEmpty ? nil : emoji)
                                       onCreated(a)
                                   })
                 }

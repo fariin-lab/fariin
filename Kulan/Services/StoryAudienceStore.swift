@@ -62,6 +62,10 @@ struct StoryAudience: Identifiable, Codable, Equatable {
     var members: [String]
     var allowReplies: Bool
     var createdAt: Date
+    /// ⛔ A CUSTOM LIST'S OWN EMOJI — owner 2026-10-16: "let the user add an emoji; the icon only by
+    /// default". nil or empty = the owner's folder drawing, as before. Optional so a disk mirror
+    /// written before this field still decodes.
+    var emoji: String? = nil
 
     /// The fixed ids. Custom lists get a uuid, so none of these can ever be taken.
     static let everyoneId = "everyone"
@@ -498,11 +502,11 @@ final class StoryAudienceStore {
     }
 
     @discardableResult
-    func createCustom(name: String, members: [String], allowReplies: Bool) -> StoryAudience {
+    func createCustom(name: String, members: [String], allowReplies: Bool, emoji: String? = nil) -> StoryAudience {
         let a = StoryAudience(id: UUID().uuidString, kind: .custom,
                               name: name.trimmingCharacters(in: .whitespacesAndNewlines),
                               mode: .only, members: members, allowReplies: allowReplies,
-                              createdAt: Date())
+                              createdAt: Date(), emoji: emoji)
         custom.append(a)
         saveMirror()
         write(a)
@@ -541,6 +545,7 @@ final class StoryAudienceStore {
                 "mode": a.mode.rawValue,
                 "members": a.members,
                 "allowReplies": a.allowReplies,
+                "emoji": a.emoji ?? "",
                 // CLAMPED, not trusted. Firestore raises rather than returning an error for a date
                 // outside 0001-01-01 … 9999-12-31, and a raise from a background write is a crash
                 // with no catch anywhere near it. This date comes from a decode, a disk mirror and
@@ -574,7 +579,8 @@ final class StoryAudienceStore {
             mode: mode,
             members: members,
             allowReplies: data["allowReplies"] as? Bool ?? true,
-            createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+            createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
+            emoji: (data["emoji"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         )
     }
 
