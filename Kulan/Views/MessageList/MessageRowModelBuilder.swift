@@ -778,8 +778,9 @@ enum MessageRowModelBuilder {
         let mine = m.authorId == ctx.me
         let name = mine ? (ctx.otherName.isEmpty ? "them" : ctx.otherName) : ctx.nameFor(m.authorId)
         guard ctx.storyIsLive(sm.id, m.authorId) else {
-            let line = mine ? "The story where you mentioned \(name) is no longer available"
-                            : "The story where \(name) mentioned you is no longer available"
+            // Two lines, broken after the name (owner 2026-10-16: one long line looked bad).
+            let line = mine ? "The story where you mentioned \(name)\nis no longer available"
+                            : "The story where \(name) mentioned you\nis no longer available"
             return NoticeRow(text: line, symbol: nil, style: .pill, tapTargetId: nil,
                              onWallpaper: ctx.onWallpaper, wallpaperBlur: ctx.wallpaperBlur,
                              boldName: name)
