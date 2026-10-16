@@ -6426,7 +6426,16 @@ private struct LiveStoryWatch: ViewModifier {
         guard enabled, !storyId.isEmpty, !authorUid.isEmpty else { return }
         let id = storyId
         let gone = onGone
-        stop = StoriesService.shared.watchStoryGone(id, authorUid: authorUid) { gone(id) }
+        // ⛔ NOT FOR FARIIN'S OFFICIAL STORIES. Owner, 2026-10-16: "when Fariin posts a story and a
+        // user opens it, sometimes the story does not appear; they have to open it again". An
+        // official story has no `stories/official-<id>` document and no `publicStories` mirror (it
+        // lives in `officialStories`, which no phone can read), so this listener's first server
+        // answer was "missing" or "denied", which it reads as deleted: `dropGoneStory` pulled the
+        // story out a moment after it opened, closing the viewer or jumping to the next person.
+        // Its expiry below still closes it on time.
+        if !OfficialChannel.isOfficial(authorUid) {
+            stop = StoriesService.shared.watchStoryGone(id, authorUid: authorUid) { gone(id) }
+        }
         if let expiresAt {
             let wait = max(0, expiresAt.timeIntervalSince(ServerClock.now))
             expiry = Task { @MainActor in
