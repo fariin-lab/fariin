@@ -3563,6 +3563,24 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// the screen empty below. The room is measured against the bottom CLEARANCE (keyboard band, bar,
     /// gap), so with the keyboard up it shrinks by exactly what the keys took and the shortfall
     /// shrinks with it — the same arithmetic in both keyboard states rather than a special case.
+    /// The visible message viewport in window coordinates, for the media flights' clipping view,
+    /// measured from what actually covers the list right now: the header above, the composer below.
+    /// The old rect was `adjustedContentInset` saved on the last layout pass, which carried two
+    /// errors: a stale keyboard clearance cut the landing photo in half, and the top inset's
+    /// bottom-align padding (a short chat) moved the top edge down into open space.
+    func liveMediaClip() -> CGRect? {
+        guard view.window != nil else { return nil }
+        let winFrame = view.convert(view.bounds, to: nil)
+        let top = winFrame.minY + collectionView.safeAreaInsets.top + topOverlayHeight
+        var bottom = winFrame.maxY - collectionView.adjustedContentInset.bottom
+        if let bar = composerBar, !bar.isHidden, bottomBarContainer.frame.height > 1 {
+            bottom = bottomBarContainer.convert(bottomBarContainer.bounds, to: nil).minY
+        }
+        let rect = CGRect(x: winFrame.minX, y: top, width: winFrame.width, height: max(0, bottom - top))
+        DiagLog.add("IMGCLIP# top \(Int(top)) bottom \(Int(bottom)) win \(Int(winFrame.height)) kb \(Int(keyboardOverlap))")
+        return rect
+    }
+
     private func bottomAlignShortfall(bottomClearance: CGFloat) -> CGFloat {
         let safe = collectionView.safeAreaInsets
         let room = collectionView.bounds.height - (safe.top + topOverlayHeight) - bottomClearance
@@ -5035,12 +5053,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // The visible message viewport in window coordinates, for the media transitions' clipping view
         // (the reference app passes `collectionView.adjustedContentInset` as `clippingAreaInsets`; this
         // is the same region expressed as a rect).
-        let winFrame = view.convert(view.bounds, to: nil)
-        let inset = collectionView.adjustedContentInset
-        MediaOpenRects.clipRect = CGRect(x: winFrame.minX,
-                                         y: winFrame.minY + inset.top,
-                                         width: winFrame.width,
-                                         height: max(0, winFrame.height - inset.top - inset.bottom))
+        // Registered, not written: the rect is worked out when a flight asks (see `liveMediaClip`).
+        // Only a list that is on screen takes the slot, so one alive behind it cannot steal it.
+        if view.window != nil {
+            MediaOpenRects.clipRectSource = { [weak self] in self?.liveMediaClip() }
+        }
         // Report the GEOMETRIC nav-bar overlap. Async so the SwiftUI state write never lands mid-layout.
         let top = view.safeAreaInsets.top
         if abs(top - lastReportedTop) > 0.5 {

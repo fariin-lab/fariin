@@ -184,7 +184,14 @@ import Combine
     /// header is revealed from behind the bar instead of flying over it. Written only by the chat list;
     /// read only through the closures the chat wires up, so other screens (gallery, profile) are
     /// unaffected by a stale value.
-    static var clipRect: CGRect?
+    ///
+    /// ⛔ ASKED LIVE, NOT STORED — owner, 2026-10-16: drag a photo closed and it landed cut in half,
+    /// the lower part of the bubble empty blue, then popped to full. The rect used to be a value
+    /// saved on the list's last layout pass, and a saved value goes stale: a pass taken while the
+    /// keyboard was up, or by another list instance still alive behind this one, left the bottom
+    /// edge hundreds of points too high, and the landing copy was clipped there.
+    static var clipRectSource: (() -> CGRect?)?
+    static var clipRect: CGRect? { clipRectSource?() }
     /// The same thing for the attach sheet's photo grid: its scroll view's frame, asked of the view
     /// itself (the grid carries a `MediaViewAnchor` under this key). A tile half under the sheet's top
     /// edge flies out from behind that edge, not over it. Nil once the grid is gone.
