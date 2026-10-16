@@ -39,7 +39,13 @@ final class InAppBannerCenter {
     /// position, over the card's own height with the default timing function; there is no spring
     /// anywhere in that path and no fade. Ours used two different springs for in and out, which is
     /// where the bounce on arrival came from.
-    static let slide: Animation = .easeInOut(duration: 0.4)
+    ///
+    /// ⛔ 2026-10-16, REVERSED ON HIS WORD: "use Apple's native iOS 26 notification animation". The
+    /// system banner drops in on a spring with a small settle and goes back up without one. Apple
+    /// gives no API for its own banner's curve, so these are SwiftUI's system springs, not numbers
+    /// read off a recording: in with a light bounce, out with none.
+    static let slide: Animation = .spring(duration: 0.5, bounce: 0.18)
+    static let slideOut: Animation = .spring(duration: 0.4, bounce: 0)
 
     @MainActor
     func show(cid: String?, title: String, body: String) {
@@ -70,7 +76,7 @@ final class InAppBannerCenter {
     @MainActor
     func dismiss() {
         hideTask?.cancel(); hideTask = nil
-        withAnimation(Self.slide) { item = nil }
+        withAnimation(Self.slideOut) { item = nil }
     }
 
     /// The sender's photo out of the chat list we already hold: the group's photo for a group, the
@@ -241,13 +247,8 @@ struct InAppBannerCard: View {
         .contentShape(RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
         .gesture(dragGesture)
         .onTapGesture { open() }
-        // ⛔ POSITION ONLY, 0.4s, EASE-IN-EASE-OUT — and NOT a spring, which is what ours used.
-        // Their `animateIn`/`animateOut` move the layer's position by the card's own height with
-        // the default timing function and touch nothing else: no scale, no fade. Ours combined a
-        // move with an opacity fade on a spring, which is why it arrived with a bounce and a
-        // ghost. The move is asymmetric here (in from the top, out to the top) for the same reason
-        // theirs is: it always leaves upward, whichever way it was dragged.
-        .transition(.move(edge: .top))
+        // The slide is NOT here — see `inAppBanner()`. A transition only runs on the view that is
+        // inserted or removed, and this card sits inside the GeometryReader that is.
     }
 
     // MARK: - The two gestures
@@ -311,6 +312,12 @@ extension View {
             if let item = InAppBannerCenter.shared.item {
                 InAppBannerCard(item: item)
                     .id(item.id)   // a new message re-runs the slide-in instead of swapping text in place
+                    // ⛔ ON THE INSERTED VIEW — owner 2026-10-16: "the banner appears without an
+                    // animation". This used to sit on the card INSIDE `InAppBannerCard`'s
+                    // GeometryReader, which is not the view the `if` inserts, so SwiftUI never ran
+                    // it and the card just appeared and vanished. The reader is 144pt tall from the
+                    // screen's top, so a move by its own height takes the card fully off screen.
+                    .transition(.move(edge: .top))
             }
         }
     }
