@@ -12,10 +12,9 @@ import FirebaseMessaging
 // it is sent. That is exactly what a topic is: the phone puts its own hand up. Two families, and the
 // difference between them is a promise the app makes out loud:
 //
-//   ann_*  news, features, release notes, maintenance. The channel is muted for everybody by
-//          default and the welcome message says "we are here to share important updates, not spam
-//          your notifications". So this phone is not in these topics at all until somebody turns
-//          the bell on, and steps straight back out when they turn it off. Mute is not a filter
+//   ann_*  news, features, release notes, maintenance. Since 2026-10-16 the channel is UNMUTED by
+//          default (owner: "like normal chats"), so this phone joins these topics unless the bell
+//          is off, and steps straight back out when it is turned off. Mute is not a filter
 //          applied on arrival; it is not being on the list.
 //
 //   sec_*  security alerts. Chat Info promises these arrive even if the chat is BLOCKED, so they

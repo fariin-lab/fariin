@@ -429,10 +429,11 @@ extension Announcement {
 
 /// What THIS person has done with the channel. One document, written only by its owner.
 ///
-/// Muted is the default and costs no write: the reference app mutes the release channel forever at
-/// creation (a max-value mute timestamp on each platform) and the promise in the
-/// welcome message — "we are here to share important updates, not spam your notifications" — is only
-/// true if the mute is real before anybody touches anything.
+/// ⛔ UNMUTED IS THE DEFAULT — owner 2026-10-16: "unmuted by default so users get the in-app banner,
+/// like normal chats". It was muted by default (the reference app mutes its release channel at
+/// creation), so nobody who had not touched the bell got a push, a banner, a sound or a buzz from
+/// this chat. The welcome message that promised the mute is withdrawn the same day. A mute somebody
+/// chose is in their document and still wins; a missing document now means "not muted".
 /// Document shape, for reference when reading the writers below:
 /// `{ muted: Bool, blocked: Bool, pinned: Bool, archived: Bool, lastReadAt: ms, clearedAt: ms }`.
 /// Every setter writes ONE field with `merge: true` rather than the whole document, so two settings
@@ -454,7 +455,7 @@ extension Announcement {
 ///   · Every time here is the SERVER's (server timestamps on the announcements, `ServerClock` for the
 ///     moments this phone chooses). The phone's own clock decides nothing.
 struct OfficialChannelState: Equatable {
-    var muted: Bool = true
+    var muted: Bool = false
     /// ⛔ WHEN A TIMED MUTE ENDS, server ms; 0 = Always — owner, 2026-09-29: the profile's Mute
     /// offers the chat's own 1 hour / 8 hours / 1 day / 1 week / Always. Written with `muted` and
     /// `mutedAt` (the rules' `notOlder('muted')` already orders it), read through `isMutedNow`.
@@ -481,7 +482,7 @@ struct OfficialChannelState: Equatable {
     init() {}
 
     init(data: [String: Any]) {
-        muted = data["muted"] as? Bool ?? true
+        muted = data["muted"] as? Bool ?? false
         mutedUntilMillis = Self.millis(data["mutedUntil"])
         blocked = data["blocked"] as? Bool ?? false
         pinned = data["pinned"] as? Bool ?? false
@@ -672,7 +673,7 @@ final class OfficialChannelStore {
                 // the bell for as long as the error lasted. Keep what we have instead.
                 guard let self else { return }
                 guard let snap else { self.listenerDied("state", error); return }
-                // A missing document is the muted default, not an error. Nobody should have to pay a
+                // A missing document is the unmuted default, not an error. Nobody should have to pay a
                 // write to be left alone. Merged, not replaced: the watermarks only move forward.
                 self.state = self.state.merged(with: OfficialChannelState(data: snap.data() ?? [:]))
                 self.answer("state")
