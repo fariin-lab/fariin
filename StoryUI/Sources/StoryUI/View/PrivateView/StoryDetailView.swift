@@ -1622,6 +1622,15 @@ private extension StoryDetailView {
                     // a mention carries our own scheme and is resolved by the host above this view,
                     // so it has to go on being resolved there, untouched.
                     .environment(\.openURL, OpenURLAction { url in
+                        // ⛔ A MENTION STAYS IN THE STORY — owner 2026-10-16: "mention is not working".
+                        // Handed to the system, `kulan://u/<handle>` came back through the app's deep
+                        // link and opened (even started) a chat BEHIND the viewer, so nothing seemed to
+                        // happen. The host resolves it and shows the profile over the story instead.
+                        if url.scheme == "kulan", url.host == "u",
+                           let handle = url.pathComponents.last(where: { $0 != "/" }), !handle.isEmpty {
+                            NotificationCenter.default.post(name: .init("storyActionMention"), object: handle)
+                            return .handled
+                        }
                         guard url.scheme == "http" || url.scheme == "https" else { return .systemAction }
                         flashCaptionLink(url)
                         return .handled

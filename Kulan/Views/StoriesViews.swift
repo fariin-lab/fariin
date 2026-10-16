@@ -2182,6 +2182,21 @@ struct StoryViewer: View {
                   let url = URL(string: KulanApp.storyLink(id: s.id)) else { return }
             shareURL = StoryLinkPayload(url: url)
         }
+        // A caption @mention (owner 2026-10-16): the person's profile OVER the story, the same sheet
+        // a tap on the header opens, found by username the way a profile link is.
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyActionMention"))) { note in
+            guard let handle = note.object as? String else { return }
+            Task {
+                guard let u = await ChatService.findByHandle(handle, allowSelf: true) else {
+                    await MainActor.run { flashSentToast("No Fariin user found") }
+                    return
+                }
+                await MainActor.run {
+                    profileSheet = StoryGroup(authorUid: u.id, name: u.name, photoUrl: u.photoUrl,
+                                              stories: [], lastViewedAt: nil, isMine: u.id == me)
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionHide"))) { _ in
             if !currentIsMine { StoryPrefs.setHidden(currentBucketUid, true); isPresented = false }
         }
