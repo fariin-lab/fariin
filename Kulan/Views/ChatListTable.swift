@@ -1059,43 +1059,19 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         return item
     }
 
-    /// ⛔ ONE JOB: THE SEARCH BAR'S CANCEL BUTTON IS SHOWN EXACTLY WHILE THE CONTROLLER IS ACTIVE —
-    /// his report, 2026-09-16: tap the search field, tap Cancel, come back, and the button is still
-    /// sitting beside an idle "Search" placeholder. A leftover view, not a leftover search: the bar
-    /// was at rest with Edit and the title drawn. `.searchable` owns that button (SwiftUI installs
-    /// the controller; `automaticallyShowsCancelButton` is UIKit's), and the one thing this app owns
-    /// is the navigation item it was installed on. Stated as the invariant rather than as a repair
-    /// for one path, and guarded, so it writes nothing on the passes where the two already agree.
-    /// The bar's background, hairline and glass are the system's; nothing else is touched.
+    /// The search field's grey (`SearchFieldFill`), the one thing this page sets on Apple's bar. Until
+    /// 2026-10-16 it also hid the cancel button; see the note inside.
     func reassertNavChrome() {
         guard let item = searchHostItem(), let bar = item.searchController?.searchBar else { return }
         // The grey survives the back swipe — see `SearchFieldFill`. Once per field.
         SearchFieldFill.own(bar.searchTextField)
-        // Only the leftover is cleared. Showing the button is the search controller's own job
-        // (`automaticallyShowsCancelButton`), so it draws in the system's iOS 26 style; forcing it
-        // on here drew the classic one (owner, 2026-10-12: make search like the reference app).
-        // ⛔ NOT WHILE THE FIELD IS IN USE — owner 2026-10-13: tap search and there is no X, the
-        // search cannot be closed. This runs on every layout pass, and while search is OPENING the
-        // field is already being typed in with `isActive` still false: the check took away the
-        // button the controller had just shown, and nothing showed it again. A field that is
-        // first responder is a search in progress, never a leftover.
-        let active = item.searchController?.isActive ?? false
-        let inUse = bar.searchTextField.isFirstResponder || bar.searchTextField.isEditing
-        if !active, !inUse, bar.showsCancelButton {
-            bar.setShowsCancelButton(false, animated: false)
-            // ⛔ AND HAND THE BUTTON BACK TO THE CONTROLLER — owner 2026-10-16: search, open a
-            // profile, come back, tap search: no X. Opening a result closes the search
-            // (`dismissSearch`) in the same moment the profile is pushed, so this page leaves the
-            // window before the controller has hidden its button. That leftover is what the line
-            // above clears, but the controller still counts its button as shown and does not
-            // show it again on the next search. Turning its automatic button off and on makes it
-            // take the bar's real state as its own. Best reading of the code, not yet seen on a
-            // phone.
-            if let sc = item.searchController, sc.automaticallyShowsCancelButton {
-                sc.automaticallyShowsCancelButton = false
-                sc.automaticallyShowsCancelButton = true
-            }
-        }
+        // ⛔ THE X IS APPLE'S AND NOTHING HERE TOUCHES IT — owner 2026-10-16: "the X still sometimes
+        // does not appear; why custom? use the native search bar." The bar always was `.searchable`;
+        // what was ours was this function hiding the cancel button whenever it judged it a
+        // leftover (09-16), then two patches for the times that judgement was wrong (10-13, 10-16).
+        // Each patch found another way for our hide to fight the controller. All of it is gone: the
+        // search controller shows and hides its own X. If a leftover X beside an idle field is ever
+        // reported again, fix the presentation that leaves it, not by hiding the button here.
     }
 
     // ⛔ NO `UINavigationBarAppearance` ON THIS PAGE — 2026-09-24. `scrolledAppearance` and

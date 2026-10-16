@@ -514,8 +514,23 @@ struct ChatSearchPage: View {
         if query.isEmpty {
             // Nothing searched yet on this account. Theirs shows a spinner here; a spinner that
             // never resolves is what his screenshot is complaining about in another form.
-            EmptyStateView(title: "Search", icon: "magnifyingglass",
-                           text: "Find your chats and groups, or a person by their username.")
+            // ⛔ THE MESSAGE REQUESTS EMPTY PAGE'S TYPE — owner 2026-10-16: title 17 semibold, line 15
+            // secondary (MessageRequestsView `emptyLine`). The magnifier stays.
+            VStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 4)
+                Text("Search")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text("Find your chats and groups, or a person by their username.")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 40)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if repo.loadingWholeList || searching {
             // ⛔ LOOKING IS SHOWN AS LOOKING — owner, 2026-09-27, with the message search's skeleton:
             // "add a loading screen like this while I search a username". It was a bare spinner
