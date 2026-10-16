@@ -32,11 +32,38 @@ final class OfficialStories {
     private var lastFetch: Date = .distantPast
     private var fetching = false
     private var expiryTimer: Timer?
+    /// The account whose saved answer has been shown this launch.
+    private var seededFor: String?
+
+    private static func savedURL(uid: String) -> URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("official-stories-\(uid).json")
+    }
+    private static func loadSaved(uid: String) -> [Story]? {
+        guard let url = savedURL(uid: uid), let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode([Story].self, from: data)
+    }
+    private static func save(_ stories: [Story], uid: String) {
+        guard let url = savedURL(uid: uid), let data = try? JSONEncoder().encode(stories) else { return }
+        DispatchQueue.global(qos: .utility).async {
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                     withIntermediateDirectories: true)
+            try? data.write(to: url, options: .atomic)
+        }
+    }
 
     /// Ask again, unless the last answer is still fresh. Called when the Stories list appears and
     /// when the app comes back to the front; `force` after a story has expired on screen.
     func refresh(force: Bool = false) {
-        guard Auth.auth().currentUser != nil, !fetching else { return }
+        guard let uid = Auth.auth().currentUser?.uid, !fetching else { return }
+        // ⛔ THE LAST ANSWER FIRST — owner 2026-10-16: the Fariin card arrived after the others.
+        // Friends' cards come from saved data at once; this one waited for the callable. The last
+        // answer is kept on the phone and shown the moment the app asks, expired ones dropped,
+        // and the server's reply replaces it as before.
+        if seededFor != uid {
+            seededFor = uid
+            if let saved = Self.loadSaved(uid: uid) { publish(saved, save: false) }
+        }
         guard force || Date().timeIntervalSince(lastFetch) > 5 * 60 else { return }
         fetching = true
         Task {
@@ -52,6 +79,8 @@ final class OfficialStories {
     func reset() {
         expiryTimer?.invalidate(); expiryTimer = nil
         lastFetch = .distantPast
+        if let uid = seededFor, let url = Self.savedURL(uid: uid) { try? FileManager.default.removeItem(at: url) }
+        seededFor = nil
         Self.lock.lock(); Self.cached = nil; Self.lock.unlock()
     }
 
@@ -90,8 +119,9 @@ final class OfficialStories {
         return s
     }
 
-    private func publish(_ stories: [Story]) {
+    private func publish(_ stories: [Story], save: Bool = true) {
         let live = stories.filter { $0.expiresAt > Date() }.sorted { $0.createdAt < $1.createdAt }
+        if save, let uid = seededFor { Self.save(live, uid: uid) }
         // Somebody who blocked the Fariin chat has said they do not want its news; stories are news.
         let g: StoryGroup? = live.isEmpty || OfficialChannelStore.shared.state.blocked ? nil
             : StoryGroup(authorUid: OfficialChannel.cid, name: OfficialChannel.name,
