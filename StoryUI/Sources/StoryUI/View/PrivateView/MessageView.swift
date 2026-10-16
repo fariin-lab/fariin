@@ -125,7 +125,6 @@ private extension MessageView {
         }
     }
     
-    @ViewBuilder
     /// The closed reply bar: the host's sentence and Apple's lock, dimmed, in a hairline capsule the
     /// height of the reply pill. Same look the app's overlay had (16pt, white 55%, 1pt white 28%).
     func lockedPill(_ text: String) -> some View {
@@ -143,6 +142,7 @@ private extension MessageView {
         .allowsHitTesting(false)   // a statement, not a control
     }
 
+    @ViewBuilder
     func buttonViewBuilder(_ config: StoryInteractionConfig?) -> some View {
         if let config {
             // ⚠️ ZERO, AND THE GAP IS STILL ~18pt — his 2026-09-24 "the gap between the repost icon
