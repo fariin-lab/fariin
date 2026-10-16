@@ -1579,6 +1579,8 @@ final class StoriesService {
             try Task.checkCancellation()   // cancelled during upload → undo
             let url = try await ref.downloadURL().absoluteString
             try await docRef.updateData(["mediaUrl": url])
+            // The story is up: tell the people its caption mentions (`StoryMentions`).
+            StoryMentions.send(storyId: storyId, caption: caption, thumbUrl: url, recipients: recipients, me: me)
             // The stranger-facing copy, media only. See `writePublicMirror`.
             if everyone {
                 await writePublicMirror(storyId: storyId, me: me, mediaUrl: url, thumbUrl: "",
@@ -1967,6 +1969,8 @@ final class StoriesService {
             let (thumbUrl, videoUrl) = try await (tURL.absoluteString, vURL.absoluteString)
             // One atomic update: recipients' listeners either see the full story or nothing.
             try await docRef.updateData(["mediaUrl": videoUrl, "thumbUrl": thumbUrl])
+            // The story is up: tell the people its caption mentions (`StoryMentions`).
+            StoryMentions.send(storyId: storyId, caption: caption, thumbUrl: thumbUrl, recipients: recipients, me: me)
             // The stranger-facing copy, media only. See `writePublicMirror`.
             if everyone {
                 await writePublicMirror(storyId: storyId, me: me, mediaUrl: videoUrl,

@@ -263,6 +263,12 @@ enum InlineThumbCache {
     }
 }
 
+/// See `Message.storyMention`.
+struct StoryMentionRef: Equatable, Codable, Hashable {
+    let id: String
+    let thumbUrl: String
+}
+
 struct Message: Identifiable, Equatable, Codable {
     let id: String
     var authorId: String
@@ -281,6 +287,11 @@ struct Message: Identifiable, Equatable, Codable {
     var enc: EncMeta?
     var clientId: String?
     var replyTo: ReplyRef?
+    /// ⛔ A STORY MENTION — owner 2026-10-16: posting a story whose caption @mentions somebody puts
+    /// this message in the 1:1 chat with them, drawn as a centred card (`MessageRowModelBuilder`).
+    /// The poster is `authorId`; the person mentioned is the chat's other member. Plain story id and
+    /// thumbnail url, like a story reply's (`ReplyRef.storyThumbUrl`), which are not secrets.
+    var storyMention: StoryMentionRef?
     var reactions: [String: String]   // uid -> decrypted emoji
     var mentions: [String] = []       // uids @-mentioned in this message (groups)
     var viewOnce: Bool = false        // view-once photo (standard): recipient can open it exactly once
@@ -665,7 +676,7 @@ struct Message: Identifiable, Equatable, Codable {
         case id, authorId, text, type
         case imageUrl, audioUrl, videoUrl, thumbUrl, thumbEnc
         case fileUrl, fileName, fileSize, duration, waveform, enc
-        case clientId, replyTo, reactions, mentions, viewOnce, album
+        case clientId, replyTo, storyMention, reactions, mentions, viewOnce, album
         case createdAt, width, blurhash, thumb, height
         case callerUid, callOutcome, callVideo, callDuration
         case edited, deleted, deletedBy, forwarded, clientTs, linkPreview, hasServerTime, uploading, albumSizes
@@ -786,6 +797,9 @@ struct Message: Identifiable, Equatable, Codable {
             }
             width = only.width
             height = only.height
+        }
+        if let m = data["storyMention"] as? [String: Any], let sid = m["id"] as? String, !sid.isEmpty {
+            self.storyMention = StoryMentionRef(id: sid, thumbUrl: m["thumb"] as? String ?? "")
         }
         if let r = data["replyTo"] as? [String: Any] {
             self.replyTo = ReplyRef(

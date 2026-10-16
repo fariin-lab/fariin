@@ -851,7 +851,8 @@ enum ChatService {
     /// place in this chat's send line taken at that tap. Both are optional: a caller without them is
     /// stamped and queued on entry here, which is still before every await below.
     static func sendText(cid: String, text: String, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, mentions: [String] = [], preview: OutgoingLinkPreview? = nil, forwarded: Bool = false, countsAsUnread: Bool = true,
-                         tapTs: Double? = nil, turn: SendTurn? = nil) async throws {
+                         tapTs: Double? = nil, turn: SendTurn? = nil,
+                         storyMention: StoryMentionRef? = nil) async throws {
         // owner audit 2026-10-06 chat #24: stamped and queued BEFORE the first await. `clientTs` used
         // to be read after encryption and the server reads, so of two quick sends whichever cleared
         // those awaits first took the earlier stamp, and nothing kept their writes in tap order.
@@ -960,6 +961,8 @@ enum ChatService {
         if let replyEnc { msg["replyTo"] = replyEnc }
         if !mentions.isEmpty { msg["mentions"] = mentions }
         if forwarded { msg["forwarded"] = true }
+        // A story mention card (`Message.storyMention`, owner 2026-10-16). 1:1 only, like replies.
+        if let storyMention { msg["storyMention"] = ["id": storyMention.id, "thumb": storyMention.thumbUrl] }
         // 2026-09-24 feature-audit: a knock carries no link card. The rules take a request's one
         // message as plain short text and refuse `linkPreview` on it, so the card turned every first
         // message holding a link into a send that failed on every Resend. Stripped here rather than
