@@ -1034,19 +1034,19 @@ struct ThreadView: View {
     @ViewBuilder private var encryptionNotice: some View {
         if repo.didInitialLoad, repo.items.isEmpty, !notAMember {
             let line = Text("\(Image(systemName: "lock.fill")) Messages and calls are end-to-end encrypted. Only people in this chat can read or listen to them.")
-            // The safety number is a number BETWEEN two devices, so a group has nothing to show. It
-            // gets the notice with no link rather than a link that leads nowhere.
-            if isGroup || otherUid.isEmpty {
-                line.modifier(EmptyChatNotice()).allowsHitTesting(false)
-            } else {
-                Button { showEncryptionInfo = true } label: {
-                    // Fixed brand blue, not accentColor — accentColor is WHITE in dark mode, which is
-                    // the bug that made the jump-button count invisible.
-                    (line + Text(" Learn more").foregroundStyle(Theme.defaultBubble(dark)))
-                        .modifier(EmptyChatNotice())
-                }
-                .buttonStyle(.plain)
+            // ⛔ LEARN MORE OPENS fariin.com/safety — owner 2026-10-15: the safety page sat where
+            // nobody looks; every new chat shows this line, the way the reference app's notice
+            // leads to its security page. It used to open the safety-number screen, which is a
+            // check between two devices, not an explanation; that stays one tap away in the
+            // contact's info (Verify Encryption) and on the key-changed bar. Groups get the link
+            // too now, since the page is not about one person.
+            Button { if let u = URL(string: "https://fariin.com/safety") { WebLink.open(u) } } label: {
+                // Fixed brand blue, not accentColor — accentColor is WHITE in dark mode, which is
+                // the bug that made the jump-button count invisible.
+                (line + Text(" Learn more").foregroundStyle(Theme.defaultBubble(dark)))
+                    .modifier(EmptyChatNotice())
             }
+            .buttonStyle(.plain)
         }
     }
 

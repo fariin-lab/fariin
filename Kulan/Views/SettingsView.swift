@@ -234,6 +234,13 @@ struct SettingsView: View {
                     // sharing into Messages and other messengers.
                     Button { InviteShare.present() } label: { SettingsRowLabel("Invite Friends", "ic_invite_friends") }
                         .tint(.primary)
+                    // ⛔ SAFETY ON THE FIRST PAGE — owner 2026-10-15: the Safety Tips row inside
+                    // Privacy & Security is a place "users can't see". Beside Help, where people
+                    // look when something is wrong. Opens fariin.com/safety in the app's browser.
+                    Button { if let u = URL(string: "https://fariin.com/safety") { WebLink.open(u) } } label: {
+                        SettingsRowLabel("Safety", system: "checkmark.shield")
+                    }
+                    .tint(.primary)
                     NavigationLink { AboutView().toolbar(.hidden, for: .tabBar) } label: {
                         SettingsRowLabel("Help & About", system: "questionmark.circle")
                     }
