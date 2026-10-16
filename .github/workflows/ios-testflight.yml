@@ -74,7 +74,17 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: GIF PAGE WITH APPLE'S OWN TOP BAR; YOUR FILES OPEN AT ONCE.
+            THIS BUILD: POST STORY FLIES INTO MY STORY; OFFICIAL STORIES.
+            Post Story: the sheet drops, the black lifts, and your picture flies into your My Story card (no slide back). The camera X still slides.
+            Official Stories: Fariin in the Stories row, read-only viewer.
+            Fariin chat: unmuted by default; broadcasts from before your account existed are hidden; no in-app banner for Fariin security messages.
+            Profile from a story: back arrow at the top left.
+            Contact info: Encryption and Restricted chat slide up like Disappearing Messages.
+            Stories: a first single story no longer flashes a two-card stack.
+            Chat list search: the X comes back after opening a result and returning.
+            Empty pages: No live stories, Nothing archived, No Results in one style.
+
+            EARLIER: GIF PAGE WITH APPLE'S OWN TOP BAR; YOUR FILES OPEN AT ONCE.
             GIF page: the title, X and search are Apple's navigation bar now, with the iOS 26 blur; the mood bar sits on the bottom edge under the GIFs.
             Files you sent open straight away (no download of your own file).
             Share sheet: Copy Link copies, closes the sheet and says Link copied.
