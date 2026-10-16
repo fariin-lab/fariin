@@ -2868,6 +2868,12 @@ struct ChatsView: View {
             } message: {
                 Text("You've posted \(StoriesService.dailyStoryLimit) stories today. You can post again in about \(storyBudget.dailyLimitHoursLeft) hours.")
             }
+            // ⛔ ADD FROM MY OWN STORY — owner 2026-10-16: the "+" on my avatar in the viewer. The
+            // viewer closes itself first and asks here, the one door with the limit check, whose
+            // alerts stay on screen because this shell is always mounted.
+            .onReceive(NotificationCenter.default.publisher(for: .init("storyComposeRequested"))) { _ in
+                composeStory()
+            }
             // Ask once when the row appears, so the button already knows the answer when it is
             // pressed. Posting keeps the count moving from there without another read.
             .task { await storyBudget.refreshDailyBudget() }

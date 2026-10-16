@@ -2159,6 +2159,15 @@ struct StoryViewer: View {
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionHide"))) { _ in
             if !currentIsMine { StoryPrefs.setHidden(currentBucketUid, true); isPresented = false }
         }
+        // The "+" on my own avatar (owner 2026-10-16). The viewer closes first: the camera and the
+        // day's-limit alerts belong to the shell (`storyComposeRequested`, MainShell).
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyActionAddStory"))) { _ in
+            guard currentIsMine else { return }
+            isPresented = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                NotificationCenter.default.post(name: .init("storyComposeRequested"), object: nil)
+            }
+        }
         // "…" → Report (friend stories only): files a report doc for review (App Store 1.2).
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionReport"))) { _ in
             guard !currentIsMine, let s = currentStory else { return }
