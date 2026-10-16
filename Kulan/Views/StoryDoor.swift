@@ -324,6 +324,31 @@ enum StoryDoor {
     /// If the photograph fails (no registered card, not in a window yet), NOTHING moves: the old
     /// hole and cover stay, `coverSourceKey` keeps naming the old person, and the close falls back
     /// to the fade landing exactly as before — a wrong-picture landing is worse than either.
+    /// ⛔ A NEW PICTURE OF THE SAME CARD — owner 2026-10-16: delete one of my stories in the viewer,
+    /// pull down, and the close landed with no picture (the old one had been dropped as possibly
+    /// showing the deleted story) and the card popped in afterwards, sometimes still showing it.
+    /// `retarget` never runs for this (same person, same key, and it skips a key it already wears).
+    ///
+    /// The card is hidden for the whole visit and a hidden card photographs blank (see
+    /// `StoryZoomPresenter.invalidateCover`), so it is shown for a moment, BEHIND the viewer's
+    /// opaque wall where nobody sees it, photographed once it has drawn its updated front, and
+    /// hidden again. If the photograph fails, the close keeps the no-picture landing it already
+    /// has. Call it after the card's data has changed.
+    static func refreshCover(of sourceKey: String) {
+        guard StoryZoomPresenter.isActive, !sourceKey.isEmpty else { return }
+        let key = StoryDoorState.shared.namespaced(sourceKey)
+        MediaSourceVisibility.shared.reveal()
+        // Two frames or so for SwiftUI to redraw the card with its new front and drop the alpha 0.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            guard StoryZoomPresenter.isActive else { return }
+            if let view = liveView(key),
+               let shot = StoryCardShot.renderBehindCover(view, cornerRadius: sourceRadius(key)) {
+                StoryZoomPresenter.retargetCover(shot, sourceKey: key)
+            }
+            MediaSourceVisibility.shared.hide(MediaOpenRects.key(.storyRow, key))
+        }
+    }
+
     static func retarget(to sourceKey: String) {
         guard StoryZoomPresenter.isActive else { return }
         // The viewer names the person by bare group id; the cards may be filed under a screen's own

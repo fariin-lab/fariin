@@ -2099,6 +2099,16 @@ struct StoryViewer: View {
             // back and the close simply lands without a cover — which is a fallback the flight
             // already has, and the mechanism is written up on `invalidateCover`.
             StoryZoomPresenter.invalidateCover()
+            // ⛔ AND A NEW PICTURE AT ONCE — owner 2026-10-16: with the cover dropped and nothing to
+            // replace it, the close faded into an empty slot and the card popped in afterwards,
+            // still showing the deleted story until the server's several calls had finished. The
+            // card forgets the story now (a failed delete's reload below puts it back), and its
+            // updated front is photographed as the close's picture. Not when it was the last one:
+            // the viewer closes and there is no card left.
+            if !wasLast {
+                StoriesRepository.shared.removeLocally(id)
+                StoryDoor.refreshCover(of: heroKeyNow())
+            }
             Task {
                 let gone = await StoriesService.shared.deleteStory(id)
                 guard gone else {
