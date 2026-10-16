@@ -78,7 +78,8 @@ struct GifPickerView: View {
     var onBack: (() -> Void)? = nil
     var onWantsFullHeight: (() -> Void)? = nil
     @State private var searching = false
-    @FocusState private var searchFocused: Bool
+    /// Drives `NativeSearchField` (a UIKit field, so a plain flag rather than @FocusState).
+    @State private var searchFocused = false
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var picked = false   // 2026-09-24 decision D-composer-5: see `pick`
@@ -297,34 +298,30 @@ struct GifPickerView: View {
             }
             .navigationTitle(searching ? "" : "Choose GIF")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
+            // ⛔ APPLE'S SEARCH FIELD, FULL WIDTH, WITH THE ROUND X BESIDE IT — owner 2026-10-16, with
+            // the system sticker search as the picture: "use native". The bar goes while searching and
+            // this row takes its place: `UISearchTextField` itself (the system's magnifier, placeholder
+            // and clear button, left-aligned) and the app's one glass X that ends the search.
+            .toolbar(searching ? .hidden : .visible, for: .navigationBar)
+            .safeAreaInset(edge: .top, spacing: 0) {
                 if searching {
-                    // SEARCH TAKES THE WHOLE ROW (owner 2026-10-15): the field, and one X on its right
-                    // that ends the search.
-                    ToolbarItem(placement: .principal) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                            TextField("Search GIFs", text: $query)
-                                .focused($searchFocused)
-                                .submitLabel(.search)
-                        }
-                        .padding(.horizontal, 14).frame(height: 40)
-                        // ⛔ ITS OWN GLASS — owner 2026-10-16, circled: the field "disappearing". A
-                        // principal item gets no bar-button glass, so the bare text sat on the bar's
-                        // scroll-edge blur with the GIFs moving through it. The system's glass
-                        // capsule, as a search field in a bar wears on iOS 26.
-                        .liquidGlass(Capsule())
-                        .frame(maxWidth: .infinity)
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
+                    HStack(spacing: 10) {
+                        NativeSearchField(text: $query, placeholder: "Search GIFs", focused: $searchFocused)
+                            .frame(height: 48)
+                        CloseXButton(diameter: 48) {
                             searchFocused = false
                             query = ""
                             withAnimation(.easeInOut(duration: 0.2)) { searching = false }
-                        } label: { Image(systemName: "xmark") }
+                        }
                         .accessibilityLabel("Close search")
                     }
-                } else {
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .padding(.bottom, 6)
+                }
+            }
+            .toolbar {
+                if !searching {
                     // An X that closes the sheet (owner 2026-10-15), not a back chevron.
                     ToolbarItem(placement: .topBarLeading) {
                         Button { onBack?() } label: { Image(systemName: "xmark") }
@@ -524,5 +521,41 @@ private extension View {
             .liquidGlass(Capsule())
             .padding(.horizontal, 16)
             .padding(.bottom, 6)
+    }
+}
+
+/// The system's own search field (`UISearchTextField`): magnifier, left-aligned placeholder, clear
+/// button, the iOS 26 capsule. Owner 2026-10-16 ("use native"). `focused` raises and drops the
+/// keyboard; typing writes `text`.
+struct NativeSearchField: UIViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    @Binding var focused: Bool
+
+    func makeUIView(context: Context) -> UISearchTextField {
+        let f = UISearchTextField()
+        f.placeholder = placeholder
+        f.returnKeyType = .search
+        f.delegate = context.coordinator
+        f.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
+        f.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return f
+    }
+
+    func updateUIView(_ f: UISearchTextField, context: Context) {
+        if f.text != text { f.text = text }
+        if focused, !f.isFirstResponder { DispatchQueue.main.async { f.becomeFirstResponder() } }
+        if !focused, f.isFirstResponder { f.resignFirstResponder() }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: NativeSearchField
+        init(_ p: NativeSearchField) { parent = p }
+        @objc func changed(_ f: UITextField) { parent.text = f.text ?? "" }
+        func textFieldShouldReturn(_ f: UITextField) -> Bool { f.resignFirstResponder(); return true }
+        func textFieldDidBeginEditing(_ f: UITextField) { if !parent.focused { parent.focused = true } }
+        func textFieldDidEndEditing(_ f: UITextField) { if parent.focused { parent.focused = false } }
     }
 }
