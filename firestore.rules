@@ -1224,6 +1224,16 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // ⛔ 2026-10-16 Official Stories: written ONLY by the admin panel's server (adminApi ostorySave /
+    // ostoryRemove, admin SDK, bypasses these rules) and handed to phones ONLY by the
+    // officialStoriesFeed callable, which filters by country, build and iOS. So no phone reads this
+    // collection: a story aimed at one country must not be on every phone in the world. Admins who
+    // can post may look (the panel lists through the op, but may read directly). No client writes.
+    match /officialStories/{id} {
+      allow read: if adminCan('send');
+      allow write: if false;
+    }
+
     match /announcements/{id} {
       // Everything here is a public broadcast, so every signed-in phone may read it. That also means
       // a SCHEDULED announcement is on the server, readable, from the moment it is written - the same

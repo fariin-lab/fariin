@@ -305,6 +305,29 @@ service firebase.storage {
       allow delete: if false;
     }
 
+    // ⛔ 2026-10-16 Official Stories media, uploaded by the admin panel page straight from the
+    // admin's browser: officialStories/{id}/media.jpg | media.mp4 | thumb.jpg, nothing else. Only an
+    // admin (an admins/{uid} row, cross-service firestore.exists; the Storage service account has
+    // Firestore read) writes, and only an admin reads: phones never read this path, they get the
+    // download-token links the server mints in ostorySave, from the officialStoriesFeed callable.
+    // Overwrite is allowed so a failed or replaced upload can be redone before the story is saved.
+    // No client delete (the server keeps the files of a withdrawn story).
+    match /officialStories/{storyId}/{file} {
+      function isAdminUser() {
+        return request.auth != null
+          && firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid));
+      }
+      allow read: if isAdminUser();
+      allow create, update: if isAdminUser()
+        && request.resource.size <= 50 * 1024 * 1024
+        && (
+             (file == 'media.jpg' && request.resource.contentType == 'image/jpeg')
+          || (file == 'media.mp4' && request.resource.contentType == 'video/mp4')
+          || (file == 'thumb.jpg' && request.resource.contentType == 'image/jpeg')
+        );
+      allow delete: if false;
+    }
+
     // Official channel pictures at announcements/{announcementId}/image.jpg — PLAIN, like story
     // photos. A broadcast to everybody cannot be a secret, so sealing it would be a costume: every
     // phone would hold the key.
