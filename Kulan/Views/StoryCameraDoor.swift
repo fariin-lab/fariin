@@ -311,6 +311,12 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
 @MainActor enum StoryPostFlight {
     struct Source { let image: UIImage; let rect: CGRect; let cornerRadius: CGFloat }
 
+    /// The flight's window is on top, so it speaks for the status bar while it is up: white, over
+    /// the black and the card, as the reference keeps it while its root is a card.
+    private final class LightStatusBarController: UIViewController {
+        override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
+    }
+
     private static var pending: Source?
     private static var window: UIWindow?
 
@@ -356,7 +362,7 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
         overlay.windowLevel = .normal + 1
         overlay.isUserInteractionEnabled = false
         overlay.backgroundColor = .clear
-        let root = UIViewController()
+        let root = LightStatusBarController()
         root.view.backgroundColor = .clear
         overlay.rootViewController = root
         let stage = root.view!
@@ -478,13 +484,18 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
 
         // Hide the real card while its copy is on the way. The row becomes the uploading row a frame
         // later, and that is the one that must stay hidden then.
-        var hiddenKey = dest.key
+        // ⚠️ AND IN THE LIST LAYOUT IT IS HIDDEN BEFORE IT EXISTS. A post sets `uploading` before it
+        // reports, so the row WILL turn into the uploading row — a frame or two from now, and a
+        // reporter that appears replays the hidden key on subscription. Waiting to see it first let
+        // the real card show under the flying copy for those frames: the picture twice. The grid
+        // (storyList off, no glow strip) has no uploading card; the check below covers the strip.
+        let uploadingKey = MediaOpenRects.key(.storyRow, StoryDoor.uploadingSourceKey)
+        var hiddenKey = StoriesService.shared.uploading && AppFeatures.storyList ? uploadingKey : dest.key
         MediaSourceVisibility.shared.hide(hiddenKey)
         DispatchQueue.main.async {
-            let uploading = MediaOpenRects.key(.storyRow, StoryDoor.uploadingSourceKey)
-            if hiddenKey != uploading, MediaOpenRects.liveViewRect(uploading) != nil {
-                hiddenKey = uploading
-                MediaSourceVisibility.shared.hide(uploading)
+            if hiddenKey != uploadingKey, MediaOpenRects.liveViewRect(uploadingKey) != nil {
+                hiddenKey = uploadingKey
+                MediaSourceVisibility.shared.hide(uploadingKey)
             }
         }
 
