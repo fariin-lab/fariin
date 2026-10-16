@@ -32,6 +32,8 @@ struct ChatNavigationItem: UIViewRepresentable {
     var bar: Bar
     var onTap: () -> Void
     var onTapAvatar: (() -> Void)? = nil
+    /// Pull the header down to close the sheet this chat sits in (`ChatHeaderView.onPullDown`).
+    var onPullDown: (() -> Void)? = nil
 
     /// What sits either side of the header. Mirrors their `uiMode` switch.
     enum Bar {
@@ -85,6 +87,7 @@ struct ChatNavigationItem: UIViewRepresentable {
         let c = context.coordinator
         c.header.onTap = onTap
         c.header.onTapAvatar = onTapAvatar
+        c.header.onPullDown = onPullDown
         if c.lastModel != model {
             c.lastModel = model
             c.header.configure(model)
@@ -332,5 +335,18 @@ extension UIView {
             responder = current.next
         }
         return nil
+    }
+}
+
+/// Set by a sheet that pushes a chat (the profile over a story, owner 2026-10-16): pulling that
+/// chat's header down closes the sheet. Unset everywhere else, so no other header can be pulled.
+private struct ChatSheetPullDownKey: EnvironmentKey {
+    static let defaultValue: (() -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    var chatSheetPullDown: (() -> Void)? {
+        get { self[ChatSheetPullDownKey.self] }
+        set { self[ChatSheetPullDownKey.self] = newValue }
     }
 }

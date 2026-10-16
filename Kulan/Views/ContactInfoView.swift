@@ -413,14 +413,14 @@ struct ContactInfoView: View {
     /// first; `ProfileCardDoor` (a username link) already does. A chat that already exists opens
     /// at once, as before.
     private func goToChat() {
-        let open: () -> Void = {
-            guard source == .story else { openChat = true; return }
-            let router = AppRouter.shared
-            router.pendingChatName = name
-            router.pendingChatPhoto = photoUrl
-            router.pendingChatPush = false
-            router.pendingChatId = cid
-        }
+        // ⛔ 2026-10-16, REVERSES 10-11 ON HIS WORD: from a story the chat opens INSIDE this sheet
+        // again ("open a sheet like the profile, not a full page, exactly like the reference app").
+        // The 10-11 reason was the drag conflict (reading older messages vs closing the sheet). It is
+        // answered the reference app's way: the sheet's own drag stays off while the chat is up
+        // (`interactiveDismissDisabled(openChat)`), the list scrolls freely, and the chat's HEADER
+        // is the handle that pulls the whole sheet away (`chatSheetPullDown` below). Back returns
+        // to this profile.
+        let open: () -> Void = { openChat = true }
         guard !isSelf, !isPreview, !otherUid.isEmpty else { open(); return }
         if let existing = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) {
             open()
@@ -1177,6 +1177,8 @@ struct ContactInfoView: View {
             }
             .navigationDestination(isPresented: $openChat) {
                 ThreadView(cid: cid, title: name, photoUrl: photoUrl)
+                    // Only in the sheet over a story: pulling the header down closes the sheet.
+                    .environment(\.chatSheetPullDown, source == .story ? ({ dismiss() } as (() -> Void)?) : nil)
             }
             // ⛔ THE SHEET LETS GO OF THE DRAG WHILE A CONVERSATION IS OPEN INSIDE IT — his
             // 2026-08-18 "open a friend's story, tap the profile, tap Message, and scrolling down

@@ -33,6 +33,12 @@ final class ChatHeaderView: UIView {
 
     var onTap: (() -> Void)?
     var onTapAvatar: (() -> Void)?
+    /// ⛔ PULL THE HEADER DOWN TO CLOSE THE SHEET — owner 2026-10-16, "exactly like the reference
+    /// app": a chat opened from a profile that is a sheet over a story. The message list keeps its
+    /// own drag (the sheet's is off while the chat is up, see ContactInfoView), and this header is
+    /// the handle: the sheet follows the finger and goes on a long or fast pull, else springs back.
+    /// nil (every other chat) = no pull at all.
+    var onPullDown: (() -> Void)?
 
     /// Their `titleIcon`: setting nil hides the slot so the row closes up.
     var titleIcon: UIImage? {
@@ -236,6 +242,35 @@ final class ChatHeaderView: UIView {
         heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
 
         rootStack.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(didTapView)))
+        let pull = UIPanGestureRecognizer(target: self, action: #selector(didPull(_:)))
+        addGestureRecognizer(pull)
+    }
+
+    /// The sheet's own view: the outermost controller above this bar, then its presentation.
+    private var sheetView: UIView? {
+        var vc = owningViewController
+        while let p = vc?.parent { vc = p }
+        return vc?.presentationController?.presentedView
+    }
+
+    @objc private func didPull(_ g: UIPanGestureRecognizer) {
+        guard onPullDown != nil, let sheet = sheetView else { return }
+        let y = max(0, g.translation(in: sheet.superview).y)
+        switch g.state {
+        case .changed:
+            sheet.transform = CGAffineTransform(translationX: 0, y: y)
+        case .ended, .cancelled, .failed:
+            let v = g.velocity(in: sheet.superview).y
+            if g.state == .ended, y > 120 || v > 900 {
+                onPullDown?()   // the sheet slides out from where the finger left it
+            } else {
+                UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.85,
+                               initialSpringVelocity: 0, options: [.allowUserInteraction]) {
+                    sheet.transform = .identity
+                }
+            }
+        default: break
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -458,5 +493,16 @@ final class HeaderAvatarView: UIView {
             self.imageView.isHidden = false
             UIView.animate(withDuration: 0.25) { self.imageView.alpha = 1 }   // AvatarView's cross-fade
         }
+    }
+}
+
+extension ChatHeaderView {
+    /// The pull only exists where it was asked for, and only as a downward, mostly vertical drag, so
+    /// taps on the name and avatar and every other chat's header are untouched.
+    override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        guard let pan = g as? UIPanGestureRecognizer else { return true }
+        guard onPullDown != nil else { return false }
+        let v = pan.velocity(in: self)
+        return v.y > 0 && v.y > abs(v.x)
     }
 }

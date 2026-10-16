@@ -463,6 +463,8 @@ struct ThreadView: View {
     @State private var inputFocused = false
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
+    /// Non-nil only inside the profile sheet over a story: the header pulls the sheet away.
+    @Environment(\.chatSheetPullDown) private var sheetPullDown
     @AppStorage("typingIndicators") private var typingPref = true
     @AppStorage("shareLastSeen") private var lastSeenPref = true
 
@@ -1222,7 +1224,7 @@ struct ThreadView: View {
             inputFocused = false
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             showContactInfo = true
-        }))
+        }, onPullDown: sheetPullDown))
         .toolbar(.hidden, for: .tabBar)
         // ⛔ THE CHAT NAMES ITS OWN BAR SCHEME — owner, 2026-09-29, phone switched to dark with a
         // chat open: Back and the call capsule stayed light-mode glass until the chat was reopened.
