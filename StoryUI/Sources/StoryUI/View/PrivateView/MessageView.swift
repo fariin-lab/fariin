@@ -29,8 +29,12 @@ struct MessageView: View {
             ZStack {
                 switch story.config.storyType {
                 case .plain(let config):
-                    HStack {
-                        Spacer()
+                    HStack(spacing: 12) {
+                        if let locked = config?.lockedText {
+                            lockedPill(locked)
+                        } else {
+                            Spacer()
+                        }
                         buttonViewBuilder(config)
                     }
                 case .message(let config, _, let placeholder):
@@ -122,6 +126,23 @@ private extension MessageView {
     }
     
     @ViewBuilder
+    /// The closed reply bar: the host's sentence and Apple's lock, dimmed, in a hairline capsule the
+    /// height of the reply pill. Same look the app's overlay had (16pt, white 55%, 1pt white 28%).
+    func lockedPill(_ text: String) -> some View {
+        HStack(spacing: 6) {
+            Text(text)
+            Image(systemName: "lock.fill")
+        }
+        .font(.system(size: 16))
+        .foregroundColor(.white.opacity(0.55))
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .frame(maxWidth: .infinity)
+        .frame(height: Constant.MessageView.height)
+        .background(Capsule().stroke(Color.white.opacity(0.28), lineWidth: 1))
+        .allowsHitTesting(false)   // a statement, not a control
+    }
+
     func buttonViewBuilder(_ config: StoryInteractionConfig?) -> some View {
         if let config {
             // ⚠️ ZERO, AND THE GAP IS STILL ~18pt — his 2026-09-24 "the gap between the repost icon

@@ -18,10 +18,16 @@ public struct StoryInteractionConfig: Equatable, Hashable {
     /// package knows or should. The app answers it once (`StoryShareRights`) and hands the answer
     /// down as this flag.
     let showRepostButton: Bool
-    
-    public init(showLikeButton: Bool = false, showRepostButton: Bool = false) {
+    /// ⛔ THE "CAN'T REPLY" LINE, DRAWN IN THE CARD — owner 2026-10-16: swiping to the next person
+    /// turned the story but the locked bar stayed still. The host drew it as an overlay on the
+    /// whole viewer; drawn here, in the card's own bottom row where the reply pill sits on other
+    /// stories, it turns with the cube. nil = no line (the host decides when replies are closed).
+    let lockedText: String?
+
+    public init(showLikeButton: Bool = false, showRepostButton: Bool = false, lockedText: String? = nil) {
         self.showLikeButton = showLikeButton
         self.showRepostButton = showRepostButton
+        self.lockedText = lockedText
     }
     
 }

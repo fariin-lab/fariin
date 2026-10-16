@@ -1796,6 +1796,12 @@ struct StoryViewer: View {
                     // Fariin: no reply bar and no heart, like my own (owner 2026-10-16). Hoisted for the
                     // same type-checker reason as `canPassOn`.
                     let plainOnly = g.isMine || OfficialChannel.isOfficial(g.authorUid)
+                    // ⛔ THE LOCKED LINE RIDES IN THE CARD (owner 2026-10-16: it stayed still while
+                    // the cube turned). Same rule `replyLockReason` had for the overlay: somebody
+                    // else's story with no reply bar — a stranger, replies off, or Fariin.
+                    let canMessage = (deliveredToMe || StoryContact.isFriend(g.authorUid)) && s.allowsReplies
+                    let locked: String? = g.isMine ? nil
+                        : (OfficialChannel.isOfficial(g.authorUid) || !canMessage) ? Self.replyLocked : nil
                     // A repost cannot be reposted again (owner, 2026-10-12: "Ali reposts Abdi, Ahmed cannot repost that, but can repost Ali's own story"). Share and Copy Link are unchanged.
                     let canRepost = canPassOn && s.repostOf == nil
                     return StoryUI.Story(
@@ -1914,14 +1920,15 @@ struct StoryViewer: View {
                             // red and said "Reacted" while the author got nothing. Hidden, it
                             // promises nothing; turning receipts back on brings it back.
                             storyType: plainOnly
-                                ? .plain()
-                                : (deliveredToMe || StoryContact.isFriend(g.authorUid)) && s.allowsReplies
+                                ? (locked == nil ? .plain() : .plain(config: StoryInteractionConfig(lockedText: locked)))
+                                : canMessage
                                     ? .message(config: StoryInteractionConfig(showLikeButton: StoryPrefs.viewReceiptsOn,
                                                                               showRepostButton: canRepost),
                                                emojis: [["😭", "😍", "🤣", "❤️", "😄", "🔥", "❤️‍🔥"]],
                                                placeholder: "Send message…")
                                     : .plain(config: StoryInteractionConfig(showLikeButton: StoryPrefs.viewReceiptsOn,
-                                                                            showRepostButton: canRepost)),
+                                                                            showRepostButton: canRepost,
+                                                                            lockedText: locked)),
                             mediaType: s.isVideo ? .video : .image
                         )
                     )
@@ -2975,56 +2982,8 @@ struct StoryViewer: View {
         // It does NOT undo the L3 privacy rule. That rule is about not handing somebody a direct line
         // to a person who never accepted them, and a sentence saying the line is closed is not a
         // line. What changes is that the closed door is now visible instead of being an empty strip.
-        .overlay(alignment: .bottom) {
-            if !currentIsMine, let reason = replyLockReason {
-                // ⚠️ APPLE'S SYMBOL, NOT THE EMOJI — his 2026-08-18 "dont use emoji icon use apple
-                // icon lock". A 🔒 inside the string is a colour glyph from whatever font the system
-                // reaches for: it ignores the text's weight, keeps its own yellow whatever the label
-                // is dimmed to, and cannot be aligned to the cap height. `lock.fill` is drawn as part
-                // of the label instead, so it takes the same size, the same opacity and the same
-                // baseline as the words next to it, and it dims with them.
-                HStack(spacing: 6) {
-                    Text(reason)
-                    Image(systemName: "lock.fill")
-                }
-                    .font(.system(size: 16))
-                    .foregroundStyle(.white.opacity(0.55))
-                    .frame(maxWidth: .infinity)
-                    // ⛔ 44 AND +16, TO SIT ON THE HEART'S LINE — owner, 2026-09-02: "when I open a
-                    // glowing story the reply card and the love icon are not aligned".
-                    //
-                    // ⚠️ THEY ARE TWO LAYERS AND THEY WERE MEASURED FROM THE SAME EDGE DIFFERENTLY.
-                    // The heart comes from the library's `MessageView`, which is placed with
-                    // `.padding()` — 16 on every side — plus the window's bottom inset, and its row
-                    // is `Constant.MessageView.height`, 44. This pill is ours, drawn as an overlay
-                    // on the card at the bottom inset alone and 48 tall. So the heart's centre sat
-                    // 16 + 2 higher, which is the 14 points he ringed.
-                    //
-                    // Matching both numbers is what aligns them, not nudging one: same height, same
-                    // 16 above the same inset.
-                    .frame(height: 44)
-                    .background(Capsule().stroke(.white.opacity(0.28), lineWidth: 1))
-                    .padding(.leading, 16)
-                    // ⚠️ THE HEART SHARES THIS SLOT NOW. `MessageView`'s `.plain(config:)` branch
-                    // pushes the like button to the trailing edge in the same strip, so a capsule
-                    // that still ran to a 16pt trailing margin would sit under it. 60 is the
-                    // heart's 44pt target plus the 16 the capsule used to have.
-                    //
-                    // ⛔ ONLY WHEN THERE IS A HEART — owner 2026-10-16, circled: on a Fariin story the
-                    // gaps were 16 left and 60 right around nothing. No heart (Fariin's stories, or
-                    // view receipts off, the same two tests `storyType` uses) = 16 both sides.
-                    .padding(.trailing, StoryPrefs.viewReceiptsOn && !OfficialChannel.isOfficial(currentBucketUid) ? 60 : 16)
-                    // The library's own `.padding()` is 16 on top of the window inset — see above.
-                    .padding(.bottom, max(10, bottomInset) + 16)
-                    // Steps aside for the same three things every other piece of chrome does: the
-                    // close drag, a hero flight (a button close moves no finger), and the viewers
-                    // sheet coming up over the card.
-                    .opacity((heroFlying || dragDown > 6 || (showViewers && viewersProgress > 0.05)) ? 0 : 1)
-                    .animation(.easeOut(duration: 0.15), value: dragDown > 6)
-                    .animation(.easeOut(duration: 0.15), value: heroFlying)
-                    .allowsHitTesting(false)   // it is a statement, not a control
-            }
-        }
+        // The "can't reply" line is drawn in each card now (StoryInteractionConfig.lockedText), so it
+        // turns with the cube instead of standing still over it (owner 2026-10-16).
         // ⚠️ DELETED HERE: the `currentIsMine && !mineOnly` gradient owner bar.
         //
         // It was the safety net for "my story inside a MIXED feed", described in its own comment as
