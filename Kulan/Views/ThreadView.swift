@@ -8279,8 +8279,18 @@ struct ThreadView: View {
             // instant the field resigned, so a modal presentation ran over a keyboard dismissal in
             // the same frames. It waits for the keyboard's own `didHide` now (immediate if the
             // keyboard was never up), exactly as the attach sheet does.
+            //
+            // ⛔ 2026-10-16, owner: "with the keyboard up, the GIF opens late; '+' is fast". Waiting
+            // for `didHide` played keyboard-down and sheet-up one after the other. Now the "+" timing
+            // (above, the reference app's): when the keyboard was up the sheet starts 0.15 s into its
+            // fall, so the two motions overlap; with no keyboard it opens at once.
+            let keyboardWasUp = keyboard.height > 0
             inputFocused = false
-            keyboard.onceHidden { showGifPicker = true }
+            if keyboardWasUp {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { showGifPicker = true }
+            } else {
+                showGifPicker = true
+            }
         }
         // The camera button in the field (2026-10-15), the way the GIF opens: keyboard first.
         a.camera = {
