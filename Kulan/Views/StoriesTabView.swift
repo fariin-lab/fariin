@@ -794,7 +794,10 @@ struct StoriesTabView: View {
                 // A post whose thumbnail is not decoded yet simply waits its turn, so nothing is grey
                 // while anything at all can be shown.
                 let pending = storyBudget.inFlight.compactMap(\.image)
-                let posted = StoriesRepository.shared.mine?.stories ?? []
+                // Not the posts still on their cards: one that has just landed is in `mine` before
+                // its card goes, and a first single story stacked behind itself (owner 2026-10-16).
+                let landing = Set(storyBudget.inFlight.flatMap(\.docIds))
+                let posted = (StoriesRepository.shared.mine?.stories ?? []).filter { !landing.contains($0.id) }
                 let postedURL: (Story) -> String = { $0.thumbUrl.isEmpty ? $0.mediaUrl : $0.thumbUrl }
                 let frontPosted = pending.isEmpty ? posted.last : nil
                 let backPosted: Story? = pending.count >= 2 ? nil

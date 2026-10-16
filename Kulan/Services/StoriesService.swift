@@ -691,6 +691,11 @@ final class StoriesService {
         /// A repost carries its credit from frame one too, so the uploading card shows whose story
         /// it is instead of gaining the credit only when the post lands (2026-10-12).
         var repostOf: StoryRepost? = nil
+        /// ⛔ THE REAL STORY ID(S) THIS POST WILL LAND AS — owner 2026-10-16: a first single story
+        /// flashed the two-card stack. When the post lands it is in `mine.stories` for a moment while
+        /// this card is still up, so the row stacked the story behind itself. The row leaves these
+        /// out of "already posted". A video can land as several parts, hence a list.
+        var docIds: [String] = []
     }
     /// Oldest first, which is the order stories are read in — so the placeholders sit at the end of
     /// my bucket in the same order they will land as real stories.
@@ -780,7 +785,8 @@ final class StoriesService {
                                     startedAt: Date(),
                                     tag: tag,   // the header says the chosen audience from frame one
                                     caption: caption,
-                                    repostOf: repostOf)
+                                    repostOf: repostOf,
+                                    docIds: [docId])
         let pendingId = pending.id
         let pendingURL = pending.url
         let me = uid
@@ -1654,7 +1660,8 @@ final class StoriesService {
                                     startedAt: Date(),
                                     tag: tag,
                                     caption: caption,
-                                    repostOf: repostOf)
+                                    repostOf: repostOf,
+                                    docIds: partIds)
         // ⚠️ THE SAME BYTES, or the composed picture above is wasted. StoryUI's ImageLoader reads
         // URLCache FIRST, so seeding the raw poster here would win over `pending.image` and put the
         // black-letterboxed frame back on screen.
