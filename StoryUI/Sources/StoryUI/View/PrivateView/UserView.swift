@@ -176,29 +176,6 @@ struct UserView: View {
         return out
     }
 
-    /// ⛔ "+" ON MY OWN AVATAR — owner 2026-10-16, with a mockup: tapping my own avatar on my story
-    /// did nothing; the badge opens Add Story. The Stories list's ⊕ (`StoryListRow.plusBadge`: white
-    /// bold plus on a black disc, edged in the page colour), in proportion to this 38pt circle; the
-    /// page here is always black. Its own tap wins over the header button around it, and the host
-    /// closes the viewer before it opens the camera.
-    private var addStoryBadge: some View {
-        Image(systemName: "plus")
-            .font(.system(size: 8, weight: .bold))
-            .foregroundColor(.white)
-            .frame(width: 14, height: 14)
-            .background(Color.black, in: Circle())
-            .padding(1.5)
-            .background(Circle().fill(Color.black))
-            .frame(width: 30, height: 30, alignment: .bottomTrailing)   // a finger-sized target
-            .contentShape(Rectangle())
-            .offset(x: 3, y: 3)
-            .highPriorityGesture(TapGesture().onEnded {
-                NotificationCenter.default.post(name: .init("storyActionAddStory"), object: nil)
-            })
-            .accessibilityLabel("Add story")
-            .accessibilityAddTraits(.isButton)
-    }
-
     var body: some View {
         // ⚠️ SPELLED OUT HERE RATHER THAN TAKEN FROM `hStackSpace` (owner 2026-08-22: the gap
         // between the two buttons went 13 → 12, then 12 → 10). That constant is shared with the
@@ -210,7 +187,6 @@ struct UserView: View {
             Button { onProfile?() } label: {
             HStack(spacing: Constant.UserView.hStackSpace) {
                 CacheAsyncImage(urlString: image, name: name)   // 38×38 circle
-                    .overlay(alignment: .bottomTrailing) { if isMyStory { addStoryBadge } }
                 VStack(alignment: .leading, spacing: 2) {
                     // TWO SHAPES, AND THE AUDIENCE DECIDES WHICH. With a line to fit underneath,
                     // the name and the time share the top row: the time is a detail about the name,
