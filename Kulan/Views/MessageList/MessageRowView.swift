@@ -393,8 +393,8 @@ final class RowNoticePillView: UIView {
     private let fill = BubbleFillView()
     private let label = UILabel()
     private let rim = BubbleShapeView()
-    /// `.storyCard` only (story mentions, owner 2026-10-16): the story picture and the app's story
-    /// ring around it (unseen gradient, 0x34C76F → 0x3DA1FD, as `StoryRingView` draws it).
+    /// `.storyCard` only (story mentions, owner 2026-10-16): the story picture as the app's story card;
+    /// the ring layer is kept but unused (he asked for no ring).
     private let thumb = RowImageView(frame: .zero)
     private let ring = CAGradientLayer()
     private let ringMask = CAShapeLayer()
@@ -489,22 +489,18 @@ final class RowNoticePillView: UIView {
 extension RowNoticePillView {
     /// The story mention card's picture, ring and flight source. Hidden on every other notice.
     fileprivate func configureStory(_ plan: NoticePlan) {
-        guard plan.style == .storyCard, let img = plan.image, let ringRect = plan.ring else {
+        guard plan.style == .storyCard, let img = plan.image else {
             thumb.isHidden = true; thumb.reset(); ring.isHidden = true
             setFlightKey("")
             return
         }
+        // The Stories list card's shape: continuous corner 14 at 66 wide, scaled (owner 2026-10-16:
+        // no circle, no ring). `ring` stays hidden.
+        ring.isHidden = true
         thumb.isHidden = false
         thumb.frame = img
-        thumb.layer.cornerRadius = img.width / 2
-        thumb.configure(url: plan.storyThumbUrl, enc: nil, cid: "", cornerRadius: img.width / 2)
-        thumb.layer.cornerCurve = .circular   // a true circle; `.continuous` at half the side is not
-        CATransaction.begin(); CATransaction.setDisableActions(true)
-        ring.isHidden = false
-        ring.frame = ringRect
-        ringMask.frame = CGRect(origin: .zero, size: ringRect.size)
-        ringMask.path = UIBezierPath(ovalIn: CGRect(origin: .zero, size: ringRect.size).insetBy(dx: 1.25, dy: 1.25)).cgPath
-        CATransaction.commit()
+        thumb.configure(url: plan.storyThumbUrl, enc: nil, cid: "", cornerRadius: Self.cardCorner(img))
+        thumb.layer.cornerCurve = .continuous
         setFlightKey(plan.flightKey)
     }
 
@@ -516,9 +512,12 @@ extension RowNoticePillView {
         guard !key.isEmpty else { return }
         MediaOpenRects.captureView(key, thumb)
         if thumb.window != nil {
-            MediaOpenRects.capture(key, thumb.convert(thumb.bounds, to: nil), cornerRadius: thumb.bounds.width / 2)
+            MediaOpenRects.capture(key, thumb.convert(thumb.bounds, to: nil), cornerRadius: Self.cardCorner(thumb.bounds))
         }
     }
+
+    /// `StoryListRow.corner` (14) at its 66pt width, kept in proportion.
+    fileprivate static func cardCorner(_ r: CGRect) -> CGFloat { (14 * r.width / 66).rounded() }
 }
 
 // ── The call-history bubble ──

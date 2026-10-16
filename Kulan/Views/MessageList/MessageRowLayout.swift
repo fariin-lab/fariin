@@ -2474,12 +2474,14 @@ enum MessageRowLayout {
             // ⛔ THE STORY MENTION CARD (owner 2026-10-16, the reference app's picture): the story in
             // a ring at the top, the line under it, View Story inside the card at the bottom.
             let cardW = min(236, width - BubbleMetrics.rowMargin * 2), pad: CGFloat = 16
-            let ringSide: CGFloat = 116, gap: CGFloat = 5
-            let ring = CGRect(x: (cardW - ringSide) / 2, y: pad, width: ringSide, height: ringSide)
-            let image = ring.insetBy(dx: gap + 2.5, dy: gap + 2.5)
+            // ⛔ THE APP'S OWN STORY CARD, NOT A RINGED CIRCLE — owner 2026-10-16: "my story is not a
+            // circle, use my card design, no ring". The Stories list's card (`StoryListRow`: 66x94,
+            // continuous corner 14), scaled to 100 wide with the same proportions and corner.
+            let imgW: CGFloat = 100, imgH = (100 * 94 / 66).rounded()
+            let image = CGRect(x: (cardW - imgW) / 2, y: pad, width: imgW, height: imgH)
             let textW = cardW - pad * 2
             let size = BubbleText.size(attr, width: textW)
-            let textY = ring.maxY + 12
+            let textY = image.maxY + 12
             let text = CGRect(x: (cardW - size.width) / 2, y: textY, width: size.width, height: size.height)
             let buttonH: CGFloat = 38, buttonW = min(textW, 164)
             let buttonY = text.maxY + 14
@@ -2488,7 +2490,7 @@ enum MessageRowLayout {
             var plan = NoticePlan(capsule: rect, text: text, attr: attr, style: .storyCard,
                                   onWallpaper: n.onWallpaper, wallpaperBlur: n.wallpaperBlur)
             plan.image = image
-            plan.ring = ring
+            plan.ring = nil
             plan.storyThumbUrl = n.storyThumbUrl
             plan.flightKey = n.flightKey
             if let a = n.actions.first {
