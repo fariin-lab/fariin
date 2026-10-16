@@ -1009,14 +1009,24 @@ struct MyFriendsPrivacyView: View {
                     // NOTHING CHOSEN IS NOT A CHOICE. Save stays dead until at least one person is
                     // picked, the same rule Select Viewers already uses for a custom story — an
                     // empty except-list and an empty only-list both mean "the mode did nothing".
-                    requireAtLeastOne: true,
+                    // ⛔ BUT EMPTYING A LIST YOU ALREADY HAVE IS A CHOICE — owner 2026-10-16: with one
+                    // person in Only Share With, taking them off left Save dead and the person stuck.
+                    // Editing a saved list of this mode, Save stays live with nobody picked, and saving
+                    // it empty goes back to All (the same reading the loader's self-heal gives an
+                    // empty narrowing). Starting a new list still needs somebody.
+                    requireAtLeastOne: !(a.mode == target.mode && !a.members.isEmpty),
                     onSave: {
-                        // COMMITTED HERE, not on the tap that opened this. An empty draft leaves the
-                        // mode exactly as it was, so backing out cannot leave a tick behind.
+                        // COMMITTED HERE, not on the tap that opened this. An empty draft on a NEW
+                        // list leaves the mode exactly as it was, so backing out cannot leave a tick.
                         if !draft.isEmpty {
                             var n = a
                             n.mode = target.mode
                             n.members = Array(draft)
+                            store.update(n)
+                        } else if a.mode == target.mode {
+                            var n = a
+                            n.mode = .all
+                            n.members = []
                             store.update(n)
                         }
                         picking = nil
