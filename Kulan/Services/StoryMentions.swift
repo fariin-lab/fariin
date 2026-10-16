@@ -26,22 +26,33 @@ enum StoryMentions {
         guard !handles.isEmpty else { return }
         Task.detached(priority: .utility) {
             var sent = Set<String>()
+            // One MENTION# line per name says where it stopped (owner 2026-10-16: no card arrived).
+            // Remove once a device log has answered.
+            func log(_ s: String) { Task { @MainActor in DiagLog.add("MENTION# story=\(storyId.prefix(6)) \(s)") } }
+            log("names=\(handles.count) audience=\(recipients.count)")
             for h in handles {
-                guard let u = await ChatService.findByHandle(h) else { continue }   // never me
-                guard u.id != me, !sent.contains(u.id), recipients.contains(u.id),
-                      !BlockList.snapshot.contains(u.id) else { continue }
+                guard let u = await ChatService.findByHandle(h) else { log("@\(h) not found"); continue }   // never me
+                guard u.id != me, !sent.contains(u.id) else { continue }
+                guard recipients.contains(u.id) else { log("@\(h) not in audience"); continue }
+                guard !BlockList.snapshot.contains(u.id) else { log("@\(h) blocked"); continue }
                 // ⛔ ONLY INTO A CHAT WE ALREADY HAVE — owner 2026-10-16: never a first message to
                 // somebody I have never chatted with, never a new chat. The app's one meaning of
                 // "existing chat" (`isContact`: accepted 1:1, or an older chat with a message), the
                 // same test the rules apply to a `storyMention` message on the server.
                 let known = await MainActor.run { PrivacyPrefs.isContact(u.id) }
-                guard known else { continue }
+                guard known else { log("@\(h) no existing chat"); continue }
                 sent.insert(u.id)
                 let cid = ChatService.convId(me, u.id)
-                try? await ChatService.sendText(cid: cid, text: previewText,
-                                                clientId: "storymention-\(storyId)-\(u.id)",
-                                                storyMention: StoryMentionRef(id: storyId, thumbUrl: thumbUrl))
+                do {
+                    try await ChatService.sendText(cid: cid, text: previewText,
+                                                   clientId: "storymention-\(storyId)-\(u.id)",
+                                                   storyMention: StoryMentionRef(id: storyId, thumbUrl: thumbUrl))
+                    log("@\(h) sent")
+                } catch {
+                    log("@\(h) send failed: \(error.localizedDescription)")
+                }
             }
+            Task { @MainActor in DiagLog.flagForUpload() }
         }
     }
 }
