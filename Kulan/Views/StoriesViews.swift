@@ -1282,10 +1282,6 @@ struct StoryViewer: View {
     /// Fariin's header tapped (official stories, owner 2026-10-16): the channel's own info page.
     @State private var officialInfoUp = false
     @State private var toastText = "Sent"               // reused for "Sent" (reply) and "Saved"
-    /// The Get / Mute notifications confirmation (owner 2026-10-16, the reference's bar on his
-    /// screenshots): bell or slashed bell, the name in bold. Its own state so the reply toast is untouched.
-    @State private var notifyToast: (on: Bool, name: String)?
-    @State private var notifyToastSeq = 0
     @State private var dragDown: CGFloat = 0            // swipe-down amount → fade my overlays with the card
     // ⚠️ `carouselInteracting` IS DELETED. It said "a swipe is in flight, so stand the real story
     // aside and let the row draw a copy of it" — one of the three inputs to a handover that no
@@ -2243,42 +2239,12 @@ struct StoryViewer: View {
                 isPresented = false
             }
         }
-        // "…" → Get notifications / Mute notifications (owner 2026-10-16). See `StoryNotifyStore`.
-        .onReceive(NotificationCenter.default.publisher(for: .init("storyActionNotify"))) { _ in
-            guard !currentIsMine, !currentBucketUid.isEmpty else { return }
-            let name = groups.first { $0.authorUid == currentBucketUid }?.name ?? "they"
-            let on = StoryNotifyStore.shared.toggle(currentBucketUid)
-            notifyToastSeq += 1
-            let seq = notifyToastSeq
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { notifyToast = (on, name) }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                guard seq == notifyToastSeq else { return }   // a newer tap keeps its own 3s
-                withAnimation(.easeOut(duration: 0.2)) { notifyToast = nil }
-            }
-        }
-        // The reference's bar, as on his screenshots: bell (or slashed bell) on the left, the name
-        // in bold, over the bottom of the story just above the reply field.
-        .overlay(alignment: .bottom) {
-            if let t = notifyToast {
-                HStack(spacing: 16) {
-                    Image(systemName: t.on ? "bell.fill" : "bell.slash.fill")
-                        .font(.system(size: 22))
-                        .foregroundStyle(.white)
-                        .frame(width: 28)
-                    (t.on
-                        ? Text("You will receive a notification whenever ") + Text(t.name).bold() + Text(" posts a story.")
-                        : Text("You will no longer receive a notification when ") + Text(t.name).bold() + Text(" posts a story."))
-                        .font(.subheadline)
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.horizontal, 20).padding(.vertical, 12)
-                .background(Color(white: 0.17).opacity(0.95), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .padding(.horizontal, 12)
-                .padding(.bottom, 120)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
+        // "…" → Get notifications / Mute notifications (owner 2026-10-16). Its own modifier: this
+        // chain is already at the type-checker's limit (the TestFlight build failed on it).
+        .modifier(StoryNotifyMenuAction(author: {
+            guard !currentIsMine, !currentBucketUid.isEmpty else { return nil }
+            return (currentBucketUid, groups.first { $0.authorUid == currentBucketUid }?.name ?? "they")
+        }))
         // "…" → Report (friend stories only): files a report doc for review (App Store 1.2).
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionReport"))) { _ in
             guard !currentIsMine, let s = currentStory else { return }

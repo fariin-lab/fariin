@@ -1,4 +1,4 @@
-import Foundation
+import SwiftUI
 import FirebaseAuth
 import FirebaseFirestore
 import StoryUI
@@ -81,5 +81,62 @@ final class StoryNotifyStore {
                 return StoryNotifyStore.shared.isOn(author)
             }
         }
+    }
+}
+
+/// The story viewer's "Get notifications" / "Mute notifications" tap, and the bar that confirms it:
+/// the reference's, as on the owner's screenshots (2026-10-16): bell or slashed bell on the left,
+/// the name in bold, just above the reply field. A modifier of its own because the viewer's chain
+/// is already at the type-checker's limit; its toast state lives here, not on the viewer.
+struct StoryNotifyMenuAction: ViewModifier {
+    /// The author on screen and their name, or nil when the tap does not apply (my own story).
+    let author: () -> (uid: String, name: String)?
+    @State private var toast: (on: Bool, name: String)?
+    @State private var seq = 0
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .init("storyActionNotify"))) { _ in
+                guard let a = author() else { return }
+                let on = StoryNotifyStore.shared.toggle(a.uid)
+                seq += 1
+                let mine = seq
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { toast = (on, a.name) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    guard mine == seq else { return }   // a newer tap keeps its own 3s
+                    withAnimation(.easeOut(duration: 0.2)) { toast = nil }
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if let t = toast { StoryNotifyBar(on: t.on, name: t.name) }
+            }
+    }
+}
+
+private struct StoryNotifyBar: View {
+    let on: Bool
+    let name: String
+
+    private var message: Text {
+        on ? Text("You will receive a notification whenever ") + Text(name).bold() + Text(" posts a story.")
+           : Text("You will no longer receive a notification when ") + Text(name).bold() + Text(" posts a story.")
+    }
+
+    var body: some View {
+        HStack(spacing: 16) {
+            Image(systemName: on ? "bell.fill" : "bell.slash.fill")
+                .font(.system(size: 22))
+                .foregroundStyle(.white)
+                .frame(width: 28)
+            message
+                .font(.subheadline)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 12)
+        .background(Color(white: 0.17).opacity(0.95), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 120)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }
