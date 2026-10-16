@@ -73,11 +73,6 @@ struct SettingsView: View {
     @State private var photoCloseTick = 0         // toolbar X → viewer close (see ProfilePhotoViewer.closeSignal)
     @State private var avatarFrame: CGRect = .zero   // the circle's global rect — the morph's start and end
 
-    private var inviteText: String {
-        let h = profile.me?.handle ?? ""
-        return h.isEmpty ? "Chat with me on Fariin." : "Chat with me on Fariin, my username is @\(h)"
-    }
-
     var body: some View {
         NavigationStack {
             List {
@@ -235,7 +230,10 @@ struct SettingsView: View {
 
                 Section {
                     // My QR Code lives in the top-left toolbar button — no duplicate row here.
-                    ShareLink(item: inviteText, preview: InviteShare.preview) { SettingsRowLabel("Invite Friends", "ic_invite_friends") }
+                    // The system share sheet (see `InviteShare.present`): ShareLink's preview broke
+                    // sharing into Messages and other messengers.
+                    Button { InviteShare.present() } label: { SettingsRowLabel("Invite Friends", "ic_invite_friends") }
+                        .tint(.primary)
                     NavigationLink { AboutView().toolbar(.hidden, for: .tabBar) } label: {
                         SettingsRowLabel("Help & About", system: "questionmark.circle")
                     }

@@ -48,10 +48,6 @@ struct NewChatView: View {
         guard all.count >= frequentThreshold else { return [] }
         return Array(all.sorted { $0.displayUpdatedAt(me) > $1.displayUpdatedAt(me) }.prefix(3))
     }
-    private var inviteText: String {
-        let h = ProfileStore.shared.me?.handle ?? ""
-        return h.isEmpty ? "Chat with me on Fariin." : "Chat with me on Fariin, my username is @\(h)"
-    }
 
     // People you've chatted with, grouped by first letter (A–Z, then "#").
     private var sections: [(letter: String, convs: [Conversation])] {
@@ -91,7 +87,8 @@ struct NewChatView: View {
                             }
                             // New contact and Scan QR code rows removed (owner 2026-09-30): scanning
                             // lives on the top-right button already.
-                            ShareLink(item: inviteText, preview: InviteShare.preview) {
+                            // The system share sheet (see `InviteShare.present`).
+                            Button { InviteShare.present() } label: {
                                 actionRow("square.and.arrow.up", "Invite friends")
                             }
                             .tint(.primary)

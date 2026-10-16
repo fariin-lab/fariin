@@ -1250,10 +1250,7 @@ private struct InviteShareSheet: View {
     @Environment(\.dismiss) private var dismiss
     private var profile = ProfileStore.shared
 
-    private var inviteText: String {
-        let h = profile.me?.handle ?? ""
-        return h.isEmpty ? "Chat with me on Fariin." : "Chat with me on Fariin, my username is @\(h)"
-    }
+    private var inviteText: String { InviteShare.text }   // with the profile link (2026-10-15)
 
     var body: some View {
         // The header shows the Fariin mark, not the system's text icon (2026-09-25).
