@@ -4045,7 +4045,7 @@ struct ChatRow: View, Equatable {
         case "📄 File":              return ("doc.fill", "File")
         // Our own GIF mark, the one the composer button wears. `sparkles` was standing in for a
         // symbol Apple does not ship, and it says "magic" rather than "GIF" (his 573 screenshot).
-        case "GIF":                  return ("ic_gif", "GIF")
+        case "GIF":                  return ("ic_gif_fill", "GIF")   // filled (owner 2026-10-16)
         // ⛔ AN UNANSWERED CALL IS "MISSED" ONLY FOR THE PERSON WHO WAS CALLED. The same marker
         // string reaches both phones — one conversation document, two readers — so the direction is
         // read from `lastSender` and applied here. The Calls tab has always drawn it this way; the
@@ -4141,7 +4141,7 @@ struct ChatRow: View, Equatable {
         let lead = String(line[..<range.lowerBound])
         var quoted = String(line[range.upperBound...])
         if quoted.hasSuffix("\"") { quoted.removeLast() }
-        if quoted == "GIF" { return (lead: lead, icon: "ic_gif", words: "GIF") }
+        if quoted == "GIF" { return (lead: lead, icon: "ic_gif_fill", words: "GIF") }
         let marks: [(String, String)] = [("🎤 ", "mic.fill"), ("🎥 ", "video.fill"), ("📷 ", "photo"),
                                          ("📹 ", "video.fill"), ("📞 ", "phone.fill"),
                                          ("🎬 ", "photo.on.rectangle.angled")]
