@@ -1068,7 +1068,7 @@ enum MessageRowLayout {
                 if case .media(let mb) = b.body, mb.kind == .sticker, plan.meta != .zero {
                     let meta = plan.meta.offsetBy(dx: bubbleRect.minX, dy: bubbleRect.minY)
                     let total = widths.reduce(0, +) + BubbleMetrics.reactionChipGap * CGFloat(max(0, widths.count - 1))
-                    cx = max(bubbleRect.minX, meta.minX - 6 - total)
+                    cx = max(bubbleRect.minX, meta.minX - 16 - total)   // 16 clears the time CAPSULE, which is wider than its text (owner: touching)
                     cy = meta.midY - height / 2
                 }
                 plan.reactionsFreeform = true
@@ -1254,7 +1254,8 @@ enum MessageRowLayout {
                                        width: s.width + 12, height: s.height + 4)
             }
         }
-        if m.uploading {
+        // 2026-10-17 (owner): a sticker shows no upload ring; it is small and goes up in a moment.
+        if m.uploading && m.kind != .sticker {
             // 52, his number off the side-by-side (2026-08-27): 44 with an 8pt inset drew a 28pt
             // thread in the middle of a 250pt photo and he could barely see it. The disc is the
             // tap target as well as the indicator — see UploadRingView.

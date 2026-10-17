@@ -9,6 +9,8 @@ import ImageIO
 final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
     var onSend: (GiphyService.Gif) -> Void = { _ in }
     var onSearch: () -> Void = {}
+    /// Room under the last row for the panel's floating GIFs | Stickers switch.
+    var bottomRoom: CGFloat = 0 { didSet { if oldValue != bottomRoom { setNeedsLayout() } } }
 
     private var gifs: [GiphyService.Gif] = []
     private var loaded = false
@@ -42,7 +44,7 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
         super.layoutSubviews()
         search.frame = CGRect(x: 10, y: 4, width: bounds.width - 20, height: 36)
         grid.frame = CGRect(x: 0, y: 46, width: bounds.width, height: max(0, bounds.height - 46))
-        grid.contentInset.bottom = safeAreaInsets.bottom
+        grid.contentInset.bottom = max(safeAreaInsets.bottom, 8) + bottomRoom
         grid.collectionViewLayout.invalidateLayout()
     }
 

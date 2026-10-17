@@ -136,6 +136,9 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         gifGrid.onSend = { [weak self] g in self?.onSendGif(g) }
         gifGrid.onSearch = { [weak self] in self?.onGifs() }
         addSubview(gifGrid)
+        // The switch floats over both grids (it sits at their foot now).
+        bringSubviewToFront(tabGlass)
+        bringSubviewToFront(tabs)
 
         deleteBar.backgroundColor = .secondarySystemBackground
         deleteBar.isHidden = true
@@ -158,23 +161,28 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         let w = bounds.width
         // Frames are only valid on an untransformed view; the hide lift is put back on below.
         for v in [tabs, tabGlass, editButton, strip] as [UIView] { v.transform = .identity }
-        tabs.frame = CGRect(x: (w - 220) / 2, y: M.top, width: 220, height: M.tabsH)
-        editButton.frame = CGRect(x: w - 44 - 6, y: M.top, width: 44, height: M.tabsH)
+        // ⛔ THE SWITCH SITS AT THE BOTTOM — owner 2026-10-17, as the reference app has it: the pack
+        // strip (with the pen at its end) on top, GIFs | Stickers floating over the grid at the foot.
+        // Scrolling into the grid sends the strip up and the switch down; scrolling back brings both.
+        let bottomInset = max(safeAreaInsets.bottom, 8)
+        strip.frame = CGRect(x: 0, y: M.top, width: w - 50, height: M.stripH)
+        editButton.frame = CGRect(x: w - 44 - 6, y: M.top + (M.stripH - M.tabsH) / 2, width: 44, height: M.tabsH)
+        layoutStrip()
+        tabs.frame = CGRect(x: (w - 220) / 2, y: bounds.height - bottomInset - M.tabsH - 4, width: 220, height: M.tabsH)
         tabGlass.frame = tabs.frame.insetBy(dx: -3, dy: -3)
         tabGlass.layer.cornerRadius = tabGlass.bounds.height / 2
-        strip.frame = CGRect(x: 0, y: tabs.frame.maxY + 4, width: w, height: M.stripH)
-        layoutStrip()
-        // Hidden on scroll (see `setHeaderHidden`): the header rides up and fades, the grid takes its room.
-        let lift = headerHidden ? strip.frame.maxY : 0
-        for v in [tabs, tabGlass, editButton, strip] as [UIView] {
-            v.transform = CGAffineTransform(translationX: 0, y: -lift)
-            v.alpha = headerHidden ? 0 : 1
-        }
+        let up = headerHidden ? strip.frame.maxY : 0
+        let down = headerHidden ? bounds.height - tabGlass.frame.minY : 0
+        for v in [editButton, strip] as [UIView] { v.transform = CGAffineTransform(translationX: 0, y: -up) }
+        for v in [tabs, tabGlass] as [UIView] { v.transform = CGAffineTransform(translationX: 0, y: down) }
+        for v in [tabs, tabGlass, editButton, strip] as [UIView] { v.alpha = headerHidden ? 0 : 1 }
+        if editing { tabs.alpha = 0; tabGlass.alpha = 0 }   // the Delete bar takes the foot while editing
         let gridTop = headerHidden ? 0 : strip.frame.maxY
         grid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, bounds.height - gridTop))
-        let gifTop = tabs.frame.maxY + 6
-        gifGrid.frame = CGRect(x: 0, y: gifTop, width: w, height: max(0, bounds.height - gifTop))
-        grid.contentInset.bottom = safeAreaInsets.bottom + (editing ? 44 : 0)
+        gifGrid.frame = CGRect(x: 0, y: M.top, width: w, height: max(0, bounds.height - M.top))
+        gifGrid.bottomRoom = M.tabsH + 16
+        // Room under the last row for the floating switch (and the Delete bar while editing).
+        grid.contentInset.bottom = bottomInset + M.tabsH + 16 + (editing ? 44 : 0)
         let barH = 44 + safeAreaInsets.bottom
         deleteBar.frame = CGRect(x: 0, y: bounds.height - barH, width: w, height: barH)
         deleteButton.frame = CGRect(x: 0, y: 0, width: w, height: 44)
