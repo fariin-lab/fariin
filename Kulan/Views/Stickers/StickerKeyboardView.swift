@@ -53,13 +53,21 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             case .pack(let p): return p.title
             }
         }
+        /// Only my own shelves can lose stickers; the packs are everyone's.
+        var editable: Bool { self == .recents || self == .favorites }
+        var key: String { self == .recents ? "r" : "f" }
     }
     private struct Section { let shelf: Shelf; let stickers: [Sticker] }
 
     private let height: CGFloat
     private var sections: [Section] = []
-    private var editing: Shelf?            // .recents or .favorites while choosing what to remove
+    // ⛔ ONE PEN, NOT AN EDIT PER SHELF — owner 2026-10-17: a small pen beside the tabs; tapping it
+    // makes every sticker in Recently Used and Favorites selectable at once, then Delete.
+    private var editing = false
+    /// "<shelf key>|<sticker id>": the same sticker can sit in both shelves and is picked per shelf.
     private var picked: Set<String> = []
+    private let editButton = UIButton(type: .system)
+    private let tabGlass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
 
     private let tabs = UISegmentedControl(items: ["GIFs", "Stickers"])
     private let strip = UIScrollView()
@@ -92,7 +100,21 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         tabs.setTitleTextAttributes([.font: normal, .foregroundColor: UIColor.secondaryLabel], for: .normal)
         tabs.setTitleTextAttributes([.font: bold, .foregroundColor: UIColor.label], for: .selected)
         tabs.addTarget(self, action: #selector(tabChanged), for: .valueChanged)
+        // ⛔ LIQUID GLASS UNDER THE SWITCH — owner 2026-10-17: the flat grey track read as a web control.
+        // The system glass capsule is the track; the control's own track is cleared on top of it.
+        tabGlass.clipsToBounds = true
+        addSubview(tabGlass)
+        tabs.setBackgroundImage(UIImage(), for: .normal, barMetrics: .default)
+        tabs.setDividerImage(UIImage(), forLeftSegmentState: .normal, rightSegmentState: .normal, barMetrics: .default)
+        tabs.selectedSegmentTintColor = UIColor.label.withAlphaComponent(0.12)
         addSubview(tabs)
+
+        editButton.setImage(UIImage(systemName: "pencil",
+                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .medium)), for: .normal)
+        editButton.tintColor = .secondaryLabel
+        editButton.accessibilityLabel = "Edit stickers"
+        editButton.addTarget(self, action: #selector(editTapped), for: .touchUpInside)
+        addSubview(editButton)
 
         strip.showsHorizontalScrollIndicator = false
         strip.alwaysBounceHorizontal = true
@@ -127,11 +149,14 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         super.layoutSubviews()
         let w = bounds.width
         tabs.frame = CGRect(x: (w - 220) / 2, y: M.top, width: 220, height: M.tabsH)
+        editButton.frame = CGRect(x: w - 44 - 6, y: M.top, width: 44, height: M.tabsH)
+        tabGlass.frame = tabs.frame.insetBy(dx: -3, dy: -3)
+        tabGlass.layer.cornerRadius = tabGlass.bounds.height / 2
         strip.frame = CGRect(x: 0, y: tabs.frame.maxY + 4, width: w, height: M.stripH)
         layoutStrip()
         let gridTop = strip.frame.maxY
         grid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, bounds.height - gridTop))
-        grid.contentInset.bottom = safeAreaInsets.bottom + (editing == nil ? 0 : 44)
+        grid.contentInset.bottom = safeAreaInsets.bottom + (editing ? 44 : 0)
         let barH = 44 + safeAreaInsets.bottom
         deleteBar.frame = CGRect(x: 0, y: bounds.height - barH, width: w, height: barH)
         deleteButton.frame = CGRect(x: 0, y: 0, width: w, height: 44)
@@ -142,7 +167,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     override func didMoveToWindow() {
         super.didMoveToWindow()
         // Back on screen: pick up what changed while away (a sticker just sent, one just made).
-        if window != nil, editing == nil { reload() }
+        if window != nil, !editing { reload() }
     }
 
     // MARK: Data
@@ -153,7 +178,9 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         if !store.favorites.isEmpty { s.append(Section(shelf: .favorites, stickers: store.favorites)) }
         for p in store.packs { s.append(Section(shelf: .pack(p), stickers: p.stickers)) }
         sections = s
-        if let e = editing, !sections.contains(where: { $0.shelf == e }) { endEditing() }
+        let anyMine = !store.recents.isEmpty || !store.favorites.isEmpty
+        editButton.isHidden = !anyMine
+        if editing && !anyMine { endEditing() }
         grid.reloadData()
         buildStrip()
     }
@@ -253,37 +280,50 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
 
     // MARK: Editing
 
-    private func beginEditing(_ shelf: Shelf) {
-        editing = shelf
+    @objc private func editTapped() {
+        if editing { endEditing() } else { beginEditing() }
+    }
+
+    private func setPen() {
+        let name = editing ? "checkmark" : "pencil"
+        editButton.setImage(UIImage(systemName: name,
+                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .medium)), for: .normal)
+        editButton.tintColor = editing ? .systemBlue : .secondaryLabel
+        editButton.accessibilityLabel = editing ? "Done" : "Edit stickers"
+    }
+
+    private func beginEditing() {
+        editing = true
         picked = []
         deleteBar.isHidden = false
+        setPen()
         updateDeleteButton()
         setNeedsLayout()
         grid.reloadData()
     }
 
     private func endEditing() {
-        editing = nil
+        editing = false
         picked = []
         deleteBar.isHidden = true
+        setPen()
         setNeedsLayout()
         grid.reloadData()
     }
 
     private func updateDeleteButton() {
-        let base = editing == .recents ? "Remove from Recents" : "Remove from Favorites"
-        deleteButton.setTitle(picked.isEmpty ? base : "\(base) (\(picked.count))", for: .normal)
+        deleteButton.setTitle(picked.isEmpty ? "Delete" : "Delete (\(picked.count))", for: .normal)
         deleteButton.isEnabled = !picked.isEmpty
     }
 
+    /// Recents lose the sticker from Recents only; Favorites lose it (and its file, for one I made).
     @objc @MainActor private func deleteTapped() {
-        guard let e = editing, !picked.isEmpty else { return }
-        if e == .recents { StickerStore.shared.removeFromRecents(picked) }
-        else { StickerStore.shared.removeFavorites(picked) }
-        editing = nil
-        picked = []
-        deleteBar.isHidden = true
-        setNeedsLayout()
+        guard editing, !picked.isEmpty else { return }
+        let ids = { (k: String) in Set(self.picked.filter { $0.hasPrefix(k + "|") }.map { String($0.dropFirst(2)) }) }
+        let recents = ids(Shelf.recents.key), favorites = ids(Shelf.favorites.key)
+        if !recents.isEmpty { StickerStore.shared.removeFromRecents(recents) }
+        if !favorites.isEmpty { StickerStore.shared.removeFavorites(favorites) }
+        endEditing()
         reload()
     }
 
@@ -330,13 +370,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         let h = cv.dequeueReusableSupplementaryView(ofKind: kind, withReuseIdentifier: ShelfHeader.id, for: ip) as! ShelfHeader
         let shelf = sections[ip.section].shelf
         h.title.text = shelf.title
-        let editable = shelf == .recents || shelf == .favorites
-        h.edit.isHidden = !editable
-        h.edit.setTitle(editing == shelf ? "Done" : "Edit", for: .normal)
-        h.onEdit = { [weak self] in
-            guard let self else { return }
-            if self.editing == shelf { self.endEditing() } else { self.beginEditing(shelf) }
-        }
+        h.edit.isHidden = true   // the one pen beside the tabs edits every shelf (2026-10-17)
         return h
     }
 
@@ -350,9 +384,37 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         let px = Int(itemSide * min(UIScreen.main.scale, 2))
         c.show(url: StickerStore.shared.fileURL(for: s), pixelSize: px)
         let shelf = sections[ip.section].shelf
-        c.setChecking(editing == shelf, on: picked.contains(s.id))
+        c.setChecking(editing && shelf.editable, on: picked.contains("\(shelf.key)|\(s.id)"))
         c.accessibilityLabel = "Sticker \(s.emoji)"
         return c
+    }
+
+    /// Long press (owner 2026-10-17): Add to / Remove from Favorites on every sticker; Delete only on one
+    /// I made — the packs are everyone's and cannot be deleted.
+    func collectionView(_ cv: UICollectionView, contextMenuConfigurationForItemsAt ips: [IndexPath],
+                        point: CGPoint) -> UIContextMenuConfiguration? {
+        guard !editing, let ip = ips.first, !isCreate(ip), let s = sticker(at: ip) else { return nil }
+        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in
+            MainActor.assumeIsolated {
+                let store = StickerStore.shared
+                var items: [UIMenuElement] = []
+                if store.isFavorite(s) {
+                    items.append(UIAction(title: "Remove from Favorites", image: UIImage(systemName: "star.slash")) { [weak self] _ in
+                        store.removeFavorites([s.id]); self?.reload()
+                    })
+                } else {
+                    items.append(UIAction(title: "Add to Favorites", image: UIImage(systemName: "star")) { [weak self] _ in
+                        store.addFavorite(s); self?.reload()
+                    })
+                }
+                if s.source == .mine {
+                    items.append(UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+                        store.removeFavorites([s.id]); store.removeFromRecents([s.id]); self?.reload()
+                    })
+                }
+                return UIMenu(children: items)
+            }
+        }
     }
 
     func collectionView(_ cv: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt ip: IndexPath) {
@@ -366,14 +428,16 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     @MainActor func collectionView(_ cv: UICollectionView, didSelectItemAt ip: IndexPath) {
         cv.deselectItem(at: ip, animated: false)
         if isCreate(ip) {
-            if editing == nil { onCreate() }
+            if !editing { onCreate() }
             return
         }
         guard let s = sticker(at: ip) else { return }
-        if let e = editing {
-            guard sections[ip.section].shelf == e else { return }
-            if picked.contains(s.id) { picked.remove(s.id) } else { picked.insert(s.id) }
-            (cv.cellForItem(at: ip) as? StickerCell)?.setChecking(true, on: picked.contains(s.id))
+        if editing {
+            let shelf = sections[ip.section].shelf
+            guard shelf.editable else { return }
+            let k = "\(shelf.key)|\(s.id)"
+            if picked.contains(k) { picked.remove(k) } else { picked.insert(k) }
+            (cv.cellForItem(at: ip) as? StickerCell)?.setChecking(true, on: picked.contains(k))
             updateDeleteButton()
             return
         }
