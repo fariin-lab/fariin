@@ -240,7 +240,8 @@ enum ChatService {
     static func uploadEncrypted(_ bytes: Data, to path: String,
                                 contentType: String = "application/octet-stream",
                                 progressId: String? = nil,
-                                attach: BackgroundUploader.Attach? = nil) async throws -> String {
+                                attach: BackgroundUploader.Attach? = nil,
+                                trace: UploadTrace? = nil) async throws -> String {
         let ref = Storage.storage().reference().child(path)
         let meta = StorageMetadata(); meta.contentType = contentType
 
@@ -260,6 +261,7 @@ enum ChatService {
                     // the chunk size to LLONG_MAX, so nothing is ever chunked and a dropped upload
                     // starts over — a ring left at 80% while the bytes go again would be a lie.
                     if let progressId, attempt > 0 { await UploadProgress.shared.reset(progressId) }
+                    trace?.set { $0.attempts = attempt + 1 }
                     // THE SWITCH, AND IT SHIPS OFF. `BackgroundUploader` hands the file to iOS, so
                     // the transfer survives leaving the app and a broken connection resumes from
                     // where it stopped instead of from zero — the two things this loop cannot fix by
@@ -267,13 +269,28 @@ enum ChatService {
                     // document takes, and it could not be compiled or run where it was written, so
                     // it is opt-in until a real phone has proved it. Settings → Storage and Data.
                     if UploadEngine.backgroundEnabled {
-                        return try await BackgroundUploader.shared.upload(file: tmp, to: path,
-                                                                          contentType: contentType,
-                                                                          progressId: progressId,
-                                                                          attach: attach)
+                        let url = try await BackgroundUploader.shared.upload(file: tmp, to: path,
+                                                                             contentType: contentType,
+                                                                             progressId: progressId,
+                                                                             attach: attach)
+                        trace?.set { $0.url = Date() }
+                        return url
                     }
-                    try await putFileReportingProgress(ref, from: tmp, metadata: meta, progressId: progressId)
-                    return try await ref.downloadURL().absoluteString
+                    let token = try await putFileReportingProgress(ref, from: tmp, metadata: meta,
+                                                                   progressId: progressId, trace: trace)
+                    // ⛔ NO SECOND ROUND TRIP FOR THE ADDRESS (owner, 2026-10-17). The put's own reply
+                    // already carries the download token, so the URL is built here exactly the way
+                    // `BackgroundUploader` builds it. `downloadURL()` is only the fallback for a reply
+                    // that came back without a token.
+                    let url: String
+                    if let token, !token.isEmpty {
+                        url = BackgroundUploader.tokenURL(bucket: ref.bucket, path: ref.fullPath,
+                                                          token: token)
+                    } else {
+                        url = try await ref.downloadURL().absoluteString
+                    }
+                    trace?.set { $0.url = Date() }
+                    return url
                 } catch {
                     // ⛔ OUR OWN EARLIER ATTEMPT MAY HAVE LANDED. A put that reached the server but
                     // lost its reply leaves the object in place, and the create-only rule then
@@ -299,12 +316,23 @@ enum ChatService {
         }
     }
 
+    /// Timestamps for the hidden PHOTO# diagnostic line (owner, 2026-10-17): where a slow photo
+    /// send spends its time. Times only, never content or keys.
+    final class UploadTrace: @unchecked Sendable {
+        struct Marks { var bytes100: Date?; var putOK: Date?; var url: Date?; var attempts = 0 }
+        private let lock = NSLock()
+        private var marks = Marks()
+        func set(_ change: (inout Marks) -> Void) { lock.lock(); change(&marks); lock.unlock() }
+        var snapshot: Marks { lock.lock(); defer { lock.unlock() }; return marks }
+    }
+
     /// `putFileAsync` is the reason the bubble could only ever show a spinner: the async wrapper
     /// throws the task away, and the task is the only thing that reports bytes. The observable form
     /// gives the same result and hands back progress on the way.
     private static func putFileReportingProgress(_ ref: StorageReference, from tmp: URL,
                                                  metadata: StorageMetadata,
-                                                 progressId: String?) async throws {
+                                                 progressId: String?,
+                                                 trace: UploadTrace? = nil) async throws -> String? {
         let task = ref.putFile(from: tmp, metadata: metadata)
         // ⛔ A STALLED TRANSFER IS RESTARTED, NOT WAITED OUT — owner, 2026-10-10 ("the image upload
         // never ends", ring frozen part-way; the reference app restarts a stuck part in seconds). The SDK
@@ -314,14 +342,19 @@ enum ChatService {
         // and the caller's loop starts a fresh transfer about two seconds later.
         final class Box: @unchecked Sendable {
             let lock = NSLock(); var done = false; var lastBytes: Int64 = -1; var lastMove = Date()
+            var allSent = false
         }
         let box = Box()
         let stallLimit: TimeInterval = 20
+        // ⛔ ALL BYTES SENT IS NOT A STALL (owner, 2026-10-17). Once 100% has gone, no new bytes is
+        // the normal wait for the server to finish and reply; cutting it at 20 s threw away a
+        // finished upload and sent the whole photo again. That phase gets its own, longer limit.
+        let finishingLimit: TimeInterval = 60
         // Exactly one resume: success, failure and the stall check race, and only the first one
         // counts (`box.done`). Observers are torn down so a retry's task cannot report into it.
         return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                let finish: (Result<Void, Error>) -> Void = { result in
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String?, Error>) in
+                let finish: (Result<String?, Error>) -> Void = { result in
                     box.lock.lock()
                     if box.done { box.lock.unlock(); return }
                     box.done = true
@@ -333,12 +366,21 @@ enum ChatService {
                     guard let p = snap.progress else { return }
                     box.lock.lock()
                     if p.completedUnitCount != box.lastBytes { box.lastBytes = p.completedUnitCount; box.lastMove = Date() }
+                    let firstFull = !box.allSent && p.totalUnitCount > 0 && p.completedUnitCount >= p.totalUnitCount
+                    if firstFull { box.allSent = true }
                     box.lock.unlock()
+                    if firstFull { trace?.set { $0.bytes100 = Date() } }
                     guard let progressId, p.totalUnitCount > 0 else { return }
                     let fraction = Double(p.completedUnitCount) / Double(p.totalUnitCount)
                     Task { @MainActor in UploadProgress.shared.report(progressId, fraction) }
                 }
-                task.observe(.success) { _ in finish(.success(())) }
+                task.observe(.success) { snap in
+                    trace?.set { $0.putOK = Date() }
+                    // The download token from the put's own reply (first of a comma list), so the
+                    // caller can skip `downloadURL()`. nil when the reply has none.
+                    let tokens = snap.metadata?.dictionaryRepresentation()["downloadTokens"] as? String
+                    finish(.success(tokens?.split(separator: ",").first.map(String.init)))
+                }
                 task.observe(.failure) { snap in
                     finish(.failure(snap.error ?? NSError(domain: StorageErrorDomain, code: -1)))
                 }
@@ -347,9 +389,10 @@ enum ChatService {
                         try? await Task.sleep(nanoseconds: 5_000_000_000)
                         box.lock.lock()
                         let done = box.done, idle = Date().timeIntervalSince(box.lastMove)
+                        let limit = box.allSent ? finishingLimit : stallLimit
                         box.lock.unlock()
                         if done { return }
-                        if idle >= stallLimit {
+                        if idle >= limit {
                             print("[Upload] no progress for \(Int(idle)) s, restarting the transfer")
                             finish(.failure(URLError(.timedOut)))   // retryable: a fresh attempt follows
                             task.cancel()
@@ -1257,8 +1300,17 @@ enum ChatService {
         let longEdge = max(img.size.width, img.size.height)
         let scale = min(1, maxDimension / longEdge)
         if scale >= 1 { return img.jpegData(compressionQuality: quality) ?? stripped(data) }
-        let newSize = CGSize(width: img.size.width * scale, height: img.size.height * scale)
-        let resized = UIGraphicsImageRenderer(size: newSize).image { _ in
+        let newSize = CGSize(width: (img.size.width * scale).rounded(),
+                             height: (img.size.height * scale).rounded())
+        // ⛔ SCALE 1, NOT THE SCREEN'S (owner, 2026-10-17). With no format the renderer draws at 3x
+        // on a modern phone, so "1600" came out as 4800 pixels and a 4032px photo went up BIGGER
+        // than it started. `UIImage(data:)` is scale 1, so `img.size` is already pixels.
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        if let alpha = img.cgImage?.alphaInfo {
+            format.opaque = [.none, .noneSkipFirst, .noneSkipLast].contains(alpha)
+        }
+        let resized = UIGraphicsImageRenderer(size: newSize, format: format).image { _ in
             img.draw(in: CGRect(origin: .zero, size: newSize))
         }
         return resized.jpegData(compressionQuality: quality) ?? stripped(data)
@@ -1335,6 +1387,7 @@ enum ChatService {
 
     static func sendImage(cid: String, data rawData: Data, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, viewOnce: Bool = false, caption: String = "", forwarded: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload — order is when send was tapped
+        let tap = Date(), trace = UploadTrace()             // PHOTO# timings, 2026-10-17
         let data = sendJPEG(rawData)
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") {
@@ -1358,6 +1411,7 @@ enum ChatService {
                                            "updatedAt": FieldValue.serverTimestamp()], merge: true)
             }
         }
+        let encDone = Date()
 
         let msgRef = convRef.collection("messages").document()
 
@@ -1374,7 +1428,8 @@ enum ChatService {
                                                 // lands — see `PendingUpload`. The photo's own seal
                                                 // is already in the message write below, so no enc.
                                                 attach: .init(cid: cid, messageId: msgRef.documentID,
-                                                              urlField: "imageUrl", enc: nil))
+                                                              urlField: "imageUrl", enc: nil),
+                                                trace: trace)
 
         // Caption travels INSIDE the image message (the caption is the message body) — sealed
         // exactly like a text message.
@@ -1464,6 +1519,15 @@ enum ChatService {
         }
         batch.updateData(convUpdate, forDocument: convRef)
         try await batch.commit()
+
+        // Hidden diagnostic (owner, 2026-10-17): ms since the send tap for each step. Sizes and
+        // times only. -1 means the step was not seen (the background uploader reports no bytes).
+        let m = trace.snapshot
+        func ms(_ d: Date?) -> Int { d.map { Int($0.timeIntervalSince(tap) * 1000) } ?? -1 }
+        let px = sized.map { "\(Int($0.size.width))x\(Int($0.size.height))" } ?? "?"
+        DiagLog.add("PHOTO# raw=\(rawData.count) sent=\(cipher.count) px=\(px) enc=\(ms(encDone)) "
+                    + "bytes100=\(ms(m.bytes100)) putOK=\(ms(m.putOK)) url=\(ms(m.url)) "
+                    + "commit=\(ms(Date())) attempts=\(m.attempts)")
     }
 
     /// Send 2+ photos as ONE album message (grid + one caption), as standard messengers do. Each photo is

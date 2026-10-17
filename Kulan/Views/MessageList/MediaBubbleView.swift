@@ -946,6 +946,7 @@ final class UploadRingView: UIView {
     private let cross = UIImageView()
     private var bag = Set<AnyCancellable>()
     private var spinning = false
+    private var finishing = false
     /// The last value handed to `onCancelled`, so `paint` — which runs many times a second while an
     /// upload is progressing — tells its owner only when the answer actually changes.
     private var lastCancelled: Bool?
@@ -1000,6 +1001,7 @@ final class UploadRingView: UIView {
     func stop() {
         bag.removeAll()
         spinning = false
+        finishing = false
         arc.removeAllAnimations()
         arc.strokeEnd = 0
         alpha = 1                            // a recycled cell must not inherit a hidden ring
@@ -1049,6 +1051,9 @@ final class UploadRingView: UIView {
         // moment a transfer is queued, long before a byte moves, so a tile queued behind the others
         // drew the 0.03 hair and nothing more: a ring that looks frozen. Spin until bytes move.
         guard let fraction = UploadProgress.shared.fraction(key), fraction > 0 else { startSpinning(); return }
+        // ⛔ ALL BYTES SENT, SERVER NOT DONE (owner, 2026-10-17): the ring sat frozen at 99% while
+        // the server finished. It turns instead until the item is really done (`settled` above).
+        if fraction >= 0.999 { startFinishing(); return }
         stopSpinning()
         // A hair of ring at zero, so the first determinate frame is still an indicator and not an
         // empty circle.
@@ -1069,6 +1074,7 @@ final class UploadRingView: UIView {
         // ring came back STILL and this guard refused to restart it. Ask the layer, not the flag.
         guard !spinning || arc.animation(forKey: "spin") == nil else { return }
         spinning = true
+        finishing = false
         let open = CABasicAnimation(keyPath: "strokeEnd")
         open.fromValue = 0
         open.toValue = 0.5
@@ -1090,10 +1096,28 @@ final class UploadRingView: UIView {
     /// while the model still says zero. Removing it is what lets the real fraction take over
     /// instead of being masked by a presentation value that outlived its animation.
     private func stopSpinning() {
-        guard spinning else { return }
+        guard spinning || finishing else { return }
         spinning = false
+        finishing = false
         arc.removeAnimation(forKey: "open")
         arc.removeAnimation(forKey: "spin")
+    }
+
+    /// The "finishing" turn (2026-10-17): every byte is sent and the server has not answered yet.
+    /// The arc stops just short of a full circle so the gap shows it turning, and it never reads as
+    /// done before it is. Core Animation on the layer, not a SwiftUI repeat-forever animation.
+    private func startFinishing() {
+        guard !finishing || arc.animation(forKey: "spin") == nil else { return }
+        if spinning { stopSpinning() }
+        finishing = true
+        arc.removeAnimation(forKey: "fill")
+        arc.strokeEnd = 0.9
+        let spin = CABasicAnimation(keyPath: "transform.rotation.z")
+        spin.fromValue = 0
+        spin.toValue = Double.pi * 2
+        spin.duration = 1
+        spin.repeatCount = .infinity
+        arc.add(spin, forKey: "spin")
     }
 
     /// Back on screen: repaint, which restarts a spinner iOS stripped while it was away.

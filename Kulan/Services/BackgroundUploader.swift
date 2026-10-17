@@ -344,10 +344,16 @@ final class BackgroundUploader: NSObject {
               let first = tokens.split(separator: ",").first else {
             throw BackgroundUploadError.noDownloadToken
         }
+        return Self.tokenURL(bucket: bucket, path: path, token: String(first))
+    }
+
+    /// The one place the download address is built by hand. Shared with the foreground upload
+    /// (2026-10-17) so it skips the extra `downloadURL()` round trip and both stay byte-identical.
+    static func tokenURL(bucket: String, path: String, token: String) -> String {
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~")
         let encoded = path.addingPercentEncoding(withAllowedCharacters: allowed) ?? path
-        return "https://firebasestorage.googleapis.com/v0/b/\(bucket)/o/\(encoded)?alt=media&token=\(first)"
+        return "https://firebasestorage.googleapis.com/v0/b/\(bucket)/o/\(encoded)?alt=media&token=\(token)"
     }
 }
 
