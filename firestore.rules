@@ -1167,6 +1167,12 @@ service cloud.firestore {
     // ⚠️ WRITE THEM AS NUMBERS. The console types a new field as a string unless it is told
     // otherwise, and a string here is ignored — `appLimit()` falls back rather than erroring, so a
     // limit typed as text looks like an edit that did nothing.
+    // 2026-10-17: Fariin's stories changed; phones re-ask `officialStoriesFeed`. Server-written only.
+    match /config/officialStoriesStamp {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     match /config/limits {
       allow read: if signedIn();
       allow write: if adminIsOwner();

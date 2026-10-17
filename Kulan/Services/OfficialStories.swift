@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import FirebaseAuth
 import FirebaseFunctions
+import FirebaseFirestore
 
 // ⛔ OFFICIAL STORIES — owner 2026-10-16: "admins upload stories for the Fariin official chat in the
 // admin panel; users view them exactly like normal stories". Fariin is a row in the Stories list
@@ -31,6 +32,10 @@ final class OfficialStories {
 
     private var lastFetch: Date = .distantPast
     private var fetching = false
+    /// Live: `config/officialStoriesStamp` moves on every change to an official story (owner
+    /// 2026-10-17: a new Fariin story showed only after reopening the app). Each move re-asks the feed.
+    private var stampWatch: ListenerRegistration?
+    private var lastStamp: Timestamp?
     private var expiryTimer: Timer?
     /// The account whose saved answer has been shown this launch.
     private var seededFor: String?
@@ -64,6 +69,18 @@ final class OfficialStories {
             seededFor = uid
             if let saved = Self.loadSaved(uid: uid) { publish(saved, save: false) }
         }
+        if stampWatch == nil {
+            // Firestore calls back on the main queue.
+            stampWatch = Firestore.firestore().document("config/officialStoriesStamp").addSnapshotListener { snap, _ in
+                guard let at = snap?.data()?["at"] as? Timestamp else { return }
+                MainActor.assumeIsolated {
+                    let me = OfficialStories.shared
+                    defer { me.lastStamp = at }
+                    // The first answer only records where we are; a later move is a change.
+                    if let was = me.lastStamp, was != at { me.refresh(force: true) }
+                }
+            }
+        }
         guard force || Date().timeIntervalSince(lastFetch) > 5 * 60 else { return }
         fetching = true
         Task {
@@ -78,6 +95,7 @@ final class OfficialStories {
     /// Sign-out: the next account must not inherit this one's answer.
     func reset() {
         expiryTimer?.invalidate(); expiryTimer = nil
+        stampWatch?.remove(); stampWatch = nil; lastStamp = nil
         lastFetch = .distantPast
         if let uid = seededFor, let url = Self.savedURL(uid: uid) { try? FileManager.default.removeItem(at: url) }
         seededFor = nil

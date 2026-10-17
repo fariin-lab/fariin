@@ -124,10 +124,9 @@ struct SettingsView: View {
                         // ⛔ ROOM FOR THE PRESS — owner 2026-10-13: a cut, border-like edge on the buttons
                         // when tapped. Interactive glass grows under the finger and the list row clips at
                         // its own edges. The margin keeps the growth inside the row.
-                        // 2026-10-17: and room for the glass's SHADOW to fade out before the cell clips it
-                        // (8/5 cut it into the grey tray he reported three times).
-                        .padding(.horizontal, 18)
-                        .padding(.bottom, 22)
+                        // 2026-10-17, owner: the buttons' sides line up with the Account card's (the row
+                        // is the card's width, so no side padding) and no extra space under them.
+                        .padding(.bottom, 6)
                     }
                     // Zero side insets, as the buttons' own row had: they keep their width. The header
                     // is centred, so the circle and name do not move.
