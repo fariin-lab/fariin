@@ -1064,12 +1064,14 @@ struct EmailAuthView: View {
     /// Email step → password step, handing first responder straight over.
     private func advance() {
         error = nil
-        email = email.trimmingCharacters(in: .whitespaces)
+        // Checked BEFORE trimming: trimming edits `email`, and that edit's onChange would clear the
+        // red box straight after it was set. `emailLooksValid` trims for itself.
         guard emailLooksValid else {
             emailInvalid = true
             emailFocused = true
             return
         }
+        email = email.trimmingCharacters(in: .whitespaces)
         withAnimation(.easeInOut(duration: 0.2)) { showPassword = true }
         passwordFocused = true
     }
