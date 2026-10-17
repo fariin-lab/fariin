@@ -233,7 +233,8 @@ struct LoginCodeView: View {
                 if purpose == .newAccount {
                     try await AuthService.shared.requestSignupCode(email: trimmedEmail)
                 } else {
-                    try await AuthService.shared.requestLoginCode(email: trimmedEmail)
+                    try await AuthService.shared.requestLoginCode(email: trimmedEmail,
+                                                                  confirm: purpose != .forgot)
                 }
                 await MainActor.run {
                     step = .code

@@ -552,10 +552,14 @@ final class AuthService: NSObject {
     ///
     /// SAYS NOTHING ABOUT WHETHER THE ACCOUNT EXISTS. The server answers the same either way, so this
     /// screen cannot be used to find out who has an account here.
-    func requestLoginCode(email: String) async throws {
+    /// `confirm`: the code proves an address rather than signing in, so the mail says
+    /// "Confirm your email" instead of "Your login code".
+    func requestLoginCode(email: String, confirm: Bool = false) async throws {
+        var body: [String: Any] = ["email": email]
+        if confirm { body["purpose"] = "confirm" }
         _ = try await Functions.functions(region: "me-central1")
             .httpsCallable("requestLoginCode")
-            .call(["email": email])
+            .call(body)
     }
 
     /// Trade the code for a session. The server checks it and mints a CUSTOM TOKEN — the only way to
