@@ -313,7 +313,8 @@ struct StorySoloPager: UIViewControllerRepresentable {
             case .changed:
                 let ty = max(0, t.y)
                 let frac = min(1, ty / card.bounds.height)
-                let scale = 1.0 - 0.7 * frac
+                // Owner 2026-10-17: it shrank to a dot on a long pull; it stops at half size now.
+                let scale = max(0.5, 1.0 - 0.7 * frac)
                 card.layer.cornerCurve = .continuous
                 // Clip to the STORY, not the container — the strip above the 9:16 card is the
                 // container's own background and must not shrink into view as a black header.

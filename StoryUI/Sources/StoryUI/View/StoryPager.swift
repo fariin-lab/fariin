@@ -1060,7 +1060,8 @@ struct StoryPager: UIViewControllerRepresentable {
                 // Reference video (user's chosen close): the card shrinks HARD as you pull —
                 // down to ~30% at a full drag — floating over the live chat list, with a light
                 // horizontal follow. It shrinks in place; it does not ride off with the finger.
-                let scale = 1.0 - 0.7 * frac
+                // Owner 2026-10-17: it shrank to a dot on a long pull; it stops at half size now.
+                let scale = max(0.5, 1.0 - 0.7 * frac)
                 card.layer.cornerCurve = .continuous    // Apple squircle
                 // CLIPPED TO THE STORY, NOT TO THE PAGE, which is the black header he circled. The
                 // page is taller than the 9:16 card and the strip above it is the page's own black
