@@ -4015,6 +4015,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // (rather than refusing the hide flag) also covers the change-frame variant, which carries an
         // off-screen end frame and no flag at all.
         if !up, UIApplication.shared.applicationState != .active { return }
+        if !up, (composerBar as? ChatComposerView)?.holdsKeyboardForGifSearch == true { return }
         let announced = up ? overlap : restSafeBottom
         let d = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
         if d > 0 {
@@ -4080,6 +4081,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // that bug. An inactive hide is `syncKeyboardOnReturn`'s: at didBecomeActive it lowers when the
         // field no longer has focus, which is the case when the keys really went away.
         guard UIApplication.shared.applicationState == .active else { return }
+        guard (composerBar as? ChatComposerView)?.holdsKeyboardForGifSearch != true else { return }
         settleKeyboardAtRest()
     }
 

@@ -654,6 +654,11 @@ final class ChatComposerView: UIView {
         else if let p = pendingFocus { requestFocus(p) }
     }
 
+    private var gifSearchActive = false
+    /// True while the sticker panel's GIF search is expanding, active, or collapsing back to the
+    /// panel, so `MessageListController` keeps the keyboard guide pinned and never drops the composer.
+    private(set) var holdsKeyboardForGifSearch = false
+
     /// Honours a focus request now, or keeps it for the next chance: the view has no window yet
     /// (chat opening on a reply), or UIKit refused the responder mid-transition (context menu still
     /// dismissing). A kept request is cleared by the next CHANGE of the flag, so a person who has
@@ -663,11 +668,18 @@ final class ChatComposerView: UIView {
         guard window != nil else { pendingFocus = on; return }
         if on {
             textView.resignRequested = false
-            if !textView.isFirstResponder, !textView.becomeFirstResponder() { pendingFocus = true }
-        } else if textView.isFirstResponder {
-            // OUR resign announces itself, so the guard lets it through — see ComposerTextView.
-            textView.resignRequested = true
-            textView.resignFirstResponder()
+            if !textView.isFirstResponder, !gifSearchActive, !textView.becomeFirstResponder() { pendingFocus = true }
+        } else {
+            if gifSearchActive {
+                gifSearchActive = false
+                holdsKeyboardForGifSearch = false
+                (textView.inputView as? StickerKeyboardView)?.tearDownSearchOverlay()
+            }
+            if textView.isFirstResponder {
+                // OUR resign announces itself, so the guard lets it through — see ComposerTextView.
+                textView.resignRequested = true
+                textView.resignFirstResponder()
+            }
         }
     }
 
@@ -1275,8 +1287,15 @@ final class ChatComposerView: UIView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window == nil { setLive(false); stopPulse() }
-        else if shown.recordingActive { setLive(true) }
+        if window == nil {
+            setLive(false)
+            stopPulse()
+            gifSearchActive = false
+            holdsKeyboardForGifSearch = false
+            (textView.inputView as? StickerKeyboardView)?.tearDownSearchOverlay()
+        } else if shown.recordingActive {
+            setLive(true)
+        }
         // Focus asked for before the view had a window is honoured now that it has one.
         if window != nil, let p = pendingFocus { requestFocus(p) }
     }
@@ -1353,7 +1372,7 @@ extension ChatComposerView: UITextViewDelegate {
     /// answers for the BAR, which never is one, so a caller outside this file cannot ask the
     /// question without this. Read by the list controller when the app comes back from the
     /// background and it has to decide whether the keys are still up.
-    var isEditingText: Bool { textView.isFirstResponder }
+    var isEditingText: Bool { textView.isFirstResponder || gifSearchActive }
 
     func textViewDidBeginEditing(_ tv: UITextView) {
         // Arm the resign guard for the presentation — see `ComposerTextView.resignFirstResponder`.
@@ -1363,6 +1382,9 @@ extension ChatComposerView: UITextViewDelegate {
     }
 
     func textViewDidEndEditing(_ tv: UITextView) {
+        // While the sticker panel is expanded to full screen for GIF search, its own search field
+        // holds first responder; keep the sticker panel and focus state alive.
+        if gifSearchActive { return }
         // The keys went away with the panel up (scroll, tap on the chat): the next focus is the
         // keyboard again, not the panel.
         if stickerPanelUp { setStickerPanel(false, reload: false) }
@@ -1397,13 +1419,35 @@ extension ChatComposerView: UITextViewDelegate {
             panel.onSend = { [weak self] s in self?.actions.sendSticker(s) }
             panel.onCreate = { [weak self] in self?.actions.createSticker() }
             panel.onSendGif = { [weak self] g in self?.actions.sendGif(g) }
-            panel.onGifs = { [weak self] in
+            panel.hostWindow = { [weak self] in self?.window }
+            panel.onTouch = { [weak self] in self?.actions.barTouched() }
+            panel.onBeginGifSearch = { [weak self] in
                 guard let self else { return }
-                self.setStickerPanel(false, reload: false)
-                self.actions.gif()
+                self.gifSearchActive = true
+                self.holdsKeyboardForGifSearch = true
+                self.textView.resignRequested = true
+            }
+            panel.onWillCollapseGifSearch = { [weak self] in
+                guard let self else { return }
+                self.holdsKeyboardForGifSearch = true
+            }
+            panel.onRestorePanelFocus = { [weak self] in
+                guard let self else { return }
+                self.gifSearchActive = false
+                self.textView.resignRequested = false
+                _ = self.textView.becomeFirstResponder()
+                self.textView.reloadInputViews()
+            }
+            panel.onDidCollapseGifSearch = { [weak self] in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                    self?.holdsKeyboardForGifSearch = false
+                }
             }
             textView.inputView = panel
         } else {
+            gifSearchActive = false
+            holdsKeyboardForGifSearch = false
+            (textView.inputView as? StickerKeyboardView)?.tearDownSearchOverlay()
             textView.inputView = nil
         }
         gifButton.icon.image = (on ? UIImage(named: "ic_keyboard") : UIImage(named: "ic_gif"))?
