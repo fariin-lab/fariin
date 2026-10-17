@@ -148,13 +148,21 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     override func layoutSubviews() {
         super.layoutSubviews()
         let w = bounds.width
+        // Frames are only valid on an untransformed view; the hide lift is put back on below.
+        for v in [tabs, tabGlass, editButton, strip] as [UIView] { v.transform = .identity }
         tabs.frame = CGRect(x: (w - 220) / 2, y: M.top, width: 220, height: M.tabsH)
         editButton.frame = CGRect(x: w - 44 - 6, y: M.top, width: 44, height: M.tabsH)
         tabGlass.frame = tabs.frame.insetBy(dx: -3, dy: -3)
         tabGlass.layer.cornerRadius = tabGlass.bounds.height / 2
         strip.frame = CGRect(x: 0, y: tabs.frame.maxY + 4, width: w, height: M.stripH)
         layoutStrip()
-        let gridTop = strip.frame.maxY
+        // Hidden on scroll (see `setHeaderHidden`): the header rides up and fades, the grid takes its room.
+        let lift = headerHidden ? strip.frame.maxY : 0
+        for v in [tabs, tabGlass, editButton, strip] as [UIView] {
+            v.transform = CGAffineTransform(translationX: 0, y: -lift)
+            v.alpha = headerHidden ? 0 : 1
+        }
+        let gridTop = headerHidden ? 0 : strip.frame.maxY
         grid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, bounds.height - gridTop))
         grid.contentInset.bottom = safeAreaInsets.bottom + (editing ? 44 : 0)
         let barH = 44 + safeAreaInsets.bottom
@@ -224,6 +232,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             stripButtons.append(b)
         }
         layoutStrip()
+        markedStrip = -1
         markStrip(0)
     }
 
@@ -234,15 +243,31 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             b.frame = CGRect(x: x, y: y, width: M.stripCell, height: M.stripCell)
             x += M.stripCell + M.stripSpacing
         }
+        if stripButtons.indices.contains(markedStrip) {
+            stripHighlight.frame = stripButtons[markedStrip].frame.insetBy(dx: 4, dy: 4)
+        }
         strip.contentSize = CGSize(width: x + M.side - M.stripSpacing, height: M.stripH)
     }
 
     private var markedStrip = -1
+    /// One small highlight that slides between packs (owner 2026-10-17: the full-cell one looked big).
+    private let stripHighlight: UIView = {
+        let v = UIView()
+        v.backgroundColor = UIColor.label.withAlphaComponent(0.1)
+        v.layer.cornerRadius = 9
+        v.layer.cornerCurve = .continuous
+        v.isUserInteractionEnabled = false
+        return v
+    }()
     private func markStrip(_ i: Int) {
         guard i != markedStrip else { return }
+        let first = markedStrip < 0
         markedStrip = i
-        for b in stripButtons {
-            b.backgroundColor = b.tag == i ? UIColor.label.withAlphaComponent(0.1) : .clear
+        if stripHighlight.superview !== strip { strip.insertSubview(stripHighlight, at: 0) }
+        if stripButtons.indices.contains(i) {
+            let to = stripButtons[i].frame.insetBy(dx: 4, dy: 4)
+            if first { stripHighlight.frame = to }
+            else { UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState]) { self.stripHighlight.frame = to } }
         }
         if stripButtons.indices.contains(i) {
             strip.scrollRectToVisible(stripButtons[i].frame.insetBy(dx: -M.side, dy: 0), animated: true)
@@ -267,6 +292,26 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         guard sv === grid else { return }
         let top = grid.indexPathsForVisibleItems.min()
         if let s = top?.section { markStrip(s) }
+        // ⛔ THE TABS AND THE PACK STRIP GET OUT OF THE WAY — owner 2026-10-17: scrolling into the
+        // stickers hides them, scrolling back shows them. Only a drag moves them, so a layout pass or
+        // the strip's own jump never flickers them.
+        guard sv.isTracking || sv.isDecelerating else { lastY = sv.contentOffset.y; return }
+        let y = sv.contentOffset.y, dy = y - lastY
+        lastY = y
+        if y <= 0 { setHeaderHidden(false) }
+        else if dy > 6 { setHeaderHidden(true) }
+        else if dy < -6 { setHeaderHidden(false) }
+    }
+
+    private var lastY: CGFloat = 0
+    private var headerHidden = false
+
+    private func setHeaderHidden(_ hide: Bool) {
+        guard hide != headerHidden else { return }
+        headerHidden = hide
+        UIView.animate(withDuration: 0.25, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+            self.layoutSubviews()
+        }
     }
 
     // MARK: Tabs

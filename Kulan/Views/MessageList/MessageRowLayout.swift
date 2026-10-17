@@ -1058,7 +1058,15 @@ enum MessageRowLayout {
                 // belongs to, and on the opposite side from the time capsule.
                 let inset: CGFloat = 8
                 var cx = bubbleRect.minX + inset
-                let cy = bubbleRect.maxY - height / 2
+                var cy = bubbleRect.maxY - height / 2
+                // 2026-10-17 (owner): on a STICKER the badge sat under the time pill, apart from it. It
+                // goes on the time's own line, just left of the pill, the way a sticker's footer reads.
+                if case .media(let mb) = b.body, mb.kind == .sticker, plan.meta != .zero {
+                    let meta = plan.meta.offsetBy(dx: bubbleRect.minX, dy: bubbleRect.minY)
+                    let total = widths.reduce(0, +) + BubbleMetrics.reactionChipGap * CGFloat(max(0, widths.count - 1))
+                    cx = max(bubbleRect.minX, meta.minX - 6 - total)
+                    cy = meta.midY - height / 2
+                }
                 plan.reactionsFreeform = true
                 for (i, w) in widths.enumerated() {
                     plan.reactions.append(CGRect(x: cx, y: cy, width: w, height: height))

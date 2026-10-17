@@ -1374,6 +1374,8 @@ extension ChatComposerView: UITextViewDelegate {
     var stickerPanelUp: Bool { textView.inputView != nil }
 
     func toggleStickerPanel() {
+        // Owner 2026-10-17: a light buzz on open and on close.
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         if stickerPanelUp {
             setStickerPanel(false, reload: true)
             return
@@ -1403,7 +1405,7 @@ extension ChatComposerView: UITextViewDelegate {
         } else {
             textView.inputView = nil
         }
-        gifButton.icon.image = (on ? UIImage(systemName: "keyboard") : UIImage(named: "ic_gif"))?
+        gifButton.icon.image = (on ? UIImage(named: "ic_keyboard") : UIImage(named: "ic_gif"))?
             .withRenderingMode(.alwaysTemplate)
         gifButton.accessibilityLabel = on ? "Keyboard" : "GIF"
         if reload { textView.reloadInputViews() }
