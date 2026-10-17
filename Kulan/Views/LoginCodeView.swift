@@ -51,7 +51,7 @@ struct LoginCodeView: View {
 
         var blurb: String {
             switch self {
-            case .forgot:     return "No password needed. Type the code and you are back in."
+            case .forgot:     return "Type the email on your account. We will send a code that logs you in, no password needed."
             case .signUp:     return "One code and your account is ready."
             case .unproven:   return "This is a one-time check. It will not be asked again."
             case .newAccount: return "Type the code we send you, then choose a password."
@@ -105,7 +105,7 @@ struct LoginCodeView: View {
             VStack(spacing: 14) {
                 // Same header as the email page (EmailAuthView), so the two read as one flow.
                 VStack(spacing: 6) {
-                    Text(step == .email ? "What is your email?"
+                    Text(step == .email ? "Get a login code"
                          : step == .newPassword ? "Create a new password" : purpose.title)
                         .font(.system(size: 30, weight: .bold)).foregroundStyle(.primary)
                         .multilineTextAlignment(.center)
@@ -134,17 +134,32 @@ struct LoginCodeView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                         .disabled(busy)
                 } else if step == .email {
-                    labelled("Email") {
-                        // No placeholder, same reason as the login field: the row is labelled
-                        // "Email" already, so a fake address underneath it only repeated the label.
-                        TextField("", text: $address)
+                    // The sign-up page's field: glyph inside, placeholder, no label above
+                    // (owner, 2026-10-17: the label-over-grey-box version looked cheap).
+                    HStack(spacing: 12) {
+                        Image(systemName: "envelope").foregroundStyle(.secondary).frame(width: 22)
+                        TextField("Email", text: $address)
                             .keyboardType(.emailAddress)
-                            .textContentType(.emailAddress)
+                            .textContentType(.username)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .focused($focused)
+                            .submitLabel(.send)
+                            .onSubmit { if trimmedEmail.contains("@") { send() } }
                     }
-                    primaryButton("Send Code", enabled: trimmedEmail.contains("@")) { send() }
+                    .authField(focused: focused)
+                    primaryButton("Send code", enabled: trimmedEmail.contains("@")) { send() }
+                        .padding(.top, 4)
+
+                    // For the person who is here because they are worried, not because they
+                    // forgot: straight to the help page on getting an account back.
+                    if purpose == .forgot,
+                       let help = URL(string: "https://help.fariin.com/security/if-you-think-someone-else-is-in-your-account") {
+                        Button("Someone else is in my account") { WebLink.open(help) }
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.primary)
+                            .padding(.top, 6)
+                    }
                 } else {
                     CodeBoxes(code: $code, length: codeLength, focused: $focused,
                               invalid: error != nil && code.isEmpty)
