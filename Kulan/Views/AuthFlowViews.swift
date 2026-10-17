@@ -236,24 +236,29 @@ extension View {
             .contentShape(Capsule())
     }
 
-    /// The email pages' main button: the light pill once it can be pressed, a raised grey pill with
-    /// dim text until then (the reference's disabled look, not a faded copy of the enabled one).
+    /// The email pages' main button: always the solid pill, softened until it can be pressed.
+    /// It was a grey pill with grey text, which on a white page read as no button at all (owner,
+    /// 2026-10-16, side by side with a large app's sign-up).
     func authActionPill(enabled: Bool) -> some View {
         self.font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(enabled ? AuthPalette.page : Color.primary.opacity(0.3))
+            .foregroundStyle(AuthPalette.page)
             .frame(maxWidth: .infinity).frame(height: 54)
-            .background(enabled ? Color.primary : AuthPalette.raised, in: Capsule())
+            .background(Color.primary.opacity(enabled ? 1 : 0.3), in: Capsule())
     }
 
-    /// A field box on the email pages: its glyph inside, no label above, outlined while focused.
-    func authField(focused: Bool) -> some View {
-        self.font(.system(size: 17))
+    /// A field box on the email pages: its glyph inside, no label above, a hairline at rest, dark
+    /// while focused, red after a bad address. White with an edge, not grey: a grey box over a
+    /// grey button read as two of the same thing.
+    func authField(focused: Bool, invalid: Bool = false) -> some View {
+        let edge: Color = invalid ? .red : Color.primary.opacity(focused ? 0.75 : 0.18)
+        return self.font(.system(size: 17))
             .foregroundStyle(.primary)
             .padding(.horizontal, 18).frame(height: 56)
-            .background(AuthPalette.raised, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(AuthPalette.page, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.primary.opacity(focused ? 0.75 : 0), lineWidth: 1.2))
+                .strokeBorder(edge, lineWidth: focused || invalid ? 1.2 : 1))
             .animation(.easeOut(duration: 0.15), value: focused)
+            .animation(.easeOut(duration: 0.15), value: invalid)
     }
 
     /// The second choice: OUTLINED, not filled.
@@ -733,9 +738,37 @@ struct EmailAuthView: View {
 
     /// Sign-up asks ONE thing at a time: the address, then the password. Log in shows both.
     @State private var showPassword = false
-    /// The scroll area's height, so the content can fill it and catch taps on the empty part.
+    /// The page's height with the keyboard DOWN. The content is at least this tall, so the empty
+    /// part catches taps, "Already have an account?" sits at the bottom, and while typing that line
+    /// stays behind the keyboard instead of riding up over the address chips.
     @State private var viewportHeight: CGFloat = 0
+    /// Set when Continue is pressed on an address that cannot be one. Cleared by the next edit.
+    @State private var emailInvalid = false
+    /// Sign-up hit an address that already has an account: offer the way in instead of a red line.
+    @State private var showTaken = false
+    @State private var takenSheetHeight: CGFloat = 260
+    private enum TakenChoice { case code, otherEmail }
+    @State private var takenChoice: TakenChoice?
     private var onEmailStep: Bool { mode == .create && !showPassword }
+
+    /// The common address endings, offered above the keyboard once a name has been typed.
+    private static let domains = ["gmail.com", "yahoo.com", "hotmail.com", "icloud.com", "outlook.com"]
+    /// Endings that fit what is typed after the "@". Empty (row hidden) with no name yet, so a
+    /// lone "@gmail.com" cannot be made, and once the ending is complete.
+    private var domainChips: [String] {
+        guard emailFocused else { return [] }
+        let t = email.trimmingCharacters(in: .whitespaces)
+        let parts = t.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
+        guard let name = parts.first, !name.isEmpty else { return [] }
+        let typed = parts.count > 1 ? parts[1].lowercased() : ""
+        return Self.domains.filter { $0.hasPrefix(typed) && $0 != typed }
+    }
+    /// A chip REPLACES whatever follows the "@", so two taps never stack two endings.
+    private func applyDomain(_ domain: String) {
+        let t = email.trimmingCharacters(in: .whitespaces)
+        let name = t.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+        email = "\(name)@\(domain)"
+    }
 
     /// ⛔ THE FOUR RULES — owner, 2026-09-25: at least 8 characters, a letter, a number, and the two
     /// entries matching, ticked off live. The same `PasswordRules` the Settings password pages use,
@@ -752,7 +785,8 @@ struct EmailAuthView: View {
         let domain = t[t.index(after: at)...]
         return domain.contains(".") && !domain.hasSuffix(".") && !domain.contains("@")
     }
-    private var primaryEnabled: Bool { onEmailStep ? emailLooksValid : canSubmit }
+    /// Continue is always pressable: a bad address gets a red box and a reason, not a dead button.
+    private var primaryEnabled: Bool { onEmailStep ? true : canSubmit }
 
     private var title: String {
         switch (mode, onEmailStep) {
@@ -777,6 +811,11 @@ struct EmailAuthView: View {
         ZStack {
             AuthPalette.page.ignoresSafeArea()
                 .dismissesKeyboardOnTap()
+            // Measures the page as if the keyboard were down (see `viewportHeight`).
+            Color.clear
+                .ignoresSafeArea(.keyboard)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewportHeight = $0 }
+                .allowsHitTesting(false)
             ScrollView {
                 VStack(spacing: 14) {
                     VStack(spacing: 6) {
@@ -814,11 +853,19 @@ struct EmailAuthView: View {
                                 .focused($emailFocused)
                                 .submitLabel(.next)
                                 .onSubmit {
-                                    if mode == .create { if emailLooksValid { advance() } }
+                                    if mode == .create { advance() }
                                     else { emailFocused = false; passwordFocused = true }
                                 }
+                                .onChange(of: email) { emailInvalid = false }
                         }
-                        .authField(focused: emailFocused)
+                        .authField(focused: emailFocused, invalid: emailInvalid)
+
+                        if emailInvalid {
+                            Text("Enter a correct email address, like name@example.com")
+                                .font(.footnote).foregroundStyle(.red)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 4).padding(.top, -6)
+                        }
                     }
 
                     if !onEmailStep {
@@ -877,6 +924,10 @@ struct EmailAuthView: View {
                             .multilineTextAlignment(.center)
                     }
 
+                    // The other mode lives at the foot of the page, like large apps' sign-up: next
+                    // to the form it pulled the eye off the field and left the bottom half empty.
+                    Spacer(minLength: 24)
+
                     Button { switchMode() } label: {
                         HStack(spacing: 5) {
                             Text(mode == .login ? "Don’t have an account?" : "Already have an account?")
@@ -887,7 +938,7 @@ struct EmailAuthView: View {
                         .font(.subheadline)
                     }
                     .buttonStyle(.plain)
-                    .padding(.top, 24)
+                    .padding(.bottom, 12)
                 }
                 .padding(.horizontal, 24)
                 // The ScrollView covers the page, so the page's own tap never fires: the empty
@@ -895,9 +946,75 @@ struct EmailAuthView: View {
                 .frame(maxWidth: .infinity, minHeight: viewportHeight, alignment: .top)
                 .background(Color.clear.contentShape(Rectangle()).dismissesKeyboardOnTap())
             }
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewportHeight = $0 }
             .scrollDismissesKeyboard(.interactively)
             .scrollBounceBehavior(.basedOnSize)
+            // Above the keyboard: the ScrollView ends at the keyboard, so its bottom inset does too.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                let chips = domainChips
+                if !chips.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(chips, id: \.self) { d in
+                                Button { applyDomain(d) } label: {
+                                    Text("@" + d)
+                                        .font(.system(size: 15, weight: .medium))
+                                        .foregroundStyle(.primary)
+                                        .padding(.horizontal, 14).frame(height: 36)
+                                        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.18), lineWidth: 1))
+                                        .contentShape(Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 24)
+                    }
+                    .padding(.vertical, 8)
+                    .background(AuthPalette.page)
+                    .transition(.opacity)
+                }
+            }
+            .animation(.easeOut(duration: 0.15), value: domainChips)
+        }
+        // ONE sheet in place of the red "already has an account" line, which came after both
+        // passwords and left people to find Log In on their own. The main way in is a code, as a
+        // large app's sign-up does: whoever is here was making a new password, so the old one is
+        // likely gone. Asked only at Create, never at Continue, so the address box cannot be used
+        // to test addresses one by one without also typing a password.
+        // The choice runs in onDismiss: a push or a focus change while the sheet is still leaving
+        // is dropped or lands under it.
+        .sheet(isPresented: $showTaken, onDismiss: {
+            let choice = takenChoice
+            takenChoice = nil
+            switch choice {
+            case .code?: prove = .forgot   // the code page sends the code by itself on open
+            case .otherEmail?: backToEmail()
+            case nil: break
+            }
+        }) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Are you trying to log in?")
+                    .font(.system(size: 24, weight: .bold))
+                Text("This email already has an account. We can send a code to it so you can log in.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    takenChoice = .code
+                    showTaken = false
+                } label: { Text("Log in with a code").authPrimaryPill() }
+                .buttonStyle(.plain)
+                .padding(.top, 6)
+                Button {
+                    takenChoice = .otherEmail
+                    showTaken = false
+                } label: { Text("Use a different email").authSecondaryPill() }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 24).padding(.top, 28).padding(.bottom, 12)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { takenSheetHeight = $0 }
+            .frame(maxHeight: .infinity, alignment: .top)
+            // A little over the measured content, so a rounding gap never clips the last button.
+            .presentationDetents([.height(takenSheetHeight + 16)])
+            .presentationDragIndicator(.visible)
         }
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
@@ -948,6 +1065,11 @@ struct EmailAuthView: View {
     private func advance() {
         error = nil
         email = email.trimmingCharacters(in: .whitespaces)
+        guard emailLooksValid else {
+            emailInvalid = true
+            emailFocused = true
+            return
+        }
         withAnimation(.easeInOut(duration: 0.2)) { showPassword = true }
         passwordFocused = true
     }
@@ -987,6 +1109,11 @@ struct EmailAuthView: View {
                     } else {
                         await MainActor.run { onAuthed() }
                     }
+                }
+            } catch AuthFlowError.emailTaken where mode == .create {
+                await MainActor.run {
+                    passwordFocused = false; confirmFocused = false
+                    showTaken = true
                 }
             } catch {
                 await MainActor.run { self.error = AuthService.plainMessage(error) }
