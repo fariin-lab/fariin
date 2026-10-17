@@ -217,6 +217,8 @@ struct AttachRecentsStrip: View {
     @State private var selectedAlbum: PHAssetCollection?   // nil = the newest across the whole library
     /// ["folder"] while an album is pushed over the album list, [] otherwise.
     @State private var folderPath: [String] = []
+    /// The bottom inset handed to `FolderNavHost`, written only when it changes (see `body`).
+    @State private var navBottomInset: CGFloat = 0
     @State private var albums: [AttachAlbum] = []
 
     /// ⛔ **THE GRID IS EDGE TO EDGE — owner, 2026-09-02: "now images Is Runded cornders and Laft and
@@ -268,15 +270,28 @@ struct AttachRecentsStrip: View {
         // bottom inset the SwiftUI side had (bar + caption bar + home indicator) as a safe-area
         // inset, so the grid's scroll view still clears the bar while its pictures scroll under it
         // to the very edge, as they did before the folder page became a UIKit push.
-        GeometryReader { geo in
-            FolderNavHost(
-                root: AnyView(rootPage),
-                folder: AnyView(grid.background(Color(uiColor: .systemBackground))),
-                showFolder: !folderPath.isEmpty,
-                bottomInset: geo.safeAreaInsets.bottom,
-                onPopped: { folderPath = [] }
-            )
-            .ignoresSafeArea(.container, edges: .bottom)
+        // ⛔ THE SHEET'S MOVE DOES NOT REBUILD THE GRID — owner 2026-10-17: swiping the sheet from
+        // half to full lagged; the reference app's does not. The host sat INSIDE a GeometryReader,
+        // and the sheet changes size on every frame of a drag or snap, so every frame re-ran this
+        // closure and handed `FolderNavHost` two fresh AnyViews: both hosted pages re-diffed the whole
+        // grid (every loaded asset) 60-120 times a second. The reader now sits behind the host and
+        // only writes the one number it is for, when that number changes; the host itself no longer
+        // depends on the size, so a resize is a plain layout pass.
+        FolderNavHost(
+            root: AnyView(rootPage),
+            folder: AnyView(grid.background(Color(uiColor: .systemBackground))),
+            showFolder: !folderPath.isEmpty,
+            bottomInset: navBottomInset,
+            onPopped: { folderPath = [] }
+        )
+        .ignoresSafeArea(.container, edges: .bottom)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            GeometryReader { geo in
+                Color.clear.onChange(of: geo.safeAreaInsets.bottom, initial: true) { _, v in
+                    if navBottomInset != v { navBottomInset = v }
+                }
+            }
         }
         // The folder page left by the system swipe: the round button must stop being a Back arrow.
         .onChange(of: folderPath) { _, path in

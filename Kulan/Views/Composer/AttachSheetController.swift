@@ -93,16 +93,20 @@ import MapKit
 }
 
 extension EnvironmentValues {
-    /// See `AttachSheetMetrics.side`.
-    @Entry var attachSheetSide: CGFloat = 0
+    /// The live metrics object, not the number: see `AttachSheetRoot`.
+    @Entry var attachSheetMetrics: AttachSheetMetrics? = nil
 }
 
+/// ⛔ ONLY THE BAR HEARS THE SIDE CHANGE — owner 2026-10-17, lag going from half to full. `side`
+/// changes on every frame of a drag or snap. Read here, it re-ran this body each frame and pushed
+/// a new environment value through the whole panel; now the object rides the environment once and
+/// only `AttachSheetSideMargin` reads `side`, so only that modifier updates per frame.
 private struct AttachSheetRoot: View {
     let metrics: AttachSheetMetrics
     let content: AnyView
     var body: some View {
         content.safeAreaPadding(.bottom, metrics.bottom)
-            .environment(\.attachSheetSide, metrics.side)
+            .environment(\.attachSheetMetrics, metrics)
     }
 }
 
@@ -135,8 +139,17 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     private var laterGen = 0
     private var sheetTop: CGFloat = 0
     private var isExpanded = false {
-        didSet { if isExpanded != oldValue { onExpandedChange?(isExpanded) } }
+        didSet {
+            guard isExpanded != oldValue else { return }
+            if holdExpandedNote { expandedNotePending = true } else { onExpandedChange?(isExpanded) }
+        }
     }
+    /// ⛔ "FULL" IS TOLD AFTER THE SNAP, NOT AT ITS FIRST FRAME — owner 2026-10-17, lag going from
+    /// half to full. The note re-renders the whole chat screen (its `attachSheetFull`), and it went
+    /// out on the very frame the snap started. Going up it now waits for `stopDriving`; it only
+    /// gates the bar's X, which also needs the grid scrolled a row, and the snap keeps it at the top.
+    private var holdExpandedNote = false
+    private var expandedNotePending = false
     private var keyboardUp = false
 
     // Drag state
@@ -344,6 +357,11 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
 
     private func stopDriving() {
         stepper = nil
+        holdExpandedNote = false
+        if expandedNotePending {
+            expandedNotePending = false
+            onExpandedChange?(isExpanded)
+        }
         guard driving || link != nil else { return }
         driving = false
         link?.invalidate()
@@ -814,6 +832,8 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     /// back to the state it came from is their plain 0.3s ease.
     private func snap(expanded: Bool, velocity: CGFloat, stay: Bool) {
         stopAll()
+        // Going up: hold the "full" note until the snap is over (see `holdExpandedNote`).
+        holdExpandedNote = expanded
         isExpanded = expanded
         let target = expanded ? expandedTop : compactTop
         let distance = abs(target - sheetTop)
@@ -971,6 +991,6 @@ private struct AttachSheetAnchor: UIViewControllerRepresentable {
 /// Adds the sheet's lost side inset (`AttachSheetMetrics.side`) to a row's side margins, so the row
 /// keeps one gap to the screen's sides at half and at full height.
 struct AttachSheetSideMargin: ViewModifier {
-    @Environment(\.attachSheetSide) private var side
-    func body(content: Content) -> some View { content.padding(.horizontal, side) }
+    @Environment(\.attachSheetMetrics) private var metrics
+    func body(content: Content) -> some View { content.padding(.horizontal, metrics?.side ?? 0) }
 }
