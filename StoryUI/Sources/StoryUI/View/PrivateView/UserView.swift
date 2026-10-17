@@ -161,7 +161,8 @@ struct UserView: View {
                 out.append(.init(title: on ? "Mute notifications" : "Get notifications",
                                  systemImage: on ? "bell.slash" : "bell",
                                  // His own bell (owner 2026-10-16), the one the profile's mute uses.
-                                 assetImage: on ? "ic_bell_off" : "ic_bell") {
+                                 // 2026-10-17: Get = his Notifications mark from Settings.
+                                 assetImage: on ? "ic_bell_off" : "ic_notifications") {
                     NotificationCenter.default.post(name: .init("storyActionNotify"), object: nil)
                 })
             }
@@ -180,10 +181,12 @@ struct UserView: View {
                 })
                 // No Copy Story Link (owner, 2026-10-11): Share's sheet has Copy Link.
             }
-            out.append(.init(title: "Hide Stories", systemImage: "eye.slash") {
+            // His own drawings (owner 2026-10-17); the symbols stay as the fallback.
+            out.append(.init(title: "Hide Stories", systemImage: "eye.slash", assetImage: "ic_eye_off") {
                 NotificationCenter.default.post(name: .init("storyActionHide"), object: nil)
             })
-            out.append(.init(title: "Report", systemImage: "exclamationmark.bubble", destructive: true) {
+            out.append(.init(title: "Report", systemImage: "exclamationmark.bubble", assetImage: "ic_report",
+                             destructive: true) {
                 NotificationCenter.default.post(name: .init("storyActionReport"), object: nil)
             })
         }

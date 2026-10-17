@@ -1704,7 +1704,8 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         let read = UIContextualAction(style: .normal, title: c.hasUnreadMark(p.me) ? "Read" : "Unread") { _, _, done in
             p.onToggleRead(c); done(true)
         }
-        read.image = ChatListIcon.symbol(c.hasUnreadMark(p.me) ? "envelope.open.fill" : "envelope.badge.fill")
+        // His own drawings (owner 2026-10-17), through the sizer so they keep the symbols' size.
+        read.image = ChatListIcon.asset(c.hasUnreadMark(p.me) ? "ic_swipe_read" : "ic_swipe_unread")
         read.backgroundColor = .systemBlue
 
         let pinned = c.isPinned(p.me)
@@ -1777,7 +1778,8 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             }
             done(true)
         }
-        mute.image = ChatListIcon.symbol(muted ? "bell.fill" : "bell.slash.fill")
+        // The profile's own bells (owner 2026-10-17: "use the icons you used in profile"), same size.
+        mute.image = ChatListIcon.asset(muted ? "ic_bell" : "ic_bell_off")
         mute.backgroundColor = .systemIndigo
 
         let cfg = UISwipeActionsConfiguration(actions: [archive, del, mute])

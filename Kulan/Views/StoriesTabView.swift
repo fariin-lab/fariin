@@ -1505,7 +1505,7 @@ struct StoriesTabView: View {
             + (official ? [] : [CMAction(title: "View Profile", icon: "ic_account") { profileGroup = g }])
             // The alert, not the hide: `StoryPrefs.setHidden` happens on the confirmation. See
             // `hideTarget`.
-            + [CMAction(title: "Hide Stories", icon: "eye.slash", destructive: true) { hideTarget = g }]
+            + [CMAction(title: "Hide Stories", icon: "ic_eye_off", destructive: true) { hideTarget = g }]   // his eye, 2026-10-17
     }
 
     /// My own card's menu, the strip's again: the one action a card of my own stories offers that a
