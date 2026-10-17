@@ -12,7 +12,23 @@ extension Notification.Name { static let goToMessage = Notification.Name("goToMe
 // every open/close of "See All Media" â€” a stability trick (the gallery model is retained and only
 // loaded once; reopen renders the cached sections synchronously with no spinner). @MainActor so the
 // SwiftUI views that read/write it stay data-race free.
-@MainActor enum GalleryCache { static var store: [String: [Message]] = [:] }
+@MainActor enum GalleryCache {
+    static var store: [String: [Message]] = [:]
+    /// 2026-10-17: these are decrypted messages and nothing cleared them on sign-out; SessionWipe does
+    /// now, together with the disk copy (GalleryDiskCache).
+    static func removeAll() {
+        store = [:]
+        GalleryDiskCache.shared.removeAll()
+    }
+    /// What the page can paint on its first frame: memory first, then the disk copy from the last
+    /// run (seeded into memory so the disk is read once per chat per launch).
+    static func seed(_ cid: String) -> [Message]? {
+        if let m = store[cid] { return m }
+        guard let disk = GalleryDiskCache.shared.load(cid) else { return nil }
+        store[cid] = disk
+        return disk
+    }
+}
 
 // Full-screen shared-content gallery, PUSHED (not a sheet). An "All Media" header with a live
 // photo/video count and a filter button, then five tabs â€” Media, Files, Voice, Links, GIFs â€” with
@@ -162,7 +178,26 @@ struct MediaGalleryView: View {
     }
     @State private var derived = Derived()
 
+    /// 2026-10-17: the cached gallery goes into the page's STATE here, before the first frame. Seeding
+    /// it in `.task` came one frame late: the first frame was already the loading state, and that
+    /// frame is the flash the owner saw on reopen. `derived` is built here too, for the same reason.
+    init(cid: String, title: String, photoUrl: String?) {
+        self.cid = cid
+        self.title = title
+        self.photoUrl = photoUrl
+        if let cached = GalleryCache.seed(cid) {
+            let shown = cached.filter { !HiddenMessages.isHidden($0.id) }
+            _all = State(initialValue: shown)
+            _loaded = State(initialValue: true)
+            _derived = State(initialValue: Self.makeDerived(shown, filter: .all, cid: cid))
+        }
+    }
+
     private func rebuildDerived() {
+        derived = Self.makeDerived(all, filter: mediaFilter, cid: cid)
+    }
+
+    private static func makeDerived(_ all: [Message], filter mediaFilter: MediaFilter, cid: String) -> Derived {
         var d = Derived()
         d.expandedAll = all.flatMap { $0.expandedGalleryItems(cid: cid) }.filter { !HiddenMessages.isHidden($0.id) }
         // ⚠️ `!viewOnce` HERE IS A HOLE CLOSED, not a nicety (found 2026-08-11): a view-once photo
@@ -186,7 +221,17 @@ struct MediaGalleryView: View {
         // Counted off `mediaItems`, NOT the whole list: the Show filter can narrow the grid.
         d.photoCount = d.mediaItems.filter { $0.isImage && !$0.isGif }.count
         d.videoCount = d.mediaItems.filter { $0.isVideo }.count
-        derived = d
+        return d
+    }
+
+    /// Only what some tab can show goes to disk: a 400-message window is mostly plain chat text the
+    /// gallery never draws, and that text has no reason to sit in a second file (2026-10-17).
+    private static func galleryRelevant(_ all: [Message]) -> [Message] {
+        all.filter { m in
+            if m.viewOnce { return false }
+            return m.isImage || m.isVideo || m.isAlbum || m.isGif || m.isAudio || m.isFile
+                || firstURL(in: m.text) != nil
+        }
     }
 
     private var expandedAll: [Message] { derived.expandedAll }
@@ -203,6 +248,9 @@ struct MediaGalleryView: View {
 
     // The count line under "All Media" reflects the visible tab.
     private var subtitle: String {
+        // 2026-10-17: never "0 photos, 0 videos" while still loading (owner screenshot). A space, not
+        // "", so the subtitle row keeps its height and the title does not jump when the count lands.
+        guard loaded else { return " " }
         func n(_ c: Int, _ one: String) -> String { "\(c) \(one)\(c == 1 ? "" : "s")" }
         switch tab {
         case .media: return "\(n(photoCount, "photo")), \(n(videoCount, "video"))"
@@ -214,8 +262,9 @@ struct MediaGalleryView: View {
     }
 
     var body: some View {
+        // No spinner overlay any more (2026-10-17): each page draws its own skeleton while `!loaded`,
+        // so the tabs still swipe during a cold load. See `gridSkeleton` / `rowsSkeleton`.
         content
-            .overlay { loadingOverlay }   // spinner until the first load finishes (no empty flash)
             .background(GeometryReader { g in
                 Color.clear.onChange(of: g.frame(in: .global), initial: true) { _, f in gridFrame = f }
             })
@@ -295,12 +344,16 @@ struct MediaGalleryView: View {
             // Hidden ones are dropped on the way IN, so the four lists that read `all` directly
             // (files, voice, links, GIFs) get the same treatment `expandedAll` gives the grid.
             func visible(_ m: [Message]) -> [Message] { m.filter { !HiddenMessages.isHidden($0.id) } }
-            if let cached = GalleryCache.store[cid] { all = visible(cached); loaded = true }
+            // The cached copy is already in state from `init` (2026-10-17); this only covers a cache
+            // that filled after the page was built.
+            if !loaded, let cached = GalleryCache.store[cid] { all = visible(cached); loaded = true }
             // nil = the load failed: keep the cached gallery on screen instead of wiping it (2026-09-24).
             guard let fetched = await ChatService.galleryContent(cid) else { loaded = true; return }
             let fresh = visible(fetched)
-            all = fresh
+            // Silent refresh: an unchanged answer writes nothing, so nothing on screen moves.
+            if fresh != all { all = fresh }
             GalleryCache.store[cid] = fresh
+            GalleryDiskCache.shared.store(cid, Self.galleryRelevant(fresh))
             loaded = true
         }
         .fullScreenCover(item: $viewerImage) { msg in
@@ -463,12 +516,66 @@ struct MediaGalleryView: View {
         }
     }
 
-    // Shown until the first load finishes, so the empty state never flashes while loading.
-    @ViewBuilder private var loadingOverlay: some View {
-        if !loaded {
-            ProgressView().tint(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+    // MARK: - Skeletons (2026-10-17, replaced the centred spinner)
+    //
+    // Shown only on a genuinely cold open (no memory or disk copy), so the empty state never flashes
+    // while loading. Each one is the real page's layout with grey in it: same columns, spacing,
+    // paddings and dividers, so nothing jumps when the items land.
+
+    /// The grid page: a title-sized bar, then grey squares in the real `cols`. ONE shimmer sweeps
+    /// across the whole grid (a single SkeletonFill masked by the tiles) rather than 28 separate
+    /// sweeps, which read as a ripple instead of one soft pass of light.
+    private var gridSkeleton: some View {
+        gridSkeletonLayout(.clear)
+            .overlay { SkeletonFill().mask { gridSkeletonLayout(.black) } }
+            .allowsHitTesting(false)
+    }
+
+    /// Mirrors `grid`: section title (title3 bold, 14 side, 6 top), then the 4-column grid, 2pt gaps.
+    private func gridSkeletonLayout(_ fill: Color) -> some View {
+        VStack(alignment: .leading, spacing: 22) {
+            RoundedRectangle(cornerRadius: 6, style: .continuous).fill(fill)
+                .frame(width: 110, height: 20)
+                .padding(.horizontal, 14).padding(.top, 6)
+            LazyVGrid(columns: cols, spacing: 2) {
+                ForEach(0..<28, id: \.self) { _ in
+                    fill.aspectRatio(1, contentMode: .fit)
+                }
+            }
         }
+        .padding(.top, 4).padding(.bottom, 12)
+    }
+
+    /// The list pages, one placeholder per row in the real row's shape and padding.
+    private func rowsSkeleton(_ t: Tab) -> some View {
+        LazyVStack(spacing: 0) {
+            ForEach(0..<10, id: \.self) { i in
+                HStack(spacing: 12) {
+                    switch t {
+                    case .links:
+                        VStack(alignment: .leading, spacing: 6) {
+                            SkeletonBlock(width: 120, height: 14)
+                            SkeletonBlock(width: i % 2 == 0 ? 240 : 190, height: 11)
+                            SkeletonBlock(width: 160, height: 9)
+                        }
+                        .padding(.vertical, 3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    default:
+                        // Files: icon disc + name + size + date. Voice: play disc + waveform + date.
+                        SkeletonCircle(size: 44)
+                        VStack(alignment: .leading, spacing: 7) {
+                            SkeletonBlock(width: t == .voice ? 170 : (i % 2 == 0 ? 180 : 140), height: t == .voice ? 18 : 14)
+                            SkeletonBlock(width: t == .voice ? 44 : 60, height: 10)
+                        }
+                        Spacer()
+                        SkeletonBlock(width: 52, height: 10)
+                    }
+                }
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                Divider().padding(.leading, t == .links ? 16 : 64)
+            }
+        }
+        .allowsHitTesting(false)
     }
 
     // MARK: - Toolbar (selection only â€” the tabs live in the header now)
@@ -579,6 +686,7 @@ struct MediaGalleryView: View {
     private func grid(_ items: [Message], sections groups: [(title: String, items: [Message])],
                       emptyIcon: String, emptyText: String) -> some View {
         ScrollView {
+            if !loaded { gridSkeleton }
             if loaded && items.isEmpty { emptyState(emptyIcon, emptyText) }
             LazyVStack(alignment: .leading, spacing: 22) {
                 // KEYED BY POSITION, NOT BY TITLE. `id: \.title` assumed two groups can never carry
@@ -609,7 +717,7 @@ struct MediaGalleryView: View {
     private static let monthFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "LLLL"; return f }()
     private static let monthYearFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "LLLL yyyy"; return f }()
 
-    private func sections(_ items: [Message]) -> [(title: String, items: [Message])] {
+    private static func sections(_ items: [Message]) -> [(title: String, items: [Message])] {
         let cal = Calendar.current
         var groups: [(title: String, items: [Message])] = []
         let monthFmt = Self.monthFmt, monthYearFmt = Self.monthYearFmt   // built once, not per call
@@ -736,6 +844,7 @@ struct MediaGalleryView: View {
 
     private var voiceList: some View {
         ScrollView {
+            if !loaded { rowsSkeleton(.voice) }
             if loaded && voiceItems.isEmpty { emptyState("mic", "No voice messages") }
             LazyVStack(spacing: 0) {
                 ForEach(voiceItems) { m in
@@ -774,6 +883,7 @@ struct MediaGalleryView: View {
 
     private var linksList: some View {
         ScrollView {
+            if !loaded { rowsSkeleton(.links) }
             if loaded && linkItems.isEmpty { emptyState("link", "No links") }
             LazyVStack(spacing: 0) {
                 ForEach(linkItems) { m in
@@ -823,6 +933,7 @@ struct MediaGalleryView: View {
 
     private var filesList: some View {
         ScrollView {
+            if !loaded { rowsSkeleton(.files) }
             if loaded && fileItems.isEmpty { emptyState("doc", "No files") }
             LazyVStack(spacing: 0) {
                 ForEach(fileItems) { m in
@@ -1011,6 +1122,7 @@ struct MediaGalleryView: View {
             await MainActor.run {
                 all.removeAll { gone.contains($0.id) }
                 GalleryCache.store[cid] = all   // keep the reopen cache in sync (no deleted-media flash)
+                GalleryDiskCache.shared.store(cid, Self.galleryRelevant(all))   // and the relaunch copy
                 exitSelection()
                 if !refused.isEmpty { deleteFailed = true }
             }
