@@ -162,7 +162,8 @@ struct UserView: View {
                                  systemImage: on ? "bell.slash" : "bell",
                                  // His own bell (owner 2026-10-16), the one the profile's mute uses.
                                  // 2026-10-17: Get = his Notifications mark from Settings.
-                                 assetImage: on ? "ic_bell_off" : "ic_notifications") {
+                                 // Mute = his OUTLINE crossed bell (owner 2026-10-17: not the filled one).
+                                 assetImage: on ? "ic_bell_off_outline" : "ic_notifications") {
                     NotificationCenter.default.post(name: .init("storyActionNotify"), object: nil)
                 })
             }
