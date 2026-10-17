@@ -431,8 +431,25 @@ struct SettingsView: View {
         // in a List row lights the whole row (row-shaped, card-rounded) on press, and it stayed up
         // while the page the button opened was on screen. `.borderless` keeps each button's press
         // to itself and the row never highlights, as in the app's other two-button rows.
-        .buttonStyle(.borderless)
-        .liquidGlass(Capsule(), interactive: true)
+        //
+        // ⛔ NO GLASS HERE — owner 2026-10-17, third report of the grey tray on iOS 26. The tray was the
+        // glass's own soft SHADOW: iOS 26 Liquid Glass casts one, the two buttons' shadows merged, and
+        // the List cell clipped them at its card-rounded edges, so it read as a grey card behind both
+        // buttons. Neither the row move (0846b0bf) nor `.borderless` could touch it. A solid capsule
+        // in the cards' own colour has no shadow; the press dims it instead.
+        .buttonStyle(ProfileCapsuleButtonStyle())
+    }
+}
+
+/// Edit profile / Share profile: a solid capsule in the grouped cards' colour, dimmed while pressed.
+/// A ButtonStyle (not a `.background` on the label) so the press is the button's own and the List
+/// row never highlights.
+private struct ProfileCapsuleButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+            .opacity(configuration.isPressed ? 0.55 : 1)
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
     }
 }
 

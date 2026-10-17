@@ -437,7 +437,11 @@ final class RowNoticePillView: UIView {
             // The SAME surface an incoming bubble wears — the reference app's date header is not
             // styled to resemble a bubble, it IS one, minus the text colour. So this goes through
             // the identical `Theme.receivedSurface` decision every incoming bubble makes.
-            let path = BubbleShape.capsulePath(size)
+            // A multi-line notice wears one background per line (owner 2026-10-17); the fill, the
+            // wallpaper slice and the rim all take the path, so every surface variant follows it.
+            let path = plan.lineRows.count > 1
+                ? Self.stackedLinesPath(plan.lineRows, radius: plan.lineRadius)
+                : BubbleShape.capsulePath(size)
             let bubbleFill: BubbleFill
             switch Theme.receivedSurface(dark, onWallpaper: plan.onWallpaper, blur: plan.wallpaperBlur) {
             case .flat:
@@ -518,6 +522,42 @@ extension RowNoticePillView {
 
     /// `StoryListRow.corner` (14) at its 66pt width, kept in proportion.
     fileprivate static func cardCorner(_ r: CGRect) -> CGFloat { (14 * r.width / 66).rounded() }
+
+    /// The outline of centred line rows stacked touching (owner 2026-10-17, the reference app's
+    /// service message): the outer corners round outward, and where a wider line meets a narrower
+    /// one the step rounds INTO the corner, so the two read as one poured shape. Walked clockwise
+    /// as a polygon; `addArc(tangent1End:tangent2End:radius:)` rounds each vertex, and the turn
+    /// direction alone makes a corner convex or concave.
+    fileprivate static func stackedLinesPath(_ rows: [CGRect], radius r: CGFloat) -> UIBezierPath {
+        guard let first = rows.first, let last = rows.last else { return UIBezierPath() }
+        var pts: [(CGPoint, CGFloat)] = []
+        // Down the right side.
+        pts.append((CGPoint(x: first.maxX, y: first.minY), r))
+        for i in 0..<(rows.count - 1) where rows[i].maxX != rows[i + 1].maxX {
+            // A step can only round as far as half its own width, or the two arcs overlap.
+            let s = min(r, abs(rows[i].maxX - rows[i + 1].maxX) / 2)
+            pts.append((CGPoint(x: rows[i].maxX, y: rows[i].maxY), s))
+            pts.append((CGPoint(x: rows[i + 1].maxX, y: rows[i].maxY), s))
+        }
+        pts.append((CGPoint(x: last.maxX, y: last.maxY), r))
+        // Back up the left side.
+        pts.append((CGPoint(x: last.minX, y: last.maxY), r))
+        for i in stride(from: rows.count - 2, through: 0, by: -1) where rows[i].minX != rows[i + 1].minX {
+            let s = min(r, abs(rows[i].minX - rows[i + 1].minX) / 2)
+            pts.append((CGPoint(x: rows[i + 1].minX, y: rows[i].maxY), s))
+            pts.append((CGPoint(x: rows[i].minX, y: rows[i].maxY), s))
+        }
+        pts.append((CGPoint(x: first.minX, y: first.minY), r))
+
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: first.midX, y: first.minY))
+        for (i, p) in pts.enumerated() {
+            let next = i + 1 < pts.count ? pts[i + 1].0 : CGPoint(x: first.midX, y: first.minY)
+            path.addArc(tangent1End: p.0, tangent2End: next, radius: p.1)
+        }
+        path.closeSubpath()
+        return UIBezierPath(cgPath: path)
+    }
 }
 
 // ── The call-history bubble ──

@@ -261,6 +261,10 @@ struct NoticePlan {
     var ring: CGRect? = nil
     var storyThumbUrl: String? = nil
     var flightKey: String = ""
+    /// `.pill` with more than one line only (owner 2026-10-17): each line's own background, in
+    /// CAPSULE coordinates, stacked touching. Empty means the plain capsule, as before.
+    var lineRows: [CGRect] = []
+    var lineRadius: CGFloat = 0
 }
 
 struct NoticeButtonPlan {
@@ -2469,6 +2473,17 @@ enum MessageRowLayout {
                                   attr: attr, style: .pill,
                                   onWallpaper: n.onWallpaper, wallpaperBlur: n.wallpaperBlur)
             plan.buttons = noticeButtons(n.actions, under: rect, rowWidth: width)
+            // ⛔ ONE BACKGROUND PER LINE — owner 2026-10-17, the reference app's service message: a
+            // two-line notice drew one box around both lines, wide line and short line alike. Each
+            // line now gets its own grey hugging its own width. A single line keeps the capsule.
+            let single = BubbleMetrics.noticeFont.lineHeight + vPad * 2
+            let rows = noticeLineRows(attr, wrapWidth: avail, hPad: hPad, vPad: vPad,
+                                      capsule: rect.size, radius: (single / 2).rounded())
+            if rows.count > 1 {
+                plan.lineRows = rows
+                let minH = rows.map(\.height).min() ?? single
+                plan.lineRadius = min((single / 2).rounded(), (minH / 2).rounded(.down))
+            }
             return plan
         case .storyCard:
             // ⛔ THE STORY MENTION CARD (owner 2026-10-16, the reference app's picture): the story in
@@ -2519,6 +2534,74 @@ enum MessageRowLayout {
                               attr: attr, style: .unsupported,
                               onWallpaper: n.onWallpaper, wallpaperBlur: n.wallpaperBlur)
         }
+    }
+
+    /// Each laid-out line of a pill notice as its own background row, centred, in capsule
+    /// coordinates (owner 2026-10-17). The first row starts at the capsule's top and the last ends
+    /// at its bottom, so the stack covers exactly what the capsule did. Under two lines: empty.
+    private static func noticeLineRows(_ attr: NSAttributedString, wrapWidth: CGFloat,
+                                       hPad: CGFloat, vPad: CGFloat,
+                                       capsule: CGSize, radius: CGFloat) -> [CGRect] {
+        guard attr.length > 0 else { return [] }
+        let storage = NSTextStorage(attributedString: attr)
+        let lm = NSLayoutManager()
+        storage.addLayoutManager(lm)
+        let tc = NSTextContainer(size: CGSize(width: max(1, wrapWidth), height: .greatestFiniteMagnitude))
+        tc.lineFragmentPadding = 0
+        lm.addTextContainer(tc)
+        lm.ensureLayout(for: tc)
+
+        // The ink width of each line, without the space or newline it ends on: a centred label
+        // centres the words, not the trailing blank, so the grey must not reach for it either.
+        let text = storage.string as NSString
+        var lines: [(width: CGFloat, top: CGFloat, bottom: CGFloat)] = []
+        lm.enumerateLineFragments(forGlyphRange: NSRange(location: 0, length: lm.numberOfGlyphs)) {
+            rect, _, _, glyphs, _ in
+            var chars = lm.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+            while chars.length > 0,
+                  let u = UnicodeScalar(text.character(at: chars.location + chars.length - 1)),
+                  CharacterSet.whitespacesAndNewlines.contains(u) {
+                chars.length -= 1
+            }
+            var w: CGFloat = 0
+            if chars.length > 0 {
+                let g = lm.glyphRange(forCharacterRange: chars, actualCharacterRange: nil)
+                w = ceil(lm.boundingRect(forGlyphRange: g, in: tc).width)
+            }
+            lines.append((w, rect.minY, rect.maxY))
+        }
+        // A blank line (two newlines) has no ink: it borrows the wider neighbour's width below.
+        guard lines.count > 1 else { return [] }
+
+        var widths = lines.map { min(capsule.width, $0.width + hPad * 2) }
+        for i in widths.indices where lines[i].width == 0 {
+            let prev = i > 0 ? widths[i - 1] : 0
+            let next = i + 1 < widths.count ? widths[i + 1] : 0
+            widths[i] = max(prev, next)
+        }
+        // Two lines within a few points of each other read as one edge with a dent in it; the
+        // reference app squares them up to the wider one. Repeated until nothing moves.
+        var changed = true
+        while changed {
+            changed = false
+            for i in 0..<(widths.count - 1) where widths[i] != widths[i + 1]
+                && abs(widths[i] - widths[i + 1]) / 2 < radius / 2 {
+                let w = max(widths[i], widths[i + 1])
+                widths[i] = w; widths[i + 1] = w
+                changed = true
+            }
+        }
+
+        var rows: [CGRect] = []
+        for i in lines.indices {
+            let top = i == 0 ? 0 : min(capsule.height, (vPad + lines[i].top).rounded())
+            let bottom = i == lines.count - 1 ? capsule.height
+                                              : min(capsule.height, (vPad + lines[i].bottom).rounded())
+            let w = widths[i].rounded()
+            rows.append(CGRect(x: ((capsule.width - w) / 2).rounded(), y: top,
+                               width: w, height: max(0, bottom - top)))
+        }
+        return rows
     }
 
     /// Bolds the first occurrence of `name` (the story mention lines).
