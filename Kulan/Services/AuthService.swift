@@ -256,10 +256,10 @@ final class AuthService: NSObject {
 
     // MARK: - Email
 
-    /// Sign up with email. "Sign up with an account you already have" is NOT a dead end: if the
-    /// email is already registered and the password matches, we just log you in (Apple and Google
-    /// already behave this way, so email now matches them). Only a WRONG password stops you, and
-    /// then the message says exactly what to do.
+    /// Sign up with email. An address that already has an account is ALWAYS refused with
+    /// `emailTaken`, whatever the password: the sign-up door never signs anyone in (2026-07-24,
+    /// see the catch below). Firebase refuses the duplicate server-side, so the old account is
+    /// never changed; the sign-up page turns `emailTaken` into its "Are you trying to log in?" sheet.
     func createEmailAccount(email: String, password: String) async throws {
         // Anonymous session → LINK, so the existing uid (and every chat/key) is preserved.
         if let user = Auth.auth().currentUser, user.isAnonymous {
