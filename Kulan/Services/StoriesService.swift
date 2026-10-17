@@ -446,7 +446,12 @@ enum StoryViewerListCache {
     /// ⚠️ ONLY EVER A REAL ANSWER. A failed read must not be written here as an empty list — that is
     /// how "No views yet" once appeared under a card reading one view, and it poisoned the entry for
     /// the rest of the sitting. The caller checks; this is the reminder for the next one.
-    static func put(_ people: [StoryViewerInfo], for storyId: String) { store[storyId] = people }
+    static func put(_ people: [StoryViewerInfo], for storyId: String) {
+        // 2026-10-17: never hold an empty list while receipts are off; it is cleared on the flip
+        // anyway, and an empty answer then is the one most likely to be wrong a moment later.
+        if people.isEmpty && !StoryReceiptPrefs.isOn { return }
+        store[storyId] = people
+    }
 
     /// Drop one story's list. For the two moments its audience can genuinely change out from under
     /// the list — the story being deleted, or its audience edited.
@@ -515,6 +520,8 @@ enum StoryCountCache {
     }
 
     static func put(_ storyId: String, count: Int, reactions: Int, recent: [String], reposts: Int = 0) {
+        // 2026-10-17: same rule as `StoryViewerListCache.put`, no remembered zero while receipts are off.
+        if count == 0 && !StoryReceiptPrefs.isOn { return }
         var s = store
         var order = UserDefaults.standard.stringArray(forKey: orderKey) ?? []
         if s[storyId] == nil { order.append(storyId) }
@@ -526,6 +533,101 @@ enum StoryCountCache {
         }
         store = s
         UserDefaults.standard.set(order, forKey: orderKey)
+    }
+
+    /// 2026-10-17: every number goes when the receipts switch flips; each was counted under the other
+    /// setting (the frozen list while off, the full one while on).
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: key)
+        UserDefaults.standard.removeObject(forKey: orderKey)
+    }
+}
+
+/// ⛔ STORY VIEW RECEIPTS, PER ACCOUNT (owner 2026-10-17).
+///
+/// The switch used to be the local key alone, so a second phone, a reinstall or a sign-in elsewhere
+/// had its own answer, and views made with it off were never written anywhere and could not come back.
+/// Now `users/{me}/private/storyPrefs {receipts, offAt}` is the answer and the local key is its cache
+/// (every existing reader still reads the key, missing = on).
+///
+/// OFF: my views go to `users/{me}/hiddenStoryViews` (mine alone), not onto the author's story. My
+/// own stories show only the viewers who were there when I turned it off (`firstAt <= offAt`), never
+/// anyone new. ON again: the server (`onStoryPrefsWritten`) turns my hidden views on stories still up
+/// into real receipts, and my own lists open up to everyone who watched meanwhile. Nothing is deleted
+/// because of OFF.
+enum StoryReceiptPrefs {
+    static let key = "storyViewReceipts"
+    static let offAtKey = "storyViewReceiptsOffAt"
+
+    static var isOn: Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
+    /// When it was turned off. Nil while on, or for an account that was off before this existed and
+    /// has not been seen by the server yet (`start` writes one for it).
+    static var offAt: Date? { UserDefaults.standard.object(forKey: offAtKey) as? Date }
+
+    private static var authHandle: AuthStateDidChangeListenerHandle?
+    private static var prefsWatch: ListenerRegistration?
+    private static var watchedUid = ""
+
+    private static func ref(_ uid: String) -> DocumentReference {
+        Firestore.firestore().collection("users").document(uid)
+            .collection("private").document("storyPrefs")
+    }
+
+    /// The Settings switch. Local first so the next read on this phone already has it; the write is
+    /// queued by Firestore when offline and lands later.
+    static func set(_ on: Bool) {
+        guard on != isOn else { return }
+        apply(on: on, offAt: on ? nil : Date())
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        write(uid: uid, on: on)
+    }
+
+    private static func write(uid: String, on: Bool) {
+        let offAt: Any = on ? NSNull() : FieldValue.serverTimestamp()
+        ref(uid).setData(["receipts": on, "offAt": offAt])
+    }
+
+    private static func apply(on: Bool, offAt: Date?) {
+        let d = UserDefaults.standard
+        let changed = on != isOn || offAt != self.offAt
+        d.set(on, forKey: key)
+        if let offAt { d.set(offAt, forKey: offAtKey) } else { d.removeObject(forKey: offAtKey) }
+        guard changed else { return }
+        // Both caches were filled under the other setting; neither may outlive the flip.
+        StoryViewerListCache.clear()
+        StoryCountCache.clear()
+    }
+
+    /// Called once at launch. Follows the signed-in account and keeps the local key equal to the
+    /// account's switch, so a flip on another phone arrives here too.
+    static func start() {
+        guard authHandle == nil else { return }
+        authHandle = Auth.auth().addStateDidChangeListener { _, user in
+            StoryReceiptPrefs.watch(uid: user?.uid ?? "")
+        }
+    }
+
+    private static func watch(uid: String) {
+        guard uid != watchedUid else { return }
+        prefsWatch?.remove()
+        prefsWatch = nil
+        watchedUid = uid
+        guard !uid.isEmpty else { return }
+        prefsWatch = ref(uid).addSnapshotListener { snap, _ in
+            typealias P = StoryReceiptPrefs
+            guard let snap, P.watchedUid == uid else { return }
+            if let data = snap.data(), let on = data["receipts"] as? Bool {
+                // A pending local write has no server time yet; keep the local one until it lands.
+                let serverOff = (data["offAt"] as? Timestamp)?.dateValue()
+                P.apply(on: on, offAt: on ? nil : (serverOff ?? P.offAt ?? Date()))
+            } else if !snap.metadata.isFromCache {
+                // No document on the server: this account has only ever had the local switch.
+                // Carry it up once, so the other phones and the server know it.
+                let on = P.isOn
+                if !on && P.offAt == nil { P.apply(on: false, offAt: Date()) }
+                P.write(uid: uid, on: on)
+            }
+        }
     }
 }
 
@@ -2126,12 +2228,20 @@ final class StoriesService {
                 .setData(["lastViewedAt": Timestamp(date: story.createdAt)], merge: true)
         }
 
-        let receiptsOn = UserDefaults.standard.object(forKey: "storyViewReceipts") as? Bool ?? true
-        if receiptsOn {
+        if StoryReceiptPrefs.isOn {
             // merge: a re-view must NOT wipe a previously-set "reaction" off this receipt.
             try? await db.collection("stories").document(story.id)
                 .collection("views").document(me)
                 .setData(["viewedAt": FieldValue.serverTimestamp()], merge: true)
+        } else {
+            // 2026-10-17 (owner): OFF no longer throws the view away. It is noted on MY side only,
+            // where the author cannot read it, and the server turns it into a real receipt if I
+            // switch back on while the story is still up. See `StoryReceiptPrefs`.
+            try? await db.collection("users").document(me)
+                .collection("hiddenStoryViews").document(story.id)
+                .setData(["storyId": story.id, "authorUid": story.authorUid,
+                          "at": FieldValue.serverTimestamp(),
+                          "expiresAt": Timestamp(date: story.expiresAt)])
         }
         if story.oneTime { await consumeOneTime(story) }
     }
@@ -2236,7 +2346,17 @@ final class StoriesService {
         guard !uid.isEmpty else { return nil }
         // Reciprocal, exactly as `fetchViewers` is: with receipts off you do not see who watched
         // yours, and a count is who watched yours with the names taken off.
-        guard UserDefaults.standard.object(forKey: "storyViewReceipts") as? Bool ?? true else { return nil }
+        // 2026-10-17 (owner): off now means "nobody NEW", not "nobody". The count is the frozen list
+        // `fetchViewers` gives while off, so the number and the names cannot disagree.
+        guard StoryReceiptPrefs.isOn else {
+            guard let frozen = await fetchViewers(storyId: storyId) else { return nil }
+            let meta = try? await db.collection("stories").document(storyId)
+                .collection("meta").document("views").getDocument()
+            return StoryViewSummary(count: frozen.count,
+                                    reactionCount: frozen.filter { !($0.reaction ?? "").isEmpty }.count,
+                                    recent: Array(frozen.prefix(3)),
+                                    repostCount: meta?.data()?["repostCount"] as? Int ?? 0)
+        }
         let snap = try? await db.collection("stories").document(storyId)
             .collection("meta").document("views").getDocument()
         guard let data = snap?.data(),
@@ -2270,7 +2390,8 @@ final class StoriesService {
     /// rule the one-shot reads follow).
     func observeViewCount(storyId: String, onChange: @escaping (StoryViewSummary) -> Void) -> ListenerRegistration? {
         guard !uid.isEmpty, !storyId.isEmpty, !Self.isPending(storyId) else { return nil }
-        guard UserDefaults.standard.object(forKey: "storyViewReceipts") as? Bool ?? true else { return nil }
+        // Off: the list is frozen at `offAt`, so there is nothing new to listen for.
+        guard StoryReceiptPrefs.isOn else { return nil }
         return db.collection("stories").document(storyId)
             .collection("meta").document("views")
             .addSnapshotListener { snap, _ in
@@ -2337,7 +2458,12 @@ final class StoriesService {
         // others view your stories"). The gate existed only on the SENDING half — your views were
         // hidden from others while their full Seen-by list, timestamps and reactions still showed
         // to you (audit). the reference app's rule, and the one the copy already claims.
-        guard UserDefaults.standard.object(forKey: "storyViewReceipts") as? Bool ?? true else { return [] }
+        // 2026-10-17 (owner): OFF keeps the viewers who were there when I turned it off and hides
+        // only the new ones; it no longer answers [] (which read "No views yet" over real views).
+        // `firstAt` is set once by the server; a receipt from before it existed falls back to
+        // `viewedAt`. No `offAt` known yet means nothing counts as "before".
+        let receiptsOn = StoryReceiptPrefs.isOn
+        let cutoff = StoryReceiptPrefs.offAt ?? .distantPast
         // ⚠️ A FAILED READ IS NOT AN EMPTY LIST, AND TREATING IT AS ONE IS WHY HE SAW "No views yet"
         // UNDER A CARD READING ONE VIEW.
         //
@@ -2364,7 +2490,12 @@ final class StoriesService {
             .order(by: "viewedAt", descending: true)
             .limit(to: Self.viewerListCap)
             .getDocuments(source: .server) else { return nil }
-        let docs = snap.documents
+        let docs = receiptsOn ? snap.documents : snap.documents.filter { d in
+            let data = d.data()
+            let stamp = (data["firstAt"] as? Timestamp) ?? (data["viewedAt"] as? Timestamp)
+            let first = stamp?.dateValue()
+            return first.map { $0 <= cutoff } ?? false
+        }
         let (convs, me) = await MainActor.run { (ConversationsRepository.shared.conversations, uid) }
         return docs.map { d in
             let u = d.documentID

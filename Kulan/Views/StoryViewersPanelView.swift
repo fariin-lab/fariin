@@ -103,6 +103,7 @@ final class StoryViewersPanelView: UIView {
     private let loadingHost = UIHostingController(rootView: StoryViewerSkeleton())
     private var loadingView: UIView { loadingHost.view }
     private let emptyLabel = UILabel()
+    private var showingViewsOff = false
 
     private var filtered: [StoryViewerInfo] = []
     private var tab = 0
@@ -285,7 +286,11 @@ final class StoryViewersPanelView: UIView {
         let top = search.frame.maxY + 10
         table.frame = CGRect(x: 0, y: top, width: w, height: max(0, bounds.height - top))
         loadingView.frame = CGRect(x: 0, y: top, width: w, height: max(0, bounds.height - top))
-        emptyLabel.frame = CGRect(x: 24, y: top + 40, width: w - 48, height: 22)
+        // Two lines and a title when receipts are off (2026-10-17), one line otherwise.
+        let emptyH = showingViewsOff
+            ? ceil(emptyLabel.sizeThatFits(CGSize(width: w - 48, height: .greatestFiniteMagnitude)).height)
+            : 22
+        emptyLabel.frame = CGRect(x: 24, y: top + 40, width: w - 48, height: emptyH)
     }
 
     // MARK: Keyboard
@@ -367,6 +372,34 @@ final class StoryViewersPanelView: UIView {
     }
 
     private func updateEmptyState() {
+        // 2026-10-17 (owner): receipts off and nobody had watched before I turned them off, so the
+        // list is empty because of my setting, not because nobody watched. Say so.
+        let off = viewers.isEmpty && !StoryPrefs.viewReceiptsOn
+        if off != showingViewsOff {
+            showingViewsOff = off
+            if off {
+                let title = NSAttributedString(string: "Views not available\n", attributes: [
+                    .font: UIFont.preferredFont(forTextStyle: .headline),
+                    .foregroundColor: UIColor.white])
+                let body = NSAttributedString(
+                    string: "Can't see views because you disabled Read Receipts in Settings > Stories",
+                    attributes: [.font: UIFont.preferredFont(forTextStyle: .subheadline),
+                                 .foregroundColor: UIColor.white.withAlphaComponent(0.55)])
+                let text = NSMutableAttributedString(attributedString: title)
+                text.append(body)
+                emptyLabel.numberOfLines = 0
+                emptyLabel.attributedText = text
+                emptyLabel.textAlignment = .center
+            } else {
+                emptyLabel.numberOfLines = 1
+                emptyLabel.attributedText = nil
+                emptyLabel.text = "No views yet"
+                emptyLabel.textColor = UIColor.white.withAlphaComponent(0.55)
+                emptyLabel.font = .preferredFont(forTextStyle: .subheadline)
+                emptyLabel.textAlignment = .center
+            }
+            setNeedsLayout()
+        }
         emptyLabel.isHidden = isLoading || !filtered.isEmpty
     }
 }

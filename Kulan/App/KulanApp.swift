@@ -51,6 +51,8 @@ struct KulanApp: App {
                     // .cardPixels`), so the open falls back to that as its first frame.
                     // "Get notifications" in the story menu (owner 2026-10-16).
                     StoryNotifyStore.installSeam()
+                    // 2026-10-17: story view receipts follow the account (owner).
+                    StoryReceiptPrefs.start()
                     StoryPosterSource.provider = {
                         DiskImageCache.shared.memoryImage($0)
                             ?? DiskImageCache.shared.memoryImage("\($0)#\(Int(StoryImage.cardPixels))")

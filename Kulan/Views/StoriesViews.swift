@@ -5276,6 +5276,9 @@ struct StoryViewer: View {
                                     .overlay(Circle().stroke(.black, lineWidth: 1.5))
                             }
                         }
+                    } else if !oneTimeFull && !StoryPrefs.viewReceiptsOn {
+                        // 2026-10-17 (owner): his crossed eye while my receipts are off.
+                        StoryViewsOffIcon()
                     } else {
                         Image(systemName: oneTimeFull ? "1.circle" : "eye")
                             .font(.subheadline).foregroundStyle(.white)
@@ -5836,6 +5839,8 @@ struct StoryOwnerBarView: View {
                                             .overlay(Circle().stroke(.black, lineWidth: 1.5))
                                     }
                                 }
+                            } else if !m.oneTimeFull && !StoryPrefs.viewReceiptsOn {
+                                StoryViewsOffIcon()   // 2026-10-17, receipts off (owner)
                             } else {
                                 Image(systemName: m.oneTimeFull ? "1.circle" : "eye")
                                     .font(.subheadline).foregroundStyle(.white)
@@ -6514,5 +6519,18 @@ private struct LiveStoryWatch: ViewModifier {
                 gone(id)
             }
         }
+    }
+}
+
+/// 2026-10-17 (owner): his crossed eye (asset ic_views_off, template) in place of the eye while
+/// my story view receipts are off. Sized to the .subheadline eye it replaces.
+struct StoryViewsOffIcon: View {
+    var body: some View {
+        Image("ic_views_off")
+            .renderingMode(.template)
+            .resizable()
+            .scaledToFit()
+            .frame(width: 18, height: 18)
+            .foregroundStyle(.white)
     }
 }

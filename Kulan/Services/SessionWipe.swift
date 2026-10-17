@@ -239,7 +239,7 @@ enum SessionWipe {
             "notif.push", "notif.preview", "notif.sound",
             "notif.inAppSound", "notif.inAppVibrate", "notif.inAppPreview",
             // stories
-            "storyViewReceipts", "storiesOptedOut",
+            "storyViewReceipts", "storyViewReceiptsOffAt", "storiesOptedOut",
             "hiddenStories", "seenStoryItems", "notifyStories", "likedStories",
             // ⚠️ THESE TWO WERE MISSED, and both are account-scoped like everything above them.
             // `oneTimeUsed` is the burn list for view-once stories and it HARD-FILTERS them out of

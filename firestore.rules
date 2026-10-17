@@ -795,6 +795,35 @@ service cloud.firestore {
           && request.resource.data.at == request.time;
       }
 
+      // 2026-10-17 STORY VIEW RECEIPTS, PER ACCOUNT (owner). `receipts` is the switch; `offAt` is the
+      // server time it was last turned off (null while on). It lives on the account so a second phone,
+      // a reinstall and a restart all see the same answer. Owner only both ways; the server reads it
+      // with admin rights (onStoryPrefsWritten promotes hidden views when it flips back on).
+      match /private/storyPrefs {
+        allow read, delete: if signedIn() && request.auth.uid == uid;
+        allow create, update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['receipts', 'offAt'])
+          && request.resource.data.receipts is bool
+          && (request.resource.data.get('offAt', null) == null
+              || (request.resource.data.offAt is timestamp
+                  && request.resource.data.offAt <= request.time));
+      }
+
+      // 2026-10-17 A STORY I WATCHED WITH RECEIPTS OFF (owner): kept here, never on the author's
+      // story, so they cannot see it. Turning receipts back on hands the live ones to the server,
+      // which writes the real receipt (block and expiry checked there) and deletes this note.
+      // Mine alone; nobody else can learn what I watched while hidden.
+      match /hiddenStoryViews/{storyId} {
+        allow read, delete: if signedIn() && request.auth.uid == uid;
+        allow create, update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['storyId', 'authorUid', 'at', 'expiresAt'])
+          && request.resource.data.storyId == storyId
+          && request.resource.data.authorUid is string
+          && request.resource.data.authorUid != uid
+          && request.resource.data.at == request.time
+          && request.resource.data.expiresAt is timestamp;
+      }
+
       match /blocked/{other} {
         allow read, delete: if signedIn() && request.auth.uid == uid;
         // 2026-09-26: `at` may be EARLIER than now, never later. Moving a block that was recorded
@@ -3010,8 +3039,11 @@ service cloud.firestore {
         );
         // Only `viewedAt` + a short `reaction` string may be written — no injected fields, no
         // unbounded/junk reaction (the receipt-spoofing hole).
+        // 2026-10-17: `firstAt` is the server's (onStoryViewWritten) time of the FIRST view, set
+        // once. A client may never create it and may never change it; an older build's merge of
+        // viewedAt/reaction leaves it as it is, so those builds still pass.
         function validReceipt() {
-          return request.resource.data.keys().hasOnly(['viewedAt', 'reaction'])
+          return request.resource.data.keys().hasOnly(['viewedAt', 'reaction', 'firstAt'])
             && (!('reaction' in request.resource.data)
                 || (request.resource.data.reaction is string && request.resource.data.reaction.size() <= 16));
         }
@@ -3053,9 +3085,11 @@ service cloud.firestore {
               || request.auth.uid in storyData().recipientUids
               || storyData().get('public', false) == true)
           && !isBlockedByUser(storyData().authorUid)   // 2026-09-26: never in a blocker's Seen-by
+          && !('firstAt' in request.resource.data)     // 2026-10-17: the server's to set
           && validReceipt() && reactionAllowed();
         allow update: if signedIn() && request.auth.uid == viewerUid
           && !isBlockedByUser(storyData().authorUid)   // 2026-09-26: no reaction after a block
+          && request.resource.data.get('firstAt', null) == resource.data.get('firstAt', null)
           && validReceipt() && reactionAllowed();  // set/clear reaction
         // NO delete — a view receipt is not something a viewer takes back. (Second stray paste of the
         // message-request decline rule; it read conversation fields off a view receipt, so it could

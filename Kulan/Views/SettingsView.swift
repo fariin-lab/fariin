@@ -1621,7 +1621,10 @@ struct StorySettingsView: View {
             }
             if !optedOut {
                 Section {
-                    Toggle("View Receipts", isOn: $viewReceipts).tint(.green)
+                    // 2026-10-17: through StoryReceiptPrefs, which also saves it on the account.
+                    Toggle("View Receipts", isOn: Binding(get: { viewReceipts },
+                                                          set: { StoryReceiptPrefs.set($0) }))
+                        .tint(.green)
                 } footer: {
                     Text("See and share when stories are viewed. If disabled, you won't see when others view your stories.")
                 }

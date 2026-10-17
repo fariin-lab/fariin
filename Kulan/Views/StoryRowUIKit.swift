@@ -227,6 +227,16 @@ final class StoryRowCountView: UIView {
     /// Reposts, after the heart (owner, 2026-10-11). Hidden at zero, as the heart is.
     private let repost = UIImageView()
     private let reposts = UILabel()
+    private var showingViewsOff = false
+    private static let eyeImage = UIImage(systemName: "eye.fill",
+                                          withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .bold))
+    /// His asset at the 18pt the 15pt bold glyphs beside it come out at, as the repost mark is drawn.
+    private static let viewsOffImage: UIImage? = UIImage(named: "ic_views_off").map { img in
+        UIGraphicsImageRenderer(size: CGSize(width: 18, height: 18)).image { _ in
+            img.draw(in: CGRect(x: 0, y: 0, width: 18, height: 18))
+        }.withRenderingMode(.alwaysTemplate)
+    } ?? UIImage(systemName: "eye.slash.fill",
+                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .bold))
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -237,7 +247,7 @@ final class StoryRowCountView: UIView {
         // out at the same point size.
         let font = UIFont.systemFont(ofSize: 15, weight: .bold)
         let symbol = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
-        eye.image = UIImage(systemName: "eye.fill", withConfiguration: symbol)
+        eye.image = Self.eyeImage
         eye.tintColor = .white
         heart.image = UIImage(systemName: "heart.fill", withConfiguration: symbol)
         // ⛔ WHITE, NOT RED (owner 2026-08-22). The eye beside it is white and the two are one
@@ -307,6 +317,13 @@ final class StoryRowCountView: UIView {
     func set(views v: Int, likes l: Int, reposts r: Int = 0, known: Bool = true) {
         isHidden = !known
         guard known else { return }
+        // 2026-10-17 (owner): his crossed eye (ic_views_off) while my receipts are off; the count
+        // beside it stays the one frozen when I turned them off.
+        let off = !StoryPrefs.viewReceiptsOn
+        if off != showingViewsOff {
+            showingViewsOff = off
+            eye.image = off ? Self.viewsOffImage : Self.eyeImage
+        }
         views.text = Self.compact(v)
         likes.text = Self.compact(l)
         // The SwiftUI original omitted the heart entirely at zero rather than showing "0".
