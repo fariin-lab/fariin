@@ -489,17 +489,25 @@ struct VerificationInfoSheet: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
 
-                Spacer()
+                Spacer(minLength: 8)
+
+                // Owner 2026-10-17: no Done in the corner; one blue "Got it" bar at the bottom.
+                Button { dismiss() } label: {
+                    Text("Got it")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .tint(Color(hex: 0x2392FE))
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
             }
             .frame(maxWidth: .infinity)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
         }
-        .presentationDetents([.height(380)])
+        .presentationDetents([.height(420)])
     }
 
     /// An older record, or one whose kind this build has not heard of. The mark still means the one
