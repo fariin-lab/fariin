@@ -135,7 +135,11 @@ targets:
         # app opens. A refresh task would spend battery and reads to fetch data those two already
         # deliver, on a schedule iOS may not honour. Revisit only if something must change while
         # the app is closed that a push cannot carry.
-        UIBackgroundModes: [voip, audio]
+        # ⛔ 2026-10-17, REVERSED ON HIS WORD ("I missed Background App Refresh"): `fetch` added, with a
+        # real task behind it (Services/BackgroundRefresh.swift: one server read of the chat list
+        # into the disk cache). iOS shows the Settings row only for an app that declares it.
+        UIBackgroundModes: [voip, audio, fetch]
+        BGTaskSchedulerPermittedIdentifiers: [com.kulan.messenger.native.refresh]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kulan.messenger.native

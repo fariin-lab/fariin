@@ -47,6 +47,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         DiagLog.launched()
         StoryTraceBridge.install()   // the story player's timeline into the same log (2026-10-14)
         FirebaseApp.configure()
+        // Background App Refresh (owner 2026-10-17): registered before launch ends, asked for again
+        // each time the app goes to the background. See `BackgroundRefresh`.
+        BackgroundRefresh.register()
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                               object: nil, queue: .main) { _ in BackgroundRefresh.schedule() }
 
         // ⚠️ A DEAD UPLOAD MUST FAIL, NOT HANG. Firebase Storage's default `maxUploadRetryTime` is
         // 600 SECONDS: on a bad connection `putDataAsync` retries quietly for ten minutes before it
