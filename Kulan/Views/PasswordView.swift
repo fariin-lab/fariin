@@ -438,68 +438,171 @@ struct PasswordResetCodeView: View {
     let address: String
     var onDone: () -> Void
 
+    // ⛔ TWO STEPS IN THE SIGN-UP PAGES' DESIGN (owner, 2026-10-17, "the exact same design" as the
+    // code page): the six boxes alone first, checked by the server (`checkPasswordResetCode`, which
+    // does not spend the code), and only then the new-password boxes. It was one grouped list with
+    // the code and both passwords at once and Save in the bar.
+    private enum Step { case code, password }
+    @State private var step: Step = .code
+
     @State private var code = ""
     @State private var password = ""
     @State private var confirm = ""
     @State private var working = false
     @State private var error: String?
     @State private var done = false
+    @State private var resendIn = 30
+    @FocusState private var codeFocused: Bool
+    // UIKit password fields (RevealablePasswordField), so plain @State focus, as on sign-up.
+    @State private var newFocused = false
+    @State private var confirmFocused = false
+    @State private var reveal = false
 
     private var rules: PasswordRules { PasswordRules(password: password, confirm: confirm) }
     private var canSave: Bool { !working && code.count == 6 && rules.allMet }
 
     var body: some View {
-        List {
-            Section {
-                TextField("6-digit code", text: $code)
-                    .keyboardType(.numberPad)
-                    .textContentType(.oneTimeCode)
-                    .disabled(working)
-                    // A number pad cannot refuse a paste, so the field is filtered, as on the email page.
-                    .onChange(of: code) { _, new in
-                        let digits = String(new.filter(\.isNumber).prefix(6))
-                        if digits != new { code = digits }
+        ZStack {
+            AuthPalette.page.ignoresSafeArea()
+                .dismissesKeyboardOnTap()
+            ScrollView {
+                VStack(spacing: 14) {
+                    VStack(spacing: 6) {
+                        Text(step == .code ? "Check your email" : "Create a new password")
+                            .font(.system(size: 30, weight: .bold)).foregroundStyle(.primary)
+                            .multilineTextAlignment(.center)
+                        Text(step == .code
+                             ? "Enter the 6-digit code we sent to \(address). It expires in 10 minutes."
+                             : "Use at least 8 characters, with a letter and a number.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 8)
                     }
-            } header: {
-                Text("Verification code").textCase(nil)
-            } footer: {
-                Text("We sent a code to \(address). Enter it below to confirm.")
-            }
+                    .padding(.top, 36).padding(.bottom, 12)
 
-            Section {
-                SecureField("New password", text: $password)
-                    .textContentType(.newPassword)
-                    .disabled(working)
-                SecureField("Confirm new password", text: $confirm)
-                    .textContentType(.newPassword)
-                    .disabled(working)
-            } footer: {
-                VStack(alignment: .leading, spacing: 10) {
-                    PasswordChecklist(rules: rules)
-                    Text("After changing, all other devices will need to sign in again.")
+                    if step == .code {
+                        CodeBoxes(code: $code, length: 6, focused: $codeFocused,
+                                  invalid: error != nil && code.isEmpty)
+                            .onChange(of: code) { _, v in
+                                let digits = String(v.filter(\.isNumber).prefix(6))
+                                if digits != v { code = digits; return }
+                                if !digits.isEmpty { error = nil }
+                                // Six digits in: check, without making them find a button.
+                                if digits.count == 6 && !working { Task { await check() } }
+                            }
+                        pill("Continue", enabled: code.count == 6) { Task { await check() } }
+                            .padding(.top, 4)
+                        Button(resendIn > 0 ? "Send another code in \(resendIn)s" : "Send another code") {
+                            Task { await resend() }
+                        }
+                        .font(.subheadline.weight(resendIn > 0 ? .regular : .semibold))
+                        .foregroundStyle(resendIn > 0 ? Color.secondary : Color.primary)
+                        .disabled(resendIn > 0 || working)
+                        .padding(.top, 6)
+                    } else {
+                        passwordBox(text: $password, focused: $newFocused, placeholder: "New password",
+                                    onSubmit: { newFocused = false; confirmFocused = true })
+                        passwordBox(text: $confirm, focused: $confirmFocused, placeholder: "Confirm new password",
+                                    onSubmit: { if canSave { Task { await save() } } })
+                        PasswordChecklist(rules: rules)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 4).padding(.top, 2)
+                        pill("Save password", enabled: canSave) { Task { await save() } }
+                            .padding(.top, 4)
+                        Text("After changing, all other devices will need to log in again.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.top, 4)
+                    }
+
+                    if let error {
+                        Text(error).font(.footnote).foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
+                    }
                 }
-                .padding(.top, 4)
+                .padding(.horizontal, 24)
             }
-
-            if let error {
-                Section { Text(error).font(.footnote).foregroundStyle(.red) }
-            }
+            .scrollDismissesKeyboard(.interactively)
+            .scrollBounceBehavior(.basedOnSize)
         }
-        .navigationTitle("Password")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Save") { Task { await save() } }
-                    .disabled(!canSave)
-                    .fontWeight(.semibold)
-                    .opacity(working ? 0.4 : 1)
-            }
+        .animation(.easeInOut(duration: 0.2), value: step)
+        .onAppear { if step == .code { codeFocused = true } }
+        // The resend cooldown; the server limits sends too, this only keeps the button honest.
+        .task(id: resendIn) {
+            guard resendIn > 0 else { return }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            if resendIn > 0 { resendIn -= 1 }
         }
         .alert("Password saved", isPresented: $done) {
             Button("Done") { onDone() }
         } message: {
             Text("Your old password no longer works.")
+        }
+    }
+
+    /// The sign-up page's main button.
+    private func pill(_ title: String, enabled: Bool, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Group {
+                if working { ProgressView().tint(AuthPalette.page) } else { Text(title) }
+            }
+            .authActionPill(enabled: enabled || working)
+        }
+        .buttonStyle(.plain)
+        .disabled(working || !enabled)
+    }
+
+    /// The sign-up page's password box: lock, UIKit field, eye.
+    private func passwordBox(text: Binding<String>, focused: Binding<Bool>, placeholder: String,
+                             onSubmit: @escaping () -> Void) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "lock").foregroundStyle(.secondary).frame(width: 22)
+            RevealablePasswordField(text: text, secure: !reveal, focused: focused,
+                                    placeholder: placeholder, contentType: .newPassword,
+                                    onSubmit: onSubmit)
+            Button { reveal.toggle() } label: {
+                Image(systemName: reveal ? "eye.slash" : "eye")
+                    .font(.system(size: 16)).foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(reveal ? "Hide password" : "Show password")
+        }
+        .authField(focused: focused.wrappedValue)
+    }
+
+    /// Step 1: ask the server whether the code is right, without spending it.
+    private func check() async {
+        guard code.count == 6, !working else { return }
+        guard NetworkState.shared.isOnline else {
+            error = "No internet connection. Check your connection and try again."
+            return
+        }
+        working = true; error = nil
+        defer { working = false }
+        do {
+            _ = try await AccountCall.run("checkPasswordResetCode", ["code": code])
+            codeFocused = false
+            step = .password
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { newFocused = true }
+        } catch {
+            // Cleared, so the next try does not start with six wrong digits to delete.
+            self.error = error.localizedDescription
+            code = ""
+        }
+    }
+
+    private func resend() async {
+        working = true; error = nil
+        defer { working = false }
+        do {
+            _ = try await AccountCall.run("startPasswordReset")
+            resendIn = 30
+            code = ""
+        } catch {
+            self.error = error.localizedDescription
         }
     }
 
