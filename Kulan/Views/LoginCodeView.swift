@@ -103,18 +103,21 @@ struct LoginCodeView: View {
             AuthPalette.page.ignoresSafeArea()
                 .dismissesKeyboardOnTap()
             VStack(spacing: 14) {
-                Spacer().frame(height: 40)
+                // Same header as the email page (EmailAuthView), so the two read as one flow.
+                VStack(spacing: 6) {
+                    Text(step == .email ? "What is your email?"
+                         : step == .newPassword ? "Create a new password" : purpose.title)
+                        .font(.system(size: 30, weight: .bold)).foregroundStyle(.primary)
+                        .multilineTextAlignment(.center)
 
-                Text(step == .email ? "What is your email?"
-                     : step == .newPassword ? "Create a new password" : purpose.title)
-                    .font(.system(size: 22, weight: .bold)).foregroundStyle(.primary)
-
-                Text(step == .email ? purpose.blurb
-                     : step == .newPassword ? "Use at least \(Self.passwordMin) characters. You will use it to log in next time."
-                     : "We sent a six-digit code to \(trimmedEmail). It expires in 10 minutes.")
-                    .font(.footnote).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 8)
+                    Text(step == .email ? purpose.blurb
+                         : step == .newPassword ? "Use at least \(Self.passwordMin) characters. You will use it to log in next time."
+                         : "Enter the 6-digit code we sent to \(trimmedEmail). It expires in 10 minutes.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 8)
+                }
+                .padding(.top, 36).padding(.bottom, 12)
 
                 if step == .newPassword {
                     labelled("New password") {
@@ -143,32 +146,26 @@ struct LoginCodeView: View {
                     }
                     primaryButton("Send Code", enabled: trimmedEmail.contains("@")) { send() }
                 } else {
-                    labelled("Code") {
-                        TextField("", text: $code, prompt: Text("123456").foregroundStyle(.tertiary))
-                            .keyboardType(.numberPad)
-                            // The one-time-code content type is what makes iOS offer the number
-                            // straight from the mail notification, so most people never type it.
-                            .textContentType(.oneTimeCode)
-                            .font(.system(size: 22, weight: .semibold, design: .rounded))
-                            .kerning(6)
-                            .multilineTextAlignment(.center)
-                            .focused($focused)
-                            .onChange(of: code) { _, v in
-                                let digits = v.filter(\.isNumber)
-                                if digits != v { code = String(digits.prefix(codeLength)); return }
-                                if digits.count > codeLength { code = String(digits.prefix(codeLength)); return }
-                                // Six digits in: go, without making them find a button.
-                                if digits.count == codeLength && !busy { verify() }
-                            }
-                    }
+                    CodeBoxes(code: $code, length: codeLength, focused: $focused,
+                              invalid: error != nil && code.isEmpty)
+                        .onChange(of: code) { _, v in
+                            let digits = v.filter(\.isNumber)
+                            if digits != v { code = String(digits.prefix(codeLength)); return }
+                            if digits.count > codeLength { code = String(digits.prefix(codeLength)); return }
+                            if !digits.isEmpty { error = nil }
+                            // Six digits in: go, without making them find a button.
+                            if digits.count == codeLength && !busy { verify() }
+                        }
                     primaryButton(purpose.action, enabled: code.count == codeLength) { verify() }
+                        .padding(.top, 4)
 
                     Button(resendIn > 0 ? "Send another code in \(resendIn)s" : "Send another code") {
                         send()
                     }
-                    .font(.footnote)
-                    .foregroundStyle(resendIn > 0 ? Color.secondary : Color.accentColor)
+                    .font(.subheadline.weight(resendIn > 0 ? .regular : .semibold))
+                    .foregroundStyle(resendIn > 0 ? Color.secondary : Color.primary)
                     .disabled(resendIn > 0 || busy)
+                    .padding(.top, 6)
 
                     // FORGOT PASSWORD ONLY. There, a typo in the login field is a real possibility
                     // and this is the way back from it. On the other two doors the address belongs
@@ -179,11 +176,11 @@ struct LoginCodeView: View {
                         Button("Use a different email") {
                             step = .email; code = ""; error = nil; focused = true
                         }
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .font(.subheadline).foregroundStyle(.secondary)
                     } else if purpose == .newAccount {
                         // Back to the sign-up page, where the address is typed.
                         Button("Use a different email") { dismiss() }
-                            .font(.footnote).foregroundStyle(.secondary)
+                            .font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
 
@@ -322,20 +319,94 @@ struct LoginCodeView: View {
             Group {
                 if busy { ProgressView().tint(AuthPalette.page) } else { Text(title) }
             }
-            .authPrimaryPill()
+            // The email page's button, so a disabled one is a softened black pill, not grey on grey.
+            .authActionPill(enabled: enabled || busy)
         }
+        .buttonStyle(.plain)
         .disabled(busy || !enabled)
-        .opacity(enabled ? 1 : 0.55)
     }
 
     private func labelled<C: View>(_ label: String, @ViewBuilder content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            // The email page's field look: white, hairline edge.
             content()
                 .font(.system(size: 17))
                 .foregroundStyle(.primary)
-                .padding(.horizontal, 16).frame(height: 50)
-                .background(AuthPalette.raised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(.horizontal, 16).frame(height: 54)
+                .background(AuthPalette.page, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.18), lineWidth: 1))
         }
+    }
+}
+
+/// Six boxes, one digit each, over ONE real text field.
+///
+/// One field, not six: `.oneTimeCode` (iOS offering the number from the mail notification) and
+/// pasting a whole code only work on a single field, and six fields need focus juggling on every
+/// key. The field sits on top of the boxes with its text and caret made clear, so a tap anywhere
+/// on the row focuses it and a long-press still offers Paste. The boxes only draw what it holds.
+struct CodeBoxes: View {
+    @Binding var code: String
+    let length: Int
+    var focused: FocusState<Bool>.Binding
+    var invalid = false
+
+    var body: some View {
+        let digits = Array(code)
+        HStack(spacing: 8) {
+            ForEach(0..<length, id: \.self) { i in
+                let isNext = focused.wrappedValue && i == min(digits.count, length - 1)
+                    && digits.count < length
+                let edge: Color = invalid ? .red
+                    : isNext ? Color.primary.opacity(0.75) : Color.primary.opacity(0.18)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(AuthPalette.page)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(edge, lineWidth: isNext || invalid ? 1.4 : 1)
+                    if i < digits.count {
+                        Text(String(digits[i]))
+                            .font(.system(size: 26, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.primary)
+                    } else if isNext {
+                        CodeCaret()
+                    }
+                }
+                .frame(height: 58)
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: code)
+        .animation(.easeOut(duration: 0.15), value: invalid)
+        .overlay {
+            TextField("", text: $code)
+                .keyboardType(.numberPad)
+                // The one-time-code content type is what makes iOS offer the number straight
+                // from the mail notification, so most people never type it.
+                .textContentType(.oneTimeCode)
+                .foregroundStyle(.clear)
+                .tint(.clear)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .focused(focused)
+                .accessibilityLabel("Code")
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { focused.wrappedValue = true }
+    }
+}
+
+/// The blinking bar in the next empty box.
+private struct CodeCaret: View {
+    @State private var on = true
+    var body: some View {
+        RoundedRectangle(cornerRadius: 1)
+            .fill(Color.primary)
+            .frame(width: 2, height: 26)
+            .opacity(on ? 1 : 0)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) { on = false }
+            }
     }
 }
