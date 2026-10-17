@@ -36,29 +36,42 @@ struct LoginCodeView: View {
         /// Signing in to an account whose address has never been proved. Clears itself: spending the
         /// code marks the address confirmed server-side, so this door is one-time per account.
         case unproven
+        /// Sign-up, CODE FIRST (2026-10-17): the address is proved before any account exists. The
+        /// code buys a ticket handed to `onTicket`; nobody is signed in here.
+        case newAccount
 
         var title: String {
             switch self {
-            case .forgot:   return "Enter your code"
-            case .signUp:   return "Confirm your email"
-            case .unproven: return "Confirm your email"
+            case .forgot:     return "Enter your code"
+            case .signUp:     return "Confirm your email"
+            case .unproven:   return "Confirm your email"
+            case .newAccount: return "Check your email"
             }
         }
 
         var blurb: String {
             switch self {
-            case .forgot:   return "No password needed. Type the code and you are back in."
-            case .signUp:   return "One code and your account is ready."
-            case .unproven: return "This is a one-time check. It will not be asked again."
+            case .forgot:     return "No password needed. Type the code and you are back in."
+            case .signUp:     return "One code and your account is ready."
+            case .unproven:   return "This is a one-time check. It will not be asked again."
+            case .newAccount: return "Type the code we send you, then choose a password."
             }
         }
 
-        var action: String { self == .forgot ? "Log In" : "Confirm" }
+        var action: String {
+            switch self {
+            case .forgot:     return "Log In"
+            case .newAccount: return "Continue"
+            default:          return "Confirm"
+            }
+        }
     }
 
     var email: String = ""
     var purpose: Purpose = .forgot
     var onAuthed: () -> Void
+    /// `.newAccount` only: receives the ticket once the code is right. `onAuthed` is not called.
+    var onTicket: ((String) -> Void)? = nil
 
     /// `newPassword`: FORGOT PASSWORD ONLY, after the code signs you in — owner, 2026-09-29, "after
     /// the correct code give me the option to add a new password, because I forgot the old one".
@@ -167,6 +180,10 @@ struct LoginCodeView: View {
                             step = .email; code = ""; error = nil; focused = true
                         }
                         .font(.footnote).foregroundStyle(.secondary)
+                    } else if purpose == .newAccount {
+                        // Back to the sign-up page, where the address is typed.
+                        Button("Use a different email") { dismiss() }
+                            .font(.footnote).foregroundStyle(.secondary)
                     }
                 }
 
@@ -216,7 +233,11 @@ struct LoginCodeView: View {
         busy = true; error = nil
         Task {
             do {
-                try await AuthService.shared.requestLoginCode(email: trimmedEmail)
+                if purpose == .newAccount {
+                    try await AuthService.shared.requestSignupCode(email: trimmedEmail)
+                } else {
+                    try await AuthService.shared.requestLoginCode(email: trimmedEmail)
+                }
                 await MainActor.run {
                     step = .code
                     code = ""
@@ -238,6 +259,12 @@ struct LoginCodeView: View {
         busy = true; error = nil
         Task {
             do {
+                if purpose == .newAccount {
+                    let ticket = try await AuthService.shared.verifySignupCode(email: trimmedEmail, code: code)
+                    await MainActor.run { onTicket?(ticket) }
+                    await MainActor.run { busy = false }
+                    return
+                }
                 try await AuthService.shared.signInWithLoginCode(email: trimmedEmail, code: code)
                 await MainActor.run {
                     // Never a password on Apple's hidden relay address: it could never be typed at

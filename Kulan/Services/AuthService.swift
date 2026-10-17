@@ -587,6 +587,55 @@ final class AuthService: NSObject {
         return signIn.user.uid
     }
 
+    // MARK: - Sign-up, code first (2026-10-17)
+
+    /// Step 1 of email sign-up: a code to the address, and NO account yet. The server answers the
+    /// same whether or not the address already has an account (that owner gets a "you already have
+    /// an account" mail instead of a code), so this cannot be used to find out who is on Fariin.
+    func requestSignupCode(email: String) async throws {
+        _ = try await Functions.functions(region: "me-central1")
+            .httpsCallable("requestSignupCode")
+            .call(["email": email])
+    }
+
+    /// Step 2: spend the code for a one-time ticket that says "this person reads this inbox".
+    func verifySignupCode(email: String, code: String) async throws -> String {
+        let result = try await Functions.functions(region: "me-central1")
+            .httpsCallable("verifySignupCode")
+            .call(["email": email, "code": code])
+        guard let data = result.data as? [String: Any], let ticket = data["ticket"] as? String else {
+            throw NSError(domain: "Fariin", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Could not check that code. Try again."])
+        }
+        return ticket
+    }
+
+    /// Step 3: the server makes the account with the address already proved, and signs us in.
+    /// "Already has an account" (only a race can cause it) comes back as `emailTaken`, so the
+    /// sign-up page shows its "Are you trying to log in?" sheet as before.
+    func completeSignup(ticket: String, password: String) async throws {
+        let result: HTTPSCallableResult
+        do {
+            result = try await Functions.functions(region: "me-central1")
+                .httpsCallable("completeSignup")
+                .call(["ticket": ticket, "password": password])
+        } catch let e as NSError where e.domain == FunctionsErrorDomain
+                                    && e.code == FunctionsErrorCode.alreadyExists.rawValue {
+            throw AuthFlowError.emailTaken
+        } catch let e as NSError where e.domain == FunctionsErrorDomain
+                                    && e.code == FunctionsErrorCode.permissionDenied.rawValue {
+            throw AuthFlowError.signupExpired
+        }
+        guard let data = result.data as? [String: Any], let token = data["token"] as? String else {
+            throw NSError(domain: "Fariin", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Could not make your account. Try again."])
+        }
+        let signIn = try await Auth.auth().signIn(withCustomToken: token)
+        uid = signIn.user.uid
+        Self.rememberSignInMethod(.email)
+        reportLogin()
+    }
+
     // MARK: - Sign-in methods (Account settings: see what's connected, connect another)
 
     /// The sign-in doors Fariin supports, in the order Account settings lists them.
@@ -1019,9 +1068,12 @@ enum AuthFlowError: LocalizedError {
     case notSignedIn, alreadyConnected, alreadyLinkedElsewhere
     case noAccount, accountExists
     case notConnected, lastSignInMethod
+    /// Code-first sign-up: the ticket from the code page expired or was already spent.
+    case signupExpired
 
     var errorDescription: String? {
         switch self {
+        case .signupExpired: return "Your code has expired. Press Continue for a new one."
         case .appleFailed: return "Apple sign-in didn't complete. Please try again."
         case .googleFailed: return "Google sign-in didn't complete. Please try again."
         // Same words as 17007 in `plainMessage`, and for the same reason: this is what that code

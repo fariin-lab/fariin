@@ -729,6 +729,9 @@ struct EmailAuthView: View {
     /// Set when the address still has to be proved with a code, which pushes the code screen instead
     /// of finishing. One optional drives the whole thing through `navigationDestination(item:)`.
     @State private var prove: LoginCodeView.Purpose?
+    /// Sign-up only: the server's one-time proof that this person read the code at `email`.
+    /// The password step exists only while this is set.
+    @State private var signupTicket: String?
 
     @FocusState private var emailFocused: Bool
     // The password boxes are UITextFields (see RevealablePasswordField), so their focus is plain
@@ -1019,13 +1022,17 @@ struct EmailAuthView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             // A prefilled address (the saved-account row) goes straight to the password.
+            // onAppear runs again when the code page pops; on the password step that focus is
+            // `ticketArrived`'s, not the email box's.
+            if showPassword { return }
             if mode == .login && !email.isEmpty { passwordFocused = true } else { emailFocused = true }
         }
         // A PUSH, not a sheet: the code screen has to stay put while somebody goes to read their mail.
         .navigationDestination(item: $prove) { purpose in
             LoginCodeView(email: email.trimmingCharacters(in: .whitespaces),
                           purpose: purpose,
-                          onAuthed: onAuthed)
+                          onAuthed: onAuthed,
+                          onTicket: purpose == .newAccount ? { ticketArrived($0) } : nil)
         }
     }
 
@@ -1072,13 +1079,25 @@ struct EmailAuthView: View {
             return
         }
         email = email.trimmingCharacters(in: .whitespaces)
+        // CODE FIRST (2026-10-17): the address is proved before the password is even asked for.
+        // The code page sends the code itself on open and hands back a ticket (`ticketArrived`).
+        emailFocused = false
+        prove = .newAccount
+    }
+
+    /// The code was right: back from the code page onto the password step, ticket in hand.
+    private func ticketArrived(_ ticket: String) {
+        signupTicket = ticket
+        prove = nil
         withAnimation(.easeInOut(duration: 0.2)) { showPassword = true }
-        passwordFocused = true
+        // After the pop has finished, or the field asks for focus while it is still off screen.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { passwordFocused = true }
     }
 
     /// Back to the address. Both passwords are CLEARED: they were made for the address on screen.
     private func backToEmail() {
         error = nil
+        signupTicket = nil   // it proves the address on screen, not the next one typed
         password = ""; confirm = ""
         reveal = false
         passwordFocused = false; confirmFocused = false
@@ -1097,11 +1116,24 @@ struct EmailAuthView: View {
         Task {
             do {
                 if mode == .create {
-                    try await AuthService.shared.createEmailAccount(email: email.trimmingCharacters(in: .whitespaces),
-                                                                    password: password)
-                    // SIGN-UP ALWAYS PROVES THE ADDRESS with a code before the account is any use.
-                    // NOT `onAuthed()`: RootView waits for this callback, so the code screen gets its turn.
-                    await MainActor.run { prove = .signUp }
+                    // The address was proved on the code page before this step appeared, so the
+                    // server makes the account already confirmed and there is no code after it.
+                    guard let ticket = signupTicket else {
+                        await MainActor.run { backToEmail(); busy = false }
+                        return
+                    }
+                    do {
+                        try await AuthService.shared.completeSignup(ticket: ticket, password: password)
+                    } catch AuthFlowError.signupExpired {
+                        // Ticket expired or spent: the only way on is a fresh code.
+                        await MainActor.run {
+                            backToEmail()
+                            self.error = AuthFlowError.signupExpired.errorDescription
+                            busy = false
+                        }
+                        return
+                    }
+                    await MainActor.run { onAuthed() }
                 } else {
                     try await AuthService.shared.signInEmail(email: email.trimmingCharacters(in: .whitespaces),
                                                              password: password)
