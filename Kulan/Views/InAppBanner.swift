@@ -52,6 +52,17 @@ final class InAppBannerCenter {
         // A second message replaces the first and restarts the clock, rather than stacking — which
         // is theirs too: `enqueue` animates the old card out and the new one in at the same moment,
         // and only one item is ever tracked.
+        // ⛔ FARIIN'S OWN MESSAGES SPEAK AS FARIIN — owner, 2026-10-17: "Password added" arrived with a
+        // grey empty face and the message title where the sender goes. The channel's name and mark,
+        // the same as its row in the list; the title moves in front of the words ("Title: body").
+        if let cid, OfficialChannel.isOfficial(cid) {
+            let head = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let words = head.isEmpty || head == OfficialChannel.name ? body : "\(head): \(body)"
+            let next = Item(cid: cid, title: OfficialChannel.name, body: words, photoUrl: nil)
+            withAnimation(Self.slide) { item = next }
+            armHide()
+            return
+        }
         let next = Item(cid: cid, title: title, body: body, photoUrl: cid.flatMap(Self.photo(forCid:)))
         withAnimation(Self.slide) { item = next }
         armHide()
@@ -210,7 +221,11 @@ struct InAppBannerCard: View {
 
     @ViewBuilder private func card(safeTop: CGFloat) -> some View {
         HStack(spacing: Self.avatarToText) {
-            AvatarView(name: item.title, photoUrl: item.photoUrl, size: Self.avatar)
+            if let cid = item.cid, OfficialChannel.isOfficial(cid) {
+                OfficialAvatar(size: Self.avatar)
+            } else {
+                AvatarView(name: item.title, photoUrl: item.photoUrl, size: Self.avatar)
+            }
             VStack(alignment: .leading, spacing: Self.titleToBody) {
                 // 15 semibold, one line. Ours was 17.
                 Text(item.title)

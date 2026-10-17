@@ -271,11 +271,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // shared. The banner carries the decrypted message, restricted chats included, and anyone
         // watching the capture read it. The sound, vibration and badge still come.
         let captured = await MainActor.run { UIScreen.main.isCaptured }
-        // ⛔ NO BANNER FOR FARIIN'S SECURITY MESSAGES — owner 2026-10-16: "New login" and "Password
-        // changed" arrive in the Fariin chat, and the bar on top of the app said the same thing a
-        // second time. The message, the sound, the buzz and the closed-app push are unchanged.
-        let officialSecurity = cid == OfficialChannel.cid && content.userInfo["kind"] as? String == "security"
-        let wantPreview = !captured && !officialSecurity
+        // ⛔ 2026-10-17, REVERSED ON HIS WORD: Fariin's security messages ("New login", "Password
+        // added") get the banner again, now drawn as Fariin with its own mark (InAppBannerCenter.show).
+        // The 2026-10-16 rule hid it.
+        let wantPreview = !captured
             && (d.object(forKey: "notif.inAppPreview") as? Bool ?? true)
         let wantSound = d.object(forKey: "notif.inAppSound") as? Bool ?? true
         let wantVibrate = d.object(forKey: "notif.inAppVibrate") as? Bool ?? true
