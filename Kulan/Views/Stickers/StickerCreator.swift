@@ -3,6 +3,7 @@ import PhotosUI
 import ImageIO
 import UniformTypeIdentifiers
 import Vision
+import VisionKit
 import CoreImage
 
 // ⛔ MAKE A STICKER FROM A PHOTO — owner 2026-10-17. Pick one photo, lift the subject out of it
@@ -80,7 +81,12 @@ private final class StickerCreatorFlow: NSObject, PHPickerViewControllerDelegate
                                      spinner.centerYAnchor.constraint(equalTo: picker.view.centerYAnchor)])
         spinner.startAnimating()
         Task {
-            let art = await Task.detached(priority: .userInitiated) { Self.makeArt(image) }.value
+            var art = await Task.detached(priority: .userInitiated) { Self.makeArt(image) }.value
+            // 2026-10-17 (owner: his sticker came out as the whole photo): when Vision's mask finds
+            // nothing, ask VisionKit's subject lift — the one the Photos app uses — before giving up.
+            if let a = art, a.cutout == nil, let lifted = await Self.visionKitLift(image) {
+                art = StickerArt(cutout: Self.fit(lifted), rounded: a.rounded)
+            }
             spinner.removeFromSuperview()
             guard let art else {
                 picker.dismiss(animated: true) { self.fail("This photo couldn't be made into a sticker.") }
@@ -97,10 +103,19 @@ private final class StickerCreatorFlow: NSObject, PHPickerViewControllerDelegate
                         return
                     }
                 }
+                // X (owner 2026-10-17): back to the photo library, not out of the flow.
+                guard png != nil else {
+                    preview.dismiss(animated: true) { self.start(from: self.host ?? WebLink.topViewController() ?? preview) }
+                    return
+                }
                 preview.dismiss(animated: true) { self.finish() }
             }
             picker.dismiss(animated: false) {
-                preview.modalPresentationStyle = .fullScreen
+                // ⛔ OVER, NOT FULL SCREEN — owner 2026-10-17: Save and Cancel both dropped him on the
+                // chat list. `.fullScreen` takes the chat underneath out of the window, the chat's
+                // SwiftUI view disappears with it and reads that as having been left. `.overFullScreen`
+                // keeps the chat where it is, as the app's other full-screen covers do.
+                preview.modalPresentationStyle = .overFullScreen
                 (self.host ?? WebLink.topViewController())?.present(preview, animated: true)
             }
         }
@@ -114,6 +129,20 @@ private final class StickerCreatorFlow: NSObject, PHPickerViewControllerDelegate
     }
 
     private func finish() { StickerCreatorDoor.flow = nil }
+
+    /// VisionKit subject lifting (iOS 17+), on the phone. Nil when it finds no subject.
+    static func visionKitLift(_ cg: CGImage) async -> UIImage? {
+        guard ImageAnalyzer.isSupported else { return nil }
+        let ui = UIImage(cgImage: cg)
+        let analyzer = ImageAnalyzer()
+        let config = ImageAnalyzer.Configuration([.visualLookUp])
+        guard let analysis = try? await analyzer.analyze(ui, configuration: config) else { return nil }
+        let interaction = ImageAnalysisInteraction()
+        interaction.analysis = analysis
+        let subjects = await interaction.subjects
+        guard !subjects.isEmpty else { return nil }
+        return try? await interaction.image(for: subjects)
+    }
 
     // MARK: - Off the main thread
 
@@ -209,11 +238,20 @@ private final class StickerPreviewController: UIViewController {
         view.backgroundColor = .black
         overrideUserInterfaceStyle = .dark
 
-        let cancel = UIButton(type: .system)
-        cancel.setTitle("Cancel", for: .normal)
-        cancel.titleLabel?.font = .systemFont(ofSize: 17)
-        cancel.tintColor = .white
-        cancel.addAction(UIAction { [weak self] _ in self?.onDone?(nil) }, for: .touchUpInside)
+        // A 44 pt Liquid Glass X where Cancel was (owner 2026-10-17).
+        let glass = UIGlassEffect(style: .regular)
+        glass.isInteractive = true
+        let cancel = UIVisualEffectView(effect: glass)
+        cancel.layer.cornerRadius = 22
+        cancel.clipsToBounds = true
+        let x = UIButton(type: .system)
+        x.setImage(UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)), for: .normal)
+        x.tintColor = .white
+        x.accessibilityLabel = "Close"
+        x.addAction(UIAction { [weak self] _ in self?.onDone?(nil) }, for: .touchUpInside)
+        x.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
+        x.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        cancel.contentView.addSubview(x)
 
         imageView.contentMode = .scaleAspectFit
 
@@ -252,6 +290,8 @@ private final class StickerPreviewController: UIViewController {
         NSLayoutConstraint.activate([
             cancel.topAnchor.constraint(equalTo: g.topAnchor, constant: 8),
             cancel.leadingAnchor.constraint(equalTo: g.leadingAnchor, constant: 16),
+            cancel.widthAnchor.constraint(equalToConstant: 44),
+            cancel.heightAnchor.constraint(equalToConstant: 44),
 
             imageView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             imageView.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -40),

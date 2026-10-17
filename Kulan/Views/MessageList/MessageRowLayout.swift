@@ -374,8 +374,12 @@ enum MessageRowLayout {
 
         switch m.content {
         case .bubble(let b):
+            // 2026-10-17 (owner, "there's no space"): a sticker has no bubble to separate it, so two
+            // in a row from the same person touched. It always keeps a gap above it.
+            var top = m.topSpacing
+            if case .media(let mb) = b.body, mb.kind == .sticker { top = max(top, 8) }
             var p = bubble(b, originX: contentX, availableWidth: contentW, rowWidth: width,
-                           topSpacing: m.topSpacing)
+                           topSpacing: top)
             contentHeight = p.totalHeight
             p.plan.offsetVertically(by: y)
             body = .bubble(p.plan)
