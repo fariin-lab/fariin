@@ -1396,6 +1396,7 @@ extension ChatComposerView: UITextViewDelegate {
             let panel = StickerKeyboardView(height: StickerPanelHeight.current)
             panel.onSend = { [weak self] s in self?.actions.sendSticker(s) }
             panel.onCreate = { [weak self] in self?.actions.createSticker() }
+            panel.onSendGif = { [weak self] g in self?.actions.sendGif(g) }
             panel.onGifs = { [weak self] in
                 guard let self else { return }
                 self.setStickerPanel(false, reload: false)

@@ -54,9 +54,25 @@ final class RowStickerView: UIView {
         let gen = generation
         let px = max(bounds.width, bounds.height, MessageRowLayout.stickerSide) * (UIScreen.main.scale)
 
+        // ⛔ NO BLANK BEAT ON A ROW ALREADY SEEN — owner 2026-10-17: opening a chat, every sticker
+        // vanished for a moment and came back. Each new cell started empty and waited on a load +
+        // decode. The first frame and the bytes are kept in memory, so a known sticker is on the
+        // very first frame; only one never shown before still loads.
+        if let first = Self.firstCache.object(forKey: k as NSString),
+           let data = Self.bytesCache.object(forKey: k as NSString) {
+            bytes = data as Data
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            art.contents = first
+            CATransaction.commit()
+            updatePlayback()
+            return
+        }
+
         Task { @MainActor [weak self] in
             guard let data = await Self.load(s, url: url, enc: enc, cid: cid, localData: localData) else { return }
             let first = await Task.detached(priority: .userInitiated) { Self.firstFrame(data, maxPixel: px) }.value
+            if let first { Self.firstCache.setObject(first, forKey: k as NSString) }
+            Self.bytesCache.setObject(data as NSData, forKey: k as NSString, cost: data.count)
             guard let self, self.generation == gen else { return }
             self.bytes = data
             CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -65,6 +81,12 @@ final class RowStickerView: UIView {
             self.updatePlayback()
         }
     }
+
+    /// First frames and bytes of stickers already shown (see `configure`). Bounded: ~30MB of bytes.
+    private static let firstCache: NSCache<NSString, CGImage> = { let c = NSCache<NSString, CGImage>(); c.countLimit = 120; return c }()
+    private static let bytesCache: NSCache<NSString, NSData> = {
+        let c = NSCache<NSString, NSData>(); c.totalCostLimit = 30 * 1024 * 1024; return c
+    }()
 
     /// The list says whether this row is on screen; animation runs only while it is.
     func setOnScreen(_ on: Bool) {

@@ -132,6 +132,8 @@ struct ChatComposerActions {
     /// The panel's GIFs tab still calls `gif` (today's picker).
     var sendSticker: (Sticker) -> Void = { _ in }
     var createSticker: () -> Void = {}
+    /// A GIF tapped in the panel's own GIFs tab (2026-10-17).
+    var sendGif: (GiphyService.Gif) -> Void = { _ in }
     /// The camera, from its button in the field (owner 2026-10-15: moved here from the attach sheet).
     var camera: () -> Void = {}
     var send: () -> Void = {}

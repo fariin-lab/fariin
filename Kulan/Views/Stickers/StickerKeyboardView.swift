@@ -41,8 +41,11 @@ enum StickerPanelHeight {
 final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
     var onSend: (Sticker) -> Void = { _ in }
     var onCreate: () -> Void = {}
-    /// The GIFs tab: the composer closes the panel and opens today's GIF picker.
+    /// Search GIFs: the composer closes the panel and opens the GIF picker (searching needs keys).
     var onGifs: () -> Void = {}
+    /// A GIF tapped in the panel's own GIFs tab.
+    var onSendGif: (GiphyService.Gif) -> Void = { _ in }
+    private let gifGrid = PanelGifGrid()
 
     private enum Shelf: Equatable {
         case recents, favorites, pack(StickerPack)
@@ -129,6 +132,11 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
                       withReuseIdentifier: ShelfHeader.id)
         addSubview(grid)
 
+        gifGrid.isHidden = true
+        gifGrid.onSend = { [weak self] g in self?.onSendGif(g) }
+        gifGrid.onSearch = { [weak self] in self?.onGifs() }
+        addSubview(gifGrid)
+
         deleteBar.backgroundColor = .secondarySystemBackground
         deleteBar.isHidden = true
         deleteButton.setTitleColor(.systemRed, for: .normal)
@@ -164,6 +172,8 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         }
         let gridTop = headerHidden ? 0 : strip.frame.maxY
         grid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, bounds.height - gridTop))
+        let gifTop = tabs.frame.maxY + 6
+        gifGrid.frame = CGRect(x: 0, y: gifTop, width: w, height: max(0, bounds.height - gifTop))
         grid.contentInset.bottom = safeAreaInsets.bottom + (editing ? 44 : 0)
         let barH = 44 + safeAreaInsets.bottom
         deleteBar.frame = CGRect(x: 0, y: bounds.height - barH, width: w, height: barH)
@@ -187,7 +197,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         for p in store.packs { s.append(Section(shelf: .pack(p), stickers: p.stickers)) }
         sections = s
         let anyMine = !store.recents.isEmpty || !store.favorites.isEmpty
-        editButton.isHidden = !anyMine
+        editButton.isHidden = !anyMine || tabs.selectedSegmentIndex == 0
         if editing && !anyMine { endEditing() }
         grid.reloadData()
         buildStrip()
@@ -316,11 +326,18 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
 
     // MARK: Tabs
 
+    /// GIFs show in the panel itself now (owner 2026-10-17); Search still hands over to the picker.
     @objc private func tabChanged() {
-        guard tabs.selectedSegmentIndex == 0 else { return }
-        // Back to Stickers right away, so the panel reads correctly the next time it opens.
-        tabs.selectedSegmentIndex = 1
-        onGifs()
+        UISelectionFeedbackGenerator().selectionChanged()
+        let gifsOn = tabs.selectedSegmentIndex == 0
+        if gifsOn { if editing { endEditing() }; gifGrid.loadIfNeeded() }
+        UIView.transition(with: self, duration: 0.18, options: [.transitionCrossDissolve, .allowUserInteraction]) {
+            self.gifGrid.isHidden = !gifsOn
+            self.grid.isHidden = gifsOn
+            self.strip.isHidden = gifsOn
+            self.editButton.isHidden = gifsOn || (StickerStore.shared.recents.isEmpty && StickerStore.shared.favorites.isEmpty)
+        }
+        setNeedsLayout()
     }
 
     // MARK: Editing
