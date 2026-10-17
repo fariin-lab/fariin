@@ -770,6 +770,92 @@ struct OnboardingView: View {
     @State private var handleState: HandleState = .empty
     @State private var checkTask: Task<Void, Never>?
 
+    // ⛔ USERNAME IDEAS (owner, 2026-10-17, after a large app's sign-up): the box fills itself with a
+    // FREE name made from the name being typed, so most people just press Continue; and a taken
+    // name gets up to three free ones to tap. Built from the NAME, never the email: a username is
+    // public, and one made from "mo.abdi1990@" would hand out the address.
+    /// True once the person types in the username box themselves; from then on we never overwrite it.
+    @State private var handleEdited = false
+    /// The last value WE put in the box, so its onChange is not mistaken for typing.
+    @State private var autoHandle: String?
+    @State private var ideas: [String] = []
+    @State private var ideaTask: Task<Void, Never>?
+
+    /// Candidate usernames from a name or a taken username, in order of preference, all of a legal
+    /// shape. Short ones are padded with digits to the minimum length ("Mo" -> mo_abdi, mo4821).
+    static func handleIdeas(from raw: String) -> [String] {
+        let alnum = Set("abcdefghijklmnopqrstuvwxyz0123456789")
+        let words = raw.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
+            .lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map { String($0.filter { alnum.contains($0) }) }
+            .filter { !$0.isEmpty }
+        guard !words.isEmpty, words.joined().contains(where: \.isLetter) else { return [] }
+        let joined = words.joined()
+        let under = words.joined(separator: "_")
+        func pad(_ s: String) -> String {
+            var s = s
+            while s.count < Limits.usernameMinChars { s += String(Int.random(in: 0...9)) }
+            return s
+        }
+        let cands: [String] = [joined, under,
+                               joined + String(Int.random(in: 10...99)),
+                               under + String(Int.random(in: 10...99)),
+                               joined + String(Int.random(in: 100...999)),
+                               joined + "_" + String(Int.random(in: 10...99))]
+            .map { pad(String($0.prefix(Limits.usernameMaxChars))) }
+        var seen = Set<String>()
+        return cands.filter {
+            ChatService.isValidHandle($0) && ChatService.handleShapeProblem($0) == nil && seen.insert($0).inserted
+        }
+    }
+
+    /// Asks the server about candidates one by one (at most six calls) and returns the first free ones.
+    private static func freeHandles(_ candidates: [String], want: Int) async -> [String] {
+        var out: [String] = []
+        for c in candidates.prefix(6) {
+            if Task.isCancelled { break }
+            if let r = try? await ChatService.checkHandleAvailable(c), r.available {
+                out.append(c)
+                if out.count == want { break }
+            }
+        }
+        return out
+    }
+
+    /// Name typed, username untouched: fill the box with the first free idea after a pause.
+    private func schedulePrefill() {
+        guard !handleEdited else { return }
+        ideaTask?.cancel()
+        let source = name
+        ideaTask = Task {
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard !Task.isCancelled else { return }
+            let free = await Self.freeHandles(Self.handleIdeas(from: source), want: 1)
+            guard !Task.isCancelled, let pick = free.first else { return }
+            await MainActor.run {
+                guard !handleEdited, name == source else { return }
+                autoHandle = pick
+                handle = pick
+            }
+        }
+    }
+
+    /// The typed username is taken: offer up to three free ones made from it.
+    private func scheduleAlternatives() {
+        ideaTask?.cancel()
+        let h = ChatService.sanitizeHandle(handle)
+        ideaTask = Task {
+            let cands = Self.handleIdeas(from: h).filter { $0.lowercased() != h.lowercased() }
+            let free = await Self.freeHandles(cands, want: 3)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard ChatService.sanitizeHandle(handle) == h, handleState == .taken else { return }
+                ideas = free
+            }
+        }
+    }
+
     /// `unknown` may continue too: Continue asks the server anyway (claimUsername decides), and a
     /// check that failed once must not strand somebody whose connection has since come back.
     private var canContinue: Bool {
@@ -871,6 +957,7 @@ struct OnboardingView: View {
                                 .focused($focus, equals: .name)
                                 .submitLabel(.next)
                                 .onSubmit { focus = .handle }
+                                .onChange(of: name) { schedulePrefill() }
                         }
 
                         field(icon: "at", focused: focus == .handle, invalid: handleState == .taken, accessory: {
@@ -905,6 +992,10 @@ struct OnboardingView: View {
                                     .onChange(of: handle) { _, v in
                                         let clean = ChatService.sanitizeHandle(v)
                                         if clean != v { handle = clean }
+                                        // Our own fill is not typing. Clearing the box hands it back
+                                        // to the name-based fill.
+                                        if v != autoHandle { handleEdited = !v.isEmpty }
+                                        ideas = []
                                         scheduleHandleCheck()
                                     }
                             }
@@ -915,7 +1006,9 @@ struct OnboardingView: View {
                         Group {
                             switch handleState {
                             case .taken:
-                                Text("@\(ChatService.sanitizeHandle(handle)) is taken. Try adding a number.")
+                                Text(ideas.isEmpty
+                                     ? "@\(ChatService.sanitizeHandle(handle)) is taken. Try adding a number."
+                                     : "@\(ChatService.sanitizeHandle(handle)) is taken. These are free:")
                                     .foregroundStyle(.red)
                             case .free:
                                 Text("@\(ChatService.sanitizeHandle(handle)) is available.")
@@ -934,8 +1027,39 @@ struct OnboardingView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 4).padding(.top, -4)
                         .animation(.easeInOut(duration: 0.15), value: handleState)
+
+                        // Free alternatives to a taken name, one tap each.
+                        if handleState == .taken && !ideas.isEmpty {
+                            VStack(spacing: 0) {
+                                ForEach(Array(ideas.enumerated()), id: \.element) { i, idea in
+                                    Button {
+                                        handleEdited = true
+                                        handle = idea
+                                    } label: {
+                                        HStack {
+                                            Text("@" + idea).font(.system(size: 17)).foregroundStyle(.primary)
+                                            Spacer(minLength: 0)
+                                            Image(systemName: "checkmark.circle")
+                                                .font(.system(size: 17)).foregroundStyle(.secondary)
+                                        }
+                                        .padding(.horizontal, 18).frame(height: 50)
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    if i < ideas.count - 1 { Divider().padding(.leading, 18) }
+                                }
+                            }
+                            .background(AuthPalette.page, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .strokeBorder(Color.primary.opacity(0.18), lineWidth: 1))
+                            .transition(.opacity)
+                        }
                     }
                     .padding(.top, 26)
+                    .animation(.easeOut(duration: 0.15), value: ideas)
+                    .onChange(of: handleState) { _, s in
+                        if s == .taken { scheduleAlternatives() }
+                    }
 
                     if let error {
                         Text(error).font(.footnote).foregroundStyle(.red)
