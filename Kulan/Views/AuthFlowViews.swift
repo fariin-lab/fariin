@@ -56,10 +56,10 @@ struct WelcomeView: View {
                         .scaledToFit()
                         .frame(width: 120, height: 120)
                         .accessibilityLabel("Fariin")
-                    // "Sign in", not "Welcome": the first-run agreement screen right before this one
+                    // "Log in", not "Welcome": the first-run agreement screen right before this one
                     // already says "Welcome to Fariin", and the same title twice in a row read as a
                     // loop (2026-09-24).
-                    Text("Sign in to Fariin")
+                    Text("Log in to Fariin")
                         .font(.system(size: 26, weight: .bold))
                         .foregroundStyle(.primary)
                         .padding(.top, 22)
@@ -93,7 +93,7 @@ struct WelcomeView: View {
                         }
                         .buttonStyle(.plain)
                         NavigationLink { AuthMethodView(mode: .login, onAuthed: onAuthed) } label: {
-                            Text("Log In")
+                            Text("Log in")
                                 .font(.system(size: 17, weight: .semibold))
                                 .foregroundStyle(.primary)
                                 .frame(maxWidth: .infinity).frame(height: 50)
@@ -793,14 +793,18 @@ struct EmailAuthView: View {
 
     private var title: String {
         switch (mode, onEmailStep) {
-        case (.login, _): return "Welcome back"
+        // "Log in" everywhere, never "Sign in" beside it (owner, 2026-10-17: the code page said
+        // Log In, this page Sign in, and the mail "login code"). Not "Log in to Fariin": the door
+        // page right before this one already says that, and the same title twice reads as a loop.
+        case (.login, _): return "Log in with email"
         case (.create, true): return "Create account"
         case (.create, false): return "Create a password"
         }
     }
     private var subtitle: String {
         switch (mode, onEmailStep) {
-        case (.login, _): return "Sign in to continue"
+        // No second line on log in: "Sign in to continue" was the stock template line and said nothing.
+        case (.login, _): return ""
         // True: sign-up always proves the address with a code (see `submit`).
         case (.create, true): return "We’ll send a verification code to your email."
         case (.create, false): return "Use at least 8 characters, with a letter and a number."
@@ -822,13 +826,23 @@ struct EmailAuthView: View {
             ScrollView {
                 VStack(spacing: 14) {
                     VStack(spacing: 6) {
+                        // The app's own mark first, so the page says whose door it is. Same
+                        // artwork as the Home Screen icon (`ShiningLogo`, welcome-mark).
+                        ShiningLogo()
+                            .frame(width: 64, height: 64)
+                            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                            .padding(.bottom, 14)
+                            .accessibilityHidden(true)
                         Text(title)
                             .font(.system(size: 30, weight: .bold)).foregroundStyle(.primary)
-                        Text(subtitle)
-                            .font(.subheadline).foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
+                        if !subtitle.isEmpty {
+                            Text(subtitle)
+                                .font(.subheadline).foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
                     }
-                    .padding(.top, 36).padding(.bottom, 12)
+                    .padding(.top, 20).padding(.bottom, 12)
 
                     if mode == .create && showPassword {
                         Button { backToEmail() } label: {
@@ -899,7 +913,7 @@ struct EmailAuthView: View {
                             } else if onEmailStep {
                                 Text("Continue")
                             } else {
-                                Text(mode == .create ? "Create account" : "Sign in")
+                                Text(mode == .create ? "Create account" : "Log in")
                             }
                         }
                         .authActionPill(enabled: primaryEnabled || busy)
@@ -917,7 +931,7 @@ struct EmailAuthView: View {
                         } label: {
                             Text("Forgot password?")
                                 .font(.subheadline.weight(.medium))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.primary)
                         }
                         .padding(.top, 10)
                     }
@@ -935,7 +949,7 @@ struct EmailAuthView: View {
                         HStack(spacing: 5) {
                             Text(mode == .login ? "Don’t have an account?" : "Already have an account?")
                                 .foregroundStyle(.secondary)
-                            Text(mode == .login ? "Sign up" : "Sign in")
+                            Text(mode == .login ? "Sign up" : "Log in")
                                 .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
                         }
                         .font(.subheadline)

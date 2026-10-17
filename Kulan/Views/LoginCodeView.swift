@@ -60,7 +60,7 @@ struct LoginCodeView: View {
 
         var action: String {
             switch self {
-            case .forgot:     return "Log In"
+            case .forgot:     return "Log in"
             case .newAccount: return "Continue"
             default:          return "Confirm"
             }
