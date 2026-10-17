@@ -733,6 +733,8 @@ struct EmailAuthView: View {
 
     /// Sign-up asks ONE thing at a time: the address, then the password. Log in shows both.
     @State private var showPassword = false
+    /// The scroll area's height, so the content can fill it and catch taps on the empty part.
+    @State private var viewportHeight: CGFloat = 0
     private var onEmailStep: Bool { mode == .create && !showPassword }
 
     /// ⛔ THE FOUR RULES — owner, 2026-09-25: at least 8 characters, a letter, a number, and the two
@@ -888,7 +890,12 @@ struct EmailAuthView: View {
                     .padding(.top, 24)
                 }
                 .padding(.horizontal, 24)
+                // The ScrollView covers the page, so the page's own tap never fires: the empty
+                // space has to live inside the scroll content, at least one screen tall.
+                .frame(maxWidth: .infinity, minHeight: viewportHeight, alignment: .top)
+                .background(Color.clear.contentShape(Rectangle()).dismissesKeyboardOnTap())
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewportHeight = $0 }
             .scrollDismissesKeyboard(.interactively)
             .scrollBounceBehavior(.basedOnSize)
         }
