@@ -124,8 +124,10 @@ struct SettingsView: View {
                         // ⛔ ROOM FOR THE PRESS — owner 2026-10-13: a cut, border-like edge on the buttons
                         // when tapped. Interactive glass grows under the finger and the list row clips at
                         // its own edges. The margin keeps the growth inside the row.
-                        .padding(.horizontal, 8)
-                        .padding(.bottom, 5)
+                        // 2026-10-17: and room for the glass's SHADOW to fade out before the cell clips it
+                        // (8/5 cut it into the grey tray he reported three times).
+                        .padding(.horizontal, 18)
+                        .padding(.bottom, 22)
                     }
                     // Zero side insets, as the buttons' own row had: they keep their width. The header
                     // is centred, so the circle and name do not move.
@@ -432,24 +434,14 @@ struct SettingsView: View {
         // while the page the button opened was on screen. `.borderless` keeps each button's press
         // to itself and the row never highlights, as in the app's other two-button rows.
         //
-        // ⛔ NO GLASS HERE — owner 2026-10-17, third report of the grey tray on iOS 26. The tray was the
-        // glass's own soft SHADOW: iOS 26 Liquid Glass casts one, the two buttons' shadows merged, and
-        // the List cell clipped them at its card-rounded edges, so it read as a grey card behind both
-        // buttons. Neither the row move (0846b0bf) nor `.borderless` could touch it. A solid capsule
-        // in the cards' own colour has no shadow; the press dims it instead.
-        .buttonStyle(ProfileCapsuleButtonStyle())
-    }
-}
-
-/// Edit profile / Share profile: a solid capsule in the grouped cards' colour, dimmed while pressed.
-/// A ButtonStyle (not a `.background` on the label) so the press is the button's own and the List
-/// row never highlights.
-private struct ProfileCapsuleButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(Color(.secondarySystemGroupedBackground), in: Capsule())
-            .opacity(configuration.isPressed ? 0.55 : 1)
-            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+        //
+        // ⛔ GLASS IS BACK, WITH ROOM — owner 2026-10-17, same day, after the solid version: "losing
+        // liquid glass, add it". The grey tray he reported three times was this glass's own soft
+        // SHADOW clipped by the List cell at its card-rounded edges. The glass stays; the row now
+        // leaves the shadow room to fade out inside the cell (see the padding on the buttons' HStack)
+        // so there is no edge left to cut it into a band.
+        .buttonStyle(.borderless)
+        .liquidGlass(Capsule(), interactive: true)
     }
 }
 
