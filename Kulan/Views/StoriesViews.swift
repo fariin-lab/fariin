@@ -2922,6 +2922,9 @@ struct StoryViewer: View {
                     // Friend's story: a swipe UP opens the reply keyboard (like tapping the reply
                     // pill). StoryUI's MessageView focuses its TextField on this notification.
                     openDragging = false
+                    // ⛔ NOT ON FARIIN'S STORIES — owner 2026-10-17: a swipe up on an official story
+                    // (no reply bar, only its button) opened the keyboard for a hidden field.
+                    if let a = currentStory?.authorUid, OfficialChannel.isOfficial(a) { return }
                     if translation > 40 || velocity > 300 {
                         NotificationCenter.default.post(name: .init("focusStoryReply"), object: nil)
                     }
