@@ -240,7 +240,8 @@ enum BubbleBody: Equatable {
         /// measured by `displayBox` (240 × 340), and a video additionally takes the photo path's
         /// caption floor. Each of those was tuned against a report; collapsing them would undo
         /// several at once.
-        enum Kind: Equatable { case photo, video, gif }
+        /// `.sticker` (2026-10-17): no bubble, its own aspect-fit box (`MessageRowLayout.stickerBox`).
+        enum Kind: Equatable { case photo, video, gif, sticker }
         var kind: Kind
 
         var url: String?                 // the encrypted bytes (a gif's is a public Giphy url)
@@ -283,6 +284,8 @@ enum BubbleBody: Equatable {
         /// The MESSAGE id (VideoCache's key and DeadMedia's), and who sent it (the mailman delete).
         var messageId: String = ""
         var authorId: String = ""
+        /// `.sticker` only: which art (pack + file), so the row can draw the bundled copy.
+        var sticker: Sticker? = nil
     }
 
     /// The OG card that travelled WITH the message. Two shapes, and they are not variations of one

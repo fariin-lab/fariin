@@ -128,6 +128,10 @@ struct ChatComposerActions {
     var barTouched: () -> Void = {}
     var attach: () -> Void = {}
     var gif: () -> Void = {}
+    /// 2026-10-17 sticker keyboard: a sticker tapped in the panel, and its "Create Sticker" tile.
+    /// The panel's GIFs tab still calls `gif` (today's picker).
+    var sendSticker: (Sticker) -> Void = { _ in }
+    var createSticker: () -> Void = {}
     /// The camera, from its button in the field (owner 2026-10-15: moved here from the attach sheet).
     var camera: () -> Void = {}
     var send: () -> Void = {}

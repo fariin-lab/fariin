@@ -115,6 +115,7 @@ enum SessionWipe {
         GlowStoriesCache.clear()
         ThreadMessageCache.shared.removeAll()   // decrypted messages
         GalleryCache.removeAll()   // 2026-10-17: All Media's decrypted items, memory + disk
+        StickerStore.shared.wipe() // 2026-10-17: my made stickers + recents belong to the account
         ProfileStore.shared.me = nil
         ProfileStore.shared.stopPrivacySync()   // 2026-09-24 decision D11: stop mirroring this account's privacy
         BlockList.shared.stop()                 // 2026-09-24 decision D8: the account's block list goes with it

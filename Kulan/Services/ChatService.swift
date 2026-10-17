@@ -2466,7 +2466,9 @@ enum ChatService {
     static func forwardMessage(_ m: Message, from sourceCid: String, to targetCid: String,
                                clientId: String? = nil) async throws {
         let forwarded = isForward(m, from: sourceCid, to: targetCid)
-        if m.isImage {
+        if m.isSticker {   // 2026-10-17 chat stickers
+            try await StickerSend.forward(m, from: sourceCid, to: targetCid, clientId: clientId, forwarded: forwarded)
+        } else if m.isImage {
             let bytes: Data
             if let local = m.localImageData {
                 bytes = local
@@ -3145,6 +3147,9 @@ enum ChatService {
         let text = d["text"] as? String ?? ""
         let type = d["type"] as? String ?? ""
         let viewOnce = d["viewOnce"] as? Bool == true
+        // 2026-10-17 (owner, chat stickers): a sticker's `text` is only the old-build fallback
+        // (StickerSend), never a caption, so the label wins.
+        if type == "sticker" { return StickerSend.label(emoji: d["emoji"] as? String) }
         // A view-once caption is never shown, and a caption otherwise wins, as at send.
         if !text.isEmpty, !viewOnce || type == "text" || type.isEmpty { return text }
         switch type {

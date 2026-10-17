@@ -73,6 +73,13 @@ final class MessageRowCell: UICollectionViewCell {
     /// The jump-to flash on this row's bubble (see `MessageRowView.performJumpHighlight`).
     func performJumpHighlight() { rowView.performJumpHighlight() }
 
+    /// 2026-10-17 chat stickers: the list's willDisplay / didEndDisplaying, so an animated sticker
+    /// plays only while its row is on screen.
+    func setOnScreen(_ on: Bool) { rowView.setMediaOnScreen(on) }
+
+    /// A loaded sticker's bytes (Save to Favorites of one somebody else made).
+    var stickerBytes: Data? { rowView.stickerBytes }
+
     /// Which way a reaction resize grows this row, set by the owning list before it configures.
     var reactionGrowsFromBottom: Bool {
         get { rowView.growsFromBottom }
@@ -272,6 +279,7 @@ final class MessageRowCell: UICollectionViewCell {
             case .photo: noun = "Photo"
             case .video: noun = "Video" + (mb.durationText.map { ", \($0)" } ?? "")
             case .gif:   noun = "GIF"
+            case .sticker: noun = StickerSend.label(emoji: mb.sticker?.emoji)
             }
             if let words = mb.caption?.text, !words.isEmpty { return "\(noun), \(words)" }
             return noun

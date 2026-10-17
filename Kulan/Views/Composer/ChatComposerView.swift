@@ -364,7 +364,15 @@ final class ChatComposerView: UIView {
         // reach for without looking; the stickers are a browse.
         gifButton.icon.tintColor = UIColor.label.withAlphaComponent(0.55)
         gifButton.accessibilityLabel = "GIF"
-        gifButton.addAction(UIAction { [weak self] _ in self?.actions.gif() }, for: .touchUpInside)
+        // 2026-10-17: the GIF button opens the sticker panel in the keyboard's place (and, while it
+        // is up, shows a keyboard and puts the keys back). The panel's GIFs tab reaches `actions.gif`.
+        gifButton.addAction(UIAction { [weak self] _ in self?.toggleStickerPanel() }, for: .touchUpInside)
+        StickerPanelHeight.start()
+        // A tap in the field while the panel is up brings the keys back, as in the reference app.
+        let fieldTap = UITapGestureRecognizer(target: self, action: #selector(fieldTappedForKeys))
+        fieldTap.cancelsTouchesInView = false
+        fieldTap.delegate = self
+        textView.addGestureRecognizer(fieldTap)
         cameraButton.icon.tintColor = UIColor.label.withAlphaComponent(0.55)
         cameraButton.accessibilityLabel = "Camera"
         cameraButton.addAction(UIAction { [weak self] _ in self?.actions.camera() }, for: .touchUpInside)
@@ -1355,7 +1363,50 @@ extension ChatComposerView: UITextViewDelegate {
     }
 
     func textViewDidEndEditing(_ tv: UITextView) {
+        // The keys went away with the panel up (scroll, tap on the chat): the next focus is the
+        // keyboard again, not the panel.
+        if stickerPanelUp { setStickerPanel(false, reload: false) }
         DispatchQueue.main.async { [weak self] in self?.actions.focusChanged(false) }
+    }
+
+    // MARK: Sticker panel (2026-10-17)
+
+    var stickerPanelUp: Bool { textView.inputView != nil }
+
+    func toggleStickerPanel() {
+        if stickerPanelUp {
+            setStickerPanel(false, reload: true)
+            return
+        }
+        setStickerPanel(true, reload: textView.isFirstResponder)
+        if !textView.isFirstResponder { requestFocus(true) }
+    }
+
+    @objc private func fieldTappedForKeys() {
+        guard stickerPanelUp, textView.isFirstResponder else { return }
+        setStickerPanel(false, reload: true)
+    }
+
+    /// Swaps the field's inputView. `reload` lets the system animate the swap while the field
+    /// already holds the responder; when it does not, `becomeFirstResponder` brings the panel up.
+    private func setStickerPanel(_ on: Bool, reload: Bool) {
+        if on {
+            let panel = StickerKeyboardView(height: StickerPanelHeight.current)
+            panel.onSend = { [weak self] s in self?.actions.sendSticker(s) }
+            panel.onCreate = { [weak self] in self?.actions.createSticker() }
+            panel.onGifs = { [weak self] in
+                guard let self else { return }
+                self.setStickerPanel(false, reload: false)
+                self.actions.gif()
+            }
+            textView.inputView = panel
+        } else {
+            textView.inputView = nil
+        }
+        gifButton.icon.image = (on ? UIImage(systemName: "keyboard") : UIImage(named: "ic_gif"))?
+            .withRenderingMode(.alwaysTemplate)
+        gifButton.accessibilityLabel = on ? "Keyboard" : "GIF"
+        if reload { textView.reloadInputViews() }
     }
 
     // 2026-09-24 decision D-composer-5: the caret, for @mentions typed in the middle of a message.

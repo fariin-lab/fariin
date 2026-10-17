@@ -1,0 +1,150 @@
+import UIKit
+import ImageIO
+
+// ⛔ A STICKER IN THE CHAT LIST — owner 2026-10-17. Drawn on a plain CALayer, no SwiftUI: a SwiftUI
+// repeatForever animation near the text field deadlocked on iOS 26 (BUILD 959), so every moving
+// sticker here is Core Animation / ImageIO only.
+//
+//   • the first frame is decoded off the main thread and shown at once (downsampled to the box);
+//   • an animated one plays through `CGAnimateImageDataWithBlock`, which decodes one frame at a time
+//     instead of holding them all, and ONLY while the row is on screen (`setOnScreen`, driven by the
+//     list's willDisplay / didEndDisplaying) and in a window;
+//   • built-in art comes from this phone's pack; if the pack lacks the file, the public copy on
+//     fariin.com (cached on disk like any picture);
+//   • a sticker I made is a sealed PNG: decrypted like a photo, kept in `DiskImageCache` as PNG so
+//     the alpha survives, and the same bytes serve "Save to Favorites".
+final class RowStickerView: UIView {
+    private let art = CALayer()
+    private var key: String?            // what is on screen (or loading)
+    private var bytes: Data?            // the loaded file, for the animator
+    private var animated = false
+    private var onScreen = true
+    private var playing = false
+    private var generation = 0          // bumped on every change; a stale load or animator stops
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        backgroundColor = .clear
+        art.contentsGravity = .resizeAspect
+        art.masksToBounds = false
+        layer.addSublayer(art)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        art.frame = bounds
+        art.contentsScale = window?.screen.scale ?? UIScreen.main.scale
+        CATransaction.commit()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        updatePlayback()
+    }
+
+    func configure(_ s: Sticker, url: String?, enc: EncMeta?, cid: String, localData: Data?) {
+        let k = "\(s.id)|\(url ?? "")"
+        guard k != key else { updatePlayback(); return }
+        reset()
+        key = k
+        animated = s.animated
+        let gen = generation
+        let px = max(bounds.width, bounds.height, MessageRowLayout.stickerSide) * (UIScreen.main.scale)
+
+        Task { @MainActor [weak self] in
+            guard let data = await Self.load(s, url: url, enc: enc, cid: cid, localData: localData) else { return }
+            let first = await Task.detached(priority: .userInitiated) { Self.firstFrame(data, maxPixel: px) }.value
+            guard let self, self.generation == gen else { return }
+            self.bytes = data
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            self.art.contents = first
+            CATransaction.commit()
+            self.updatePlayback()
+        }
+    }
+
+    /// The list says whether this row is on screen; animation runs only while it is.
+    func setOnScreen(_ on: Bool) {
+        onScreen = on
+        updatePlayback()
+    }
+
+    func reset() {
+        generation += 1
+        key = nil; bytes = nil; animated = false; playing = false
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        art.contents = nil
+        CATransaction.commit()
+    }
+
+    /// The decrypted bytes behind this row, if it has them (Save to Favorites of a received one).
+    var loadedBytes: Data? { bytes }
+
+    private func updatePlayback() {
+        let want = animated && onScreen && window != nil && bytes != nil && !isHidden
+        if want == playing { return }
+        playing = want
+        generation += want ? 0 : 1      // stopping: the running animator sees a new generation
+        guard want, let data = bytes else { return }
+        let gen = generation
+        // Called on the main queue, one frame at a time. `stop` ends it for good; a later start makes
+        // a fresh animator.
+        let status = CGAnimateImageDataWithBlock(data as CFData, nil) { [weak self] _, image, stop in
+            guard let self, self.generation == gen, self.playing else { stop.pointee = true; return }
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            self.art.contents = image
+            CATransaction.commit()
+        }
+        if status != noErr { playing = false }
+    }
+
+    // MARK: - Bytes
+
+    /// Off the main actor: the file read, the download and the decrypt.
+    nonisolated private static func load(_ s: Sticker, url: String?, enc: EncMeta?, cid: String, localData: Data?) async -> Data? {
+        if let localData { return localData }
+        switch s.source {
+        case .bundled:
+            if let f = await MainActor.run(body: { StickerStore.shared.fileURL(for: s) }),
+               let d = try? Data(contentsOf: f) { return d }
+            // The pack does not have it (a newer pack than this build): the public copy.
+            let u = url ?? StickerSend.publicURL(s)
+            if let cached = await DiskImageCache.shared.rawData(for: u) { return cached }
+            guard let remote = URL(string: u), remote.scheme == "https",
+                  let (d, _) = try? await MediaSession.shared.data(from: remote),
+                  CGImageSourceCreateWithData(d as CFData, nil).map({ CGImageSourceGetCount($0) > 0 }) == true
+            else { return nil }
+            DiskImageCache.shared.storeBytes(d, for: u)
+            return d
+        case .mine:
+            // My own, still on this phone (sent by me, or saved) — no download.
+            if let f = await MainActor.run(body: { StickerStore.shared.fileURL(for: s) }),
+               let d = try? Data(contentsOf: f) { return d }
+            guard let u = url, !u.isEmpty else { return nil }
+            if let cached = await DiskImageCache.shared.rawData(for: u) { return cached }
+            guard let remote = URL(string: u), let enc,
+                  let (cipher, _) = try? await MediaSession.shared.data(from: remote),
+                  let png = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: enc),
+                  let ui = UIImage(data: png)
+            else { return nil }
+            DiskImageCache.shared.store(ui, data: png, for: u)
+            return png
+        }
+    }
+
+    /// Frame 0, downsampled to the box, decoded now (not lazily at draw time on the main thread).
+    nonisolated private static func firstFrame(_ data: Data, maxPixel: CGFloat) -> CGImage? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary)
+        else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(64, maxPixel),
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
+    }
+}

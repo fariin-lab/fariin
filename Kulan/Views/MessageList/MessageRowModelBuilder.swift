@@ -161,6 +161,10 @@ enum MessageRowModelBuilder {
             body = .tombstone(isMe && msg.deletedBy == nil ? "You deleted this message" : "This message was deleted")
         } else if msg.viewOnce {
             body = .pill(viewOncePill(msg, ctx: ctx, isMe: isMe))
+        // ⛔ A STICKER HAS NO BUBBLE — owner 2026-10-17. The media box with no fill and no corners,
+        // the art aspect-fit in about 160pt, the time on its own capsule like a bare photo.
+        } else if let s = msg.sticker {
+            body = .media(stickerBody(msg, s, ctx: ctx))
         // ⛔ A VOICE NOTE IS NEVER A PLACEHOLDER PILL. `ChatService.sendAudio` writes the duration
         // and the true waveform into the document BEFORE the first byte is uploaded, and says why:
         // "the recipient can be shown a REAL voice bubble immediately". The generic pending branch
@@ -413,6 +417,35 @@ enum MessageRowModelBuilder {
             videoUrl: kind == .video ? m.videoUrl : nil,
             messageId: m.id,
             authorId: m.authorId)
+    }
+
+    /// 2026-10-17 chat stickers. The art is drawn by `RowStickerView`: a built-in one from this
+    /// phone's pack (the public `imageUrl` copy only when the pack lacks it), one I made through the
+    /// photo decrypt path. No caption, no gate (a sticker is small and is the whole message).
+    private static func stickerBody(_ m: Message, _ s: Sticker, ctx: MessageRowContext) -> BubbleBody.MediaBody {
+        BubbleBody.MediaBody(
+            kind: .sticker,
+            url: m.imageUrl,
+            enc: m.enc,
+            posterUrl: nil,
+            posterEnc: nil,
+            localData: m.localImageData,
+            blurhash: nil,
+            inlineThumbBase64: nil,
+            thumbCacheId: m.rowId,
+            flightKey: MediaOpenRects.key(.chat, m.id),
+            pixelWidth: m.width ?? 512,
+            pixelHeight: m.height ?? 512,
+            durationText: nil,
+            caption: nil,
+            uploading: m.sendState == .sending && s.source == .mine,
+            sendFailed: m.sendState == .failed,
+            clientId: m.clientId,
+            cancellable: false,
+            gated: false,
+            messageId: m.id,
+            authorId: m.authorId,
+            sticker: s)
     }
 
     private static func albumBody(_ m: Message, ctx: MessageRowContext) -> BubbleBody.AlbumBody {
@@ -682,6 +715,12 @@ enum MessageRowModelBuilder {
         if o.isImage, let url = o.imageUrl { return .media(url: url, enc: o.enc, play: false) }
         if o.isAlbum, let first = o.album.first { return .media(url: first.imageUrl, enc: first.enc, play: false) }
         if o.isGif, let url = o.imageUrl { return .gif(url: url) }
+        // 2026-10-17 chat stickers: one I made is a sealed PNG like a photo. A built-in one draws
+        // from the pack, not a url, so its quote carries the words only.
+        if o.isSticker {
+            if o.stickerPack == "mine", let url = o.imageUrl, !url.isEmpty { return .media(url: url, enc: o.enc, play: false) }
+            return .none
+        }
         if o.isVideo, let url = o.thumbUrl { return .media(url: url, enc: o.thumbEnc, play: true) }
         return .none
     }
@@ -695,6 +734,7 @@ enum MessageRowModelBuilder {
         // The words follow the same rule as the picture: a view-once original is named by what it
         // WAS, never by its caption, which is content the sender meant to be seen once.
         if o?.viewOnce == true { return "Photo" }
+        if let o, o.isSticker { return StickerSend.label(emoji: o.stickerEmoji) }   // 2026-10-17
         if let o, o.isImage || o.isGif || o.isVideo || o.isAlbum {
             if !o.text.isEmpty { return quoteSafeLabel(o.text) }   // the caption wins
             if o.isAlbum { return "Photos" }

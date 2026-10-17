@@ -5355,10 +5355,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
+    // 2026-10-17 chat stickers: an animated sticker plays only while its row is on screen.
+    func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell,
+                        forItemAt indexPath: IndexPath) {
+        (cell as? MessageRowCell)?.setOnScreen(true)
+    }
+
     // The swiped cell scrolled off and is being RECYCLED for another row: kill the swipe immediately â€”
     // keeping the transform would slide the WRONG row left when the cell is reused.
     func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell,
                         forItemAt indexPath: IndexPath) {
+        (cell as? MessageRowCell)?.setOnScreen(false)   // 2026-10-17: animated stickers stop off screen
         guard cell === swipingCell else { return }
         resetSwipe(animated: false)
         swipePan.isEnabled = false; swipePan.isEnabled = true   // cancel the in-flight pan

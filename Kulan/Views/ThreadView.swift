@@ -3547,6 +3547,11 @@ struct ThreadView: View {
                 forwardTarget = m
             })
         }
+        if let fav = StickerSend.favoriteTitle(m) {   // 2026-10-17 chat stickers
+            items.append(UIAction(title: fav, image: UIImage(systemName: fav.hasPrefix("Remove") ? "star.slash" : "star")) { _ in
+                Task { @MainActor in showJumpToast(await StickerSend.toggleFavorite(m, cid: cid)) }
+            })
+        }
         items.append(UIAction(title: "Select", image: UIImage(systemName: "checkmark.circle")) { _ in
             setUIMode(.selection); selectedIds = [m.id]   // their order: mode first, then add the item
         })
@@ -3697,6 +3702,12 @@ struct ThreadView: View {
         if m.isImage && !m.viewOnce && savingAllowed {
             out.append(CMAction(title: "Save Image", icon: "square.and.arrow.down") {
                 Task { await saveImageToPhotos(m) }
+            })
+        }
+        // 2026-10-17 chat stickers (owner): keep a sticker from the chat, mine or theirs.
+        if let fav = StickerSend.favoriteTitle(m) {
+            out.append(CMAction(title: fav, icon: fav.hasPrefix("Remove") ? "star.slash" : "star") {
+                Task { @MainActor in showJumpToast(await StickerSend.toggleFavorite(m, cid: cid)) }
             })
         }
         out.append(CMAction(title: "Select", icon: "checkmark.circle") {
@@ -8049,6 +8060,8 @@ struct ThreadView: View {
             return .text(r.viewOnce ? "View-once photo" : "Photo")
         } else if r.isGif {
             return .text("GIF")
+        } else if r.isSticker {   // 2026-10-17 chat stickers
+            return .text(StickerSend.label(emoji: r.stickerEmoji))
         } else if r.isCall {
             // A call carries no text at all; its own glyph, like the file and voice rows.
             return .labelled(symbol: r.callVideo ? "video.fill" : "phone.fill",
@@ -8320,6 +8333,16 @@ struct ThreadView: View {
             } else {
                 showGifPicker = true
             }
+        }
+        // 2026-10-17 sticker keyboard: the panel sends in place (it stays up, as in the reference
+        // app); the reply being written goes with the sticker and is then done.
+        a.sendSticker = { s in
+            StickerSend.send(s, cid: cid, replyTo: replyingTo?.id)
+            if replyingTo != nil { replyingTo = nil }
+        }
+        a.createSticker = {
+            inputFocused = false
+            StickerCreatorDoor.present()
         }
         // The camera button in the field (2026-10-15), the way the GIF opens: keyboard first.
         a.camera = {
@@ -11590,6 +11613,7 @@ func replyQuoteText(_ m: Message) -> String {
     if m.isAudio { return "🎤 Voice message" }
     if m.isFile { return "📄 \(m.fileName ?? "Document")" }
     if m.isGif { return "GIF" }
+    if m.isSticker { return StickerSend.label(emoji: m.stickerEmoji) }   // 2026-10-17 chat stickers
     return m.safeText
 }
 

@@ -167,6 +167,7 @@ enum DataExport {
         if m.isImage || !m.album.isEmpty { return captioned("[Photo]", m.text) }
         if m.isFile { return "[File: \(m.fileName ?? "document")]" }
         if m.isGif { return "[GIF]" }
+        if m.isSticker { return "[\(StickerSend.label(emoji: m.stickerEmoji))]" }   // 2026-10-17
         return m.text
     }
 

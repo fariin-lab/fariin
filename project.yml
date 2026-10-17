@@ -39,6 +39,14 @@ targets:
     platform: iOS
     sources:
       - path: Kulan
+        # 2026-10-17 sticker keyboard: the built-in packs ship as ONE folder reference (below) so the
+        # pack/sticker subpaths survive in the bundle; a plain group would flatten them to the root.
+        excludes:
+          - "Resources/Stickers/packs"
+          - "Resources/Stickers/packs/**"
+      - path: Kulan/Resources/Stickers/packs
+        type: folder
+        buildPhase: resources
       # 2026-10-08 screen share v3: the shared-memory channel with the BroadcastUpload extension.
       # Lives outside Kulan/ so the folder source above does not pick it up a second time.
       - path: Shared/ScreenShareIPC.swift

@@ -1256,8 +1256,13 @@ enum MessageRowLayout {
         let bubbleRect = CGRect(x: bubbleX, y: y, width: bubbleW, height: bubbleH)
         y = bubbleRect.maxY
 
+        // 2026-10-17 chat stickers: the box stays (taps, menu, reactions hang off it) and drops its
+        // fill, rim and corners, the jumbomoji rule. A sticker sent as a REPLY keeps its fill: the
+        // quote's colours are made for the bubble and would be unreadable on a wallpaper.
+        let bare = m.kind == .sticker && b.quote == nil
         var out = BubblePlan(
-            bubble: bubbleRect, radii: b.radii, isCapsule: false, fill: b.fill, rim: b.rim,
+            bubble: bubbleRect, radii: bare ? .uniform(0) : b.radii, isCapsule: false,
+            fill: bare ? .clear : b.fill, rim: bare ? false : b.rim,
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: footerColor,
@@ -2337,7 +2342,18 @@ enum MessageRowLayout {
         case .photo: return photoBox(m, maxBubbleWidth: maxBubbleWidth)
         case .video: return videoBox(m, maxBubbleWidth: maxBubbleWidth)
         case .gif:   return displayBox(width: m.pixelWidth, height: m.pixelHeight)
+        case .sticker: return stickerBox(width: m.pixelWidth, height: m.pixelHeight)
         }
+    }
+
+    /// 2026-10-17 chat stickers: the art aspect-fit inside 160 × 160, never upscaled past it.
+    static let stickerSide: CGFloat = 160
+    static func stickerBox(width: Double?, height: Double?) -> CGSize {
+        let side = stickerSide
+        guard let w = width, let h = height, w > 0, h > 0 else { return CGSize(width: side, height: side) }
+        let aspect = CGFloat(w / h)
+        if aspect >= 1 { return CGSize(width: side, height: max(40, (side / aspect).rounded())) }
+        return CGSize(width: max(40, (side * aspect).rounded()), height: side)
     }
 
     // ── The reply quote ──

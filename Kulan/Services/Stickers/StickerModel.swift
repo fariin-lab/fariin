@@ -2,7 +2,7 @@ import Foundation
 
 // ⛔ THE CHAT STICKER KEYBOARD — owner 2026-10-17 ("go build"). Shared types between the keyboard
 // (StickerStore, StickerKeyboardView, StickerPlayer) and the message side (sending, the sticker row,
-// StickerCreator). Art: Google Noto Animated Emoji, CC BY 4.0 (credit in Settings > About).
+// StickerCreator). Art: Fariin's own, drawn for the app (packs in Resources/Stickers/packs).
 
 /// One sticker. A bundled one is drawn by every phone from its own copy of the pack, so a message
 /// carries only `packId` + `stickerId`; a sticker I made is a transparent PNG that travels through

@@ -114,6 +114,7 @@ final class RowGifView: UIImageView {
 final class MediaBubbleView: UIView {
     private let picture = RowImageView(frame: .zero)
     private var gif: RowGifView?
+    private var sticker: RowStickerView?   // 2026-10-17 chat stickers
     private let playBadge = UIImageView()
     private let durationPill = UIView()
     private let durationLabel = UILabel()
@@ -200,6 +201,7 @@ final class MediaBubbleView: UIView {
         let a: CGFloat = hidden ? 0 : 1
         picture.alpha = a
         gif?.alpha = a
+        sticker?.alpha = a
         playBadge.alpha = a
         durationPill.alpha = a
         durationLabel.alpha = a
@@ -211,7 +213,27 @@ final class MediaBubbleView: UIView {
     func configure(_ m: BubbleBody.MediaBody, plan: MediaPlan, cid: String) {
         flightKey = m.flightKey
         // The picture. A gif is its own view because it animates; everything else is one image.
+        if m.kind != .sticker { sticker?.reset(); sticker?.isHidden = true }
         switch m.kind {
+        case .sticker:
+            // 2026-10-17 chat stickers: no picture view, no gif view, its own layer-backed view.
+            picture.isHidden = true
+            picture.reset()
+            gif?.isHidden = true
+            gif?.reset()
+            let v = sticker ?? {
+                let v = RowStickerView(frame: .zero)
+                insertSubview(v, at: 0)
+                sticker = v
+                return v
+            }()
+            v.isHidden = false
+            v.frame = plan.media
+            if let s = m.sticker {
+                v.configure(s, url: m.url, enc: m.enc, cid: cid, localData: m.localData)
+            } else {
+                v.reset()
+            }
         case .gif:
             picture.isHidden = true
             picture.reset()
@@ -316,9 +338,16 @@ final class MediaBubbleView: UIView {
     func prepareForReuse() {
         picture.reset()
         gif?.reset()
+        sticker?.reset()
         ring?.stop()
         unwatchDownload()
     }
+
+    /// 2026-10-17 chat stickers: an animated sticker plays only while its row is on screen.
+    func setOnScreen(_ on: Bool) { sticker?.setOnScreen(on) }
+
+    /// The sticker's decrypted bytes, when this bubble is a sticker that has loaded.
+    var stickerBytes: Data? { sticker?.isHidden == false ? sticker?.loadedBytes : nil }
 
     // MARK: - Receiving: the download's own states (2026-09-26 media pass)
     //
@@ -343,7 +372,7 @@ final class MediaBubbleView: UIView {
                     target = .init(url: u, isVideo: true, enc: m.enc, cid: cid,
                                    itemId: m.messageId, authorId: m.authorId, gated: true)
                 }
-            case .gif:
+            case .gif, .sticker:
                 break
             }
         }

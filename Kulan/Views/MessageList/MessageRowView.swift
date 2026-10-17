@@ -1691,6 +1691,10 @@ final class MessageRowView: UIView {
     /// A tap on media that is not on the phone yet belongs to its download (start / cancel / retry),
     /// not to the viewer. False when the file is here and the tap should open it as before.
     func handleMediaDownloadTap() -> Bool { mediaView?.handleDownloadTap() ?? false }
+
+    /// 2026-10-17 chat stickers: see `MessageRowCell.setOnScreen`.
+    func setMediaOnScreen(_ on: Bool) { mediaView?.setOnScreen(on) }
+    var stickerBytes: Data? { mediaView?.isHidden == false ? mediaView?.stickerBytes : nil }
     /// The same for one album tile.
     func handleAlbumDownloadTap(tile i: Int) -> Bool { albumView?.handleDownloadTap(tile: i) ?? false }
 

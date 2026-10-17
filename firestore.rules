@@ -2031,6 +2031,21 @@ service cloud.firestore {
                         && lp.imageUrl.matches('https://.+')))
                 && (!('imageEnc' in lp) || lp.imageEnc is map));
         }
+        // 2026-10-17 (owner, chat stickers): the four plain sticker fields. A built-in sticker is
+        // drawn by every phone from its own copy of the pack, so the message carries only which one
+        // (`stickerPack` + `stickerId`), the emoji it stands for and whether it moves. Public art,
+        // not a secret, so not sealed; a sticker I made rides `imageUrl` + `enc` like a photo.
+        // Each field only on a `sticker`, each a short string (or a bool), nothing else.
+        function stickerShapeOk() {
+          let d = request.resource.data;
+          let isSticker = d.get('type', '') == 'sticker';
+          return (isSticker
+              ? (d.get('stickerPack', null) is string && d.stickerPack.size() > 0 && d.stickerPack.size() <= 64
+                 && d.get('stickerId', null) is string && d.stickerId.size() > 0 && d.stickerId.size() <= 128
+                 && (!('emoji' in d) || (d.emoji is string && d.emoji.size() <= 32))
+                 && (!('animated' in d) || d.animated is bool))
+              : !d.keys().hasAny(['stickerPack', 'stickerId', 'emoji', 'animated']));
+        }
         // 2026-09-24 feature-audit: A VOICE NOTE'S SHAPE. `duration` and `waveform` were the two
         // attachment fields with no check at all. The recorder stops at 30 minutes (1,800s), so a
         // voice note's duration is a number from 0 to 1,900 (margin); other kinds (video) keep
@@ -2211,14 +2226,17 @@ service cloud.firestore {
           // restriction (media only, say) did nothing on the server. What the server can see:
           //   photo, album, video, file, and a text carrying a link card → sendMedia
           //   voice note (`audio`)                                        → sendVoice
-          //   sticker or GIF (`gif`, both ride the one send path)         → sendStickers
+          //   sticker or GIF (`gif`, `sticker`)                           → sendStickers
           // Polls, locations and contacts are sealed inside the text, so the server cannot tell them
           // from a text; `sendText` covers them, and the client gates `sendPolls` itself.
           && (!(request.resource.data.get('type', '') in ['image', 'album', 'video', 'file']
                 || 'linkPreview' in request.resource.data)
               || !restrictedIn(convData(), 'sendMedia'))
           && (request.resource.data.get('type', '') != 'audio' || !restrictedIn(convData(), 'sendVoice'))
-          && (request.resource.data.get('type', '') != 'gif' || !restrictedIn(convData(), 'sendStickers'));
+          // 2026-10-17 (owner, chat stickers): the `sticker` type is held to the same flag as a GIF.
+          && (!(request.resource.data.get('type', '') in ['gif', 'sticker'])
+              || !restrictedIn(convData(), 'sendStickers'))
+          && stickerShapeOk();
         // Participants may edit reactions; the AUTHOR may also edit their own text, and rewrite their
         // own album array (deleting ONE album item for everyone = removing it from the album; the
         // client deletes the whole message when the last item goes).

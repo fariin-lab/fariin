@@ -292,6 +292,13 @@ struct Message: Identifiable, Equatable, Codable {
     /// The poster is `authorId`; the person mentioned is the chat's other member. Plain story id and
     /// thumbnail url, like a story reply's (`ReplyRef.storyThumbUrl`), which are not secrets.
     var storyMention: StoryMentionRef?
+    /// ⛔ A CHAT STICKER — owner 2026-10-17. `type == "sticker"`. A built-in one names its pack and
+    /// file and every phone draws its own copy; one I made (`stickerPack == "mine"`) is a transparent
+    /// PNG in `imageUrl` + `enc`, sealed like a photo. Plain fields: which art, not what was said.
+    var stickerPack: String? = nil
+    var stickerId: String? = nil
+    var stickerEmoji: String? = nil
+    var stickerAnimated: Bool? = nil   // optional so an older chat cache (without it) still decodes
     var reactions: [String: String]   // uid -> decrypted emoji
     var mentions: [String] = []       // uids @-mentioned in this message (groups)
     var viewOnce: Bool = false        // view-once photo (standard): recipient can open it exactly once
@@ -376,7 +383,16 @@ struct Message: Identifiable, Equatable, Codable {
     /// minutes for the sweep. The DELETING is the server's; this is only the drawing.
     var expiresAt: Date? = nil
 
-    var isImage: Bool { (type == "image" && (imageUrl?.isEmpty == false)) || (localImageData != nil && type != "video") }
+    var isImage: Bool { (type == "image" && (imageUrl?.isEmpty == false)) || (localImageData != nil && type != "video" && type != "sticker") }
+    /// A sticker (see `stickerPack`). A pending one I made carries its PNG in `localImageData`,
+    /// which is why `isImage` above leaves "sticker" out: it is never a photo for the gallery.
+    var isSticker: Bool { type == "sticker" && stickerPack?.isEmpty == false && stickerId?.isEmpty == false }
+    /// The shared model the sticker store and keyboard use.
+    var sticker: Sticker? {
+        guard isSticker, let pack = stickerPack, let sid = stickerId else { return nil }
+        return Sticker(source: pack == "mine" ? .mine : .bundled, packId: pack, stickerId: sid,
+                       emoji: stickerEmoji ?? "", animated: stickerAnimated ?? false)
+    }
     /// ⚠️ THE THIRD CLAUSE IS FOR A FAILED NOTE THAT OUTLIVED THE APP. A pending voice message keeps
     /// `type == "audio"` across a restart but has no `audioUrl` (it never uploaded) and no
     /// `localAudioData` (bytes are not written to the cache) — so both of the first two clauses were
@@ -468,6 +484,7 @@ struct Message: Identifiable, Equatable, Codable {
         m.width = nil; m.height = nil; m.blurhash = nil; m.thumb = nil
         m.album = []; m.localAlbum = []; m.localAlbumIsVideo = []
         m.linkPreview = nil
+        m.stickerPack = nil; m.stickerId = nil; m.stickerEmoji = nil; m.stickerAnimated = nil
         m.replyTo = nil
         m.reactions = [:]
         m.mentions = []
@@ -595,6 +612,27 @@ struct Message: Identifiable, Equatable, Codable {
         self.height = height
     }
 
+    /// Local optimistic STICKER (2026-10-17). A built-in one draws from the pack at once; one I made
+    /// carries its PNG in `localImageData` until the encrypted upload lands.
+    init(localSticker s: Sticker, png: Data?, width: Double, height: Double,
+         authorId: String, clientId: String, sendState: MessageSendState) {
+        self.id = clientId
+        self.authorId = authorId
+        self.text = ""
+        self.type = "sticker"
+        self.clientId = clientId
+        self.reactions = [:]
+        self.createdAt = Date()
+        self.sendState = sendState
+        self.stickerPack = s.packId
+        self.stickerId = s.stickerId
+        self.stickerEmoji = s.emoji
+        self.stickerAnimated = s.animated
+        self.localImageData = png
+        self.width = width
+        self.height = height
+    }
+
     /// Local optimistic message shown instantly before the server confirms it.
     /// `id` = clientId until the server echo (matched by clientId) replaces it.
     /// A centred notice that is never written anywhere and never leaves this phone — "You blocked
@@ -681,6 +719,7 @@ struct Message: Identifiable, Equatable, Codable {
         case callerUid, callOutcome, callVideo, callDuration
         case edited, deleted, deletedBy, forwarded, clientTs, linkPreview, hasServerTime, uploading, albumSizes
         case expiresAt   // owner audit 2026-10-06 chat #21: a cold open must know what has already expired
+        case stickerPack, stickerId, stickerEmoji, stickerAnimated   // 2026-10-17 chat stickers, all optional
         // ⚠️ THE PATH TO A PENDING SEND'S OWN BYTES, and it has to persist or a failed voice note
         // comes back after a restart as a bubble with nothing in it and a retry button that quietly
         // does nothing. The BYTES are not encoded (localAudioData/localImageData stay out on
@@ -797,6 +836,15 @@ struct Message: Identifiable, Equatable, Codable {
             }
             width = only.width
             height = only.height
+        }
+        if type == "sticker" {
+            stickerPack = data["stickerPack"] as? String
+            stickerId = data["stickerId"] as? String
+            stickerEmoji = data["emoji"] as? String
+            stickerAnimated = data["animated"] as? Bool
+            // The sealed `text` is only what an OLDER build shows instead (StickerSend), never a
+            // caption: dropped here so Copy, Edit, search and previews never see it.
+            text = ""
         }
         if let m = data["storyMention"] as? [String: Any], let sid = m["id"] as? String, !sid.isEmpty {
             self.storyMention = StoryMentionRef(id: sid, thumbUrl: m["thumb"] as? String ?? "")
@@ -1602,6 +1650,7 @@ extension Message {
     /// it is a friendly noun (mirrors the chat-list preview). Media types keep their own snippet logic
     /// elsewhere; this only rescues the marker-carrying text messages.
     var safeText: String {
+        if isSticker { return StickerSend.label(emoji: stickerEmoji) }   // 2026-10-17 chat stickers
         if contactCard != nil { return "Contact" }
         if locationCard != nil { return "Location" }
         if let p = poll { return "📊 \(p.question)" }
