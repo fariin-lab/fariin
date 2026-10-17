@@ -223,7 +223,11 @@ struct VideoApprovalView: View {
     // 9:16 or taller → long-portrait presentation (rounded corners on the video itself).
     private var isTallVideo: Bool { videoSize.width > 0 && videoSize.height >= videoSize.width * (16.0 / 9.0) - 1 }
 
-    var body: some View {
+    // ⛔ ALWAYS DARK — owner 2026-10-17: the editor sits on black, and in light mode its glass buttons, tool
+    // row and caption bar drew light grey. The whole editor resolves as dark whatever the phone is set to.
+    var body: some View { editorScreen.environment(\.colorScheme, .dark) }
+
+    @ViewBuilder private var editorScreen: some View {
         ZStack {
             // While the still flies, its own black backdrop (under this cover) is the background.
             Color.black.ignoresSafeArea().opacity(arrived ? 1 : 0)

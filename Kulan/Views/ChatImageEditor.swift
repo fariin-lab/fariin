@@ -168,7 +168,11 @@ struct ChatImageEditor: View {
         editedCache = Self.cropped(Self.filtered(base, filterIndex), aspect: Self.aspects[aspectIndex].1)
     }
 
-    var body: some View {
+    // ⛔ ALWAYS DARK — owner 2026-10-17: the editor sits on black, and in light mode its glass buttons, tool
+    // row and caption bar drew light grey. The whole editor resolves as dark whatever the phone is set to.
+    var body: some View { editorScreen.environment(\.colorScheme, .dark) }
+
+    @ViewBuilder private var editorScreen: some View {
         GeometryReader { geo in editorBody(geo.size) }
     }
 
