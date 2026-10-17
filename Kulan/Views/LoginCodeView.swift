@@ -82,6 +82,10 @@ struct LoginCodeView: View {
     @State private var step: Step = .email
     @State private var newPassword = ""
     @State private var confirmPassword = ""
+    // UIKit password fields (RevealablePasswordField), so plain @State focus, as on sign-up.
+    @State private var newFocused = false
+    @State private var confirmFocused = false
+    @State private var reveal = false
     private static let passwordMin = 8   // the server's PASSWORD_MIN and PasswordView's rule
     /// onAppear fires again on every back-navigation, and the auto-send below must not re-post a
     /// code each time somebody swipes back into this screen. Sends are rate-limited server-side, so
@@ -111,7 +115,7 @@ struct LoginCodeView: View {
                         .multilineTextAlignment(.center)
 
                     Text(step == .email ? purpose.blurb
-                         : step == .newPassword ? "Use at least \(Self.passwordMin) characters. You will use it to log in next time."
+                         : step == .newPassword ? "You will use it to log in next time. Or skip this and keep logging in with a code."
                          : "Enter the 6-digit code we sent to \(trimmedEmail). It expires in 10 minutes.")
                         .font(.subheadline).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -120,19 +124,42 @@ struct LoginCodeView: View {
                 .padding(.top, 36).padding(.bottom, 12)
 
                 if step == .newPassword {
-                    labelled("New password") {
-                        SecureField("", text: $newPassword)
-                            .textContentType(.newPassword)
-                            .focused($focused)
+                    // Whose account this is, so nobody sets a password on the wrong one.
+                    HStack(spacing: 10) {
+                        Image(systemName: "person.crop.circle.fill")
+                            .font(.system(size: 26)).foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Logged in as").font(.footnote).foregroundStyle(.secondary)
+                            Text(trimmedEmail).font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+                                .lineLimit(1).truncationMode(.middle)
+                        }
+                        Spacer(minLength: 0)
                     }
-                    labelled("Confirm password") {
-                        SecureField("", text: $confirmPassword)
-                            .textContentType(.newPassword)
-                    }
-                    primaryButton("Save Password", enabled: newPasswordValid) { saveNewPassword() }
+                    .padding(.horizontal, 16).padding(.vertical, 12)
+                    .background(AuthPalette.raised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                    // The sign-up page's password boxes and the SAME four rules, ticked off live
+                    // (it asked for 8 characters only, sign-up for 8 + a letter + a number).
+                    newPasswordBox(text: $newPassword, focused: $newFocused, placeholder: "New password",
+                                   onSubmit: { newFocused = false; confirmFocused = true })
+                    newPasswordBox(text: $confirmPassword, focused: $confirmFocused, placeholder: "Confirm password",
+                                   onSubmit: { if newPasswordValid { saveNewPassword() } })
+                    PasswordChecklist(rules: newRules)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 4).padding(.top, 2)
+
+                    primaryButton("Save password", enabled: newPasswordValid) { saveNewPassword() }
+                        .padding(.top, 4)
                     Button("Not now") { onAuthed() }
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                         .disabled(busy)
+                        .padding(.top, 4)
+
+                    // Our own line for the person who came here because they were worried.
+                    Text("Think someone else got in? Once you are in, open Settings › Devices and sign out any phone you do not know.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 8).padding(.horizontal, 8)
                 } else if step == .email {
                     // The sign-up page's field: glyph inside, placeholder, no label above
                     // (owner, 2026-10-17: the label-over-grey-box version looked cheap).
@@ -283,7 +310,7 @@ struct LoginCodeView: View {
                     // Never a password on Apple's hidden relay address: it could never be typed at
                     // the sign-in screen (`AuthService.hasTypableAddress`, `passwordIsOnRelay`).
                     if purpose == .forgot, AuthService.shared.hasTypableAddress {
-                        step = .newPassword; error = nil; focused = true
+                        step = .newPassword; error = nil; focused = false; newFocused = true
                     } else {
                         onAuthed()
                     }
@@ -297,8 +324,26 @@ struct LoginCodeView: View {
         }
     }
 
-    private var newPasswordValid: Bool {
-        newPassword.count >= Self.passwordMin && newPassword == confirmPassword
+    private var newRules: PasswordRules { PasswordRules(password: newPassword, confirm: confirmPassword) }
+    private var newPasswordValid: Bool { newRules.allMet }
+
+    /// The sign-up page's password box (EmailAuthView.passwordBox): lock, UIKit field, eye.
+    private func newPasswordBox(text: Binding<String>, focused: Binding<Bool>, placeholder: String,
+                                onSubmit: @escaping () -> Void) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "lock").foregroundStyle(.secondary).frame(width: 22)
+            RevealablePasswordField(text: text, secure: !reveal, focused: focused,
+                                    placeholder: placeholder, contentType: .newPassword,
+                                    onSubmit: onSubmit)
+            Button { reveal.toggle() } label: {
+                Image(systemName: reveal ? "eye.slash" : "eye")
+                    .font(.system(size: 16)).foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(reveal ? "Hide password" : "Show password")
+        }
+        .authField(focused: focused.wrappedValue)
     }
 
     /// Same call the Password page makes: `updatePassword` when the account already has a password,
