@@ -14,7 +14,7 @@ struct RootView: View {
     /// two-step account meets before the app (see TwoStepGate).
     /// `notifications` (first-run rebuild, 2026-09-24) is the explainer between the profile step and
     /// the Chats screen, shown only while iOS has never asked this phone (see Push.needsExplainer).
-    enum Phase: Equatable { case loading, welcome, onboarding, tour, main, proveEmail(String), restore(handle: String, due: Date), twoStep, notifications }
+    enum Phase: Equatable { case loading, welcome, onboarding, main, proveEmail(String), restore(handle: String, due: Date), twoStep, notifications }
     @State private var phase: Phase = .loading
     /// When "Agree and continue" was tapped on this install (seconds since 1970), 0 = not yet.
     @AppStorage(FirstRun.termsAgreedAtKey) private var termsAgreedAt: Double = 0
@@ -107,11 +107,10 @@ struct RootView: View {
                         DeviceRegistry.shared.start()
                         startOfficialChannel()
                     }
-                    // 2026-09-25: the feature tour first (owner's reference), then the rest as before.
-                    phase = .tour
-                }
-            case .tour:
-                FeatureTourView {
+                    // The 5-page feature tour that sat here (2026-09-25) is REMOVED on the owner's
+                    // word, 2026-10-17: people want their chats right after sign-up, and its two
+                    // points live where they matter (the encryption notice in every new chat, the
+                    // username line on the profile page). Straight on to notifications.
                     Task {
                         if await Push.needsExplainer() {
                             askAgeAfterNotifications = true
@@ -1012,7 +1011,8 @@ struct OnboardingView: View {
                         .font(.system(size: 30, weight: .bold)).foregroundStyle(.primary)
                         .multilineTextAlignment(.center)
                         .padding(.top, 18)
-                    Text("Your name and username are how friends find you on Fariin.")
+                    // Carries the removed tour's last page: found by username, no number, no address book.
+                    Text("Friends find you by your name and username. No phone number needed.")
                         .font(.subheadline).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.top, 6).padding(.horizontal, 12)
