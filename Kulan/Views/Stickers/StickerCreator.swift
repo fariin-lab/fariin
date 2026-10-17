@@ -144,7 +144,7 @@ private final class StickerCreatorFlow: NSObject, PHPickerViewControllerDelegate
         do { try handler.perform([request]) } catch { return nil }
         guard let obs = request.results?.first, !obs.allInstances.isEmpty,
               let buffer = try? obs.generateMaskedImage(ofInstances: obs.allInstances, from: handler,
-                                                        croppingToInstances: true)
+                                                        croppedToInstancesExtent: true)
         else { return nil }
         let ci = CIImage(cvPixelBuffer: buffer)
         guard let cg = CIContext(options: nil).createCGImage(ci, from: ci.extent) else { return nil }

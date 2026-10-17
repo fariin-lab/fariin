@@ -1,3 +1,254 @@
 {
-  "packs": []
+ "packs": [
+  {
+   "id": "kulu",
+   "title": "Kulu",
+   "stickers": [
+    {
+     "id": "hi",
+     "emoji": "👋"
+    },
+    {
+     "id": "laugh",
+     "emoji": "😂"
+    },
+    {
+     "id": "love",
+     "emoji": "😍"
+    },
+    {
+     "id": "cry",
+     "emoji": "😭"
+    },
+    {
+     "id": "angry",
+     "emoji": "😠"
+    },
+    {
+     "id": "wow",
+     "emoji": "😮"
+    },
+    {
+     "id": "wink",
+     "emoji": "😉"
+    },
+    {
+     "id": "sleepy",
+     "emoji": "😴"
+    },
+    {
+     "id": "cool",
+     "emoji": "😎"
+    },
+    {
+     "id": "thinking",
+     "emoji": "🤔"
+    },
+    {
+     "id": "party",
+     "emoji": "🥳"
+    },
+    {
+     "id": "yes",
+     "emoji": "✅"
+    }
+   ]
+  },
+  {
+   "id": "kuluday",
+   "title": "Kulu Day",
+   "stickers": [
+    {
+     "id": "coffee",
+     "emoji": "☕"
+    },
+    {
+     "id": "typing",
+     "emoji": "💬"
+    },
+    {
+     "id": "please",
+     "emoji": "🥺"
+    },
+    {
+     "id": "shy",
+     "emoji": "😊"
+    },
+    {
+     "id": "shocked",
+     "emoji": "😱"
+    },
+    {
+     "id": "dizzy",
+     "emoji": "😵‍💫"
+    },
+    {
+     "id": "dance",
+     "emoji": "💃"
+    },
+    {
+     "id": "hug",
+     "emoji": "🤗"
+    },
+    {
+     "id": "goodnight",
+     "emoji": "🌙"
+    },
+    {
+     "id": "celebrate",
+     "emoji": "🎉"
+    },
+    {
+     "id": "facepalm",
+     "emoji": "🤦"
+    },
+    {
+     "id": "kiss",
+     "emoji": "😘"
+    }
+   ]
+  },
+  {
+   "id": "words",
+   "title": "Somali Words",
+   "stickers": [
+    {
+     "id": "mahadsanid",
+     "emoji": "🙏"
+    },
+    {
+     "id": "haye",
+     "emoji": "👌"
+    },
+    {
+     "id": "hambalyo",
+     "emoji": "🎉"
+    },
+    {
+     "id": "nabad",
+     "emoji": "👋"
+    },
+    {
+     "id": "iskawarran",
+     "emoji": "👋"
+    },
+    {
+     "id": "subax",
+     "emoji": "☀️"
+    },
+    {
+     "id": "habeen",
+     "emoji": "🌙"
+    },
+    {
+     "id": "xiisay",
+     "emoji": "❤️"
+    },
+    {
+     "id": "haa",
+     "emoji": "✅"
+    },
+    {
+     "id": "maya",
+     "emoji": "❌"
+    },
+    {
+     "id": "hahaha",
+     "emoji": "😂"
+    },
+    {
+     "id": "wow",
+     "emoji": "😮"
+    }
+   ]
+  },
+  {
+   "id": "hearts",
+   "title": "Hearts",
+   "stickers": [
+    {
+     "id": "beat",
+     "emoji": "❤️"
+    },
+    {
+     "id": "sparkle",
+     "emoji": "💖"
+    },
+    {
+     "id": "two",
+     "emoji": "💕"
+    },
+    {
+     "id": "balloon",
+     "emoji": "🎈"
+    },
+    {
+     "id": "mend",
+     "emoji": "❤️‍🩹"
+    },
+    {
+     "id": "letter",
+     "emoji": "💌"
+    },
+    {
+     "id": "rain",
+     "emoji": "💗"
+    },
+    {
+     "id": "face",
+     "emoji": "🥰"
+    },
+    {
+     "id": "arrow",
+     "emoji": "💘"
+    },
+    {
+     "id": "rainbow",
+     "emoji": "❤️‍🔥"
+    }
+   ]
+  },
+  {
+   "id": "nature",
+   "title": "Weather & Treats",
+   "stickers": [
+    {
+     "id": "sun",
+     "emoji": "☀️"
+    },
+    {
+     "id": "rain",
+     "emoji": "🌧️"
+    },
+    {
+     "id": "storm",
+     "emoji": "⛈️"
+    },
+    {
+     "id": "rainbow",
+     "emoji": "🌈"
+    },
+    {
+     "id": "moon",
+     "emoji": "🌜"
+    },
+    {
+     "id": "tea",
+     "emoji": "🍵"
+    },
+    {
+     "id": "cake",
+     "emoji": "🎂"
+    },
+    {
+     "id": "melon",
+     "emoji": "🍉"
+    },
+    {
+     "id": "icecream",
+     "emoji": "🍦"
+    }
+   ]
+  }
+ ]
 }
