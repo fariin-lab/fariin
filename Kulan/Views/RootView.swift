@@ -732,6 +732,74 @@ final class PrivacyShield {
 /// 2026-09-24 fix-all (onboarding photo): a picked image waiting for the cropper.
 private struct OnboardingCropItem: Identifiable { let id = UUID(); let image: UIImage }
 
+/// The username box's answer as ONE ring (owner, 2026-10-17): a thin grey track with an arc running
+/// round it while the server is asked, then the arc closes into a full green circle with a tick
+/// drawing itself in, or a red one with a cross. The same ring the whole time, so the answer reads
+/// as the end of the wait rather than a different icon popping in.
+private struct HandleCheckRing: View {
+    enum Phase { case checking, free, taken }
+    let state: Phase
+
+    @State private var spin = false
+    @State private var mark: CGFloat = 0
+
+    private var tint: Color {
+        switch state {
+        case .checking: return .accentColor
+        case .free: return .green
+        case .taken: return .red
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(Color.primary.opacity(0.14), lineWidth: 2.2)
+            Circle()
+                .trim(from: 0, to: state == .checking ? 0.28 : 1)
+                .stroke(tint, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                .rotationEffect(.degrees(spin && state == .checking ? 360 : 0) - .degrees(90))
+                .animation(state == .checking
+                           ? .linear(duration: 0.8).repeatForever(autoreverses: false)
+                           : .easeOut(duration: 0.25), value: spin)
+                .animation(.easeOut(duration: 0.25), value: state)
+            Group {
+                if state == .free {
+                    TickShape().trim(from: 0, to: mark)
+                        .stroke(tint, style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
+                        .frame(width: 10, height: 8)
+                } else if state == .taken {
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(tint)
+                        .opacity(mark)
+                }
+            }
+        }
+        .frame(width: 22, height: 22)
+        .onAppear { spin = true; settle() }
+        .onChange(of: state) { _, s in
+            if s == .checking { mark = 0; spin = false; DispatchQueue.main.async { spin = true } }
+            settle()
+        }
+        .accessibilityLabel(state == .checking ? "Checking" : state == .free ? "Available" : "Taken")
+    }
+
+    /// The mark draws in just after the ring has closed.
+    private func settle() {
+        guard state != .checking else { return }
+        mark = 0
+        withAnimation(.easeOut(duration: 0.25).delay(0.18)) { mark = 1 }
+    }
+}
+
+private struct TickShape: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX, y: r.midY))
+        p.addLine(to: CGPoint(x: r.minX + r.width * 0.38, y: r.maxY))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.minY))
+        return p
+    }
+}
+
 struct OnboardingView: View {
     var onDone: () -> Void
     @State private var name = ""
@@ -970,14 +1038,11 @@ struct OnboardingView: View {
                             case .invalid:
                                 Image(systemName: "circle.dashed")
                                     .foregroundStyle(.secondary).font(.system(size: 17))
-                            case .checking:
-                                ProgressView().controlSize(.small)
-                            case .free:
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.primary).font(.system(size: 17))
-                            case .taken:
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(.red).font(.system(size: 17))
+                            case .checking, .free, .taken:
+                                // One ring that spins while asking and closes into the answer
+                                // (owner, 2026-10-17), instead of a spinner swapped for an icon.
+                                HandleCheckRing(state: handleState == .checking ? .checking
+                                                : handleState == .free ? .free : .taken)
                             case .unknown:
                                 Image(systemName: "wifi.slash")
                                     .foregroundStyle(.secondary).font(.system(size: 15))
