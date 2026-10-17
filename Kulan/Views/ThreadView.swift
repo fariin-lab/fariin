@@ -1233,6 +1233,8 @@ struct ThreadView: View {
         // environment changes. This page is on top, so its own `scheme` redraws in the same pass as
         // the switch. Same value the list hands down, so nothing flips during a Back swipe.
         .toolbarColorScheme(scheme, for: .navigationBar)
+        // And back from dark to light, which iOS 26 does not re-apply (owner 2026-10-17).
+        .background(NavBarStyleSync().frame(width: 0, height: 0))
         // ⛔ NO BAR BACKGROUND IS DECLARED HERE ANY MORE — owner, 2026-09-24, screenshot of the chat
         // header: a full-width grey-to-purple wash over the wallpaper with a hard bottom edge. That
         // wash was `.toolbarBackground(.visible, for: .navigationBar)` on this line (added

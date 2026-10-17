@@ -174,10 +174,9 @@ struct GlowProfileView: View {
     /// to and a light-mode phone puts a black chevron on a photograph. iOS 27 draws the items'
     /// glass from the backdrop and ignores the scheme, so `.dark` is right there; iOS 26 obeys it
     /// for the material too and `.dark` gives the near-black discs he photographed and rejected.
-    private static var barScheme: ColorScheme {
-        if #available(iOS 27.0, *) { return .dark }
-        return .light
-    }
+    /// ⛔ 2026-10-17, REVERSED ON HIS WORD for this page: "iOS 26 profile top buttons, back and Edit,
+    /// always dark mode". `.light` put a black chevron on the photograph. Dark on every iOS now.
+    private static var barScheme: ColorScheme { .dark }
 
     // 2026-09-24 fix-all #90: `isMe` and every "somebody else's profile" branch are gone. The page's
     // one caller (SettingsView) always passes the signed-in uid, so those branches (the Glow button,
