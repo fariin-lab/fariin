@@ -824,42 +824,56 @@ struct OnboardingView: View {
                     // Decision: not a separate step, so the quickest sign-up is exactly as short as
                     // before; the avatar and the line under it open the Settings flow's own picker
                     // and cropper, and the picture is set only once Continue has saved the profile.
+                    // 2026-10-17 (owner: "super basic page, cheap"): the other sign-up pages' look.
+                    // Bigger avatar with a camera badge that says "tap me" without a second button
+                    // line, a 30pt title, and the sign-up page's white hairline fields.
                     Button { showPhotoPicker = true } label: {
                         Group {
                             if let pickedAvatar {
                                 Image(uiImage: pickedAvatar).resizable().scaledToFill()
-                                    .frame(width: 84, height: 84).clipShape(Circle())
+                                    .frame(width: 96, height: 96).clipShape(Circle())
                             } else {
-                                AvatarView(name: name.isEmpty ? "?" : name, size: 84)
+                                AvatarView(name: name.isEmpty ? "?" : name, size: 96)
                             }
                         }
                         .overlay(Circle().strokeBorder(AuthPalette.hairline, lineWidth: 1))
+                        .overlay(alignment: .bottomTrailing) {
+                            Image(systemName: pickedAvatar == nil ? "camera.fill" : "pencil")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(AuthPalette.page)
+                                .frame(width: 30, height: 30)
+                                .background(Color.primary, in: Circle())
+                                .overlay(Circle().strokeBorder(AuthPalette.page, lineWidth: 2.5))
+                                .offset(x: 2, y: 2)
+                        }
                         .animation(.easeOut(duration: 0.2), value: name)
                     }
                     .buttonStyle(.plain)
-                    Button(pickedAvatar == nil ? "Add a Photo" : "Edit Photo") { showPhotoPicker = true }
-                        .font(.subheadline.weight(.semibold)).tint(.primary)
-                        .padding(.top, 8)
+                    .accessibilityLabel(pickedAvatar == nil ? "Add a photo" : "Change photo")
+                    Text(pickedAvatar == nil ? "Add a photo (optional)" : "Tap to change")
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .padding(.top, 10)
 
                     Text("Create your profile")
-                        .font(.system(size: 23, weight: .bold)).foregroundStyle(.primary)
-                        .padding(.top, 16)
-                    Text("This is how people will find and know you on Fariin.")
+                        .font(.system(size: 30, weight: .bold)).foregroundStyle(.primary)
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 18)
+                    Text("Your name and username are how friends find you on Fariin.")
                         .font(.subheadline).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-                        .padding(.top, 5).padding(.horizontal, 24)
+                        .padding(.top, 6).padding(.horizontal, 12)
 
                     VStack(spacing: 14) {
-                        field("YOUR NAME") {
+                        field(icon: "person", focused: focus == .name) {
                             TextField("", text: $name,
-                                      prompt: Text("e.g. Amina Yusuf").foregroundStyle(.tertiary))
+                                      prompt: Text("Your name").foregroundStyle(.tertiary))
                                 .textInputAutocapitalization(.words)
                                 .focused($focus, equals: .name)
                                 .submitLabel(.next)
                                 .onSubmit { focus = .handle }
                         }
 
-                        field("USERNAME", accessory: {
+                        field(icon: "at", focused: focus == .handle, invalid: handleState == .taken, accessory: {
                             // The tick now means AVAILABLE, which is what everybody already thought
                             // it meant. Monochrome: this flow has no colour in it but the avatar,
                             // and the shapes carry the meaning without needing any.
@@ -883,7 +897,6 @@ struct OnboardingView: View {
                             }
                         }) {
                             HStack(spacing: 2) {
-                                Text("@").foregroundStyle(.secondary)
                                 TextField("", text: $handle,
                                           prompt: Text("username").foregroundStyle(.tertiary))
                                     .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -917,8 +930,9 @@ struct OnboardingView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
-                        .font(.caption)
+                        .font(.footnote)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 4).padding(.top, -4)
                         .animation(.easeInOut(duration: 0.15), value: handleState)
                     }
                     .padding(.top, 26)
@@ -941,10 +955,11 @@ struct OnboardingView: View {
                                 Text("Continue")
                             }
                         }
-                        .authPrimaryPill()
+                        // The sign-up page's button: a softened black pill until it can go.
+                        .authActionPill(enabled: canContinue || saving)
                     }
+                    .buttonStyle(.plain)
                     .disabled(!canContinue)
-                    .opacity(canContinue ? 1 : 0.5)
                     .animation(.easeOut(duration: 0.15), value: canContinue)
 
                     // App Store Guideline 1.2: users must agree to the terms (which
@@ -1002,22 +1017,17 @@ struct OnboardingView: View {
         }
     }
 
-    // Labelled field box, same shape language as the email sign-up screen.
-    private func field<C: View, A: View>(_ label: String,
+    // The email sign-up page's field (`authField`): glyph inside, no caps label above, white with a
+    // hairline, dark while focused, red when the username is taken.
+    private func field<C: View, A: View>(icon: String, focused: Bool, invalid: Bool = false,
                                          @ViewBuilder accessory: () -> A = { EmptyView() },
                                          @ViewBuilder content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(label).font(.caption2.weight(.bold)).foregroundStyle(.secondary)
-                .tracking(0.6)
-            HStack(spacing: 8) {
-                content()
-                    .font(.system(size: 17))
-                    .foregroundStyle(.primary)
-                accessory()
-            }
-            .padding(.horizontal, 16).frame(height: 50)
-            .background(AuthPalette.raised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        HStack(spacing: 12) {
+            Image(systemName: icon).foregroundStyle(.secondary).frame(width: 22)
+            content()
+            accessory()
         }
+        .authField(focused: focused, invalid: invalid)
     }
 
     private func save() async {
