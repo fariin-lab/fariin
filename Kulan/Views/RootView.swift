@@ -739,7 +739,6 @@ private struct HandleCheckRing: View {
     enum Phase { case checking, free, taken }
     let state: Phase
 
-    @State private var spin = false
     @State private var mark: CGFloat = 0
 
     private var tint: Color {
@@ -753,14 +752,20 @@ private struct HandleCheckRing: View {
     var body: some View {
         ZStack {
             Circle().stroke(Color.primary.opacity(0.14), lineWidth: 2.2)
-            Circle()
-                .trim(from: 0, to: state == .checking ? 0.28 : 1)
-                .stroke(tint, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
-                .rotationEffect(.degrees(spin && state == .checking ? 360 : 0) - .degrees(90))
-                .animation(state == .checking
-                           ? .linear(duration: 0.8).repeatForever(autoreverses: false)
-                           : .easeOut(duration: 0.25), value: spin)
-                .animation(.easeOut(duration: 0.25), value: state)
+            // ⛔ THE SPIN RUNS ON CORE ANIMATION, NOT A SWIFTUI repeatForever — 2026-10-17, build 959
+            // watchdog kill (0x8BADF00D, "stuck (deadlock)"). iOS 26 draws a repeating SwiftUI shape
+            // animation on its own AsyncRenderer thread, which took SwiftUI's update lock and waited
+            // for a CALayer lock; main held that layer lock (keyboard suggestions for the Name field
+            // laying out) and waited for SwiftUI's lock. A CABasicAnimation never touches that thread.
+            if state == .checking {
+                SpinningArc(color: UIColor(tint), lineWidth: 2.2, fraction: 0.28, period: 0.8)
+            } else {
+                Circle()
+                    .trim(from: 0, to: 1)
+                    .stroke(tint, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .transition(.opacity)
+            }
             Group {
                 if state == .free {
                     TickShape().trim(from: 0, to: mark)
@@ -773,9 +778,10 @@ private struct HandleCheckRing: View {
             }
         }
         .frame(width: 22, height: 22)
-        .onAppear { spin = true; settle() }
+        .animation(.easeOut(duration: 0.25), value: state)
+        .onAppear { settle() }
         .onChange(of: state) { _, s in
-            if s == .checking { mark = 0; spin = false; DispatchQueue.main.async { spin = true } }
+            if s == .checking { mark = 0 }
             settle()
         }
         .accessibilityLabel(state == .checking ? "Checking" : state == .free ? "Available" : "Taken")
@@ -786,6 +792,60 @@ private struct HandleCheckRing: View {
         guard state != .checking else { return }
         mark = 0
         withAnimation(.easeOut(duration: 0.25).delay(0.18)) { mark = 1 }
+    }
+}
+
+/// A round-capped arc turning forever, driven by a CABasicAnimation on the layer (see the note in
+/// `HandleCheckRing`): the render server runs it, so SwiftUI's async renderer never does.
+private struct SpinningArc: UIViewRepresentable {
+    let color: UIColor
+    let lineWidth: CGFloat
+    let fraction: CGFloat
+    let period: CFTimeInterval
+
+    final class ArcView: UIView {
+        let arc = CAShapeLayer()
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            arc.fillColor = nil
+            arc.lineCap = .round
+            layer.addSublayer(arc)
+        }
+        required init?(coder: NSCoder) { fatalError() }
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            arc.frame = bounds
+            let inset = arc.lineWidth / 2
+            arc.path = UIBezierPath(ovalIn: bounds.insetBy(dx: inset, dy: inset)).cgPath
+        }
+        /// A window move or app return strips layer animations; put the turn back.
+        override func didMoveToWindow() { super.didMoveToWindow(); spin() }
+        var period: CFTimeInterval = 0.8
+        func spin() {
+            guard window != nil, layer.animation(forKey: "spin") == nil else { return }
+            let a = CABasicAnimation(keyPath: "transform.rotation.z")
+            a.fromValue = -CGFloat.pi / 2
+            a.toValue = CGFloat.pi * 1.5
+            a.duration = period
+            a.repeatCount = .infinity
+            a.isRemovedOnCompletion = false
+            layer.add(a, forKey: "spin")
+        }
+    }
+
+    func makeUIView(context: Context) -> ArcView {
+        let v = ArcView()
+        v.backgroundColor = .clear
+        return v
+    }
+
+    func updateUIView(_ v: ArcView, context: Context) {
+        v.arc.strokeColor = color.cgColor
+        v.arc.lineWidth = lineWidth
+        v.arc.strokeEnd = fraction
+        v.period = period
+        v.setNeedsLayout()
+        v.spin()
     }
 }
 
