@@ -2702,6 +2702,10 @@ struct ChatsView: View {
                         .onChange(of: hasRealChat, initial: true) { _, has in
                             if has { getStarted.finish(me) }
                         }
+                        // The pen (or the tip itself) opened New Message: the tip has done its job.
+                        .onChange(of: showNew) { _, open in
+                            if open { withAnimation(.easeOut(duration: 0.2)) { getStarted.dismissTip(me) } }
+                        }
     }
 
     // MARK: Get Started (owner 2026-10-18, see GetStartedBanner.swift)
@@ -2761,7 +2765,7 @@ struct ChatsView: View {
 
     /// The tip shows while the empty welcome does, as theirs shows with their empty inbox.
     @ViewBuilder private var firstChatCueLayer: some View {
-        if getStartedContext, visible.isEmpty, newPeople.isEmpty, !olderChatsPending {
+        if getStartedContext, visible.isEmpty, newPeople.isEmpty, !olderChatsPending, !getStarted.isTipDismissed(me) {
             FirstChatCue(anchorX: composeMidX) { showNew = true }
                 .transition(.opacity)
         }

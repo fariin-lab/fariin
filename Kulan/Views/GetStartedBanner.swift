@@ -92,6 +92,19 @@ final class GetStartedStore {
         version += 1
     }
 
+    /// The first-chat tip, put away once the pen was tapped (owner 2026-10-18: "when I tap the pen,
+    /// hide that badge"). Its own flag: the cards stay until the first real chat.
+    func isTipDismissed(_ uid: String) -> Bool {
+        _ = version
+        return uid.isEmpty || defaults.bool(forKey: key(uid, "tipDismissed"))
+    }
+
+    func dismissTip(_ uid: String) {
+        guard !uid.isEmpty, !defaults.bool(forKey: key(uid, "tipDismissed")) else { return }
+        defaults.set(true, forKey: key(uid, "tipDismissed"))
+        version += 1
+    }
+
     func isRemoved(_ card: GetStartedCard, _ uid: String) -> Bool {
         _ = version
         return (defaults.stringArray(forKey: key(uid, "removed")) ?? []).contains(card.rawValue)
@@ -226,15 +239,17 @@ struct FirstChatCue: View {
     }
 
     var body: some View {
-        Text("Tap here to send your first message.")
-            .font(.body)
+        // ⛔ OWNER 2026-10-18 (build 969): shorter words, round ends, Liquid Glass in the app's blue.
+        Text("Start your first chat")
+            .font(.subheadline.weight(.semibold))
             .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             .foregroundStyle(.white)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.top, 11 + CueShape.tailHeight)
-            .padding(.bottom, 11)
+            .lineLimit(1)
+            .padding(.top, 9 + CueShape.tailHeight)
+            .padding(.bottom, 9)
             .padding(.horizontal, 16)
-            .background(CueShape(tailX: tailX).fill(Theme.defaultBubble(scheme == .dark)))
+            .glassEffect(.regular.tint(Theme.defaultBubble(scheme == .dark)).interactive(),
+                         in: CueShape(tailX: tailX))
             .contentShape(CueShape(tailX: tailX))
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { f in
                 minX = f.minX; width = f.width
@@ -256,7 +271,8 @@ private struct CueShape: Shape {
         var p = Path()
         let bubble = CGRect(x: rect.minX, y: rect.minY + Self.tailHeight,
                             width: rect.width, height: rect.height - Self.tailHeight)
-        p.addRoundedRect(in: bubble, cornerSize: CGSize(width: 9, height: 9))
+        p.addRoundedRect(in: bubble, cornerSize: CGSize(width: bubble.height / 2, height: bubble.height / 2),
+                         style: .continuous)
         let half = Self.tailWidth / 2
         let fallback = rect.width - Self.tailMargin - half
         let lo = Self.tailMargin + half, hi = rect.width - Self.tailMargin - half
