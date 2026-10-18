@@ -3968,7 +3968,10 @@ struct ThreadView: View {
     // Jumps (reply/search) route through nativeScrollTarget; read receipts + jump-button count come from
     // the shared onChange(of: repo.items.count) handler on the container.
     private var nativeList: some View {
-        NativeMessageList(
+        // Read here, in the body, so the body is still asked again whenever anything a row is built
+        // from changes (the key is every such value); the rows themselves are built by the list.
+        let _ = uikitModelsKey()
+        return NativeMessageList(
             rowIds: repo.items.map { $0.rowId },
             rowSignatures: rowSignatures,   // per-row content signature → list reconfigures only changed rows
             row: { id in
@@ -3979,10 +3982,9 @@ struct ThreadView: View {
             },
             // UIKit bubble migration: plain 1:1 delivered text renders as a native UIKit cell. The models
             // are a frozen per-emission snapshot (routing can never flip between measure and render).
-            rowModels: uikitModels,
-            // MUST stay directly after `rowModels:` — argument expressions evaluate in source order, and
-            // reading `uikitModels` above is what refreshes the cache this version comes from.
-            uikitModelsVersion: uikitModelCache.version,
+            // Built by the list from its own update step, not here in the body (see
+            // `NativeMessageList.rowModelsProvider`: builds 974/975 ran out of stack here).
+            rowModelsProvider: { (uikitModels, uikitModelCache.version) },
             onTapLink: { url, rowId in routeThreadURL(url, rowId: rowId) },
             onTapQuote: { id in jumpToQuotedOriginal(id) },
             onTapStoryQuote: { rowId, replyId in

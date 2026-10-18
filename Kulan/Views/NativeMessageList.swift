@@ -67,6 +67,11 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // the visible cells on every SwiftUI update, and the body re-runs on typing flags, presence dots and
     // keyboard focus â€” all of which leave the models identical. Comparing one integer skips that walk.
     var uikitModelsVersion: Int = 0
+    /// ⛔ BUILT HERE, NOT IN THE CHAT'S BODY (builds 974 and 975 crashed, owner's .ips 2026-10-18): a
+    /// main-thread STACK OVERFLOW while the rows were built at the bottom of ThreadView's deep SwiftUI
+    /// body chain. Handed over as a function, the rows are built from `updateUIViewController`, whose
+    /// stack does not carry that chain. Returns the models and their version. Nil = use the two above.
+    var rowModelsProvider: (() -> ([String: MessageRowModel], Int))? = nil
     // The UIKit rows route their taps back up through these. A link, a quote, a reaction badge, the
     // retry line and a group sender are rectangles in the row's plan, so the CELL hit-tests them and
     // reports which one was hit — no gesture recogniser per element, and a row with none of them
@@ -255,6 +260,9 @@ struct NativeMessageList: UIViewControllerRepresentable {
             // ours must leave rather than sit under it. See `hideComposer`.
             vc.hideComposer()
         }
+        let provided = rowModelsProvider?()
+        let rowModels = provided?.0 ?? self.rowModels
+        let uikitModelsVersion = provided?.1 ?? self.uikitModelsVersion
         vc.rowModels = rowModels   // BEFORE apply: measure + cell provider see the same frozen routing
         // ⛔ WARM EVERY PICTURE'S PLACEHOLDER OFF THE MAIN THREAD, HERE, BEFORE ANY OF THEM IS
         // DEQUEUED. Measured from his log, 2026-08-30: media rows averaged 2.0ms and peaked at
