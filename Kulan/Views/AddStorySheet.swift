@@ -1196,10 +1196,16 @@ struct StoryThumb: View {
     @State private var image: UIImage?
     var body: some View {
         GeometryReader { geo in
+            // ⛔ CENTRED, LIKE THE ATTACH SHEET'S TILES (owner 2026-10-18): the ZStack took the
+            // filled picture's own size and a GeometryReader pins its child top-leading, so every tile
+            // showed the photo's TOP-LEFT and the zoom (which flies a centre crop) landed on a
+            // different part of it. The cell's own frame, the picture filled from its middle.
             ZStack {
                 Color(.systemGray6)
                 if let image { Image(uiImage: image).resizable().scaledToFill() }
             }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .clipped()
             // Two pictures, not one: PhotoKit's cached thumbnail lands more or less at once and the
             // sharp resize replaces it a moment later. See `PhotoGridStore.thumbnails`.
             .task {
