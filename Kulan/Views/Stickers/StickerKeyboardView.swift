@@ -67,6 +67,37 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     /// The home-indicator inset seen while in the keyboard, for laying the card out while it is away.
     private var restSafeBottom: CGFloat = 0
 
+    // ⛔ DRAG TO GROW / SHRINK — owner 2026-10-18 ("it cannot be enlarged or shrunk"). Read off the
+    // reference app's source (its input panel container + chat layout): one vertical pan over the
+    // panel; from the strip / tab band any time, from a grid only when that grid is at its top and
+    // the drag is DOWN on the grown panel (up on a grid always scrolls it). The height follows the
+    // finger 1:1 between the keyboard's height and "screen minus status bar minus 10 minus the
+    // composer"; release past a quarter of the way commits, else it goes back; 0.4 s on their
+    // spring-named cubic either way. The chat above dims to 0.2 black, the composer rides on top of
+    // the panel, top corners round to 10. Sending a sticker or GIF shrinks it back, as theirs does.
+    // While grown the card lives in a window above the keyboard (the GIF search machinery), since
+    // an inputView cannot draw or take touches above the keyboard's own frame.
+    /// The composer's bar moves up with the grown panel by this much (0 = at rest).
+    var onExpansionLift: (CGFloat) -> Void = { _ in }
+    /// The top of the composer's bar container in window space, at rest.
+    var composerTopInWindow: () -> CGFloat? = { nil }
+    /// The lowest point the grown panel must leave free at the top (the chat's navigation bar foot).
+    var expansionCeilingInWindow: () -> CGFloat? = { nil }
+    private let expandPan = UIPanGestureRecognizer()
+    private let expandPanDelegate = ExpandPanDelegate()
+    private let expandDim = UIView()
+    private var expandAnimator: UIViewPropertyAnimator?
+    /// The card is out in its window for the grow (dragging, grown, or settling).
+    private var expansionLive = false
+    /// The panel is leaving with the keys and the card is sliding down after it.
+    private var slidingAway = false
+    private var lift: CGFloat = 0
+    private var liftAtStart: CGFloat = 0
+    private var liftRange: CGFloat = 0
+    private var restCardFrame: CGRect = .zero
+    /// The composer's band above the panel (its pad, the bar, the gap), measured when the grow starts.
+    private var chromeH: CGFloat = 0
+
     private enum Shelf: Equatable {
         case recents, favorites, pack(StickerPack)
         var title: String {
@@ -180,7 +211,10 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         cardView.addSubview(grid)
 
         gifGrid.isHidden = true
-        gifGrid.onSend = { [weak self] g in self?.onSendGif(g) }
+        gifGrid.onSend = { [weak self] g in
+            self?.onSendGif(g)
+            self?.collapseExpansion()   // a send shrinks the grown panel, as the reference app's does
+        }
         gifGrid.onSearch = { [weak self] in self?.expandForGifSearch() }
         gifGrid.onCancelSearch = { [weak self] in self?.collapseGifSearch() }
         gifGrid.onSearchFieldEnded = { [weak self] in
@@ -201,6 +235,14 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         deleteButton.addTarget(self, action: #selector(deleteTapped), for: .touchUpInside)
         deleteBar.addSubview(deleteButton)
         cardView.addSubview(deleteBar)
+
+        expandDim.backgroundColor = UIColor(white: 0, alpha: 0.2)   // their content dim
+        expandDim.isUserInteractionEnabled = false
+        expandPan.maximumNumberOfTouches = 1
+        expandPan.addTarget(self, action: #selector(expandPanned(_:)))
+        expandPanDelegate.owner = self
+        expandPan.delegate = expandPanDelegate
+        cardView.addGestureRecognizer(expandPan)
 
         reload()
         // Packs from the admin panel (2026-10-18): a changed catalog redraws the shelves; a server
@@ -305,6 +347,9 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             return
         }
         guard let hostWin = hostWindow() ?? window else { return }
+        // Search from the grown panel: the card leaves its grow window from where it is (the branch
+        // below), the composer goes back down behind the search page.
+        if expansionLive { endExpansionForSearch() }
         transitionGen += 1
         searchingGifs = true
         headerHidden = false
@@ -454,16 +499,243 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     }
 
     /// No animation: the chat is leaving, the panel is going, or the field was resigned from outside.
+    /// Also ends a grow at once (no animation).
     func tearDownSearchOverlay() {
+        if slidingAway { return }   // the slide-down puts the card home itself when it lands
         transitionGen += 1
         let was = searchingGifs
+        let wasGrown = expansionLive
+        if wasGrown { dropExpansionState() }
         searchingGifs = false
         gifGrid.setSearching(false)
         if gifGrid.searchField.isFirstResponder {
             _ = gifGrid.searchField.resignFirstResponder()
         }
-        guard was || cardView.superview !== self else { return }
+        guard was || wasGrown || cardView.superview !== self else { return }
         putCardHome()
+    }
+
+    // MARK: Drag to grow / shrink (owner 2026-10-18, see the note on `onExpansionLift`)
+
+    /// The pan may start here: vertical, the panel at rest or grown (never mid GIF search or editing);
+    /// on a grid only DOWN, only when that grid is at its top, only while grown; elsewhere (strip, tab
+    /// band, the GIF search pill) up from rest or down from grown.
+    fileprivate func expandShouldBegin(_ pan: UIPanGestureRecognizer) -> Bool {
+        guard !searchingGifs, !editing, !slidingAway else { return false }
+        if cardView.superview === self {
+            guard window != nil, hostWindow() != nil else { return false }
+        } else {
+            guard expansionLive else { return false }
+        }
+        let v = pan.velocity(in: cardView)
+        guard abs(v.y) > abs(v.x) else { return false }
+        let grown = currentLift() > 0.5
+        let p = pan.location(in: cardView)
+        // The tab band at the foot is its own row (see `hitTest`), even where the grid runs under it.
+        let inBand = !headerHidden && !tabs.isHidden && tabs.alpha > 0.01 && p.y >= tabGlass.frame.minY - 10
+        var hit = inBand ? nil : cardView.hitTest(p, with: nil)
+        while let h = hit, h !== cardView {
+            if let s = h as? UIScrollView, s === grid || s === gifGrid.scrollView {
+                let atTop = s.contentOffset.y <= -s.adjustedContentInset.top + 1
+                return grown && atTop && v.y > 0
+            }
+            hit = h.superview
+        }
+        return grown ? v.y > 0 : v.y < 0
+    }
+
+    /// The grids and the strip wait for this pan to fail, the way theirs makes every pan inside wait.
+    fileprivate func expandShouldWait(for other: UIGestureRecognizer) -> Bool {
+        guard other is UIPanGestureRecognizer, let sv = other.view as? UIScrollView else { return false }
+        return sv.isDescendant(of: cardView)
+    }
+
+    /// The lift as drawn: a settle stopped half way leaves the card's frame where it was.
+    private func currentLift() -> CGFloat {
+        guard expansionLive, restCardFrame.height > 0 else { return 0 }
+        return max(0, cardView.frame.height - restCardFrame.height)
+    }
+
+    @objc private func expandPanned(_ pan: UIPanGestureRecognizer) {
+        switch pan.state {
+        case .began:
+            if let a = expandAnimator {
+                // Caught mid-settle: stop where it is drawn and carry on from there.
+                expandAnimator = nil
+                a.stopAnimation(true)
+            }
+            if cardView.superview === self {
+                guard liftCardForExpansion() else { return }
+            }
+            lift = currentLift()
+            liftAtStart = lift
+        case .changed:
+            guard expansionLive else { return }
+            // Screen space: the card changes window on the way out, both windows fill the screen.
+            let ty = pan.translation(in: nil).y
+            applyLift(min(liftRange, max(0, liftAtStart - ty)))
+        case .ended, .cancelled, .failed:
+            guard expansionLive else { return }
+            // Their rule: a quarter of the way from where the drag began decides; short of that the
+            // panel goes back. Theirs reads a velocity that is always zero; a real flick (600 pt/s)
+            // counts here, so a short fast swipe is not lost.
+            let moved = lift - liftAtStart
+            let vy = pan.velocity(in: nil).y
+            let open: Bool
+            if abs(moved) > liftRange * 0.25 { open = moved > 0 }
+            else if abs(vy) > 600 { open = vy < 0 }
+            else { open = liftAtStart >= liftRange * 0.5 }
+            settleExpansion(open: open)
+        default:
+            break
+        }
+    }
+
+    /// Takes the card out of the keyboard into a window above it, exactly over the panel.
+    private func liftCardForExpansion() -> Bool {
+        guard let hostWin = hostWindow() ?? window, let scene = hostWin.windowScene else { return false }
+        let restH = bounds.height > 0 ? bounds.height : height
+        let winB = hostWin.bounds
+        restCardFrame = CGRect(x: 0, y: winB.height - restH, width: winB.width, height: restH)
+        let composerTop = composerTopInWindow() ?? (restCardFrame.minY - 56)
+        chromeH = max(0, restCardFrame.minY - composerTop)
+        // Theirs: screen minus max(status bar, safe top) minus 10 minus the composer. Here the chat's
+        // navigation bar stays visible (theirs pushes the whole chat back as a sheet), so the bar
+        // stops 10 pt under whichever is lower.
+        let statusH = scene.statusBarManager?.statusBarFrame.height ?? 0
+        let ceiling = max(hostWin.safeAreaInsets.top, statusH, expansionCeilingInWindow() ?? 0)
+        liftRange = max(0, composerTop - (ceiling + 10))
+        guard liftRange > 40 else { return false }
+
+        let maxLevel = scene.windows.map(\.windowLevel.rawValue).max() ?? 10_000_001
+        let cw = PassthroughWindow(windowScene: scene)
+        cw.frame = winB
+        cw.windowLevel = UIWindow.Level(rawValue: maxLevel + 1)
+        cw.backgroundColor = .clear
+        cw.overrideUserInterfaceStyle = hostWin.overrideUserInterfaceStyle
+        cw.targetView = cardView
+        cw.onTouch = { [weak self] in self?.onTouch() }
+        expandDim.alpha = 0
+        expandDim.frame = CGRect(x: 0, y: 0, width: winB.width, height: max(0, composerTop))
+        cw.addSubview(expandDim)
+        cw.isHidden = false
+        collapseWindow?.isHidden = true
+        collapseWindow = cw
+
+        transitionGen += 1
+        expansionLive = true
+        lift = 0
+        backdrop.isHidden = false
+        UIView.performWithoutAnimation {
+            cw.addSubview(cardView)
+            cardView.frame = restCardFrame
+            layoutCardSubviews()
+            cardView.layoutIfNeeded()
+        }
+        return true
+    }
+
+    /// One height for everything that follows it: the card, its corners, the dim, the composer.
+    private func applyLift(_ l: CGFloat) {
+        lift = l
+        let f = restCardFrame
+        let frac = liftRange > 0 ? min(1, l / liftRange) : 0
+        cardView.frame = CGRect(x: f.minX, y: f.minY - l, width: f.width, height: f.height + l)
+        cardView.layer.cornerRadius = 10 * frac
+        expandDim.alpha = frac
+        expandDim.frame.size.height = max(0, f.minY - chromeH - l)
+        layoutCardSubviews()
+        onExpansionLift(l)
+    }
+
+    private func settleExpansion(open: Bool) {
+        let target = open ? liftRange : 0
+        let a = UIViewPropertyAnimator(duration: MediaOpen.storyEditorDuration, timingParameters: MediaOpen.storyEditorCurve)
+        a.addAnimations {
+            self.applyLift(target)
+            self.cardView.layoutIfNeeded()
+        }
+        a.addCompletion { [weak self, weak a] pos in
+            guard let self, let a, self.expandAnimator === a else { return }
+            self.expandAnimator = nil
+            if pos == .end, target == 0 { self.finishExpansionHome() }
+        }
+        expandAnimator?.stopAnimation(true)
+        expandAnimator = a
+        a.startAnimation()
+    }
+
+    /// Back at the keyboard's height: the card goes home into the panel, which never moved.
+    private func finishExpansionHome() {
+        guard expansionLive else { return }
+        dropExpansionState()
+        putCardHome()
+    }
+
+    /// The grow's own state, nothing moved: the caller puts the card where it belongs.
+    private func dropExpansionState() {
+        if let a = expandAnimator {
+            expandAnimator = nil
+            a.stopAnimation(true)
+        }
+        expansionLive = false
+        lift = 0
+        expandDim.removeFromSuperview()
+        onExpansionLift(0)
+    }
+
+    /// A sticker or GIF was sent from the grown panel: back to the keyboard's height (theirs calls
+    /// `collapseInput` in the send's own update).
+    func collapseExpansion() {
+        guard expansionLive, !slidingAway else { return }
+        settleExpansion(open: false)
+    }
+
+    /// GIF search starts from the grown panel. The search page covers the composer, which goes
+    /// back down behind it; the card itself is moved on by `expandForGifSearch`.
+    private func endExpansionForSearch() {
+        if let a = expandAnimator {
+            expandAnimator = nil
+            a.stopAnimation(true)
+        }
+        expansionLive = false
+        lift = 0
+        expandDim.removeFromSuperview()
+        UIView.animate(withDuration: 0.38, delay: 0, usingSpringWithDamping: 0.92, initialSpringVelocity: 0,
+                       options: [.beginFromCurrentState, .allowUserInteraction]) {
+            self.onExpansionLift(0)
+        }
+    }
+
+    /// The keys are going (a tap on the chat, the keyboard button) while grown: the card slides down
+    /// off the screen with them and the composer comes down with it, instead of snapping. The panel
+    /// may already be out of the keyboard by then; the card goes home once it is out of sight.
+    func slideExpansionAway() {
+        guard expansionLive, !slidingAway else { return }
+        if let a = expandAnimator {
+            expandAnimator = nil
+            a.stopAnimation(true)
+        }
+        expansionLive = false
+        slidingAway = true
+        let f = cardView.frame
+        let bottom = cardView.superview?.bounds.height ?? (f.maxY + f.height)
+        let a = UIViewPropertyAnimator(duration: MediaOpen.storyEditorDuration, timingParameters: MediaOpen.storyEditorCurve)
+        a.addAnimations {
+            self.cardView.frame = CGRect(x: f.minX, y: bottom, width: f.width, height: f.height)
+            self.expandDim.alpha = 0
+            self.onExpansionLift(0)
+        }
+        a.addCompletion { [weak self] _ in
+            guard let self else { return }
+            self.slidingAway = false
+            self.lift = 0
+            self.expandDim.removeFromSuperview()
+            // Never left floating: home (and the grow window hidden) whatever happened meanwhile.
+            guard !self.searchingGifs else { return }
+            self.putCardHome()
+        }
+        a.startAnimation()
     }
 
     // MARK: Data
@@ -635,7 +907,9 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
                 let p = CGPoint(x: min(max(point.x, tabs.frame.minX + 1), tabs.frame.maxX - 1), y: tabs.frame.midY)
                 return tabs.hitTest(convert(p, to: tabs), with: event) ?? tabs
             }
-            return self
+            // The card, not the panel: still no sticker, but the drag-to-grow pan (on the card) sees
+            // a drag that starts in the band, as theirs does across its whole panel (2026-10-18).
+            return cardView
         }
         return super.hitTest(point, with: event)
     }
@@ -852,6 +1126,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         // Recents move on the next showing, not under the finger.
         StickerStore.shared.noteUsed(s)
         onSend(s)
+        collapseExpansion()   // a send from the grown panel shrinks it back (theirs: `collapseInput`)
     }
 }
 
@@ -960,6 +1235,19 @@ private final class PassthroughOverlayView: UIView {
         guard target.bounds.contains(p) else { return nil }
         onTouch()
         return super.hitTest(point, with: event)
+    }
+}
+
+/// The drag-to-grow pan's rules live on the panel; this only forwards. A separate object because
+/// `gestureRecognizerShouldBegin(_:)` is also a UIView method, which the panel must not override.
+@MainActor private final class ExpandPanDelegate: NSObject, UIGestureRecognizerDelegate {
+    weak var owner: StickerKeyboardView?
+    func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        guard let pan = g as? UIPanGestureRecognizer, let owner else { return false }
+        return owner.expandShouldBegin(pan)
+    }
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+        owner?.expandShouldWait(for: other) ?? false
     }
 }
 

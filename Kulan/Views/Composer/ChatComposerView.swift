@@ -1346,6 +1346,9 @@ final class ChatComposerView: UIView {
             stopPulse()
             // Leaving the chat mid GIF search: no full-screen card or extra window left behind.
             if gifSearchActive || holdsKeyboardForGifSearch { endGifSearchNow() }
+            // Leaving mid grow: no window left over the next screen, the bar's container back home.
+            (textView.inputView as? StickerKeyboardView)?.tearDownSearchOverlay()
+            liftForStickerPanel(0)
         } else if shown.recordingActive {
             setLive(true)
         }
@@ -1504,10 +1507,21 @@ extension ChatComposerView: UITextViewDelegate {
                     self.holdsKeyboardForGifSearch = false
                 }
             }
+            // Drag to grow / shrink (owner 2026-10-18): the bar rides on top of the grown panel, and
+            // the panel stops under the chat's navigation bar.
+            panel.onExpansionLift = { [weak self] dy in self?.liftForStickerPanel(dy) }
+            panel.composerTopInWindow = { [weak self] in
+                guard let c = self?.superview, c.window != nil else { return nil }
+                return c.convert(c.bounds, to: nil).minY
+            }
+            panel.expansionCeilingInWindow = { [weak self] in self?.navigationBarBottomInWindow() }
             textView.inputView = panel
         } else {
             gifSearchActive = false
             holdsKeyboardForGifSearch = false
+            // Grown and the keys are leaving with us on screen: the card slides down with them and
+            // the bar comes down with it, rather than both snapping (the teardown below then waits).
+            if window != nil { (textView.inputView as? StickerKeyboardView)?.slideExpansionAway() }
             (textView.inputView as? StickerKeyboardView)?.tearDownSearchOverlay()
             textView.inputView = nil
         }
@@ -1519,6 +1533,29 @@ extension ChatComposerView: UITextViewDelegate {
             self.cameraButton.alpha = cameraAlpha
         }
         if reload { textView.reloadInputViews() }
+    }
+
+    /// The bar's whole container moves, not the bar: the container only hit-tests inside its own
+    /// bounds, so a bar lifted out of it would draw but not take a tap. A transform, so no
+    /// constraint, keyboard guide or list inset changes while the panel is grown (the list stays put
+    /// under the dim, as the reference app's does). 0 puts it back.
+    private func liftForStickerPanel(_ dy: CGFloat) {
+        guard let c = superview as? BarTouchView else { return }
+        let t: CGAffineTransform = dy > 0.5 ? CGAffineTransform(translationX: 0, y: -dy) : .identity
+        if c.transform != t { c.transform = t }
+    }
+
+    /// The foot of the navigation bar this chat is shown under, in window space.
+    private func navigationBarBottomInWindow() -> CGFloat? {
+        var r: UIResponder? = self
+        while let n = r {
+            if let vc = n as? UIViewController, let nb = vc.navigationController?.navigationBar,
+               nb.window != nil, !nb.isHidden {
+                return nb.convert(nb.bounds, to: nil).maxY
+            }
+            r = n.next
+        }
+        return nil
     }
 
     // 2026-09-24 decision D-composer-5: the caret, for @mentions typed in the middle of a message.

@@ -41,6 +41,8 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
     private let stripHighlight = UIView()
     private let emptyLabel = UILabel()
     private let grid: UICollectionView
+    /// The GIF grid, for the panel's drag-to-grow rule (a grid hands the drag over only at its top).
+    var scrollView: UIScrollView { grid }
 
     // The sticker strip's numbers (StickerKeyboardView.M): 40 pt cells, 4 apart, a 44 pt row.
     private enum M {
