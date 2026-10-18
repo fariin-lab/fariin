@@ -236,7 +236,14 @@ struct NewGroupView: View {
         }
         .overlay { if creating { ProgressView().controlSize(.large) } }
         // Straight to the name, as the page is for naming the group.
-        .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { nameFocused = true } }
+        // ⛔ AFTER THE PUSH, NOT DURING IT (owner 2026-10-18, build 969: "the keyboard comes from the
+        // right"). Focus at 0.35 s landed inside the iOS 26 push, so the keyboard rode in sideways with
+        // the page. 0.6 s is past the push: the keys rise from the bottom on their own. `.task`, so
+        // going back before then cancels it and no keyboard opens over the page being left.
+        .task {
+            try? await Task.sleep(for: .milliseconds(600))
+            if !Task.isCancelled { nameFocused = true }
+        }
         .sheet(isPresented: $showPhotoPicker) {
             StoryLibraryPicker(
                 onImage: { ui, _ in setPhoto(ui) },
