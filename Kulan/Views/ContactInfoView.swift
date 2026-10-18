@@ -1591,17 +1591,21 @@ struct ContactInfoView: View {
         return VStack(alignment: .leading, spacing: 0) {
             // Bigger "+" in a grey circle (matches the group-avatar rows below), not a tiny glyph.
             Button { showAddGroup = true } label: {
-                HStack(spacing: 12) {
+                // ⛔ THE BLOCK ROW'S COLUMNS (owner 2026-10-18): the circle centred on the 26 pt icon column
+                // the rows below use (`ProfileInfoRow`), the words starting where theirs do (16 + 26 + 14),
+                // and the same ~58 pt row height.
+                HStack(spacing: 14) {
                     // 2026-10-18 (owner): GLASS, not a fixed grey. Every profile tints its page from the
                     // photo, and one grey circle sat on all of them; glass takes each page's colour.
                     Image(systemName: "plus")
-                        .font(.system(size: 18, weight: .medium)).foregroundStyle(.primary)
-                        .frame(width: 36, height: 36)   // the standard contact-row avatar size (.thirtySix)
+                        .font(.system(size: 16, weight: .medium)).foregroundStyle(.primary)
+                        .frame(width: 30, height: 30)
                         .liquidGlass(Circle(), interactive: false)
+                        .frame(width: 26)
                     Text("Add to a Group").foregroundStyle(.primary)
                     Spacer()
                 }
-                .padding(.horizontal, 16).padding(.vertical, 9)
+                .padding(.horizontal, 16).padding(.vertical, 14)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
