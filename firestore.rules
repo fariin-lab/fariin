@@ -321,7 +321,11 @@ service cloud.firestore {
         return ['banned', 'bannedAt', 'bannedBy', 'banReason',
                 'handle', 'handleLower', 'usernameHistory',
                 'verification', 'usernameChecks',
-                'glowerCount', 'glowingCount'];
+                'glowerCount', 'glowingCount',
+                // owner 2026-10-18: the admin panel's per-person Message Requests / Chat Key
+                // override (adminApi msgPolicyUserSet). A phone that could write it could switch
+                // its own requests off or another person's key requirement, so only the server does.
+                'msgPolicy'];
       }
 
       // ⛔ THE PROFILE'S LINKS ARE CAPPED HERE, NOT ONLY IN THE APP — owner's Links feature,
@@ -1186,6 +1190,16 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // ⛔ MESSAGE POLICY (owner 2026-10-18): Message Requests and the Chat Key, switched globally from
+    // the admin panel. Read by every phone with a LIVE listener (MsgPolicy.swift) and by the
+    // conversation rules (`requestsOnFor`, `chatKeyRequiredFor`); written only by adminApi
+    // (msgPolicySet), which checks the owner and a fresh sign-in and records old → new in the
+    // audit chain. Absent = today's behaviour.
+    match /config/msgPolicy {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     // The admin team. You may read your OWN row, which is how the app knows whether to show the admin
     // screens at all; the owner may read the whole team.
     match /admins/{uid} {
@@ -1482,6 +1496,48 @@ service cloud.firestore {
         return !exists(/databases/$(database)/documents/users/$(u))
           || get(/databases/$(database)/documents/users/$(u)).data.get('privacy', {}).get('messages', 'everyone') != 'contacts';
       }
+      // ⛔ MESSAGE POLICY FROM THE ADMIN PANEL — owner 2026-10-18: Message Requests and the Chat Key
+      // switched on or off for everybody, or for one person, at any time and with no app release.
+      //   config/msgPolicy        {requests, chatKeyRequired, chatKeyVisible}   the global switches
+      //   users/{u}.msgPolicy     {requests?, chatKeyRequired?}                 one person's override
+      // Both are written only by adminApi (config has no client write; `msgPolicy` is in
+      // serverOnlyUserFields). The person override wins over the global, the global over the
+      // shipped default, and the shipped default is TODAY'S behaviour: requests on, Chat Key
+      // required, Chat Key shown. A missing document, a missing key, or anything but `false`
+      // reads as on, so nothing changes until the owner flips a switch.
+      //
+      // THE RECIPIENT'S SETTING DECIDES. `u` is always the person being written to.
+      //
+      // The override lives on the user document, not in a collection of its own, because every
+      // check that needs it already reads `users/{u}` (`acceptsFromStrangers`) and rule evaluation
+      // caches that document: one extra read per request (the config), not three.
+      //
+      // ⚠️ EVERY CALLER PUTS TODAY'S CHECK FIRST AND THESE AFTER AN `||`. So an ordinary chat that
+      // passes today's rules never reads the config at all, and only a write today's rules would
+      // refuse asks whether the owner has switched that refusal off.
+      function msgPolicyGlobal() {
+        return exists(/databases/$(database)/documents/config/msgPolicy)
+          ? get(/databases/$(database)/documents/config/msgPolicy).data : {};
+      }
+      function msgPolicyOverride(u) {
+        return exists(/databases/$(database)/documents/users/$(u))
+          ? get(/databases/$(database)/documents/users/$(u)).data.get('msgPolicy', {}) : {};
+      }
+      // Does a stranger's first message to `u` arrive as a request (one short text, then wait)?
+      function requestsOnFor(u) {
+        return msgPolicyOverride(u).get('requests', msgPolicyGlobal().get('requests', true)) != false;
+      }
+      // Is `u`'s "People Who Know My Chat Key" setting enforced? HIDING THE CHAT KEY (the global
+      // `chatKeyVisible: false`) TURNS THE REQUIREMENT OFF TOO: a key nobody can see or type must
+      // never be the reason somebody cannot be reached. The panel says so next to the switch.
+      function chatKeyRequiredFor(u) {
+        return msgPolicyGlobal().get('chatKeyVisible', true) != false
+          && msgPolicyOverride(u).get('chatKeyRequired', msgPolicyGlobal().get('chatKeyRequired', true)) != false;
+      }
+      // A stranger may write to `u`: `u` takes messages from everyone, or the key is not required.
+      function strangersMayWrite(u) {
+        return acceptsFromStrangers(u) || !chatKeyRequiredFor(u);
+      }
       // THE DECLINE COOLDOWN — owner's spec, 2026-09-11 §10. `u` deleted my last request less than
       // seven days ago, so I may not open another. Read from `requestDeclines/{u}/from/{me}`, which
       // only `u` can write (see that match); an absent document is simply "never declined".
@@ -1533,7 +1589,7 @@ service cloud.firestore {
           && request.resource.data.get('startedBy', '') == request.auth.uid
           && request.resource.data.get('accepted', true) == false
           && request.resource.data.get('lastSender', '') == ''
-          && acceptsFromStrangers(otherExistingMember())
+          && strangersMayWrite(otherExistingMember())   // owner 2026-10-18: or the Chat Key is switched off
           && !declinedRecently(otherExistingMember());
       }
       // 2026-09-24 fix-all: IS THE CALLER UNDER A LIVE RESTRICTION `flag` in the conversation data
@@ -1665,6 +1721,11 @@ service cloud.firestore {
             // choosing, a `lastMessage`, no `startedBy`) read as an old accepted chat. The app
             // mints group ids with `document()` (letters and digits, never "_").
             && !cid.matches('.*_.*')
+            // ⛔ "CREATE NEW GROUPS" OFF — owner 2026-10-18, from the admin panel (config/features,
+            // `groupCreate`). Only a NEW group is refused; every existing group keeps working, as
+            // this is the create rule alone. Absent, or the doc missing, means on, as today.
+            && !(exists(/databases/$(database)/documents/config/features)
+                 && get(/databases/$(database)/documents/config/features).data.get('groupCreate', true) == false)
           )
           || (
             // 1:1 audit r3 F1, 2026-10-08: THE ID IS THE MEMBERSHIP, enforced here too. The two
@@ -1676,7 +1737,10 @@ service cloud.firestore {
             && cid == (request.resource.data.users[0] < request.resource.data.users[1]
                          ? request.resource.data.users[0] + '_' + request.resource.data.users[1]
                          : request.resource.data.users[1] + '_' + request.resource.data.users[0])
-            && (request.auth.uid == otherMember() || acceptsFromStrangers(otherMember()))
+            // owner 2026-10-18: `chatKeyRequiredFor` after today's check, so a "People Who Know My
+            // Chat Key" account takes new chats from anyone while the panel has the requirement off.
+            && (request.auth.uid == otherMember() || acceptsFromStrangers(otherMember())
+                || !chatKeyRequiredFor(otherMember()))
             // ...and not somebody who deleted my last request this week (§10). Same guard shape
             // as the privacy read above; the document is theirs and this is the only reader.
             && (request.auth.uid == otherMember() || !declinedRecently(otherMember()))
@@ -1961,6 +2025,11 @@ service cloud.firestore {
                    'lastMessage', 'lastSender', 'lastImageUrl', 'lastImageEnc', 'lastImages',
                    'accepted', 'startedBy'
                  ])
+              // owner 2026-10-18: MESSAGE REQUESTS OFF for the person asked (`requestsOnFor`), so the
+              // one who started keeps writing: `lastMessage`/`lastSender` move with every send.
+              // `accepted` and `startedBy` stay theirs to never write: the G1 clause below and the
+              // `startedBy` pin hold whatever this says.
+              || !requestsOnFor(otherExistingMember())
             )
             // 1:1 audit r2 G1, 2026-10-08: the clause above lets the starter through while
             // `lastSender` is still empty (a fresh request), so a stranger could accept their own
@@ -2369,6 +2438,9 @@ service cloud.firestore {
                || convData().get('accepted', false) == true
                || convData().get('lastSender', '') == ''
                || convData().get('lastSender', '') != request.auth.uid
+               // owner 2026-10-18: MESSAGE REQUESTS OFF for the other person: no one-message wait.
+               // Their Chat Key setting still holds, for a chat that is not open yet.
+               || (!requestsOnFor(otherHalf()) && strangersMayWrite(otherHalf()))
              )
           // A REQUEST IS ONE SHORT TEXT — owner's spec, 2026-09-11 §9, and the database says so.
           //
@@ -2391,16 +2463,23 @@ service cloud.firestore {
           && (
                !isPendingFirstMessage()
                || (
-                    request.resource.data.text is string
-                    && request.resource.data.text.size() <= 880
-                    && !request.resource.data.keys().hasAny([
-                         'type', 'imageUrl', 'audioUrl', 'videoUrl', 'fileUrl', 'fileName',
-                         'fileSize', 'album', 'albumSizes', 'thumb', 'thumbUrl', 'thumbEnc',
-                         'blurhash', 'width', 'height', 'duration', 'waveform', 'viewOnce',
-                         'callerUid', 'callOutcome', 'linkPreview', 'sticker', 'gif', 'location',
-                         'poll', 'contact'
-                       ])
-                    && acceptsFromStrangers(otherHalf())
+                    // owner 2026-10-18: the short-text shape is a REQUEST's; with Message Requests
+                    // off for the other person the first message may be anything a chat carries.
+                    (
+                      request.resource.data.text is string
+                      && request.resource.data.text.size() <= 880
+                      && !request.resource.data.keys().hasAny([
+                           'type', 'imageUrl', 'audioUrl', 'videoUrl', 'fileUrl', 'fileName',
+                           'fileSize', 'album', 'albumSizes', 'thumb', 'thumbUrl', 'thumbEnc',
+                           'blurhash', 'width', 'height', 'duration', 'waveform', 'viewOnce',
+                           'callerUid', 'callOutcome', 'linkPreview', 'sticker', 'gif', 'location',
+                           'poll', 'contact'
+                         ])
+                      || !requestsOnFor(otherHalf())
+                    )
+                    // ...their privacy, unless the panel has the Chat Key requirement off. The
+                    // day's knock budget below holds in every mode.
+                    && strangersMayWrite(otherHalf())
                     // ...and not more knocks today than `requests_per_day_default` (20, or the
                     // number in `config/limits`). A person does not open twenty new chats with
                     // strangers in a day; a script does. FAILS OPEN when the counter was never
