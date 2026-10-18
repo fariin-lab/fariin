@@ -69,6 +69,17 @@ struct NewChatView: View {
     }
     private var indexLetters: [String] { sections.map(\.letter) }
 
+    /// The search, on this phone only: the people in `sections`, matched on name or @username.
+    private var localMatches: [Conversation] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+        guard !q.isEmpty else { return [] }
+        return sections.flatMap(\.convs).filter { c in
+            c.name(for: me).lowercased().contains(q)
+                || (handles[c.otherUid(me)]?.lowercased().contains(q) ?? false)
+        }
+    }
+
     var body: some View {
         NavigationStack {
             ScrollViewReader { proxy in
@@ -105,32 +116,18 @@ struct NewChatView: View {
                     if let error { Text(error).foregroundStyle(.red) }
 
                     if !query.isEmpty {
+                        // ⛔ YOUR CHATS ONLY (owner 2026-10-18): this search used to ask the server for any
+                        // username in the app. It matches the people you already chat with now, by name or
+                        // @username, on the phone; finding someone new is the Chats page search.
                         Section("Results") {
-                            ForEach(results) { user in
-                                // Search finds STRANGERS — honor their Profile Picture audience
-                                // (photo hidden unless they allow non-contacts; a shared chat
-                                // qualifies as contact).
-                                Button { start(user) } label: {
-                                    personRow(name: user.name.isEmpty ? user.handle : user.name,
-                                              handle: user.handle,
-                                              photo: PrivacyPrefs.allows(user.privacy, "photo",
-                                                                          contactOfMine: PrivacyPrefs.mayViewPhotoOf(user.id))
-                                                     ? user.photoUrl : nil,
-                                              uid: user.id)
-                                }
-                                .modifier(ForwardRowSpacing())
-                            }
-                            if results.isEmpty {
-                                if searching {
-                                    ChatListSkeleton()   // shimmer rows instead of a spinner
-                                } else {
-                                    Text("No one found for “\(query)”").foregroundStyle(.secondary)
-                                }
+                            ForEach(localMatches) { conv in personButton(conv) }
+                            if localMatches.isEmpty {
+                                Text("No chats match “\(query)”").foregroundStyle(.secondary)
                             }
                         }
                     } else if sections.isEmpty {
-                        EmptyStateView(title: "Start a new chat", icon: "square.and.pencil",
-                                       text: "Search a username to message someone.")
+                        EmptyStateView(title: "No chats yet", icon: "square.and.pencil",
+                                       text: "To find someone new, search their username on the Chats page.")
                     } else {
                         ForEach(sections, id: \.letter) { section in
                             Section(section.letter) {
@@ -192,20 +189,6 @@ struct NewChatView: View {
                 NewContactView { t in showNewContact = false; dismiss(); onOpen(t) }
             }
             .task { await loadHandles() }
-            .onChange(of: query) { _, q in
-                let trimmed = q.trimmingCharacters(in: .whitespaces)
-                guard !trimmed.isEmpty else { results = []; searching = false; return }
-                searching = true
-                Task {
-                    var r = await ChatService.searchUsers(prefix: trimmed)
-                    if r.isEmpty, let exact = await ChatService.findByHandle(trimmed) { r = [exact] }
-                    await MainActor.run {
-                        guard query.trimmingCharacters(in: .whitespaces) == trimmed else { return }
-                        results = r
-                        searching = false
-                    }
-                }
-            }
         }
     }
 
