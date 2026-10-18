@@ -92,9 +92,25 @@ enum DataExport {
         out += "BLOCKED ACCOUNTS\n"
         let blocked = BlockList.shared.entries.keys.sorted()
         if blocked.isEmpty { out += "  None\n" }
+        // ⛔ NEVER THE ACCOUNT ID — owner 2026-10-18: a blocked person who was not in this phone's
+        // profile cache came out as their raw uid, someone else's internal identifier in my file. The
+        // name and @username are fetched when not cached; when neither can be read, plain words.
         for b in blocked {
-            let p = await ProfileStore.shared.cachedPeer(b)
-            out += "  " + (p.map { "@\($0.handle)" } ?? b) + "\n"
+            var name = "", handle = ""
+            if let p = await ProfileStore.shared.cachedPeer(b) {
+                name = p.name; handle = p.handle
+            } else if let p = await ProfileStore.shared.fetch(b) {
+                name = p.name; handle = p.handle
+            }
+            let line: String = {
+                switch (name.isEmpty, handle.isEmpty) {
+                case (false, false): return "\(name) (@\(handle))"
+                case (true, false):  return "@\(handle)"
+                case (false, true):  return name
+                default:             return "An account you blocked"
+                }
+            }()
+            out += "  \(line)\n"
         }
         out += "\n"
 
