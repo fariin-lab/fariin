@@ -4621,8 +4621,12 @@ struct ChatRow: View, Equatable {
                         VerifiedMark(uid: conv.otherUid(me), size: 15)
                     }
                     if muted {
-                        Image(systemName: "bell.slash.fill")
-                            .font(.system(size: 11)).foregroundStyle(.tertiary)
+                        // His icon, a little bigger than the 11 pt symbol it replaces (owner 2026-10-18).
+                        Image("ic_bell_muted")
+                            .renderingMode(.template)
+                            .resizable().scaledToFit()
+                            .frame(width: 15, height: 15)
+                            .foregroundStyle(.tertiary)
                     }
                     Spacer(minLength: 8)
                     Text(timeStr)
