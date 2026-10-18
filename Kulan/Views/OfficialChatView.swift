@@ -1275,11 +1275,10 @@ private struct InviteShareSheet: View {
     @Environment(\.dismiss) private var dismiss
     private var profile = ProfileStore.shared
 
-    private var inviteText: String { InviteShare.text }   // with the profile link (2026-10-15)
-
     var body: some View {
-        // The header shows the Fariin mark, not the system's text icon (2026-09-25).
-        ShareSheet(items: [InviteActivityItem(text: inviteText)])
+        // The header shows the Fariin mark, not the system's text icon (2026-09-25); sentence and
+        // link go as two items so Messages draws the link card (2026-10-18).
+        ShareSheet(items: InviteShare.items)
     }
 }
 

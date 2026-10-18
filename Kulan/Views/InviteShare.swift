@@ -16,11 +16,18 @@ enum InviteShare {
     /// Now it ends with my profile page (fariin.com/u/<handle>, which has its own title and
     /// picture for the preview and opens a chat with me in the app), or the home page without a
     /// username.
-    static var text: String {
+    static var link: URL {
         let h = ProfileStore.shared.me?.handle ?? ""
-        return h.isEmpty ? "Chat with me on Fariin: \(KulanApp.linkHost)"
-                         : "Chat with me on Fariin: \(KulanApp.userLink(handle: h))"
+        return URL(string: h.isEmpty ? KulanApp.linkHost : KulanApp.userLink(handle: h))
+            ?? URL(string: KulanApp.linkHost)!
     }
+
+    /// ⛔ SENTENCE AND LINK ARE TWO ITEMS — owner 2026-10-18: in Messages our invite was bare text
+    /// while other messengers showed a big card. Messages only builds the card (the page's
+    /// og:title + og:image) for a URL item; a link typed inside a String stays plain words.
+    static let sentence = "Let's chat on Fariin. Here's my link"
+
+    static var items: [Any] { [InviteActivityItem(), link] }
 
     static let title = "Invite to Fariin"
 
@@ -35,17 +42,17 @@ enum InviteShare {
             .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.rootViewController
         while let p = top?.presentedViewController { top = p }
         guard let top else { return }
-        let vc = UIActivityViewController(activityItems: [InviteActivityItem()], applicationActivities: nil)
+        let vc = UIActivityViewController(activityItems: items, applicationActivities: nil)
         vc.popoverPresentationController?.sourceView = top.view
         top.present(vc, animated: true)
     }
 }
 
-/// The same invite for `UIActivityViewController`: the text is what is shared, the metadata is only
-/// the sheet's header.
+/// The invite's sentence for `UIActivityViewController` (the link rides beside it as a URL item);
+/// the metadata is only the sheet's header.
 final class InviteActivityItem: NSObject, UIActivityItemSource {
     private let text: String
-    init(text: String = InviteShare.text) { self.text = text }
+    init(text: String = InviteShare.sentence) { self.text = text }
 
     func activityViewControllerPlaceholderItem(_ controller: UIActivityViewController) -> Any { text }
 
