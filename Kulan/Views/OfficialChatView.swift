@@ -601,6 +601,18 @@ struct OfficialChatInfoView: View {
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        // ⛔ ADD A FARIIN STORY — owner 2026-10-18, top right circled. Admins who may post only; it
+        // opens the normal camera and editor, and the last step is Fariin's (OfficialStoryCompose).
+        .toolbar {
+            if AdminStore.shared.can(.send) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { OfficialStoryCompose.open() } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel("Add Fariin story")
+                }
+            }
+        }
         .navigationDestination(isPresented: $showAllMedia) {
             OfficialMediaGrid(items: media) { zoomed = $0 }
         }

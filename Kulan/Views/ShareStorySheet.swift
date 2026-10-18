@@ -477,6 +477,17 @@ struct ShareStorySheet: View {
     }
 
     var body: some View {
+        // ⛔ FARIIN'S LAST STEP — owner 2026-10-18. The camera opened from the "+" on Fariin's page
+        // (`OfficialStoryCompose`): no audience (a Fariin story is for everyone), a link and how long
+        // it stays up instead. Never for an edit or a repost.
+        if OfficialStoryCompose.active, editing == nil, repostOf == nil {
+            OfficialStoryForm(image: image, video: video, caption: caption, extras: extras, onPosted: onPosted)
+        } else {
+            standardBody
+        }
+    }
+
+    private var standardBody: some View {
         NavigationStack {
             List {
                 Section {
@@ -1103,3 +1114,103 @@ struct ShareStorySheet: View {
     }
 }
 
+/// Fariin's form at the end of the normal story flow (see `OfficialStoryCompose`). The words are the
+/// admin panel's own: a button label and its link, both or neither, and how long it stays up.
+private struct OfficialStoryForm: View {
+    let image: Data
+    let video: StoryVideoPayload?
+    let caption: String
+    let extras: [StoryExtra]
+    let onPosted: () -> Void
+
+    @State private var draft = OfficialStoryCompose.Draft()
+    @State private var posting = false
+    @State private var error: String?
+
+    private var preparing: Bool { image.isEmpty && video == nil }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Learn more", text: $draft.buttonText)
+                        .textInputAutocapitalization(.sentences)
+                    TextField("https://", text: $draft.buttonUrl)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                } header: {
+                    Text("Button").textCase(nil)
+                } footer: {
+                    Text("Optional. A button at the bottom of the story that opens this link. The link starts with https:// or kulan://")
+                }
+                Section {
+                    Picker("Stays up", selection: $draft.hours) {
+                        ForEach(OfficialStoryCompose.hourChoices, id: \.self) { Text("\($0) h").tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Stays up").textCase(nil)
+                } footer: {
+                    Text("Everyone sees it, as Fariin, until it comes down.")
+                }
+                if let error {
+                    Section { Text(error).foregroundStyle(.red).font(.footnote) }
+                }
+            }
+            .navigationTitle("Post as Fariin")
+            .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom) {
+                Button { post() } label: {
+                    Group {
+                        if posting || preparing { ProgressView().tint(.white) }
+                        else { Text("Post Story").font(.headline) }
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity).frame(height: 52)
+                    .background(Color.blue, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(posting || preparing)
+                .padding(.horizontal, 16).padding(.vertical, 10)
+            }
+        }
+        .presentationDetents([.large])
+        .interactiveDismissDisabled(posting)
+    }
+
+    /// Posted here, not in the background like a person's story: the server can refuse (a bad link,
+    /// a permission taken away), and the admin has to see that sentence on this sheet.
+    private func post() {
+        let t = draft.buttonText.trimmingCharacters(in: .whitespaces)
+        let u = draft.buttonUrl.trimmingCharacters(in: .whitespaces)
+        if t.isEmpty != u.isEmpty {
+            error = t.isEmpty ? "Give the button a label, like \"Learn more\"." : "Give the button a link."
+            return
+        }
+        posting = true; error = nil
+        Task { @MainActor in
+            do {
+                if let video {
+                    try await OfficialStoryCompose.postVideo(video, caption: caption, draft: draft)
+                } else {
+                    try await OfficialStoryCompose.postPhoto(image, caption: caption, draft: draft)
+                }
+                // The rest of a multi-pick, in order, each with its own caption, the same draft.
+                for e in extras {
+                    if let v = e.video {
+                        try await OfficialStoryCompose.postVideo(v, caption: e.caption, draft: draft)
+                    } else if let p = e.photo {
+                        try await OfficialStoryCompose.postPhoto(p, caption: e.caption, draft: draft)
+                    }
+                }
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                posting = false
+                onPosted()
+            } catch {
+                posting = false
+                self.error = error.localizedDescription
+            }
+        }
+    }
+}

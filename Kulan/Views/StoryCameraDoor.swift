@@ -231,6 +231,7 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
     /// raised down with it, in one animation, whether or not an editor is open. The nil-coalesce
     /// keeps the old behaviour for the case the door is ever used with nothing presenting it.
     static func close() {
+        OfficialStoryCompose.end()   // Fariin's form is for the camera the "+" opened, no other
         guard let host = presented else { return }
         presented = nil
         (host.presentingViewController ?? host).dismiss(animated: true)
@@ -245,6 +246,7 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
     /// then the camera and everything it raised are taken down with no animation, so the real app is
     /// already standing under the copies when they start to move. The ✕ keeps `close()`.
     static func closeAfterPost() {
+        OfficialStoryCompose.end()
         let source = StoryPostFlight.takePending()
         guard let host = presented else { return }
         var top: UIViewController = host
