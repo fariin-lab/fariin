@@ -1766,14 +1766,13 @@ service cloud.firestore {
             // alone, this also caught a recipient who had already replied (older builds let them
             // type into a request), so their phone could never write the `accepted` their reply
             // stood for, and the chat stayed a request forever (see `healAnsweredRequests`).
+            // ⛔ 2026-10-18 owner: the starter is no longer held to one message, so the clause that
+            // froze `lastMessage`/`lastSender` for them is gone. `accepted` stays theirs to never
+            // write (below), and `startedBy` stays pinned (the one-way door further down).
             && (
               !isRequestPending()
               || request.auth.uid != resource.data.get('startedBy', '')
-              || request.auth.uid != resource.data.get('lastSender', '')
-              || !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-                   'lastMessage', 'lastSender', 'lastImageUrl', 'lastImageEnc', 'lastImages',
-                   'accepted', 'startedBy'
-                 ])
+              || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['startedBy'])
             )
             // 1:1 audit r2 G1, 2026-10-08: the clause above lets the starter through while
             // `lastSender` is still empty (a fresh request), so a stranger could accept their own
@@ -2169,15 +2168,10 @@ service cloud.firestore {
           // Announcement mode: when onlyAdminsSend is set, only admins may create messages.
           && (convData().get('onlyAdminsSend', false) == false
               || request.auth.uid in convData().get('admins', []))
-          // A pending request carries ONE message. `lastSender` is empty until the request is sent,
-          // so the first message passes; after that only the RECIPIENT may write, and their reply is
-          // itself the acceptance. The requester's second attempt is refused here, by the database.
-          && (
-               convData().get('startedBy', '') == ''
-               || convData().get('accepted', false) == true
-               || convData().get('lastSender', '') == ''
-               || convData().get('lastSender', '') != request.auth.uid
-             )
+          // ⛔ NO ONE-MESSAGE LIMIT ON A REQUEST — owner 2026-10-18: it made a new app hard to
+          // start on. The starter may keep writing; the other person still decides with Accept /
+          // Delete / Block, and "My Friends" privacy plus the day's new-chat count still hold on
+          // the first message (below).
           // A REQUEST IS ONE SHORT TEXT — owner's spec, 2026-09-11 §9, and the database says so.
           //
           // The one message a pending conversation accepts may carry no media of any kind: none of
@@ -2199,16 +2193,8 @@ service cloud.firestore {
           && (
                !isPendingFirstMessage()
                || (
-                    request.resource.data.text is string
-                    && request.resource.data.text.size() <= 880
-                    && !request.resource.data.keys().hasAny([
-                         'type', 'imageUrl', 'audioUrl', 'videoUrl', 'fileUrl', 'fileName',
-                         'fileSize', 'album', 'albumSizes', 'thumb', 'thumbUrl', 'thumbEnc',
-                         'blurhash', 'width', 'height', 'duration', 'waveform', 'viewOnce',
-                         'callerUid', 'callOutcome', 'linkPreview', 'sticker', 'gif', 'location',
-                         'poll', 'contact'
-                       ])
-                    && acceptsFromStrangers(otherHalf())
+                    // 2026-10-18 owner: no longer text-only and 150 characters; any message.
+                    acceptsFromStrangers(otherHalf())
                     // ...and not more knocks today than `requests_per_day_default` (20, or the
                     // number in `config/limits`). A person does not open twenty new chats with
                     // strangers in a day; a script does. FAILS OPEN when the counter was never
