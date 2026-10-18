@@ -1504,7 +1504,7 @@ struct NewAudienceButton: UIViewRepresentable {
         custom.attributes = canAddCustom ? [] : [.disabled]
         let oneTime = UIAction(title: "One-Time Story",
                                subtitle: "Can only be viewed once by each recipient.",
-                               image: UIImage(systemName: "flame")) { _ in
+                               image: Self.menuIcon(symbol: "flame")) { _ in
             context.coordinator.onOneTime?()
         }
         // Nil handler == this screen cannot post, only manage audiences. Visible, and dimmed.
@@ -1527,17 +1527,34 @@ struct NewAudienceButton: UIViewRepresentable {
     /// drawing is fitted inside that box, so a square icon fills it and a tall one is not stretched.
     /// Template mode so it tints with the menu label exactly as a symbol does — and so a disabled
     /// item greys the icon along with its text.
+    ///
+    /// 2026-10-18 (owner, both circled: "icons small, add size"): the flame's own menu size was the
+    /// box, and on a two-line item that reads tiny. Both are now fitted into one 24 pt box, the chat
+    /// menu's icon size, so they stay matched and grow together.
+    private static let menuIconBox = CGSize(width: 24, height: 24)
+
+    private static func menuIcon(symbol: String) -> UIImage? {
+        UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 19, weight: .regular))
+            .map { fit($0) }
+    }
+
     private static func menuIcon(_ name: String) -> UIImage? {
-        guard let raw = UIImage(named: name), raw.size.width > 0, raw.size.height > 0 else {
-            return UIImage(named: name)
-        }
-        let box = UIImage(systemName: "flame")?.size ?? CGSize(width: 22, height: 22)
+        guard let raw = UIImage(named: name) else { return nil }
+        return fit(raw)
+    }
+
+    private static func fit(_ raw: UIImage) -> UIImage? {
+        guard raw.size.width > 0, raw.size.height > 0 else { return raw }
+        let box = menuIconBox
         let scale = min(box.width / raw.size.width, box.height / raw.size.height)
         let fitted = CGSize(width: raw.size.width * scale, height: raw.size.height * scale)
         let format = UIGraphicsImageRendererFormat.preferred()
         format.opaque = false
-        let drawn = UIGraphicsImageRenderer(size: fitted, format: format).image { _ in
-            raw.draw(in: CGRect(origin: .zero, size: fitted))
+        // Centred in the full box, so a narrow drawing keeps the same column as a wide one.
+        let drawn = UIGraphicsImageRenderer(size: box, format: format).image { _ in
+            raw.withRenderingMode(.alwaysTemplate).draw(in: CGRect(x: (box.width - fitted.width) / 2,
+                                                                   y: (box.height - fitted.height) / 2,
+                                                                   width: fitted.width, height: fitted.height))
         }
         return drawn.withRenderingMode(.alwaysTemplate)
     }
