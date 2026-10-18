@@ -1649,34 +1649,11 @@ struct ContactInfoView: View {
     }
 
     // One tappable row: icon, title, optional trailing value, chevron. `tint` colors icon+title.
+    // The row itself is `ProfileInfoRow`, shared with the group info page.
     private func infoRow(_ title: String, _ icon: String, value: String? = nil,
                          tint: Color = .primary, chevron: Bool = true,
                          action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                // "ic_" names an asset-catalog glyph, anything else an SF Symbol. Same 26pt slot
-                // either way so the titles stay on one line no matter which kind a row uses.
-                Group {
-                    if icon.hasPrefix("ic_") {
-                        Image(icon).renderingMode(.template).resizable().scaledToFit()
-                            .frame(width: 21, height: 21)
-                    } else {
-                        Image(systemName: icon).font(.system(size: 17))
-                    }
-                }
-                .frame(width: 26)
-                .foregroundStyle(tint)
-                Text(title).foregroundStyle(tint)
-                Spacer()
-                if let value { Text(value).foregroundStyle(.secondary) }
-                if chevron {
-                    Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
-                }
-            }
-            .padding(.horizontal, 16).padding(.vertical, 18)   // the reference app's tall profile rows (~58pt)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        ProfileInfoRow(title: title, icon: icon, value: value, tint: tint, chevron: chevron, action: action)
     }
 
     /// The line between two rows of one card. The system's own `Divider` is resolved against the
@@ -2323,15 +2300,7 @@ struct ContactInfoView: View {
     ///
     /// 8 is the page's own rhythm, and it is the gap between every pair of tiles including the
     /// placeholders — evenly spaced was the other half of what he asked for.
-    private static let mediaTile: CGFloat = 84
-    private static let mediaTileRadius: CGFloat = 12
-    private static let mediaGap: CGFloat = 8
-    /// The card's inner margin, unchanged from the padding this card already had.
-    private static let mediaInset: CGFloat = 14
-
-    private var mediaTileShape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: Self.mediaTileRadius, style: .continuous)
-    }
+    /// (The four numbers live on `ProfileMediaCard` now, shared with the group info page.)
 
     /// ALL MEDIA AS ONE CONTAINER — his 2026-09-05 concept. The heading sits at the top left of the
     /// card and "See All ›" at the top right, on one line, with a single row of thumbnails beneath
@@ -2350,74 +2319,11 @@ struct ContactInfoView: View {
     ///
     /// Nothing about what a tile opens, or where the media comes from, is touched here.
     private var mediaCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Text("All Media").font(.headline)
-                Spacer(minLength: 8)
-                // Not its own button: the CARD takes the tap, as it always has, so the whole heading
-                // line opens the gallery rather than a few points of chevron.
-                HStack(spacing: 3) {
-                    Text("See All").font(.subheadline.weight(.medium)).foregroundStyle(.primary)
-                    Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
-                }
-            }
-            .padding(.horizontal, Self.mediaInset)
-            .padding(.top, Self.mediaInset)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Self.mediaGap) {
-                    // Reserved space, filled: while the real thumbnails load, the row holds the same
-                    // number of quiet placeholder tiles the chat had last time. The section's height
-                    // is therefore identical before and after the load, so nothing shifts.
-                    if media.isEmpty {
-                        ForEach(0..<min(mediaHint, 12), id: \.self) { _ in
-                            mediaTileShape
-                                .fill(Color.primary.opacity(0.07))
-                                .frame(width: Self.mediaTile, height: Self.mediaTile)
-                        }
-                    }
-                    ForEach(media.prefix(12)) { m in
-                        // Videos carry thumbUrl/thumbEnc (no imageUrl) — they were invisible here.
-                        if let url = m.imageUrl ?? m.thumbUrl {
-                            SecureImageView(imageUrl: url, enc: m.imageUrl != nil ? m.enc : m.thumbEnc, cid: cid)
-                                .frame(width: Self.mediaTile, height: Self.mediaTile)
-                                .clipShape(mediaTileShape)
-                                .contentShape(mediaTileShape)
-                                // Own namespace — the chat and All Media register these same ids.
-                                .modifier(MediaRectReporter(id: m.id, scope: .profile))
-                                // OPEN LIKE THE CHAT: fly the thumb's media out of its tile (one
-                                // pipeline, every entry point), falling back to a plain presentation.
-                                // The system .zoom here scaled the whole cover AND ran its own dismiss
-                                // pan alongside MediaDismissHost's.
-                                .onTapGesture {
-                                    let key = MediaOpenRects.key(.profile, m.id)
-                                    // Both cache tiers, not memory only — see flyOrPresent.
-                                    // Videos → the PLAYER (audit: they went to the image viewer,
-                                    // whose loader guards on imageUrl and spun forever).
-                                    MediaOpen.flyOrPresent(
-                                        imageUrl: url, rectKey: key,
-                                        present: { MediaPresentGate.present {
-                                            if m.isVideo { viewerVideo = m } else { viewerImage = m }
-                                        } })
-                                }
-                        }
-                    }
-                }
-                // The card's margin, carried by the CONTENT rather than by the scroll view — the
-                // leading 14 lines the first tile up under the heading, and the trailing 14 gives
-                // the last tile the same air once the row is scrolled to its end.
-                .padding(.horizontal, Self.mediaInset)
-            }
-            .padding(.bottom, Self.mediaInset)
-        }
-        // Clipped to the card's own shape, so a tile that runs past the right edge is cut by the
-        // card and not by open space. This has to come BEFORE the surface: the fill and its hairline
-        // are drawn behind and over the clipped content, so the card itself keeps its full size.
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .profileSurface(plain: cardColor)   // iOS 26 corners
-        // Tap anywhere on the CARD (heading line / background) → the full media page. The thumbnails'
-        // own tap wins over this for their area, so a photo tap opens just that photo.
-        .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .onTapGesture { showAllMedia = true }
+        // Shared with the group info page (`ProfileMediaCard`). Videos → the PLAYER (audit: they
+        // went to the image viewer, whose loader guards on imageUrl and spun forever).
+        ProfileMediaCard(cid: cid, media: media, hint: mediaHint, cardColor: cardColor,
+                         onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
+                         onSeeAll: { showAllMedia = true })
     }
 
     // MARK: - Logic

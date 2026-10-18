@@ -953,6 +953,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var onlyAdminsSend: Bool           // announcement mode: only admins may send (groups)
     var membersCanAdd: Bool            // group: non-admins may add members (default false)
     var membersCanEditInfo: Bool       // group: non-admins may edit name/photo/desc (default false)
+    var onlyAdminsCall = false         // group: only admins may START a call (joining stays open)
+    var memberLabels: [String: String] = [:]   // group: uid → the short tag shown under their name
     // Per-flag admin rights (the reference app model): uid → granted right slugs. An admin with NO entry
     // has ALL rights (legacy behaviour); the owner (createdBy) always has all. See Conversation.Right.
     var inviteCode: String             // group's current primary invite-link code ("" = none)
@@ -1058,6 +1060,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.onlyAdminsSend = data["onlyAdminsSend"] as? Bool ?? false
         self.membersCanAdd = data["membersCanAdd"] as? Bool ?? false
         self.membersCanEditInfo = data["membersCanEditInfo"] as? Bool ?? false
+        self.onlyAdminsCall = data["onlyAdminsCall"] as? Bool ?? false
+        self.memberLabels = (data["memberLabels"] as? [String: Any] ?? [:]).compactMapValues { $0 as? String }
+            .filter { !$0.value.isEmpty }
         self.inviteCode = data["inviteCode"] as? String ?? ""
         self.adminRights = stringArrayMap(data["adminRights"])
         self.startedBy = data["startedBy"] as? String ?? ""
@@ -1180,6 +1185,12 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// True if `uid` is fully muted (can't send any content) right now.
     func isMutedMember(_ uid: String, now: Double) -> Bool {
         activeRestrictions(uid, now: now).contains(Restrict.sendText.rawValue)
+    }
+
+    /// Group Settings "Start group call" (2026-10-18): with Admins only, a member may join a call
+    /// that is going but not start one (the server's `groupCallToken` and the rules say the same).
+    func canStartCall(_ me: String) -> Bool {
+        !isGroup || !onlyAdminsCall || admins.contains(me) || isOwner(me)
     }
 
     // Announcement mode: in a group with onlyAdminsSend, non-admins can't send. Also blocks a

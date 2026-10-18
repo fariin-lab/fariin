@@ -1295,26 +1295,12 @@ struct ThreadView: View {
         }
         .navigationDestination(isPresented: $showContactInfo) {
             if isGroup {
-                if Flags.groupsEnabled { GroupInfoView(cid: cid) }
+                if Flags.groupsEnabled { GroupInfoView(cid: cid, onSearch: { searchFromInfoPage() }) }
             } else {
                 // The conversation already carries their tall crop, so the header can draw it on the
                 // first frame instead of waiting for a fetch. Absent → falls back to the avatar.
                 ContactInfoView(cid: cid, name: title, photoUrl: photoUrl,
-                                posterUrl: conversation?.posterUrl(for: me), onSearch: {
-                    showContactInfo = false   // pop back to the chat…
-                    // …then open search once the pop has LANDED — owner, 2026-10-08: the keyboard came
-                    // in from the left, cut off. A fixed 0.35s fired while the iOS 26 pop was still
-                    // sliding, and a keyboard raised mid-transition rides it sideways. Wait for the
-                    // navigation transition itself to end (checked every 50ms, at most 1.5s).
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 100_000_000)   // let the pop begin
-                        for _ in 0..<28 {
-                            guard Self.navigationIsMoving() else { break }
-                            try? await Task.sleep(nanoseconds: 50_000_000)
-                        }
-                        activateSearch()
-                    }
-                })
+                                posterUrl: conversation?.posterUrl(for: me), onSearch: { searchFromInfoPage() })
             }
         }
         .confirmationDialog("\(title) asked you to turn off Restricted chat",
@@ -2061,7 +2047,9 @@ struct ThreadView: View {
                              canManageAdmins: (conversation?.createdBy == me && !(conversation?.createdBy.isEmpty ?? true)),
                              canRestrict: conversation?.adminCan(me, .banUsers) ?? false,
                              currentRights: conversation?.adminRights[m.id],
-                             mutedUntil: conversation?.restrictedUntil[m.id] ?? 0)
+                             mutedUntil: conversation?.restrictedUntil[m.id] ?? 0,
+                             label: conversation?.memberLabels[m.id] ?? "",
+                             canEditLabel: m.id == me || (conversation?.adminCan(me, .changeInfo) ?? false))
                 .presentationDetents([.medium, .large])
         }
         .fullScreenCover(isPresented: $showGroupCall) { GroupCallView() }
@@ -4920,12 +4908,30 @@ struct ThreadView: View {
                 video: { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl, video: true) },
                 callsEnabled: callsEnabled || liveWithThem)
         }
-        if isGroup && CallFeatures.groupCalls {
+        // Group Settings "Start group call: Admins only": a member joins from the Join bar instead.
+        if isGroup && CallFeatures.groupCalls && (conversation?.canStartCall(me) ?? true) {
             return .conversation(audio: { startGroupCall(video: false) },
                                  video: { startGroupCall(video: true) },
                                  callsEnabled: callsEnabled)
         }
         return .conversation(audio: nil, video: nil, callsEnabled: true)
+    }
+
+    /// The profile's (or the group info page's) Search button.
+    private func searchFromInfoPage() {
+        showContactInfo = false   // pop back to the chat…
+        // …then open search once the pop has LANDED — owner, 2026-10-08: the keyboard came
+        // in from the left, cut off. A fixed 0.35s fired while the iOS 26 pop was still
+        // sliding, and a keyboard raised mid-transition rides it sideways. Wait for the
+        // navigation transition itself to end (checked every 50ms, at most 1.5s).
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 100_000_000)   // let the pop begin
+            for _ in 0..<28 {
+                guard Self.navigationIsMoving() else { break }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            activateSearch()
+        }
     }
 
     private func startGroupCall(video: Bool) {

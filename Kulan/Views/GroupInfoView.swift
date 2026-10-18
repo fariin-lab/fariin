@@ -1,43 +1,48 @@
 import SwiftUI
-import PhotosUI
 import FirebaseFirestore
 
-// Group info: avatar (admin can change) + name (admin can rename), member list with Admin
-// badges, admin actions (add / remove / promote), and Leave. Live from ConversationsRepository.
+// ⛔ GROUP INFO, IN THE PERSON PROFILE'S DESIGN — owner 2026-10-18: "make it exactly the design the
+// user profile is using". The 1:1 page's own pieces (`ProfileInfoRow`, `ProfileMediaCard`,
+// `PosterActionIcon`, `profileSurface`) on the same grey page: the ROUND photo always (never the big
+// photo header; that is a person's), name and member count, the round actions, the description as an
+// About card (the Fariin official chat's), one settings card, All Media, the members, and the red
+// card. Who-can-do-what, admins, the member list and invites live on Group Settings
+// (`GroupSettingsView`), not here. Edit changes the name and the photo (`EditGroupView`).
 struct GroupInfoView: View {
     let cid: String
-    init(cid: String) { self.cid = cid }
+    /// The chat's search, opened from the round Search action (the profile's own wiring).
+    let onSearch: (() -> Void)?
+    init(cid: String, onSearch: (() -> Void)? = nil) { self.cid = cid; self.onSearch = onSearch }
     @Environment(\.dismiss) private var dismiss
     private var repo = ConversationsRepository.shared
     private var me: String { AuthService.shared.uid ?? "" }
 
-    @State private var showRename = false
-    @State private var newName = ""
     @State private var showDescEdit = false
     @State private var descText = ""
-    @State private var showMute = false
     @State private var showDisappear = false
-    @State private var avatarItem: PhotosPickerItem?
+    @State private var pendingDisappear: Int?   // chosen timer awaiting the "for all members" confirm
     @State private var showAdd = false
     @State private var memberAction: MemberAction?
     @State private var confirmLeave = false
     @State private var confirmClear = false
     @State private var confirmReport = false
-    @State private var media: [Message] = []
-    @State private var showAllMedia = false
-    @State private var uploadingAvatar = false
-    @State private var showCall = false
-    @State private var pendingDisappear: Int?   // chosen timer awaiting the "for all members" confirm
-    @State private var showInvite = false
-    @State private var joinReqs: [JoinRequest] = []
-    @State private var reqListener: ListenerRegistration?
     @State private var confirmDelete = false
     /// A refused Leave / Delete Group. Both used to close the page on `try?` whatever happened.
     @State private var actionError: String?
-    @State private var showGroupPhoto = false    // tap the poster → the same morph a person's photo uses
-    @State private var photoCloseTick = 0         // toolbar X → viewer close (see ProfilePhotoViewer.closeSignal)
-    @State private var posterRect: CGRect = .zero // poster photo's global square — the morph's start/end
-    @AppStorage(ProfileLayoutStyle.storageKey) private var profileLayout = ProfileLayoutStyle.modern.rawValue
+    @State private var media: [Message] = []
+    @State private var showAllMedia = false
+    @State private var viewerImage: Message?
+    @State private var viewerVideo: Message?
+    @State private var showCall = false
+    @State private var showInvite = false
+    @State private var showSounds = false
+    @State private var showSettings = false
+    @State private var showEdit = false
+    @State private var showGroupPhoto = false    // tap the photo → the same morph a person's photo uses
+    @State private var photoCloseTick = 0        // toolbar X → viewer close (see ProfilePhotoViewer.closeSignal)
+    @State private var avatarFrame: CGRect = .zero
+    @State private var memberQuery = ""
+    @State private var searchingMembers = false
 
     struct MemberAction: Identifiable { let id: String; let name: String; let isAdmin: Bool }
 
@@ -46,486 +51,335 @@ struct GroupInfoView: View {
     private var iAmOwner: Bool { conv?.createdBy == me && !(conv?.createdBy.isEmpty ?? true) }
     // Per-flag admin right check (owner = all; legacy admin with no adminRights entry = all).
     private func can(_ r: Conversation.Right) -> Bool { conv?.adminCan(me, r) ?? false }
-    // An admin with the matching right can; members can too when the group's permission toggle is on.
+    // An admin with the matching right can; members can too when the group's permission is on.
     private var canEditInfo: Bool { can(.changeInfo) || (conv?.membersCanEditInfo ?? false) }
     private var canAdd: Bool { can(.inviteUsers) || (conv?.membersCanAdd ?? false) }
-
-    /// A group needs no index lookup: its photo lives on the conversation document itself, which is
-    /// the authority AND is already on this device through the live listener. But it needs the same
-    /// last question a person's profile asks — is there a PICTURE behind that url — because a url
-    /// whose file is gone would otherwise draw a letter where a face should be. Groups with no photo,
-    /// and plenty have none, keep the round avatar and its camera badge.
-    ///
-    /// (A person's profile is the hard case, because it is opened with a MIRROR of their photo rather
-    /// than their own record. That is what [ProfilePhotoIndex] is for.)
-    private var useModernHeader: Bool {
-        ProfileLayoutStyle.resolved(profileLayout) == .modern
-            && ProfilePhotoIndex.hasPicture(conv?.avatarUrl)
-    }
+    private var title: String { conv?.title ?? "Group" }
+    private var muted: Bool { conv?.isMuted(me, now: Date().timeIntervalSince1970 * 1000) ?? false }
+    private var cardColor: Color { Color(uiColor: .secondarySystemGroupedBackground) }
 
     var body: some View {
-        Group {   // pushed from the chat header → uses the parent nav bar (no nested stack)
-            groupBody
-                .alert("Rename group", isPresented: $showRename) {
-                    TextField("Group name", text: $newName)
-                    Button("Save") { let t = newName; Task { try? await ChatService.renameGroup(cid: cid, title: t) } }
-                    Button("Cancel", role: .cancel) {}
-                }
-                .alert("Group description", isPresented: $showDescEdit) {
-                    TextField("Description", text: $descText)
-                    Button("Save") { let t = descText; Task { try? await ChatService.setGroupDescription(cid: cid, text: t) } }
-                    Button("Cancel", role: .cancel) {}
-                }
-                .confirmationDialog("Mute Notifications", isPresented: $showMute, titleVisibility: .visible) {
-                    Button("Mute for 1 hour")  { Task { await ChatService.setMute(cid, until: ChatService.muteUntil(1)) } }
-                    Button("Mute for 8 hours") { Task { await ChatService.setMute(cid, until: ChatService.muteUntil(8)) } }
-                    Button("Mute for 1 week")  { Task { await ChatService.setMute(cid, until: ChatService.muteUntil(168)) } }
-                    Button("Mute Always")      { Task { await ChatService.setMute(cid, until: ChatService.muteUntil(nil)) } }
-                    Button("Unmute")           { Task { await ChatService.setMute(cid, until: 0) } }
-                    Button("Cancel", role: .cancel) {}
-                }
-                .confirmationDialog("Disappearing Messages", isPresented: $showDisappear, titleVisibility: .visible) {
-                    // Off is safe → applies directly; turning ON confirms first (deletes for everyone).
-                    Button("Off")     { Task { await ChatService.setDisappear(cid, seconds: 0) } }
-                    Button("1 Day")   { pendingDisappear = 86_400 }
-                    Button("1 Week")  { pendingDisappear = 604_800 }
-                    Button("Cancel", role: .cancel) {}
-                }
-                .alert("Turn on disappearing messages?", isPresented: Binding(
-                    get: { pendingDisappear != nil },
-                    set: { if !$0 { pendingDisappear = nil } }
-                )) {
-                    Button("Cancel", role: .cancel) { pendingDisappear = nil }
-                    Button("Turn On") {
-                        if let s = pendingDisappear { Task { await ChatService.setDisappear(cid, seconds: s) } }
-                        pendingDisappear = nil
-                    }
-                } message: {
-                    Text("New messages in this group will be deleted for ALL members after \(ChatService.disappearLabel(pendingDisappear ?? 86_400)). Everyone will see that you turned this on.")
-                }
-        }
-    }
-
-    // Split out so the body's modifier chain stays small enough for the type-checker.
-    private var groupBody: some View {
-        List {
-            headerSection
-            settingsSection
-            if can(.inviteUsers) && !joinReqs.isEmpty { joinRequestsSection }
-            mediaSection
-            membersSection
-            leaveSection
-        }
-        // Named so the poster can read its own offset and stretch on a rubber-band pull.
-        .coordinateSpace(name: "groupScroll")
-        .navigationTitle("Group Info")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar { toolbarContent }
-        // Tap the poster → the same in-place morph a person's photo uses: it grows out of the header
-        // and the drag-down flies back into it. An overlay, not a cover, so the page stays behind.
-        .overlay {
-            if showGroupPhoto {
-                ProfilePhotoViewer(name: conv?.title ?? "Group", photoUrl: conv?.avatarUrl ?? "",
-                                   sourceFrame: posterRect, poster: true,
-                                   closeSignal: photoCloseTick,
-                                   isPresented: $showGroupPhoto)
-                    .ignoresSafeArea()
-            }
-        }
-        .navigationBarBackButtonHidden(showGroupPhoto)
-        // Same rule as ContactInfoView: the top strip belongs to the navigation bar, which sits
-        // above the viewer overlay and eats its touches — so the viewer's X is a bar item here,
-        // wired to the viewer through closeSignal.
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
+        page
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { toolbarContent }
+            .navigationBarBackButtonHidden(showGroupPhoto)
+            .overlay {
                 if showGroupPhoto {
-                    Button { photoCloseTick &+= 1 } label: {
-                        Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
-                    }
-                    .tint(.primary)
+                    ProfilePhotoViewer(name: title, photoUrl: conv?.avatarUrl ?? "",
+                                       sourceFrame: avatarFrame, poster: false,
+                                       closeSignal: photoCloseTick,
+                                       isPresented: $showGroupPhoto)
+                        .ignoresSafeArea()
                 }
             }
-        }
-        .onAppear {
-            guard reqListener == nil else { return }
-            reqListener = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
-        }
-        .onDisappear { reqListener?.remove(); reqListener = nil }
-        .sheet(isPresented: $showInvite) {
-            InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
-                            initialCode: conv?.inviteCode ?? "")
-                .presentationDetents([.medium, .large])
-        }
-        .sheet(item: $memberAction) { m in
-            GroupMemberSheet(cid: cid, member: m, iAmAdmin: iAmAdmin, ownerUid: conv?.createdBy ?? "",
-                             canManageAdmins: iAmOwner, canRestrict: can(.banUsers),
-                             currentRights: conv?.adminRights[m.id], mutedUntil: conv?.restrictedUntil[m.id] ?? 0)
-                .presentationDetents([.medium, .large])
-        }
-        .confirmationDialog("Leave this group?", isPresented: $confirmLeave, titleVisibility: .visible) {
-            Button("Leave", role: .destructive) {
-                // Close only on success (audit, 2026-09-24): a refused leave was swallowed by `try?`
-                // and the page closed anyway, so he believed he had left a group he was still in.
-                Task {
-                    do {
-                        try await ChatService.leaveGroup(cid: cid)
-                        await MainActor.run { dismiss() }
-                    } catch {
-                        let msg = error.localizedDescription
-                        await MainActor.run { actionError = msg }
-                    }
+            .modifier(GroupInfoDialogs(cid: cid, showDescEdit: $showDescEdit, descText: $descText,
+                                       showDisappear: $showDisappear, pendingDisappear: $pendingDisappear))
+            .modifier(GroupInfoExits(cid: cid, conv: conv, me: me,
+                                     confirmLeave: $confirmLeave, confirmClear: $confirmClear,
+                                     confirmReport: $confirmReport, confirmDelete: $confirmDelete,
+                                     actionError: $actionError, onGone: { dismiss() }))
+            .sheet(isPresented: $showInvite) {
+                InviteLinkSheet(cid: cid, groupTitle: title, groupPhoto: conv?.avatarUrl,
+                                initialCode: conv?.inviteCode ?? "")
+                    .presentationDetents([.medium, .large])
+            }
+            .sheet(item: $memberAction) { m in memberSheet(m) }
+            .sheet(isPresented: $showAdd) { AddMembersSheet(cid: cid, existing: Set(conv?.users ?? [])) }
+            .sheet(isPresented: $showEdit) {
+                EditGroupView(cid: cid, title: title, photoUrl: conv?.avatarUrl)
+            }
+            .fullScreenCover(item: $viewerImage) { msg in
+                ImageViewerView(message: msg, cid: cid, rectScope: .profile)
+            }
+            .fullScreenCover(item: $viewerVideo) { msg in
+                VideoPlayerScreen(message: msg, cid: cid, clipProvider: { nil }, rectScope: .profile)
+            }
+            .navigationDestination(isPresented: $showAllMedia) {
+                MediaGalleryView(cid: cid, title: title, photoUrl: conv?.avatarUrl)
+            }
+            .navigationDestination(isPresented: $showSounds) { SoundsNotificationsView(cid: cid) }
+            .navigationDestination(isPresented: $showSettings) { GroupSettingsView(cid: cid) }
+            .fullScreenCover(isPresented: $showCall) { GroupCallView() }
+            // Local first (offline + instant), then the server; a failed load leaves what we have.
+            .task {
+                if let local = ThreadMessageCache.shared.messages(for: cid) {
+                    let localMedia = local
+                        .filter { $0.isImage || $0.isVideo || $0.isAlbum }
+                        .reversed()
+                        .flatMap { $0.expandedGalleryItems(cid: cid) }
+                    if !localMedia.isEmpty { media = Array(localMedia) }
                 }
+                if let fresh = await ChatService.sharedMedia(cid) { media = fresh }
             }
-            Button("Cancel", role: .cancel) {}
-        }
-        .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
-                                                          set: { if !$0 { actionError = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: { Text(actionError ?? "") }
-        .sheet(isPresented: $showAdd) {
-            AddMembersSheet(cid: cid, existing: Set(conv?.users ?? []))
-        }
-        .onChange(of: avatarItem) { _, item in
-            guard let item else { return }
-            Task {
-                await MainActor.run { uploadingAvatar = true }
-                if let d = try? await item.loadTransferable(type: Data.self) {
-                    try? await ChatService.uploadGroupAvatar(cid: cid, data: d)
-                }
-                // Reset so re-picking (even the same photo) fires onChange again (WallpaperPickerSheet pattern).
-                await MainActor.run { uploadingAvatar = false; avatarItem = nil }
-            }
-        }
-        // Local first (offline + instant), then the server; a failed load leaves what we have rather
-        // than emptying the section — see ContactInfoView.load for the whole story.
-        .task {
-            if let local = ThreadMessageCache.shared.messages(for: cid) {
-                let localMedia = local
-                    .filter { $0.isImage || $0.isVideo || $0.isAlbum }
-                    .flatMap { $0.expandedGalleryItems(cid: cid) }
-                    .reversed()
-                if !localMedia.isEmpty { media = Array(localMedia) }
-            }
-            if let fresh = await ChatService.sharedMedia(cid) { media = fresh }
-        }
-        // MediaGalleryView, like the 1:1 profile (audit): SharedMediaGridView renders only items with
-        // an imageUrl, so group VIDEOS vanished from the grid entirely, and any that were reachable
-        // opened in the image viewer — the endless-spinner routing already fixed on the profile page.
-        .sheet(isPresented: $showAllMedia) {
-            NavigationStack {
-                MediaGalleryView(cid: cid, title: conv?.title ?? "Group", photoUrl: conv?.avatarUrl)
-            }
-        }
-        .fullScreenCover(isPresented: $showCall) { GroupCallView() }
     }
 
-    @ViewBuilder private var headerSection: some View {
-        if useModernHeader {
-            Section {
-                groupPoster
-                    // Edge to edge: the row's own insets would frame the photo like a card.
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-            }
-        } else {
-            classicHeaderSection
+    private var page: some View {
+        ScrollView {
+            VStack(spacing: 20) { AnyView(sections) }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
+        }
+        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+    }
+
+    @ViewBuilder private var sections: some View {
+        hero
+        actionsRow
+        if showsAbout { aboutCard.padding(.top, 8) }
+        settingsCard.padding(.top, 8)
+        if !media.isEmpty {
+            ProfileMediaCard(cid: cid, media: media, cardColor: cardColor,
+                             onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
+                             onSeeAll: { showAllMedia = true })
+                .padding(.top, 8)
+        }
+        membersBlock.padding(.top, 12)
+        dangerCard.padding(.top, 8)
+        if let label = createdByLabel {
+            Text(label).font(.footnote).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity).multilineTextAlignment(.center)
         }
     }
 
-    private var groupPoster: some View {
-        ProfilePosterHeader(
-            name: conv?.title ?? "Group",
-            photoUrl: conv?.avatarUrl,
-            scrollSpace: "groupScroll",
-            onPhotoRect: { posterRect = $0 },
-            onTap: { showGroupPhoto = true },
-            // No layout feedback from the download: the conversation document already said whether
-            // there is a photo, and a failed fetch means offline as often as it means gone.
-            photoHidden: showGroupPhoto,
-            // This page is a List, and a List clips its rows. Running the photo up under the bars
-            // the way a person's profile does would have it sliced off at the row's top edge, so
-            // here it starts below them. Everything else — the square, the wash, the join into the
-            // page — is the same header.
-            bleedUnderBars: false,
-            edgeBleed: 0,
-            caption: { groupCaption($0) },
-            actions: { groupGlassActions }
-        )
-    }
+    // MARK: Header
 
-    /// Name, member count and description, over the photo. Same content the round header showed,
-    /// including the admin's "add a description" prompt — nothing moved into a menu.
-    private func groupCaption(_ text: Color) -> some View {
-        VStack(spacing: 3) {
-            Text(conv?.title ?? "Group").font(.title.weight(.bold)).foregroundStyle(text)
+    /// The profile's round header (`ContactInfoView.hero`'s numbers): the 120pt circle, the name,
+    /// and the member count where a person's @handle sits.
+    private var hero: some View {
+        VStack(spacing: 6) {
+            AvatarView(name: title, photoUrl: conv?.avatarUrl, size: 120)
+                .opacity(showGroupPhoto ? 0 : 1)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { avatarFrame = $0 }
+                .contentShape(Circle())
+                .onTapGesture {
+                    if ProfilePhotoIndex.hasPicture(conv?.avatarUrl) { showGroupPhoto = true }
+                }
+            Text(title).font(.title.weight(.bold))
                 .lineLimit(2).multilineTextAlignment(.center)
-            Text(conv?.memberCountLabel ?? " ").font(.subheadline).foregroundStyle(text.opacity(0.82))
-                .frame(minHeight: 20)
-            if let d = conv?.groupDescription, !d.isEmpty {
-                Text(d).font(.footnote).foregroundStyle(text.opacity(0.82))
-                    .multilineTextAlignment(.center)
-                    .padding(.top, 2)
-                    .onTapGesture { if canEditInfo { descText = d; showDescEdit = true } }
-            } else if canEditInfo {
-                Button("Add group description…") { descText = ""; showDescEdit = true }
-                    .font(.footnote).foregroundStyle(text.opacity(0.82))
-                    .padding(.top, 2)
-            }
+            Text(conv?.memberCountLabel ?? " ")
+                .font(.body).foregroundStyle(.secondary)
+                .frame(minHeight: 22)
         }
         .frame(maxWidth: .infinity)
+        .padding(.top, 20)
+        .padding(.bottom, 14)
     }
 
-    /// The group's three actions as circles, plus the photo picker for anyone allowed to change it.
-    /// The camera used to be a badge on the corner of the round avatar; a poster has no corner to
-    /// hang it on, so it becomes a peer of the others rather than a new place to hunt for.
-    private var groupGlassActions: some View {
+    /// The profile's five round actions: add a member, video call, mute, search, more.
+    private var actionsRow: some View {
         HStack(spacing: 0) {
-            if CallFeatures.groupCalls {
-                Button { startCall(video: false) } label: { PosterActionIcon(icon: "phone.fill") }.tint(.primary)
-                Button { startCall(video: true) } label: { PosterActionIcon(icon: "video.fill") }.tint(.primary)
+            if canAdd {
+                Button { showAdd = true } label: { PosterActionIcon(icon: "person.badge.plus", onPhoto: false) }
+                    .tint(.primary)
+                    .accessibilityLabel("Add Members")
             }
-            Button { showMute = true } label: { PosterActionIcon(icon: "ic_bell_off") }.tint(.primary)
-            if canEditInfo {
-                PhotosPicker(selection: $avatarItem, matching: .images) {
-                    ZStack {
-                        PosterActionIcon(icon: "camera.fill").opacity(uploadingAvatar ? 0.35 : 1)
-                        if uploadingAvatar { ProgressView() }
-                    }
-                }
-                .buttonStyle(.plain)
-                .disabled(uploadingAvatar)
+            if mayCall {
+                Button { startCall(video: true) } label: { PosterActionIcon(icon: "video.fill", onPhoto: false) }
+                    .tint(.primary)
+                    .accessibilityLabel("Video call")
+            }
+            Menu { muteMenuItems } label: {
+                PosterActionIcon(icon: muted ? "ic_bell" : "ic_bell_off", onPhoto: false)
+            }
+            .tint(.primary)
+            .accessibilityLabel(muted ? "Unmute" : "Mute")
+            if let onSearch {
+                Button { onSearch() } label: { PosterActionIcon(icon: "magnifyingglass", onPhoto: false) }
+                    .tint(.primary)
+                    .accessibilityLabel("Search")
+            }
+            Menu { moreMenuItems } label: { PosterActionIcon(icon: "ellipsis", onPhoto: false) }
+                .tint(.primary)
+                .accessibilityLabel("More")
+        }
+    }
+
+    private var mayCall: Bool { CallFeatures.groupCalls && (conv?.canStartCall(me) ?? false) }
+
+    @ViewBuilder private var muteMenuItems: some View {
+        if muted {
+            Section(muteUntilLabel) {
+                Button("Unmute") { Task { await ChatService.setMute(cid, until: 0) } }
+            }
+        } else {
+            Section("Mute this chat for…") {
+                Button("1 hour") { setMuted(ChatService.muteUntil(1)) }
+                Button("8 hours") { setMuted(ChatService.muteUntil(8)) }
+                Button("1 day") { setMuted(ChatService.muteUntil(24)) }
+                Button("1 week") { setMuted(ChatService.muteUntil(168)) }
+                Button("Always") { setMuted(ChatService.muteUntil(nil)) }
             }
         }
     }
 
-    private var classicHeaderSection: some View {
-        Section {
-            VStack(spacing: 10) {
-                if canEditInfo {
-                    PhotosPicker(selection: $avatarItem, matching: .images) {
-                        ZStack(alignment: .bottomTrailing) {
-                            AvatarView(name: conv?.title ?? "Group", photoUrl: conv?.avatarUrl, size: 88)
-                                .overlay { if uploadingAvatar {
-                                    ZStack { Circle().fill(.black.opacity(0.35)); ProgressView().tint(.white) }
-                                } }
-                            Image(systemName: "camera.circle.fill")
-                                .font(.system(size: 26)).symbolRenderingMode(.palette)
-                                .foregroundStyle(.white, Color.accentColor)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(uploadingAvatar)
-                } else {
-                    AvatarView(name: conv?.title ?? "Group", photoUrl: conv?.avatarUrl, size: 88)
-                }
-                Text(conv?.title ?? "Group").font(.title2.weight(.bold))
-                Text(conv?.memberCountLabel ?? "").font(.subheadline).foregroundStyle(.secondary)
-                // Description (tap to add/edit if admin) — like standard group info.
-                if let d = conv?.groupDescription, !d.isEmpty {
-                    Text(d).font(.footnote).foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .onTapGesture { if canEditInfo { descText = d; showDescEdit = true } }
-                } else if canEditInfo {
-                    Button("Add group description…") { descText = ""; showDescEdit = true }
-                        .font(.footnote)
-                }
-                // The SAME row the poster shows, for the same reason a person's no-photo profile
-                // uses it: labelled pills here and glass circles there is two designs in one app.
-                groupGlassActions
-                    .padding(.top, 8)
-            }
-            .frame(maxWidth: .infinity)
-            .listRowBackground(Color.clear)
+    private func setMuted(_ until: Double) { Task { await ChatService.setMute(cid, until: until) } }
+
+    private var muteUntilLabel: String {
+        let secs = (conv?.mutedBy[me] ?? 0) / 1000
+        if secs > Date().addingTimeInterval(3600 * 24 * 365 * 5).timeIntervalSince1970 { return "Muted always" }
+        let date = Date(timeIntervalSince1970: secs)
+        let t = Calendar.current.isDateInToday(date)
+            ? date.formatted(date: .omitted, time: .shortened)
+            : date.formatted(date: .abbreviated, time: .shortened)
+        return "Muted until \(t)"
+    }
+
+    /// The ••• menu, the profile's: housekeeping only. Leave / Report / Delete are on the red card.
+    @ViewBuilder private var moreMenuItems: some View {
+        if mayCall {
+            Button { startCall(video: false) } label: { Label("Voice Call", systemImage: "phone") }
         }
+        Button { changeWallpaper() } label: {
+            Label { Text("Change Wallpaper") } icon: { MenuIcon("ic_wallpaper") }
+        }
+        Button { confirmClear = true } label: { Label("Clear Chat", systemImage: "trash") }
     }
 
     private func startCall(video: Bool) {
-        Task { await GroupCallService.shared.start(cid: cid, title: conv?.title ?? "Group", video: video) }
+        Task { await GroupCallService.shared.start(cid: cid, title: title, video: video) }
         InstantCover.run { showCall = true }   // a cut, not a slide (owner, 2026-10-06)
     }
 
-    // Colored icon chip for list rows (premium look vs plain SF Symbols).
-    private func chip(_ icon: String, _ color: Color) -> some View {
-        Image(systemName: icon).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
-            .frame(width: 29, height: 29)
-            .background(color, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-    }
-
-    /// 2026-09-24 audit: approve/deny were `try?`, so a refusal (group full, request already
-    /// handled by another admin, offline) looked exactly like success. Same alert as Leave.
-    private func joinAction(_ op: @escaping () async throws -> Void) {
-        Task {
-            do { try await op() } catch {
-                let msg = error.localizedDescription
-                await MainActor.run { actionError = msg }
-            }
+    /// Back to the chat, then its wallpaper picker (the profile's own route).
+    private func changeWallpaper() {
+        let target = cid
+        dismiss()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            NotificationCenter.default.post(name: .openChatWallpaper, object: target)
         }
     }
 
-    private var joinRequestsSection: some View {
-        Section("Join requests (\(joinReqs.count))") {
-            ForEach(joinReqs) { r in
-                HStack(spacing: 12) {
-                    AvatarView(name: r.name, photoUrl: r.photo, size: 34)
-                    Text(r.name).foregroundStyle(.primary).lineLimit(1)
-                    Spacer(minLength: 8)
-                    Button { joinAction { try await GroupInviteService.approveJoin(cid: cid, uid: r.uid) } } label: {
-                        Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(.green)
-                    }.buttonStyle(.plain)
-                    Button { joinAction { try await GroupInviteService.denyJoin(cid: cid, uid: r.uid) } } label: {
-                        Image(systemName: "xmark.circle.fill").font(.title3).foregroundStyle(.red)
-                    }.buttonStyle(.plain)
-                }
-            }
-        }
+    // MARK: Cards
+
+    private var desc: String { conv?.groupDescription ?? "" }
+    private var showsAbout: Bool { !desc.isEmpty || canEditInfo }
+
+    /// The description, as the Fariin official chat's About card. Tap to edit, for whoever may.
+    private var aboutCard: some View {
+        ProfileAboutContent(text: desc.isEmpty ? "Add a group description" : desc, placeholder: desc.isEmpty)
+            .profileSurface(plain: cardColor)
+            .contentShape(Rectangle())
+            .onTapGesture { if canEditInfo { descText = desc; showDescEdit = true } }
     }
 
-    private var membersSection: some View {
-        Section(conv?.memberCountLabel.capitalized ?? "Members") {
-            if canAdd {
-                Button { showAdd = true } label: { rowLabel("person.badge.plus", "Add Members", .blue) }
-                // 2026-09-24 fix-all #226: invite links are an admin right ("Add Members" permission
-                // lets a member add people directly, not mint or revoke the group's links), so a plain
-                // member no longer sees a row whose sheet the server refuses.
-                if can(.inviteUsers) {
-                    Button { showInvite = true } label: { rowLabel("link", "Invite via Link", .teal) }
-                }
+    private var settingsCard: some View {
+        VStack(spacing: 0) {
+            // A group-wide setting: the change-info right edits it, everyone else reads it.
+            ProfileInfoRow(title: "Disappearing Messages", icon: "ic_disappearing", value: disappearLabel,
+                           chevron: can(.changeInfo)) {
+                if can(.changeInfo) { showDisappear = true }
             }
-            ForEach(sortedMembers, id: \.self) { uid in memberRow(uid) }
+            rowDivider
+            ProfileInfoRow(title: "Sounds & Notifications", icon: "ic_notifications",
+                           value: muted ? "Muted" : "On") { showSounds = true }
+            // Invite links are an admin right (fix-all #226), so only that admin sees the row.
+            if can(.inviteUsers) {
+                rowDivider
+                ProfileInfoRow(title: "Group invite link", icon: "link",
+                               value: (conv?.inviteCode ?? "").isEmpty ? "Off" : "On") { showInvite = true }
+            }
+            if iAmAdmin {
+                rowDivider
+                ProfileInfoRow(title: "Group Settings", icon: "gearshape") { showSettings = true }
+            }
         }
+        .profileSurface(plain: cardColor)
     }
 
-    private var settingsSection: some View {
-        Section {
-            Button { showMute = true } label: { rowLabel("bell.slash.fill", "Mute Notifications", .gray) }
-            // Disappearing messages is a group-wide setting → needs the Change-info right to edit.
-            if can(.changeInfo) {
-                Button { showDisappear = true } label: {
-                    HStack {
-                        rowLabel("timer", "Disappearing Messages", .orange)
-                        Spacer()
-                        Text(disappearLabel).foregroundStyle(.secondary)
-                    }
-                }
-            } else if (conv?.disappearSeconds ?? 0) > 0 {
-                HStack {
-                    rowLabel("timer", "Disappearing Messages", .orange)
-                    Spacer()
-                    Text(disappearLabel).foregroundStyle(.secondary)
-                }
-            }
-            // Announcement mode + who-can-do-what: group governance → needs the Change-info right.
-            if can(.changeInfo) {
-                Toggle(isOn: Binding(
-                    get: { conv?.onlyAdminsSend ?? false },
-                    set: { v in Task { try? await ChatService.setOnlyAdminsSend(cid: cid, v) } }
-                )) { rowLabel("megaphone.fill", "Only admins can send", .pink) }
-                Toggle(isOn: Binding(
-                    get: { conv?.membersCanAdd ?? false },
-                    set: { v in Task { try? await ChatService.setGroupPermission(cid: cid, key: "membersCanAdd", v) } }
-                )) { rowLabel("person.badge.plus", "Members can add others", .green) }
-                Toggle(isOn: Binding(
-                    get: { conv?.membersCanEditInfo ?? false },
-                    set: { v in Task { try? await ChatService.setGroupPermission(cid: cid, key: "membersCanEditInfo", v) } }
-                )) { rowLabel("pencil", "Members can edit group info", .purple) }
-            }
-        }
-    }
-
-    // A list row: colored icon chip + label (premium look).
-    private func rowLabel(_ icon: String, _ text: String, _ color: Color) -> some View {
-        HStack(spacing: 12) {
-            chip(icon, color)
-            Text(text).foregroundStyle(.primary)
-        }
-    }
+    private var rowDivider: some View { Divider().padding(.leading, 56) }
 
     private var disappearLabel: String {
-        switch conv?.disappearSeconds ?? 0 {
-        case 86_400:  return "1 day"
-        case 604_800: return "1 week"
-        default:      return "Off"
-        }
+        let s = conv?.disappearSeconds ?? 0
+        return s == 0 ? "Off" : ChatService.disappearShortLabel(s)
     }
 
-    @ViewBuilder private var mediaSection: some View {
-        if !media.isEmpty {
-            Section("Media") {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(media.prefix(12)) { m in
-                            // Videos carry thumbUrl/thumbEnc (no imageUrl) — they were invisible here.
-                            if let url = m.imageUrl ?? m.thumbUrl {
-                                SecureImageView(imageUrl: url, enc: m.imageUrl != nil ? m.enc : m.thumbEnc, cid: cid)
-                                    .frame(width: 84, height: 84)
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                            }
-                        }
-                    }
+    // MARK: Members
+
+    private var membersBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(conv?.memberCountLabel.capitalized ?? "Members").font(.headline)
+                Spacer()
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { searchingMembers.toggle() }
+                    if !searchingMembers { memberQuery = "" }
+                } label: {
+                    Image(systemName: searchingMembers ? "xmark" : "magnifyingglass")
+                        .font(.system(size: 17, weight: .medium)).foregroundStyle(.secondary)
                 }
-                Button("See All") { showAllMedia = true }.tint(.primary)
+                .buttonStyle(.plain)
+                .accessibilityLabel(searchingMembers ? "Close search" : "Search members")
             }
+            .padding(.horizontal, 8)
+            if searchingMembers {
+                TextField("Search members", text: $memberQuery)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .profileSurface(plain: cardColor, radius: 14)
+            }
+            membersCard
         }
     }
 
-    private var leaveSection: some View {
-        Section {
-            Button(role: .destructive) { confirmClear = true } label: {
-                HStack(spacing: 12) { chip("trash.fill", .red); Text("Clear Chat").foregroundStyle(.red) }
+    private var membersCard: some View {
+        VStack(spacing: 0) {
+            if canAdd && memberQuery.isEmpty {
+                Button { showAdd = true } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 18, weight: .medium)).foregroundStyle(.secondary)
+                            .frame(width: 40, height: 40)
+                            .background(Circle().fill(Color(.systemGray5)))
+                        Text("Add Members").foregroundStyle(.primary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
-            Button(role: .destructive) { confirmLeave = true } label: {
-                HStack(spacing: 12) { chip("rectangle.portrait.and.arrow.right.fill", .red); Text("Leave Group").foregroundStyle(.red) }
+            ForEach(Array(shownMembers.enumerated()), id: \.element) { i, uid in
+                if i > 0 || (canAdd && memberQuery.isEmpty) { rowDivider }
+                GroupMemberRow(conv: conv, uid: uid, me: me) {
+                    memberAction = MemberAction(id: uid, name: conv?.names[uid] ?? "User",
+                                                isAdmin: conv?.isAdmin(uid) ?? false)
+                }
             }
-            Button(role: .destructive) { confirmReport = true } label: {
-                HStack(spacing: 12) { chip("exclamationmark.bubble.fill", .red); Text("Report Group").foregroundStyle(.red) }
-            }
+        }
+        .profileSurface(plain: cardColor)
+    }
+
+    private var shownMembers: [String] {
+        let all = GroupMembers.sorted(conv, me: me)
+        let q = memberQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return all }
+        return all.filter { (conv?.names[$0] ?? "").lowercased().contains(q) }
+    }
+
+    private func memberSheet(_ m: MemberAction) -> some View {
+        GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: m.id)
+            .presentationDetents([.medium, .large])
+    }
+
+    // MARK: Exits
+
+    /// The profile's red card, for a group: Leave, Report, and Delete for the owner.
+    private var dangerCard: some View {
+        VStack(spacing: 0) {
+            ProfileInfoRow(title: "Leave Group", icon: "rectangle.portrait.and.arrow.right",
+                           tint: .red, chevron: false) { confirmLeave = true }
+            rowDivider
+            ProfileInfoRow(title: "Report Group", icon: "ic_report", tint: .red, chevron: false) { confirmReport = true }
             // Only the owner can permanently delete the whole group (for everyone).
             if iAmOwner {
-                Button(role: .destructive) { confirmDelete = true } label: {
-                    HStack(spacing: 12) { chip("trash.slash.fill", .red); Text("Delete Group").foregroundStyle(.red) }
-                }
-            }
-        } footer: {
-            if let label = createdByLabel {
-                Text(label).frame(maxWidth: .infinity).multilineTextAlignment(.center).padding(.top, 6)
+                rowDivider
+                ProfileInfoRow(title: "Delete Group", icon: "trash", tint: .red, chevron: false) { confirmDelete = true }
             }
         }
-        .confirmationDialog("Clear this chat?", isPresented: $confirmClear, titleVisibility: .visible) {
-            // Local clear (hides history for ME only) — NOT a global delete of my messages.
-            Button("Clear Chat", role: .destructive) { Task { await ChatService.deleteForMe(cid) } }
-            Button("Cancel", role: .cancel) {}
-        } message: { Text("This clears the chat from your device only.") }
-        .confirmationDialog("Report this group?", isPresented: $confirmReport, titleVisibility: .visible) {
-            Button("Report", role: .destructive) {
-                // admins.first can be ME (self-report) — pick another admin, else the creator, else any other member.
-                let creator = conv?.createdBy
-                let target = conv?.admins.first(where: { $0 != me })
-                    ?? ((creator?.isEmpty == false && creator != me) ? creator : nil)
-                    ?? conv?.users.first(where: { $0 != me })
-                    ?? ""
-                Task { await ChatService.report(reportedUid: target, cid: cid, reason: "group") }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { Text("The group will be reported to moderators for review.") }
-        .confirmationDialog("Delete this group?", isPresented: $confirmDelete, titleVisibility: .visible) {
-            Button("Delete Group", role: .destructive) {
-                // Same as Leave (audit, 2026-09-24): close only once the delete really went through.
-                Task {
-                    do {
-                        try await GroupInviteService.deleteGroup(cid: cid)
-                        await MainActor.run { dismiss() }
-                    } catch {
-                        let msg = error.localizedDescription
-                        await MainActor.run { actionError = msg }
-                    }
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { Text("This permanently deletes the group and all its messages for everyone. This cannot be undone.") }
+        .profileSurface(plain: cardColor)
     }
 
-    // "Created by you · 26 Jun 2026" footer, like the reference group screens.
+    // "Created by you · 26 Jun 2026", like the reference group screens.
     private var createdByLabel: String? {
         guard let conv, conv.isGroup, !conv.createdBy.isEmpty else { return nil }
         let who = conv.createdBy == me ? "you" : (conv.names[conv.createdBy] ?? "someone")
@@ -535,42 +389,177 @@ struct GroupInfoView: View {
     }
 
     @ToolbarContentBuilder private var toolbarContent: some ToolbarContent {
-        if canEditInfo {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Edit") { newName = conv?.title ?? ""; showRename = true }
+        if showGroupPhoto {
+            // The bar sits above the viewer overlay and eats its touches, so the viewer's X is a bar
+            // item, wired through closeSignal (ContactInfoView's rule).
+            ToolbarItem(placement: .topBarLeading) {
+                Button { photoCloseTick &+= 1 } label: {
+                    Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
+                }
+                .tint(.primary)
             }
+        } else if canEditInfo {
+            ToolbarItem(placement: .topBarTrailing) { Button("Edit") { showEdit = true } }
         }
     }
+}
 
-
-    private var sortedMembers: [String] {
+/// The group's members in the order every list shows them: me, then admins, then by name.
+enum GroupMembers {
+    static func sorted(_ conv: Conversation?, me: String) -> [String] {
         (conv?.users ?? []).sorted { a, b in
             if a == me { return true }
             if b == me { return false }
             let aAdmin = conv?.isAdmin(a) ?? false, bAdmin = conv?.isAdmin(b) ?? false
             if aAdmin != bAdmin { return aAdmin }
-            return name(a).lowercased() < name(b).lowercased()
+            return (conv?.names[a] ?? "").lowercased() < (conv?.names[b] ?? "").lowercased()
         }
     }
+}
 
-    private func name(_ uid: String) -> String {
-        uid == me ? "You" : (conv?.names[uid] ?? "User")
+/// One member: photo, name, their label under it (Member Label), and Owner / Admin on the right.
+struct GroupMemberRow: View {
+    let conv: Conversation?
+    let uid: String
+    let me: String
+    let onTap: () -> Void
+
+    private var name: String { uid == me ? "You" : (conv?.names[uid] ?? "User") }
+    private var role: String? {
+        if let c = conv, !c.createdBy.isEmpty, c.createdBy == uid { return "Owner" }
+        return (conv?.isAdmin(uid) ?? false) ? "Admin" : nil
     }
 
-    @ViewBuilder private func memberRow(_ uid: String) -> some View {
-        let isAdmin = conv?.isAdmin(uid) ?? false
-        // Anyone can tap a member to view their profile; the sheet gates admin actions.
-        Button {
-            memberAction = MemberAction(id: uid, name: conv?.names[uid] ?? "User", isAdmin: isAdmin)
-        } label: {
+    var body: some View {
+        Button(action: onTap) {
             HStack(spacing: 12) {
-                AvatarView(name: name(uid), photoUrl: conv?.photos[uid], size: 40)
-                Text(name(uid)).foregroundStyle(.primary)
-                VerifiedMark(uid: uid, size: 13)
-                Spacer()
-                if isAdmin { Text("Admin").font(.caption).foregroundStyle(.secondary) }
+                AvatarView(name: name, photoUrl: conv?.photos[uid], size: 40)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(name).foregroundStyle(.primary).lineLimit(1)
+                        VerifiedMark(uid: uid, size: 13)
+                    }
+                    if let label = conv?.memberLabels[uid], !label.isEmpty {
+                        MemberLabelChip(text: label)
+                    }
+                }
+                Spacer(minLength: 8)
+                if let role { Text(role).foregroundStyle(.secondary) }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 9)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// A member's label: one line in the accent colour on a pale capsule (owner's mockup).
+struct MemberLabelChip: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.subheadline)
+            .lineLimit(1)
+            .foregroundStyle(Color.accentColor)
+            .padding(.horizontal, 10).padding(.vertical, 3)
+            .background(Capsule().fill(Color.accentColor.opacity(0.14)))
+    }
+}
+
+/// The description editor and the disappearing timer, as the page always asked them.
+private struct GroupInfoDialogs: ViewModifier {
+    let cid: String
+    @Binding var showDescEdit: Bool
+    @Binding var descText: String
+    @Binding var showDisappear: Bool
+    @Binding var pendingDisappear: Int?
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Group description", isPresented: $showDescEdit) {
+                TextField("Description", text: $descText)
+                Button("Save") { let t = descText; Task { try? await ChatService.setGroupDescription(cid: cid, text: t) } }
+                Button("Cancel", role: .cancel) {}
+            }
+            .confirmationDialog("Disappearing Messages", isPresented: $showDisappear, titleVisibility: .visible) {
+                // Off is safe → applies directly; turning ON confirms first (deletes for everyone).
+                Button("Off")     { Task { await ChatService.setDisappear(cid, seconds: 0) } }
+                Button("1 Day")   { pendingDisappear = 86_400 }
+                Button("1 Week")  { pendingDisappear = 604_800 }
+                Button("Cancel", role: .cancel) {}
+            }
+            .alert("Turn on disappearing messages?", isPresented: Binding(
+                get: { pendingDisappear != nil },
+                set: { if !$0 { pendingDisappear = nil } }
+            )) {
+                Button("Cancel", role: .cancel) { pendingDisappear = nil }
+                Button("Turn On") {
+                    if let s = pendingDisappear { Task { await ChatService.setDisappear(cid, seconds: s) } }
+                    pendingDisappear = nil
+                }
+            } message: {
+                Text("New messages in this group will be deleted for ALL members after \(ChatService.disappearLabel(pendingDisappear ?? 86_400)). Everyone will see that you turned this on.")
+            }
+    }
+}
+
+/// Clear, Leave, Report and Delete, each asked first, as the page always asked them.
+private struct GroupInfoExits: ViewModifier {
+    let cid: String
+    let conv: Conversation?
+    let me: String
+    @Binding var confirmLeave: Bool
+    @Binding var confirmClear: Bool
+    @Binding var confirmReport: Bool
+    @Binding var confirmDelete: Bool
+    @Binding var actionError: String?
+    let onGone: () -> Void
+
+    /// Close only on success (audit, 2026-09-24): a refused leave or delete was swallowed by `try?`
+    /// and the page closed anyway.
+    private func run(_ op: @escaping () async throws -> Void) {
+        Task {
+            do {
+                try await op()
+                await MainActor.run { onGone() }
+            } catch {
+                let msg = error.localizedDescription
+                await MainActor.run { actionError = msg }
             }
         }
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog("Clear this chat?", isPresented: $confirmClear, titleVisibility: .visible) {
+                // Local clear (hides history for ME only) — NOT a global delete of my messages.
+                Button("Clear Chat", role: .destructive) { Task { await ChatService.deleteForMe(cid) } }
+                Button("Cancel", role: .cancel) {}
+            } message: { Text("This clears the chat from your device only.") }
+            .confirmationDialog("Leave this group?", isPresented: $confirmLeave, titleVisibility: .visible) {
+                Button("Leave", role: .destructive) { run { try await ChatService.leaveGroup(cid: cid) } }
+                Button("Cancel", role: .cancel) {}
+            }
+            .confirmationDialog("Report this group?", isPresented: $confirmReport, titleVisibility: .visible) {
+                Button("Report", role: .destructive) {
+                    // admins.first can be ME (self-report) — pick another admin, else the creator, else any other member.
+                    let creator = conv?.createdBy
+                    let target = conv?.admins.first(where: { $0 != me })
+                        ?? ((creator?.isEmpty == false && creator != me) ? creator : nil)
+                        ?? conv?.users.first(where: { $0 != me })
+                        ?? ""
+                    Task { await ChatService.report(reportedUid: target, cid: cid, reason: "group") }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { Text("The group will be reported to moderators for review.") }
+            .confirmationDialog("Delete this group?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                Button("Delete Group", role: .destructive) { run { try await GroupInviteService.deleteGroup(cid: cid) } }
+                Button("Cancel", role: .cancel) {}
+            } message: { Text("This permanently deletes the group and all its messages for everyone. This cannot be undone.") }
+            .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
+                                                              set: { if !$0 { actionError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(actionError ?? "") }
     }
 }
 
@@ -695,6 +684,10 @@ struct GroupMemberSheet: View {
     var canRestrict: Bool = false          // I hold the Restrict-members right → can remove/mute
     var currentRights: [String]? = nil      // this admin's granted rights (nil = all/legacy)
     var mutedUntil: Double = 0              // ms; > now = currently restricted
+    var label: String = ""                  // their Member Label ("" = none)
+    var canEditLabel: Bool = false          // it is me, or I hold the change-info right
+    @State private var showLabelEdit = false
+    @State private var labelText = ""
     @Environment(\.dismiss) private var dismiss
     @State private var profile: UserProfile?
     @State private var confirmRemove = false
@@ -769,12 +762,23 @@ struct GroupMemberSheet: View {
                                 .background(Color.accentColor.opacity(0.15), in: Capsule())
                                 .foregroundStyle(Color.accentColor)
                         }
+                        if !label.isEmpty { MemberLabelChip(text: label) }
                         if let a = gatedMemberAbout, !a.isEmpty {
                             Text(a).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }
                     }
                     .frame(maxWidth: .infinity)
                     .listRowBackground(Color.clear)
+                }
+                // ⛔ MEMBER LABEL — owner 2026-10-18. Mine to set, or anyone's with change-info.
+                if canEditLabel {
+                    Section {
+                        Button { labelText = label; showLabelEdit = true } label: {
+                            Label(label.isEmpty ? "Add Member Label" : "Edit Member Label", systemImage: "tag")
+                        }
+                    } footer: {
+                        Text("A short label shown under \(member.id == me ? "your" : "their") name in this group.")
+                    }
                 }
                 // Anyone can message a fellow member (opens/creates the 1:1).
                 if member.id != me {
@@ -884,6 +888,20 @@ struct GroupMemberSheet: View {
                                                               set: { if !$0 { actionError = nil } })) {
                 Button("OK", role: .cancel) {}
             } message: { Text(actionError ?? "") }
+            .alert("Member Label", isPresented: $showLabelEdit) {
+                TextField("Label", text: $labelText)
+                Button("Save") {
+                    let t = labelText, who = member.id
+                    run { try await ChatService.setMemberLabel(cid: cid, uid: who, t) }
+                }
+                if !label.isEmpty {
+                    Button("Remove", role: .destructive) {
+                        let who = member.id
+                        run { try await ChatService.setMemberLabel(cid: cid, uid: who, "") }
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { Text("Up to \(ChatService.memberLabelMax) characters.") }
             // 2026-09-24 fix-all #124: ContactInfoView's two confirms, word for word.
             .darkAlert("Block \(member.name)?",
                        message: "Blocked users will not be able to call you or send you messages.",

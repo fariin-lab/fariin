@@ -1707,9 +1707,15 @@ service cloud.firestore {
           && n.get('admins', []).toSet().difference(o.get('admins', []).toSet()).size() == 0
           && o.get('admins', []).toSet().difference(n.get('admins', []).toSet()).difference(gone).size() == 0
           && n.get('adminRights', {}).diff(o.get('adminRights', {})).affectedKeys().difference(gone).size() == 0
+          // 2026-10-18 Group Settings: who may start a call (`onlyAdminsCall`) and Restricted Group
+          // (`restrictedBy` and the three older restriction fields) are group rules like the rest.
           && (!keys.hasAny(['title', 'avatarUrl', 'desc', 'disappearSeconds', 'onlyAdminsSend',
-                            'membersCanAdd', 'membersCanEditInfo'])
+                            'membersCanAdd', 'membersCanEditInfo', 'onlyAdminsCall',
+                            'restrictedBy', 'restrictRequest', 'noScreenshots', 'noForwarding', 'noSaving'])
               || adminHasRight('changeInfo'))
+          // Member Label: someone else's needs change-info; their own needs nothing.
+          && (!('memberLabels' in keys) || adminHasRight('changeInfo')
+              || n.get('memberLabels', {}).diff(o.get('memberLabels', {})).affectedKeys().hasOnly([request.auth.uid]))
           && (added.size() == 0 || adminHasRight('inviteUsers'))
           && (!('inviteCode' in keys) || adminHasRight('inviteUsers'))
           && (gone.size() == 0 || gone.hasOnly([request.auth.uid]) || adminHasRight('banUsers'))
@@ -1876,8 +1882,14 @@ service cloud.firestore {
                  'lastReactionToEnc',
                  'names', 'photos', 'posters', 'pinnedMessageIds',
                  // 2026-09-24 decision D13: Mark as Unread flag, pinned to my key by privateMapsUntouched.
-                 'markedUnread'
+                 'markedUnread', 'memberLabels'
                ])
+            // 2026-10-18 Member Label: a member writes only their OWN label, a string of 24 or less.
+            && (!('memberLabels' in request.resource.data.diff(resource.data).affectedKeys())
+                || (request.resource.data.get('memberLabels', {}).diff(resource.data.get('memberLabels', {})).affectedKeys().hasOnly([request.auth.uid])
+                    && (!(request.auth.uid in request.resource.data.get('memberLabels', {}))
+                        || (request.resource.data.memberLabels[request.auth.uid] is string
+                            && request.resource.data.memberLabels[request.auth.uid].size() <= 24))))
             // names/photos/posters are the per-member profile mirrors every chat list reads.
             // A member may refresh THEIR OWN entry only — the map diff is pinned to their uid,
             // so nobody can rewrite another member's name or face. Without this branch a plain
@@ -2503,14 +2515,23 @@ service cloud.firestore {
           && request.resource.data.get(f, {}).diff(resource.data.get(f, {})).changedKeys().size() == 0
           && request.resource.data.get(f, {}).diff(resource.data.get(f, {})).removedKeys().size() == 0;
       }
+      // 2026-10-18 Group Settings "Start group call: Admins only" (`onlyAdminsCall`). The token
+      // (groupCallToken) is the real gate; this keeps a member from marking a call live and ringing
+      // the group without one.
+      function mayStartCall() {
+        let conv = get(/databases/$(database)/documents/conversations/$(cid)).data;
+        return conv.get('onlyAdminsCall', false) != true || request.auth.uid in conv.get('admins', []);
+      }
       allow read: if signedIn() && !isAdhoc() && isGroupMember();
       allow create: if signedIn() && !isAdhoc() && isGroupMember() && isStartWrite()
         && !('removedUids' in request.resource.data)
-        && startStampNew();
+        && startStampNew()
+        && mayStartCall();
       // audit M-034 (2026-10-07): somebody the owner removed from this call (still in `removedUids`)
       // may not switch it off for everyone on the way out.
       allow update: if signedIn() && !isAdhoc() && isGroupMember() && groupRemovedKept() && (
            (isStartWrite() && startStampNewOrKept()
+             && mayStartCall()   // a start write is a START: joiners never write one
              && (resource.data.get('active', false) != true
                  || resource.data.get('startedBy', '') == request.auth.uid
                  || (resource.data.get('startedAt', null) is timestamp

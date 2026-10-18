@@ -3636,6 +3636,35 @@ enum ChatService {
         try? await writeSystemMessage(cid: cid, text: "\(name) turned \(on ? "on" : "off") Restricted chat.")
     }
 
+    /// ⛔ MEMBER LABEL — owner 2026-10-18: a short tag under a member's name in the group (the
+    /// reference app's member tags). Anyone may set their own; an admin with the change-info right
+    /// may set anyone's (firestore.rules). Empty removes it. 24 characters, one line.
+    static let memberLabelMax = 24
+    static func setMemberLabel(cid: String, uid member: String, _ text: String) async throws {
+        let clean = String(text.replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespaces).prefix(memberLabelMax))
+        try await db.collection("conversations").document(cid).updateData([
+            "memberLabels.\(member)": clean.isEmpty ? FieldValue.delete() : clean,
+        ])
+    }
+
+    /// ⛔ RESTRICTED GROUP — owner 2026-10-18, Group Settings. The same restriction a 1:1 has (no
+    /// forwarding, copying, saving or screenshots), but a GROUP rule: an admin with the change-info
+    /// right switches it for everyone (firestore.rules), there is no per-person switch and no request
+    /// step. On writes the admin's own key; off clears every key, so it is off whoever turned it on.
+    /// Never silent, as the 1:1 switch is not.
+    static func setGroupRestricted(_ cid: String, on: Bool) async throws {
+        let ref = db.collection("conversations").document(cid)
+        var fields: [String: Any] = [
+            "restrictedBy": on ? [uid: true] : FieldValue.delete(),
+            "restrictRequest": FieldValue.delete(),
+            "updatedAt": FieldValue.serverTimestamp(),
+        ]
+        for r in ChatRestriction.allCases { fields[r.rawValue] = false }
+        try await ref.updateData(fields)
+        try? await writeSystemMessage(cid: cid, text: "\(myName()) turned \(on ? "on" : "off") Restricted group.")
+    }
+
     /// The reference app's consent step: they switched it on, so I can only ASK them to turn it off.
     /// One pending request per chat, which they accept or decline (`answerUnrestrict`); it lapses
     /// after `ChatRestrictions.requestLifetime` if they do neither.

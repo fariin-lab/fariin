@@ -739,15 +739,12 @@ struct OfficialChatInfoView: View {
 
     private var aboutCard: some View {
         card {
-            VStack(alignment: .leading, spacing: 10) {
-                Label("About", systemImage: "text.alignleft").font(.body)
-                // ⛔ ONE SHORT TEXT, ONE STYLE — owner, 2026-09-28, circled the card: "this text is 3
-                // types, clear all and write only one simple short text". The three paragraphs
-                // (regular, medium, secondary with a tick) are gone.
-                // Owner, 2026-09-29: these two lines, word for word.
-                Text("The only official chat from Fariin\nKeep up to date with news & release notes")
-            }
-            .padding(18)
+            // ⛔ ONE SHORT TEXT, ONE STYLE — owner, 2026-09-28, circled the card: "this text is 3
+            // types, clear all and write only one simple short text". The three paragraphs
+            // (regular, medium, secondary with a tick) are gone.
+            // Owner, 2026-09-29: these two lines, word for word. (The card's inside is
+            // `ProfileAboutContent`, shared with the group info page's About.)
+            ProfileAboutContent(text: "The only official chat from Fariin\nKeep up to date with news & release notes")
         }
     }
 
