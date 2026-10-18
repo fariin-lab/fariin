@@ -80,10 +80,10 @@ struct GroupInfoView: View {
                                      confirmLeave: $confirmLeave, confirmClear: $confirmClear,
                                      confirmReport: $confirmReport, confirmDelete: $confirmDelete,
                                      actionError: $actionError, onGone: { dismiss() }))
-            .sheet(isPresented: $showInvite) {
+            // A full page, pushed (owner 2026-10-18), not a half sheet.
+            .navigationDestination(isPresented: $showInvite) {
                 InviteLinkSheet(cid: cid, groupTitle: title, groupPhoto: conv?.avatarUrl,
-                                initialCode: conv?.inviteCode ?? "")
-                    .presentationDetents([.medium, .large])
+                                initialCode: conv?.inviteCode ?? "", embedded: true)
             }
             .sheet(item: $memberAction) { m in memberSheet(m) }
             .sheet(isPresented: $showAdd) { AddMembersSheet(cid: cid, existing: Set(conv?.users ?? [])) }
@@ -239,6 +239,13 @@ struct GroupInfoView: View {
                 Label { Text("Change Wallpaper") } icon: { MenuIcon("ic_wallpaper") }
             }
         }
+        // 2026-10-18 (owner): Share Group sends the group's invite link, and only exists while the
+        // group HAS one. A private group (no link) shows nothing here.
+        if let code = conv?.inviteCode, !code.isEmpty, let link = URL(string: KulanApp.groupLink(code: code)) {
+            ShareLink(item: link, message: Text("Join \(title) on Fariin")) {
+                Label("Share Group", systemImage: "square.and.arrow.up")
+            }
+        }
         Button { confirmClear = true } label: { Label("Clear Chat", systemImage: "trash") }
     }
 
@@ -388,7 +395,9 @@ struct GroupInfoView: View {
     }
 
     // "Created by you · 26 Jun 2026", like the reference group screens.
+    // 2026-10-18 (owner): taken off the bottom of the page; nil hides the line wherever it is used.
     private var createdByLabel: String? {
+        return nil
         guard let conv, conv.isGroup, !conv.createdBy.isEmpty else { return nil }
         let who = conv.createdBy == me ? "you" : (conv.names[conv.createdBy] ?? "someone")
         guard let d = conv.createdAt else { return "Created by \(who)" }
@@ -766,9 +775,11 @@ struct GroupMemberSheet: View {
     let member: GroupInfoView.MemberAction
     let iAmAdmin: Bool
     let ownerUid: String
-    var canManageAdmins: Bool = false      // I'm the owner → can promote/demote + set admin rights
+    var canManageAdmins: Bool = false      // Conversation.canManageAdmin: promote/demote + set their rights
     var canRestrict: Bool = false          // I hold the Restrict-members right → can remove/mute
-    var currentRights: [String]? = nil      // this admin's granted rights (nil = all/legacy)
+    var currentRights: [String]? = nil      // this admin's granted rights (nil = the defaults/legacy)
+    var grantable: [String] = []            // owner 2026-10-18: the rights I may hand out (all, for the owner)
+    @State private var confirmTransfer = false
     var mutedUntil: Double = 0              // ms; > now = currently restricted
     var label: String = ""                  // their Member Label ("" = none)
     var canEditLabel: Bool = false          // it is me, or I hold the change-info right
@@ -903,37 +914,35 @@ struct GroupMemberSheet: View {
                         }
                     }
                 }
-                // The owner is protected: no admin can demote or remove them. Promote/demote needs the
-                // Add-admins right; removing a member needs the Restrict-members right.
-                if member.id != me && !isOwner && (canManageAdmins || canRestrict) {
+                // The owner is protected: no admin can demote or remove them. Promote/demote/rights is
+                // `canManageAdmins` (the owner, or the promoter holding "Add new admins"); removing a
+                // member needs the Restrict-members right, and removing an ADMIN is the owner's alone
+                // (owner 2026-10-18, firestore.rules nonOwnerAdminWriteOK).
+                let canRemove = canRestrict && (iAmOwner || !member.isAdmin)
+                if member.id != me && !isOwner && (canManageAdmins || canRemove || iAmOwner) {
                     Section {
                         if canManageAdmins {
                             if member.isAdmin {
-                                Button("Remove as Admin") {
+                                NavigationLink {
+                                    AdminRightsView(cid: cid, uid: member.id, name: member.name,
+                                                    grantable: grantable, rights: $rights)
+                                } label: { Text("Edit Admin Rights") }
+                                Button("Remove Admin") {
                                     run { try await ChatService.demoteGroupAdmin(cid: cid, uid: member.id, name: member.name) }
                                 }
                             } else {
                                 Button("Make Admin") {
-                                    run { try await ChatService.promoteGroupAdmin(cid: cid, uid: member.id, name: member.name) }
+                                    // A new admin gets the defaults, cut down to what I may hand out.
+                                    let give = Conversation.Right.defaults.map(\.rawValue).filter { grantable.contains($0) }
+                                    run { try await ChatService.promoteGroupAdmin(cid: cid, uid: member.id, name: member.name, rights: give) }
                                 }
                             }
                         }
-                        if canRestrict {
-                            Button("Remove from Group", role: .destructive) { confirmRemove = true }
+                        if iAmOwner {
+                            Button("Transfer Ownership") { confirmTransfer = true }
                         }
-                    }
-                }
-                // Per-flag admin permissions — owner-only, for an admin who isn't the owner.
-                if iAmOwner && member.isAdmin && !isOwner && member.id != me {
-                    Section("Admin permissions") {
-                        ForEach(Conversation.Right.allCases) { r in
-                            Toggle(r.label, isOn: Binding(
-                                get: { rights.contains(r.rawValue) },
-                                set: { on in
-                                    if on { rights.insert(r.rawValue) } else { rights.remove(r.rawValue) }
-                                    let list = Array(rights)
-                                    Task { try? await ChatService.setAdminRights(cid: cid, uid: member.id, rights: list) }
-                                }))
+                        if canRemove {
+                            Button("Remove from Group", role: .destructive) { confirmRemove = true }
                         }
                     }
                 }
@@ -961,7 +970,16 @@ struct GroupMemberSheet: View {
             .onAppear {
                 guard !rightsLoaded else { return }
                 rightsLoaded = true
-                rights = currentRights.map(Set.init) ?? Set(Conversation.Right.allCases.map(\.rawValue))
+                rights = currentRights.map(Set.init) ?? Set(Conversation.Right.defaults.map(\.rawValue))
+            }
+            .confirmationDialog("Make \(member.name) the owner?",
+                                isPresented: $confirmTransfer, titleVisibility: .visible) {
+                Button("Transfer Ownership", role: .destructive) {
+                    run { try await ChatService.transferGroupOwnership(cid: cid, to: member.id, name: member.name) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("\(member.name) will have full control of this group, including over you. You will stay an admin.")
             }
             .confirmationDialog("Remove \(member.name) from the group?",
                                 isPresented: $confirmRemove, titleVisibility: .visible) {

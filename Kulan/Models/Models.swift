@@ -963,6 +963,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     // has ALL rights (legacy behaviour); the owner (createdBy) always has all. See Conversation.Right.
     var inviteCode: String             // group's current primary invite-link code ("" = none)
     var adminRights: [String: [String]]
+    // owner 2026-10-18: admin uid → the admin who promoted them. Only that admin (or the owner) may
+    // change their rights or demote them. Missing = the owner's appointment (or from before this).
+    var adminBy: [String: String] = [:]
     // Per-member restrictions (the reference app bannedRights): uid → restricted flags + an auto-expiring
     // `until` timestamp (ms). Empty flags or a past `until` = no restriction. See Conversation.Restrict.
     var restrictedFlags: [String: [String]]
@@ -998,6 +1001,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// purge (kpurgeOne, functions-loginalert), which also renames them to "Deleted Account" in
     /// `names`. Empty during the 30-day grace period: only a finished deletion lands here.
     var deletedUsers: [String] = []
+    /// owner 2026-10-18: people removed from the group (ChatService.removeGroupMember). They cannot
+    /// rejoin by link while listed; Removed Users in Group Settings lets one back.
+    var bannedUids: [String] = []
 
     /// The label for a member whose account is gone. Same words the server writes into `names`.
     static let deletedAccountName = "Deleted Account"
@@ -1070,6 +1076,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.groupWallpaper = self.convType == "group" ? data["wallpaper"] as? String : nil
         self.inviteCode = data["inviteCode"] as? String ?? ""
         self.adminRights = stringArrayMap(data["adminRights"])
+        self.adminBy = (data["adminBy"] as? [String: Any] ?? [:]).compactMapValues { $0 as? String }
         self.startedBy = data["startedBy"] as? String ?? ""
         // Absent means "from before this existed" — accepted. Present means the flag decides.
         self.accepted = data["accepted"] as? Bool ?? (data["startedBy"] == nil)
@@ -1077,6 +1084,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.acceptedBy = data["acceptedBy"] as? String ?? ""
         self.acceptedAtMillis = ((data["acceptedAt"] as? Timestamp)?.dateValue().timeIntervalSince1970 ?? 0) * 1000
         self.deletedUsers = data["deletedUsers"] as? [String] ?? []
+        self.bannedUids = data["bannedUids"] as? [String] ?? []
         self.restrictedFlags = stringArrayMap(data["restrictedFlags"])
         self.restrictedUntil = doubleMap(data["restrictedUntil"])
         self.lastReactionEnc = data["lastReactionEnc"] as? String
@@ -1145,11 +1153,11 @@ struct Conversation: Identifiable, Equatable, Hashable {
     func isOwner(_ me: String) -> Bool { !createdBy.isEmpty && createdBy == me }
 
     // Per-flag admin rights (reference-style). Slugs kept small, mapped to what Fariin actually gates.
-    // Delegatable admin rights. Managing the admin TEAM (promote/demote/set-rights) is deliberately
-    // NOT here — it is owner-only, so a limited admin can never mint an admin more powerful than
-    // themselves or demote a peer the owner appointed.
+    // Delegatable admin rights. Managing the admin TEAM belongs to the owner; owner 2026-10-18: the
+    // owner may hand part of it on with `addAdmins`, which lets that admin promote members with at
+    // most their own rights and manage only the admins they promoted (`adminBy`). See canManageAdmin.
     enum Right: String, CaseIterable, Identifiable {
-        case changeInfo, deleteMessages, banUsers, inviteUsers, pinMessages, manageCalls
+        case changeInfo, deleteMessages, banUsers, inviteUsers, pinMessages, manageCalls, addAdmins
         var id: String { rawValue }
         var label: String {
             switch self {
@@ -1159,16 +1167,33 @@ struct Conversation: Identifiable, Equatable, Hashable {
             case .inviteUsers:    return "Add members"
             case .pinMessages:    return "Pin messages"
             case .manageCalls:    return "Manage video chats"
+            case .addAdmins:      return "Add new admins"
             }
         }
+        /// What a new admin gets: everything but `addAdmins`. Also what a legacy admin (no entry) holds.
+        static var defaults: [Right] { allCases.filter { $0 != .addAdmins } }
     }
-    /// Can `uid` perform `right`? Owner → always. Admin with no adminRights entry → all (legacy).
-    /// Admin with an entry → only the granted slugs. Non-admin → never.
+    /// Can `uid` perform `right`? Owner → always. Admin with no adminRights entry → the defaults
+    /// (legacy: every right they had before `addAdmins` existed). Admin with an entry → only the
+    /// granted slugs. Non-admin → never.
     func adminCan(_ uid: String, _ right: Right) -> Bool {
         if isOwner(uid) { return true }
         guard admins.contains(uid) else { return false }
-        guard let granted = adminRights[uid] else { return true }   // legacy admin = full rights
+        guard let granted = adminRights[uid] else { return right != .addAdmins }   // legacy admin
         return granted.contains(right.rawValue)
+    }
+    /// The rights `uid` holds as an admin, as granted (legacy = the defaults; owner = all).
+    func adminRightsOf(_ uid: String) -> [Right] {
+        Right.allCases.filter { adminCan(uid, $0) }
+    }
+    /// owner 2026-10-18: may `me` promote, demote or edit `target`? The owner: anyone but themselves.
+    /// An admin with `addAdmins`: a member (to promote), or an admin they promoted. Never the owner.
+    /// The same test as firestore.rules `delegatedAdminEditOK`.
+    func canManageAdmin(_ me: String, _ target: String) -> Bool {
+        guard isGroup, target != me, !isOwner(target), users.contains(target) else { return false }
+        if isOwner(me) { return true }
+        guard adminCan(me, .addAdmins), adminRights[me] != nil else { return false }
+        return !admins.contains(target) || adminBy[target] == me
     }
 
     // Per-member restrictions (the reference app bannedRights). Slugs the client enforces at send time.

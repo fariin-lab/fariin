@@ -1697,6 +1697,7 @@ service cloud.firestore {
       //   pinnedMessageIds grows (pin)                                            → pinMessages
       //   admins / adminRights: never added to; an admin may only drop out of `admins` in the same
       //     write that takes them out of `users` (removed from the group, or leaving).
+      //     owner 2026-10-18: except through delegatedAdminEditOK (the `addAdmins` right).
       // Everything else (sends, previews, own private state) is untouched by this check.
       // owner 2026-10-18: THE GROUP WALLPAPER ("only the owner or an admin can change it; everyone
       // sees it"). A group's `wallpaper` is `ChatWallpaper.stored` (none, g:/c:/b: + an id) or
@@ -1709,16 +1710,50 @@ service cloud.firestore {
           && (w == 'none' || w.matches('[gcb]:[A-Za-z0-9_-]{1,64}')
               || w.matches('u:https://firebasestorage[.]googleapis[.]com/.*'));
       }
+      // owner 2026-10-18: AN ADMIN THE OWNER TRUSTED WITH "Add new admins" (`addAdmins`, never held
+      // by a legacy admin with no entry) may run a small part of the team, the reference app's way:
+      //   · promote a member, with at most the rights they hold themselves;
+      //   · change the rights of, or demote, only an admin THEY promoted (`adminBy.{uid}` = promoter).
+      // Never the owner, never themselves. One person per write, named in `adminEdit.uid` (with
+      // `adminEdit.by` = the writer): the rules language cannot pick the one key out of a changed
+      // set, so the write says who it is about and the checks below hold it to exactly that person.
+      function delegatedAdminEditOK(touched) {
+        let o = resource.data;
+        let n = request.resource.data;
+        let e = n.get('adminEdit', {});
+        let t = e.get('uid', '');
+        let mine = o.get('adminRights', {}).get(request.auth.uid, []);
+        return mine is list && 'addAdmins' in mine
+          && e.get('by', '') == request.auth.uid
+          && touched.hasOnly([t])
+          && t != o.get('createdBy', '') && t != request.auth.uid
+          && t in o.users && t in n.users
+          && (!(t in o.get('admins', [])) || o.get('adminBy', {}).get(t, '') == request.auth.uid)
+          && ((t in n.get('admins', [])
+               && n.get('adminRights', {}).get(t, null) is list
+               && n.get('adminRights', {}).get(t, []).hasOnly(mine)
+               && n.get('adminBy', {}).get(t, '') == request.auth.uid)
+              || (!(t in n.get('admins', []))
+                  && !(t in n.get('adminRights', {}))
+                  && !(t in n.get('adminBy', {}))));
+      }
       function nonOwnerAdminWriteOK() {
         let o = resource.data;
         let n = request.resource.data;
         let keys = n.diff(o).affectedKeys();
         let gone = o.users.toSet().difference(n.users.toSet());
         let added = n.users.toSet().difference(o.users.toSet());
+        // owner 2026-10-18: the admin team as this write changes it, leavers aside.
+        let promoted = n.get('admins', []).toSet().difference(o.get('admins', []).toSet());
+        let demoted = o.get('admins', []).toSet().difference(n.get('admins', []).toSet()).difference(gone);
+        let rightsKeys = n.get('adminRights', {}).diff(o.get('adminRights', {})).affectedKeys().difference(gone);
+        let byKeys = n.get('adminBy', {}).diff(o.get('adminBy', {})).affectedKeys().difference(gone);
+        let touched = promoted.union(demoted).union(rightsKeys).union(byKeys);
         return !keys.hasAny(['createdBy', 'type'])
-          && n.get('admins', []).toSet().difference(o.get('admins', []).toSet()).size() == 0
-          && o.get('admins', []).toSet().difference(n.get('admins', []).toSet()).difference(gone).size() == 0
-          && n.get('adminRights', {}).diff(o.get('adminRights', {})).affectedKeys().difference(gone).size() == 0
+          && ((touched.size() == 0 && !('adminEdit' in keys)) || delegatedAdminEditOK(touched))
+          // owner 2026-10-18: removing ANOTHER admin from the group is a demotion as well, so the
+          // remove-members right covers members only. The owner removes admins; anyone may leave.
+          && gone.intersection(o.get('admins', []).toSet()).difference([request.auth.uid].toSet()).size() == 0
           // 2026-10-18 Group Settings: who may start a call (`onlyAdminsCall`) and Restricted Group
           // (`restrictedBy` and the three older restriction fields) are group rules like the rest.
           && (!keys.hasAny(['title', 'avatarUrl', 'desc', 'disappearSeconds', 'onlyAdminsSend',
@@ -1756,12 +1791,15 @@ service cloud.firestore {
       // member who stays, and that member is an admin after the write (ChatService.leaveGroup picks
       // the longest-serving admin, else the longest-serving member and makes them admin too).
       // Non-owners were already refused any `createdBy` change by nonOwnerAdminWriteOK.
+      // owner 2026-10-18: TRANSFER OWNERSHIP. The owner may also hand the group on while staying in
+      // it (ChatService.transferGroupOwnership), to someone already a member who is an admin after
+      // the write. Still only the owner: nobody else can ever write `createdBy`.
       function ownerHandOffOK() {
         let o = resource.data;
         let n = request.resource.data;
         return n.get('createdBy', '') == o.get('createdBy', '')
           || (request.auth.uid == o.get('createdBy', '')
-              && !(request.auth.uid in n.users)
+              && n.get('createdBy', '') in o.users
               && n.get('createdBy', '') in n.users
               && n.get('createdBy', '') in n.get('admins', []));
       }

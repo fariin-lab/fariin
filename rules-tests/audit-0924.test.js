@@ -848,7 +848,8 @@ function groupCases() {
     ['OK      legacy admin renames the group', 'ALLOW', 'ALLOW', ...up(LEG, { title: 'New name' })],
     ['OK      legacy admin removes THIRD (ban + notice)', 'ALLOW', 'ALLOW',
       ...up(LEG, { users: [ADMIN, LIM, LEG, ME], bannedUids: [THIRD], lastMessage: 'x removed y', lastSender: LEG })],
-    ['OK      legacy admin removes admin LIM from the group', 'ALLOW', 'ALLOW',
+    // owner 2026-10-18: removing ANOTHER admin is the owner's alone now (group-admin-rights-1018).
+    ['FIX     legacy admin removes admin LIM from the group', 'ALLOW', 'DENY',
       ...up(LEG, { users: [ADMIN, LEG, ME, THIRD], admins: [ADMIN, LEG], adminRights: {}, bannedUids: [LIM] })],
     ['OK      legacy admin adds a member', 'ALLOW', 'ALLOW',
       ...up(LEG, { users: [...team.users, NEW], names: { [NEW]: 'New' }, unreadCount: { ...team.unreadCount, [NEW]: 0 } })],

@@ -2048,9 +2048,10 @@ struct ThreadView: View {
             GroupMemberSheet(cid: cid, member: m,
                              iAmAdmin: conversation?.isAdmin(me) ?? false,
                              ownerUid: conversation?.createdBy ?? "",
-                             canManageAdmins: (conversation?.createdBy == me && !(conversation?.createdBy.isEmpty ?? true)),
+                             canManageAdmins: conversation?.canManageAdmin(me, m.id) ?? false,
                              canRestrict: conversation?.adminCan(me, .banUsers) ?? false,
                              currentRights: conversation?.adminRights[m.id],
+                             grantable: conversation?.adminRightsOf(me).map(\.rawValue) ?? [],
                              mutedUntil: conversation?.restrictedUntil[m.id] ?? 0,
                              label: conversation?.memberLabels[m.id] ?? "",
                              canEditLabel: m.id == me || (conversation?.adminCan(me, .changeInfo) ?? false))

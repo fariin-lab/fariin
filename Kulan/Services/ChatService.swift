@@ -675,6 +675,7 @@ enum ChatService {
             // them (Add Members) or approving a join request lifts the ban. Clear their admin/restriction state.
             "bannedUids": FieldValue.arrayUnion([removed]),
             "adminRights.\(removed)": FieldValue.delete(),
+            "adminBy.\(removed)": FieldValue.delete(),   // owner 2026-10-18
             "restrictedFlags.\(removed)": FieldValue.delete(),
             "restrictedUntil.\(removed)": FieldValue.delete(),
             "updatedAt": FieldValue.serverTimestamp(),
@@ -742,6 +743,7 @@ enum ChatService {
                     if !admins.contains(heir) { convUpdate["admins"] = admins.filter { $0 != me } + [heir] }
                     // The owner holds every right; drop a limited-admin entry so no screen shows one.
                     convUpdate["adminRights.\(heir)"] = FieldValue.delete()
+                    convUpdate["adminBy.\(heir)"] = FieldValue.delete()   // owner 2026-10-18
                     notice("\(names[heir] ?? "A member") is now the owner")
                 }
                 notice(left)
@@ -793,11 +795,19 @@ enum ChatService {
         try await writeSystemMessage(cid: cid, text: "\(myName()) renamed the group to “\(t)”")
     }
 
-    /// Promote a member to admin (admin) + system message.
-    static func promoteGroupAdmin(cid: String, uid promoted: String, name: String) async throws {
+    /// Promote a member to admin (owner, or an admin with "Add new admins") + system message.
+    /// owner 2026-10-18: the new admin's rights are written out (`rights`, default
+    /// `Conversation.Right.defaults`), with `adminBy` = me and `adminEdit` naming them, which is what
+    /// firestore.rules `delegatedAdminEditOK` holds a non-owner promoter to. A non-owner passes only
+    /// rights they hold themselves.
+    static func promoteGroupAdmin(cid: String, uid promoted: String, name: String,
+                                  rights: [String] = Conversation.Right.defaults.map(\.rawValue)) async throws {
         let convRef = db.collection("conversations").document(cid)
         try await convRef.updateData([
             "admins": FieldValue.arrayUnion([promoted]),
+            "adminRights.\(promoted)": rights,
+            "adminBy.\(promoted)": uid,
+            "adminEdit": ["uid": promoted, "by": uid],
             // An admin is never restricted — clear any lingering mute so a later demote can't silently
             // re-apply a stale "forever" restriction.
             "restrictedFlags.\(promoted)": FieldValue.delete(),
@@ -807,25 +817,66 @@ enum ChatService {
         try await writeSystemMessage(cid: cid, text: "\(myName()) made \(name) an admin")
     }
 
-    /// Demote an admin back to a regular member (admin) + system message. Clears any per-flag grant.
+    /// Demote an admin back to a regular member (the owner, or the admin who promoted them) + system
+    /// message. Clears any per-flag grant and who promoted them.
     static func demoteGroupAdmin(cid: String, uid demoted: String, name: String) async throws {
         let convRef = db.collection("conversations").document(cid)
         try await convRef.updateData([
             "admins": FieldValue.arrayRemove([demoted]),
             "adminRights.\(demoted)": FieldValue.delete(),
+            "adminBy.\(demoted)": FieldValue.delete(),
+            "adminEdit": ["uid": demoted, "by": uid],
             "updatedAt": FieldValue.serverTimestamp(),
         ])
         try await writeSystemMessage(cid: cid, text: "\(myName()) removed \(name) as admin")
     }
 
-    /// Set an admin's granted per-flag rights (owner-only in the UI). `rights` is a subset of
-    /// Conversation.Right raw values; an empty/omitted map means the admin has ALL rights (legacy).
-    static func setAdminRights(cid: String, uid: String, rights: [String]) async throws {
+    /// Set an admin's granted per-flag rights (the owner, or the admin who promoted them). `rights`
+    /// is a subset of Conversation.Right raw values; a non-owner may list only rights they hold.
+    static func setAdminRights(cid: String, uid target: String, rights: [String]) async throws {
         try await db.collection("conversations").document(cid).updateData([
-            "admins": FieldValue.arrayUnion([uid]),   // granting rights implies admin
-            "adminRights.\(uid)": rights,
+            "adminRights.\(target)": rights,
+            "adminEdit": ["uid": target, "by": uid],
             "updatedAt": FieldValue.serverTimestamp(),
         ])
+    }
+
+    /// owner 2026-10-18: LET A REMOVED PERSON BACK (Removed Users). Takes them off `bannedUids`, so
+    /// an invite link or a join request works for them again; it does not add them to the group.
+    /// firestore.rules: the remove-members right, or the add-members right (which may only shrink it).
+    static func unbanGroupMember(cid: String, uid target: String) async throws {
+        try await db.collection("conversations").document(cid).updateData([
+            "bannedUids": FieldValue.arrayRemove([target]),
+            "updatedAt": FieldValue.serverTimestamp(),
+        ])
+    }
+
+    /// owner 2026-10-18: TRANSFER OWNERSHIP (owner only; firestore.rules `ownerHandOffOK`). The new
+    /// owner must be a member; they become an admin if they were not. I stay in the group as an admin
+    /// with every right, "Add new admins" included, the way the reference app leaves its old owner.
+    static func transferGroupOwnership(cid: String, to heir: String, name: String) async throws {
+        let convRef = db.collection("conversations").document(cid)
+        let me = uid
+        let text = "\(name) is now the owner"
+        let batch = db.batch()
+        batch.setData(["text": text, "authorId": me, "type": "system",
+                       "createdAt": FieldValue.serverTimestamp()],
+                      forDocument: convRef.collection("messages").document())
+        batch.updateData([
+            "createdBy": heir,
+            "admins": FieldValue.arrayUnion([heir]),
+            // The owner holds every right; no entry, nobody's appointee.
+            "adminRights.\(heir)": FieldValue.delete(),
+            "adminBy.\(heir)": FieldValue.delete(),
+            "restrictedFlags.\(heir)": FieldValue.delete(),
+            "restrictedUntil.\(heir)": FieldValue.delete(),
+            "adminRights.\(me)": Conversation.Right.allCases.map(\.rawValue),
+            "adminBy.\(me)": heir,
+            "lastMessage": text,
+            "lastSender": me,
+            "updatedAt": FieldValue.serverTimestamp(),
+        ], forDocument: convRef)
+        try await batch.commit()
     }
 
     /// Restrict a member with an auto-expiring timeout (the reference app bannedRights model). `flags` is a

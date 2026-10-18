@@ -9,16 +9,16 @@ import FirebaseFirestore
 extension GroupMemberSheet {
     /// The member card, filled from the group the same way wherever it is opened.
     static func make(cid: String, conv: Conversation?, me: String, uid: String) -> GroupMemberSheet {
-        let iAmOwner = conv?.createdBy == me && !(conv?.createdBy.isEmpty ?? true)
         return GroupMemberSheet(
             cid: cid,
             member: GroupInfoView.MemberAction(id: uid, name: conv?.names[uid] ?? "User",
                                                isAdmin: conv?.isAdmin(uid) ?? false),
             iAmAdmin: conv?.isAdmin(me) ?? false,
             ownerUid: conv?.createdBy ?? "",
-            canManageAdmins: iAmOwner,
+            canManageAdmins: conv?.canManageAdmin(me, uid) ?? false,
             canRestrict: conv?.adminCan(me, .banUsers) ?? false,
             currentRights: conv?.adminRights[uid],
+            grantable: conv?.adminRightsOf(me).map(\.rawValue) ?? [],
             mutedUntil: conv?.restrictedUntil[uid] ?? 0,
             label: conv?.memberLabels[uid] ?? "",
             canEditLabel: uid == me || (conv?.adminCan(me, .changeInfo) ?? false))
@@ -41,17 +41,38 @@ struct GroupSettingsView: View {
     private var canEdit: Bool { can(.changeInfo) }
 
     var body: some View {
+        // owner 2026-10-18: ONE THING PER SECTION, each with a short header and at most one short
+        // footer (it was one long Permissions card with pickers and a paragraph under it).
         List {
-            permissionsSection
+            membersCanSection
+            privacySection
             Section {
                 NavigationLink { GroupAdminsView(cid: cid) } label: {
                     settingLabel("Administrators", "person.badge.shield.checkmark",
                                  value: "\(conv?.admins.count ?? 0)")
                 }
+            } header: { Text("Admins") } footer: {
+                Text("The owner decides what each admin can do.")
+            }
+            Section {
                 NavigationLink { GroupMembersListView(cid: cid) } label: {
                     settingLabel("Members", "person.2", value: "\(conv?.users.count ?? 0)")
                 }
-                if can(.inviteUsers) {
+            }
+            // owner 2026-10-18: REMOVED USERS, the people taken out of the group (`bannedUids`).
+            // In place of the old "Remove users: Admins" row; who may remove is a per-admin right.
+            if can(.banUsers) || can(.inviteUsers) {
+                Section {
+                    NavigationLink { GroupRemovedUsersView(cid: cid) } label: {
+                        settingLabel("Removed Users", "person.badge.minus",
+                                     value: "\(conv?.bannedUids.count ?? 0)")
+                    }
+                } footer: {
+                    Text("People removed from the group can't join again with a link until you let them back.")
+                }
+            }
+            if can(.inviteUsers) {
+                Section {
                     NavigationLink { GroupRequestsView(cid: cid) } label: {
                         settingLabel("Requests & Invites", "link",
                                      value: joinReqs.isEmpty ? nil : "\(joinReqs.count)")
@@ -73,47 +94,48 @@ struct GroupSettingsView: View {
         } message: { Text(actionError ?? "") }
     }
 
-    private var permissionsSection: some View {
+    /// What every member may do. Admins always may; a switch turned off leaves it to admins.
+    private var membersCanSection: some View {
         Section {
             Toggle(isOn: bool(get: { !($0.onlyAdminsSend) },
                               set: { v in try await ChatService.setOnlyAdminsSend(cid: cid, !v) })) {
-                settingLabel("Anyone can send messages", "bubble.left.and.bubble.right")
+                settingLabel("Send messages", "bubble.left.and.bubble.right")
             }
-            whoPicker("Add members", "person.badge.plus",
-                      get: { $0.membersCanAdd }, key: "membersCanAdd")
-            whoPicker("Edit group details", "pencil",
-                      get: { $0.membersCanEditInfo }, key: "membersCanEditInfo")
-            Picker(selection: bool(get: { !($0.onlyAdminsCall) },
-                                   set: { v in try await ChatService.setGroupPermission(cid: cid, key: "onlyAdminsCall", !v) })) {
-                Text("Everyone").tag(true)
-                Text("Admins only").tag(false)
-            } label: { settingLabel("Start group call", "phone") }
-            .pickerStyle(.menu)
-            Toggle(isOn: bool(get: { $0.isRestricted },
-                              set: { v in try await ChatService.setGroupRestricted(cid, on: v) })) {
-                settingLabel("Restricted Group", "ic_restricted_chat")
+            Toggle(isOn: bool(get: { $0.membersCanAdd },
+                              set: { v in try await ChatService.setGroupPermission(cid: cid, key: "membersCanAdd", v) })) {
+                settingLabel("Add members", "person.badge.plus")
             }
-            // Removing a member is the admin right "Restrict / remove members", set per admin on
-            // the Administrators page; there is no member-wide switch for it.
-            NavigationLink { GroupAdminsView(cid: cid) } label: {
-                settingLabel("Remove users", "person.badge.minus", value: "Admins")
+            Toggle(isOn: bool(get: { $0.membersCanEditInfo },
+                              set: { v in try await ChatService.setGroupPermission(cid: cid, key: "membersCanEditInfo", v) })) {
+                settingLabel("Edit group info", "pencil")
+            }
+            // Hidden while group calls are (CallFeatures.groupCalls, as on the group info page).
+            if CallFeatures.groupCalls {
+                Toggle(isOn: bool(get: { !($0.onlyAdminsCall) },
+                                  set: { v in try await ChatService.setGroupPermission(cid: cid, key: "onlyAdminsCall", !v) })) {
+                    settingLabel("Start group calls", "phone")
+                }
             }
         } header: {
-            Text("Permissions")
+            Text("What members can do")
         } footer: {
-            Text("With \u{201C}Anyone can send messages\u{201D} off, only admins can send and the group is read-only for everyone else. Restricted Group stops forwarding, copying, saving and screenshots for everyone. Which admins can remove members is set for each admin under Administrators.")
+            Text("Admins can always do these. Switch one off and only admins can.")
         }
         .disabled(!canEdit)
     }
 
-    /// Everyone / Admins only, for a `membersCan*` switch (true = Everyone).
-    private func whoPicker(_ title: String, _ icon: String,
-                           get: @escaping (Conversation) -> Bool, key: String) -> some View {
-        Picker(selection: bool(get: get, set: { v in try await ChatService.setGroupPermission(cid: cid, key: key, v) })) {
-            Text("Everyone").tag(true)
-            Text("Admins only").tag(false)
-        } label: { settingLabel(title, icon) }
-        .pickerStyle(.menu)
+    private var privacySection: some View {
+        Section {
+            Toggle(isOn: bool(get: { $0.isRestricted },
+                              set: { v in try await ChatService.setGroupRestricted(cid, on: v) })) {
+                settingLabel("Restricted Group", "ic_restricted_chat")
+            }
+        } header: {
+            Text("Privacy")
+        } footer: {
+            Text("Stops forwarding, copying, saving and screenshots in this group, for everyone.")
+        }
+        .disabled(!canEdit)
     }
 
     /// A binding onto the live group: reads the conversation, writes through `set`, says so if the
@@ -167,7 +189,7 @@ struct GroupAdminsView: View {
     @State private var actionError: String?
 
     private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
-    private var iAmOwner: Bool { conv?.createdBy == me && !(conv?.createdBy.isEmpty ?? true) }
+    private var canAddAdmins: Bool { conv?.adminCan(me, .addAdmins) ?? false }
     private var admins: [String] {
         GroupMembers.sorted(conv, me: me).filter { conv?.isAdmin($0) ?? false }
             .sorted { a, _ in a == conv?.createdBy }
@@ -178,7 +200,8 @@ struct GroupAdminsView: View {
 
     var body: some View {
         List {
-            if iAmOwner && !others.isEmpty {
+            // owner 2026-10-18: the owner, or an admin the owner gave "Add new admins".
+            if canAddAdmins && !others.isEmpty {
                 Section {
                     Button { showPick = true } label: { Label("Add Admin", systemImage: "plus") }
                 }
@@ -219,9 +242,12 @@ struct GroupAdminsView: View {
 
     private func promote(_ uid: String) {
         let name = conv?.names[uid] ?? "User"
+        // The defaults, cut down to what I may hand out (all of them, for the owner).
+        let mine = conv?.adminRightsOf(me).map(\.rawValue) ?? []
+        let give = Conversation.Right.defaults.map(\.rawValue).filter { mine.contains($0) }
         showPick = false
         Task {
-            do { try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name) } catch {
+            do { try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: give) } catch {
                 let msg = error.localizedDescription
                 await MainActor.run { actionError = msg }
             }
@@ -231,6 +257,144 @@ struct GroupAdminsView: View {
 
 /// An id for `.sheet(item:)`.
 private struct Opened: Identifiable { let id: String }
+
+// MARK: - Removed users
+
+/// owner 2026-10-18: REMOVED USERS. Everyone on the group's `bannedUids` (written by Remove from
+/// Group), with Let Back In for each. Letting someone back does not add them; it lets an invite link
+/// or a join request work for them again, or an admin add them.
+struct GroupRemovedUsersView: View {
+    let cid: String
+    private var repo = ConversationsRepository.shared
+    init(cid: String) { self.cid = cid }
+
+    @State private var busy: String?
+    @State private var actionError: String?
+
+    private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(conv?.bannedUids ?? [], id: \.self) { uid in
+                    HStack(spacing: 12) {
+                        AvatarView(name: conv?.names[uid] ?? "User", photoUrl: conv?.photos[uid], size: 40)
+                        Text(conv?.names[uid] ?? "User").lineLimit(1)
+                        Spacer(minLength: 8)
+                        if busy == uid {
+                            ProgressView()
+                        } else {
+                            Button("Let Back In") { unban(uid) }
+                                .buttonStyle(.borderless)
+                                .disabled(busy != nil)
+                        }
+                    }
+                }
+            } footer: {
+                if conv?.bannedUids.isEmpty ?? true {
+                    Text("Nobody has been removed from this group.")
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Removed Users")
+        .navigationBarTitleDisplayMode(.inline)
+        .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
+                                                          set: { if !$0 { actionError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(actionError ?? "") }
+    }
+
+    private func unban(_ uid: String) {
+        busy = uid
+        Task {
+            do {
+                try await ChatService.unbanGroupMember(cid: cid, uid: uid)
+                await MainActor.run { busy = nil }
+            } catch {
+                let msg = error.localizedDescription
+                await MainActor.run { busy = nil; actionError = msg }
+            }
+        }
+    }
+}
+
+// MARK: - Admin rights
+
+/// owner 2026-10-18: EDIT ADMIN RIGHTS. One switch per right, saved as it is flipped. The owner sees
+/// every right; an admin with "Add new admins" sees only the rights they hold themselves (they
+/// cannot give more than they have; firestore.rules `delegatedAdminEditOK` refuses it anyway).
+struct AdminRightsView: View {
+    let cid: String
+    let uid: String
+    let name: String
+    let grantable: [String]
+    @Binding var rights: Set<String>
+    @State private var saving = false
+    @State private var actionError: String?
+
+    private var shown: [Conversation.Right] {
+        Conversation.Right.allCases.filter { grantable.contains($0.rawValue) }
+    }
+
+    var body: some View {
+        List {
+            // owner 2026-10-18: full access in one switch, or a small set below.
+            Section {
+                Toggle(isOn: Binding(
+                    get: { shown.allSatisfy { rights.contains($0.rawValue) } },
+                    set: { on in
+                        var next = rights
+                        for r in shown { if on { next.insert(r.rawValue) } else { next.remove(r.rawValue) } }
+                        save(next)
+                    })) {
+                    Text("All rights").fontWeight(.semibold)
+                }
+                .disabled(saving)
+            }
+            Section {
+                ForEach(shown) { r in
+                    Toggle(r.label, isOn: Binding(
+                        get: { rights.contains(r.rawValue) },
+                        set: { on in
+                            var next = rights
+                            if on { next.insert(r.rawValue) } else { next.remove(r.rawValue) }
+                            save(next)
+                        }))
+                        .disabled(saving)
+                }
+            } header: {
+                Text("What \(name) can do")
+            } footer: {
+                Text("\(name) can only do what is switched on here. Nobody but the owner can remove or change the owner.")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Admin Rights")
+        .navigationBarTitleDisplayMode(.inline)
+        .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
+                                                          set: { if !$0 { actionError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(actionError ?? "") }
+    }
+
+    private func save(_ next: Set<String>) {
+        let old = rights
+        rights = next
+        saving = true
+        // Only what I may grant goes out, so a list with a right I no longer hold is not refused.
+        let list = Conversation.Right.allCases.map(\.rawValue).filter { next.contains($0) && grantable.contains($0) }
+        Task {
+            do {
+                try await ChatService.setAdminRights(cid: cid, uid: uid, rights: list)
+                await MainActor.run { saving = false }
+            } catch {
+                let msg = error.localizedDescription
+                await MainActor.run { rights = old; saving = false; actionError = msg }
+            }
+        }
+    }
+}
 
 // MARK: - Members
 
