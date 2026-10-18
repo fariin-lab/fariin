@@ -1507,7 +1507,7 @@ struct StoriesTabView: View {
         return [CMAction(title: official ? "Open Messages" : "Send Message", icon: "ic_menu_chat") { openStoryChat(g) }]
             + (official ? [] : [CMAction(title: "View Profile", icon: "ic_account") { profileGroup = g }])
             + (official ? [] : [CMAction(title: notifyOn ? "Mute Notifications" : "Get Notifications",
-                                         icon: notifyOn ? "ic_bell_off" : "ic_notifications") {
+                                         icon: notifyOn ? "ic_bell_muted" : "ic_notifications") {
                 StoryNotifyStore.shared.toggle(g.authorUid)
             }])
             // The alert, not the hide: `StoryPrefs.setHidden` happens on the confirmation. See
