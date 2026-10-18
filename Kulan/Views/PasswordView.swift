@@ -73,6 +73,8 @@ struct PasswordView: View {
     @State private var resetCodeOpen = false
     @State private var resetAddress = ""
     @State private var busy = false
+    /// Set when a save was stopped for a fresh sign-in; the sign-in's success finishes that save.
+    @State private var saveAfterReauth = false
     @Environment(\.colorScheme) private var scheme   // 2026-09-24 fix-all #204: Apple button style
     @State private var error: String?
     @State private var done = false
@@ -362,7 +364,18 @@ struct PasswordView: View {
         Task {
             do {
                 try await work()
-                await MainActor.run { busy = false; currentPassword = ""; gate = .open }
+                await MainActor.run {
+                    busy = false; gate = .open
+                    // A change resuming its save still needs the current password it was typed with.
+                    if !saveAfterReauth { currentPassword = "" }
+                    // ⛔ 2026-10-18, owner: after the Apple check the form came back and wanted Save a
+                    // second time. The re-check was asked FOR a save, and the new password is still in
+                    // the fields, so the save finishes now.
+                    if saveAfterReauth {
+                        saveAfterReauth = false
+                        if rules.allMet { save() }
+                    }
+                }
             } catch {
                 await MainActor.run {
                     busy = false
@@ -426,7 +439,7 @@ struct PasswordView: View {
                 // Not an error to show, a step to offer. Firebase's own wording here is "This
                 // operation is sensitive and requires recent authentication", which reads as a
                 // failure and gives nobody anything to do about it.
-                await MainActor.run { busy = false; error = nil; gate = .needsReauth }
+                await MainActor.run { busy = false; error = nil; saveAfterReauth = true; gate = .needsReauth }
             } catch {
                 await MainActor.run {
                     busy = false
