@@ -408,11 +408,11 @@ struct MediaDismissHost: UIViewRepresentable {
             case .changed:
                 guard active, let c = container else { return }
                 let o = g.translation(in: root)
-                if parent.style == .storyEditor {
-                    // `previewFrame.y + dismissOffset`: vertical only, nothing else moves.
-                    c.center = CGPoint(x: fromFrame.midX, y: fromFrame.midY + o.y)
-                    return
-                }
+                // ⛔ THE ATTACH EDITOR'S DRAG FOR THE STORY EDITOR TOO (owner 2026-10-18, build 972:
+                // "when I scroll down it only moves down; make it exactly like the attach sheet's
+                // image"). The vertical-only, full-size drag is gone: the picture follows the finger
+                // both ways, shrinks to 0.8 with the shadow and the rest fades, as below. The black
+                // still leaves at the start (`.began`) and the landing keeps the story curve.
                 let progress = min(1, max(0, hypot(o.x, o.y) / Self.distanceToCompletion))
                 // 1:1 finger lock (center = fromFrame.offsetBy(offset).center) — both axes, raw.
                 c.center = CGPoint(x: fromFrame.midX + o.x, y: fromFrame.midY + o.y)
@@ -460,10 +460,8 @@ struct MediaDismissHost: UIViewRepresentable {
                 // (1000pt/s) or a long drag; its distance is a quarter of the screen, which he has
                 // called too heavy before (160pt), so the distance here is 120pt. A drag that is
                 // travelling back up fast when released cancels even past the distance.
-                let commit = parent.style == .storyEditor
-                    // Theirs, both directions: `abs(translation.y) > height * 0.33 || abs(velocity.y) > 1000`.
-                    ? abs(o.y) > root.bounds.height * 0.33 || abs(v.y) > 1000
-                    : (o.y > 120 && v.y > -300) || (v.y > 1000 && o.y > 20)
+                // One rule for both since 2026-10-18 (the story editor drags like the attach editor).
+                let commit = (o.y > 120 && v.y > -300) || (v.y > 1000 && o.y > 20)
                 imageCloseLog.info("drag ended: dy \(Int(o.y)) vy \(Int(v.y)) -> \(commit ? "finish" : "cancel")")
                 if commit {
                     finish(offset: o, velocity: v)
