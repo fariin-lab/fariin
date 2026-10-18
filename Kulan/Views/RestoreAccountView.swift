@@ -52,11 +52,20 @@ struct RestoreAccountView: View {
                     .font(.system(size: 40, weight: .light))
                     .foregroundStyle(.secondary)
 
+                // owner 2026-10-18: SAY THE STATE IN SO MANY WORDS. Somebody who signed in to an
+                // account they asked to delete has to learn, before anything else, that it is
+                // waiting to be deleted and on which day. A small label, so the reassurance under it
+                // still leads.
+                Text("Scheduled for deletion on \(dueText)")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 16)
+
                 Text("Everything is still here")
                     .font(.title2.weight(.bold))
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 18).padding(.horizontal, 28)
+                    .padding(.top, 8).padding(.horizontal, 28)
 
                 Text(handle.isEmpty
                      ? "Your chats, your photos and your name. Nothing has been deleted."
@@ -71,7 +80,8 @@ struct RestoreAccountView: View {
                 } label: {
                     Group {
                         if working { ProgressView().tint(AuthPalette.page) }
-                        else { Text("Bring my account back") }
+                        // owner 2026-10-18: named for what it does to the deletion.
+                        else { Text("Cancel Deletion") }
                     }
                     .authDoorPill()
                 }
@@ -82,8 +92,8 @@ struct RestoreAccountView: View {
                 // The deadline is a fact, not a threat, so it sits UNDER the way back rather than
                 // above it. A date as well as a countdown: one is checkable, the other is felt.
                 Text(daysLeft == 0
-                     ? "Today is the last day. It is deleted on \(dueText)."
-                     : "It is deleted on \(dueText), \(daysLeft) day\(daysLeft == 1 ? "" : "s") from now.")
+                     ? "Today is the last day. Cancel now to keep your account."
+                     : "\(daysLeft) day\(daysLeft == 1 ? "" : "s") left. Cancel any time before then to keep your account as it is.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -128,7 +138,9 @@ struct RestoreAccountView: View {
                     // `await` because both are main-actor and this closure's isolation is not
                     // spelled out; on the main actor already it is only a no-op warning.
                     await DeviceRegistry.shared.stopWatching()
-                    try await ProfileStore.shared.deleteAccount()
+                    // owner 2026-10-18: the SERVER finishes it now (purgeAccountNow), profile
+                    // included. The phone-only path left the profile behind; see deleteAccountNow.
+                    try await ProfileStore.shared.deleteAccountNow()
                     // And wipe this phone's copy, as Delete Account and Sign Out both do. This door
                     // never did, so the next account on the phone inherited the deleted one's cached
                     // chats, drafts, photos and settings.
@@ -137,7 +149,7 @@ struct RestoreAccountView: View {
                 }
             }
         } message: {
-            Text("This finishes the deletion straight away instead of waiting until \(dueText). It cannot be undone.")
+            Text("This deletes your account, profile, username and stories straight away instead of on \(dueText). It cannot be undone.")
         }
     }
 

@@ -19,10 +19,44 @@ struct DeleteAccountView: View {
     @Environment(\.colorScheme) private var scheme
     private var profile = ProfileStore.shared
 
-    private enum Step { case confirm, verify, working }
+    // owner 2026-10-18: "a professional account deletion experience". The order, from what the large
+    // messengers do, in our own words: what happens (and what does not), a way to take your data
+    // first, an optional reason, prove it is you, one last destructive confirm, then a page that
+    // says the deletion is scheduled and on which day. `done` is that last page.
+    private enum Step { case confirm, verify, working, done }
     @State private var step: Step = .confirm
     @State private var error: String?
     @State private var password = ""
+    /// The final "are you sure" after the sign-in check, before anything is written.
+    @State private var confirmFinal = false
+    @State private var reason: LeaveReason = .none
+    @State private var exportFile: ExportFile?
+    @State private var exporting = false
+    @State private var scheduledFor: Date?
+
+    /// The optional answer. Raw values are the slugs `scheduleAccountDeletion` accepts.
+    private enum LeaveReason: String, CaseIterable, Identifiable {
+        case none = "", notUsing = "not-using", privacy, otherApp = "other-app",
+             unwanted = "unwanted-messages", problems, other
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .none: return "Prefer not to say"
+            case .notUsing: return "I don't use it any more"
+            case .privacy: return "Privacy worries"
+            case .otherApp: return "I use another app"
+            case .unwanted: return "Unwanted messages"
+            case .problems: return "Something isn't working"
+            case .other: return "Something else"
+            }
+        }
+    }
+
+    /// The day the server will purge: its own date once scheduled, else the same arithmetic.
+    private var dueText: String {
+        let d = scheduledFor ?? Calendar.current.date(byAdding: .day, value: ProfileStore.gracePeriodDays, to: Date()) ?? Date()
+        return d.formatted(.dateTime.day().month(.wide).year())
+    }
     /// 2026-09-24 fix-all #144: true from the moment a re-auth is confirmed until it succeeds or
     /// fails. The page stays on the verify screen with a spinner under the doors, instead of
     /// `.working` swapping back to the step-one form while the request runs.
@@ -35,7 +69,9 @@ struct DeleteAccountView: View {
             // The verify step is ONE focused security gate, so it gets a centred page of its own. As a
             // Form section it stacked at the top and left two thirds of the screen empty under a bare
             // white bar, which is what looked unfinished.
-            if step == .verify || verifying {   // 2026-09-24 fix-all #144
+            if step == .done {
+                donePage
+            } else if step == .verify || verifying {   // 2026-09-24 fix-all #144
                 verifyPage
             } else {
                 deleteForm
@@ -44,8 +80,52 @@ struct DeleteAccountView: View {
         .navigationTitle("Delete Account")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
-        .interactiveDismissDisabled(step == .working)
+        // owner 2026-10-18: once scheduled, the only way out is Done, which signs out.
+        .navigationBarBackButtonHidden(step == .done)
+        .interactiveDismissDisabled(step == .working || step == .done)
         .disabled(step == .working)
+        .alert(handle.isEmpty ? "Delete your account?" : "Delete @\(handle)?", isPresented: $confirmFinal) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete Account", role: .destructive) { scheduleNow() }
+        } message: {
+            Text("You will be signed out and your account hidden. It is deleted for good on \(dueText) unless you sign in before then.")
+        }
+        .sheet(item: $exportFile, onDismiss: { DataExport.cleanup() }) { f in ActivityView(items: [f.url]) }
+    }
+
+    // MARK: - Last page: scheduled
+
+    private var donePage: some View {
+        ScrollView {
+            VStack(spacing: 14) {
+                Image(systemName: "calendar.badge.clock")
+                    .font(.system(size: 44, weight: .light))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 48)
+                Text("Deletion Scheduled").font(.title2.weight(.bold))
+                Text(handle.isEmpty
+                     ? "Your account will be deleted on \(dueText)."
+                     : "@\(handle) will be deleted on \(dueText).")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Until then nobody can find you or see your profile. Changed your mind? Sign in before that day and choose Cancel Deletion.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button { Task { await finishSignOut() } } label: {
+                    Text("Done").fontWeight(.semibold)
+                        .frame(maxWidth: .infinity).frame(height: 52)
+                        .foregroundStyle(Color(.systemBackground))
+                        .background(Color.primary, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 20)
+            }
+            .padding(.horizontal, 28)
+            .frame(maxWidth: .infinity)
+        }
+        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
     }
 
     private var deleteForm: some View {
@@ -110,17 +190,52 @@ struct DeleteAccountView: View {
 
     @ViewBuilder private var confirmSection: some View {
         Section {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Permanently Delete Account")
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Delete Your Account")
                     .font(.title2.weight(.bold))
-                Text("Your account is hidden now and deleted after \(ProfileStore.gracePeriodDays) days. Sign in before then to restore it.")
+                Text("Read what happens before you go on. Nothing is deleted on this page.")
                     .font(.subheadline).foregroundStyle(.secondary)
-                // Honest about what deleting your account does NOT reach: messages already
-                // delivered live on other people's phones, and we can't reach into those.
-                Text("Messages you already sent stay on the phones of the people you sent them to.")
-                    .font(.footnote).foregroundStyle(.secondary)
             }
             .padding(.vertical, 4)
+        }
+
+        // owner 2026-10-18: what happens, step by step, and what it does NOT reach. Must agree with
+        // kpurgeOne (functions-loginalert) and with the restore screen.
+        Section("What happens") {
+            factRow("eye.slash", "Hidden right away",
+                    "You are signed out. Nobody can find you, see your profile or your stories.")
+            factRow("calendar", "Deleted for good on \(dueText)",
+                    "Your profile, photo, username, stories and group memberships are removed. Your username becomes free for others after a while.")
+            factRow("arrow.uturn.backward", "You can change your mind",
+                    "Sign in before that day and choose Cancel Deletion. Everything comes back as it was.")
+            // Honest about what deleting your account does NOT reach: messages already
+            // delivered live on other people's phones, and we can't reach into those.
+            factRow("bubble.left.and.bubble.right", "What stays",
+                    "Messages you already sent stay with the people who got them. Your name there becomes Deleted Account.")
+        }
+
+        // Take a copy first: the account report from Settings, offered where it matters most.
+        Section {
+            Button { Task { await exportData() } } label: {
+                HStack {
+                    Label("Download My Data First", systemImage: "arrow.down.doc")
+                    Spacer()
+                    if exporting { ProgressView() }
+                }
+            }
+            .disabled(exporting)
+        } footer: {
+            Text("A file with your account details, before they are gone.")
+        }
+
+        Section {
+            Picker("Reason", selection: $reason) {
+                ForEach(LeaveReason.allCases) { r in Text(r.label).tag(r) }
+            }
+        } header: {
+            Text("Why are you leaving? (optional)")
+        } footer: {
+            Text("Only the reason is kept, not who gave it.")
         }
 
         if !handle.isEmpty {
@@ -142,7 +257,7 @@ struct DeleteAccountView: View {
                     if step == .working {
                         ProgressView()
                     } else {
-                        Text("Delete Account").fontWeight(.semibold)
+                        Text("Continue").fontWeight(.semibold)   // owner 2026-10-18: not the last step
                     }
                     Spacer()
                 }
@@ -208,7 +323,7 @@ struct DeleteAccountView: View {
                 } label: {
                     // Grey until there is a password, the way a system button is disabled; red only
                     // once pressing it would actually delete.
-                    Text("Delete Account").fontWeight(.semibold)
+                    Text("Continue").fontWeight(.semibold)   // owner 2026-10-18: a confirm follows
                         .frame(maxWidth: .infinity).frame(height: 52)
                         .foregroundStyle(password.isEmpty ? Color.secondary : Color.white)
                         .background(password.isEmpty ? Color(uiColor: .tertiarySystemFill) : Color.red,
@@ -262,7 +377,9 @@ struct DeleteAccountView: View {
             defer { verifying = false }   // 2026-09-24 fix-all #144
             do {
                 try await work()
-                await performScheduling()
+                // owner 2026-10-18: proven, now the one last confirm. Nothing written yet.
+                step = .verify
+                confirmFinal = true
             } catch {
                 // Only the password is in question on this screen; the email is not something the
                 // person typed, so the front door's "wrong email or password" would send them
@@ -275,10 +392,40 @@ struct DeleteAccountView: View {
         }
     }
 
+    /// No sign-in door to check (legacy anonymous session): straight to the last confirm.
     private func deleteNow() {
+        error = nil
+        confirmFinal = true
+    }
+
+    /// The last confirm said yes.
+    private func scheduleNow() {
         step = .working
         error = nil
         Task { await performScheduling() }
+    }
+
+    private func factRow(_ icon: String, _ title: String, _ detail: String) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 18))
+                .foregroundStyle(.secondary)
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.subheadline.weight(.semibold))
+                Text(detail).font(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// The same account report Settings › Download My Data makes (`DataExport.accountReport`).
+    private func exportData() async {
+        exporting = true
+        defer { exporting = false }
+        do { exportFile = ExportFile(url: try await DataExport.accountReport()) }
+        catch { self.error = error.localizedDescription }
     }
 
     /// The normal path now SCHEDULES the deletion instead of performing it, so a change of mind within
@@ -289,7 +436,21 @@ struct DeleteAccountView: View {
     private func performScheduling() async {
         do {
             await AuthService.shared.reportAccountDeletion()
-            try await profile.scheduleDeletion()
+            try await profile.scheduleDeletion(reason: reason.rawValue)
+            // owner 2026-10-18: show the date before signing out. If the app is killed on this page
+            // the next launch lands on the restore screen anyway (RootView reads the same field).
+            scheduledFor = profile.me?.deletionScheduledFor
+            step = .done
+        } catch {
+            self.error = AuthService.plainMessage(error)
+            step = .confirm
+        }
+    }
+
+    /// Done on the scheduled page: the sign-out half of what used to follow the schedule at once.
+    private func finishSignOut() async {
+        step = .working
+        do {   // nothing here throws; kept as a block so the steps read in order
             if let uid = Auth.auth().currentUser?.uid { LastAccount.forget(uid) }   // not offered on Log In
             // Same order Settings uses: stop this phone's pushes while we still have auth, then sign out.
             await Push.unregister()
@@ -304,9 +465,6 @@ struct DeleteAccountView: View {
             SessionWipe.wipeAccountData()
             dismiss()
             onDeleted()
-        } catch {
-            self.error = AuthService.plainMessage(error)
-            step = .confirm
         }
     }
 

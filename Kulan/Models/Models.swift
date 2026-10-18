@@ -988,6 +988,14 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var acceptedBy: String
     /// 2026-10-10: when the request was accepted (server stamp, onRequestAccepted). 0 = unknown.
     var acceptedAtMillis: Double
+    /// owner 2026-10-18: members whose account was deleted for good. Written only by the server's
+    /// purge (kpurgeOne, functions-loginalert), which also renames them to "Deleted Account" in
+    /// `names`. Empty during the 30-day grace period: only a finished deletion lands here.
+    var deletedUsers: [String] = []
+
+    /// The label for a member whose account is gone. Same words the server writes into `names`.
+    static let deletedAccountName = "Deleted Account"
+    func isDeletedAccount(_ uid: String) -> Bool { !uid.isEmpty && deletedUsers.contains(uid) }
 
     init(id: String, data: [String: Any]) {
         self.id = id
@@ -1058,6 +1066,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.acceptedVia = data["acceptedVia"] as? String ?? ""
         self.acceptedBy = data["acceptedBy"] as? String ?? ""
         self.acceptedAtMillis = ((data["acceptedAt"] as? Timestamp)?.dateValue().timeIntervalSince1970 ?? 0) * 1000
+        self.deletedUsers = data["deletedUsers"] as? [String] ?? []
         self.restrictedFlags = stringArrayMap(data["restrictedFlags"])
         self.restrictedUntil = doubleMap(data["restrictedUntil"])
         self.lastReactionEnc = data["lastReactionEnc"] as? String
@@ -1083,6 +1092,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     func otherUid(_ me: String) -> String { users.first { $0 != me } ?? "" }
     func name(for me: String) -> String {
         let other = otherUid(me)
+        // owner 2026-10-18: a deleted account is "Deleted Account" even under a saved contact name,
+        // the way the reference app shows one. Only after the purge, never during the grace period.
+        if !isGroup, isDeletedAccount(other) { return Self.deletedAccountName }
         // 1:1 only: a locally-saved contact name overrides the profile name.
         if !isGroup, let custom = ContactNames.shared.name(for: other) { return custom }
         return names[other] ?? "User"
@@ -1096,6 +1108,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// newer `?v=` stamp wins, and an empty mirror never hides a known photo.
     func photoUrl(for me: String) -> String? {
         let other = otherUid(me)
+        // owner 2026-10-18: no picture for a deleted account, not even one this phone remembers.
+        if !isGroup, isDeletedAccount(other) { return nil }
         let mirror = photos[other].flatMap { $0.isEmpty ? nil : $0 }
         let known = ProfilePhotoIndex.facts(other)?.photo
         guard let known, !known.isEmpty else { return photos[other] }
@@ -1111,7 +1125,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     }
     /// nil when they have never set a poster — the profile then draws the classic circle, which is
     /// also what everyone who last set a photo before this existed will get until they set a new one.
-    func posterUrl(for me: String) -> String? { posters[otherUid(me)] }
+    func posterUrl(for me: String) -> String? {
+        isDeletedAccount(otherUid(me)) ? nil : posters[otherUid(me)]   // owner 2026-10-18
+    }
 
     // ── Group helpers ──
     var isGroup: Bool { convType == "group" }

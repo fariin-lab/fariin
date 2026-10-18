@@ -4,6 +4,7 @@ import Observation
 import FirebaseAuth
 import FirebaseFirestore
 import FirebaseStorage
+import FirebaseFunctions
 
 /// My profile + lookups for other users. The header avatar reads `me` (loaded
 /// once at launch) — native TabView keeps it mounted, so no re-fetch/blink.
@@ -510,12 +511,14 @@ final class ProfileStore {
     ///
     /// Apple's in-app-deletion rule (5.1.1(v)) is satisfied by deletion being STARTED in the app; a
     /// grace period is allowed, which is how the standard messengers do it.
-    func scheduleDeletion() async throws {
+    /// `reason`: owner 2026-10-18, the optional answer from the delete page (a fixed slug the server
+    /// checks against its own list; empty = not answered). Stored by the server with no uid.
+    func scheduleDeletion(reason: String = "") async throws {
         guard Auth.auth().currentUser != nil else { throw AuthFlowError.notSignedIn }
         // 2026-09-24 decision D6: the server sets the date (its own now + 30 days) and `isHidden`;
         // the rules refuse this phone writing `deletionScheduledFor` itself. See
         // `scheduleAccountDeletion` in functions-account.
-        let d = try await AccountCall.run("scheduleAccountDeletion")
+        let d = try await AccountCall.run("scheduleAccountDeletion", reason.isEmpty ? [:] : ["reason": reason])
         if let ms = d["due"] as? Double {
             me?.deletionScheduledFor = Date(timeIntervalSince1970: ms / 1000)
         } else if let ms = d["due"] as? Int {
@@ -546,6 +549,37 @@ final class ProfileStore {
         ], merge: true)
         me?.deletionScheduledFor = nil
         me = await fetch(user.uid)
+    }
+
+    /// "Delete it now", by the SERVER (owner 2026-10-18). `purgeAccountNow` (functions-loginalert)
+    /// runs the same purge as the 30-day job, profile included. The phone-side `deleteAccount()`
+    /// below cannot remove the profile (the rules have no delete on users/{uid}), so it left a named,
+    /// hidden profile with no sign-in behind it, and that is how a deleted account's chat kept its
+    /// composer. Kept only as the fallback while the function is not deployed yet.
+    func deleteAccountNow() async throws {
+        guard let user = Auth.auth().currentUser else { return }
+        let uid = user.uid
+        // Straight to the SDK, not `AccountCall.run`: that one rewrites every error into a sentence,
+        // and the fallback below needs the raw "not found" code.
+        do {
+            _ = try await Functions.functions(region: "me-central1")
+                .httpsCallable("purgeAccountNow").call()
+        } catch let e as NSError where e.domain == FunctionsErrorDomain
+                    && e.code == FunctionsErrorCode.notFound.rawValue {
+            try await deleteAccount()
+            return
+        } catch let e as NSError where e.domain == FunctionsErrorDomain {
+            // Same words the other account screens use; `reauth` = the sign-in is too old.
+            if let details = e.userInfo["details"] as? [String: Any], details["reauth"] as? Bool == true {
+                throw AccountCall.Failure.message("For your security, sign out and sign in again, then choose Delete it now.")
+            }
+            throw AccountCall.Failure.message(e.localizedDescription)
+        }
+        // The server removed the account; this phone's copies of its keys go too, as below.
+        Crypto.shared.destroyIdentity(uid: uid)
+        ChatPin.forgetLocalCopy(uid: uid)
+        try? Auth.auth().signOut()
+        me = nil
     }
 
     /// PERMANENTLY delete the account: removes the profile doc and the Firebase auth user.
