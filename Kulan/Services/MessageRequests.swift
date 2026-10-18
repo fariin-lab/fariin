@@ -50,7 +50,33 @@ enum MessageRequests {
         case firstMessage
     }
 
+    /// What the screen offers, with the admin panel's switch applied (owner 2026-10-18, MsgPolicy).
+    /// With Message Requests OFF for the person being written to, a stranger's chat is an ordinary
+    /// chat on both phones: in the recipient's main list with a composer (no Accept/Delete), and on
+    /// the sender's side no "request sent" wait and no 150-character text-only first message.
+    ///
+    /// ⚠️ THE CONVERSATION STAYS A REQUEST UNDERNEATH (`startedBy`, `accepted: false`) until the
+    /// recipient answers, and their reply writes `accepted` as it does today (`ChatService.sendText`,
+    /// `healAnsweredRequests`). So "friends" (stories, "My Chats" privacy, calls) still begins at the
+    /// reply, exactly as an accepted request, and flipping the switch back on later puts any still
+    /// unanswered chat back into Message Requests. `rawStance` is today's reading, for the knock
+    /// counter and anything that must not move with the switch.
     static func stance(_ c: Conversation, myUid: String = ChatService.uid) -> Stance {
+        let s = rawStance(c, myUid: myUid)
+        switch s {
+        case .open:
+            return .open
+        case .incoming:
+            // I am the one being asked: MY setting.
+            return MsgPolicy.shared.requestsOn(for: myUid) ? .incoming : .open
+        case .awaitingReply, .firstMessage:
+            // I am asking: THEIR setting.
+            return MsgPolicy.shared.requestsOn(for: c.otherUid(myUid)) ? s : .open
+        }
+    }
+
+    /// Today's reading of the two fields, with no admin switch applied.
+    static func rawStance(_ c: Conversation, myUid: String = ChatService.uid) -> Stance {
         // Groups are never requests: you were added by a member, which is its own permission.
         guard c.convType != "group", !c.startedBy.isEmpty, !c.accepted else { return .open }
         // THE REQUESTER IS WHOEVER SPOKE FIRST, not whoever opened the document. Opening a chat and

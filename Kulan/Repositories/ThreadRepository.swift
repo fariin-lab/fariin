@@ -805,6 +805,9 @@ final class ThreadRepository {
                     }
                     let privacy = (snap.data()?["privacy"] as? [String: String]) ?? [:]
                     self?.otherPrivacy = privacy
+                    // owner 2026-10-18: their admin-panel override (Message Requests / Chat Key) rides
+                    // the same snapshot, so a flip reaches this open chat at once.
+                    MsgPolicy.shared.record(uid: other, data: snap.data())
                     // 2026-09-24 decision D15: a deleted account is one whose profile is GONE.
                     // ⛔ 2026-10-18, owner: "after 30 days" — inside the deletion grace period
                     // (isHidden + deletionScheduledFor) they can still come back, so the chat stays

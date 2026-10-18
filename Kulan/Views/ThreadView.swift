@@ -2102,9 +2102,9 @@ struct ThreadView: View {
         // Owner decision 2026-10-10: ask the server once per chat whether they have a Chat Key (a
         // cached answer paints at once). 1:1 only; a group has no key.
         .task(id: cid) {
-            guard !isGroup, !otherUid.isEmpty else { otherHasKey = false; return }
-            otherHasKey = ChatPin.cachedKeyExists(uid: otherUid) ?? false
-            otherHasKey = await ChatPin.keyExists(uid: otherUid) ?? false
+            guard !isGroup, !otherUid.isEmpty else { otherKeyKnown = false; return }
+            otherKeyKnown = ChatPin.cachedKeyExists(uid: otherUid) ?? false
+            otherKeyKnown = await ChatPin.keyExists(uid: otherUid) ?? false
         }
         .onChange(of: requestStance) { old, new in
             // ⛔ THE KEYBOARD GOES WITH THE COMPOSER — owner, 2026-09-25: after the first message the
@@ -2883,7 +2883,10 @@ struct ThreadView: View {
     @State private var keyAccepted = false
     /// Owner decision 2026-10-10: they HAVE a Chat Key (server `chatKeyExists`). Only then is "Use
     /// Chat Key" offered anywhere in this chat; false until the server says yes.
-    @State private var otherHasKey = false
+    @State private var otherKeyKnown = false
+    /// owner 2026-10-18: and the admin panel has not hidden the Chat Key (MsgPolicy). Every "Use Chat
+    /// Key" door in this chat reads this one value, so hiding the key closes all of them at once.
+    private var otherHasKey: Bool { otherKeyKnown && MsgPolicy.shared.chatKeyVisible }
     @State private var cachedConv: Conversation?
     private var conversation: Conversation? { cachedConv }
     private var isGroup: Bool { conversation?.isGroup ?? false }
@@ -8040,6 +8043,9 @@ struct ThreadView: View {
     // here on the sender's client; existing chats are unaffected.
     private var cannotMessageThem: Bool {
         guard !isGroup, !repo.iBlocked else { return false }
+        // owner 2026-10-18: the admin panel has their Chat Key requirement off (or the key hidden),
+        // so their "People Who Know My Chat Key" choice is not enforced; the rules agree.
+        guard MsgPolicy.shared.chatKeyRequired(for: otherUid) else { return false }
         let audience = Audience(rawValue: repo.otherPrivacy["messages"] ?? "") ?? .everyone
         if audience == .everyone { return false }
         return !hasChatHistory

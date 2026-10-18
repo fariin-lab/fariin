@@ -99,6 +99,7 @@ enum SessionWipe {
         // for the gap between this sign-out and the next snapshot. Which tier they resolve to is
         // read live off `ProfileStore.me`, and that is nil'd a few lines below.
         AppLimits.shared.stop()
+        MsgPolicy.shared.stop()   // owner 2026-10-18: my override goes with the account
         RemoteFeatures.shared.stop()   // saved switches stay: they describe the app, not the person
         // The story audiences are a list of the last person's friends by name, mirrored to disk so
         // the share sheet can open instantly. Left behind, the next account's Share Story sheet

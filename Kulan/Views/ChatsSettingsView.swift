@@ -30,6 +30,8 @@ struct ChatsSettingsView: View {
             // ⛔ CHAT PIN, FIRST ON THIS PAGE — owner, 2026-09-11: "chatpin feature also add in
             // setting/chats ... user can see easy". The same page the Chats title menu and
             // Privacy › Messages open; this is a third door, not a second copy.
+            // owner 2026-10-18: gone while the admin panel hides the Chat Key (MsgPolicy).
+            if MsgPolicy.shared.chatKeyVisible {
             Section {
                 NavigationLink { ChatPinPage() } label: {
                     HStack {
@@ -42,6 +44,7 @@ struct ChatsSettingsView: View {
                 }
             } footer: {
                 Text("A private number you can share. Anyone who knows it can message and call you directly.")
+            }
             }
 
             Section {

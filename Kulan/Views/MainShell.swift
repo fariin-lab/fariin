@@ -1939,6 +1939,12 @@ struct ChatsView: View {
         // Message Requests page and nowhere else; my OWN unanswered request to somebody stays
         // here, because that is my chat and I am the one waiting.
         out = out.filter { MessageRequests.stance($0, myUid: me) != .incoming }
+        // owner 2026-10-18: with Message Requests switched off (MsgPolicy) a stranger's chat comes
+        // straight here, so a stranger I have BLOCKED stays out of the list, as their request stays
+        // off the Requests page today. Nothing of theirs shows until I answer or unblock.
+        out = out.filter { (c: Conversation) -> Bool in
+            !(MessageRequests.rawStance(c, myUid: me) == .incoming && c.isBlockedByMe(me))
+        }
         // A 1:1 chat you merely OPENED (from search / a profile) but never exchanged a message
         // in stays OUT of the list (standard behavior) until something real happens: a message
         // either way, an unread, a pin, or a draft you typed. Groups always list — creating
@@ -2040,8 +2046,11 @@ struct ChatsView: View {
             // `circle.grid.3x3.fill` was the keypad stand-in this shipped with and it said "number
             // pad" rather than "key". Template SVG in the catalogue, so `MenuIcon`'s asset init
             // picks it up and the tint still reaches it.
-            Button { path.append(ChatPinRoute.mine) } label: {
-                Label { Text("Chat Key") } icon: { MenuIcon("ic_chat_key") }
+            // owner 2026-10-18: gone while the admin panel hides the Chat Key (MsgPolicy).
+            if MsgPolicy.shared.chatKeyVisible {
+                Button { path.append(ChatPinRoute.mine) } label: {
+                    Label { Text("Chat Key") } icon: { MenuIcon("ic_chat_key") }
+                }
             }
             Button { path.append(ArchiveRoute.archive) } label: {
                 Label { Text("Archive") } icon: { MenuIcon("ic_archive") }

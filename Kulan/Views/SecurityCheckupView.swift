@@ -303,6 +303,8 @@ struct SecurityCheckupSheet: View {
                   why: "People who know your Chat Key can start a chat with you.",
                   status: check.chatKey, open: { open = .chatKey }),
         ]
+        // owner 2026-10-18: no Chat Key row while the admin panel hides the Chat Key (MsgPolicy).
+        .filter { $0.id != "chatKey" || MsgPolicy.shared.chatKeyVisible }
     }
 
     var body: some View {

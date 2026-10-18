@@ -1035,12 +1035,24 @@ enum ChatService {
         // that counter. The local mirror answers first; a chat born a moment ago that the listener
         // has not delivered yet is read from the server, because that brand-new chat is exactly
         // the case this counts. See `MessageRequests.countKnock` for why it is best effort.
-        var knocking = await MainActor.run {
-            ConversationsRepository.shared.conversations.first { $0.id == cid }
-                .map { MessageRequests.stance($0) == .firstMessage }
+        // owner 2026-10-18: `rawStance`, not `stance`. With Message Requests switched off in the
+        // admin panel the first message to a stranger is still a new chat with a stranger, and the
+        // rules still hold it to the day's budget, so it is still counted.
+        // ...and `answering`: a reply to somebody else's unanswered chat carries `accepted: true`
+        // in the same write. With requests on the composer only exists after Accept, so this
+        // changes nothing; with them off it is the one moment "friends" begins.
+        var knocking: Bool?
+        var answering = false
+        let localConv = await MainActor.run { ConversationsRepository.shared.conversations.first { $0.id == cid } }
+        if let localConv {
+            let raw = MessageRequests.rawStance(localConv)
+            knocking = raw == .firstMessage
+            answering = raw == .incoming
         }
         if knocking == nil, let d = (try? await convRef.getDocument())?.data() {
-            knocking = MessageRequests.stance(Conversation(id: cid, data: d)) == .firstMessage
+            let raw = MessageRequests.rawStance(Conversation(id: cid, data: d))
+            knocking = raw == .firstMessage
+            answering = raw == .incoming
         }
         if knocking == true { await MessageRequests.countKnock(clientId: clientId) }   // 2026-09-24 feature-audit: once per clientId
 
@@ -1107,7 +1119,9 @@ enum ChatService {
         // message as plain short text and refuse `linkPreview` on it, so the card turned every first
         // message holding a link into a send that failed on every Resend. Stripped here rather than
         // only in the composer, so a queued retry or a forward is covered too; the link stays in the text.
-        let knockPreview = (knocking == true || isNewConv) ? nil : preview
+        // owner 2026-10-18: not with Message Requests off for them (MsgPolicy); the rules take any
+        // first message then, card included.
+        let knockPreview = ((knocking == true || isNewConv) && MsgPolicy.shared.requestsOn(for: other)) ? nil : preview
         if let knockPreview, let lp = await sealLinkPreview(knockPreview, cid: cid, members: nil, msgId: msgRef.documentID) {
             msg["linkPreview"] = lp
         }
@@ -1118,6 +1132,7 @@ enum ChatService {
             "updatedAt": FieldValue.serverTimestamp(),
         ]
         if countsAsUnread { convUpdate["unreadCount.\(other)"] = FieldValue.increment(Int64(1)) }
+        if answering { convUpdate["accepted"] = true }   // owner 2026-10-18, see `answering` above
         batch.updateData(convUpdate, forDocument: convRef)
         try await commitTextInTurn(batch, turn: turn, clientId: clientId)
     }

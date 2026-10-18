@@ -460,14 +460,18 @@ struct MessagesPrivacyPage: View {
                 // NO "No One" HERE (owner 2026-08-04). Messaging is the app; a switch that turns it
                 // off entirely is being held back as a paid option rather than shipped as a way to
                 // make yourself unreachable by accident. The other two audiences are unchanged.
-                ForEach(PrivacyPrefs.options(for: "messages"), id: \.self) { a in
+                // owner 2026-10-18: while the admin panel hides the Chat Key (MsgPolicy) the key
+                // option is not offered and Everyone carries the tick, because that is what is in
+                // force. The stored choice is left alone, so it is back when the key is shown again.
+                ForEach(PrivacyPrefs.options(for: "messages")
+                            .filter { $0 != .contacts || MsgPolicy.shared.chatKeyVisible }, id: \.self) { a in
                     Button {
                         choose(a)
                     } label: {
                         HStack {
                             Text(a.label(for: "messages")).foregroundStyle(.primary)
                             Spacer()
-                            if privMessages == a.rawValue {
+                            if (MsgPolicy.shared.chatKeyVisible ? privMessages : Audience.everyone.rawValue) == a.rawValue {
                                 // Green, like the switches below — his mockup, 2026-09-11.
                                 Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(.green)
                             }
@@ -484,11 +488,21 @@ struct MessagesPrivacyPage: View {
                 // The two modes in the owner's own words, 2026-09-11 ("Messages — Who Can Send Me
                 // Messages"): Everyone can knock once with a short text and the key lets them
                 // straight in; the second closes even that first knock to anyone without it.
-                Text("Who new people can message. Your chats are never affected.")
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Who new people can message. Your chats are never affected.")
+                    // owner 2026-10-18: say so when the admin panel has the requirement off for me,
+                    // so the choice above never promises a door that is not there.
+                    if MsgPolicy.shared.chatKeyVisible && privMessages == Audience.contacts.rawValue
+                        && !MsgPolicy.shared.chatKeyRequired(for: ChatService.uid) {
+                        Text("Fariin has paused the Chat Key requirement for now, so anyone can message you.")
+                    }
+                }
             }
 
             // CHAT PIN — owner's spec, 2026-09-11. The private invitation that goes past both modes,
             // beside the setting it goes past, and also behind the Chats title menu (see MainShell).
+            // owner 2026-10-18: gone while the admin panel hides the Chat Key (MsgPolicy).
+            if MsgPolicy.shared.chatKeyVisible {
             Section {
                 NavigationLink { ChatPinPage() } label: {
                     HStack {
@@ -508,6 +522,7 @@ struct MessagesPrivacyPage: View {
                 } else {
                     Text("Anyone who knows your Chat Key can message and call you directly, whatever you choose above.")
                 }
+            }
             }
 
             if !usernameMode {

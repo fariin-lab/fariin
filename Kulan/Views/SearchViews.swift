@@ -695,6 +695,8 @@ enum SettingsIndex {
                   keywords: "help about version",
                   dest: AnyView(AboutView())),
         ]
+        // owner 2026-10-18: settings search does not find the Chat Key while the admin panel hides it.
+        .filter { $0.title != "Chat Key" || MsgPolicy.shared.chatKeyVisible }
     }
 
 

@@ -464,7 +464,9 @@ struct ContactInfoView: View {
 
     private func tapMessage() {
         let audience = Audience(rawValue: targetPrivacy["messages"] ?? "") ?? .everyone
-        if audience == .contacts && !isFriend {
+        // owner 2026-10-18: not while the admin panel has their Chat Key requirement off or the key
+        // hidden (MsgPolicy); the chat then simply opens with a composer.
+        if audience == .contacts && !isFriend && MsgPolicy.shared.chatKeyRequired(for: otherUid) {
             // Owner decision 2026-10-10: the Chat Key prompt only for someone who HAS a key; with
             // none, the chat opens on its "can't message" notice (no key button there either).
             if let known = ChatPin.cachedKeyExists(uid: otherUid) {

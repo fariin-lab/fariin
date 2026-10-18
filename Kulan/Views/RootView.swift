@@ -579,6 +579,8 @@ struct RootView: View {
         // usually a handful of numbers — and it has to be running before Add Story can be pressed,
         // because that button asks it whether there is any allowance left before it opens anything.
         AppLimits.shared.start()
+        // owner 2026-10-18: the admin panel's Message Requests / Chat Key switches, LIVE (MsgPolicy).
+        MsgPolicy.shared.start(uid: AuthService.shared.uid ?? "")
         // The owner's feature switches (config/features). Saved for the NEXT launch; see RemoteFeatures.
         RemoteFeatures.shared.start()
         // The story audiences, for the same reason: the share sheet opens on a tap and must already
