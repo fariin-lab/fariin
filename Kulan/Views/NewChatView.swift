@@ -82,7 +82,7 @@ struct NewChatView: View {
                         // there are no communities, channels or broadcasts here to list.
                         Section {
                             if Flags.groupsEnabled {
-                                Button { showNewGroup = true } label: { actionRow("person.2.fill", "New group") }
+                                Button { showNewGroup = true } label: { actionRow("person.2", "New group")   // outline, like Invite (owner 2026-10-18) }
                                     .tint(.primary)
                             }
                             // New contact and Scan QR code rows removed (owner 2026-09-30): scanning
