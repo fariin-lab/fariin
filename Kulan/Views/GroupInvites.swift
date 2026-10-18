@@ -159,6 +159,9 @@ struct InviteLinkSheet: View {
     let groupTitle: String
     let groupPhoto: String?
     var initialCode: String = ""
+    /// Pushed as a full page (owner 2026-10-18: "open a full page, not a sheet"): no stack of its own
+    /// and no Done; the page's back button closes it.
+    var embedded: Bool = false
     @Environment(\.dismiss) private var dismiss
     @State private var invite: GroupInvite?
     @State private var loading = true
@@ -170,7 +173,7 @@ struct InviteLinkSheet: View {
     private let limitOptions: [(String, Int)] = [("No limit", 0), ("10 uses", 10), ("50 uses", 50), ("100 uses", 100)]
 
     var body: some View {
-        NavigationStack {
+        InviteStackIfNeeded(on: !embedded) {
             List {
                 if loading {
                     Section { ProgressView().frame(maxWidth: .infinity) }.listRowBackground(Color.clear)
@@ -230,7 +233,7 @@ struct InviteLinkSheet: View {
                 }
             }
             .navigationTitle("Invite via Link").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .toolbar { if !embedded { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } } }
             .task { await load() }
             // 2026-09-24 fix-all #126: the code, white behind it so any camera reads it in either theme.
             .sheet(isPresented: $showQR) {
@@ -375,5 +378,14 @@ struct JoinGroupSheet: View {
             }
             joining = false
         }
+    }
+}
+
+/// A NavigationStack only when the screen is its own sheet; a pushed page already has one.
+private struct InviteStackIfNeeded<Content: View>: View {
+    let on: Bool
+    @ViewBuilder let content: () -> Content
+    var body: some View {
+        if on { NavigationStack { content() } } else { content() }
     }
 }
