@@ -384,6 +384,10 @@ struct EditGroupView: View {
 
     private var trimmed: String { name.trimmingCharacters(in: .whitespaces) }
     private var trimmedDesc: String { desc.trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// A group description's ceiling, the size the large messengers give one.
+    private static let descChars = 255
+    private static let descCounterAppearsAt = 20
+    private var descRemaining: Int { max(0, Self.descChars - desc.count) }
     private var changed: Bool {
         newPhoto != nil || trimmed != title
             || trimmedDesc != description.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -414,13 +418,29 @@ struct EditGroupView: View {
                         .submitLabel(.done)
                         .focused($nameFocused)
                 }
+                // ⛔ THE BIO'S RULES (owner 2026-10-18: "use the logic you used for the bio"): one
+                // paragraph (a newline never reaches the field, `Limits.oneParagraph`), up to 5 lines,
+                // and a countdown that only appears in the last 20 characters, red at 0.
                 Section {
-                    TextField("Description", text: $desc, axis: .vertical)
-                        .lineLimit(1...6)
-                        .onChange(of: desc) { _, v in if v.count > 500 { desc = String(v.prefix(500)) } }
+                    VStack(alignment: .trailing, spacing: 6) {
+                        TextField("Description",
+                                  text: Binding(get: { desc },
+                                                set: { desc = Limits.oneParagraph($0, max: Self.descChars) }),
+                                  axis: .vertical)
+                            .lineLimit(1...5)
+                        if descRemaining <= Self.descCounterAppearsAt {
+                            Text("\(descRemaining)")
+                                .font(.footnote)
+                                .monospacedDigit()
+                                .foregroundStyle(descRemaining == 0 ? .red : .secondary)
+                                .transition(.opacity)
+                                .accessibilityLabel("\(descRemaining) characters left")
+                        }
+                    }
                 } footer: {
                     Text("Optional. Shown on the group's info page.")
                 }
+                .animation(.smooth(duration: 0.22), value: descRemaining <= Self.descCounterAppearsAt)
                 if let error { Text(error).foregroundStyle(.red) }
             }
             .listStyle(.insetGrouped)
@@ -437,7 +457,7 @@ struct EditGroupView: View {
             .overlay { if saving { ProgressView().controlSize(.large) } }
             .onAppear {
                 if name.isEmpty { name = title }
-                if !descLoaded { desc = description; descLoaded = true }
+                if !descLoaded { desc = Limits.oneParagraph(description, max: Self.descChars); descLoaded = true }
             }
             // The app's own photo sheet, as New Group's photo uses.
             .sheet(isPresented: $showPicker) {
@@ -456,10 +476,10 @@ struct EditGroupView: View {
             if let newPhoto, let ui = UIImage(data: newPhoto) {
                 Image(uiImage: ui).resizable().scaledToFill()
             } else {
-                AvatarView(name: title, photoUrl: photoUrl, size: 100)
+                AvatarView(name: title, photoUrl: photoUrl, size: 120)   // Edit Profile's size (owner 2026-10-18)
             }
         }
-        .frame(width: 100, height: 100)
+        .frame(width: 120, height: 120)
         .clipShape(Circle())
         .contentShape(Circle())
     }
