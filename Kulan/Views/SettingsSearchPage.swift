@@ -74,16 +74,14 @@ struct SettingsSearchPage: View {
         .padding(.bottom, 6)
     }
 
-    /// A top-level page wears its icon; a page inside another page is indented under the same column,
-    /// with no icon and its parent's name beneath, as the reference draws it.
+    /// A top-level page wears its icon; a page inside another page has no icon and its parent's name
+    /// beneath. 2026-10-18 (owner): no empty icon column in front of it any more, the words start at
+    /// the row's edge.
     @ViewBuilder private func row(_ e: SettingsIndex.Entry) -> some View {
         if let parent = e.parent {
-            HStack(spacing: 16) {
-                Color.clear.frame(width: 24, height: 24)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(e.title).font(.body)
-                    Text(parent).font(.footnote).foregroundStyle(.secondary)
-                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(e.title).font(.body)
+                Text(parent).font(.footnote).foregroundStyle(.secondary)
             }
             .padding(.vertical, 2)
         } else if e.system {
