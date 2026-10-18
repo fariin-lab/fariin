@@ -1064,7 +1064,12 @@ struct StoryRowLongPress: UIViewRepresentable {
                 // taken off the screen and nothing was raised in its place, so the card lost its
                 // name for the whole press. `labelView` is the same test the lift itself makes
                 // twenty lines up, so the two can no longer disagree.
-                MediaSourceVisibility.shared.hide(t.key, withLabel: t.labelView != nil || t.labelImage != nil)
+                // ⛔ THE REAL NAME STAYS (owner 2026-10-18, build 969: "when I close, the name disappears
+                // and appears again"). Hiding it handed it back on SwiftUI's next pass, while the copy's
+                // name is cut at once at the close (`onWillDismiss`), so there was a beat with no name at
+                // all. The real row sits under the menu's blur and under the copy's own name at the
+                // lift, so leaving it in place shows nothing twice; only the card steps aside.
+                MediaSourceVisibility.shared.hide(t.key, withLabel: false)
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.8)
                 o.present(in: window, startAtSqueeze: true)
 
