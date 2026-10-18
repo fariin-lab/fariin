@@ -15,6 +15,9 @@ enum Flags {
     /// ON for testing — owner 2026-10-18: "turn on all group doors, will turn off later". Off again
     /// from the panel (config/features groups=false, next open) or by flipping this back.
     static var groupsEnabled: Bool { RemoteFeatures.offOnly("groups", default: true) }
+    /// "Create new groups" (owner 2026-10-18, admin panel): OFF hides every way to MAKE a group and
+    /// the rules refuse one; groups that exist keep working. Live (`LiveFeatures`), on unless set.
+    static var groupCreateEnabled: Bool { groupsEnabled && LiveFeatures.shared.values["groupCreate"] != false }
     /// Two-step verification's door in Settings. OFF (owner, 2026-09-25: "turn off 2FA as groups,
     /// we are not ready to finalize"). Only the door closes. An account that ALREADY turned it on
     /// still sees the row, so it can turn it off, and still gets the sign-in password prompt,

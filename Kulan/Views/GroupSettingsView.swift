@@ -43,9 +43,18 @@ struct GroupSettingsView: View {
     var body: some View {
         // owner 2026-10-18: ONE THING PER SECTION, each with a short header and at most one short
         // footer (it was one long Permissions card with pickers and a paragraph under it).
+        // ⛔ OWNER'S LAYOUT, 2026-10-18 (his picture): Requests & Invites alone at the top; Admins;
+        // one card with Permissions (the member switches, on their own page, with how many are on),
+        // Members and Removed Users; Privacy last. Every door keeps the right it needed before.
         List {
-            membersCanSection
-            privacySection
+            if can(.inviteUsers) {
+                Section {
+                    NavigationLink { GroupRequestsView(cid: cid) } label: {
+                        settingLabel("Requests & Invites", "link",
+                                     value: joinReqs.isEmpty ? nil : "\(joinReqs.count)")
+                    }
+                }
+            }
             Section {
                 NavigationLink { GroupAdminsView(cid: cid) } label: {
                     settingLabel("Administrators", "person.badge.shield.checkmark",
@@ -55,30 +64,21 @@ struct GroupSettingsView: View {
                 Text("The owner decides what each admin can do.")
             }
             Section {
+                NavigationLink { permissionsPage } label: {
+                    settingLabel("Permissions", "switch.2", value: permissionsCount)
+                }
                 NavigationLink { GroupMembersListView(cid: cid) } label: {
                     settingLabel("Members", "person.2", value: "\(conv?.users.count ?? 0)")
                 }
-            }
-            // owner 2026-10-18: REMOVED USERS, the people taken out of the group (`bannedUids`).
-            // In place of the old "Remove users: Admins" row; who may remove is a per-admin right.
-            if can(.banUsers) || can(.inviteUsers) {
-                Section {
+                // REMOVED USERS, the people taken out of the group (`bannedUids`).
+                if can(.banUsers) || can(.inviteUsers) {
                     NavigationLink { GroupRemovedUsersView(cid: cid) } label: {
                         settingLabel("Removed Users", "person.badge.minus",
                                      value: "\(conv?.bannedUids.count ?? 0)")
                     }
-                } footer: {
-                    Text("People removed from the group can't join again with a link until you let them back.")
                 }
             }
-            if can(.inviteUsers) {
-                Section {
-                    NavigationLink { GroupRequestsView(cid: cid) } label: {
-                        settingLabel("Requests & Invites", "link",
-                                     value: joinReqs.isEmpty ? nil : "\(joinReqs.count)")
-                    }
-                }
-            }
+            privacySection
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Group Settings")
@@ -92,6 +92,26 @@ struct GroupSettingsView: View {
                                                           set: { if !$0 { actionError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(actionError ?? "") }
+    }
+
+    /// The member switches on their own page (owner 2026-10-18), reached from Permissions.
+    private var permissionsPage: some View {
+        List { membersCanSection }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Permissions")
+            .navigationBarTitleDisplayMode(.inline)
+            .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
+                                                              set: { if !$0 { actionError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(actionError ?? "") }
+    }
+
+    /// "3/4": how many of the member switches on the Permissions page are on.
+    private var permissionsCount: String? {
+        guard let c = conv else { return nil }
+        var on = [!c.onlyAdminsSend, c.membersCanAdd, c.membersCanEditInfo]
+        if CallFeatures.groupCalls { on.append(!c.onlyAdminsCall) }
+        return "\(on.filter { $0 }.count)/\(on.count)"
     }
 
     /// What every member may do. Admins always may; a switch turned off leaves it to admins.

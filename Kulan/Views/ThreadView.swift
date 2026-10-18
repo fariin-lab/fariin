@@ -3397,6 +3397,17 @@ struct ThreadView: View {
         // went to SwiftUI. The UIKit rows draw all four now, so the gate is per-MESSAGE only:
         // `MessageRowModelBuilder.canRender` decides, and it is the one place that decides.
         guard Self.useUIKitBubbles else { return [:] }
+        // ⛔ BUILD 974 CRASH (owner's .ips, 2026-10-18): a STACK OVERFLOW on the main thread, here,
+        // under SwiftUI's deep body stack ("Could not determine thread index for stack guard region",
+        // in type metadata lookup). This getter held the 30-value key AND the row context with all its
+        // closures in ONE frame, and the 10-18 additions tipped it over. Each half is its own
+        // never-inlined function now, so the key's frame is gone before the rebuild's is made.
+        let key = uikitModelsKey()
+        if uikitModelCache.key == key { return uikitModelCache.models }
+        return rebuildUikitModels(key: key)
+    }
+
+    @inline(never) private func uikitModelsKey() -> String {
         // Audit M5: iBlocked and the read-receipts pref feed the tick, so they must key the cache —
         // toggling the pref (or a block-state change) left uikit rows showing stale ticks.
         // The wallpaper and its blurred picture are INSIDE the model (`onWallpaper`, `wallpaperBlur`),
@@ -3456,8 +3467,11 @@ struct ThreadView: View {
             // The Restricted chat request I can answer: its notice carries Reject / Accept.
             liveRestrictRequestId ?? "-",
         ].joined(separator: "|")
-        if uikitModelCache.key == key { return uikitModelCache.models }
+        return key
+    }
 
+    @inline(never) private func rebuildUikitModels(key: String) -> [String: MessageRowModel] {
+        let storiesRepo = StoriesRepository.shared
         // The timer in force and the notice that set it (owner 2026-09-29, the icon on every
         // message sent while it is on — `MessageRowModelBuilder.provisionalExpiry`).
         let timerSeconds = conversation?.disappearSeconds ?? 0
