@@ -251,6 +251,7 @@ struct NewGroupView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Create") { create() }.disabled(!canCreate).fontWeight(.semibold)
+                    .buttonStyle(.borderedProminent).tint(.blue)   // blue (owner 2026-10-18)
             }
         }
         .overlay { if creating { ProgressView().controlSize(.large) } }
@@ -279,7 +280,8 @@ struct NewGroupView: View {
                 Image(uiImage: ui).resizable().scaledToFill()
             } else {
                 Circle().fill(Color.accentColor.opacity(0.12))
-                Image(systemName: "camera.fill").font(.system(size: 24)).foregroundStyle(Color.accentColor)
+                Image("ic_group_camera").renderingMode(.template).resizable().scaledToFit()   // his icon (owner 2026-10-18)
+                    .frame(width: 28, height: 28).foregroundStyle(Color.accentColor)
             }
         }
         .frame(width: 64, height: 64)
