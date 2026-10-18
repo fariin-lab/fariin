@@ -1998,9 +1998,13 @@ struct ThreadView: View {
         .environment(\.colorScheme, scheme)
         // Chat wallpaper picker. ContactInfoView's "Change Wallpaper" pops back to this chat and
         // posts this notification, so the picker opens here (over the live chat, previewing behind).
-        .sheet(isPresented: $showWallpaper) { WallpaperPickerSheet(cid: cid) }
+        // owner 2026-10-18: in a group the picker sets the GROUP's wallpaper for everyone, and only
+        // someone who may change group info gets to open it (GroupInfoView hides the menu row too).
+        .sheet(isPresented: $showWallpaper) { WallpaperPickerSheet(cid: cid, sharedGroup: isGroup) }
         .onReceive(NotificationCenter.default.publisher(for: .openChatWallpaper)) { note in
             guard (note.object as? String) == cid else { return }
+            if isGroup, let conv = conversation,
+               !(conv.adminCan(me, .changeInfo) || conv.membersCanEditInfo) { return }
             showWallpaper = true
         }
         // "Go to Chat" from the media gallery: pop the profile/gallery push back to this chat, then

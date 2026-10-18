@@ -542,6 +542,36 @@ enum ChatService {
         return url
     }
 
+    /// GROUP WALLPAPER — owner 2026-10-18: "only the owner or an admin can change it; when an admin
+    /// changes it, everyone sees that wallpaper when they enter the group". The picture goes up as
+    /// `profiles/group_<cid>-wp<millis>.jpg` (storage.rules `groupWallpaperEditor`, the same people
+    /// the group photo allows). A NEW name per wallpaper, so the download link changes with it and
+    /// every phone knows to fetch the new one (an overwrite keeps the old link and token).
+    /// The JPEG is already downscaled by the caller (`WallpaperStore.sharedUploadJPEG`).
+    static func uploadGroupWallpaper(cid: String, jpeg: Data) async throws -> String {
+        let stamp = Int64(Date().timeIntervalSince1970 * 1000)
+        let ref = Storage.storage().reference().child("profiles/group_\(cid)-wp\(stamp).jpg")
+        let meta = StorageMetadata(); meta.contentType = "image/jpeg"
+        _ = try await ref.putDataAsync(jpeg, metadata: meta)
+        return try await ref.downloadURL().absoluteString
+    }
+
+    /// Write the group's shared wallpaper (`ChatWallpaper.stored`, or "u:<download link>" for a
+    /// photo) plus one notice line, the way `renameGroup` does it. The rules let only the people
+    /// who may change group info write it (firestore.rules `nonOwnerAdminWriteOK`, and the
+    /// members-can-edit-info branch). The previous photo file is removed best-effort.
+    static func setGroupWallpaper(cid: String, stored: String, previous: String?) async throws {
+        let convRef = db.collection("conversations").document(cid)
+        try await convRef.updateData(["wallpaper": stored, "updatedAt": FieldValue.serverTimestamp()])
+        let text = stored == "none" ? "\(myName()) removed the group wallpaper"
+                                    : "\(myName()) changed the group wallpaper"
+        try? await writeSystemMessage(cid: cid, text: text)
+        if let previous, previous.hasPrefix("u:"), previous != stored,
+           let old = Storage.storage().safeReference(forURL: String(previous.dropFirst(2))) {
+            try? await old.delete()
+        }
+    }
+
     // MARK: - Group management (each writes a system event message + updates the conv)
 
     /// Add members + a "X added Y" system message. New members can't read prior history

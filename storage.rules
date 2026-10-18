@@ -80,12 +80,17 @@ service firebase.storage {
             // `try?`. Allowed for the people the Firestore rule lets set `avatarUrl`: an admin, or
             // any member while "members can edit info" is on. Same firestore.get() the chat-media
             // membership check below uses; the group doc always exists before its photo is set.
-            || groupPhotoEditor(file))
+            || groupPhotoEditor(file)
+            // owner 2026-10-18: a GROUP WALLPAPER, `group_<cid>-wp<millis>.jpg`
+            // (ChatService.uploadGroupWallpaper). Same people as the group photo; JPEG only.
+            || (groupWallpaperEditor(file) && request.resource.contentType == 'image/jpeg'))
         && request.resource.size < 8 * 1024 * 1024
         && request.resource.contentType.matches('image/.*');
       // You may delete your OWN profile photos (both crops) — used on account deletion.
       allow delete: if request.auth != null
-        && (file == request.auth.uid + '.jpg' || file == request.auth.uid + '-poster.jpg');
+        && (file == request.auth.uid + '.jpg' || file == request.auth.uid + '-poster.jpg'
+            // owner 2026-10-18: the group's previous wallpaper, removed by whoever replaces it.
+            || groupWallpaperEditor(file));
     }
 
     // Chat media: chat/{cid}/{messageId}.enc — END-TO-END ENCRYPTED, so it uploads
@@ -198,6 +203,15 @@ service firebase.storage {
         && (request.auth.uid in groupDoc(file.split('[_.]')[1]).data.get('admins', [])
             || (groupDoc(file.split('[_.]')[1]).data.get('membersCanEditInfo', false) == true
                 && request.auth.uid in groupDoc(file.split('[_.]')[1]).data.get('users', [])));
+    }
+
+    // owner 2026-10-18: the caller may set this group's wallpaper. `file` is
+    // `group_<cid>-wp<millis>.jpg`; the read rule's `group_.*` already lets members fetch it.
+    function groupWallpaperEditor(file) {
+      return file.matches('group_[A-Za-z0-9]{1,64}-wp[0-9]{1,16}[.]jpg')
+        && (request.auth.uid in groupDoc(file.split('[_.-]')[1]).data.get('admins', [])
+            || (groupDoc(file.split('[_.-]')[1]).data.get('membersCanEditInfo', false) == true
+                && request.auth.uid in groupDoc(file.split('[_.-]')[1]).data.get('users', [])));
     }
 
     function groupDoc(cid) {

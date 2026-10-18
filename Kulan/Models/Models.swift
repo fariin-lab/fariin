@@ -955,6 +955,10 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var membersCanEditInfo: Bool       // group: non-admins may edit name/photo/desc (default false)
     var onlyAdminsCall = false         // group: only admins may START a call (joining stays open)
     var memberLabels: [String: String] = [:]   // group: uid → the short tag shown under their name
+    /// owner 2026-10-18: the group's SHARED wallpaper (`ChatWallpaper.stored`, or "u:<download
+    /// link>" for a photo). Set by whoever may change group info; beats each phone's own pick.
+    /// nil = never set, so every phone keeps its own. Groups only; a 1:1 never carries it.
+    var groupWallpaper: String? = nil
     // Per-flag admin rights (the reference app model): uid → granted right slugs. An admin with NO entry
     // has ALL rights (legacy behaviour); the owner (createdBy) always has all. See Conversation.Right.
     var inviteCode: String             // group's current primary invite-link code ("" = none)
@@ -1063,6 +1067,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.onlyAdminsCall = data["onlyAdminsCall"] as? Bool ?? false
         self.memberLabels = (data["memberLabels"] as? [String: Any] ?? [:]).compactMapValues { $0 as? String }
             .filter { !$0.value.isEmpty }
+        self.groupWallpaper = self.convType == "group" ? data["wallpaper"] as? String : nil
         self.inviteCode = data["inviteCode"] as? String ?? ""
         self.adminRights = stringArrayMap(data["adminRights"])
         self.startedBy = data["startedBy"] as? String ?? ""

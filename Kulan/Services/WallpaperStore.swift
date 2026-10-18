@@ -371,6 +371,14 @@ enum ChatWallpapers {
     @ObservationIgnored private var cache: [String: ChatWallpaper] = [:]
     @ObservationIgnored private var imageCache: [String: UIImage] = [:]
     @ObservationIgnored private var hashes: [String: String]   // photo id -> content hash (dedup)
+    // GROUP WALLPAPER (owner 2026-10-18), see "Shared group wallpaper" below.
+    @ObservationIgnored private var groupShared: [String: String]          // cid -> the group's `wallpaper` field
+    @ObservationIgnored private var groupUrlIds: [String: String]          // download link -> local photo id
+    @ObservationIgnored private var groupPreview: [String: ChatWallpaper] = [:]
+    @ObservationIgnored private var groupPending: [String: ChatWallpaper] = [:]
+    @ObservationIgnored private var groupEditing: Set<String> = []
+    @ObservationIgnored private var groupLastShown: [String: ChatWallpaper] = [:]
+    @ObservationIgnored private var groupFetching: Set<String> = []
 
     // (The brightness slider of build 796 is gone, on his word the same day: "low and high is not
     // working, change it completely". The preview has a dark/light button instead, which saves
@@ -379,6 +387,8 @@ enum ChatWallpapers {
     private init() {
         libraryIds = UserDefaults.standard.stringArray(forKey: "wallpaper.library.v1") ?? []
         hashes = (UserDefaults.standard.dictionary(forKey: "wallpaper.libraryHashes.v1") as? [String: String]) ?? [:]
+        groupShared = (UserDefaults.standard.dictionary(forKey: Self.groupSharedKey) as? [String: String]) ?? [:]
+        groupUrlIds = (UserDefaults.standard.dictionary(forKey: Self.groupUrlIdsKey) as? [String: String]) ?? [:]
     }
 
     // MARK: - Active wallpaper (per chat)
@@ -401,6 +411,12 @@ enum ChatWallpapers {
         // at the one source, so the background, the bubble surfaces, the blur slices and the chat
         // colour's Auto all agree it is the plain page.
         if OfficialChannel.isOfficial(cid) { return .none }
+        // owner 2026-10-18: A GROUP'S SHARED WALLPAPER BEATS THIS PHONE'S OWN PICK. While an admin
+        // has the picker open, what they are trying comes first; then a change still uploading;
+        // then the group's own `wallpaper` field. A group without that field falls through to the
+        // per-phone logic below, exactly as before.
+        if let p = groupPreview[cid] { return p }
+        if let s = groupResolved(cid) { return s }
         if let c = cache[cid] { return c }
         // No per-chat pick → fall back to the all-chats default ("Apply For All Chats").
         // An explicit per-chat "none" is stored as the string "none", so it does NOT fall through.
@@ -423,6 +439,13 @@ enum ChatWallpapers {
     }
 
     func set(_ w: ChatWallpaper, for cid: String) {
+        // A group being edited in the picker: this is a PREVIEW, held in memory only. Apply
+        // publishes it to everyone (`publishGroupWallpaper`); closing drops it (`endGroupEdit`).
+        if groupEditing.contains(cid) {
+            groupPreview[cid] = w
+            version &+= 1
+            return
+        }
         cache[cid] = w
         UserDefaults.standard.set(w.stored, forKey: Self.key(cid))
         version &+= 1                                           // observed → live re-render
@@ -436,11 +459,16 @@ enum ChatWallpapers {
     /// Does this chat have its OWN stored pick (vs inheriting the all-chats default)?
     /// The picker needs the raw answer, which `wallpaper(for:)` hides behind its fallback.
     func hasOverride(for cid: String) -> Bool {
-        UserDefaults.standard.string(forKey: Self.key(cid)) != nil
+        groupShared[cid] != nil || UserDefaults.standard.string(forKey: Self.key(cid)) != nil
     }
 
     /// Remove the per-chat pick so this chat follows the all-chats default again.
     func clearOverride(for cid: String) {
+        if groupEditing.contains(cid) {
+            groupPreview[cid] = nil
+            version &+= 1
+            return
+        }
         cache[cid] = nil
         UserDefaults.standard.removeObject(forKey: Self.key(cid))
         version &+= 1
@@ -460,7 +488,8 @@ enum ChatWallpapers {
         let d = UserDefaults.standard
         if clearingChatPicks {
             for k in d.dictionaryRepresentation().keys
-                where k.hasPrefix("wallpaper.") && !k.hasPrefix("wallpaper.library") && k != Self.defaultKey {
+                where k.hasPrefix("wallpaper.") && !k.hasPrefix("wallpaper.library") && k != Self.defaultKey
+                    && !k.hasPrefix("wallpaper.group") {   // the groups' shared copies are not this phone's picks
                 d.removeObject(forKey: k)
             }
         } else if let cid {
@@ -470,6 +499,140 @@ enum ChatWallpapers {
         d.set(w.stored, forKey: Self.defaultKey)
         version &+= 1
     }
+
+    // MARK: - Shared group wallpaper
+    //
+    // ⛔ ONE WALLPAPER FOR THE WHOLE GROUP — owner, 2026-10-18: "only the owner or an admin can
+    // change it. When an admin changes it, everyone sees that wallpaper when they enter the group."
+    // The group's conversation carries `wallpaper` (firestore.rules: change-info right, or members
+    // while "members can edit info" is on). Its value is `ChatWallpaper.stored` for a theme, colour
+    // or none, and "u:<download link>" for a photo, which each phone fetches ONCE into the photo
+    // folder under an id made from the link (`sharedPhotoId`) and then draws as `.photo(id)`.
+    // Until the photo lands the chat keeps what it showed before, then it changes in place.
+    // A group that never had one set follows each phone's own pick, as every chat did before.
+    // 1:1 chats never read any of this. The bubble colour stays each phone's own.
+
+    /// Called with every chat-list snapshot (`ConversationsRepository`). Groups only.
+    func syncGroupWallpapers(_ convs: [Conversation]) {
+        var changed = false
+        for c in convs where c.isGroup && groupShared[c.id] != c.groupWallpaper {
+            groupShared[c.id] = c.groupWallpaper
+            changed = true
+        }
+        guard changed else { return }
+        UserDefaults.standard.set(groupShared, forKey: Self.groupSharedKey)
+        version &+= 1
+    }
+
+    /// The group's wallpaper as this phone can draw it now, or nil to use this phone's own pick.
+    private func groupResolved(_ cid: String) -> ChatWallpaper? {
+        if let p = groupPending[cid] { return p }
+        guard let raw = groupShared[cid] else { return nil }
+        guard raw.hasPrefix("u:") else {
+            // "p:" names a photo on SOMEBODY ELSE'S phone, meaningless here; never written by the
+            // app (a photo goes up as "u:"), so it reads as plain.
+            if raw.hasPrefix("p:") || raw == "photo" { return ChatWallpaper.none }
+            return ChatWallpaper(stored: raw)
+        }
+        let link = String(raw.dropFirst(2))
+        let id = groupUrlIds[link] ?? Self.sharedPhotoId(link)
+        if libraryImage(id) != nil {
+            groupLastShown[cid] = .photo(id)
+            return .photo(id)
+        }
+        fetchGroupPhoto(link, id: id)
+        return groupLastShown[cid]
+    }
+
+    /// The picker is open on a group whose wallpaper this person may change: `set` and
+    /// `clearOverride` become a live preview held in memory, nothing saved on the phone.
+    func beginGroupEdit(_ cid: String) { groupEditing.insert(cid) }
+
+    /// The picker closed. Any preview goes; Apply has already published what it keeps.
+    func endGroupEdit(_ cid: String) {
+        groupEditing.remove(cid)
+        if groupPreview.removeValue(forKey: cid) != nil { version &+= 1 }
+    }
+
+    /// Apply in a group: shown at once on this phone, then (a photo is uploaded first) written to
+    /// the group for everyone. On failure the chat goes back to the group's previous wallpaper.
+    func publishGroupWallpaper(_ w: ChatWallpaper, for cid: String) {
+        let previous = groupShared[cid]
+        var image: UIImage? = nil
+        if case .photo(let id) = w {
+            // The same photo the group already has: nothing to send.
+            if let prev = previous, prev.hasPrefix("u:") {
+                let link = String(prev.dropFirst(2))
+                if (groupUrlIds[link] ?? Self.sharedPhotoId(link)) == id { return }
+            }
+            guard let img = libraryImage(id) else { return }
+            image = img
+        } else if previous == w.stored {
+            return
+        }
+        groupPending[cid] = w
+        version &+= 1
+        Task { @MainActor in
+            do {
+                var stored = w.stored
+                if case .photo(let id) = w, let image {
+                    let jpeg = await Task.detached(priority: .userInitiated) {
+                        WallpaperStore.sharedUploadJPEG(image)
+                    }.value
+                    guard let jpeg else { throw CocoaError(.fileWriteUnknown) }
+                    let link = try await ChatService.uploadGroupWallpaper(cid: cid, jpeg: jpeg)
+                    self.groupUrlIds[link] = id        // this phone already has the picture
+                    UserDefaults.standard.set(self.groupUrlIds, forKey: Self.groupUrlIdsKey)
+                    stored = "u:" + link
+                }
+                try await ChatService.setGroupWallpaper(cid: cid, stored: stored, previous: previous)
+                self.groupShared[cid] = stored
+                UserDefaults.standard.set(self.groupShared, forKey: Self.groupSharedKey)
+            } catch {
+                DiagLog.add("GROUPWP# publish failed cid=\(cid): \(error.localizedDescription)")
+            }
+            self.groupPending[cid] = nil
+            self.version &+= 1
+        }
+    }
+
+    /// Fetch a group's photo once into the photo folder (NOT the person's own library list, so
+    /// their picker shows only photos they chose). Only Firebase Storage links are fetched.
+    private func fetchGroupPhoto(_ link: String, id: String) {
+        guard !groupFetching.contains(link), let u = URL(string: link), u.scheme == "https",
+              u.host?.lowercased() == "firebasestorage.googleapis.com" else { return }
+        groupFetching.insert(link)
+        let file = Self.libraryURL(id)
+        Task.detached(priority: .utility) {
+            let data = try? await URLSession.shared.data(from: u).0
+            let ok = data.flatMap { UIImage(data: $0) } != nil
+            var saved = false
+            if let data, ok {
+                try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
+                                                         withIntermediateDirectories: true)
+                saved = (try? data.write(to: file, options: .atomic)) != nil
+            }
+            await MainActor.run {
+                let store = WallpaperStore.shared
+                store.groupFetching.remove(link)
+                if saved { store.version &+= 1 }   // observed: the open chat redraws with it
+                else { DiagLog.add("GROUPWP# fetch failed id=\(id)") }
+            }
+        }
+    }
+
+    /// ~2000 px JPEG at 0.8 for the shared upload (storage.rules caps it at 8 MB).
+    static func sharedUploadJPEG(_ image: UIImage) -> Data? {
+        downscale(image, maxDimension: 2000).jpegData(compressionQuality: 0.8)
+    }
+
+    /// A stable local id for a group photo link, the same on every launch.
+    private static func sharedPhotoId(_ link: String) -> String {
+        "grp-" + SHA256.hash(data: Data(link.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static let groupSharedKey = "wallpaper.groupShared.v1"
+    private static let groupUrlIdsKey = "wallpaper.groupUrlIds.v1"
 
     // MARK: - User photo library (persistent history; local only)
 
@@ -546,6 +709,8 @@ enum ChatWallpapers {
         imageCache = [:]
         hashes = [:]
         libraryIds = []
+        groupShared = [:]; groupUrlIds = [:]; groupPreview = [:]; groupPending = [:]
+        groupEditing = []; groupLastShown = [:]
         version &+= 1
     }
 

@@ -297,6 +297,8 @@ final class ConversationsRepository {
                 // in a snapshot that changes nothing else. No-op while the setting is off.
                 // 2026-09-24 decision D8: the raw list is kept so a block list change can re-filter it.
                 self.lastRaw = convs
+                // owner 2026-10-18: each group's shared wallpaper, before anyone opens the group.
+                WallpaperStore.shared.syncGroupWallpapers(convs)
                 // 2026-09-24 fix-all #6: a pinned chat older than the window stays on the list.
                 self.syncPinnedExtras(convs, uid: uid, fromServer: !snap.metadata.isFromCache)
                 // 2026-09-26 block rebuild: NOTHING IS PUBLISHED BEFORE MY BLOCK LIST HAS ANSWERED.
@@ -600,6 +602,7 @@ final class ConversationsRepository {
                     // brings it back to the top of the window, where its pin is remembered again.
                     guard c.isPinned(uid), !c.isCleared(uid) else { self.forgetPinnedExtra(id, uid: uid); return }
                     self.pinnedExtraDocs[id] = c
+                    WallpaperStore.shared.syncGroupWallpapers([c])   // owner 2026-10-18
                     self.pinnedExtraRaw[id] = (id: snap.documentID, data: data)
                     // L10: the disk cache must hold this too, or the very cache that exists to answer
                     // the first frame instantly is again missing this pin on the next cold launch.

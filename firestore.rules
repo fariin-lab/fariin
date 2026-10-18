@@ -1625,6 +1625,7 @@ service cloud.firestore {
         && request.auth.uid in request.resource.data.users
         && unreadCreateOk()   // 2026-09-24 fix-all: others' badges are born at 0 (or 1 with a first send)
         && !('deletedUsers' in request.resource.data)   // 2026-10-18: the purge's marker, server-only
+        && !('wallpaper' in request.resource.data)      // owner 2026-10-18: set later, by update only
         && (
           // THE GROUP BRANCH GOES FIRST, on purpose. A two-member group also satisfies `size() == 2`,
           // and evaluating the 1:1 branch would send it through a privacy lookup it has no business
@@ -1697,6 +1698,17 @@ service cloud.firestore {
       //   admins / adminRights: never added to; an admin may only drop out of `admins` in the same
       //     write that takes them out of `users` (removed from the group, or leaving).
       // Everything else (sends, previews, own private state) is untouched by this check.
+      // owner 2026-10-18: THE GROUP WALLPAPER ("only the owner or an admin can change it; everyone
+      // sees it"). A group's `wallpaper` is `ChatWallpaper.stored` (none, g:/c:/b: + an id) or
+      // "u:" + a Firebase Storage download link for a photo. Never on a 1:1. WHO may write it is
+      // the change-info test below, like the name and photo.
+      function groupWallpaperOK() {
+        let w = request.resource.data.get('wallpaper', null);
+        return resource.data.get('type', '') == 'group'
+          && w is string && w.size() <= 1024
+          && (w == 'none' || w.matches('[gcb]:[A-Za-z0-9_-]{1,64}')
+              || w.matches('u:https://firebasestorage[.]googleapis[.]com/.*'));
+      }
       function nonOwnerAdminWriteOK() {
         let o = resource.data;
         let n = request.resource.data;
@@ -1710,7 +1722,7 @@ service cloud.firestore {
           // 2026-10-18 Group Settings: who may start a call (`onlyAdminsCall`) and Restricted Group
           // (`restrictedBy` and the three older restriction fields) are group rules like the rest.
           && (!keys.hasAny(['title', 'avatarUrl', 'desc', 'disappearSeconds', 'onlyAdminsSend',
-                            'membersCanAdd', 'membersCanEditInfo', 'onlyAdminsCall',
+                            'membersCanAdd', 'membersCanEditInfo', 'onlyAdminsCall', 'wallpaper',
                             'restrictedBy', 'restrictRequest', 'noScreenshots', 'noForwarding', 'noSaving'])
               || adminHasRight('changeInfo'))
           // Member Label: someone else's needs change-info; their own needs nothing.
@@ -1763,6 +1775,8 @@ service cloud.firestore {
         // 2026-10-18: `deletedUsers` is written only by the account purge (admin SDK). Without this a
         // member of a 1:1 (which may write any field) could mark the other person "Deleted Account".
         && !('deletedUsers' in request.resource.data.diff(resource.data).affectedKeys())
+        // owner 2026-10-18: the group wallpaper, groups only and a known shape (groupWallpaperOK).
+        && (!('wallpaper' in request.resource.data.diff(resource.data).affectedKeys()) || groupWallpaperOK())
         && (
           // 1:1 ONLY (not a 2-member group): members unchanged as a SET, any field.
           (
@@ -1941,7 +1955,7 @@ service cloud.firestore {
             && resource.data.get('membersCanEditInfo', false) == true
             && request.resource.data.users.hasAll(resource.data.users)
             && resource.data.users.hasAll(request.resource.data.users)
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'avatarUrl', 'desc', 'updatedAt'])
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'avatarUrl', 'desc', 'wallpaper', 'updatedAt'])
             && !restrictedIn(resource.data, 'changeInfo')   // 2026-09-24 fix-all: the per-member flag
           )
           // Group NON-admin may ADD members (only additions, max 30) when membersCanAdd is on.

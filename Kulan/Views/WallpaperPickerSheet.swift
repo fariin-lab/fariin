@@ -7,13 +7,18 @@ import UIKit
 // chat behind. The bottom button is contextual: "Choose Wallpaper from Photos" when nothing new is
 // selected (settled), and morphs to "Apply Wallpaper" — tinted with the pick's own colour — the
 // moment you choose a DIFFERENT wallpaper. On open it auto-scrolls to the wallpaper you're using so
-// you can see it selected. Local per-chat only. Closing without applying reverts.
+// you can see it selected. Local per-chat only, except in a group (`sharedGroup`, owner 2026-10-18),
+// where Apply sets the group's wallpaper for everyone. Closing without applying reverts.
 struct WallpaperPickerSheet: View {
     let cid: String
     // Settings > Appearance entry: cid is the DEFAULT slot itself and the one primary button
     // is "Apply For All Chats" (sets the default + clears every per-chat pick). From a chat,
     // the primary Apply stays per-chat and a smaller all-chats button rides under it.
     var globalOnly: Bool = false
+    /// owner 2026-10-18: a GROUP's picker, opened only for someone who may change group info.
+    /// The tiles preview on this phone alone; Apply and Reset Wallpaper set the group's wallpaper
+    /// for every member (`WallpaperStore.publishGroupWallpaper`). The chat colour stays per phone.
+    var sharedGroup: Bool = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
     private var store: WallpaperStore { .shared }
@@ -44,9 +49,10 @@ struct WallpaperPickerSheet: View {
     /// chat that had no override, and losing the difference between "none set" and "set to this"
     /// (audit). Recorded here so the cancel path can restore the real state.
     private let hadOwnWallpaper: Bool
-    init(cid: String, globalOnly: Bool = false) {
+    init(cid: String, globalOnly: Bool = false, sharedGroup: Bool = false) {
         self.cid = cid
         self.globalOnly = globalOnly
+        self.sharedGroup = sharedGroup && !globalOnly
         self.hadOwnWallpaper = WallpaperStore.shared.hasOverride(for: cid)
         let cur = WallpaperStore.shared.wallpaper(for: cid)
         _selected = State(initialValue: cur)
@@ -247,7 +253,14 @@ struct WallpaperPickerSheet: View {
         }
         // Selecting a wallpaper OR a colour LIVE-PREVIEWS it on the chat behind, but nothing is SAVED
         // until Apply. Closing without Apply reverts both to the originals.
+        .onAppear { if sharedGroup { store.beginGroupEdit(cid) } }
         .onDisappear {
+            // A group keeps nothing on the phone: the preview goes, Apply already published.
+            if sharedGroup {
+                store.endGroupEdit(cid)
+                if !committed { colorStore.set(originalColor, for: cid) }
+                return
+            }
             if !committed {
                 // Restore the REAL previous state: a chat that was inheriting the default goes back
                 // to inheriting it, instead of gaining a per-chat copy of it (see hadOwnWallpaper).
@@ -391,7 +404,10 @@ struct WallpaperPickerSheet: View {
 
     private func resetToDefault() {
         committed = true                       // persist the reset (don't let onDisappear revert it)
-        if globalOnly {
+        if sharedGroup {
+            store.publishGroupWallpaper(.none, for: cid)
+            colorStore.resetChatColor(for: cid)
+        } else if globalOnly {
             // Global reset: plain app look everywhere (default cleared + all per-chat picks). The one
             // path that still clears chats' own picks — an explicit "reset all", as the reference has.
             store.applyToAllChats(.none, clearingChatPicks: true)
@@ -414,7 +430,8 @@ struct WallpaperPickerSheet: View {
     private func resetColorOnly() {
         committed = true
         colorStore.set(ChatColors.presets.first, for: cid)
-        if hadOwnWallpaper { store.set(original, for: cid) } else { store.clearOverride(for: cid) }
+        if sharedGroup { store.endGroupEdit(cid) }   // drop the tried wallpaper; the group's stays
+        else if hadOwnWallpaper { store.set(original, for: cid) } else { store.clearOverride(for: cid) }
         dismiss()
     }
 
@@ -427,7 +444,8 @@ struct WallpaperPickerSheet: View {
     /// put back whatever theme Settings had (the pink pattern, his screenshot).
     private func resetWallpaperOnly() {
         committed = true
-        store.set(.none, for: cid)
+        if sharedGroup { store.publishGroupWallpaper(.none, for: cid) }   // plain for the whole group
+        else { store.set(.none, for: cid) }
         colorStore.set(originalColor, for: cid)
         dismiss()
     }
@@ -468,7 +486,9 @@ struct WallpaperPickerSheet: View {
                     Button {
                         if globalOnly { applyForAllChats(); return }
                         committed = true                  // keep the live-previewed wallpaper + colour
-                        store.set(selected, for: cid)
+                        // A colour-only change in a group sends nothing to the group.
+                        if sharedGroup { if selected != original { store.publishGroupWallpaper(selected, for: cid) } }
+                        else { store.set(selected, for: cid) }
                         colorStore.set(selectedColor, for: cid)
                         dismiss()
                     } label: {

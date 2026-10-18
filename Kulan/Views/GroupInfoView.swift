@@ -73,7 +73,8 @@ struct GroupInfoView: View {
                         .ignoresSafeArea()
                 }
             }
-            .modifier(GroupInfoDialogs(cid: cid, showDescEdit: $showDescEdit, descText: $descText,
+            .modifier(GroupInfoDialogs(cid: cid, current: conv?.disappearSeconds ?? 0,
+                                       showDescEdit: $showDescEdit, descText: $descText,
                                        showDisappear: $showDisappear, pendingDisappear: $pendingDisappear))
             .modifier(GroupInfoExits(cid: cid, conv: conv, me: me,
                                      confirmLeave: $confirmLeave, confirmClear: $confirmClear,
@@ -231,8 +232,12 @@ struct GroupInfoView: View {
         if mayCall {
             Button { startCall(video: false) } label: { Label("Voice Call", systemImage: "phone") }
         }
-        Button { changeWallpaper() } label: {
-            Label { Text("Change Wallpaper") } icon: { MenuIcon("ic_wallpaper") }
+        // owner 2026-10-18: the group's wallpaper is everyone's, so only someone who may change
+        // group info sees this (same test as the name and photo; firestore.rules says the same).
+        if canEditInfo {
+            Button { changeWallpaper() } label: {
+                Label { Text("Change Wallpaper") } icon: { MenuIcon("ic_wallpaper") }
+            }
         }
         Button { confirmClear = true } label: { Label("Clear Chat", systemImage: "trash") }
     }
@@ -472,6 +477,8 @@ struct MemberLabelChip: View {
 /// The description editor and the disappearing timer, as the page always asked them.
 private struct GroupInfoDialogs: ViewModifier {
     let cid: String
+    /// The group's timer now, for the page's tick.
+    let current: Int
     @Binding var showDescEdit: Bool
     @Binding var descText: String
     @Binding var showDisappear: Bool
@@ -484,12 +491,17 @@ private struct GroupInfoDialogs: ViewModifier {
                 Button("Save") { let t = descText; Task { try? await ChatService.setGroupDescription(cid: cid, text: t) } }
                 Button("Cancel", role: .cancel) {}
             }
-            .confirmationDialog("Disappearing Messages", isPresented: $showDisappear, titleVisibility: .visible) {
-                // Off is safe → applies directly; turning ON confirms first (deletes for everyone).
-                Button("Off")     { Task { await ChatService.setDisappear(cid, seconds: 0) } }
-                Button("1 Day")   { pendingDisappear = 86_400 }
-                Button("1 Week")  { pendingDisappear = 604_800 }
-                Button("Cancel", role: .cancel) {}
+            // ⛔ THE ONE-TO-ONE CHAT'S PAGE (owner 2026-10-18: "open the page exactly like a normal user's,
+            // with all its features"): every preset and Custom, not a three-line menu. Off applies at
+            // once; turning it ON still asks first, because in a group it deletes for every member.
+            .sheet(isPresented: $showDisappear) {
+                DisappearingMessagesView(cid: cid, current: current) { s in
+                    if s == 0 { Task { await ChatService.setDisappear(cid, seconds: 0) } }
+                    else if s != current {
+                        // After the page has gone, so the question is not asked under a closing sheet.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { pendingDisappear = s }
+                    }
+                }
             }
             .alert("Turn on disappearing messages?", isPresented: Binding(
                 get: { pendingDisappear != nil },
