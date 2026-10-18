@@ -173,9 +173,17 @@ struct PasswordView: View {
         .onAppear { focused = true }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Save") { save() }
-                    .disabled(!canSave)
-                    .fontWeight(.semibold)
+                // 2026-10-18 (owner): a FIRST password (Apple / Google account) says "Create" on a
+                // blue button; both show a spinner in the button's place while the save runs.
+                Button { save() } label: {
+                    if busy {
+                        ProgressView().tint(isFirstPassword ? .white : nil)
+                    } else {
+                        Text(isFirstPassword ? "Create" : "Save").fontWeight(.semibold)
+                    }
+                }
+                .disabled(!canSave)
+                .modifier(CreateProminent(on: isFirstPassword))
             }
         }
         .navigationDestination(isPresented: $resetCodeOpen) {
@@ -663,6 +671,14 @@ enum SavePasswordOffer {
 
 /// Applies `.focused` to exactly one field. A Bool `@FocusState` has one true state, so the
 /// modifier has to be attached conditionally rather than to every row.
+/// The blue bar button for "Create" (iOS 26 draws a prominent bar item as a tinted glass capsule).
+private struct CreateProminent: ViewModifier {
+    let on: Bool
+    func body(content: Content) -> some View {
+        if on { content.buttonStyle(.borderedProminent).tint(.blue) } else { content }
+    }
+}
+
 private struct FocusIf: ViewModifier {
     let active: Bool
     @FocusState.Binding var flag: Bool
