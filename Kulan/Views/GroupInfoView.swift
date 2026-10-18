@@ -261,7 +261,9 @@ struct GroupInfoView: View {
         ProfileAboutContent(text: desc.isEmpty ? "Add a group description" : desc, placeholder: desc.isEmpty)
             .profileSurface(plain: cardColor)
             .contentShape(Rectangle())
-            .onTapGesture { if canEditInfo { descText = desc; showDescEdit = true } }
+            // 2026-10-18 (owner): no small pop-up for this any more; the description is edited on the
+            // Edit Group page with the bio's rules, so the card opens that page.
+            .onTapGesture { if canEditInfo { showEdit = true } }
     }
 
     private var settingsCard: some View {
