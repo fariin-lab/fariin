@@ -1534,6 +1534,14 @@ struct ChatsView: View {
     enum RequestsRoute: Hashable { case requests }
     /// My Chat PIN, a page of the same stack, for the same reason `RequestsRoute` is its own type.
     enum ChatPinRoute: Hashable { case mine }
+    /// Chat Color from the Get Started card (owner 2026-10-18), pushed like the pages above.
+    enum GetStartedRoute: Hashable { case chatColor }
+    /// The two Get Started cards that open a sheet.
+    enum GetStartedSheet: String, Identifiable { case newGroup, editProfile; var id: String { rawValue } }
+    @State private var getStartedSheet: GetStartedSheet?
+    /// The compose button's centre in window points, so the first-chat tip points at it.
+    @State private var composeMidX: CGFloat?
+    private var getStarted = GetStartedStore.shared
     /// Somebody's unanswered requests to me, by the Message Requests page's own definition (not
     /// cleared, not blocked, stance `.incoming`), so the number on the menu entry and the rows on
     /// the page cannot disagree.
@@ -2071,6 +2079,8 @@ struct ChatsView: View {
     // and no font size forced on them, so the bar draws them at its own glyph size.
     private var composeButton: some View {
         Button { showNew = true } label: { Image(systemName: "square.and.pencil") }
+            // Where the first-chat tip points (owner 2026-10-18).
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).midX } action: { composeMidX = $0 }
     }
 
     @ToolbarContentBuilder private var homeToolbar: some ToolbarContent {
@@ -2684,6 +2694,73 @@ struct ChatsView: View {
                                 }
                             }
                         }
+                        // Get Started and the first-chat tip (owner 2026-10-18), each a property of
+                        // its own so this chain stays inside the type-checker's budget.
+                        .overlay(alignment: .topTrailing) { firstChatCueLayer }
+                        .overlay(alignment: .bottom) { getStartedLayer }
+                        .onChange(of: hasRealChat, initial: true) { _, has in
+                            if has { getStarted.finish(me) }
+                        }
+    }
+
+    // MARK: Get Started (owner 2026-10-18, see GetStartedBanner.swift)
+
+    /// A conversation that is a real chat: a message in it (or a group), not the Fariin channel,
+    /// not cleared. Archived ones count, as the reference counts its archived chats. One is enough
+    /// to end Get Started and the tip for good (the owner's rule; the reference waits for five).
+    private var hasRealChat: Bool {
+        repo.conversations.contains { c in
+            !OfficialChannel.isOfficial(c.id) && !c.isCleared(me)
+                && (Flags.groupsEnabled || !c.isGroup)
+                && (c.isGroup || !c.lastMessageCipher.isEmpty)
+        }
+    }
+
+    /// The plain chat list with nothing typed, no filter and no selection, after the first answer.
+    private var getStartedContext: Bool {
+        repo.hasLoaded && !repo.loadFailed && chatFilter == 0 && !selecting
+            && chatSearch.trimmingCharacters(in: .whitespaces).isEmpty
+            && !hasRealChat && !getStarted.isFinished(me)
+    }
+
+    private var getStartedCards: [GetStartedCard] {
+        guard getStartedContext, profile.me != nil else { return [] }
+        return getStarted.cards(me, hasPhoto: profile.me?.photoUrl?.isEmpty == false,
+                                groups: Flags.groupsEnabled)
+    }
+
+    @ViewBuilder private var getStartedLayer: some View {
+        let cards = getStartedCards
+        ZStack {
+            if !cards.isEmpty {
+                GetStartedBanner(cards: cards, onTap: openGetStarted) { card in
+                    withAnimation(.smooth(duration: 0.3)) { getStarted.remove(card, me) }
+                }
+                // The last X fades the panel away over half a second, as theirs.
+                .transition(.opacity.animation(.easeInOut(duration: 0.5)))
+            }
+        }
+        // Add Photo goes for good once there is a photo, so it does not come back if it is removed.
+        .onChange(of: profile.me?.photoUrl?.isEmpty == false, initial: true) { _, has in
+            if has { getStarted.remove(.addPhoto, me) }
+        }
+    }
+
+    /// The tip shows while the empty welcome does, as theirs shows with their empty inbox.
+    @ViewBuilder private var firstChatCueLayer: some View {
+        if getStartedContext, visible.isEmpty, newPeople.isEmpty, !olderChatsPending {
+            FirstChatCue(anchorX: composeMidX) { showNew = true }
+                .transition(.opacity)
+        }
+    }
+
+    private func openGetStarted(_ card: GetStartedCard) {
+        switch card {
+        case .newGroup: getStartedSheet = .newGroup
+        case .inviteFriends: InviteShare.present()
+        case .addPhoto: getStartedSheet = .editProfile
+        case .chatColor: path.append(GetStartedRoute.chatColor)
+        }
     }
 
     var body: some View {
@@ -2934,6 +3011,10 @@ struct ChatsView: View {
                 ChatPinPage()
                     .barFollowsPhone()
             }
+            .navigationDestination(for: GetStartedRoute.self) { _ in
+                ChatColorPage()
+                    .barFollowsPhone()
+            }
             .navigationDestination(for: ChatTarget.self) { t in
                 // The official channel gets its own screen. ThreadView is built around a composer and
                 // an encrypted message pipeline, neither of which exists here.
@@ -2973,6 +3054,15 @@ struct ChatsView: View {
             .toolbar(selecting ? .hidden : .automatic, for: .tabBar)
             // (The archive is PUSHED now — see `archiveRoute` on the navigationDestination above.)
             .sheet(isPresented: $showMyQR) { MyQRView() }
+            // Get Started's New Group and Add Photo (owner 2026-10-18).
+            .sheet(item: $getStartedSheet) { s in
+                switch s {
+                case .newGroup:
+                    NewGroupView { t in getStartedSheet = nil; path.append(t) }
+                case .editProfile:
+                    EditProfileView()
+                }
+            }
             .sheet(item: pendingInvite) { item in
                 JoinGroupSheet(code: item.code).presentationDetents([.large])
             }

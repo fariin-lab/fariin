@@ -1,0 +1,270 @@
+import SwiftUI
+import UIKit
+import Observation
+
+// ⛔ GET STARTED + THE FIRST-CHAT TIP — owner 2026-10-18, with screenshots of the reference app on a
+// brand-new account: a "Get Started" row of pastel cards at the bottom of the empty chat list, and a
+// blue tip under the compose button. "Build completely": same card size, colours, spacing, corner
+// radius, fonts, scroll, the X takes one card away, and the logic as theirs.
+//
+// Ported from the reference app's own source (its GetStartedBannerViewController and the chat list's
+// first-conversation cue), numbers unchanged:
+//   card 156 x 98, 12 apart, corner 26 on iOS 26, tinted glass; icon 28 x 28 over the label, 4 apart,
+//   label footnote semibold up to 3 lines; X at the top-right with 12 around it; title in headline,
+//   12 below the top of the panel and 10 above the cards; panel 20 above the tab bar. Tints:
+//   light F6EDE0 / DEE5D6 / E5DBE7 / D6E5E5 at 0.6, dark D7BFA9 / 95B373 / CE85DD / 8ACECE at 0.4.
+//   Tip: accent fill, corner 9, an 8-high 16-wide tail whose centre sits 20 in from the trailing
+//   edge, text padded 11 / 16, 6 in from the screen edge.
+//
+// Their logic, and the two places this differs on purpose:
+//   - an X takes that card away for good (stored per account, like theirs);
+//   - Add Photo goes for good once the profile has a photo (theirs: once there is an avatar);
+//   - they drop the whole panel at five chats; the owner asked for it to go at the FIRST real chat,
+//     so here any conversation with a message that is not the Fariin channel ends it, for good;
+//   - the tip shows while the inbox is empty and the account has never had a chat. Tapping it opens
+//     compose. Like theirs it is not put away by a tap; it goes once a chat exists.
+//   All wording on screen is ours.
+
+/// The four cards, in their order.
+enum GetStartedCard: String, CaseIterable, Identifiable {
+    case newGroup, inviteFriends, addPhoto, chatColor
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .newGroup: "New Group"
+        case .inviteFriends: "Invite Friends"
+        case .addPhoto: "Add Photo"
+        case .chatColor: "Chat Color"
+        }
+    }
+
+    /// Outline glyphs, as the reference cards draw theirs.
+    var symbol: String {
+        switch self {
+        case .newGroup: "person.2"
+        case .inviteFriends: "envelope"
+        case .addPhoto: "person.crop.circle"
+        case .chatColor: "paintpalette"
+        }
+    }
+
+    /// The reference app's tints: one colour for light, one for dark, each see-through.
+    var tint: Color {
+        let (light, dark): (UInt32, UInt32) = switch self {
+        case .newGroup: (0xF6EDE0, 0xD7BFA9)
+        case .inviteFriends: (0xDEE5D6, 0x95B373)
+        case .addPhoto: (0xE5DBE7, 0xCE85DD)
+        case .chatColor: (0xD6E5E5, 0x8ACECE)
+        }
+        return Color(UIColor { tc in
+            tc.userInterfaceStyle == .dark ? Self.ui(dark, alpha: 0.4) : Self.ui(light, alpha: 0.6)
+        })
+    }
+
+    private static func ui(_ hex: UInt32, alpha: CGFloat) -> UIColor {
+        UIColor(red: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255,
+                blue: CGFloat(hex & 0xFF) / 255, alpha: alpha)
+    }
+}
+
+/// What has been put away, per account, in UserDefaults. `version` is the one stored property the
+/// views read, so a write redraws them.
+@Observable
+final class GetStartedStore {
+    static let shared = GetStartedStore()
+    private init() {}
+
+    private(set) var version = 0
+    private let defaults = UserDefaults.standard
+
+    private func key(_ uid: String, _ name: String) -> String { "getStarted.\(uid).\(name)" }
+
+    /// The account has had a real chat: the panel and the tip are over for good.
+    func isFinished(_ uid: String) -> Bool {
+        _ = version
+        return uid.isEmpty || defaults.bool(forKey: key(uid, "finished"))
+    }
+
+    func finish(_ uid: String) {
+        guard !uid.isEmpty, !defaults.bool(forKey: key(uid, "finished")) else { return }
+        defaults.set(true, forKey: key(uid, "finished"))
+        version += 1
+    }
+
+    func isRemoved(_ card: GetStartedCard, _ uid: String) -> Bool {
+        _ = version
+        return (defaults.stringArray(forKey: key(uid, "removed")) ?? []).contains(card.rawValue)
+    }
+
+    func remove(_ card: GetStartedCard, _ uid: String) {
+        guard !uid.isEmpty else { return }
+        var list = defaults.stringArray(forKey: key(uid, "removed")) ?? []
+        guard !list.contains(card.rawValue) else { return }
+        list.append(card.rawValue)
+        defaults.set(list, forKey: key(uid, "removed"))
+        version += 1
+    }
+
+    /// The cards still to show, in order.
+    func cards(_ uid: String, hasPhoto: Bool, groups: Bool) -> [GetStartedCard] {
+        guard !isFinished(uid) else { return [] }
+        return GetStartedCard.allCases.filter { c in
+            if isRemoved(c, uid) { return false }
+            if c == .newGroup && !groups { return false }
+            if c == .addPhoto && hasPhoto { return false }
+            return true
+        }
+    }
+}
+
+/// The panel: title, then the cards scrolling sideways.
+struct GetStartedBanner: View {
+    let cards: [GetStartedCard]
+    let onTap: (GetStartedCard) -> Void
+    let onRemove: (GetStartedCard) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Get Started")
+                .font(.headline)
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 16)
+                .accessibilityAddTraits(.isHeader)
+            ScrollView(.horizontal, showsIndicators: false) {
+                GlassEffectContainer(spacing: 12) {
+                    HStack(spacing: 12) {
+                        ForEach(cards) { card in
+                            GetStartedCardView(card: card, onTap: { onTap(card) },
+                                               onRemove: { onRemove(card) })
+                                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                        }
+                    }
+                }
+            }
+            // The cards run to the screen edge while scrolling, as the reference's do (its row is
+            // inset by the margins with clipping off).
+            .contentMargins(.horizontal, 16, for: .scrollContent)
+            .scrollClipDisabled()
+            .scrollBounceBehavior(.always, axes: .horizontal)
+            .frame(height: 98)
+        }
+        .padding(.top, 40 + 12)
+        .padding(.bottom, 20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Rows (the Fariin channel) can sit under the panel: a 40-high fade into the page colour,
+        // then solid down behind the tab bar, as theirs. Not hit-testable, so the faded strip does
+        // not swallow taps on the row behind it.
+        .background {
+            VStack(spacing: 0) {
+                LinearGradient(colors: [Color(.systemBackground).opacity(0), Color(.systemBackground)],
+                               startPoint: .top, endPoint: .bottom)
+                    .frame(height: 40)
+                Color(.systemBackground)
+            }
+            .ignoresSafeArea(edges: .bottom)
+            .allowsHitTesting(false)
+        }
+    }
+}
+
+private struct GetStartedCardView: View {
+    let card: GetStartedCard
+    let onTap: () -> Void
+    let onRemove: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Button(action: onTap) {
+                VStack(spacing: 4) {
+                    Image(systemName: card.symbol)
+                        .font(.system(size: 22, weight: .regular))
+                        .frame(width: 28, height: 28)
+                    Text(card.title)
+                        .font(.footnote.weight(.semibold))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(3)
+                }
+                .foregroundStyle(.primary)
+                .padding(8)
+                .frame(width: 156, height: 98)
+                .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(card.title)
+            .accessibilityAction(named: "Remove") { onRemove() }
+
+            Button(action: onRemove) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 20)
+                    .padding(12)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHidden(true)   // the card's own "Remove" action does this for VoiceOver
+        }
+        .frame(width: 156, height: 98)
+        .glassEffect(.regular.tint(card.tint), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+    }
+}
+
+/// The blue tip under compose. `anchorX` is the compose button's centre in window points; the tail
+/// is drawn under it. Without it the tail sits where the reference puts it, 20 in from the edge.
+struct FirstChatCue: View {
+    let anchorX: CGFloat?
+    let onTap: () -> Void
+    @Environment(\.colorScheme) private var scheme
+    @State private var minX: CGFloat = 0
+    @State private var width: CGFloat = 0
+
+    private var tailX: CGFloat? {
+        guard let anchorX, anchorX > 0, width > 0 else { return nil }
+        return anchorX - minX
+    }
+
+    var body: some View {
+        Text("Tap here to send your first message.")
+            .font(.body)
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .foregroundStyle(.white)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 11 + CueShape.tailHeight)
+            .padding(.bottom, 11)
+            .padding(.horizontal, 16)
+            .background(CueShape(tailX: tailX).fill(Theme.defaultBubble(scheme == .dark)))
+            .contentShape(CueShape(tailX: tailX))
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { f in
+                minX = f.minX; width = f.width
+            }
+            .onTapGesture(perform: onTap)
+            .accessibilityAddTraits(.isButton)
+            .padding(.trailing, 6)
+            .padding(.leading, 10)
+    }
+}
+
+private struct CueShape: Shape {
+    static let tailHeight: CGFloat = 8
+    static let tailWidth: CGFloat = 16
+    static let tailMargin: CGFloat = 12
+    var tailX: CGFloat?
+
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let bubble = CGRect(x: rect.minX, y: rect.minY + Self.tailHeight,
+                            width: rect.width, height: rect.height - Self.tailHeight)
+        p.addRoundedRect(in: bubble, cornerSize: CGSize(width: 9, height: 9))
+        let half = Self.tailWidth / 2
+        let fallback = rect.width - Self.tailMargin - half
+        let lo = Self.tailMargin + half, hi = rect.width - Self.tailMargin - half
+        let x = rect.minX + min(max(tailX ?? fallback, lo), max(lo, hi))
+        p.move(to: CGPoint(x: x, y: rect.minY))
+        p.addLine(to: CGPoint(x: x - half, y: rect.minY + Self.tailHeight))
+        p.addLine(to: CGPoint(x: x + half, y: rect.minY + Self.tailHeight))
+        p.closeSubpath()
+        return p
+    }
+}
