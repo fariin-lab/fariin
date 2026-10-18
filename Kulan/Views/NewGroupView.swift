@@ -182,8 +182,10 @@ struct NewGroupView: View {
 
     // MARK: - Page 2: New Group
 
-    private static let disappearChoices: [(label: String, seconds: Int)] = [
-        ("Off", 0), ("1 Day", 86_400), ("1 Week", 604_800), ("1 Month", 2_592_000),
+    private struct DisappearChoice: Hashable { let label: String; let seconds: Int }
+    private static let disappearChoices: [DisappearChoice] = [
+        .init(label: "Off", seconds: 0), .init(label: "1 Day", seconds: 86_400),
+        .init(label: "1 Week", seconds: 604_800), .init(label: "1 Month", seconds: 2_592_000),
     ]
 
     private var detailsPage: some View {
@@ -209,7 +211,7 @@ struct NewGroupView: View {
                 // iOS 26 only takes taps on its value. Off / 1 Day / 1 Week / 1 Month, his list.
                 Menu {
                     Picker("Disappearing Messages", selection: $disappearSeconds) {
-                        ForEach(Self.disappearChoices, id: \.seconds) { Text($0.label).tag($0.seconds) }
+                        ForEach(Self.disappearChoices, id: \.self) { Text($0.label).tag($0.seconds) }
                         // The Settings default, when it is none of these.
                         if !Self.disappearChoices.contains(where: { $0.seconds == disappearSeconds }) {
                             Text(ChatService.disappearLabel(disappearSeconds).capitalized).tag(disappearSeconds)
