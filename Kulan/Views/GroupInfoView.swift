@@ -606,27 +606,80 @@ struct AddMembersSheet: View {
             .sorted { $0.name.lowercased() < $1.name.lowercased() }
     }
 
+    /// Everyone this sheet has shown, for the chips of those picked (a search result stays named
+    /// after the search changes).
+    @State private var known: [String: (name: String, photo: String?)] = [:]
+
+    /// Your chats, A to Z, as Select Members groups them.
+    private var lettered: [(letter: String, people: [(id: String, name: String, photo: String?)])] {
+        let groups = Dictionary(grouping: candidates) { p -> String in
+            let f = p.name.trimmingCharacters(in: .whitespaces).uppercased().first
+            return f.map { $0.isLetter ? String($0) : "#" } ?? "#"
+        }
+        return groups.keys.sorted { $0 == "#" ? false : ($1 == "#" ? true : $0 < $1) }
+            .map { ($0, groups[$0] ?? []) }
+    }
+
+    /// ⛔ SELECT MEMBERS' PAGE, EXACTLY (owner 2026-10-18: "make it look exactly like the select members
+    /// page"): the picked people as chips on top, A to Z under it, results while searching, the
+    /// Forward page's rows, X on the left and a blue Add with its spinner inside.
     var body: some View {
         NavigationStack {
             List {
-                if !query.isEmpty {
-                    let found = results.filter { $0.id != me && !existing.contains($0.id) }
-                    if found.isEmpty { Text("No users found.").foregroundStyle(.secondary) }
-                    ForEach(found) { p in
-                        memberPickRow(p.id, p.name.isEmpty ? p.handle : p.name, p.photoUrl)
+                if !selected.isEmpty {
+                    Section("Adding · \(selected.count)") {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 14) {
+                                ForEach(Array(selected).sorted(), id: \.self) { id in
+                                    let p = known[id]
+                                    Button { toggle(id) } label: {
+                                        VStack(spacing: 4) {
+                                            ZStack(alignment: .topTrailing) {
+                                                AvatarView(name: p?.name ?? "", photoUrl: p?.photo, size: 52)
+                                                Image(systemName: "xmark.circle.fill")
+                                                    .font(.system(size: 18))
+                                                    .symbolRenderingMode(.palette)
+                                                    .foregroundStyle(.white, .gray)
+                                                    .offset(x: 4, y: -4)
+                                            }
+                                            Text(p?.name ?? "").font(.caption2).lineLimit(1).frame(width: 56)
+                                                .foregroundStyle(.primary)
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+
+                if query.isEmpty {
+                    if candidates.isEmpty {
+                        Section {
+                            Text("Search by name or username to add anyone.").foregroundStyle(.secondary)
+                        }
+                    }
+                    ForEach(lettered, id: \.letter) { group in
+                        Section(group.letter) {
+                            ForEach(group.people, id: \.id) { p in memberPickRow(p.id, p.name, p.photo) }
+                        }
                     }
                 } else {
-                    if candidates.isEmpty {
-                        Text("Search by name or username to add anyone.").foregroundStyle(.secondary)
+                    Section("Results") {
+                        let found = results.filter { $0.id != me && !existing.contains($0.id) }
+                        if found.isEmpty { Text("No one found").foregroundStyle(.secondary) }
+                        ForEach(found) { p in
+                            memberPickRow(p.id, p.name.isEmpty ? p.handle : p.name, p.photoUrl)
+                        }
                     }
-                    ForEach(candidates, id: \.id) { p in memberPickRow(p.id, p.name, p.photo) }
                 }
             }
+            .listStyle(.insetGrouped)
             .searchable(text: $query, prompt: "Name or username")
             .onChange(of: query) { _, q in search(q) }
             .navigationTitle("Add Members")
             .navigationBarTitleDisplayMode(.inline)
-            .overlay { if adding { ProgressView().padding(20).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14)) } }
             .alert("Couldn't add members", isPresented: Binding(get: { errorText != nil }, set: { if !$0 { errorText = nil } })) {
                 Button("OK", role: .cancel) {}
             } message: { Text(errorText ?? "") }
@@ -634,44 +687,62 @@ struct AddMembersSheet: View {
                 Button("OK") { dismiss() }
             } message: { Text(noticeText ?? "") }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("Cancel")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Add") {
-                        let ids = Array(selected)
-                        adding = true
-                        Task {
-                            do {
-                                let keyless = try await ChatService.addGroupMembers(cid: cid, add: ids)
-                                await MainActor.run {
-                                    if keyless.isEmpty { dismiss() }
-                                    else {
-                                        noticeText = "\(keyless.joined(separator: ", ")) hasn't opened Fariin yet — they'll see messages once they do."
-                                        adding = false
-                                    }
-                                }
-                            } catch {
-                                let msg = error.localizedDescription
-                                await MainActor.run { errorText = msg; adding = false }
-                            }
-                        }
+                    Button { add() } label: {
+                        if adding { ProgressView().tint(.white) } else { Text("Add").fontWeight(.semibold) }
                     }
-                    .disabled(selected.isEmpty || adding).fontWeight(.semibold)
+                    .disabled(selected.isEmpty || adding)
+                    .buttonStyle(.borderedProminent).tint(.blue)
                 }
             }
         }
     }
 
-    @ViewBuilder private func memberPickRow(_ id: String, _ name: String, _ photo: String?) -> some View {
-        Button { toggle(id) } label: {
-            HStack(spacing: 12) {
-                AvatarView(name: name, photoUrl: photo, size: 40)
-                Text(name).foregroundStyle(.primary)
-                VerifiedMark(uid: id, size: 13)
-                Spacer()
-                Image(systemName: selected.contains(id) ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(selected.contains(id) ? Color.primary : .secondary)
+    private func add() {
+        let ids = Array(selected)
+        adding = true
+        Task {
+            do {
+                let keyless = try await ChatService.addGroupMembers(cid: cid, add: ids)
+                await MainActor.run {
+                    if keyless.isEmpty { dismiss() }
+                    else {
+                        noticeText = "\(keyless.joined(separator: ", ")) hasn't opened Fariin yet. They'll see messages once they do."
+                        adding = false
+                    }
+                }
+            } catch {
+                let msg = error.localizedDescription
+                await MainActor.run { errorText = msg; adding = false }
             }
         }
+    }
+
+    /// Select Members' row (`NewGroupView.memberRow`): the Forward page's spacing and circle.
+    @ViewBuilder private func memberPickRow(_ id: String, _ name: String, _ photo: String?) -> some View {
+        Button { known[id] = (name, photo); toggle(id) } label: {
+            HStack(spacing: 12) {
+                AvatarView(name: name, photoUrl: photo, size: 40)
+                HStack(spacing: 4) {
+                    Text(name).font(.system(size: 17)).foregroundStyle(.primary)
+                    VerifiedMark(uid: id, size: 13)
+                }
+                .lineLimit(1)
+                Spacer(minLength: 8)
+                Image(systemName: selected.contains(id) ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 22, weight: .light))
+                    .foregroundStyle(selected.contains(id) ? Color.accentColor : Color.secondary)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+        .alignmentGuide(.listRowSeparatorLeading) { _ in 52 }
     }
 
     private func search(_ q: String) {
