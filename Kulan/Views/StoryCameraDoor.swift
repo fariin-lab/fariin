@@ -199,8 +199,13 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
     /// `open()` convinced a camera is still up and refusing to present another.
     private static weak var presented: UIViewController?
 
-    static func open() {
-        guard presented == nil, let top = topViewController() else { return }
+    /// `official`: opened by the "+" on Fariin's page (OfficialStoryCompose). Set HERE, after the
+    /// guard, so a tap that does not open a camera never leaves Fariin's mode on for the next one,
+    /// and every other open clears it (review 2026-10-18).
+    @discardableResult
+    static func open(official: Bool = false) -> Bool {
+        guard presented == nil, let top = topViewController() else { return false }
+        OfficialStoryCompose.setActive(official)
         let sheet = AddStorySheet(onPosted: { Task { await StoriesRepository.shared.load(force: true) } },
                                   onDismiss: { StoryCameraDoor.close() },
                                   onPostedClose: { StoryCameraDoor.closeAfterPost() })
@@ -215,6 +220,7 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
         host.view.backgroundColor = .black
         presented = host
         top.present(host, animated: true)
+        return true
     }
 
     /// ⛔ DISMISS THE HOST, NOT WHATEVER THE HOST IS PRESENTING — owner, 2026-08-25: "when I upload

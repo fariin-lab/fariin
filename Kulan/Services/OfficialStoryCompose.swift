@@ -27,9 +27,11 @@ enum OfficialStoryCompose {
 
     static func open() {
         guard AdminStore.shared.can(.send) else { return }
-        active = true
-        StoryCameraDoor.open()
+        StoryCameraDoor.open(official: true)
     }
+
+    /// Only `StoryCameraDoor.open` sets it, once a camera has really been presented.
+    static func setActive(_ on: Bool) { active = on }
 
     /// Called when the camera goes away, whichever way.
     static func end() { active = false }
