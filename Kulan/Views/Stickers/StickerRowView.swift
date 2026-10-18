@@ -54,6 +54,19 @@ final class RowStickerView: UIView {
     func configure(_ s: Sticker, url: String?, enc: EncMeta?, cid: String, localData: Data?) {
         let k = "\(s.id)|\(url ?? "")"
         guard k != key else { updatePlayback(); return }
+        // ⛔ THE SAME STICKER, NOW UPLOADED (owner 2026-10-18, build 969: "after the upload it flashes").
+        // A sent sticker is drawn from its local PNG with no link, then the server copy arrives WITH
+        // the link: a new key, so the row reset to the shimmer and loaded the same picture again. Same
+        // sticker and the picture already up: keep it, file it under the new key too, and move on.
+        if let old = key, old.hasPrefix("\(s.id)|"), let have = bytes, let shown = art.contents {
+            key = k
+            Self.bytesCache.setObject(have as NSData, forKey: k as NSString, cost: have.count)
+            if CFGetTypeID(shown as CFTypeRef) == CGImage.typeID {
+                Self.firstCache.setObject(shown as! CGImage, forKey: k as NSString)
+            }
+            updatePlayback()
+            return
+        }
         reset()
         key = k
         animated = s.animated
@@ -64,8 +77,11 @@ final class RowStickerView: UIView {
         // vanished for a moment and came back. Each new cell started empty and waited on a load +
         // decode. The first frame and the bytes are kept in memory, so a known sticker is on the
         // very first frame; only one never shown before still loads.
-        if let first = Self.firstCache.object(forKey: k as NSString),
-           let data = Self.bytesCache.object(forKey: k as NSString) {
+        // Then by the sticker alone ("id|", what the local pending copy was filed under), so a new row
+        // for the same sent sticker also starts with its picture instead of the shimmer.
+        let bare = "\(s.id)|" as NSString
+        if let first = Self.firstCache.object(forKey: k as NSString) ?? Self.firstCache.object(forKey: bare),
+           let data = Self.bytesCache.object(forKey: k as NSString) ?? Self.bytesCache.object(forKey: bare) {
             bytes = data as Data
             CATransaction.begin(); CATransaction.setDisableActions(true)
             art.contents = first
