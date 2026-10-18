@@ -447,14 +447,19 @@ struct EditGroupView: View {
             .navigationTitle("Edit Group")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
+                // 2026-10-18 (owner): an X in place of Cancel, and Save in blue (New Group's Create).
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("Cancel")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") { save() }
-                        .disabled(trimmed.isEmpty || !changed || saving)
-                        .fontWeight(.semibold)
+                    Button { save() } label: {
+                        if saving { ProgressView().tint(.white) } else { Text("Save").fontWeight(.semibold) }
+                    }
+                    .disabled(trimmed.isEmpty || !changed || saving)
+                    .buttonStyle(.borderedProminent).tint(.blue)
                 }
             }
-            .overlay { if saving { ProgressView().controlSize(.large) } }
             .onAppear {
                 if name.isEmpty { name = title }
                 if !descLoaded { desc = Limits.oneParagraph(description, max: Self.descChars); descLoaded = true }
