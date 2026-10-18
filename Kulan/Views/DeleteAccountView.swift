@@ -164,7 +164,7 @@ struct DeleteAccountView: View {
                 VStack(spacing: 12) { verifyControls }
                     .opacity(verifying ? 0.5 : 1)   // 2026-09-24 fix-all #144
 
-                if verifying { ProgressView() }   // 2026-09-24 fix-all #144
+                if verifying { BusyArc.small(.secondary) }   // 2026-09-24 fix-all #144
 
                 if let error {
                     Text(error).font(.footnote).foregroundStyle(.red)
@@ -220,7 +220,7 @@ struct DeleteAccountView: View {
                 HStack {
                     Label("Download My Data First", systemImage: "arrow.down.doc")
                     Spacer()
-                    if exporting { ProgressView() }
+                    if exporting { BusyArc.small(.secondary) }
                 }
             }
             .disabled(exporting)
@@ -255,7 +255,7 @@ struct DeleteAccountView: View {
                 HStack {
                     Spacer()
                     if step == .working {
-                        ProgressView()
+                        BusyArc.small(.red)
                     } else {
                         Text("Continue").fontWeight(.semibold)   // owner 2026-10-18: not the last step
                     }

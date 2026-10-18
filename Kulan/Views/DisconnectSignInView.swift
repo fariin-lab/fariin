@@ -78,7 +78,7 @@ struct DisconnectSignInView: View {
         .navigationTitle("Remove \(method.title)")
         .navigationBarTitleDisplayMode(.inline)
         .disabled(working)
-        .overlay { if working { ProgressView() } }
+        .overlay { if working { BusyArc(size: 56, lineWidth: 5) } }
     }
 
     /// Only the doors this account actually has. The one being removed is still a valid way to

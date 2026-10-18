@@ -257,7 +257,7 @@ struct PasskeysView: View {
     var body: some View {
         Group {
             if loading && rows.isEmpty {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                BusyArc(size: 40, lineWidth: 4).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if rows.isEmpty {
                 intro
             } else {

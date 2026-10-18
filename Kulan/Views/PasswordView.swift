@@ -91,7 +91,7 @@ struct PasswordView: View {
     var body: some View {
         Group {
             switch gate {
-            case .checking:      ProgressView().controlSize(.large)
+            case .checking:      BusyArc(size: 40, lineWidth: 4)
             case .open:          form
             case .refused:       refusedState
             case .noDeviceLock:  noLockState
@@ -179,7 +179,7 @@ struct PasswordView: View {
                 // blue button; both show a spinner in the button's place while the save runs.
                 Button { save() } label: {
                     if busy {
-                        ProgressView().tint(isFirstPassword ? .white : nil)
+                        BusyArc.small(isFirstPassword ? .white : .secondary)
                     } else {
                         Text(isFirstPassword ? "Create" : "Save").fontWeight(.semibold)
                     }
@@ -567,7 +567,7 @@ struct PasswordResetCodeView: View {
     private func pill(_ title: String, enabled: Bool, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Group {
-                if working { ProgressView().tint(AuthPalette.page) } else { Text(title) }
+                if working { BusyArc.small(AuthPalette.page) } else { Text(title) }
             }
             .authActionPill(enabled: enabled || working)
         }

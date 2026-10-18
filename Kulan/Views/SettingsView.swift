@@ -760,17 +760,9 @@ struct AccountSettingsView: View {
         // DisconnectSignInView, with the scrim and the word added because this one ends the session
         // and a bare spinner over a still-bright list does not read as "stop tapping".
         .overlay {
-            if working {
-                ZStack {
-                    Color.black.opacity(0.12).ignoresSafeArea()
-                    VStack(spacing: 12) {
-                        ProgressView()
-                        Text("Signing out").font(.subheadline).foregroundStyle(.secondary)
-                    }
-                    .padding(20)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-                }
-            }
+            // owner 2026-10-18: the big turning arc over a washed-out page (`BusyOverlay`), not the
+            // small spinner in a card.
+            if working { BusyOverlay(text: "Signing Out…") }
         }
         // The report holds personal details, so it is deleted the moment the sheet closes.
         .sheet(item: $exportFile, onDismiss: { DataExport.cleanup() }) { f in ActivityView(items: [f.url]) }

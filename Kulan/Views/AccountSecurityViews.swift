@@ -126,7 +126,7 @@ struct SignInAgainSection: View {
                 }
                 .disabled(password.isEmpty)
             }
-            if busy { ProgressView() }
+            if busy { BusyArc.small(.secondary) }
             if let error { Text(error).font(.footnote).foregroundStyle(.red) }
         } header: {
             Text("One more check")

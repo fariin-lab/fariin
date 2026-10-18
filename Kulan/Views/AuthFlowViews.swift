@@ -446,7 +446,7 @@ struct AuthMethodView: View {
                 .overlay(alignment: .top) {
                     // Not for a saved-account tap: that one spins in its own row (owner 2026-10-13,
                     // "loading appearing wrong position").
-                    ProgressView().controlSize(.small).opacity(busy && resumingUid == nil ? 1 : 0).allowsHitTesting(false)
+                    BusyArc(size: 18, lineWidth: 2, color: .secondary).opacity(busy && resumingUid == nil ? 1 : 0).allowsHitTesting(false)
                 }
 
                 Spacer()
@@ -534,7 +534,7 @@ struct AuthMethodView: View {
                 // ⛔ THE SPINNER WHERE THE TAP WAS — owner 2026-10-13: it sat squeezed between "Add
                 // another account" and "Sign up". The row you tapped turns its chevron into it.
                 if resumingUid == info.uid {
-                    ProgressView().tint(.secondary)
+                    BusyArc.small(.secondary)
                 } else {
                     Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
                 }
@@ -917,7 +917,7 @@ struct EmailAuthView: View {
                     } label: {
                         Group {
                             if busy {
-                                ProgressView().tint(AuthPalette.page)
+                                BusyArc.small(AuthPalette.page)
                             } else if onEmailStep {
                                 Text("Continue")
                             } else {
