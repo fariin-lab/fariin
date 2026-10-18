@@ -433,29 +433,52 @@ struct AttachRecentsStrip: View {
     }
 
     private var grid: some View {
-        gridScroll
-            // Owner 2026-10-14: the attach bar's close button appears once the sheet is full AND the
-            // grid has been scrolled by at least a row. One row = a tile's side plus the gap.
-            .onScrollGeometryChange(for: Bool.self) { g in
-                let side = (g.containerSize.width - 2 * Self.tileGap) / 3
-                return g.contentOffset.y + g.contentInsets.top >= side + Self.tileGap
-            } action: { _, scrolled in onScrolledARow(scrolled) }
+        // ⛔ THE LIMITED-ACCESS ROW SITS ABOVE THE GRID, NOT IN IT — owner 2026-10-18, with the
+        // reference app beside ours: our line was inside the scroll and the first row of photos was
+        // drawn over it. Theirs is a fixed row of its own between the top and the photos: the sentence
+        // on the left, a blue MANAGE capsule on the right that offers Select More Photos… and Change
+        // Settings. The grid starts under it.
+        VStack(spacing: 0) {
+            if status == .limited { limitedRow }
+            gridScroll
+                // Owner 2026-10-14: the attach bar's close button appears once the sheet is full AND the
+                // grid has been scrolled by at least a row. One row = a tile's side plus the gap.
+                .onScrollGeometryChange(for: Bool.self) { g in
+                    let side = (g.containerSize.width - 2 * Self.tileGap) / 3
+                    return g.contentOffset.y + g.contentInsets.top >= side + Self.tileGap
+                } action: { _, scrolled in onScrolledARow(scrolled) }
+        }
+    }
+
+    private var limitedRow: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text("You have limited Fariin from accessing your photos.")
+                .font(.system(size: 15)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Menu {
+                Button { presentLimitedPicker() } label: {
+                    Label("Select More Photos…", systemImage: "photo.badge.plus")
+                }
+                Button {
+                    if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+                } label: {
+                    Label("Change Settings", systemImage: "gearshape")
+                }
+            } label: {
+                Text("MANAGE")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14).frame(height: 30)
+                    .background(Color(hex: 0x0A84FF), in: Capsule())
+            }
+        }
+        .padding(.leading, 16).padding(.trailing, 12)
+        .padding(.top, 24).padding(.bottom, 12)
     }
 
     private var gridScroll: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            // Limited access: a slim banner with a Manage button so the user can add more photos to the
-            // shared selection (otherwise the picker silently shows only the old subset forever).
-            if status == .limited {
-                HStack(spacing: 8) {
-                    Text("Only some photos are shared with Fariin.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Manage") { presentLimitedPicker() }
-                        .font(.footnote.weight(.semibold))
-                }
-                .padding(.horizontal, 16).padding(.bottom, 8)
-            }
             LazyVGrid(columns: cols, spacing: Self.tileGap) {
                 // ⛔ NO CAMERA TILE — owner, 2026-09-02. Camera is a tile INSIDE the attach bar now,
                 // beside GIF, Files and Location, and one action does not get two doors on one
