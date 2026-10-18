@@ -68,19 +68,16 @@ struct ChatsSettingsView: View {
                 Text("Show a preview card for links you type or paste. Your phone contacts the site to build it, before the message is sent.")
             }
 
-            // The setting moves WHERE a stranger's first message waits, and nothing else. It is
-            // still an ordinary conversation with Accept and Delete inside it either way — there is
-            // no separate requests inbox in this app and this does not add one.
+            // ⛔ 2026-10-18, owner: a stranger's first message is a Message Request now, so "people
+            // you've never replied to" had nothing left to catch. What skips Requests is your Chat
+            // Key: someone who types it opens a chat straight away. THOSE chats are what this moves
+            // (see UnknownChatArchiver.sweep).
             Section {
                 Toggle("Automatically Archive", isOn: $autoArchiveUnknown).tint(.green)
             } header: {
-                Text("New Chats from Unknown Users")
+                Text("New Chats from Your Chat Key")
             } footer: {
-                // NAMED THREE THINGS THIS APP DOES NOT HAVE. `Flags.groupsEnabled` is false, there
-                // are no channels at all, and there is no contact list to be in or out of — the
-                // sweep's actual test is whether YOU have ever replied (see UnknownChatArchiver).
-                // Copy carried over from a reference app describes that app, not this one.
-                Text("New chats from people you've never replied to go to Archived, muted.")
+                Text("When someone uses your Chat Key to message you, the chat goes to Archived, muted.")
             }
 
             Section {

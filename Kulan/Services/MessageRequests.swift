@@ -274,9 +274,10 @@ enum UnknownChatArchiver {
         let me = ChatService.uid
         guard !me.isEmpty else { return }
         for c in convs {
-            // THEIR unanswered request only. A chat I started is not from an unknown user to me,
-            // and an accepted one is a normal chat with a person I said yes to.
-            guard MessageRequests.stance(c, myUid: me) == .incoming else { continue }
+            // ⛔ 2026-10-18, owner: chats opened WITH MY CHAT KEY by someone else (verifyChatPin
+            // writes acceptedVia "pin" and acceptedBy = whoever typed it). A stranger's plain first
+            // message is a Message Request already and is left where it is.
+            guard c.acceptedVia == "pin", !c.acceptedBy.isEmpty, c.acceptedBy != me else { continue }
             guard !c.isArchived(me) else { continue }
             guard claim(c.id) else { continue }
             // Archive AND mute, which is what the setting says it does. Archiving alone would
