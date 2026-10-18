@@ -87,7 +87,8 @@ struct GroupInfoView: View {
             .sheet(item: $memberAction) { m in memberSheet(m) }
             .sheet(isPresented: $showAdd) { AddMembersSheet(cid: cid, existing: Set(conv?.users ?? [])) }
             .sheet(isPresented: $showEdit) {
-                EditGroupView(cid: cid, title: title, photoUrl: conv?.avatarUrl)
+                EditGroupView(cid: cid, title: title, photoUrl: conv?.avatarUrl,
+                              description: conv?.groupDescription ?? "")
             }
             .fullScreenCover(item: $viewerImage) { msg in
                 ImageViewerView(message: msg, cid: cid, rectScope: .profile)

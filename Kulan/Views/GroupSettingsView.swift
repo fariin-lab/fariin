@@ -369,9 +369,13 @@ struct EditGroupView: View {
     let cid: String
     let title: String
     let photoUrl: String?
+    /// The group's description now (owner 2026-10-18: "add a Description card here too").
+    var description: String = ""
     @Environment(\.dismiss) private var dismiss
 
     @State private var name = ""
+    @State private var desc = ""
+    @State private var descLoaded = false
     @State private var newPhoto: Data?
     @State private var showPicker = false
     @State private var saving = false
@@ -379,7 +383,11 @@ struct EditGroupView: View {
     @FocusState private var nameFocused: Bool
 
     private var trimmed: String { name.trimmingCharacters(in: .whitespaces) }
-    private var changed: Bool { newPhoto != nil || trimmed != title }
+    private var trimmedDesc: String { desc.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var changed: Bool {
+        newPhoto != nil || trimmed != title
+            || trimmedDesc != description.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     var body: some View {
         NavigationStack {
@@ -388,8 +396,14 @@ struct EditGroupView: View {
                     VStack(spacing: 12) {
                         Button { nameFocused = false; showPicker = true } label: { photo }
                             .buttonStyle(.plain)
-                        Button("Set New Photo") { nameFocused = false; showPicker = true }
-                            .font(.subheadline.weight(.medium))
+                        // Edit Profile's "Edit Photo" capsule (owner 2026-10-18): the cards' white, 36 tall.
+                        Button { nameFocused = false; showPicker = true } label: {
+                            Text("Set New Photo").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                                .padding(.horizontal, 20).frame(height: 36)
+                                .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
                     }
                     .frame(maxWidth: .infinity)
                     .listRowBackground(Color.clear)
@@ -399,6 +413,13 @@ struct EditGroupView: View {
                         .textInputAutocapitalization(.words)
                         .submitLabel(.done)
                         .focused($nameFocused)
+                }
+                Section {
+                    TextField("Description", text: $desc, axis: .vertical)
+                        .lineLimit(1...6)
+                        .onChange(of: desc) { _, v in if v.count > 500 { desc = String(v.prefix(500)) } }
+                } footer: {
+                    Text("Optional. Shown on the group's info page.")
                 }
                 if let error { Text(error).foregroundStyle(.red) }
             }
@@ -414,7 +435,10 @@ struct EditGroupView: View {
                 }
             }
             .overlay { if saving { ProgressView().controlSize(.large) } }
-            .onAppear { if name.isEmpty { name = title } }
+            .onAppear {
+                if name.isEmpty { name = title }
+                if !descLoaded { desc = description; descLoaded = true }
+            }
             // The app's own photo sheet, as New Group's photo uses.
             .sheet(isPresented: $showPicker) {
                 StoryLibraryPicker(
@@ -455,10 +479,12 @@ struct EditGroupView: View {
     /// Name first, then the photo; either refused is said, and the sheet stays.
     private func save() {
         let newName = trimmed, photo = newPhoto, oldName = title
+        let newDesc = trimmedDesc, oldDesc = description.trimmingCharacters(in: .whitespacesAndNewlines)
         saving = true; error = nil
         Task {
             do {
                 if newName != oldName { try await ChatService.renameGroup(cid: cid, title: newName) }
+                if newDesc != oldDesc { try await ChatService.setGroupDescription(cid: cid, text: newDesc) }
                 if let photo { _ = try await ChatService.uploadGroupAvatar(cid: cid, data: photo) }
                 await MainActor.run { saving = false; dismiss() }
             } catch {
