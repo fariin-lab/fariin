@@ -559,19 +559,14 @@ struct RootView: View {
         guard let handle = AppRouter.shared.pendingUserHandle else { return }
         AppRouter.shared.pendingUserHandle = nil
         guard !DemoMode.active else { return }
-        Task {
+        Task { @MainActor in
             // 2026-09-24 fix-all #167: a dead link (renamed, deleted, mistyped) used to do nothing at
-            // all. It now says so, in the QR scanner's words; a chat that will not open says the
-            // app's usual "Try again in a moment."
-            guard let user = await ChatService.findByHandle(handle) else {
-                await MainActor.run { userLinkAlert = "No Fariin user found" }
-                return
+            // all. It now says so, in the QR scanner's words.
+            // 2026-10-18 owner ("it takes a moment to open the chat"): through the card door, which
+            // opens the chat right after the lookup and writes the conversation behind it.
+            if !(await ProfileCardDoor.open(handle, push: false)) {
+                userLinkAlert = "No Fariin user found"
             }
-            guard let cid = try? await ChatService.openConversation(other: user) else {
-                await MainActor.run { userLinkAlert = "Try again in a moment." }
-                return
-            }
-            await MainActor.run { AppRouter.shared.pendingChatId = cid }
         }
     }
 

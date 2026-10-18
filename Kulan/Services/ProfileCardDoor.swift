@@ -16,8 +16,7 @@ private let requestedHandles = OSAllocatedUnfairLock(initialState: Set<String>()
 ///   2. A CHAT THAT IS ALREADY IN THE LIST OPENS AT ONCE. The conversation id is a function of the
 ///      two uids, so nothing needs asking; the usual names-and-photos refresh still runs, behind it.
 ///
-/// A person with no chat yet still waits for the conversation to be created, because there is
-/// nothing to open until it exists.
+/// A person with no chat yet opens the same way (2026-10-18); the conversation is written behind it.
 @MainActor enum ProfileCardDoor {
     private struct Known {
         let profile: UserProfile
@@ -77,13 +76,12 @@ private let requestedHandles = OSAllocatedUnfairLock(initialState: Set<String>()
         guard let user = await resolve(handle) else { return false }
         let me = AuthService.shared.uid ?? ""
         let cid = ChatService.convId(me, user.id)
-        if ConversationsRepository.shared.conversations.contains(where: { $0.id == cid }) {
-            route(cid, user, push: push)
-            Task { _ = try? await ChatService.openConversation(other: user) }
-            return true
-        }
-        guard let opened = try? await ChatService.openConversation(other: user) else { return false }
-        route(opened, user, push: push)
+        // ⛔ A NEW CHAT OPENS AT ONCE TOO — owner 2026-10-18: a profile link from an invite took a
+        // moment to land in the chat, waiting on the conversation read + write. The reference app
+        // saves nothing until the first message, and our first send already creates a missing chat
+        // with the request fields (`send`, `isNewConv`), so the write runs behind the open.
+        route(cid, user, push: push)
+        Task { _ = try? await ChatService.openConversation(other: user) }
         return true
     }
 
