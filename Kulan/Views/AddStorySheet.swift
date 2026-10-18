@@ -243,7 +243,7 @@ struct AddStorySheet: View {
         .sheet(isPresented: $showLibrary) {
             StoryLibraryPicker(
                 onImage: { ui, id in openLibraryImage(ui, assetID: id) },
-                onVideo: { url, id in libraryEditorVideo = EditorVideo(url, assetID: id) },
+                onVideo: { url, id in openLibraryVideo(url, assetID: id) },
                 flyScope: .story)
             .fullScreenCover(item: $libraryEditorImage) { item in
                 StoryEditorView(source: item.image, onPosted: { onPosted(); closeAfterPost() },
@@ -256,7 +256,10 @@ struct AddStorySheet: View {
             }
             .fullScreenCover(item: $libraryEditorVideo) { item in
                 StoryEditorView.forVideo(url: item.url, assetID: item.assetID,
-                                         onPosted: { onPosted(); closeAfterPost() })
+                                         onPosted: { onPosted(); closeAfterPost() },
+                                         poster: item.poster, flySourceKey: item.flyKey,
+                                         arrival: item.arrival)
+                    .presentationBackground(.clear)   // as the photo's, above
             }
         }
         // Text story → audience sheet (was posting straight to "everyone", ignoring audience — M4).
@@ -297,47 +300,97 @@ struct AddStorySheet: View {
         }
         libraryFlying = true
         Task {
-            // The flying copy is a screen-sized picture, decoded off the main thread, so a 48 MP
-            // original cannot stall the first frames. The editor keeps the full one.
-            let px = UIScreen.main.bounds.size.applying(.init(scaleX: UIScreen.main.scale, y: UIScreen.main.scale))
-            let fitted = AVMakeRect(aspectRatio: ui.size, insideRect: CGRect(origin: .zero, size: px)).size
-            let copy = await Task.detached(priority: .userInitiated) {
-                ui.preparingThumbnail(of: fitted) ?? ui
-            }.value
-            // The rect is read after the hop above, never before it: the grid may have moved.
-            guard let from = MediaOpenRects.liveRect(key), let rest = StoryEditorView.flyRest(for: ui) else {
-                libraryFlying = false
-                libraryEditorImage = EditorImage(ui, assetID: assetID)
-                return
-            }
+            let copy = await Self.screenSized(ui)
             var item = EditorImage(ui, assetID: assetID)
             item.flyKey = key
             item.arrival = EditorArrival(landed: false)
-            let arrival = item.arrival
-            // The tile is hidden for the flight so the photo is never on screen twice.
-            MediaSourceVisibility.shared.hide(key)
-            MediaOpen.fly(image: copy, from: from, sourceCornerRadius: 0,
-                          clip: MediaOpenRects.liveViewRect(MediaOpenRects.key(.story, "grid")),
-                          to: rest.rect, destinationCornerRadius: rest.cornerRadius,
-                          timing: MediaOpen.storyEditorCurve,
-                          timingDuration: MediaOpen.storyEditorDuration,
-                          backdropFade: MediaOpen.storyEditorBackdropIn,
-                          // The editor comes up at the start, over the flying copy, its controls
-                          // growing in; its own photo and black show once the copy has landed.
-                          onStart: {
-                              MediaPresentGate.present {
-                                  InstantCover.run { libraryEditorImage = item }   // no system slide
-                              }
-                          }) {
-                arrival.landed = true
+            let ready = item
+            flyFromTile(key: key, copy: copy, rest: StoryEditorView.flyRest(for: ui), arrival: item.arrival,
+                        present: { libraryEditorImage = ready },
+                        plain: { libraryEditorImage = EditorImage(ui, assetID: assetID) })
+        }
+    }
+
+    /// The same flight for a clip (owner 2026-10-18, "go finish"): the reference flies a still for
+    /// video too. Its first frame, at the moment the editor will show it, is the copy and the
+    /// placeholder the editor wears (`StoryEditorView.forVideo(poster:)`), so the landing matches.
+    private func openLibraryVideo(_ url: URL, assetID: String?) {
+        guard libraryEditorVideo == nil, !libraryFlying else { return }
+        let key = assetID.map { MediaOpenRects.key(.story, $0) }
+        guard let key, MediaOpenRects.liveRect(key) != nil else {
+            libraryEditorVideo = EditorVideo(url, assetID: assetID)
+            return
+        }
+        libraryFlying = true
+        Task {
+            // `resolveSourceVideo`'s frame, same time and size, so its later swap changes nothing.
+            let asset = AVURLAsset(url: url)
+            let dur = (try? await asset.load(.duration).seconds) ?? 0
+            let gen = AVAssetImageGenerator(asset: asset)
+            gen.appliesPreferredTrackTransform = true
+            gen.maximumSize = CGSize(width: 1200, height: 1200)
+            let t = CMTime(seconds: min(0.1, max(0.01, dur / 2)), preferredTimescale: 600)
+            guard let cg = try? await gen.image(at: t).image else {
                 libraryFlying = false
-                // The editor is opaque over the tile by now; give it back for the close to find.
-                DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
+                libraryEditorVideo = EditorVideo(url, assetID: assetID)
+                return
             }
+            let poster = UIImage(cgImage: cg)
+            var item = EditorVideo(url, assetID: assetID)
+            item.flyKey = key
+            item.poster = poster
+            item.arrival = EditorArrival(landed: false)
+            let ready = item
+            flyFromTile(key: key, copy: poster, rest: StoryEditorView.flyRest(for: poster, video: true),
+                        arrival: item.arrival,
+                        present: { libraryEditorVideo = ready },
+                        plain: { libraryEditorVideo = EditorVideo(url, assetID: assetID) })
+        }
+    }
+
+    /// A screen-sized copy of the picture, decoded off the main thread, so a 48 MP original cannot
+    /// stall the flight's first frames. The editor keeps the full one.
+    private static func screenSized(_ ui: UIImage) async -> UIImage {
+        let px = UIScreen.main.bounds.size.applying(.init(scaleX: UIScreen.main.scale, y: UIScreen.main.scale))
+        let fitted = AVMakeRect(aspectRatio: ui.size, insideRect: CGRect(origin: .zero, size: px)).size
+        return await Task.detached(priority: .userInitiated) { ui.preparingThumbnail(of: fitted) ?? ui }.value
+    }
+
+    /// The flight itself, one for both kinds. `plain` = no tile or no window left to fly in.
+    private func flyFromTile(key: String, copy: UIImage,
+                             rest: (rect: CGRect, cornerRadius: CGFloat)?, arrival: EditorArrival,
+                             present: @escaping () -> Void, plain: @escaping () -> Void) {
+        // The rect is read after the hops before this, never earlier: the grid may have moved.
+        guard let from = MediaOpenRects.liveRect(key), let rest else {
+            libraryFlying = false
+            plain()
+            return
+        }
+        // The tile is hidden for the flight so the picture is never on screen twice.
+        MediaSourceVisibility.shared.hide(key)
+        MediaOpen.fly(image: copy, from: from, sourceCornerRadius: 0,
+                      clip: MediaOpenRects.liveViewRect(MediaOpenRects.key(.story, "grid")),
+                      to: rest.rect, destinationCornerRadius: rest.cornerRadius,
+                      timing: MediaOpen.storyEditorCurve,
+                      timingDuration: MediaOpen.storyEditorDuration,
+                      backdropFade: MediaOpen.storyEditorBackdropIn,
+                      // The editor comes up at the start, over the flying copy, its controls
+                      // growing in; its own picture and black show once the copy has landed.
+                      onStart: {
+                          MediaPresentGate.present { InstantCover.run { present() } }   // no system slide
+                      }) {
+            arrival.landed = true
+            libraryFlying = false
+            // The editor is opaque over the tile by now; give it back for the close to find.
+            DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
         }
     }
     struct EditorVideo: Identifiable {
         let id = UUID(); let url: URL; let assetID: String?
+        /// A library tile flight, as `EditorImage`'s; `poster` is the clip's first frame it flies.
+        var flyKey: String? = nil
+        var poster: UIImage? = nil
+        var arrival = EditorArrival(landed: true)
         init(_ u: URL, assetID: String? = nil) { url = u; self.assetID = assetID }
     }
 

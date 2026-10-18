@@ -260,10 +260,15 @@ struct StoryEditorView: View {
     /// Open the composer on a video. The `source` picture is the placeholder every clip wears until
     /// its own frame decodes — it is never shown as an item, because `onAppear` seeds the clip
     /// instead of building a photo from it.
+    /// `poster` (a library tile flight) is the clip's first frame, worn instead of the black
+    /// placeholder so the picture the flight lands is the picture the card shows.
     static func forVideo(url: URL, assetID: String? = nil,
-                         onPosted: @escaping () -> Void = {}) -> StoryEditorView {
-        StoryEditorView(source: blackPoster, onPosted: onPosted,
-                        sourceVideo: SourceVideo(url: url, assetID: assetID))
+                         onPosted: @escaping () -> Void = {},
+                         poster: UIImage? = nil, flySourceKey: String? = nil,
+                         arrival: EditorArrival = EditorArrival(landed: true)) -> StoryEditorView {
+        StoryEditorView(source: poster ?? blackPoster, onPosted: onPosted,
+                        sourceVideo: SourceVideo(url: url, assetID: assetID),
+                        flySourceKey: flySourceKey, arrival: arrival)
     }
     @Environment(\.dismiss) private var dismiss
 
@@ -549,14 +554,21 @@ struct StoryEditorView: View {
     /// Where a freshly opened picture rests in the card, and its corners: a portrait one fills the
     /// card (`defaultZoom`), so the card's own rect and 40pt corners; square or landscape is fitted
     /// to the width and centred, square-cornered. The open lands here and the close lifts off it.
-    static func flyRest(of img: CGSize, in card: CGRect) -> (rect: CGRect, cornerRadius: CGFloat) {
-        guard img.width > 1, img.height > 1, img.height <= img.width else { return (card, 40) }
+    /// A clip opens at zoom 1 (`restoreCurrent`), so it is fitted whatever its shape, and only one
+    /// exactly the card's shape wears the card's corners.
+    static func flyRest(of img: CGSize, in card: CGRect, video: Bool = false) -> (rect: CGRect, cornerRadius: CGFloat) {
+        guard img.width > 1, img.height > 1 else { return (card, 40) }
+        if video {
+            let fit = AVMakeRect(aspectRatio: img, insideRect: card)
+            return (fit, fit.width >= card.width - 0.5 && fit.height >= card.height - 0.5 ? 40 : 0)
+        }
+        guard img.height <= img.width else { return (card, 40) }
         let h = card.width * img.height / img.width
         return (CGRect(x: card.minX, y: card.midY - h / 2, width: card.width, height: h), 0)
     }
-    static func flyRest(for image: UIImage) -> (rect: CGRect, cornerRadius: CGFloat)? {
+    static func flyRest(for image: UIImage, video: Bool = false) -> (rect: CGRect, cornerRadius: CGFloat)? {
         guard let win = flyWindow else { return nil }
-        return flyRest(of: image.size, in: flyCardRect(in: win))
+        return flyRest(of: image.size, in: flyCardRect(in: win), video: video)
     }
 
     private var flies: Bool { flySourceKey != nil }
@@ -1580,7 +1592,8 @@ struct StoryEditorView: View {
                         // A VIDEO-FIRST POST. The clip is the first item, wearing the black
                         // placeholder until its own frame decodes — exactly what a clip picked with
                         // the + wears. Its length and its poster arrive in `resolveSourceVideo`.
-                        items = [DraftItem(image: Self.blackPoster, videoURL: v.url,
+                        // `source` is the black placeholder, or a tile flight's first frame.
+                        items = [DraftItem(image: source, videoURL: v.url,
                                            duration: 0, assetID: v.assetID)]
                         index = 0
                         if repostOf != nil {
@@ -4090,7 +4103,7 @@ struct StoryEditorView: View {
     /// at the rest it opened on, as theirs flies its `sourceImage`.
     @ViewBuilder private var flyDismissHost: some View {
         if let key = flySourceKey {
-            let rest = Self.flyRest(of: source.size, in: cardRect)
+            let rest = Self.flyRest(of: source.size, in: cardRect, video: sourceVideo != nil)
             MediaDismissHost(
                 canBegin: { flyCanClose() },
                 media: { cardRect.width > 1 && cardRect.height > 1 ? (rest.rect, source) : nil },
