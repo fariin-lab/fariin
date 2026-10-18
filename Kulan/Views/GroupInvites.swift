@@ -174,65 +174,64 @@ struct InviteLinkSheet: View {
 
     var body: some View {
         InviteStackIfNeeded(on: !embedded) {
+            // ⛔ THE OWNER'S LAYOUT (2026-10-18, his picture): the Group Link switch with the link
+            // under it; Share and Reset Link; Require Admin Approval with one line under it. Copy and
+            // the QR code live in Share's menu now; expiry and usage limit left this page (a link that
+            // already has them keeps them, the server still applies them).
             List {
                 if loading {
                     Section { ProgressView().frame(maxWidth: .infinity) }.listRowBackground(Color.clear)
-                } else if let inv = invite, inv.isActive {
-                    Section {
-                        Text(inv.url).font(.callout.monospaced()).textSelection(.enabled)
-                        Button { UIPasteboard.general.string = inv.url } label: { Label("Copy Link", systemImage: "doc.on.doc") }
-                        ShareLink(item: URL(string: inv.url) ?? URL(string: "https://fariin.com")!) {
-                            Label("Share Link", systemImage: "square.and.arrow.up")
-                        }
-                        // 2026-09-24 fix-all #126: the link as a code to hold up for someone in the
-                        // room, drawn by the profile QR's own generator (`qrImage(from:)`).
-                        Button { showQR = true } label: { Label("QR Code", systemImage: "qrcode") }
-                    } footer: {
-                        Text(inv.usageLimit > 0 ? "Used \(inv.usedCount) of \(inv.usageLimit)." : "Anyone with this link can join.")
-                    }
-                    Section("Options") {
-                        Toggle("Require admin approval", isOn: Binding(
-                            get: { inv.requestApproval },
-                            set: { on in setField(["requestApproval": on]); invite?.requestApproval = on }))
-                        Menu {
-                            ForEach(expiryOptions, id: \.0) { opt in
-                                Button(opt.0) {
-                                    let at = opt.1 == 0 ? 0 : (Date().timeIntervalSince1970 + opt.1) * 1000
-                                    setField(["expireAt": at]); invite?.expireAt = at
-                                }
-                            }
-                        } label: { LabeledContent("Expires", value: expiryLabel(inv.expireAt)) }
-                        Menu {
-                            ForEach(limitOptions, id: \.0) { opt in
-                                Button(opt.0) { setField(["usageLimit": opt.1]); invite?.usageLimit = opt.1 }
-                            }
-                        } label: { LabeledContent("Usage limit", value: inv.usageLimit == 0 ? "No limit" : "\(inv.usageLimit)") }
-                    }
-                    Section {
-                        // 2026-09-24 audit: both kill the link everyone already has, so each asks
-                        // first, with the row's own words (no new copy) in a destructive sheet.
-                        Button(role: .destructive) { confirmRevoke = true } label: { Label("Revoke Link", systemImage: "xmark.circle") }
-                        Button { confirmNewLink = true } label: { Label("New Link", systemImage: "arrow.triangle.2.circlepath") }
-                    }
-                    .confirmationDialog("Revoke Link", isPresented: $confirmRevoke, titleVisibility: .hidden) {
-                        Button("Revoke Link", role: .destructive) { revoke() }
-                        Button("Cancel", role: .cancel) {}
-                    }
-                    .confirmationDialog("New Link", isPresented: $confirmNewLink, titleVisibility: .hidden) {
-                        Button("New Link", role: .destructive) { regenerate() }
-                        Button("Cancel", role: .cancel) {}
-                    }
                 } else {
+                    let inv = invite.flatMap { $0.isActive ? $0 : nil }
                     Section {
-                        Button { create() } label: {
-                            Label(working ? "Creating…" : "Create Invite Link", systemImage: "link.badge.plus")
-                        }.disabled(working)
-                    } footer: {
-                        Text("Share a link so people can join this group without being added by a contact.")
+                        Toggle("Group Link", isOn: Binding(
+                            get: { inv != nil || working },
+                            set: { on in if on { create() } else { revoke() } }))
+                            .disabled(working)
+                        if let inv {
+                            Text(inv.url)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    if let inv {
+                        Section {
+                            Menu {
+                                Button { shareText = inv.url } label: { Label("Send in Fariin", systemImage: "paperplane") }
+                                Button { UIPasteboard.general.string = inv.url } label: { Label("Copy Link", systemImage: "doc.on.doc") }
+                                Button { showQR = true } label: { Label("QR Code", systemImage: "qrcode") }
+                                ShareLink(item: URL(string: inv.url) ?? URL(string: "https://fariin.com")!) {
+                                    Label("More", systemImage: "ellipsis")
+                                }
+                            } label: {
+                                Label("Share", systemImage: "square.and.arrow.up").foregroundStyle(.primary)
+                            }
+                            // It kills the link everyone already has, so it asks first.
+                            Button { confirmNewLink = true } label: {
+                                Label("Reset Link", systemImage: "arrow.clockwise").foregroundStyle(.primary)
+                            }
+                        }
+                        .confirmationDialog("Reset Link", isPresented: $confirmNewLink, titleVisibility: .visible) {
+                            Button("Reset Link", role: .destructive) { regenerate() }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("The current link stops working for everyone who has it.")
+                        }
+                        Section {
+                            Toggle("Require Admin Approval", isOn: Binding(
+                                get: { inv.requestApproval },
+                                set: { on in setField(["requestApproval": on]); invite?.requestApproval = on }))
+                        } footer: {
+                            Text("An admin has to approve each person who joins with the link.")
+                        }
                     }
                 }
             }
-            .navigationTitle("Invite via Link").navigationBarTitleDisplayMode(.inline)
+            .sheet(item: Binding(get: { shareText.map { InviteShareText(id: $0) } },
+                                 set: { shareText = $0?.id })) { t in
+                ForwardPicker(shareText: t.id)
+            }
+            .navigationTitle("Group Link").navigationBarTitleDisplayMode(.inline)
             .toolbar { if !embedded { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } } }
             .task { await load() }
             // 2026-09-24 fix-all #126: the code, white behind it so any camera reads it in either theme.
@@ -257,6 +256,7 @@ struct InviteLinkSheet: View {
         }
     }
     @State private var showQR = false   // 2026-09-24 fix-all #126, private like the sheet's other state
+    @State private var shareText: String?   // the link, going out through the app's Send To sheet
 
     private func expiryLabel(_ at: Double) -> String {
         guard at > 0 else { return "Never" }
@@ -535,3 +535,6 @@ private struct InviteStackIfNeeded<Content: View>: View {
         if on { NavigationStack { content() } } else { content() }
     }
 }
+
+/// The link handed to the Send To sheet, as an `Identifiable` for `.sheet(item:)`.
+private struct InviteShareText: Identifiable { let id: String }

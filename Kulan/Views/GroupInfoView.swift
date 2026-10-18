@@ -37,6 +37,7 @@ struct GroupInfoView: View {
     @State private var showInvite = false
     /// The invite link being shared through the app's Send To sheet (Share Group).
     @State private var shareGroupText: String?
+    @State private var showAllMembers = false   // See All, under the first ten members
     @State private var showSounds = false
     @State private var showSettings = false
     @State private var showEdit = false
@@ -327,9 +328,10 @@ struct GroupInfoView: View {
             HStack {
                 Text(conv?.memberCountLabel.capitalized ?? "Members").font(.headline)
                 Spacer()
+                // owner 2026-10-18: the search opens the members sheet (its own list with its search
+                // bar, as the reference app does), not a field squeezed into this page.
                 Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { searchingMembers.toggle() }
-                    if !searchingMembers { memberQuery = "" }
+                    showAllMembers = true
                 } label: {
                     Image(systemName: searchingMembers ? "xmark" : "magnifyingglass")
                         .font(.system(size: 17, weight: .medium)).foregroundStyle(.secondary)
@@ -364,16 +366,39 @@ struct GroupInfoView: View {
                 }
                 .buttonStyle(.plain)
             }
-            ForEach(Array(shownMembers.enumerated()), id: \.element) { i, uid in
+            // ⛔ TEN ON THE PAGE (owner 2026-10-18): a big group listed every member here. The first
+            // ten, then See All opens the full, searchable members list in a sheet. A search shows
+            // every match, as before.
+            let all = shownMembers
+            let capped = memberQuery.isEmpty && all.count > Self.membersShown
+            ForEach(Array((capped ? Array(all.prefix(Self.membersShown)) : all).enumerated()), id: \.element) { i, uid in
                 if i > 0 || (canAdd && memberQuery.isEmpty) { rowDivider }
                 GroupMemberRow(conv: conv, uid: uid, me: me) {
                     memberAction = MemberAction(id: uid, name: conv?.names[uid] ?? "User",
                                                 isAdmin: conv?.isAdmin(uid) ?? false)
                 }
             }
+            if capped {
+                rowDivider
+                Button { showAllMembers = true } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 16, weight: .medium)).foregroundStyle(.secondary)
+                            .frame(width: 40, height: 40)
+                        Text("See All").foregroundStyle(.primary)
+                        Spacer()
+                        Text("\(all.count)").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
         }
         .profileSurface(plain: cardColor)
+        .sheet(isPresented: $showAllMembers) { GroupMembersSheet(cid: cid) }
     }
+    private static let membersShown = 10
 
     private var shownMembers: [String] {
         let all = GroupMembers.sorted(conv, me: me)
@@ -462,15 +487,17 @@ struct GroupMemberRow: View {
         Button(action: onTap) {
             HStack(spacing: 12) {
                 AvatarView(name: name, photoUrl: conv?.photos[uid], size: 40)
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Text(name).foregroundStyle(.primary).lineLimit(1)
-                        VerifiedMark(uid: uid, size: 13)
-                    }
-                    if let role = conv?.roles[uid] { RoleChip(role: role) }
+                // The Role sits on the name's line, right of it (owner 2026-10-18: "not under the
+                // name"). The name gives way first, so a long one truncates before the chip does.
+                HStack(spacing: 6) {
+                    Text(name).foregroundStyle(.primary).lineLimit(1)
+                    VerifiedMark(uid: uid, size: 13)
+                    if let role = conv?.roles[uid] { RoleChip(role: role).layoutPriority(1) }
                 }
                 Spacer(minLength: 8)
-                if let rank { Text(rank).foregroundStyle(.secondary) }
+                // Owner / Admin at the reference app's size for this label (owner 2026-10-18): the
+                // subheadline style (15pt), secondary grey, not the 17pt the name uses.
+                if let rank { Text(rank).font(.subheadline).foregroundStyle(.secondary) }
             }
             .padding(.horizontal, 16).padding(.vertical, 9)
             .contentShape(Rectangle())
@@ -570,11 +597,12 @@ private struct GroupInfoExits: ViewModifier {
                 Button("Clear Chat", role: .destructive) { Task { await ChatService.deleteForMe(cid) } }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("This clears the chat from your device only.") }
-            .confirmationDialog("Leave this group?", isPresented: $confirmLeave, titleVisibility: .visible) {
-                Button("Leave", role: .destructive) { run { try await ChatService.leaveGroup(cid: cid) } }
+            // owner 2026-10-18: Leave, Report and Delete ask in Apple's centred alert, not a sheet.
+            .alert("Leave Group?", isPresented: $confirmLeave) {
                 Button("Cancel", role: .cancel) {}
-            }
-            .confirmationDialog("Report this group?", isPresented: $confirmReport, titleVisibility: .visible) {
+                Button("Leave", role: .destructive) { run { try await ChatService.leaveGroup(cid: cid) } }
+            } message: { Text("You won't get messages from this group any more.") }
+            .alert("Report Group?", isPresented: $confirmReport) {
                 Button("Report", role: .destructive) {
                     // admins.first can be ME (self-report) — pick another admin, else the creator, else any other member.
                     let creator = conv?.createdBy
@@ -586,9 +614,9 @@ private struct GroupInfoExits: ViewModifier {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("The group will be reported to moderators for review.") }
-            .confirmationDialog("Delete this group?", isPresented: $confirmDelete, titleVisibility: .visible) {
-                Button("Delete Group", role: .destructive) { run { try await GroupInviteService.deleteGroup(cid: cid) } }
+            .alert("Delete Group?", isPresented: $confirmDelete) {
                 Button("Cancel", role: .cancel) {}
+                Button("Delete", role: .destructive) { run { try await GroupInviteService.deleteGroup(cid: cid) } }
             } message: { Text("This permanently deletes the group and all its messages for everyone. This cannot be undone.") }
             .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
                                                               set: { if !$0 { actionError = nil } })) {
@@ -1038,3 +1066,131 @@ struct GroupMemberSheet: View {
 
 /// The text handed to Share Group's sheet, as an `Identifiable` for `.sheet(item:)`.
 private struct ShareText: Identifiable { let id: String }
+
+// MARK: - Members sheet (search / See All)
+
+/// ⛔ THE MEMBERS SHEET — owner 2026-10-18, with the reference app's own: X, "Members", a sort
+/// button; the members under A–Z headers with the letter index down the side; one card with Add
+/// Members and Invite Via Group Link; the search bar at the bottom with the keys already up.
+/// Opened by the members search button and by See All on the group page.
+struct GroupMembersSheet: View {
+    let cid: String
+    init(cid: String) { self.cid = cid }
+    @Environment(\.dismiss) private var dismiss
+    private var repo = ConversationsRepository.shared
+    private var me: String { AuthService.shared.uid ?? "" }
+    @State private var query = ""
+    @State private var searching = true
+    @State private var adminsFirst = false
+    @State private var opened: OpenedMember?
+    @State private var showAdd = false
+    @State private var showInvite = false
+
+    private struct OpenedMember: Identifiable { let id: String }
+    private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
+    private var canAdd: Bool { (conv?.adminCan(me, .inviteUsers) ?? false) || (conv?.membersCanAdd ?? false) }
+    private var canInvite: Bool { conv?.adminCan(me, .inviteUsers) ?? false }
+
+    private func name(_ uid: String) -> String { uid == me ? "You" : (conv?.names[uid] ?? "User") }
+
+    /// Members matching the search, sorted by name (or admins first, then by name).
+    private var members: [String] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let all = (conv?.users ?? []).filter {
+            q.isEmpty || name($0).lowercased().contains(q) || (conv?.roles[$0]?.display.lowercased().contains(q) ?? false)
+        }
+        return all.sorted { a, b in
+            if adminsFirst {
+                let ra = rank(a), rb = rank(b)
+                if ra != rb { return ra < rb }
+            }
+            return name(a).localizedCaseInsensitiveCompare(name(b)) == .orderedAscending
+        }
+    }
+    private func rank(_ uid: String) -> Int {
+        if conv?.createdBy == uid { return 0 }
+        return (conv?.isAdmin(uid) ?? false) ? 1 : 2
+    }
+    /// The letter a name files under: A–Z, everything else "#".
+    private func letter(_ uid: String) -> String {
+        guard let c = name(uid).folding(options: .diacriticInsensitive, locale: .current).first,
+              c.isLetter, c.isASCII else { return "#" }
+        return String(c).uppercased()
+    }
+    private var sections: [(String, [String])] {
+        if adminsFirst { return [("", members)] }
+        var out: [(String, [String])] = []
+        for uid in members {
+            let l = letter(uid)
+            if let i = out.firstIndex(where: { $0.0 == l }) { out[i].1.append(uid) } else { out.append((l, [uid])) }
+        }
+        return out.sorted { a, b in a.0 == "#" ? false : (b.0 == "#" ? true : a.0 < b.0) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(sections, id: \.0) { sec in
+                    Section {
+                        ForEach(sec.1, id: \.self) { uid in
+                            GroupMemberRow(conv: conv, uid: uid, me: me) { opened = OpenedMember(id: uid) }
+                                .listRowInsets(EdgeInsets())
+                        }
+                    } header: {
+                        if !sec.0.isEmpty { Text(sec.0) }
+                    }
+                    .sectionIndexLabel(sec.0.isEmpty ? nil : Text(sec.0))
+                }
+                if query.isEmpty && (canAdd || canInvite) {
+                    Section {
+                        if canAdd {
+                            Button { showAdd = true } label: { actionRow("plus", "Add Members") }
+                        }
+                        if canInvite {
+                            Button { showInvite = true } label: { actionRow("link", "Invite Via Group Link") }
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .listSectionIndexVisibility(.visible)
+            .searchable(text: $query, isPresented: $searching, prompt: "Search")
+            .navigationTitle("Members")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Picker("Sort", selection: $adminsFirst) {
+                            Text("By Name").tag(false)
+                            Text("Admins First").tag(true)
+                        }
+                    } label: { Image(systemName: "line.3.horizontal.decrease") }
+                    .accessibilityLabel("Sort")
+                }
+            }
+            .sheet(item: $opened) { o in
+                GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: o.id)
+                    .presentationDetents([.medium, .large])
+            }
+            .sheet(isPresented: $showAdd) { AddMembersSheet(cid: cid, existing: Set(conv?.users ?? [])) }
+            .navigationDestination(isPresented: $showInvite) {
+                InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
+                                initialCode: conv?.inviteCode ?? "", embedded: true)
+            }
+        }
+    }
+
+    private func actionRow(_ icon: String, _ title: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .medium)).foregroundStyle(.primary)
+                .frame(width: 40, height: 40)
+                .background(Circle().fill(Color(.systemGray5)))
+            Text(title).foregroundStyle(.primary)
+            Spacer()
+        }
+    }
+}
