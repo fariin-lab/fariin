@@ -345,6 +345,12 @@ struct NewGroupView: View {
     private func create() {
         let name = groupName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return }
+        // "Create new groups" switched off from the admin panel while this page was open (owner
+        // 2026-10-18). The rules refuse it anyway; this says so in words instead of "Try again".
+        guard Flags.groupCreateEnabled else {
+            error = "Creating new groups isn't available right now."
+            return
+        }
         creating = true; error = nil
         let timer = disappearSeconds
         let photo = avatarData

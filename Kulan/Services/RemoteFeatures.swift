@@ -1,5 +1,6 @@
 import Foundation
 import FirebaseFirestore
+import Observation
 
 /// FEATURE SWITCHES THE OWNER FLIPS FROM THE ADMIN PANEL (admin.fariin.com → Feature controls),
 /// 2026-10-12. One document, `config/features`, written only by the adminApi function (the rules let
@@ -49,8 +50,21 @@ final class RemoteFeatures {
                 var out: [String: Bool] = [:]
                 for (k, v) in snap.data() ?? [:] { if let b = v as? Bool { out[k] = b } }
                 UserDefaults.standard.set(out, forKey: Self.storeKey)
+                DispatchQueue.main.async { LiveFeatures.shared.values = out }
             }
     }
 
     func stop() { listener?.remove(); listener = nil }
+}
+
+/// ⛔ THE SWITCHES THAT APPLY AT ONCE — owner 2026-10-18 ("Create new groups" from the admin panel,
+/// "without a new build", while the app is open). The snapshot above is deliberately once per launch;
+/// a switch that only closes a door (a button that should not be offered) is safe to change under a
+/// drawn screen, so those read this live copy instead. `@Observable`: a view reading a value redraws
+/// when the panel flips it. Starts from what was saved last time.
+@Observable final class LiveFeatures {
+    static let shared = LiveFeatures()
+    var values: [String: Bool] =
+        (UserDefaults.standard.dictionary(forKey: "remoteFeatures.v1") as? [String: Bool]) ?? [:]
+    private init() {}
 }

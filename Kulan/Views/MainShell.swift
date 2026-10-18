@@ -2743,7 +2743,7 @@ struct ChatsView: View {
     private var getStartedCards: [GetStartedCard] {
         guard getStartedContext, profile.me != nil else { return [] }
         return getStarted.cards(me, hasPhoto: profile.me?.photoUrl?.isEmpty == false,
-                                groups: Flags.groupsEnabled)
+                                groups: Flags.groupCreateEnabled)
     }
 
     @ViewBuilder private var getStartedLayer: some View {
