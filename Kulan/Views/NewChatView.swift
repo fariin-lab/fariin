@@ -118,6 +118,7 @@ struct NewChatView: View {
                                                      ? user.photoUrl : nil,
                                               uid: user.id)
                                 }
+                                .modifier(ForwardRowSpacing())
                             }
                             if results.isEmpty {
                                 if searching {
@@ -225,6 +226,7 @@ struct NewChatView: View {
                       photo: conv.photoUrl(for: me),
                       uid: conv.isGroup ? nil : conv.otherUid(me))
         }
+        .modifier(ForwardRowSpacing())
     }
 
     /// Fill the second lines from the on-disk cache. One pass when the screen opens; anybody the
@@ -249,21 +251,22 @@ struct NewChatView: View {
     @ViewBuilder
     private func personRow(name: String, handle: String?, photo: String?, uid: String?) -> some View {
         HStack(spacing: 12) {
-            AvatarView(name: name, photoUrl: photo, size: 44)
+            AvatarView(name: name, photoUrl: photo, size: 40)
             VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 5) {
-                    Text(name).font(.body.weight(.medium)).foregroundStyle(.primary)
+                HStack(spacing: 4) {
+                    Text(name).font(.system(size: 17)).foregroundStyle(.primary)
                     if let uid { VerifiedMark(uid: uid, size: 13) }
                 }
+                .lineLimit(1)
                 if let handle, !handle.isEmpty {
-                    Text("@\(handle)").font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                    Text("@\(handle)").font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
             Spacer()
         }
-        // 2, not 4: with the row's own inset-grouped padding on top of it these were ~74pt tall, so
-        // four people were a screenful. Theirs land in the mid-60s.
-        .padding(.vertical, 2)
+        // ⛔ THE FORWARD PAGE'S ROW — owner 2026-10-18: "use exactly the spaces the forward page uses".
+        // Same photo, same type, same 44 pt floor; the insets are on the row (`ForwardRowSpacing`).
+        .frame(minHeight: 44)
         .contentShape(Rectangle())
     }
 
@@ -273,5 +276,15 @@ struct NewChatView: View {
         let cid = ChatService.convId(me, user.id)
         onOpen(ChatTarget(id: cid, name: user.name.isEmpty ? user.handle : user.name, photo: user.photoUrl))
         Task { try? await ChatService.openConversation(other: user) }
+    }
+}
+
+/// The Forward picker's row spacing (`ForwardPicker.row`): 5 pt above and below, 16 at the sides, and
+/// the separator starting at the name, not under the photo.
+private struct ForwardRowSpacing: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+            .alignmentGuide(.listRowSeparatorLeading) { _ in 52 }
     }
 }
