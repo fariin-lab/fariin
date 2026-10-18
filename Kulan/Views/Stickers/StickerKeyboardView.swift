@@ -192,6 +192,12 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         cardView.addSubview(deleteBar)
 
         reload()
+        // Packs from the admin panel (2026-10-18): a changed catalog redraws the shelves; a server
+        // sticker's file landing fills its tile in place (no full reload, so nothing flashes).
+        NotificationCenter.default.addObserver(self, selector: #selector(catalogChanged),
+                                               name: StickerStore.packsChanged, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(artArrived),
+                                               name: StickerStore.artArrived, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -423,6 +429,20 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     }
 
     // MARK: Data
+
+    @objc private func catalogChanged() {
+        guard !editing else { return }   // the Delete bar's ticks would lose their rows
+        reload()
+    }
+
+    @objc private func artArrived() {
+        for ip in grid.indexPathsForVisibleItems {
+            guard !isCreate(ip), let st = sticker(at: ip), let c = grid.cellForItem(at: ip) as? StickerCell else { continue }
+            let px = Int(itemSide * min(UIScreen.main.scale, 2))
+            c.show(url: StickerStore.shared.fileURL(for: st), pixelSize: px)
+        }
+        buildStrip()
+    }
 
     @MainActor func reload() {
         let store = StickerStore.shared

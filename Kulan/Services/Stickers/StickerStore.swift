@@ -76,6 +76,7 @@ final class StickerStore {
     /// Bumped when a server sticker's file lands, so a grid can draw what was a shimmer.
     private(set) var artVersion = 0
     static let artArrived = Notification.Name("StickerStore.artArrived")
+    static let packsChanged = Notification.Name("StickerStore.packsChanged")
 
     private func watchCatalog(signedIn: Bool) {
         catalogListener?.remove(); catalogListener = nil
@@ -135,9 +136,12 @@ final class StickerStore {
             }
         }
         StickerCatalogLinks.set(urls, exts: exts)
-        packs = entries.enumerated().sorted { a, b in
+        let next = entries.enumerated().sorted { a, b in
             a.element.order != b.element.order ? a.element.order < b.element.order : a.offset < b.offset
         }.map(\.element.pack)
+        guard next != packs else { return }
+        packs = next
+        NotificationCenter.default.post(name: Self.packsChanged, object: nil)
     }
 
     /// Server stickers' files on this phone (Caches: not account data, and fine to lose).
