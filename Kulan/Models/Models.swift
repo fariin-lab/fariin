@@ -12,7 +12,9 @@ import UIKit   // the inline thumbnail is decoded here, next to the field that c
 // contact-screen section, group header tap) is closed until this flips to true.
 enum Flags {
     /// Unfinished: the admin panel can only switch it OFF (RemoteFeatures, next open).
-    static var groupsEnabled: Bool { RemoteFeatures.offOnly("groups", default: false) }
+    /// ON for testing — owner 2026-10-18: "turn on all group doors, will turn off later". Off again
+    /// from the panel (config/features groups=false, next open) or by flipping this back.
+    static var groupsEnabled: Bool { RemoteFeatures.offOnly("groups", default: true) }
     /// Two-step verification's door in Settings. OFF (owner, 2026-09-25: "turn off 2FA as groups,
     /// we are not ready to finalize"). Only the door closes. An account that ALREADY turned it on
     /// still sees the row, so it can turn it off, and still gets the sign-in password prompt,
