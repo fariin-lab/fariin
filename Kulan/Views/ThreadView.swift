@@ -7722,11 +7722,18 @@ struct ThreadView: View {
     // the deletion grace period) shows this in the composer's place, styled like the bars above.
     private var otherAccountDeleted: Bool { !isGroup && repo.otherAccountDeleted }
 
+    /// ⛔ OWNER 2026-10-18: the composer is gone entirely and a SOLID bar takes its place, black in
+    /// light mode and white in dark (`Color.primary` behind, the page colour for the words).
     private var deletedAccountBar: some View {
-        composerNotice {
-            Label("Deleted account", systemImage: "person.crop.circle.badge.xmark")
-                .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-        }
+        Text("This person is no longer on Fariin")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Color(.systemBackground))
+            .lineLimit(1).minimumScaleFactor(0.85)
+            .frame(maxWidth: .infinity)
+            .frame(height: 48)
+            .background(Color.primary, in: Capsule())
+            .accessibilityAddTraits(.isStaticText)
+            .systemBarChrome()
     }
 
     // Do we already share this chat (either side has sent something)? If so, messaging

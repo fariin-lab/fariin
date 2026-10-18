@@ -805,11 +805,14 @@ final class ThreadRepository {
                     }
                     let privacy = (snap.data()?["privacy"] as? [String: String]) ?? [:]
                     self?.otherPrivacy = privacy
-                    // 2026-09-24 decision D15: gone or hidden-for-deletion is a deleted account.
+                    // 2026-09-24 decision D15: a deleted account is one whose profile is GONE.
+                    // ⛔ 2026-10-18, owner: "after 30 days" — inside the deletion grace period
+                    // (isHidden + deletionScheduledFor) they can still come back, so the chat stays
+                    // open; the bar comes when the purge removes the profile, whoever asked for it.
                     // A missing doc counts only when the server said so: a cold cache also reports
                     // "does not exist" on its first snapshot, which is not a deletion.
                     if snap.exists || !snap.metadata.isFromCache {
-                        let deleted = !snap.exists || (snap.data()?["isHidden"] as? Bool) == true
+                        let deleted = !snap.exists
                         if self?.otherAccountDeleted != deleted { self?.otherAccountDeleted = deleted }
                     }
                     // AND THE CALL BUTTON LEARNS IT ON THE SAME SNAPSHOT. This listener is already
