@@ -1592,10 +1592,12 @@ struct ContactInfoView: View {
             // Bigger "+" in a grey circle (matches the group-avatar rows below), not a tiny glyph.
             Button { showAddGroup = true } label: {
                 HStack(spacing: 12) {
+                    // 2026-10-18 (owner): GLASS, not a fixed grey. Every profile tints its page from the
+                    // photo, and one grey circle sat on all of them; glass takes each page's colour.
                     Image(systemName: "plus")
-                        .font(.system(size: 18, weight: .medium)).foregroundStyle(.secondary)
+                        .font(.system(size: 18, weight: .medium)).foregroundStyle(.primary)
                         .frame(width: 36, height: 36)   // the standard contact-row avatar size (.thirtySix)
-                        .background(Circle().fill(Color(.systemGray5)))   // LIGHT grey (user request; grey4 was too dark)
+                        .liquidGlass(Circle(), interactive: false)
                     Text("Add to a Group").foregroundStyle(.primary)
                     Spacer()
                 }
