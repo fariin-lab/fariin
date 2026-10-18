@@ -1461,6 +1461,8 @@ struct NewAudienceButton: UIViewRepresentable {
         cfg.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
         cfg.cornerStyle = .capsule
         cfg.baseForegroundColor = .label
+        // White like the cards below it, as the folders page has it (owner 2026-10-18), not grey.
+        cfg.baseBackgroundColor = .secondarySystemGroupedBackground
         let b = UIButton(configuration: cfg)
         // Set in updateUIView, which decides between a menu and a direct action.
         b.setContentHuggingPriority(.required, for: .horizontal)
