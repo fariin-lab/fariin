@@ -241,6 +241,13 @@ struct StoryEditorView: View {
     /// 2026-10-12: `initialVideoPosition` + `seek(..., andPlay: true)`). Applied once, to the
     /// reposted clip, when its player is made. See `ensurePreviewPlayer`.
     var repostStartSecond: Double? = nil
+    /// ⛔ THE LIBRARY TILE THIS PHOTO FLEW OUT OF (`MediaOpenRects`, `.story`) — owner 2026-10-18,
+    /// the reference's gallery open and close (`AddStorySheet.openLibraryImage`). Set, the controls
+    /// grow out of the tile with the picture, a one-finger drag up or down and the ✕ fly the photo
+    /// back into it, and nothing of the photo or the black is drawn until `arrival` has landed.
+    /// Nil (camera, repost, the editors' +) is this screen exactly as it was.
+    var flySourceKey: String? = nil
+    @ObservedObject var arrival = EditorArrival(landed: true)
 
     /// The clip a video-first post opens on. A struct rather than a tuple so it can be `Equatable`
     /// and carried in a `@State`-driven presentation without the compiler having to infer it.
@@ -447,6 +454,12 @@ struct StoryEditorView: View {
     @State private var postError = false
     /// The X asked about, when there is something behind it worth asking about. See `closeEditor()`.
     @State private var showDiscard = false
+    // The tile flight (`flySourceKey`). See `flyEntry`, `flyDismissHost`.
+    @State private var flyEntered = false        // the controls have been sent to their rest
+    @State private var flyCardHidden = false     // a close owns the picture: the copy draws it
+    @State private var flyChromeHidden = false   // …and the controls are faded for it
+    @State private var flyCloseToken = 0         // bump: the ✕ flies the photo home
+    @State private var flyDiscarded = false      // Discard answered: the close may run with edits
     /// The black band under the card where the tool capsule and NEXT live. A CONSTANT, not a
     /// measured height: the card's frame used to be inset by the bottom bar's measured size, and
     /// anything that changed the bar (focusing the caption, opening Aa — both raise the keyboard)
@@ -519,6 +532,50 @@ struct StoryEditorView: View {
         let available = max(1, space.height - top - toolZoneHeight)
         return CGSize(width: space.width, height: min(ceil(space.width * 1.77778), available))
     }
+
+    // MARK: Tile flight geometry
+
+    private static var flyWindow: UIWindow? {
+        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+    }
+    /// The card in window points before the screen exists, from the same numbers `canvasLayer`
+    /// lays it out with: the safe area, `cardTop` 8, `cardSize`.
+    private static func flyCardRect(in win: UIWindow) -> CGRect {
+        let ins = win.safeAreaInsets
+        let space = CGSize(width: win.bounds.width, height: win.bounds.height - ins.top - ins.bottom)
+        let card = cardSize(in: space, top: 8)
+        return CGRect(x: 0, y: ins.top + 8, width: card.width, height: card.height)
+    }
+    /// Where a freshly opened picture rests in the card, and its corners: a portrait one fills the
+    /// card (`defaultZoom`), so the card's own rect and 40pt corners; square or landscape is fitted
+    /// to the width and centred, square-cornered. The open lands here and the close lifts off it.
+    static func flyRest(of img: CGSize, in card: CGRect) -> (rect: CGRect, cornerRadius: CGFloat) {
+        guard img.width > 1, img.height > 1, img.height <= img.width else { return (card, 40) }
+        let h = card.width * img.height / img.width
+        return (CGRect(x: card.minX, y: card.midY - h / 2, width: card.width, height: h), 0)
+    }
+    static func flyRest(for image: UIImage) -> (rect: CGRect, cornerRadius: CGFloat)? {
+        guard let win = flyWindow else { return nil }
+        return flyRest(of: image.size, in: flyCardRect(in: win))
+    }
+
+    private var flies: Bool { flySourceKey != nil }
+    /// The photo and the black may be drawn: no flight, or the copy has landed and no close owns it.
+    private var flyPhotoShown: Bool { !flies || (arrival.landed && !flyCardHidden) }
+    /// ⛔ THE CONTROLS GROW OUT OF THE TILE — the reference's `componentView` in `animateIn(.gallery)`:
+    /// position from the tile's centre and scale from tile width / screen width, over 0.4s on the
+    /// picture's curve, while its alpha goes 0 to 1 in 0.3s. Nil once sent home, and for every
+    /// other door. Offsets are from this screen's centre, which sits in the safe area.
+    private var flyEntry: (scale: CGFloat, offset: CGSize)? {
+        guard let key = flySourceKey, !flyEntered, let tile = MediaOpenRects.rect(key),
+              let win = Self.flyWindow, win.bounds.width > 1 else { return nil }
+        let ins = win.safeAreaInsets
+        let centre = CGPoint(x: win.bounds.midX, y: ins.top + (win.bounds.height - ins.top - ins.bottom) / 2)
+        return (max(0.05, tile.width / win.bounds.width),
+                CGSize(width: tile.midX - centre.x, height: tile.midY - centre.y))
+    }
+    /// X and NEXT on top of that: `cancelButton` / `doneButton` scale 0.1 to 1 over 0.2s.
+    private var flyPop: CGFloat { flies && !flyEntered ? 0.1 : 1 }
     /// How far the card's bottom edge sits above the bottom of this screen. `toolZoneHeight` when the
     /// 9:16 card fits in the room available, more when it does not — and the caption pill hangs off
     /// THIS rather than off the constant, or it drops through the floor of a shortened card.
@@ -1060,7 +1117,8 @@ struct StoryEditorView: View {
         // arrived and shoved it UP. Two state changes, two moments, neither animated with the
         // keyboard. Nothing here computes a keyboard height any more.
         ZStack {
-            Color.black.ignoresSafeArea()
+            // Not under a tile flight until it lands: the copy's own black is fading in below.
+            Color.black.ignoresSafeArea().opacity(!flies || arrival.landed ? 1 : 0)
             canvasLayer
                 // THE CARD'S FRAME IS FIXED (owner: "the Story preview must never shrink, resize,
                 // or change its scale"). It was inset by the bottom bar's MEASURED height, and the
@@ -1190,8 +1248,8 @@ struct StoryEditorView: View {
                 // which is the thing this screen already refuses to do while a stroke is in flight.
                 // The other app does not fade its old toolbar out either: the tab swaps and the new
                 // buttons fade in on their own.
-                toolRowLayer.opacity(chromeIn ? 1 : 0)
-                captionLayer.opacity(chromeIn ? 1 : 0)
+                toolRowLayer.opacity(chromeIn && !flyChromeHidden ? 1 : 0)
+                captionLayer.opacity(chromeIn && !flyChromeHidden ? 1 : 0)
             }
             // Aa's editor is a SIBLING of the canvas, not an overlay inside it: it needs the
             // keyboard avoidance the canvas must never have. Its own dim backdrop covers the
@@ -1251,11 +1309,30 @@ struct StoryEditorView: View {
             trimOverlay
                 .ignoresSafeArea(.keyboard)
         }
+        // A TILE FLIGHT'S ENTRY (`flyEntry`): everything grows from the tile on the picture's 0.4s
+        // curve and fades in over 0.3s, as their component view does. The photo and the black are
+        // hidden until the copy lands, so what grows here is the controls. Identity once entered,
+        // and for every other door.
+        .animation(.timingCurve(0.38, 0.7, 0.125, 1, duration: MediaOpen.storyEditorDuration)) {
+            $0.scaleEffect(flyEntry?.scale ?? 1).offset(flyEntry?.offset ?? .zero)
+        }
+        .animation(.easeInOut(duration: 0.3)) { $0.opacity(flies && !flyEntered ? 0 : 1) }
+        .overlay { flyDismissHost }
+        // Nothing is tappable until the photo has landed (the attach editor's rule).
+        .allowsHitTesting(!flies || arrival.landed)
         // THE CONTROLS ARRIVE A BEAT AFTER THE PICTURE — see `chromeIn`. The delay is not decoration:
         // it is the gap the camera's own fade-out leaves, so the two screens read as one handover
         // rather than as a cross-fade where both sets of buttons are half-visible at once.
         .onAppear {
-            withAnimation(.easeOut(duration: 0.28).delay(0.04)) { chromeIn = true }
+            if flies {
+                // The tile flight brings them in itself (above); the camera's beat would only
+                // fade them a second time. One hop, so the entry runs outside the no-animation
+                // transaction that raised the cover.
+                chromeIn = true
+                if !flyEntered { DispatchQueue.main.async { flyEntered = true } }
+            } else {
+                withAnimation(.easeOut(duration: 0.28).delay(0.04)) { chromeIn = true }
+            }
         }
         // ⚠️ RAISED WHEN THE Aa EDITOR OPENS AND LOWERED ONLY WHEN ITS KEYBOARD HAS GONE. Both halves
         // matter; see `textToolKeyboardUp`, which is where the reason is written down.
@@ -1303,7 +1380,11 @@ struct StoryEditorView: View {
             previewPlaying = false
         }
         // Closing the composer must not leave a decoder and an audio session running behind it.
-        .onDisappear { stopPreview() }
+        .onDisappear {
+            stopPreview()
+            // The cover is really gone: release a tap on another tile that came in while it left.
+            if flies { MediaPresentGate.noteClosed() }
+        }
         // ONE PLACE DECIDES WHETHER THE CLIP IS RUNNING, the same rule the video editor follows.
         // `previewPlaying` is not this screen's own flag alone: it is handed to `VideoTrimStrip` as
         // its `playing` binding, and the strip sets it FALSE the moment a handle or the playhead is
@@ -1377,19 +1458,32 @@ struct StoryEditorView: View {
             let card = Self.cardSize(in: geo.size, top: cardTop)
             let cardH = card.height
             ZStack {
-                Color.black.ignoresSafeArea()
+                Color.black.ignoresSafeArea().opacity(!flies || arrival.landed ? 1 : 0)
                 Group { if Self.renderSkip.contains("content") { Color.clear } else { cardContent(card: card) } }
                     .frame(width: card.width, height: card.height)
                     // The card ALWAYS has the rounded story shape (reference). Display-only:
                     // the flatten renders the same space unrounded, and the viewer rounds its
                     // own card exactly like this.
                     .clipShape(RoundedRectangle(cornerRadius: 40, style: .continuous))
+                    // A tile flight draws the picture until it lands, and a close's copy draws it
+                    // while it leaves: one photograph on screen, never two. Instant both ways.
+                    .opacity(flyPhotoShown ? 1 : 0)
                     .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
                     // WHERE THE PICTURE IS ON SCREEN, for the crop screen to open out of. Their
                     // presenter sets `initialContentInsets` before presenting for exactly this; see
                     // `ChatCropView.initialContentRect`. Read in global coordinates because the crop
                     // canvas sits under a bar whose height it is not told.
-                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { if !Self.renderSkip.contains("cardRect") { cardRect = $0 } }
+                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) {
+                        if !Self.renderSkip.contains("cardRect") { cardRect = $0 }
+                        // The open landed on a card computed before this screen existed
+                        // (`flyCardRect`); say so if the real one is anywhere else.
+                        if flies, flyEntered, let win = Self.flyWindow {
+                            let want = Self.flyCardRect(in: win)
+                            if abs(want.minY - $0.minY) > 1 || abs(want.height - $0.height) > 1 {
+                                DiagLog.add("STORYFLY# card \(Int($0.minY))/\(Int($0.height)) vs flight \(Int(want.minY))/\(Int(want.height))")
+                            }
+                        }
+                    }
 
                 // Top controls — stay put when the keyboard opens (don't ride up with it).
                 if !Self.renderSkip.contains("controls") {
@@ -1416,6 +1510,8 @@ struct StoryEditorView: View {
                                 .shadow(color: .black.opacity(0.35), radius: 2)
                                 .frame(width: 40, height: 40).contentShape(Circle()).editorProbeGlass()
                         }
+                        // The tile flight's pop (`flyPop`); 1 for every other door.
+                        .animation(.easeInOut(duration: 0.2)) { $0.scaleEffect(flyPop) }
                         Spacer()
                         // (The "Done" that used to sit here while drawing is GONE. The pen carries
                         // its own ✕ and ✓ at the two ends of its bar now — his 2026-08-14 design —
@@ -1469,6 +1565,7 @@ struct StoryEditorView: View {
                 // screenshot, circled, half-cut by the card's corner. `showTrim` is here for exactly
                 // the same reason and the crop screen was simply missed when it grew a bar of its own.
                 .opacity(Self.renderSkip.contains("opacity") ? 1 : (draggingID == nil && editingID == nil && !strokeInFlight && !showTrim && !showCrop && !isDrawing ? 1 : 0))
+                .opacity(flyChromeHidden ? 0 : 1)   // a tile close is flying the photo home
                 .ignoresSafeArea(Self.renderSkip.contains("ikb") ? [] : .keyboard, edges: .bottom)
                 }   // renderSkip "controls"
 
@@ -1579,7 +1676,10 @@ struct StoryEditorView: View {
                      destructive: "Clear All", cancel: "Cancel",
                      onDestructive: { drawing = PKDrawing() })
         .darkConfirm("Discard this story?", isPresented: $showDiscard,
-                     destructive: "Discard", onDestructive: { dismiss() })
+                     destructive: "Discard", onDestructive: {
+                         // A tile flight goes home after Discard too, as theirs does.
+                         if flies { flyDiscarded = true; flyCloseToken += 1 } else { dismiss() }
+                     })
         // The dial's own cancel. Smaller question than the one above — this sitting's exposure, not
         // the whole post — so it says so, and "Keep Editing" leaves the bar open with the value
         // where it was, the way the pen's Keep does.
@@ -3514,6 +3614,7 @@ struct StoryEditorView: View {
             .contentShape(Capsule())
         }
         .buttonStyle(StoryPressStyle()).disabled(posting)
+        .animation(.easeInOut(duration: 0.2)) { $0.scaleEffect(flyPop) }   // the tile flight's pop
     }
 
     // MARK: - Text overlays
@@ -3977,7 +4078,55 @@ struct StoryEditorView: View {
     }
 
     private func closeEditor() {
-        if hasWork { showDiscard = true } else { dismiss() }
+        if hasWork { showDiscard = true } else if flies { flyCloseToken += 1 } else { dismiss() }
+    }
+
+    // MARK: - Tile flight close
+
+    /// ⛔ THE REFERENCE'S CLOSE BACK TO THE LIBRARY (`handleDismissPan` + `animateOut(.gallery)`):
+    /// one finger drags the photo up or down, a third of the screen or a 1000pt/s flick lets it go,
+    /// and it flies back into its tile over 0.4s while the black goes in 0.15s; the ✕ runs the same
+    /// flight. See `MediaDismissHost.Style.storyEditor`. The picture that flies is the one picked,
+    /// at the rest it opened on, as theirs flies its `sourceImage`.
+    @ViewBuilder private var flyDismissHost: some View {
+        if let key = flySourceKey {
+            let rest = Self.flyRest(of: source.size, in: cardRect)
+            MediaDismissHost(
+                canBegin: { flyCanClose() },
+                media: { cardRect.width > 1 && cardRect.height > 1 ? (rest.rect, source) : nil },
+                onHideContent: { hide in
+                    flyCardHidden = hide
+                    // Theirs fades every control over 0.25s the moment the drag is picked up.
+                    if hide { withAnimation(.easeInOut(duration: 0.25)) { flyChromeHidden = true } }
+                },
+                targetRect: { MediaOpenRects.liveRect(key) },
+                targetId: { key },
+                clipRect: { MediaOpenRects.liveViewRect(MediaOpenRects.key(.story, "grid")) },
+                closeToken: flyCloseToken,
+                onDismiss: { flyInstantDismiss() },
+                copyFromMediaFrame: true,
+                style: .storyEditor,
+                copyCornerRadius: rest.cornerRadius,
+                onCancelStart: { withAnimation(.easeInOut(duration: 0.25)) { flyChromeHidden = false } })
+        }
+    }
+
+    /// The drag and the ✕ may fly the photo home: it has landed, and no tool, keyboard or drag owns
+    /// the screen. With work on it, theirs asks first (`maybePresentDiscardAlert`), so does this.
+    private func flyCanClose() -> Bool {
+        guard arrival.landed, !posting, editingID == nil, draggingID == nil, !isDrawing,
+              !strokeInFlight, !showTrim, !showCrop, !showStickers, !anyKeyboardUp else { return false }
+        if hasWork && !flyDiscarded {
+            DispatchQueue.main.async { showDiscard = true }
+            return false
+        }
+        return true
+    }
+
+    /// The copy IS the animation, so the cover goes without its own slide.
+    private func flyInstantDismiss() {
+        MediaPresentGate.noteDismissed()
+        withoutPresentationAnimation { dismiss() }
     }
 
     // MARK: - Send

@@ -32,7 +32,7 @@ import Combine
     /// `attach` is the attach sheet's photo grid, keyed by PHAsset local identifier.
     /// `sticker` is the photo grid behind Create Sticker (owner 2026-10-18), keyed the same way. Its
     /// own scope so the same photo on the attach grid can never answer for it.
-    enum Scope: String { case chat, gallery, profile, album, storyRow, attach, sticker }
+    enum Scope: String { case chat, gallery, profile, album, storyRow, attach, sticker, story }
     static func key(_ scope: Scope, _ id: String) -> String { "\(scope.rawValue)|\(id)" }
 
     static func capture(_ key: String, _ rect: CGRect, cornerRadius: CGFloat) {

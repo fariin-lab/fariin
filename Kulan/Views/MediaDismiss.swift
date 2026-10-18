@@ -57,6 +57,20 @@ struct MediaDismissHost: UIViewRepresentable {
     /// true = the copy starts on `media().frame` as given (window coords). The attach editors set it:
     /// their media sits above the tools, or zoomed past the screen edge, not fitted to the screen.
     var copyFromMediaFrame = false
+    /// How the drag behaves. `.viewer` is every viewer and the attach editors, unchanged.
+    var style: Style = .viewer
+    /// The copy's corners where it lifts off (the story card's 40), for `.storyEditor`.
+    var copyCornerRadius: CGFloat = 0
+    /// A drag that is springing back, at the START of the spring (`onCancel` is its end), so the
+    /// screen's controls can come back on the same 0.4s rather than after it.
+    var onCancelStart: () -> Void = {}
+
+    /// ⛔ `.storyEditor` IS THE REFERENCE'S STORY EDITOR DRAG, from `MediaEditorScreen.handleDismissPan`
+    /// (owner 2026-10-18): one finger; the picture follows the finger UP OR DOWN only, at full size,
+    /// no shrink and no shadow, the black staying put; it closes past a third of the screen or on a
+    /// 1000pt/s flick, either way; landing and spring-back both on `MediaOpen.storyEditorCurve`
+    /// over 0.4s, the black going in 0.15s.
+    enum Style { case viewer, storyEditor }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -207,6 +221,8 @@ struct MediaDismissHost: UIViewRepresentable {
             root = vc.view
             let g = DirectionalPanGestureRecognizer(direction: .vertical, target: self, action: #selector(handle(_:)))
             g.delegate = self
+            // Theirs: `maximumNumberOfTouches = 1`. Two fingers on this editor move the photo.
+            if parent.style == .storyEditor { g.maximumNumberOfTouches = 1 }
             vc.view.addGestureRecognizer(g)
             // The viewer may be presented with a native .zoom transition (hero open from the bubble).
             // That transition installs its OWN interactive-dismiss pan/pinch on the presentation chain,
@@ -288,6 +304,11 @@ struct MediaDismissHost: UIViewRepresentable {
             c.layer.shadowOffset = CGSize(width: 0, height: 32)
             c.layer.shadowRadius = 48
             c.layer.shadowOpacity = 0
+            if parent.copyCornerRadius > 0 {
+                c.layer.cornerRadius = parent.copyCornerRadius
+                c.layer.cornerCurve = .continuous
+                c.layer.masksToBounds = true
+            }
             content.frame = c.bounds
             content.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             c.addSubview(content)
@@ -375,6 +396,11 @@ struct MediaDismissHost: UIViewRepresentable {
             case .changed:
                 guard active, let c = container else { return }
                 let o = g.translation(in: root)
+                if parent.style == .storyEditor {
+                    // `previewFrame.y + dismissOffset`: vertical only, nothing else moves.
+                    c.center = CGPoint(x: fromFrame.midX, y: fromFrame.midY + o.y)
+                    return
+                }
                 let progress = min(1, max(0, hypot(o.x, o.y) / Self.distanceToCompletion))
                 // 1:1 finger lock (center = fromFrame.offsetBy(offset).center) — both axes, raw.
                 c.center = CGPoint(x: fromFrame.midX + o.x, y: fromFrame.midY + o.y)
@@ -422,7 +448,10 @@ struct MediaDismissHost: UIViewRepresentable {
                 // (1000pt/s) or a long drag; its distance is a quarter of the screen, which he has
                 // called too heavy before (160pt), so the distance here is 120pt. A drag that is
                 // travelling back up fast when released cancels even past the distance.
-                let commit = (o.y > 120 && v.y > -300) || (v.y > 1000 && o.y > 20)
+                let commit = parent.style == .storyEditor
+                    // Theirs, both directions: `abs(translation.y) > height * 0.33 || abs(velocity.y) > 1000`.
+                    ? abs(o.y) > root.bounds.height * 0.33 || abs(v.y) > 1000
+                    : (o.y > 120 && v.y > -300) || (v.y > 1000 && o.y > 20)
                 imageCloseLog.info("drag ended: dy \(Int(o.y)) vy \(Int(v.y)) -> \(commit ? "finish" : "cancel")")
                 if commit {
                     finish(offset: o, velocity: v)
@@ -540,10 +569,18 @@ struct MediaDismissHost: UIViewRepresentable {
                 // Resolved OUTSIDE the animation closure: reading `parent` inside it needs an explicit
                 // self capture, and the value cannot change mid-flight anyway.
                 let landingRadius = parent.targetId().map { MediaOpenRects.cornerRadius($0) } ?? 14
+                let storyEditor = parent.style == .storyEditor
                 let spring = UISpringTimingParameters(
                     dampingRatio: 1,     // the reference app: springDamping 1, no overshoot on a landing
                     initialVelocity: Self.springVelocity(velocity, from: c.center, to: center))
-                let animator = UIViewPropertyAnimator(duration: 0.25, timingParameters: spring)
+                // The story editor's `animateOut`: 0.4s on their cubic, with its black (this root)
+                // going in its own 0.15s rather than over the landing.
+                let animator = storyEditor
+                    ? UIViewPropertyAnimator(duration: MediaOpen.storyEditorDuration, timingParameters: MediaOpen.storyEditorCurve)
+                    : UIViewPropertyAnimator(duration: 0.25, timingParameters: spring)
+                if storyEditor, let root = self.root {
+                    UIView.animate(withDuration: MediaOpen.storyEditorBackdropOut) { root.alpha = 0 }
+                }
                 let wrapTarget = clipTarget
                 imageCloseLog.info("fly home started: home \(String(describing: home)), clip \(String(describing: clipTarget)), copy superview is window \(c.superview is UIWindow), wrapped \(self.clipWrap != nil)")
                 animator.addAnimations {
@@ -562,7 +599,8 @@ struct MediaDismissHost: UIViewRepresentable {
                     c.layer.shadowOpacity = 0
                     // The rest of the viewer (black + chrome) finishes melting over the land —
                     // the reference app's final spring does exactly this to fromView.
-                    self.root?.alpha = 0
+                    // (The story editor's root has its own 0.15s fade, started above.)
+                    if !storyEditor { self.root?.alpha = 0 }
                 }
                 c.layer.masksToBounds = true   // without this the corner radius was invisible
                 // NO alpha fade: the reference app lands the copy opaque and swaps it for the real thumbnail.
@@ -648,7 +686,11 @@ struct MediaDismissHost: UIViewRepresentable {
             let home = CGPoint(x: fromFrame.midX, y: fromFrame.midY)
             let spring = UISpringTimingParameters(dampingRatio: 1,
                                                   initialVelocity: Self.springVelocity(velocity, from: c.center, to: home))
-            let animator = UIViewPropertyAnimator(duration: 0.26, timingParameters: spring)
+            // The story editor's spring-back: `requestLayout(.animated(duration: 0.4, curve: .spring))`.
+            let animator = parent.style == .storyEditor
+                ? UIViewPropertyAnimator(duration: MediaOpen.storyEditorDuration, timingParameters: MediaOpen.storyEditorCurve)
+                : UIViewPropertyAnimator(duration: 0.26, timingParameters: spring)
+            parent.onCancelStart()
             animator.addAnimations {
                 c.center = home
                 c.transform = .identity
@@ -748,6 +790,19 @@ enum MediaOpen {
 
     static let attachBackdropFade: TimeInterval = 0.15
 
+    /// ⛔ THE STORY EDITOR'S GALLERY OPEN AND CLOSE, read off the reference's source — owner
+    /// 2026-10-18: "reuse its actual implementation and timing". `MediaEditorScreen.animateIn`
+    /// (`.gallery`) and `animateOut` move the preview with `duration 0.4, kCAMediaTimingFunctionSpring`,
+    /// and for any duration but 0.5 / 0.3832 their `CAAnimationUtils` turns that name into this cubic
+    /// (`controlPoints: 0.380, 0.700, 0.125, 1.000`), not a spring. The same curve `StoryPostFlight`
+    /// already flies with. Their black fades in over 0.35s and out over 0.15s.
+    static let storyEditorDuration: TimeInterval = 0.4
+    static var storyEditorCurve: UICubicTimingParameters {
+        UICubicTimingParameters(controlPoint1: CGPoint(x: 0.38, y: 0.7), controlPoint2: CGPoint(x: 0.125, y: 1))
+    }
+    static let storyEditorBackdropIn: TimeInterval = 0.35
+    static let storyEditorBackdropOut: TimeInterval = 0.15
+
     struct OpenPhases {
         let open: TimeInterval
         let settle: TimeInterval
@@ -826,7 +881,7 @@ enum MediaOpen {
                     clip: CGRect? = nil,
                     to destination: CGRect? = nil,
                     destinationCornerRadius: CGFloat = 0,
-                    timing: UISpringTimingParameters? = nil,
+                    timing: UITimingCurveProvider? = nil,
                     timingDuration: TimeInterval? = nil,
                     phases: OpenPhases? = nil,
                     backdropFade: TimeInterval? = nil,
@@ -912,7 +967,12 @@ enum MediaOpen {
         radius.fromValue = sourceCornerRadius
         radius.toValue = destinationCornerRadius
         radius.duration = flyDuration
-        radius.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        // On the reference's cubic the corner rides the same curve as the frame (their `cornerRadius`
+        // animation shares the preview's timing); everywhere else, as it always was.
+        radius.timingFunction = (timing as? UICubicTimingParameters).map {
+            CAMediaTimingFunction(controlPoints: Float($0.controlPoint1.x), Float($0.controlPoint1.y),
+                                  Float($0.controlPoint2.x), Float($0.controlPoint2.y))
+        } ?? CAMediaTimingFunction(name: .easeOut)
         container.layer.add(radius, forKey: "cornerRadius")
 
         let land: () -> Void = {
