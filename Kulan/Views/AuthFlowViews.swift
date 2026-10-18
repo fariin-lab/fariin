@@ -292,11 +292,13 @@ extension View {
     ///
     /// resignFirstResponder rather than a FocusState binding, because it does not care which of
     /// several fields is up, and it works the same on a screen that has two.
+    ///
+    /// ⛔ OFF — owner 2026-10-18: "tapping the email / password field still fights; remove tap to
+    /// close the keyboard altogether". A tap meant for a field kept landing on this and closing the
+    /// keys it had just opened. Kept as a no-op so the call sites stay put; swiping the page down
+    /// (`scrollDismissesKeyboard`) and Return close the keyboard.
     func dismissesKeyboardOnTap() -> some View {
-        self.onTapGesture {
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
-                                            to: nil, from: nil, for: nil)
-        }
+        self
     }
 }
 
@@ -970,13 +972,8 @@ struct EmailAuthView: View {
                 // space has to live inside the scroll content, at least one screen tall.
                 .frame(maxWidth: .infinity, minHeight: viewportHeight, alignment: .top)
                 .coordinateSpace(.named(Self.pageSpace))
-                .background(
-                    Color.clear.contentShape(Rectangle())
-                        .onTapGesture(coordinateSpace: .named(Self.pageSpace)) { p in
-                            if boxFrames.values.contains(where: { $0.contains(p) }) { return }
-                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
-                                                            to: nil, from: nil, for: nil)
-                        })
+                // (Tap on empty space to close the keyboard: removed, owner 2026-10-18, see
+                // `dismissesKeyboardOnTap`.)
             }
             .scrollDismissesKeyboard(.interactively)
             .scrollBounceBehavior(.basedOnSize)
