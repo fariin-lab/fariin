@@ -360,30 +360,72 @@ struct AddStorySheet: View {
     private func flyFromTile(key: String, copy: UIImage,
                              rest: (rect: CGRect, cornerRadius: CGFloat)?, arrival: EditorArrival,
                              present: @escaping () -> Void, plain: @escaping () -> Void) {
-        // The rect is read after the hops before this, never earlier: the grid may have moved.
-        guard let from = MediaOpenRects.liveRect(key), let rest else {
+        guard MediaOpenRects.liveRect(key) != nil, let rest else {
             libraryFlying = false
             plain()
             return
         }
-        // The tile is hidden for the flight so the picture is never on screen twice.
-        MediaSourceVisibility.shared.hide(key)
-        MediaOpen.fly(image: copy, from: from, sourceCornerRadius: 0,
-                      clip: MediaOpenRects.liveViewRect(MediaOpenRects.key(.story, "grid")),
-                      to: rest.rect, destinationCornerRadius: rest.cornerRadius,
-                      timing: MediaOpen.storyEditorCurve,
-                      timingDuration: MediaOpen.storyEditorDuration,
-                      backdropFade: MediaOpen.storyEditorBackdropIn,
-                      // The editor comes up at the start, over the flying copy, its controls
-                      // growing in; its own picture and black show once the copy has landed.
-                      onStart: {
-                          MediaPresentGate.present { InstantCover.run { present() } }   // no system slide
-                      }) {
+        // ⛔ ONE CLOCK FOR THE PICTURE AND THE CONTROLS — owner 2026-10-18, build 969: "the zoom
+        // flashes and shakes at about 90% ... after it lands at 100% the position changes again".
+        // The copy used to leave the tile at the TAP and the editor came up over it later, once it
+        // was built, so its controls' 0.4s growth started 0.1-0.2s behind the picture. The whole
+        // editor tree carries that growth (`StoryEditorView` `flyEntry`), its photo included, and the
+        // photo is shown the moment the copy lands: it appeared over the landed copy still a few
+        // percent small and off centre and then kept moving. Theirs moves the preview and the
+        // controls in one `animateIn`, from one start, after the screen has its layout. So the
+        // editor is raised first, invisible (no black, no photo, controls at 0), and the flight
+        // starts from its first hop, in the same turn as its controls (`arrival.onEnter`).
+        arrival.onEnter = {
+            // `InstantCover` holds UIKit animations off for 0.15s after the raise, and the editor
+            // is usually on screen inside that: the flight must move, so the hold ends here.
+            InstantCover.release()
+            // Read now, not at the tap: the grid may have moved while the editor was built.
+            guard let from = MediaOpenRects.liveRect(key) else {
+                arrival.landed = true
+                libraryFlying = false
+                return
+            }
+            // The tile is hidden for the flight so the picture is never on screen twice. Hidden
+            // here, not at the tap, so it stays put while the (invisible) editor is being built.
+            MediaSourceVisibility.shared.hide(key)
+            MediaOpen.fly(image: copy, from: from, sourceCornerRadius: 0,
+                          clip: MediaOpenRects.liveViewRect(MediaOpenRects.key(.story, "grid")),
+                          to: rest.rect, destinationCornerRadius: rest.cornerRadius,
+                          timing: MediaOpen.storyEditorCurve,
+                          timingDuration: MediaOpen.storyEditorDuration,
+                          backdropFade: MediaOpen.storyEditorBackdropIn,
+                          // Under the editor, so its controls grow in OVER the picture, as theirs do.
+                          under: Self.topPresentedContainer(),
+                          // Empty: the editor is already up. Passed so the copy is held 0.05s past
+                          // the landing, the frames the editor needs to draw its own photo.
+                          onStart: {}) {
+                arrival.landed = true
+                libraryFlying = false
+                // The editor is opaque over the tile by now; give it back for the close to find.
+                DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
+            }
+        }
+        MediaPresentGate.present { InstantCover.run { present() } }   // no system slide
+        // An editor that never comes up (a dropped presentation) must not hold every later tap.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            guard arrival.onEnter != nil else { return }
+            arrival.onEnter = nil
             arrival.landed = true
             libraryFlying = false
-            // The editor is opaque over the tile by now; give it back for the close to find.
-            DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
         }
+    }
+
+    /// The window's top presentation container: the story editor's, once it is up.
+    private static func topPresentedContainer() -> UIView? {
+        guard let win = UIApplication.shared.connectedScenes
+                .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first,
+              var top = win.rootViewController else { return nil }
+        while let next = top.presentedViewController, !next.isBeingDismissed { top = next }
+        // Nothing presented means no editor yet: no container to stay under (the old order).
+        guard top !== win.rootViewController else { return nil }
+        var v: UIView? = top.view
+        while let s = v?.superview, s !== win { v = s }
+        return v?.superview === win ? v : nil
     }
     struct EditorVideo: Identifiable {
         let id = UUID(); let url: URL; let assetID: String?

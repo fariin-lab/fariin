@@ -67,7 +67,8 @@ struct MediaDismissHost: UIViewRepresentable {
 
     /// ⛔ `.storyEditor` IS THE REFERENCE'S STORY EDITOR DRAG, from `MediaEditorScreen.handleDismissPan`
     /// (owner 2026-10-18): one finger; the picture follows the finger UP OR DOWN only, at full size,
-    /// no shrink and no shadow, the black staying put; it closes past a third of the screen or on a
+    /// no shrink and no shadow, the black fading out over 0.25s as the drag starts (it did NOT stay:
+    /// their dim is alpha 0 while dismissing); it closes past a third of the screen or on a
     /// 1000pt/s flick, either way; landing and spring-back both on `MediaOpen.storyEditorCurve`
     /// over 0.4s, the black going in 0.15s.
     enum Style { case viewer, storyEditor }
@@ -391,6 +392,17 @@ struct MediaDismissHost: UIViewRepresentable {
                 g.setTranslation(.zero, in: root)
                 parent.onHideContent(true)   // exactly ONE SwiftUI update for the whole gesture
                 hideSource()
+                // ⛔ THE BLACK GOES WHEN THE DRAG STARTS — owner 2026-10-18, build 969: "when I swipe
+                // down I see a black background behind it". Theirs sets `isDismissing` and lays out
+                // with `.animated(duration: 0.25, curve: .easeInOut)`, where `backgroundDimView`
+                // takes alpha 0 while dismissing (MediaEditorScreen `handleDismissPan`, layout), so
+                // the library shows behind the picture for the whole drag. The cancel spring brings
+                // it back (`cancel`), the release finishes it (`finish`).
+                if parent.style == .storyEditor {
+                    UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseInOut, .beginFromCurrentState]) {
+                        root.alpha = 0
+                    }
+                }
                 imageCloseLog.info("drag began, copy at \(String(describing: self.fromFrame))")
 
             case .changed:
@@ -885,6 +897,7 @@ enum MediaOpen {
                     timingDuration: TimeInterval? = nil,
                     phases: OpenPhases? = nil,
                     backdropFade: TimeInterval? = nil,
+                    under: UIView? = nil,
                     onStart: (() -> Void)? = nil,
                     present: @escaping () -> Void) -> FlightHandle {
         guard let window = keyWindow, source != .zero, !source.isEmpty else {
@@ -921,8 +934,15 @@ enum MediaOpen {
         content.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         container.addSubview(content)
 
-        window.addSubview(backdrop)
-        window.addSubview(clipView)
+        // `under`: a screen already presented (the story editor, owner 2026-10-18) whose controls
+        // must stay ABOVE the picture, as the reference's component view sits over its preview.
+        if let under, under.superview === window {
+            window.insertSubview(backdrop, belowSubview: under)
+            window.insertSubview(clipView, belowSubview: under)
+        } else {
+            window.addSubview(backdrop)
+            window.addSubview(clipView)
+        }
         clipView.addSubview(container)
         let handle = FlightHandle(container: container, content: content)
         if OpenTrace.active {

@@ -688,6 +688,10 @@ final class EditorArrival: ObservableObject {
     @Published var image: UIImage?
     /// The full-resolution photo is in. False holds the tools (see `ChatImageEditor`).
     @Published var fullReady: Bool
+    /// Run once by the story editor the moment it is on screen (owner 2026-10-18, build 969): its
+    /// library tile flight starts HERE, in the same turn its controls start growing, so the picture
+    /// and the controls run on one clock. Nil for every other editor.
+    var onEnter: (() -> Void)?
     init(landed: Bool, fullReady: Bool = true) {
         self.landed = landed
         self.fullReady = fullReady

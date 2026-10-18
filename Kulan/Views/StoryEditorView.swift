@@ -1341,7 +1341,16 @@ struct StoryEditorView: View {
                 // fade them a second time. One hop, so the entry runs outside the no-animation
                 // transaction that raised the cover.
                 chromeIn = true
-                if !flyEntered { DispatchQueue.main.async { flyEntered = true } }
+                // The tile flight is started from this same hop (`arrival.onEnter`), so the picture
+                // and the controls leave the tile together (owner 2026-10-18, build 969).
+                if !flyEntered {
+                    DispatchQueue.main.async {
+                        let enter = arrival.onEnter
+                        arrival.onEnter = nil
+                        enter?()
+                        flyEntered = true
+                    }
+                }
             } else {
                 withAnimation(.easeOut(duration: 0.28).delay(0.04)) { chromeIn = true }
             }
