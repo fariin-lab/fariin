@@ -105,8 +105,13 @@ enum OfficialStoryViews {
     @MainActor
     static func installPill() {
         StoryFooterAccessory.view = { storyId in
-            guard let raw = rawId(storyId), AdminStore.shared.can(.send) else { return nil }
-            return AnyView(OfficialStoryViewsPill(rawId: raw))
+            guard let raw = rawId(storyId) else { return nil }
+            let canSee = AdminStore.shared.can(.send), canDelete = AdminStore.shared.can(.remove)
+            guard canSee || canDelete else { return nil }
+            // ⛔ THE ADMIN'S FOOTER (owner 2026-10-18): views on the left, Delete on the right, and no
+            // "You can't reply" bar (MessageView leaves it out when this row is there).
+            return AnyView(OfficialStoryAdminFooter(rawId: raw, storyId: storyId,
+                                                    showsViews: canSee, canDelete: canDelete))
         }
     }
 
@@ -247,5 +252,70 @@ struct OfficialStoryViewersSheet: View {
         if n == 0 { return "People who turned story view receipts off are counted but not listed." }
         return n == 1 ? "1 more person viewed with view receipts off."
                       : "\(n) more people viewed with view receipts off."
+    }
+}
+
+/// Views pill, then Delete: what an admin sees under one of Fariin's stories.
+struct OfficialStoryAdminFooter: View {
+    let rawId: String
+    let storyId: String
+    let showsViews: Bool
+    let canDelete: Bool
+    @State private var asking = false
+    @State private var deleting = false
+    @State private var failure: String?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if showsViews { OfficialStoryViewsPill(rawId: rawId) }
+            Spacer(minLength: 0)
+            if canDelete {
+                Button {
+                    NotificationCenter.default.post(name: .init("pauseStory"), object: "officialDelete")
+                    asking = true
+                } label: {
+                    Group {
+                        if deleting { ProgressView().tint(.white) }
+                        else { Image(systemName: "trash").font(.system(size: 20)).foregroundStyle(.white) }
+                    }
+                    .shadow(color: .black.opacity(0.35), radius: 4, y: 1)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(deleting)
+                .accessibilityLabel("Delete story")
+            }
+        }
+        .confirmationDialog("Delete this story for everyone?", isPresented: $asking, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { delete() }
+            Button("Cancel", role: .cancel) { resume() }
+        }
+        .alert("Couldn't delete", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+            Button("OK", role: .cancel) { resume() }
+        } message: { Text(failure ?? "") }
+    }
+
+    private func resume() {
+        NotificationCenter.default.post(name: .init("resumeStory"), object: "officialDelete")
+    }
+
+    /// The server withdraws it for everyone (`officialStoryRemove`); this phone drops it at once.
+    private func delete() {
+        deleting = true
+        Task { @MainActor in
+            do {
+                _ = try await Functions.functions(region: "me-central1")
+                    .httpsCallable("officialStoryRemove").call(["id": rawId])
+                deleting = false
+                OfficialStories.shared.refresh(force: true)
+                if !StoryDoor.dropStory(storyId) { StoryDoor.dismiss() }
+            } catch {
+                deleting = false
+                let ns = error as NSError
+                failure = ns.domain == FunctionsErrorDomain && !ns.localizedDescription.isEmpty
+                    ? ns.localizedDescription : "Check your connection and try again."
+            }
+        }
     }
 }
