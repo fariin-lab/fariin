@@ -182,6 +182,10 @@ struct NewGroupView: View {
 
     // MARK: - Page 2: New Group
 
+    private static let disappearChoices: [(label: String, seconds: Int)] = [
+        ("Off", 0), ("1 Day", 86_400), ("1 Week", 604_800), ("1 Month", 2_592_000),
+    ]
+
     private var detailsPage: some View {
         List {
             Section {
@@ -200,16 +204,29 @@ struct NewGroupView: View {
 
             Section {
                 // The same choices a group's own info page offers.
-                Picker("Disappearing Messages", selection: $disappearSeconds) {
-                    Text("Off").tag(0)
-                    Text("1 Day").tag(86_400)
-                    Text("1 Week").tag(604_800)
-                    // The Settings default, when it is none of the three.
-                    if ![0, 86_400, 604_800].contains(disappearSeconds) {
-                        Text(ChatService.disappearLabel(disappearSeconds).capitalized).tag(disappearSeconds)
+                // ⛔ THE WHOLE ROW OPENS IT (owner 2026-10-18, build 969: only "Off" answered a tap; the
+                // words did nothing). A Menu whose label is the full row, not a `.menu` Picker, which on
+                // iOS 26 only takes taps on its value. Off / 1 Day / 1 Week / 1 Month, his list.
+                Menu {
+                    Picker("Disappearing Messages", selection: $disappearSeconds) {
+                        ForEach(Self.disappearChoices, id: \.seconds) { Text($0.label).tag($0.seconds) }
+                        // The Settings default, when it is none of these.
+                        if !Self.disappearChoices.contains(where: { $0.seconds == disappearSeconds }) {
+                            Text(ChatService.disappearLabel(disappearSeconds).capitalized).tag(disappearSeconds)
+                        }
                     }
+                } label: {
+                    HStack {
+                        Text("Disappearing Messages").foregroundStyle(.primary)
+                        Spacer()
+                        Text(Self.disappearChoices.first { $0.seconds == disappearSeconds }?.label
+                             ?? ChatService.disappearLabel(disappearSeconds).capitalized)
+                            .foregroundStyle(.secondary)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                    }
+                    .contentShape(Rectangle())
                 }
-                .pickerStyle(.menu)
             } footer: {
                 Text("New messages in this group disappear for everyone once this time has passed.")
             }
