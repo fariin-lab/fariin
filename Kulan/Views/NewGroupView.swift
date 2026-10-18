@@ -160,14 +160,24 @@ struct NewGroupView: View {
         Button { toggle(p) } label: {
             HStack(spacing: 12) {
                 AvatarView(name: p.name, photoUrl: p.photo, size: 40)
-                Text(p.name).foregroundStyle(.primary)
-                VerifiedMark(uid: p.id, size: 13)
-                Spacer()
+                HStack(spacing: 4) {
+                    Text(p.name).font(.system(size: 17)).foregroundStyle(.primary)
+                    VerifiedMark(uid: p.id, size: 13)
+                }
+                .lineLimit(1)
+                Spacer(minLength: 8)
                 Image(systemName: selected[p.id] != nil ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 22))
-                    .foregroundStyle(selected[p.id] != nil ? Color.accentColor : Color.secondary.opacity(0.5))
+                    .font(.system(size: 22, weight: .light))
+                    .foregroundStyle(selected[p.id] != nil ? Color.accentColor : Color.secondary)
             }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        // ⛔ THE FORWARD PAGE'S ROW (owner 2026-10-18: "use the spaces the forward page uses"): 5 pt above
+        // and below, 16 at the sides, the separator starting at the name (`ForwardPicker.row`).
+        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+        .alignmentGuide(.listRowSeparatorLeading) { _ in 52 }
     }
 
     // MARK: - Page 2: New Group
