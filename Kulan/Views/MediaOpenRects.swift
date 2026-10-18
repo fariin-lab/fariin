@@ -30,7 +30,9 @@ import Combine
     /// second dictionary answering the same question is how the three chat scopes ended up
     /// overwriting each other in the first place.
     /// `attach` is the attach sheet's photo grid, keyed by PHAsset local identifier.
-    enum Scope: String { case chat, gallery, profile, album, storyRow, attach }
+    /// `sticker` is the photo grid behind Create Sticker (owner 2026-10-18), keyed the same way. Its
+    /// own scope so the same photo on the attach grid can never answer for it.
+    enum Scope: String { case chat, gallery, profile, album, storyRow, attach, sticker }
     static func key(_ scope: Scope, _ id: String) -> String { "\(scope.rawValue)|\(id)" }
 
     static func capture(_ key: String, _ rect: CGRect, cornerRadius: CGFloat) {

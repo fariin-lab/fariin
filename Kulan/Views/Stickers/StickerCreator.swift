@@ -1,7 +1,6 @@
 import UIKit
-import PhotosUI
+import SwiftUI
 import ImageIO
-import UniformTypeIdentifiers
 import Vision
 import VisionKit
 import CoreImage
@@ -13,126 +12,447 @@ import CoreImage
 //
 // Every step can fail (a broken file, an iCloud photo that will not download, no subject) and each
 // failure says so in an alert rather than closing silently.
+//
+// ⛔ OUR PICKER, NOT APPLE'S, AND THE PHOTO FLIES — owner 2026-10-18: "do not open Apple's default
+// Photo Library. Use our existing custom photo library sheet, the one I am using in story." The
+// sheet is `StoryLibraryPicker` (photos only here). The picked photo zooms out of its tile onto the
+// Save page through `MediaOpen.fly` with the attach editor's own numbers, and the X or a drag down
+// flies it back into the same tile through `MediaDismissHost`, as the attach editor closes. The
+// picker stays under the Save page the whole time, so X still lands back on the library.
 enum StickerCreatorDoor {
-    /// Kept alive while the flow is up (the picker holds its delegate weakly).
-    @MainActor fileprivate static var flow: StickerCreatorFlow?
+    /// Weak: once the sheet is gone (X, swipe down, Save) nothing holds it, and the next tap opens
+    /// a fresh one.
+    @MainActor private static weak var presented: UIViewController?
 
     @MainActor static func present() {
-        guard let top = WebLink.topViewController() else { return }
-        let f = StickerCreatorFlow()
-        flow = f
-        f.start(from: top)
+        guard presented == nil, let top = WebLink.topViewController() else { return }
+        let host = UIHostingController(rootView: StickerCreatorSheet())
+        // The picker is a story surface: always dark, black behind its rounded corners.
+        host.view.backgroundColor = .black
+        host.overrideUserInterfaceStyle = .dark
+        presented = host
+        top.present(host, animated: true)
+    }
+
+    /// The sheet and everything it raised, in one motion; `done` once they are gone.
+    @MainActor static func close(then done: (() -> Void)? = nil) {
+        guard let host = presented else { done?(); return }
+        presented = nil
+        // The presenter, not the host: the host has the Save page up, and dismissing the host
+        // itself would only take that down (see `StoryCameraDoor.close`).
+        (host.presentingViewController ?? host).dismiss(animated: true, completion: done)
     }
 }
 
 /// The finished art, at most 512 × 512, transparent where there is no subject.
 private struct StickerArt {
-    let cutout: UIImage?        // the lifted subject, nil when none was found
+    let cutout: UIImage?        // the lifted subject with its white outline, nil when none was found
     let rounded: UIImage        // the whole photo as a rounded square
 }
 
-@MainActor
-private final class StickerCreatorFlow: NSObject, PHPickerViewControllerDelegate {
-    nonisolated static let side: CGFloat = 512
-    private weak var host: UIViewController?
+/// One photo on its way to the Save page.
+private struct StickerEditItem: Identifiable {
+    let id = UUID()
+    let photo: UIImage          // the picked photo, upright, at most 2048 px
+    let cg: CGImage             // the same pixels, for Vision
+    let sourceKey: String?      // its tile in `MediaOpenRects` (.sticker); nil = no tile to fly from
+    let arrival: EditorArrival
+}
 
-    func start(from top: UIViewController) {
-        host = top
-        var config = PHPickerConfiguration()
-        config.filter = .images
-        config.selectionLimit = 1
-        let picker = PHPickerViewController(configuration: config)
-        picker.delegate = self
-        top.present(picker, animated: true)
-    }
+// MARK: - The picker
 
-    // `nonisolated` + assumeIsolated: the picker calls this on the main thread whether or not the
-    // SDK marks the protocol main-actor, and this satisfies the requirement either way.
-    nonisolated func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-        MainActor.assumeIsolated { self.picked(picker, results) }
-    }
+private struct StickerCreatorSheet: View {
+    @State private var editing: StickerEditItem?
+    @State private var opening = false
+    @State private var unreadable = false
 
-    private func picked(_ picker: PHPickerViewController, _ results: [PHPickerResult]) {
-        guard let provider = results.first?.itemProvider else {
-            picker.dismiss(animated: true) { self.finish() }
-            return
+    var body: some View {
+        StoryLibraryPicker(
+            onImage: { ui, id in open(ui, assetID: id) },
+            onVideo: { _, _ in },   // `photosOnly`: there is no video tile to pick
+            photosOnly: true,
+            flyScope: .sticker,
+            pickLabel: "Make Sticker")
+        // Raised from INSIDE the sheet, as the story library raises its editor: the picker stays
+        // where it is under it, scroll position and all, and the X lands back on it.
+        .fullScreenCover(item: $editing) { item in
+            StickerSaveView(item: item, arrival: item.arrival)
+                // Clear, so a drag-close fades the page down to the picker, not to black. The page
+                // paints its own black once the photo has landed.
+                .presentationBackground(.clear)
         }
-        // The file is only valid inside the callback, so it is read (downsampled) right there.
-        provider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { url, _ in
-            let image = url.flatMap { Self.downsample($0, maxPixel: 2048) }
-            Task { @MainActor in
-                guard let image else {
-                    picker.dismiss(animated: true) {
-                        self.fail("This photo couldn't be opened. Try another one.")
-                    }
-                    return
-                }
-                self.process(image, picker: picker)
-            }
+        .alert("Couldn't Make a Sticker", isPresented: $unreadable) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This photo couldn't be opened. Try another one.")
         }
     }
 
-    private func process(_ image: CGImage, picker: PHPickerViewController) {
-        let spinner = UIActivityIndicatorView(style: .large)
-        spinner.color = .white
-        spinner.translatesAutoresizingMaskIntoConstraints = false
-        picker.view.addSubview(spinner)
-        NSLayoutConstraint.activate([spinner.centerXAnchor.constraint(equalTo: picker.view.centerXAnchor),
-                                     spinner.centerYAnchor.constraint(equalTo: picker.view.centerYAnchor)])
-        spinner.startAnimating()
+    private func open(_ ui: UIImage, assetID: String?) {
+        guard editing == nil, !opening else { return }
+        opening = true
         Task {
-            var art = await Task.detached(priority: .userInitiated) { Self.makeArt(image) }.value
-            // 2026-10-17 (owner: his sticker came out as the whole photo): when Vision's mask finds
-            // nothing, ask VisionKit's subject lift — the one the Photos app uses — before giving up.
-            if let a = art, a.cutout == nil, let lifted = await Self.visionKitLift(image) {
-                art = StickerArt(cutout: Self.fit(lifted), rounded: a.rounded)
-            }
-            spinner.removeFromSuperview()
-            guard let art else {
-                picker.dismiss(animated: true) { self.fail("This photo couldn't be made into a sticker.") }
+            // Upright and at most 2048 px before anything else: a 48 MP original is ~190 MB, and
+            // both the flight and Vision only need this much.
+            let cg = await Task.detached(priority: .userInitiated) { StickerArtMaker.normalized(ui) }.value
+            guard let cg else { opening = false; unreadable = true; return }
+            let photo = UIImage(cgImage: cg)
+            let key = assetID.map { MediaOpenRects.key(.sticker, $0) }
+            // The rect is read after the hop above, never before it: the grid may have moved.
+            guard let key, let from = MediaOpenRects.liveRect(key), let to = StickerSaveView.stageRect() else {
+                // No tile to fly from: the plain cover, closed the plain way.
+                opening = false
+                editing = StickerEditItem(photo: photo, cg: cg, sourceKey: nil, arrival: EditorArrival(landed: true))
                 return
             }
-            let preview = StickerPreviewController(art: art)
-            preview.onDone = { [weak self, weak preview] png in
-                guard let self, let preview else { return }
-                if let png {
-                    do {
-                        _ = try StickerStore.shared.addMine(png: png, emoji: "🙂")
-                    } catch {
-                        preview.dismiss(animated: true) { self.fail("The sticker couldn't be saved. Check your free space and try again.") }
-                        return
-                    }
-                }
-                // X (owner 2026-10-17): back to the photo library, not out of the flow.
-                guard png != nil else {
-                    preview.dismiss(animated: true) { self.start(from: self.host ?? WebLink.topViewController() ?? preview) }
-                    return
-                }
-                // A short note that it worked (owner 2026-10-18), over the chat it lands back in.
-                preview.dismiss(animated: true) { StickerSavedNote.show(); self.finish() }
-            }
-            picker.dismiss(animated: false) {
-                // ⛔ OVER, NOT FULL SCREEN — owner 2026-10-17: Save and Cancel both dropped him on the
-                // chat list. `.fullScreen` takes the chat underneath out of the window, the chat's
-                // SwiftUI view disappears with it and reads that as having been left. `.overFullScreen`
-                // keeps the chat where it is, as the app's other full-screen covers do.
-                preview.modalPresentationStyle = .overFullScreen
-                (self.host ?? WebLink.topViewController())?.present(preview, animated: true)
+            let item = StickerEditItem(photo: photo, cg: cg, sourceKey: key, arrival: EditorArrival(landed: false))
+            // The tile is hidden for the flight so the photo is never on screen twice.
+            MediaSourceVisibility.shared.hide(key)
+            // ⛔ THE ATTACH EDITOR'S OPEN, NUMBER FOR NUMBER (see `ThreadView.openAttachPhoto`): the
+            // chat viewer's spring and duration, the 0.15s black, clipped to the grid at the start.
+            // Square tile onto the square stage, the corners rounding to the stage's on the way.
+            MediaOpen.fly(image: photo, from: from, sourceCornerRadius: 0,
+                          clip: MediaOpenRects.liveViewRect(MediaOpenRects.key(.sticker, "grid")),
+                          to: to, destinationCornerRadius: StickerSaveView.cornerRadius(to.width),
+                          timing: MediaOpen.spring,
+                          timingDuration: MediaOpen.duration,
+                          backdropFade: MediaOpen.attachBackdropFade,
+                          // The page comes up at the start, under the flying copy, its controls
+                          // fading in with the black; its photo shows once the copy has landed.
+                          onStart: {
+                              MediaPresentGate.present {
+                                  InstantCover.run { editing = item }   // no system slide
+                              }
+                          }) {
+                item.arrival.landed = true
+                opening = false
+                // The page is opaque over the tile by now; give it back for the close to find.
+                DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
             }
         }
     }
+}
 
-    private func fail(_ text: String) {
-        let a = UIAlertController(title: "Couldn't Make a Sticker", message: text, preferredStyle: .alert)
-        a.addAction(UIAlertAction(title: "OK", style: .default))
-        (WebLink.topViewController() ?? host)?.present(a, animated: true)
-        finish()
+// MARK: - The Save page
+
+/// ⛔ REDESIGNED — owner 2026-10-18: the old page "looks too basic". Dark like the story editor: a
+/// glass X and a title on top, the sticker on a soft checkerboard (so the transparent cutout reads
+/// as transparent), a Cutout / Original switch and one white Save capsule at the bottom. The stage
+/// sits at a fixed, computable rect (`stageRect`) because the open lands on it and the close lifts
+/// off it.
+private struct StickerSaveView: View {
+    let item: StickerEditItem
+    @ObservedObject var arrival: EditorArrival
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var art: StickerArt?
+    @State private var noArt = false            // Vision and the fallback both failed
+    @State private var revealed = false         // the cutout has taken over from the flown photo
+    @State private var useOriginal = false
+    @State private var saving = false
+    @State private var saveError: String?
+    @State private var dismissing = false       // a close is flying: the copy shows the photo
+    @State private var closeToken = 0           // bump: MediaDismissHost flies the X close home
+    @State private var chromeShown = false
+
+    // MARK: Geometry (shared by the open, the page and the close)
+
+    private static let topBarH: CGFloat = 60
+    private static let bottomChromeH: CGFloat = 176
+
+    private static var window: UIWindow? {
+        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
     }
 
-    private func finish() { StickerCreatorDoor.flow = nil }
+    /// Where the sticker stage sits, in window coordinates.
+    static func stageRect() -> CGRect? {
+        guard let w = window else { return nil }
+        return stageRect(in: w.bounds.size, insets: w.safeAreaInsets)
+    }
+
+    private static func stageRect(in size: CGSize, insets: UIEdgeInsets) -> CGRect {
+        let top = insets.top + topBarH
+        let bottom = size.height - insets.bottom - bottomChromeH
+        let side = max(120, min(size.width - 48, bottom - top - 24, 440)).rounded()
+        return CGRect(x: ((size.width - side) / 2).rounded(), y: ((top + bottom - side) / 2).rounded(),
+                      width: side, height: side)
+    }
+
+    /// The stage's corners: the saved rounded-square sticker's own proportion (`roundedSquare`).
+    static func cornerRadius(_ side: CGFloat) -> CGFloat { side * 0.14 }
+
+    // MARK: Body
+
+    var body: some View {
+        GeometryReader { geo in
+            let insets = Self.window?.safeAreaInsets ?? .zero
+            let stage = Self.stageRect(in: geo.size, insets: insets)
+            ZStack {
+                // While the copy flies, its own black backdrop (under this cover) is the background.
+                Color.black.opacity(arrival.landed ? 1 : 0)
+                stageView(stage.width)
+                    .position(x: stage.midX, y: stage.midY)
+                    .opacity(dismissing || !arrival.landed ? 0 : 1)
+                chrome(insets: insets, stage: stage, size: geo.size)
+                    // Only the opacity animates (the attach editor's rule): the controls fade in
+                    // over 0.15s with the black instead of sliding in with the cover's first layout.
+                    .animation(.easeInOut(duration: 0.15)) { $0.opacity(item.sourceKey == nil || chromeShown ? 1 : 0) }
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .ignoresSafeArea()
+        // Dark whatever the phone is set to, alerts included (the story surfaces' rule).
+        .storyAlwaysDark()
+        .overlay { dismissHost }
+        // Nothing is tappable until the photo has landed (the attach editor's rule too).
+        .allowsHitTesting(arrival.landed)
+        .onAppear {
+            // One hop, so the fade runs outside the no-animation transaction that presented the cover.
+            if item.sourceKey != nil, !chromeShown { DispatchQueue.main.async { chromeShown = true } }
+        }
+        // The cover is really gone: release a tap on another tile that came in while it was leaving.
+        .onDisappear { if item.sourceKey != nil { MediaPresentGate.noteClosed() } }
+        .task { await makeArt() }
+        .onChange(of: arrival.landed) { _, _ in revealIfReady() }
+        .alert("Couldn't Make a Sticker", isPresented: $noArt) {
+            Button("OK", role: .cancel) { close() }
+        } message: {
+            Text("This photo couldn't be made into a sticker. Try another one.")
+        }
+        .alert("Couldn't Save", isPresented: Binding(get: { saveError != nil },
+                                                    set: { if !$0 { saveError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(saveError ?? "")
+        }
+    }
+
+    /// The checkerboard card, the photo the open landed on, and the cutout that lifts off it.
+    private func stageView(_ side: CGFloat) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Self.cornerRadius(side), style: .continuous)
+        let cutout = (useOriginal || !revealed) ? nil : art?.cutout
+        return ZStack {
+            StickerCheckerboard()
+            // The same picture, crop and corners the flying copy lands with, so the hand-over at
+            // the landing is invisible. It is also the Original sticker, which is this crop.
+            Image(uiImage: item.photo)
+                .resizable()
+                .scaledToFill()
+                .frame(width: side, height: side)
+                .clipped()
+                .opacity(cutout == nil ? 1 : 0)
+            if let cutout {
+                Image(uiImage: cutout)
+                    .resizable()
+                    .scaledToFit()
+                    .padding(side * 0.06)
+                    .shadow(color: .black.opacity(0.35), radius: 14, y: 8)
+                    .transition(.scale(scale: 0.9).combined(with: .opacity))
+            }
+        }
+        .frame(width: side, height: side)
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+        .animation(.spring(response: 0.4, dampingFraction: 0.82), value: cutout != nil)
+    }
+
+    private func chrome(insets: UIEdgeInsets, stage: CGRect, size: CGSize) -> some View {
+        ZStack {
+            // Top: the glass X (back to the library) and the page's name.
+            HStack {
+                CloseXButton(diameter: 44) { close() }
+                    .accessibilityLabel("Close")
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 44)
+            .overlay { Text("New Sticker").font(.headline).foregroundStyle(.white) }
+            .frame(maxHeight: .infinity, alignment: .top)
+            .padding(.top, insets.top + 8)
+
+            statusLine
+                .position(x: size.width / 2, y: stage.maxY + 28)
+
+            // Bottom: the switch, then Save, standing on the safe area.
+            VStack(spacing: 16) {
+                modeSwitch
+                saveButton
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, insets.bottom + 12)
+            .frame(maxHeight: .infinity, alignment: .bottom)
+        }
+        .frame(width: size.width, height: size.height)
+    }
+
+    @ViewBuilder private var statusLine: some View {
+        if art == nil {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small).tint(.white)
+                Text("Finding the subject…")
+            }
+            .font(.subheadline)
+            .foregroundStyle(.white.opacity(0.7))
+        } else if art?.cutout == nil {
+            Text("No subject was found, so the whole photo will be the sticker.")
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.7))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+        }
+    }
+
+    @ViewBuilder private var modeSwitch: some View {
+        if art?.cutout != nil {
+            Picker("", selection: $useOriginal) {
+                Text("Cutout").tag(false)
+                Text("Original").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 240)
+        } else {
+            // Holds the place, so Save does not move when the switch arrives.
+            Color.clear.frame(height: 32)
+        }
+    }
+
+    private var saveButton: some View {
+        Button { save() } label: {
+            ZStack {
+                if saving {
+                    ProgressView().tint(.black)
+                } else {
+                    Text("Save Sticker").font(.body.weight(.semibold))
+                }
+            }
+            .foregroundStyle(.black)
+            .frame(maxWidth: .infinity)
+            .frame(height: 52)
+            .background(Color.white, in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(art == nil || saving)
+        .opacity(art == nil ? 0.45 : 1)
+        .animation(.easeInOut(duration: 0.2), value: art == nil)
+    }
+
+    /// Flies home into the tile when there is one (the drag's pipeline, `MediaDismissHost`).
+    @ViewBuilder private var dismissHost: some View {
+        if let key = item.sourceKey {
+            MediaDismissHost(
+                canBegin: { arrival.landed && !saving },
+                // The photo, not the cutout: it goes back into a tile that shows the photo.
+                media: {
+                    guard let r = Self.stageRect() else { return nil }
+                    return (r, art?.rounded ?? item.photo)
+                },
+                onHideContent: { dismissing = $0 },
+                targetRect: { MediaOpenRects.liveRect(key) },
+                targetId: { key },
+                clipRect: { MediaOpenRects.liveViewRect(MediaOpenRects.key(.sticker, "grid")) },
+                closeToken: closeToken,
+                onDismiss: { instantDismiss() },
+                copyFromMediaFrame: true)
+        }
+    }
+
+    // MARK: Actions
+
+    /// X (owner 2026-10-17): back to the photo library, not out of the flow.
+    private func close() {
+        if item.sourceKey != nil { closeToken += 1 } else { dismiss() }
+    }
+
+    /// The copy IS the animation, so the cover goes without its own slide.
+    private func instantDismiss() {
+        MediaPresentGate.noteDismissed()
+        withoutPresentationAnimation { dismiss() }
+    }
+
+    private func makeArt() async {
+        guard art == nil else { return }
+        let cg = item.cg
+        var made = await Task.detached(priority: .userInitiated) { StickerArtMaker.makeArt(cg) }.value
+        // 2026-10-17 (owner: his sticker came out as the whole photo): when Vision's mask finds
+        // nothing, ask VisionKit's subject lift — the one the Photos app uses — before giving up.
+        if let a = made, a.cutout == nil, let lifted = await StickerArtMaker.visionKitLift(cg) {
+            let outlined = await Task.detached(priority: .userInitiated) { StickerArtMaker.outlined(lifted) }.value
+            made = StickerArt(cutout: outlined, rounded: a.rounded)
+        }
+        guard let made else { noArt = true; return }
+        art = made
+        revealIfReady()
+    }
+
+    /// The cutout lifts off the photo once BOTH the photo has landed and the cutout is ready, a
+    /// beat apart, so the landing itself is never a swap.
+    private func revealIfReady() {
+        guard !revealed, arrival.landed, art != nil else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { revealed = true }
+    }
+
+    private func save() {
+        guard let art, !saving else { return }
+        let image = (useOriginal ? nil : art.cutout) ?? art.rounded
+        guard let png = image.pngData() else {
+            saveError = "The sticker couldn't be saved. Try again."
+            return
+        }
+        saving = true
+        do {
+            _ = try StickerStore.shared.addMine(png: png, emoji: "🙂")
+        } catch {
+            saving = false
+            saveError = "The sticker couldn't be saved. Check your free space and try again."
+            return
+        }
+        // A short note that it worked (owner 2026-10-18), over the chat it lands back in.
+        StickerCreatorDoor.close { StickerSavedNote.show() }
+    }
+}
+
+/// The transparency backdrop: a quiet dark checkerboard, the convention for "nothing here".
+private struct StickerCheckerboard: View {
+    var body: some View {
+        Canvas { ctx, size in
+            let cell: CGFloat = 14
+            let cols = Int((size.width / cell).rounded(.up)), rows = Int((size.height / cell).rounded(.up))
+            var path = Path()
+            for r in 0..<rows {
+                for c in 0..<cols where (r + c) % 2 == 0 {
+                    path.addRect(CGRect(x: CGFloat(c) * cell, y: CGFloat(r) * cell, width: cell, height: cell))
+                }
+            }
+            ctx.fill(path, with: .color(.white.opacity(0.05)))
+        }
+        .background(Color(white: 0.1))
+    }
+}
+
+// MARK: - Making the art (off the main thread, except VisionKit)
+
+private enum StickerArtMaker {
+    static let side: CGFloat = 512
+    /// The sticker's white outline, in pixels of the 512 art (about 3 pt in a chat).
+    static let outline: CGFloat = 12
+
+    /// The photo upright (orientation applied) and at most `maxPixel` on its long side.
+    static func normalized(_ image: UIImage, maxPixel: CGFloat = 2048) -> CGImage? {
+        let w = image.size.width * image.scale, h = image.size.height * image.scale
+        guard w > 0, h > 0 else { return nil }
+        let s = min(1, maxPixel / max(w, h))
+        let size = CGSize(width: (w * s).rounded(), height: (h * s).rounded())
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }.cgImage
+    }
 
     /// VisionKit subject lifting (iOS 17+), on the phone. Nil when it finds no subject.
-    static func visionKitLift(_ cg: CGImage) async -> UIImage? {
+    @MainActor static func visionKitLift(_ cg: CGImage) async -> UIImage? {
         guard ImageAnalyzer.isSupported else { return nil }
         let ui = UIImage(cgImage: cg)
         let analyzer = ImageAnalyzer()
@@ -145,30 +465,14 @@ private final class StickerCreatorFlow: NSObject, PHPickerViewControllerDelegate
         return try? await interaction.image(for: subjects)
     }
 
-    // MARK: - Off the main thread
-
-    /// ImageIO straight from the file, never the full-size bitmap: a 48 MP photo decoded whole is
-    /// ~190 MB. HEIC, JPEG and PNG all come through here; orientation is applied.
-    nonisolated static func downsample(_ url: URL, maxPixel: CGFloat) -> CGImage? {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
-        else { return nil }
-        let opts: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
-        ]
-        return CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
-    }
-
-    nonisolated static func makeArt(_ image: CGImage) -> StickerArt? {
+    static func makeArt(_ image: CGImage) -> StickerArt? {
         let rounded = roundedSquare(image)
         guard let rounded else { return nil }
         return StickerArt(cutout: liftSubject(image), rounded: rounded)
     }
 
     /// Vision's foreground instance mask (iOS 17+), every instance, cropped to them.
-    nonisolated static func liftSubject(_ image: CGImage) -> UIImage? {
+    static func liftSubject(_ image: CGImage) -> UIImage? {
         let request = VNGenerateForegroundInstanceMaskRequest()
         let handler = VNImageRequestHandler(cgImage: image, orientation: .up, options: [:])
         do { try handler.perform([request]) } catch { return nil }
@@ -178,25 +482,45 @@ private final class StickerCreatorFlow: NSObject, PHPickerViewControllerDelegate
         else { return nil }
         let ci = CIImage(cvPixelBuffer: buffer)
         guard let cg = CIContext(options: nil).createCGImage(ci, from: ci.extent) else { return nil }
-        return fit(UIImage(cgImage: cg))
+        return outlined(UIImage(cgImage: cg))
     }
 
-    /// Scaled to sit inside 512 × 512 keeping its aspect, transparent around it.
-    nonisolated static func fit(_ image: UIImage) -> UIImage {
+    /// ⛔ THE STICKER OUTLINE — owner 2026-10-18 (Save page redesign): the cutout gets the soft white
+    /// edge a sticker has, and what the page shows is what is saved. Scaled to sit inside 512 × 512
+    /// with room for the edge, keeping its aspect, transparent around it. The edge is the subject's
+    /// own silhouette grown by `outline` (drawn in a ring of offsets, then filled white), under it.
+    static func outlined(_ image: UIImage) -> UIImage {
         let w = image.size.width, h = image.size.height
         guard w > 0, h > 0 else { return image }
-        let scale = min(side / w, side / h)
-        let size = CGSize(width: (w * scale).rounded(), height: (h * scale).rounded())
+        let pad = outline + 2
+        let inner = side - 2 * pad
+        let scale = min(inner / w, inner / h)
+        let fitted = CGSize(width: (w * scale).rounded(), height: (h * scale).rounded())
+        let canvas = CGSize(width: fitted.width + 2 * pad, height: fitted.height + 2 * pad)
+        let at = CGRect(origin: CGPoint(x: pad, y: pad), size: fitted)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         format.opaque = false
-        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
-            image.draw(in: CGRect(origin: .zero, size: size))
+        let renderer = UIGraphicsImageRenderer(size: canvas, format: format)
+        let silhouette = renderer.image { ctx in
+            image.draw(in: at)
+            for (count, radius) in [(24, outline), (12, outline / 2)] {
+                for k in 0..<count {
+                    let a = CGFloat(k) / CGFloat(count) * 2 * .pi
+                    image.draw(in: at.offsetBy(dx: cos(a) * radius, dy: sin(a) * radius))
+                }
+            }
+            UIColor.white.setFill()
+            ctx.fill(CGRect(origin: .zero, size: canvas), blendMode: .sourceIn)
+        }
+        return renderer.image { _ in
+            silhouette.draw(at: .zero)
+            image.draw(in: at)
         }
     }
 
     /// The middle square of the photo, 512 px, with rounded corners (transparent outside them).
-    nonisolated static func roundedSquare(_ image: CGImage) -> UIImage? {
+    static func roundedSquare(_ image: CGImage) -> UIImage? {
         let w = CGFloat(image.width), h = CGFloat(image.height)
         let s = min(w, h)
         guard s > 0, let crop = image.cropping(to: CGRect(x: ((w - s) / 2).rounded(), y: ((h - s) / 2).rounded(),
@@ -210,129 +534,6 @@ private final class StickerCreatorFlow: NSObject, PHPickerViewControllerDelegate
             UIBezierPath(roundedRect: rect, cornerRadius: side * 0.14).addClip()
             UIImage(cgImage: crop).draw(in: rect)
         }
-    }
-}
-
-/// The preview: the art centred on plain black, Cancel, the cutout / original choice, Save Sticker.
-@MainActor
-private final class StickerPreviewController: UIViewController {
-    var onDone: ((Data?) -> Void)?
-    private let art: StickerArt
-    private var useOriginal: Bool
-    private let imageView = UIImageView()
-    private let note = UILabel()
-    private let toggle = UIButton(type: .system)
-    private let save = UIButton(type: .system)
-    private var saving = false
-
-    init(art: StickerArt) {
-        self.art = art
-        self.useOriginal = art.cutout == nil
-        super.init(nibName: nil, bundle: nil)
-    }
-    required init?(coder: NSCoder) { fatalError() }
-
-    override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.backgroundColor = .black
-        overrideUserInterfaceStyle = .dark
-
-        // A 44 pt Liquid Glass X where Cancel was (owner 2026-10-17).
-        let glass = UIGlassEffect(style: .regular)
-        glass.isInteractive = true
-        let cancel = UIVisualEffectView(effect: glass)
-        cancel.layer.cornerRadius = 22
-        cancel.clipsToBounds = true
-        let x = UIButton(type: .system)
-        x.setImage(UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)), for: .normal)
-        x.tintColor = .white
-        x.accessibilityLabel = "Close"
-        x.addAction(UIAction { [weak self] _ in self?.onDone?(nil) }, for: .touchUpInside)
-        // ⚠️ PINNED, NOT AUTORESIZED (owner 2026-10-18, "fix X button icon"): the glass starts at zero
-        // size, so a 44 pt button with flexible width/height grew to 88 when the glass reached 44 and
-        // the glyph sat in the clipped bottom-right corner, a white dot.
-        x.translatesAutoresizingMaskIntoConstraints = false
-        cancel.contentView.addSubview(x)
-        NSLayoutConstraint.activate([
-            x.topAnchor.constraint(equalTo: cancel.contentView.topAnchor),
-            x.bottomAnchor.constraint(equalTo: cancel.contentView.bottomAnchor),
-            x.leadingAnchor.constraint(equalTo: cancel.contentView.leadingAnchor),
-            x.trailingAnchor.constraint(equalTo: cancel.contentView.trailingAnchor),
-        ])
-
-        imageView.contentMode = .scaleAspectFit
-
-        note.textColor = UIColor.white.withAlphaComponent(0.7)
-        note.font = .systemFont(ofSize: 15)
-        note.textAlignment = .center
-        note.numberOfLines = 0
-        note.text = art.cutout == nil
-            ? "No subject was found in this photo. You can keep the whole photo as a sticker."
-            : nil
-        note.isHidden = art.cutout != nil
-
-        var tc = UIButton.Configuration.gray()
-        tc.cornerStyle = .capsule
-        tc.baseForegroundColor = .white
-        toggle.configuration = tc
-        toggle.isHidden = art.cutout == nil
-        toggle.addAction(UIAction { [weak self] _ in
-            guard let self else { return }
-            self.useOriginal.toggle()
-            self.refresh()
-        }, for: .touchUpInside)
-
-        var sc = UIButton.Configuration.filled()
-        sc.cornerStyle = .capsule
-        sc.title = "Save Sticker"
-        sc.buttonSize = .large
-        save.configuration = sc
-        save.addAction(UIAction { [weak self] _ in self?.commit() }, for: .touchUpInside)
-
-        for v in [cancel, imageView, note, toggle, save] as [UIView] {
-            v.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview(v)
-        }
-        let g = view.safeAreaLayoutGuide
-        NSLayoutConstraint.activate([
-            cancel.topAnchor.constraint(equalTo: g.topAnchor, constant: 8),
-            cancel.leadingAnchor.constraint(equalTo: g.leadingAnchor, constant: 16),
-            cancel.widthAnchor.constraint(equalToConstant: 44),
-            cancel.heightAnchor.constraint(equalToConstant: 44),
-
-            imageView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            imageView.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -40),
-            imageView.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.7),
-            imageView.heightAnchor.constraint(equalTo: imageView.widthAnchor),
-
-            note.topAnchor.constraint(equalTo: imageView.bottomAnchor, constant: 20),
-            note.leadingAnchor.constraint(equalTo: g.leadingAnchor, constant: 32),
-            note.trailingAnchor.constraint(equalTo: g.trailingAnchor, constant: -32),
-
-            save.bottomAnchor.constraint(equalTo: g.bottomAnchor, constant: -16),
-            save.leadingAnchor.constraint(equalTo: g.leadingAnchor, constant: 16),
-            save.trailingAnchor.constraint(equalTo: g.trailingAnchor, constant: -16),
-
-            toggle.bottomAnchor.constraint(equalTo: save.topAnchor, constant: -12),
-            toggle.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-        ])
-        refresh()
-    }
-
-    private func refresh() {
-        imageView.image = (useOriginal ? nil : art.cutout) ?? art.rounded
-        toggle.configuration?.title = useOriginal ? "Use Cutout" : "Use Original"
-    }
-
-    private func commit() {
-        guard !saving else { return }
-        let image = (useOriginal ? nil : art.cutout) ?? art.rounded
-        guard let png = image.pngData() else { return }
-        saving = true
-        save.isEnabled = false
-        onDone?(png)
     }
 }
 

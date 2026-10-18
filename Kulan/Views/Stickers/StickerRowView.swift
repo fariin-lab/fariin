@@ -21,6 +21,9 @@ final class RowStickerView: UIView {
     private var onScreen = true
     private var playing = false
     private var generation = 0          // bumped on every change; a stale load or animator stops
+    /// Owner 2026-10-18: a sticker still downloading or decoding was an empty gap in the chat. The
+    /// shimmer holds its place until the first frame is up; a sticker already seen never shows it.
+    private let skeleton = SkeletonShimmerView()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -29,6 +32,7 @@ final class RowStickerView: UIView {
         art.contentsGravity = .resizeAspect
         art.masksToBounds = false
         layer.addSublayer(art)
+        addSubview(skeleton)
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -38,6 +42,8 @@ final class RowStickerView: UIView {
         art.frame = bounds
         art.contentsScale = window?.screen.scale ?? UIScreen.main.scale
         CATransaction.commit()
+        skeleton.frame = bounds.insetBy(dx: 4, dy: 4)
+        skeleton.layer.cornerRadius = min(16, skeleton.bounds.width * 0.18)
     }
 
     override func didMoveToWindow() {
@@ -68,8 +74,13 @@ final class RowStickerView: UIView {
             return
         }
 
+        skeleton.setActive(true)
         Task { @MainActor [weak self] in
-            guard let data = await Self.load(s, url: url, enc: enc, cid: cid, localData: localData) else { return }
+            guard let data = await Self.load(s, url: url, enc: enc, cid: cid, localData: localData) else {
+                // Nothing came: no shimmer forever over an empty box.
+                if let self, self.generation == gen { self.skeleton.setActive(false) }
+                return
+            }
             let first = await Task.detached(priority: .userInitiated) { Self.firstFrame(data, maxPixel: px) }.value
             if let first { Self.firstCache.setObject(first, forKey: k as NSString) }
             Self.bytesCache.setObject(data as NSData, forKey: k as NSString, cost: data.count)
@@ -78,6 +89,7 @@ final class RowStickerView: UIView {
             CATransaction.begin(); CATransaction.setDisableActions(true)
             self.art.contents = first
             CATransaction.commit()
+            self.skeleton.fadeOut()
             self.updatePlayback()
         }
     }
@@ -100,6 +112,7 @@ final class RowStickerView: UIView {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         art.contents = nil
         CATransaction.commit()
+        skeleton.setActive(false)
     }
 
     /// The decrypted bytes behind this row, if it has them (Save to Favorites of a received one).

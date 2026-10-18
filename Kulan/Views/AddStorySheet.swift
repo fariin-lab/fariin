@@ -330,6 +330,15 @@ struct StoryLibraryPicker: View {
     /// order. One callback for both halves so the host applies the whole change as one move — the
     /// picker's selection IS the post's selection, which is his "must always stay synchronized".
     var onApply: ((_ removed: [String], _ added: [StoryPick]) -> Void)? = nil
+    /// ⛔ CREATE STICKER OPENS THIS PICKER, NOT APPLE'S — owner 2026-10-18. A sticker is made from a
+    /// photo, so that door hides the videos. Off for every story door, which keeps both kinds.
+    var photosOnly: Bool = false
+    /// Set by a door that flies the picked photo out of its tile (Create Sticker): each tile and the
+    /// grid register in `MediaOpenRects` under this scope, so the open can leave from the tile and
+    /// the close can land back on it. Nil (the story doors) registers nothing.
+    var flyScope: MediaOpenRects.Scope? = nil
+    /// The one action on a tile's long-press platter in single-pick mode.
+    var pickLabel: String = "Add to Story"
     @Environment(\.dismiss) private var dismiss
     @StateObject private var store = PhotoGridStore()
     @State private var tab = 0                 // 0 = Photos, 1 = Albums
@@ -576,11 +585,23 @@ struct StoryLibraryPicker: View {
             // The Text card and the Camera tile are gone: the camera screen in front of this one owns
             // both, and offering them twice is how a picker turns back into a menu.
             LazyVGrid(columns: cols, spacing: 2) {
-                ForEach(store.assets, id: \.localIdentifier) { asset in tile(asset) }
+                ForEach(shown(store.assets), id: \.localIdentifier) { asset in tile(asset) }
             }
             .padding(.horizontal, 2)
         }
+        .background { gridAnchor }
         .overlay { if store.accessDenied { photosAccessOff } }
+    }
+
+    /// Everything, or only the photos for a door that asked for them (`photosOnly`).
+    private func shown(_ assets: [PHAsset]) -> [PHAsset] {
+        photosOnly ? assets.filter { $0.mediaType == .image } : assets
+    }
+
+    /// The grid's own frame for a flying door (`flyScope`): the open and the close are clipped to it,
+    /// as the attach grid's are (`MediaOpenRects.attachGridKey`).
+    @ViewBuilder private var gridAnchor: some View {
+        if let flyScope { MediaViewAnchor(key: MediaOpenRects.key(flyScope, "grid")) }
     }
 
     /// 2026-09-24 decision D22: Photos access refused. Same title and Open Settings button as the
@@ -862,10 +883,11 @@ struct StoryLibraryPicker: View {
         // scrolled clear of it instead of hiding underneath.
         ScrollView {
             LazyVGrid(columns: cols, spacing: 2) {
-                ForEach(store.assets(in: album.collection), id: \.localIdentifier) { asset in tile(asset) }
+                ForEach(shown(store.assets(in: album.collection)), id: \.localIdentifier) { asset in tile(asset) }
             }
             .padding(.horizontal, 2)
         }
+        .background { gridAnchor }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if allowsMultiple, !picked.isEmpty { selectionBar }
         }
@@ -882,6 +904,8 @@ struct StoryLibraryPicker: View {
         StoryThumb(asset: asset, store: store)
             .aspectRatio(1, contentMode: .fill)
             .clipped()
+            // The tile the photo flies out of and back into (`flyScope`; nothing for the story doors).
+            .modifier(PickerFlySource(id: asset.localIdentifier, scope: flyScope))
             // Video tiles get the standard duration badge (bottom-right, like the system Photos app).
             .overlay(alignment: .bottomTrailing) {
                 if asset.mediaType == .video {
@@ -944,7 +968,7 @@ struct StoryLibraryPicker: View {
             // disagree with the grid about what picking means.
             .contextMenu {
                 Button { pick(asset) } label: {
-                    Label(allowsMultiple ? "Select" : "Add to Story", systemImage: "plus.circle")
+                    Label(allowsMultiple ? "Select" : pickLabel, systemImage: "plus.circle")
                 }
             } preview: {
                 StoryPhotoPreview(asset: asset, store: store)
@@ -985,6 +1009,21 @@ struct StoryLibraryPicker: View {
     private func durationLabel(_ s: TimeInterval) -> String {
         let t = Int(s.rounded())
         return String(format: "%d:%02d", t / 60, t % 60)
+    }
+}
+
+/// The picker tile's place in `MediaOpenRects`, for a door with a `flyScope` (owner 2026-10-18,
+/// Create Sticker). The attach grid's own reporter, square corners like the tile, and the same hide
+/// while a flight is on it. No scope, no reporter: the story doors are untouched.
+private struct PickerFlySource: ViewModifier {
+    let id: String
+    let scope: MediaOpenRects.Scope?
+    @ViewBuilder func body(content: Content) -> some View {
+        if let scope {
+            content.modifier(MediaRectReporter(id: id, scope: scope, cornerRadius: 0))
+        } else {
+            content
+        }
     }
 }
 

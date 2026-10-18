@@ -86,12 +86,16 @@ final class StickerPlayerView: UIView {
     /// What the owner asked for; Low Power Mode and a missing window can still hold it back.
     private var wantsPlay = false
     private static let animKey = "sticker.frames"
+    /// Owner 2026-10-18: a tile still decoding showed nothing. The shimmer stands in until its
+    /// first frame is up; a cache hit never shows it.
+    private let skeleton = SkeletonShimmerView()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
         art.contentsGravity = .resizeAspect
         layer.addSublayer(art)
+        addSubview(skeleton)
         NotificationCenter.default.addObserver(self, selector: #selector(powerChanged),
                                                name: .NSProcessInfoPowerStateDidChange, object: nil)
     }
@@ -105,6 +109,8 @@ final class StickerPlayerView: UIView {
         art.frame = bounds
         art.contentsScale = window?.screen.scale ?? UIScreen.main.scale
         CATransaction.commit()
+        skeleton.frame = bounds.insetBy(dx: 2, dy: 2)
+        skeleton.layer.cornerRadius = min(16, skeleton.bounds.width * 0.18)
     }
 
     /// Shows a sticker. `pixelSize` is the longest side the tile is drawn at, in pixels.
@@ -115,15 +121,24 @@ final class StickerPlayerView: UIView {
         frames = nil
         art.removeAnimation(forKey: Self.animKey)
         art.contents = nil
-        guard let url else { return }
+        guard let url else { skeleton.setActive(false); return }
         let key = StickerFrameCache.key(url, pixelSize)
         if let hit = StickerFrameCache.cache.object(forKey: key) {
+            skeleton.setActive(false)
             show(hit)
             return
         }
+        skeleton.setActive(true)
         let mine = token
         StickerFrameCache.queue.addOperation {
-            guard let f = StickerFrameCache.decode(url, maxPixel: pixelSize) else { return }
+            guard let f = StickerFrameCache.decode(url, maxPixel: pixelSize) else {
+                // A file that will not decode: no shimmer forever over nothing.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.token == mine else { return }
+                    self.skeleton.setActive(false)
+                }
+                return
+            }
             StickerFrameCache.cache.setObject(f, forKey: key, cost: f.cost)
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.token == mine else { return }
@@ -138,6 +153,7 @@ final class StickerPlayerView: UIView {
         CATransaction.setDisableActions(true)
         art.contents = f.images.first
         CATransaction.commit()
+        skeleton.fadeOut()
         apply()
     }
 
