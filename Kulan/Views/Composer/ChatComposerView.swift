@@ -277,6 +277,29 @@ final class ChatComposerView: UIView {
                                                name: StickerCreatorDoor.created, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(stickerCreatorWillReturn),
                                                name: StickerCreatorDoor.willReturn, object: nil)
+        // ⛔ LIGHT ↔ DARK AT ONCE (owner 2026-10-18: "the composer needs a refresh after I change the
+        // theme"). The glass views kept the look they were made with until the chat was reopened; a
+        // fresh effect is set on every appearance change, and the colours this bar bakes are redone.
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (v: ChatComposerView, _: UITraitCollection) in
+            v.reapplyGlassForTheme()
+        }
+    }
+
+    private func reapplyGlassForTheme() {
+        for v in [pill, lockTarget] {
+            let old = v.effect as? UIGlassEffect
+            let g = UIGlassEffect(style: .regular)
+            g.isInteractive = old?.isInteractive ?? true
+            g.tintColor = old?.tintColor
+            v.effect = nil
+            v.effect = g
+        }
+        // The round glass buttons draw their material from their configuration: setting it again
+        // makes them resolve it for the new appearance.
+        for b in [plusButton, trashButton, sendButton] { b.configuration = b.configuration }
+        refreshStatic()
+        refreshAppearance()
+        setNeedsLayout()
     }
 
     /// The creator is about to close on a saved sticker: the panel goes on the field now, so the
