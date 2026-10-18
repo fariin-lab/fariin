@@ -2217,8 +2217,10 @@ final class StoriesService {
         // document, so a receipt or a watermark for one is a write that can only ever fail — and it
         // would fail against the REAL database, under the real account, for a story that is not there.
         guard !StoriesRepository.isDemoAuthor(story.authorUid) else { return }
-        // Nor for Fariin: not an account, and its stories are not in `stories`. Seen stays local.
-        guard !OfficialChannel.isOfficial(story.authorUid) else { return }
+        // Nor for Fariin: not an account, and its stories are not in `stories`. Seen stays local, and
+        // the view goes to the official story's own count instead (owner 2026-10-18, see
+        // `OfficialStoryViews`).
+        if OfficialChannel.isOfficial(story.authorUid) { await OfficialStoryViews.record(story); return }
         // Advance my per-author watermark to this story's POST time — never backwards, one write
         // per advance. (Was a wall-clock serverTimestamp, which made watching 1 of 5 stories mark
         // the whole ring seen; the watermark now means "the newest story of theirs I've watched".)

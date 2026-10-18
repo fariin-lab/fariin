@@ -1279,6 +1279,26 @@ service cloud.firestore {
     match /officialStories/{id} {
       allow read: if adminCan('send');
       allow write: if false;
+
+      // ⛔ VIEWS OF AN OFFICIAL STORY — owner 2026-10-18: "official stories need view counts, and
+      // admins must see who viewed". Every viewer is counted once; a viewer is NAMED only if their
+      // own story view receipts are on. Two shapes, both written once by the phone and never again:
+      //   named:   id == my uid, {at, named: true}
+      //   unnamed: id == sha256('fariin-oview-v1:' + uid) in lowercase hex, {at, named: false}.
+      //            No uid is stored; the hash only keeps one phone from counting twice. These rules
+      //            cannot check that the hash is really mine, so the shape is all they hold it to.
+      // Only for a story that exists. No phone reads, changes or removes one; the panel and the
+      // admins' callable read through the admin SDK, and admins who can post may read directly.
+      match /views/{viewId} {
+        allow read: if adminCan('send');
+        allow create: if signedIn()
+          && exists(/databases/$(database)/documents/officialStories/$(id))
+          && request.resource.data.keys().hasOnly(['at', 'named'])
+          && request.resource.data.at == request.time
+          && ((viewId == request.auth.uid && request.resource.data.named == true)
+            || (viewId.matches('^[0-9a-f]{64}$') && request.resource.data.named == false));
+        allow update, delete: if false;
+      }
     }
 
     // 2026-10-18 sticker packs: the catalog every phone's sticker keyboard reads (overrides of the

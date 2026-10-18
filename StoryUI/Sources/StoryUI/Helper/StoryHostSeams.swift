@@ -23,6 +23,7 @@
 //
 
 import UIKit
+import SwiftUI
 
 /// A MENTION IS A PERSON, AND ONLY THE APP KNOWS PEOPLE.
 ///
@@ -67,6 +68,13 @@ public enum StoryMention {
 /// than it used to; it can only make one arrive sooner.
 /// "GET NOTIFICATIONS" ON SOMEBODY'S STORY — whether this author's new stories notify me. Only the
 /// app knows (owner, 2026-10-16). Nil, or a nil answer, means the menu does not offer it.
+/// SOMETHING THE APP PUTS AT THE LEFT OF A PLAIN STORY'S BOTTOM ROW (owner 2026-10-18: an admin
+/// sees the view count on Fariin's official stories). Asked per story id while the row draws; nil, or
+/// a nil answer, draws nothing and the row is exactly as before. Who may see it is the app's call.
+public enum StoryFooterAccessory {
+    public static var view: ((String) -> AnyView?)?
+}
+
 public enum StoryNotifySeam {
     public static var isOn: ((String) -> Bool?)?
 }

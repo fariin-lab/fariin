@@ -30,6 +30,10 @@ struct MessageView: View {
                 switch story.config.storyType {
                 case .plain(let config):
                     HStack(spacing: 12) {
+                        // The app's own item for this story, if any (see `StoryFooterAccessory`).
+                        if let extra = StoryFooterAccessory.view?(story.id) {
+                            extra
+                        }
                         if let title = config?.actionTitle, let url = config?.actionURL {
                             actionPill(title, url)
                         } else if let locked = config?.lockedText {

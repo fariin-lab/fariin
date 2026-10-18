@@ -1758,6 +1758,8 @@ struct StoryViewer: View {
                 NotificationCenter.default.post(name: .init("resumeStory"), object: "browser")
             }
         }
+        // An admin's view count on Fariin's stories (owner 2026-10-18). See `OfficialStoryViews`.
+        OfficialStoryViews.installPill()
         self.deliveredToMe = deliveredToMe
         self.startStoryId = startStoryId
         self.heroStageOpen = heroStageOpen

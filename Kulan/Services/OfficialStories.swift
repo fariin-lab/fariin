@@ -14,8 +14,9 @@ import FirebaseFirestore
 // says about itself, which is all any server can go on; the point is that nothing outside the
 // answer ever reaches the phone.
 //
-// Nothing is written anywhere when one is watched: Fariin is not an account, so there is no
-// receipt to leave and no watermark to keep. Seen is this phone's own (`StoryPrefs`).
+// Fariin is not an account, so there is no receipt on a person's story and no watermark to keep;
+// seen is this phone's own (`StoryPrefs`). Since 2026-10-18 (owner: view counts, and admins see who
+// viewed) a watch writes one view document under the official story: `OfficialStoryViews`.
 @MainActor
 final class OfficialStories {
     static let shared = OfficialStories()

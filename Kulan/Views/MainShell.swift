@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import FirebaseAuth
 
 /// Ticking a row on or off, everywhere a list in this file has multi-select.
 ///
@@ -2729,7 +2730,9 @@ struct ChatsView: View {
     /// cleared would show the cards to someone who has used the app for months. Joined in the last
     /// 7 days, and the profile must say so: unknown means no.
     private var accountIsNew: Bool {
-        guard let joined = profile.me?.joinedAt else { return false }
+        // `createdAt` is not written on every profile (review pass C), so the sign-in record's own
+        // creation date (server time) is the fallback.
+        guard let joined = profile.me?.joinedAt ?? Auth.auth().currentUser?.metadata.creationDate else { return false }
         return Date().timeIntervalSince(joined) < 7 * 86_400
     }
 
