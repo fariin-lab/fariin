@@ -1535,7 +1535,7 @@ struct NewAudienceButton: UIViewRepresentable {
 
     private static func menuIcon(symbol: String) -> UIImage? {
         UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 19, weight: .regular))
-            .map { fit($0) }
+            .flatMap { fit($0) }
     }
 
     private static func menuIcon(_ name: String) -> UIImage? {
