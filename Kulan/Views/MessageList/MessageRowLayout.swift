@@ -1068,8 +1068,17 @@ enum MessageRowLayout {
                 if case .media(let mb) = b.body, mb.kind == .sticker, plan.meta != .zero {
                     let meta = plan.meta.offsetBy(dx: bubbleRect.minX, dy: bubbleRect.minY)
                     let total = widths.reduce(0, +) + BubbleMetrics.reactionChipGap * CGFloat(max(0, widths.count - 1))
-                    cx = max(bubbleRect.minX, meta.minX - 16 - total)   // 16 clears the time CAPSULE, which is wider than its text (owner: touching)
-                    cy = meta.midY - height / 2
+                    // ⛔ CLEAR OF THE TIME CAPSULE, ALWAYS — owner 2026-10-18 (build 969, a reacted custom
+                    // sticker: badge and time overlapping). It was clamped to the sticker's left edge, so on
+                    // a narrow sticker the badge was pushed back onto the time. It is placed from the
+                    // CAPSULE now (6 pt gap) and may run past the sticker into the free column beside it,
+                    // stopping only at the column's own edge.
+                    let capsule = (plan.mediaPlan?.metaCapsule).map { $0.offsetBy(dx: bubbleRect.minX, dy: bubbleRect.minY) }
+                    let clearX = (capsule?.minX ?? (meta.minX - 10)) - 6
+                    cx = clearX - total
+                    // No room on the left (a received sticker hugs the column's start): after the time.
+                    if cx < columnX { cx = (capsule?.maxX ?? meta.maxX + 10) + 6 }
+                    cy = (capsule?.midY ?? meta.midY) - height / 2
                 }
                 plan.reactionsFreeform = true
                 for (i, w) in widths.enumerated() {
