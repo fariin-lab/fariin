@@ -1462,7 +1462,7 @@ enum MessageRowLayout {
             innerY += size.height + 4
         }
 
-        let grid =CGRect(x: 0, y: innerY, width: solved.size.width, height: solved.size.height)
+        let grid = CGRect(x: 0, y: innerY, width: solved.size.width, height: solved.size.height)
         innerY = grid.maxY
 
         // See `mediaPlan`: the floating footer sits on the dark capsule in both themes, so it takes
