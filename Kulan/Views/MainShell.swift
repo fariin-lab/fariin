@@ -2035,8 +2035,13 @@ struct ChatsView: View {
             // .badge.questionmark` was Apple's and drew a PERSON, which named who is asking rather
             // than what they are asking for — and it sat beside two of his own drawings in the same
             // menu. Template SVG in the catalogue, so the tint still reaches it.
-            Button { path.append(RequestsRoute.requests) } label: {
-                Label { Text(requestsMenuTitle) } icon: { MenuIcon("ic_message_request") }
+            // ⛔ OFF FROM THE ADMIN PANEL = NO ENTRY (owner 2026-10-18: "I turned Message Requests off
+            // and the label is still there"). Live from MsgPolicy, for MY effective setting. With it
+            // off every incoming chat reads as open, so the count is 0 and nothing waits behind it.
+            if MsgPolicy.shared.requestsOn(for: me) || pendingRequestCount > 0 {
+                Button { path.append(RequestsRoute.requests) } label: {
+                    Label { Text(requestsMenuTitle) } icon: { MenuIcon("ic_message_request") }
+                }
             }
             // ⛔ CHAT PIN HERE — owner, 2026-09-11: "also add in chatlist when i click filter
             // button". It also sat in the title menu; that menu is gone (2026-09-24, the reference
