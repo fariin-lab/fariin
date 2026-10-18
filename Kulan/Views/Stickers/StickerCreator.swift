@@ -24,6 +24,9 @@ enum StickerCreatorDoor {
     /// a fresh one.
     @MainActor private static weak var presented: UIViewController?
 
+    /// Posted after a sticker was saved and the creator has closed; the chat's composer opens the panel.
+    static let created = Notification.Name("StickerCreatorDoor.created")
+
     @MainActor static func present() {
         guard presented == nil, let top = WebLink.topViewController() else { return }
         let host = UIHostingController(rootView: StickerCreatorSheet())
@@ -408,7 +411,12 @@ private struct StickerSaveView: View {
             return
         }
         // A short note that it worked (owner 2026-10-18), over the chat it lands back in.
-        StickerCreatorDoor.close { StickerSavedNote.show() }
+        // And the chat underneath opens the sticker panel on it (owner 2026-10-18, build 969: after Save
+        // the text keyboard came up instead of the stickers, with the new one first among them).
+        StickerCreatorDoor.close {
+            StickerSavedNote.show()
+            NotificationCenter.default.post(name: StickerCreatorDoor.created, object: nil)
+        }
     }
 }
 

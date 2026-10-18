@@ -273,6 +273,15 @@ final class ChatComposerView: UIView {
         clipsToBounds = false
         backgroundColor = .clear
         build()
+        NotificationCenter.default.addObserver(self, selector: #selector(stickerCreated),
+                                               name: StickerCreatorDoor.created, object: nil)
+    }
+
+    /// A sticker was just made from this chat's panel: back to the panel, not the text keys.
+    @objc private func stickerCreated() {
+        guard window != nil else { return }
+        if !stickerPanelUp { setStickerPanel(true, reload: textView.isFirstResponder) }
+        if !textView.isFirstResponder { requestFocus(true) }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
