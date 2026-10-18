@@ -182,14 +182,23 @@ enum ChatService {
     /// Create a GROUP conversation: random doc id, N members, creator is the sole admin.
     /// Returns the new conversation id.
     @discardableResult
-    static func createGroup(title: String, memberIds: [String], avatarUrl: String? = nil) async throws -> String {
+    /// ⛔ FAST, THE REFERENCE APP'S WAY (owner 2026-10-18, build 969: "create takes many seconds").
+    /// The chat opens on the LOCAL write: Firestore applies it on this phone at once and sends it in
+    /// order, so the member names are read side by side and the group is returned without waiting for
+    /// the server's answer. The greeting, the timer and the photo follow in the background, in that
+    /// order, behind it. `disappearSeconds`: the creator's choice (0 = off), written in the same
+    /// record, so there is no second write or second notice for it.
+    static func createGroup(title: String, memberIds: [String], avatarUrl: String? = nil,
+                            disappearSeconds: Int = 0) async throws -> String {
         var memberSet = Set(memberIds); memberSet.insert(uid)
         let users = Array(memberSet)
 
         var names: [String: String] = [:]
         var photos: [String: String] = [:]
-        for u in users {
-            if let p = await ProfileStore.shared.fetch(u) {
+        await withTaskGroup(of: (String, UserProfile?).self) { g in
+            for u in users { g.addTask { (u, await ProfileStore.shared.fetch(u)) } }
+            for await (u, p) in g {
+                guard let p else { continue }
                 names[u] = p.name.isEmpty ? p.handle : p.name
                 if let ph = p.photoUrl, !ph.isEmpty { photos[u] = ph }
             }
@@ -213,11 +222,18 @@ enum ChatService {
             "updatedAt": FieldValue.serverTimestamp(),
         ]
         if let avatarUrl, !avatarUrl.isEmpty { data["avatarUrl"] = avatarUrl }
-        try await ref.setData(data)
-        // Greet the new group with a system event (also gives the chat list a real preview).
-        try? await writeSystemMessage(cid: ref.documentID, text: "\(myName()) created the group")
-        await applyDefaultDisappear(ref.documentID)
-        return ref.documentID
+        // Not awaited: the write is on this phone now and the listener sees it; the server's answer
+        // comes behind (a refusal is logged; the chat then simply does not stay).
+        ref.setData(data) { err in
+            if let err { print("[createGroup] write refused: \(err.localizedDescription)") }
+        }
+        let cid = ref.documentID
+        Task.detached(priority: .userInitiated) {
+            // Greet the new group with a system event (also gives the chat list a real preview).
+            try? await writeSystemMessage(cid: cid, text: "\(myName()) created the group")
+            if disappearSeconds > 0 { await setDisappear(cid, seconds: disappearSeconds) }
+        }
+        return cid
     }
 
     // MARK: - Media upload (the one path everything encrypted goes through)

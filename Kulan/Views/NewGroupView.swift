@@ -250,11 +250,14 @@ struct NewGroupView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Create") { create() }.disabled(!canCreate).fontWeight(.semibold)
+                // The spinner takes the word's place in the button (owner 2026-10-18), not the page's centre.
+                Button { create() } label: {
+                    if creating { ProgressView().tint(.white) } else { Text("Create").fontWeight(.semibold) }
+                }
+                .disabled(!canCreate)
                     .buttonStyle(.borderedProminent).tint(.blue)   // blue (owner 2026-10-18)
             }
         }
-        .overlay { if creating { ProgressView().controlSize(.large) } }
         // Straight to the name, as the page is for naming the group.
         // ⛔ AFTER THE PUSH, NOT DURING IT (owner 2026-10-18, build 969: "the keyboard comes from the
         // right"). Focus at 0.35 s landed inside the iOS 26 push, so the keyboard rode in sideways with
@@ -337,13 +340,14 @@ struct NewGroupView: View {
         guard !name.isEmpty else { return }
         creating = true; error = nil
         let timer = disappearSeconds
+        let photo = avatarData
         Task {
             do {
-                let cid = try await ChatService.createGroup(title: name, memberIds: order)
-                if let avatarData { try? await ChatService.uploadGroupAvatar(cid: cid, data: avatarData) }
-                // `createGroup` already set the Settings default; this writes only a different
-                // choice (setDisappear skips a value the chat already has).
-                await ChatService.setDisappear(cid, seconds: timer)
+                // The chat opens now; the photo goes up behind it, not before it (owner 2026-10-18).
+                let cid = try await ChatService.createGroup(title: name, memberIds: order, disappearSeconds: timer)
+                if let photo {
+                    Task.detached(priority: .utility) { _ = try? await ChatService.uploadGroupAvatar(cid: cid, data: photo) }
+                }
                 await MainActor.run {
                     creating = false
                     onOpen(ChatTarget(id: cid, name: name, photo: nil))

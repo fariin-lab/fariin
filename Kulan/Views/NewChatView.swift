@@ -183,7 +183,10 @@ struct NewChatView: View {
                 }
             }
             .sheet(isPresented: $showNewGroup) {
-                NewGroupView { t in showNewGroup = false; dismiss(); onOpen(t) }
+                // Both sheets go in ONE motion, straight into the group (owner 2026-10-18: the New
+                // Message page showed for a moment first). Dismissing this page takes the New Group
+                // sheet on top of it down with it.
+                NewGroupView { t in dismiss(); onOpen(t) }
             }
             .sheet(isPresented: $showNewContact) {
                 NewContactView { t in showNewContact = false; dismiss(); onOpen(t) }
