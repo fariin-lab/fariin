@@ -738,6 +738,12 @@ struct EmailAuthView: View {
     // @State bridged to first responder, not @FocusState (which SwiftUI would reset to nil).
     @State private var passwordFocused = false
     @State private var confirmFocused = false
+    /// ⛔ Where the input boxes sit on the page — owner 2026-10-18: tapping Password raised no
+    /// keyboard and tapping back to Email did nothing; only the keyboard's arrows moved between
+    /// them. The empty-space tap behind the content (ef64b6b4, 10-16) also fired for taps on the
+    /// boxes, so a box resigned the moment it took the keyboard. The tap now skips these frames.
+    @State private var boxFrames: [String: CGRect] = [:]
+    private static let pageSpace = "emailAuthPage"
 
     /// Sign-up asks ONE thing at a time: the address, then the password. Log in shows both.
     @State private var showPassword = false
@@ -876,6 +882,8 @@ struct EmailAuthView: View {
                                 .onChange(of: email) { emailInvalid = false }
                         }
                         .authField(focused: emailFocused, invalid: emailInvalid)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.pageSpace)) }
+                            action: { boxFrames["email"] = $0 }
 
                         if emailInvalid {
                             Text("Enter a correct email address, like name@example.com")
@@ -961,7 +969,14 @@ struct EmailAuthView: View {
                 // The ScrollView covers the page, so the page's own tap never fires: the empty
                 // space has to live inside the scroll content, at least one screen tall.
                 .frame(maxWidth: .infinity, minHeight: viewportHeight, alignment: .top)
-                .background(Color.clear.contentShape(Rectangle()).dismissesKeyboardOnTap())
+                .coordinateSpace(.named(Self.pageSpace))
+                .background(
+                    Color.clear.contentShape(Rectangle())
+                        .onTapGesture(coordinateSpace: .named(Self.pageSpace)) { p in
+                            if boxFrames.values.contains(where: { $0.contains(p) }) { return }
+                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                            to: nil, from: nil, for: nil)
+                        })
             }
             .scrollDismissesKeyboard(.interactively)
             .scrollBounceBehavior(.basedOnSize)
@@ -1070,6 +1085,8 @@ struct EmailAuthView: View {
             .accessibilityLabel(reveal ? "Hide password" : "Show password")
         }
         .authField(focused: focused.wrappedValue)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.pageSpace)) }
+            action: { boxFrames[placeholder] = $0 }
     }
 
     private func switchMode() {
