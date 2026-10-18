@@ -38,8 +38,8 @@ enum AgeCheck {
     /// What we act on. Deliberately three buckets and not a number, because the decisions the app
     /// makes are three-way and storing anything finer would be collecting more than we need.
     enum Band: String {
-        case child     // under 13. Below our own stated minimum.
-        case teen      // 13 to 17. Allowed, but not to be findable by strangers.
+        case child     // under 16. Below our own stated minimum (16 since 2026-10-18, was 13).
+        case teen      // 16 to 17. Allowed, but not to be findable by strangers.
         case adult     // 18 and over.
         /// They were asked and said no. A SETTLED ANSWER, not a missing one.
         ///
@@ -64,7 +64,7 @@ enum AgeCheck {
     /// Apple may OVERRIDE these based on local law where the person is, and that is the correct
     /// behaviour rather than something to work around: a country that sets 16 should get 16 without
     /// us shipping a table of every country's rules and keeping it right forever.
-    private static let lowerGate = 13
+    private static let lowerGate = 16   // owner 2026-10-18: the App Store rating is 16+
     private static let upperGate = 18
 
     /// Remembered so the system sheet is not put in front of the same person on every launch.

@@ -46,7 +46,8 @@ struct AgreementView: View {
                     .environment(\.openURL, OpenURLAction { url in WebLink.open(url); return .handled })
                     .multilineTextAlignment(.center)
                     .padding(.top, 8)
-                Text("You must be 13 or older to use Fariin.")
+                // 16, matching the App Store age rating (16+, set 2026-10-17) and the Terms.
+                Text("You must be 16 or older to use Fariin.")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
