@@ -1,5 +1,7 @@
 import Foundation
 import Observation
+import FirebaseAuth
+import FirebaseFirestore
 
 // ⛔ THE STICKER KEYBOARD'S SHELF — owner 2026-10-17. Three lists:
 //  - `packs`: the built-in packs, read once from the bundle (Resources/Stickers/packs/packs.json,
@@ -28,8 +30,161 @@ final class StickerStore {
     }
 
     private init() {
-        packs = Self.loadManifest()
+        shipped = Self.loadManifest()
+        remote = Self.loadCatalog()
+        rebuildPacks()
         load()
+        // The admin panel's catalog, live once someone is signed in (rules: signed-in read).
+        authHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
+            MainActor.assumeIsolated { self?.watchCatalog(signedIn: user != nil) }
+        }
+    }
+
+    // MARK: Packs from the admin panel (2026-10-18)
+
+    // ⛔ STICKER PACKS MANAGED ONLINE — owner 2026-10-18: "add, remove and manage packs from the admin
+    // panel without an app update; new stickers appear automatically; manage the existing ones too".
+    // `stickerPacks/{id}` (functions-admin spack* ops): for a pack that ships in the app, an OVERRIDE
+    // (title, order, on/off, hidden stickers); for a pack that lives on the server, the whole pack with
+    // a download link per sticker. A server sticker is still `.bundled` to everything else: a message
+    // carries its pack id, sticker id and that link (`StickerSend.publicURL`), so the receiving phone,
+    // even a build older than this, draws it from the link the way it draws any pack it lacks.
+    private struct RemotePack: Codable {
+        struct Item: Codable {
+            var id: String
+            var emoji: String?
+            var ext: String?
+            var url: String?
+            var animated: Bool?
+            var hidden: Bool?
+        }
+        var id: String
+        var kind: String
+        var title: String
+        var order: Int
+        var enabled: Bool
+        var deleted: Bool
+        var stickers: [Item]
+    }
+
+    private var shipped: [StickerPack] = []
+    private var remote: [RemotePack] = []
+    @ObservationIgnored private var authHandle: AuthStateDidChangeListenerHandle?
+    @ObservationIgnored private var catalogListener: ListenerRegistration?
+    @ObservationIgnored private var downloading: Set<String> = []
+
+    /// Bumped when a server sticker's file lands, so a grid can draw what was a shimmer.
+    private(set) var artVersion = 0
+    static let artArrived = Notification.Name("StickerStore.artArrived")
+
+    private func watchCatalog(signedIn: Bool) {
+        catalogListener?.remove(); catalogListener = nil
+        guard signedIn else { return }
+        catalogListener = Firestore.firestore().collection("stickerPacks").addSnapshotListener { [weak self] snap, _ in
+            guard let snap else { return }   // refused or offline: keep the last catalog
+            let packs: [RemotePack] = snap.documents.map { d in
+                let x = d.data()
+                let items: [RemotePack.Item] = ((x["stickers"] as? [[String: Any]]) ?? []).compactMap { st in
+                    guard let id = st["id"] as? String, !id.isEmpty else { return nil }
+                    return RemotePack.Item(id: id, emoji: st["emoji"] as? String, ext: st["ext"] as? String,
+                                           url: st["url"] as? String, animated: st["animated"] as? Bool,
+                                           hidden: st["hidden"] as? Bool)
+                }
+                return RemotePack(id: d.documentID, kind: x["kind"] as? String ?? "",
+                                  title: x["title"] as? String ?? "", order: x["order"] as? Int ?? 0,
+                                  enabled: x["enabled"] as? Bool ?? true, deleted: x["deleted"] as? Bool ?? false,
+                                  stickers: items)
+            }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.remote = packs
+                self.rebuildPacks()
+                Self.saveCatalog(packs)
+            }
+        }
+    }
+
+    /// The keyboard's packs: the app's own with their overrides, then the server's, in panel order.
+    private func rebuildPacks() {
+        var urls: [String: String] = [:]
+        var exts: [String: String] = [:]
+        var entries: [(order: Int, pack: StickerPack)] = []
+        var overrides: [String: RemotePack] = [:]
+        for r in remote where r.kind == "bundled" { overrides[r.id] = r }
+        for (i, p) in shipped.enumerated() {
+            guard let o = overrides[p.id] else { entries.append((i, p)); continue }
+            guard o.enabled else { continue }
+            let hidden = Set(o.stickers.filter { $0.hidden == true }.map(\.id))
+            let kept = p.stickers.filter { !hidden.contains($0.stickerId) }
+            if !kept.isEmpty {
+                entries.append((o.order, StickerPack(id: p.id, title: o.title.isEmpty ? p.title : o.title, stickers: kept)))
+            }
+        }
+        for r in remote where r.kind == "server" {
+            // Every link is kept, hidden and removed packs included: messages already sent still need them.
+            for it in r.stickers {
+                if let u = it.url, !u.isEmpty { urls["\(r.id)/\(it.id)"] = u }
+                exts["\(r.id)/\(it.id)"] = it.ext ?? "webp"
+            }
+            guard r.enabled, !r.deleted else { continue }
+            let items = r.stickers.filter { $0.hidden != true && !($0.url ?? "").isEmpty }.map {
+                Sticker(source: .bundled, packId: r.id, stickerId: $0.id, emoji: $0.emoji ?? "", animated: $0.animated ?? false)
+            }
+            if !items.isEmpty {
+                entries.append((r.order, StickerPack(id: r.id, title: r.title.isEmpty ? r.id : r.title, stickers: items)))
+            }
+        }
+        StickerCatalogLinks.set(urls, exts: exts)
+        packs = entries.enumerated().sorted { a, b in
+            a.element.order != b.element.order ? a.element.order < b.element.order : a.offset < b.offset
+        }.map(\.element.pack)
+    }
+
+    /// Server stickers' files on this phone (Caches: not account data, and fine to lose).
+    private static var catalogArtDir: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("StickerCatalog", isDirectory: true)
+    }
+    private static var catalogURL: URL { catalogArtDir.appendingPathComponent("catalog.json") }
+
+    private static func loadCatalog() -> [RemotePack] {
+        guard let d = try? Data(contentsOf: catalogURL) else { return [] }
+        return (try? JSONDecoder().decode([RemotePack].self, from: d)) ?? []
+    }
+    private static func saveCatalog(_ packs: [RemotePack]) {
+        guard let d = try? JSONEncoder().encode(packs) else { return }
+        try? FileManager.default.createDirectory(at: catalogArtDir, withIntermediateDirectories: true)
+        try? d.write(to: catalogURL, options: .atomic)
+    }
+
+    /// The local copy of a server sticker, or nil while it downloads (the tile shimmers meanwhile and
+    /// `artArrived` is posted when it lands).
+    private func catalogFile(for s: Sticker) -> URL? {
+        let key = "\(s.packId)/\(s.stickerId)"
+        guard let link = StickerCatalogLinks.url(key), let remoteURL = URL(string: link),
+              remoteURL.scheme == "https" else { return nil }
+        let ext = StickerCatalogLinks.ext(key) ?? "webp"
+        let dir = Self.catalogArtDir.appendingPathComponent(s.packId, isDirectory: true)
+        let file = dir.appendingPathComponent("\(s.stickerId).\(ext)")
+        if FileManager.default.fileExists(atPath: file.path) { return file }
+        guard !downloading.contains(key) else { return nil }
+        downloading.insert(key)
+        Task.detached(priority: .utility) {
+            var ok = false
+            if let (data, resp) = try? await URLSession.shared.data(from: remoteURL),
+               (resp as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty {
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                ok = (try? data.write(to: file, options: .atomic)) != nil
+            }
+            await MainActor.run {
+                StickerStore.shared.downloading.remove(key)
+                if ok {
+                    StickerStore.shared.artVersion &+= 1
+                    NotificationCenter.default.post(name: StickerStore.artArrived, object: key)
+                }
+            }
+        }
+        return nil
     }
 
     // MARK: Files
@@ -44,8 +199,9 @@ final class StickerStore {
     func fileURL(for s: Sticker) -> URL? {
         switch s.source {
         case .bundled:
-            return Bundle.main.url(forResource: s.stickerId, withExtension: "webp",
-                                   subdirectory: "packs/\(s.packId)")
+            if let u = Bundle.main.url(forResource: s.stickerId, withExtension: "webp",
+                                       subdirectory: "packs/\(s.packId)") { return u }
+            return catalogFile(for: s)   // a pack from the admin panel
         case .mine:
             let u = Self.mineDir.appendingPathComponent("\(s.stickerId).png")
             return FileManager.default.fileExists(atPath: u.path) ? u : nil
@@ -178,4 +334,18 @@ final class StickerStore {
             return present.isEmpty ? nil : StickerPack(id: p.id, title: p.title, stickers: present)
         }
     }
+}
+
+/// The download links of the panel's server stickers, by "pack/sticker". Read off the main actor too
+/// (a received sticker's bytes load in the background), so it is its own small locked box.
+enum StickerCatalogLinks {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var urls: [String: String] = [:]
+    nonisolated(unsafe) private static var exts: [String: String] = [:]
+
+    static func set(_ u: [String: String], exts e: [String: String]) {
+        lock.lock(); urls = u; exts = e; lock.unlock()
+    }
+    static func url(_ key: String) -> String? { lock.lock(); defer { lock.unlock() }; return urls[key] }
+    static func ext(_ key: String) -> String? { lock.lock(); defer { lock.unlock() }; return exts[key] }
 }

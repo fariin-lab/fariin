@@ -312,6 +312,20 @@ service firebase.storage {
     // download-token links the server mints in ostorySave, from the officialStoriesFeed callable.
     // Overwrite is allowed so a failed or replaced upload can be redone before the story is saved.
     // No client delete (the server keeps the files of a withdrawn story).
+    // 2026-10-18 sticker packs' art, uploaded by the admin panel page from the admin's browser:
+    // stickerPacks/{packId}/{stickerId}.webp | .png, at most 1 MB each. Only an admin writes; any
+    // signed-in phone reads (every keyboard shows them). No client delete: a removed pack keeps its
+    // files so stickers already sent still draw.
+    match /stickerPacks/{packId}/{file} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null
+        && firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid))
+        && file.matches('^[a-z0-9][a-z0-9_-]{0,39}[.](webp|png)$')
+        && request.resource.size <= 1024 * 1024
+        && (request.resource.contentType == 'image/webp' || request.resource.contentType == 'image/png');
+      allow delete: if false;
+    }
+
     match /officialStories/{storyId}/{file} {
       function isAdminUser() {
         return request.auth != null

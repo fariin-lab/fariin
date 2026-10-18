@@ -36,7 +36,9 @@ enum StickerSend {
 
     /// The public copy of a built-in sticker, published with the art (owner 2026-10-17).
     static func publicURL(_ s: Sticker) -> String {
-        "https://fariin.com/stickers/\(s.packId)/\(s.stickerId).webp"
+        // A pack from the admin panel (2026-10-18): its own download link, which every build can draw.
+        if let link = StickerCatalogLinks.url("\(s.packId)/\(s.stickerId)") { return link }
+        return "https://fariin.com/stickers/\(s.packId)/\(s.stickerId).webp"
     }
 
     /// What an older build reads instead of the sticker (see the note at the top).

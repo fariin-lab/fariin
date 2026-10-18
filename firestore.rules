@@ -1281,6 +1281,14 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // 2026-10-18 sticker packs: the catalog every phone's sticker keyboard reads (overrides of the
+    // built-in packs, and packs that live only on the server). Written ONLY by the admin panel's server
+    // (adminApi spackSave / spackRemove). Nothing in it is private.
+    match /stickerPacks/{id} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     match /announcements/{id} {
       // Everything here is a public broadcast, so every signed-in phone may read it. That also means
       // a SCHEDULED announcement is on the server, readable, from the moment it is written - the same
