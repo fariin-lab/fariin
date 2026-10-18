@@ -10,11 +10,16 @@ import SwiftUI
 struct NewGroupView: View {
     let onOpen: (ChatTarget) -> Void
     // `preselect` pre-includes a contact (e.g. "Add to a Group" from a friend's profile).
-    init(preselect: Person? = nil, onOpen: @escaping (ChatTarget) -> Void = { _ in }) {
+    // `initial` ticks several at once (owner 2026-10-18: "Create a similar group" on a group's info
+    // page hands over its members, me left out by the caller).
+    init(preselect: Person? = nil, initial: [Person] = [], onOpen: @escaping (ChatTarget) -> Void = { _ in }) {
         self.onOpen = onOpen
-        if let p = preselect {
-            _selected = State(initialValue: [p.id: p])
-            _order = State(initialValue: [p.id])
+        var people = initial
+        if let p = preselect, !people.contains(where: { $0.id == p.id }) { people.insert(p, at: 0) }
+        if !people.isEmpty {
+            _selected = State(initialValue: Dictionary(people.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }))
+            var seen = Set<String>()
+            _order = State(initialValue: people.map(\.id).filter { seen.insert($0).inserted })
         }
     }
 

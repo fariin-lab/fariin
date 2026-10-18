@@ -226,6 +226,13 @@ struct MediaGalleryView: View {
 
     /// Only what some tab can show goes to disk: a 400-message window is mostly plain chat text the
     /// gallery never draws, and that text has no reason to sit in a second file (2026-10-17).
+    /// Everything the five tabs would hold for these messages, counted by the page's own lists so the
+    /// group info page's "Media, Links and Files" row and this page can never disagree (2026-10-18).
+    static func itemCount(_ all: [Message], cid: String) -> Int {
+        let d = makeDerived(all.filter { !HiddenMessages.isHidden($0.id) }, filter: .all, cid: cid)
+        return d.allMediaItems.count + d.gifItems.count + d.voiceItems.count + d.fileItems.count + d.linkItems.count
+    }
+
     private static func galleryRelevant(_ all: [Message]) -> [Message] {
         all.filter { m in
             if m.viewOnce { return false }

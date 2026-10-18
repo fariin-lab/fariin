@@ -24,6 +24,34 @@ enum AutoSaveToPhotos {
     /// OFF by default. Writing into someone's camera roll is not a thing to assume.
     static var isOn: Bool { UserDefaults.standard.bool(forKey: defaultsKey) }
 
+    // MARK: - Per chat (owner 2026-10-18, group info page)
+    //
+    // A chat can follow the Settings switch (Default), or override it either way. Stored beside the
+    // global key ("chats.saveToPhotos.chat.<cid>"), absent = Default, so an untouched chat costs
+    // nothing and SessionWipe clears every override by the prefix.
+    enum ChatChoice: String, CaseIterable { case standard = "default", always, never }
+    static let chatKeyPrefix = defaultsKey + ".chat."
+    static func choice(for cid: String) -> ChatChoice {
+        ChatChoice(rawValue: UserDefaults.standard.string(forKey: chatKeyPrefix + cid) ?? "") ?? .standard
+    }
+    static func setChoice(_ c: ChatChoice, for cid: String) {
+        if c == .standard { UserDefaults.standard.removeObject(forKey: chatKeyPrefix + cid) }
+        else { UserDefaults.standard.set(c.rawValue, forKey: chatKeyPrefix + cid) }
+    }
+    /// What this chat does in the end: its own choice, else the Settings switch.
+    static func savesMedia(cid: String) -> Bool {
+        switch choice(for: cid) {
+        case .always: return true
+        case .never: return false
+        case .standard: return isOn
+        }
+    }
+    /// Sign-out: every chat's override goes with the account.
+    static func removeChatChoices() {
+        let d = UserDefaults.standard
+        for k in d.dictionaryRepresentation().keys where k.hasPrefix(chatKeyPrefix) { d.removeObject(forKey: k) }
+    }
+
     // MARK: - Already-saved ledger
     //
     // Re-opening a chat runs the same sweep again, so without this every old photo would land in
@@ -52,7 +80,7 @@ enum AutoSaveToPhotos {
 
     /// Offer one message to the camera roll. Returns at once; the fetch and the write run off-main.
     static func consider(_ m: Message, cid: String) {
-        guard isOn, !m.viewOnce else { return }
+        guard savesMedia(cid: cid), !m.viewOnce else { return }   // the chat's own choice first (2026-10-18)
         guard m.authorId != (AuthService.shared.uid ?? "") else { return }   // incoming only
         guard m.isImage || m.isVideo || m.isAlbum else { return }
         guard claim(m.id) else { return }

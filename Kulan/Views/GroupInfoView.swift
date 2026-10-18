@@ -1,16 +1,23 @@
 import SwiftUI
 import FirebaseFirestore
+import Photos
 
 // ⛔ GROUP INFO, IN THE PERSON PROFILE'S DESIGN — owner 2026-10-18: "make it exactly the design the
 // user profile is using". The 1:1 page's own pieces (`ProfileInfoRow`, `ProfileMediaCard`,
-// `PosterActionIcon`, `profileSurface`) on the same grey page: the ROUND photo always (never the big
-// photo header; that is a person's), name and member count, the round actions, the description as an
-// About card (the Fariin official chat's), one settings card, All Media, the members, and the red
-// card. Who-can-do-what, admins, the member list and invites live on Group Settings
-// (`GroupSettingsView`), not here. Edit changes the name and the photo (`EditGroupView`).
+// `profileSurface`) on the same grey page: the ROUND photo always (never the big photo header; that
+// is a person's), name and member count, the actions, the description as an About card (the Fariin
+// official chat's), the members, the media, one settings card, and the red card. Who-can-do-what,
+// admins, the member list and invites live on Group Settings (`GroupSettingsView`), not here. Edit
+// changes the name and the photo (`EditGroupView`).
+//
+// owner 2026-10-18 (upgrade): labelled tiles in place of the round actions (Call, Video, Share or
+// Add, Search), the ••• menu in the top bar with the QR of the invite link beside it, a pinned
+// Members · Media · Settings switcher, Member Changes, Media and Storage rows, Save to Photos per
+// chat, Encryption, Export Chat and Create a Similar Group. No empty description card any more:
+// an "Add group description" link under the count instead. The new pieces are in GroupInfoExtras.
 struct GroupInfoView: View {
     let cid: String
-    /// The chat's search, opened from the round Search action (the profile's own wiring).
+    /// The chat's search, opened from the Search tile (the profile's own wiring).
     let onSearch: (() -> Void)?
     init(cid: String, onSearch: (() -> Void)? = nil) { self.cid = cid; self.onSearch = onSearch }
     @Environment(\.dismiss) private var dismiss
@@ -46,6 +53,23 @@ struct GroupInfoView: View {
     @State private var avatarFrame: CGRect = .zero
     @State private var memberQuery = ""
     @State private var searchingMembers = false
+    // 2026-10-18 upgrade.
+    @State private var marks = GroupInfoScrollMarks()
+    @State private var showMemberChanges = false
+    @State private var showEncryption = false
+    @State private var showQR = false
+    @State private var showSimilar = false
+    @State private var saveChoice: AutoSaveToPhotos.ChatChoice = .standard
+    @State private var photosDenied = false
+    /// Media, links and files in this chat (the gallery's own count), nil until known.
+    @State private var galleryCount: Int?
+    /// The messages the storage figure was summed from, so Clear removes exactly those files.
+    @State private var storageMessages: [Message] = []
+    @State private var storage: ChatMediaStorage.Usage?
+    @State private var confirmClearStorage = false
+    @State private var exportFile: ExportFile?
+    @State private var exportError: String?
+    @State private var exporting = false
 
     struct MemberAction: Identifiable { let id: String; let name: String; let isAdmin: Bool }
 
@@ -60,8 +84,32 @@ struct GroupInfoView: View {
     private var title: String { conv?.title ?? "Group" }
     private var muted: Bool { conv?.isMuted(me, now: Date().timeIntervalSince1970 * 1000) ?? false }
     private var cardColor: Color { Color(uiColor: .secondarySystemGroupedBackground) }
+    /// The group's invite link, only while it has one (2026-10-18: a private group shows no Share/QR).
+    private var inviteLink: String? {
+        guard let code = conv?.inviteCode, !code.isEmpty,
+              let link = URL(string: KulanApp.groupLink(code: code)) else { return nil }
+        return link.absoluteString
+    }
 
     var body: some View {
+        AnyView(core)
+            .navigationDestination(isPresented: $showMemberChanges) { GroupMemberChangesView(cid: cid) }
+            .sheet(isPresented: $showAllMembers) { GroupMembersSheet(cid: cid) }
+            .sheet(isPresented: $showEncryption) { ChatEncryptionSheet() }
+            .sheet(isPresented: $showQR) {
+                if let link = inviteLink { GroupLinkQRSheet(title: title, link: link) }
+            }
+            .sheet(isPresented: $showSimilar) {
+                NewGroupView(initial: similarPeople) { t in openCreatedGroup(t) }
+            }
+            // Export Chat: the decrypted text is deleted the moment the share sheet closes.
+            .sheet(item: $exportFile, onDismiss: { DataExport.cleanup() }) { f in ActivityView(items: [f.url]) }
+            .modifier(GroupInfoUpgradeDialogs(
+                photosDenied: $photosDenied, exportError: $exportError,
+                storage: storage, confirmClearStorage: $confirmClearStorage, onClearStorage: clearStorage))
+    }
+
+    private var core: some View {
         page
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -114,6 +162,7 @@ struct GroupInfoView: View {
             .fullScreenCover(isPresented: $showCall) { GroupCallView() }
             // Local first (offline + instant), then the server; a failed load leaves what we have.
             .task {
+                saveChoice = AutoSaveToPhotos.choice(for: cid)
                 if let local = ThreadMessageCache.shared.messages(for: cid) {
                     let localMedia = local
                         .filter { $0.isImage || $0.isVideo || $0.isAlbum }
@@ -123,29 +172,47 @@ struct GroupInfoView: View {
                 }
                 if let fresh = await ChatService.sharedMedia(cid) { media = fresh }
             }
+            // The gallery count and the storage figure, again on every return (the gallery or a
+            // clear may have changed them).
+            .onAppear { Task { await loadMediaFigures() } }
     }
 
     private var page: some View {
-        ScrollView {
-            VStack(spacing: 20) { AnyView(sections) }
+        ScrollViewReader { proxy in
+            ScrollView {
+                // ⛔ THE SWITCHER IS A PINNED SECTION HEADER (owner 2026-10-18): it scrolls up with the
+                // page and then stays under the bar while the three sections pass beneath it.
+                LazyVStack(spacing: 20, pinnedViews: [.sectionHeaders]) {
+                    AnyView(topSections)
+                    Section {
+                        // ONE child, not lazy rows: all three anchors exist as soon as the section
+                        // does, so the switcher can scroll to one that is still off screen.
+                        VStack(spacing: 20) { AnyView(lowerSections) }
+                    } header: {
+                        GroupSectionSwitcher(marks: marks) { s in
+                            withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(s.anchorId, anchor: .top) }
+                        }
+                    }
+                }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
+            }
         }
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
     }
 
-    @ViewBuilder private var sections: some View {
+    @ViewBuilder private var topSections: some View {
         hero
         actionsRow
-        if showsAbout { aboutCard.padding(.top, 8) }
-        settingsCard.padding(.top, 8)
-        if !media.isEmpty {
-            ProfileMediaCard(cid: cid, media: media, cardColor: cardColor,
-                             onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
-                             onSeeAll: { showAllMedia = true })
-                .padding(.top, 8)
-        }
-        membersBlock.padding(.top, 12)
+        if !desc.isEmpty { aboutCard.padding(.top, 8) }
+    }
+
+    @ViewBuilder private var lowerSections: some View {
+        // Each anchor rides on top of its section with no gap of its own (the stack's spacing would
+        // otherwise add one per anchor).
+        VStack(spacing: 0) { GroupSectionAnchor(section: .members, marks: marks); membersBlock }
+        VStack(spacing: 0) { GroupSectionAnchor(section: .media, marks: marks); mediaBlock }
+        VStack(spacing: 0) { GroupSectionAnchor(section: .settings, marks: marks); settingsCard }
         dangerCard.padding(.top, 8)
         if let label = createdByLabel {
             Text(label).font(.footnote).foregroundStyle(.secondary)
@@ -166,43 +233,57 @@ struct GroupInfoView: View {
                 .onTapGesture {
                     if ProfilePhotoIndex.hasPicture(conv?.avatarUrl) { showGroupPhoto = true }
                 }
-            Text(title).font(.title.weight(.bold))
-                .lineLimit(2).multilineTextAlignment(.center)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(title).font(.title.weight(.bold))
+                    .lineLimit(2).multilineTextAlignment(.center)
+                // owner 2026-10-18: a small pencil beside the name for whoever may change it.
+                if canEditInfo {
+                    Button { showEdit = true } label: {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Edit name and picture")
+                }
+            }
             Text(conv?.memberCountLabel ?? " ")
                 .font(.body).foregroundStyle(.secondary)
                 .frame(minHeight: 22)
+            // No empty About card any more (owner 2026-10-18): a small link here, only for whoever
+            // may write the description.
+            if desc.isEmpty && canEditInfo {
+                Button { showEdit = true } label: {
+                    Text("Add group description").font(.subheadline.weight(.medium))
+                        .foregroundStyle(Color.accentColor)
+                }
+                .buttonStyle(.plain)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 20)
         .padding(.bottom, 14)
     }
 
-    /// The profile's five round actions: add a member, video call, mute, search, more.
+    /// The labelled tiles (owner 2026-10-18): Call and Video when group calls are on and I may start
+    /// one, Share while the group has a link (else Add for whoever may add), Search. Mute and the
+    /// rest are in the ••• menu of the top bar.
     private var actionsRow: some View {
-        HStack(spacing: 0) {
-            if canAdd {
-                Button { showAdd = true } label: { PosterActionIcon(icon: "ic_add_member", onPhoto: false) }
-                    .tint(.primary)
-                    .accessibilityLabel("Add Members")
-            }
+        HStack(spacing: 10) {
             if mayCall {
-                Button { startCall(video: true) } label: { PosterActionIcon(icon: "video.fill", onPhoto: false) }
-                    .tint(.primary)
-                    .accessibilityLabel("Video call")
+                GroupActionTile(icon: "ic_call_voice", title: "Call", cardColor: cardColor) { startCall(video: false) }
+                GroupActionTile(icon: "ic_call_video", title: "Video", cardColor: cardColor) { startCall(video: true) }
             }
-            Menu { muteMenuItems } label: {
-                PosterActionIcon(icon: muted ? "ic_bell" : "ic_bell_off", onPhoto: false)
+            // The app's own Send To sheet (owner 2026-10-18), not the system one: the link goes to
+            // chats here as a plain message of mine.
+            if let link = inviteLink {
+                GroupActionTile(icon: "square.and.arrow.up", title: "Share", cardColor: cardColor) { shareGroupText = link }
+            } else if canAdd {
+                GroupActionTile(icon: "ic_add_member", title: "Add", cardColor: cardColor) { showAdd = true }
             }
-            .tint(.primary)
-            .accessibilityLabel(muted ? "Unmute" : "Mute")
             if let onSearch {
-                Button { onSearch() } label: { PosterActionIcon(icon: "magnifyingglass", onPhoto: false) }
-                    .tint(.primary)
-                    .accessibilityLabel("Search")
+                GroupActionTile(icon: "magnifyingglass", title: "Search", cardColor: cardColor) { onSearch() }
             }
-            Menu { moreMenuItems } label: { PosterActionIcon(icon: "ellipsis", onPhoto: false) }
-                .tint(.primary)
-                .accessibilityLabel("More")
         }
     }
 
@@ -236,26 +317,28 @@ struct GroupInfoView: View {
         return "Muted until \(t)"
     }
 
-    /// The ••• menu, the profile's: housekeeping only. Leave / Report / Delete are on the red card.
+    /// The ••• menu. Leave / Report / Delete stay on the red card. Whoever may change group info gets
+    /// the edit items and the wallpaper first; everyone gets Mute, Export, Create Similar and Clear.
     @ViewBuilder private var moreMenuItems: some View {
-        if mayCall {
-            Button { startCall(video: false) } label: { Label("Voice Call", systemImage: "phone") }
-        }
-        // owner 2026-10-18: the group's wallpaper is everyone's, so only someone who may change
-        // group info sees this (same test as the name and photo; firestore.rules says the same).
         if canEditInfo {
-            Button { changeWallpaper() } label: {
-                Label { Text("Change Wallpaper") } icon: { MenuIcon("ic_wallpaper") }
+            Section {
+                Button { showEdit = true } label: { Label("Edit Name and Picture", systemImage: "pencil") }
+                // The description is edited on Edit Group with the bio's rules (2026-10-18).
+                Button { showEdit = true } label: { Label("Edit Description", systemImage: "text.alignleft") }
+                // owner 2026-10-18: the group's wallpaper is everyone's, so only someone who may change
+                // group info sees this (same test as the name and photo; firestore.rules says the same).
+                Button { changeWallpaper() } label: {
+                    Label { Text("Change Wallpaper") } icon: { MenuIcon("ic_wallpaper") }
+                }
             }
         }
-        // 2026-10-18 (owner): Share Group sends the group's invite link, and only exists while the
-        // group HAS one. A private group (no link) shows nothing here.
-        if let code = conv?.inviteCode, !code.isEmpty, let link = URL(string: KulanApp.groupLink(code: code)) {
-            // The app's own Send To sheet (owner 2026-10-18), not the system one: the link goes to
-            // chats here as a plain message of mine.
-            Button { shareGroupText = link.absoluteString } label: {
-                Label("Share Group", systemImage: "square.and.arrow.up")
+        Section {
+            Menu { muteMenuItems } label: {
+                Label { Text(muted ? "Unmute" : "Mute") } icon: { MenuIcon(muted ? "ic_menu_unmute" : "ic_menu_mute") }
             }
+            Button { exportChat() } label: { Label("Export Chat", systemImage: "square.and.arrow.down") }
+                .disabled(exporting)
+            Button { showSimilar = true } label: { Label("Create a Similar Group", systemImage: "person.2") }
         }
         Button { confirmClear = true } label: { Label("Clear Chat", systemImage: "trash") }
     }
@@ -274,15 +357,44 @@ struct GroupInfoView: View {
         }
     }
 
+    // MARK: Export, Create Similar
+
+    private func exportChat() {
+        exporting = true
+        let t = title
+        Task {
+            defer { exporting = false }
+            do { exportFile = ExportFile(url: try await DataExport.groupChatExport(cid: cid, title: t)) }
+            catch { exportError = error.localizedDescription }
+        }
+    }
+
+    /// The group's members, me left out, in the page's order, for New Group's ticks.
+    private var similarPeople: [NewGroupView.Person] {
+        GroupMembers.sorted(conv, me: me).filter { $0 != me }.map {
+            NewGroupView.Person(id: $0, name: conv?.names[$0] ?? "User", photo: conv?.photos[$0])
+        }
+    }
+
+    /// The new group opens the way a notification's chat does, once the sheet has gone.
+    private func openCreatedGroup(_ t: ChatTarget) {
+        showSimilar = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            let router = AppRouter.shared
+            router.pendingChatName = t.name
+            router.pendingChatPhoto = t.photo
+            router.pendingChatId = t.id
+        }
+    }
+
     // MARK: Cards
 
     private var desc: String { conv?.groupDescription ?? "" }
-    private var showsAbout: Bool { !desc.isEmpty || canEditInfo }
 
-    /// The description, as the Fariin official chat's About card. Tap to edit, for whoever may.
+    /// The description, as the Fariin official chat's About card (links and @usernames tappable).
+    /// Shown only when there IS one (owner 2026-10-18); tap to edit, for whoever may.
     private var aboutCard: some View {
-        ProfileAboutContent(text: desc.isEmpty ? "Add a group description" : desc, placeholder: desc.isEmpty,
-                            linked: true)
+        ProfileAboutContent(text: desc, linked: true)
             .profileSurface(plain: cardColor)
             .contentShape(Rectangle())
             // 2026-10-18 (owner): no small pop-up for this any more; the description is edited on the
@@ -300,6 +412,11 @@ struct GroupInfoView: View {
             rowDivider
             ProfileInfoRow(title: "Sounds & Notifications", icon: "ic_notifications",
                            value: muted ? "Muted" : "On") { showSounds = true }
+            // This phone only (2026-10-18): follows Settings > Chats, or overrides it for this chat.
+            rowDivider
+            saveToPhotosRow
+            rowDivider
+            encryptionRow
             // Invite links are an admin right (fix-all #226), so only that admin sees the row.
             if can(.inviteUsers) {
                 rowDivider
@@ -314,11 +431,128 @@ struct GroupInfoView: View {
         .profileSurface(plain: cardColor)
     }
 
+    /// Default / Always / Never as the system's own menu with its tick, on the row's look.
+    private var saveToPhotosRow: some View {
+        Menu {
+            Picker("Save to Photos", selection: Binding(get: { saveChoice }, set: { pickSaveChoice($0) })) {
+                ForEach(AutoSaveToPhotos.ChatChoice.allCases, id: \.self) { c in Text(c.label).tag(c) }
+            }
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "square.and.arrow.down").font(.system(size: 17)).frame(width: 26)
+                Text("Save to Photos")
+                Spacer()
+                Text(saveChoice.label).foregroundStyle(.secondary)
+                Image(systemName: "chevron.up.chevron.down").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 16).padding(.vertical, 18)
+            .contentShape(Rectangle())
+        }
+        .tint(.primary)
+    }
+
+    /// Encryption, with its one-line promise under the title (the row's two-line form).
+    private var encryptionRow: some View {
+        Button { showEncryption = true } label: {
+            HStack(spacing: 14) {
+                Image("ic_privacy").renderingMode(.template).resizable().scaledToFit()
+                    .frame(width: 21, height: 21)
+                    .frame(width: 26)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Encryption")
+                    Text("Messages are end-to-end encrypted. Tap to learn more.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 16).padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private var rowDivider: some View { Divider().padding(.leading, 56) }
 
     private var disappearLabel: String {
         let s = conv?.disappearSeconds ?? 0
         return s == 0 ? "Off" : ChatService.disappearShortLabel(s)
+    }
+
+    // MARK: Media
+
+    /// The All Media strip when there is any, then Media, Links and Files (opens the gallery) and
+    /// this chat's storage on this phone.
+    private var mediaBlock: some View {
+        VStack(spacing: 12) {
+            if !media.isEmpty {
+                ProfileMediaCard(cid: cid, media: media, cardColor: cardColor,
+                                 onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
+                                 onSeeAll: { showAllMedia = true })
+            }
+            VStack(spacing: 0) {
+                ProfileInfoRow(title: "Media, Links and Files", icon: "photo.on.rectangle",
+                               value: galleryCount.map { "\($0)" } ?? " ") { showAllMedia = true }
+                rowDivider
+                ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
+                               value: storage.map { Self.bytes($0.total) } ?? " ",
+                               chevron: (storage?.clearable ?? 0) > 0) {
+                    if (storage?.clearable ?? 0) > 0 { confirmClearStorage = true }
+                }
+            }
+            .profileSurface(plain: cardColor)
+        }
+    }
+
+    static func bytes(_ n: Int) -> String {
+        n == 0 ? "None" : ByteCountFormatter.string(fromByteCount: Int64(n), countStyle: .file)
+    }
+
+    /// The gallery's own list (memory, then its disk copy, else one read that also warms the gallery)
+    /// gives the count; that list plus the open chat's cached messages give the storage.
+    @MainActor private func loadMediaFigures() async {
+        var all = GalleryCache.seed(cid)
+        if all == nil, let fetched = await ChatService.galleryContent(cid) {
+            let shown = fetched.filter { !HiddenMessages.isHidden($0.id) }
+            GalleryCache.store[cid] = shown
+            all = shown
+        }
+        if let all { galleryCount = MediaGalleryView.itemCount(all, cid: cid) }
+        var byId: [String: Message] = [:]
+        for m in (all ?? []) + (ThreadMessageCache.shared.messages(for: cid) ?? []) { byId[m.id] = m }
+        let msgs = Array(byId.values)
+        storageMessages = msgs
+        storage = await Task.detached(priority: .utility) { ChatMediaStorage.measure(msgs) }.value
+    }
+
+    private func clearStorage() {
+        let msgs = storageMessages
+        ChatMediaStorage.clearCache(msgs)
+        // The cache deletes are queued on its own disk queue; measure after they have run.
+        Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            storage = await Task.detached(priority: .utility) { ChatMediaStorage.measure(msgs) }.value
+        }
+    }
+
+    // MARK: Save to Photos
+
+    /// Always asks for Photos access on the tap, as the Settings switch does (a refusal from a
+    /// background save would otherwise leave "Always" showing while nothing is saved).
+    private func pickSaveChoice(_ c: AutoSaveToPhotos.ChatChoice) {
+        AutoSaveToPhotos.setChoice(c, for: cid)
+        saveChoice = c
+        guard c == .always else { return }
+        Task { @MainActor in
+            let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard status != .authorized, status != .limited else { return }
+            AutoSaveToPhotos.setChoice(.standard, for: cid)
+            saveChoice = .standard
+            photosDenied = true
+        }
     }
 
     // MARK: Members
@@ -394,9 +628,25 @@ struct GroupInfoView: View {
                 }
                 .buttonStyle(.plain)
             }
+            // owner 2026-10-18: who joined, left, was removed or changed admin, newest first.
+            if memberQuery.isEmpty {
+                rowDivider
+                Button { showMemberChanges = true } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 17, weight: .medium)).foregroundStyle(.secondary)
+                            .frame(width: 40, height: 40)
+                        Text("View Member Changes").foregroundStyle(.primary)
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
         }
         .profileSurface(plain: cardColor)
-        .sheet(isPresented: $showAllMembers) { GroupMembersSheet(cid: cid) }
     }
     private static let membersShown = 10
 
@@ -451,9 +701,53 @@ struct GroupInfoView: View {
                 }
                 .tint(.primary)
             }
-        } else if canEditInfo {
-            ToolbarItem(placement: .topBarTrailing) { Button("Edit") { showEdit = true } }
+        } else {
+            // owner 2026-10-18: the QR of the invite link (only while there is one), then •••.
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if inviteLink != nil {
+                    Button { showQR = true } label: {
+                        Image("ic_qr").renderingMode(.template).resizable().scaledToFit()
+                            .frame(width: 20, height: 20)
+                    }
+                    .tint(.primary)
+                    .accessibilityLabel("QR code")
+                }
+                Menu { moreMenuItems } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 17, weight: .semibold))
+                }
+                .tint(.primary)
+                .accessibilityLabel("More")
+            }
         }
+    }
+}
+
+/// The upgrade's questions (2026-10-18): Photos access refused for Save to Photos, an export that
+/// failed, and clearing this chat's cached media.
+private struct GroupInfoUpgradeDialogs: ViewModifier {
+    @Binding var photosDenied: Bool
+    @Binding var exportError: String?
+    let storage: ChatMediaStorage.Usage?
+    @Binding var confirmClearStorage: Bool
+    let onClearStorage: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Photos access is off", isPresented: $photosDenied) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Allow Fariin to add to your Photos in the iPhone Settings app, then choose Always again.")
+            }
+            .alert("Could not export this chat", isPresented: Binding(
+                get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(exportError ?? "") }
+            .alert("Clear cached media?", isPresented: $confirmClearStorage) {
+                Button("Cancel", role: .cancel) {}
+                Button("Clear", role: .destructive) { onClearStorage() }
+            } message: {
+                Text("This frees \(GroupInfoView.bytes(storage?.clearable ?? 0)) of copies that download again when you open them. No messages are deleted, and photos, videos and voice messages kept only on this phone stay.")
+            }
     }
 }
 

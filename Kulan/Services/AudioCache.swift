@@ -50,6 +50,12 @@ enum AudioCache {
         for f in items { try? fm.removeItem(at: f) }
     }
 
+    /// One voice note's bytes on this phone, 0 when it is not here (a chat's "Storage used" row).
+    static func diskBytes(for messageId: String) -> Int {
+        guard let u = url(for: messageId) else { return 0 }
+        return (try? u.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+    }
+
     /// Total bytes on disk (Settings "storage used").
     static func diskBytes() -> Int {
         let fm = FileManager.default

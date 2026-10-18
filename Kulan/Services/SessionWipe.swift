@@ -76,6 +76,7 @@ enum SessionWipe {
         // Save to Photos and its saved-list are this account's choice, not the phone's.
         UserDefaults.standard.removeObject(forKey: AutoSaveToPhotos.defaultsKey)
         UserDefaults.standard.removeObject(forKey: AutoSaveToPhotos.defaultsKey + ".done")
+        AutoSaveToPhotos.removeChatChoices()   // the per-chat overrides (2026-10-18)
         ChatService.clearSharedMediaCache()
         ConversationsRepository.shared.reset()
         StoriesRepository.shared.reset()

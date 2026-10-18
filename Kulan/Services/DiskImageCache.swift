@@ -299,6 +299,29 @@ final class DiskImageCache {
         return items.reduce(0) { $0 + ((try? $1.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0) }
     }
 
+    /// One url's bytes on disk, for a chat's "Storage used" row (owner 2026-10-18, group info page).
+    /// `total` counts both kinds; `cache` only the re-downloadable `.img` copy, the part a per-chat
+    /// clear may take. Reads two file sizes, no image bytes.
+    func diskBytes(for url: String) -> (total: Int, cache: Int) {
+        func size(_ u: URL) -> Int { (try? u.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0 }
+        let cache = size(fileURL(url))
+        return (cache + size(fileURL(url, owned: true)), cache)
+    }
+
+    /// Removes the CACHE copy of one url and nothing else: an `.own` file is the phone's only copy
+    /// of a chat photo (the note above `cacheExt`), so a per-chat clear must never reach it.
+    func removeCacheCopy(url: String) {
+        io.async { [weak self] in
+            guard let self else { return }
+            let owned = FileManager.default.fileExists(atPath: self.fileURL(url, owned: true).path)
+            try? FileManager.default.removeItem(at: self.fileURL(url))
+            // The owned copy still answers isCached and the memory image is still that picture.
+            guard !owned else { return }
+            self.mem.removeObject(forKey: url as NSString)
+            self.indexRemove(self.key(url))
+        }
+    }
+
     /// Keep Media (Settings > Storage): drop cached files older than N days. Safe — this
     /// cache is re-downloadable by design (unlike the video/voice only-copies).
     func sweep(olderThanDays days: Int) {

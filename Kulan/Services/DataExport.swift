@@ -176,6 +176,49 @@ enum DataExport {
         return try write(out, name: "Fariin-Chat-\(safe.isEmpty ? "Export" : safe).txt")
     }
 
+    /// A GROUP's messages (owner 2026-10-18, group info page): the 1:1 export's rules (nothing before
+    /// my Clear, nothing deleted or hidden, a failed read throws), each line named after its author.
+    /// The newest `cap` only: a big group's whole history is no file to hand a share sheet, and the
+    /// header says when the cut was made.
+    @MainActor
+    static func groupChatExport(cid: String, title: String, cap: Int = 10_000) async throws -> URL {
+        guard let uid = Auth.auth().currentUser?.uid else { throw Failure.signedOut }
+        let conv = ConversationsRepository.shared.conversations.first { $0.id == cid }
+        let clearedMs = conv?.clearedAt[uid] ?? 0
+        let names = conv?.names ?? [:]
+
+        let snap: QuerySnapshot
+        do {
+            snap = try await Firestore.firestore().collection("conversations").document(cid)
+                .collection("messages").order(by: "createdAt", descending: true)
+                .limit(to: cap).getDocuments()
+        } catch {
+            throw Failure.unreadable
+        }
+        // Every author's key before any line is opened, as the 1:1 export preloads the other person's.
+        let authors = Set(snap.documents.compactMap { $0.data()["authorId"] as? String }).filter { !$0.isEmpty }
+        _ = await Crypto.shared.preloadKeys(Array(authors))
+
+        let df = Date.FormatStyle(date: .abbreviated, time: .shortened)
+        var out = "Fariin, group \(title)\n"
+        out += "Exported \(Date().formatted(df))\n"
+        if snap.documents.count >= cap { out += "The newest \(cap) messages\n" }
+        out += "\n"
+        for d in snap.documents.reversed() {
+            let m = Message(id: d.documentID, data: d.data(), cid: cid, crypto: Crypto.shared)
+            if m.createdAt.timeIntervalSince1970 * 1000 <= clearedMs { continue }
+            if m.deleted || HiddenMessages.isHidden(m.id) { continue }
+            if m.isSystem {
+                out += "[\(m.createdAt.formatted(df))] \(m.text)\n"
+                continue
+            }
+            let who = m.authorId == uid ? "You" : (names[m.authorId] ?? "Member")
+            out += "[\(m.createdAt.formatted(df))] \(who): \(describe(m))\n"
+        }
+        let safe = title.filter { $0.isLetter || $0.isNumber || $0 == " " }
+        return try write(out, name: "Fariin-Group-\(safe.isEmpty ? "Export" : safe).txt")
+    }
+
     private static func describe(_ m: Message) -> String {
         if m.isCall { return m.callVideo ? "[Video call]" : "[Voice call]" }
         if m.isAudio { return "[Voice message]" }
