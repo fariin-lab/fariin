@@ -2989,7 +2989,7 @@ enum ChatService {
             // Tombstone path: the marker is there now. Hard-delete path: sweep first, then delete.
             // Best-effort either way: a file that will not go never fails the delete.
             for u in blobs {
-                try? await Storage.storage().reference(forURL: u).delete()
+                try? await Storage.storage().safeReference(forURL: u)?.delete()
             }
             if !markedDeleted { try await ref.delete() }
             // ⛔ AND THE DECRYPTED COPIES ON THIS PHONE. The comment at the top of this method says
@@ -3263,7 +3263,7 @@ enum ChatService {
             // nothing else would ever delete them. Best effort, after the write lands.
             for key in ["imageUrl", "videoUrl"] {
                 if let s = removed[key] as? String, s.hasPrefix("http") {
-                    try? await Storage.storage().reference(forURL: s).delete()
+                    try? await Storage.storage().safeReference(forURL: s)?.delete()
                 }
             }
             return true
@@ -3873,5 +3873,19 @@ extension Message {
                                     "authorId": authorId, "width": it.width, "height": it.height]
             return Message(id: "\(id)-\(i)", data: d, cid: cid, crypto: Crypto.shared)
         }
+    }
+}
+
+// ⛔ BUILD 965 CRASH (owner's .ips, 2026-10-17 22:00): deleting a message ran `reference(forURL:)` on
+// one of its links, and that call does not throw on a link it cannot parse, it ASSERTS and kills the
+// app. A message can carry links that are not ours (a GIF from the GIF service, a sticker, a link
+// preview). Every Storage lookup by URL goes through this: our bucket's https link or gs://, else nil.
+extension Storage {
+    func safeReference(forURL url: String) -> StorageReference? {
+        guard let u = URL(string: url), let scheme = u.scheme?.lowercased() else { return nil }
+        if scheme == "gs" { return u.host?.isEmpty == false ? reference(forURL: url) : nil }
+        guard scheme == "https", u.host?.lowercased() == "firebasestorage.googleapis.com",
+              u.path.hasPrefix("/v0/b/"), u.path.contains("/o/") else { return nil }
+        return reference(forURL: url)
     }
 }

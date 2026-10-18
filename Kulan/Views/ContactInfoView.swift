@@ -20,6 +20,14 @@ private struct HeroOffsetKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
+/// Where the poster is on screen, kept OUTSIDE SwiftUI's change tracking (owner 2026-10-18, scroll
+/// lag). A plain class held by @State: same box for the life of the page, and writing into it
+/// redraws nothing. Read only when the photo viewer opens, which is a redraw of its own.
+private final class PosterRectBox {
+    var photo: CGRect = .zero
+    var art: CGRect = .zero
+}
+
 struct ContactInfoView: View {
     let cid: String
     let name: String
@@ -207,12 +215,19 @@ struct ContactInfoView: View {
     /// Live scroll position of the header, fed by HeroOffsetKey. Drives `collapse`.
     @State private var heroOffset: CGFloat = 0
     @State private var avatarFrame: CGRect = .zero   // hero avatar's global frame — the morph's start/end
-    @State private var posterRect: CGRect = .zero    // poster photo's global square — what the nav bar watches
+    /// ⛔ NOT @State ANY MORE — owner 2026-10-18, "profile lags when scrolling". Both rects are
+    /// global frames, so they change on EVERY frame of a scroll, and as @State each write re-ran this
+    /// whole page's body (and the poster's, shader and all) sixty times a second. They live in a
+    /// plain box now: nothing redraws when they move. The one thing the bar needs from them is a
+    /// yes/no, kept in `photoUnderBarFlag` and written only when it flips.
+    @State private var posterRects = PosterRectBox()
+    @State private var photoUnderBarFlag = true   // `.zero` counted as "under" before; same start
+    private var posterRect: CGRect { posterRects.photo }    // poster photo's global square
     /// ⚠️ WHERE THE PICTURE IS REALLY DRAWN, which is a quarter taller than that square and is the
     /// rect the full-screen viewer must fly out of. Growing out of the square meant the viewer's
     /// first frame was a DIFFERENT CROP of the same photo (`scaledToFill` shows less width in a 1:1
     /// box than in a 4:5 one), which is the small jump he has reported on opening AND on closing.
-    @State private var posterArtRect: CGRect = .zero
+    private var posterArtRect: CGRect { posterRects.art }
     @AppStorage(ProfileLayoutStyle.storageKey) private var profileLayout = ProfileLayoutStyle.modern.rawValue
     @State private var publicStory: StoryGroup?    // their active "Everyone" story, shown as a ring here
     /// Their story, from whichever of this screen's two circles was tapped: the hero avatar's ring or
@@ -359,7 +374,14 @@ struct ContactInfoView: View {
     /// as "no" would flash a bar background over the photo for one frame.
     private var photoUnderBar: Bool {
         guard useModernHeader else { return false }
-        return posterRect == .zero || posterRect.maxY > barBottom
+        return photoUnderBarFlag
+    }
+
+    /// The poster's square moved. Stored without a redraw; the bar flag is written only on a flip.
+    private func notePosterRect(_ r: CGRect) {
+        posterRects.photo = r
+        let under = r == .zero || r.maxY > barBottom
+        if under != photoUnderBarFlag { photoUnderBarFlag = under }
     }
 
     /// The rect the photo viewer grows out of and shrinks back into. The artwork's real frame
@@ -1966,12 +1988,13 @@ struct ContactInfoView: View {
             // The cover that came down with the record, so the header never has to draw a letter for
             // somebody who plainly has a photograph. See `UserProfile.photoThumb`.
             placeholder: headerThumb,
-            onPhotoRect: { posterRect = $0 },
+            onPhotoRect: { notePosterRect($0) },
             // The artwork's own rect, so the viewer starts on the picture that is on screen.
-            onArtworkRect: { posterArtRect = $0 },
-            // The poster reports the same number the old hero published, so the nav bar's title
-            // still rides in on `collapse` with nothing else changed.
-            onScroll: { heroOffset = $0 },
+            onArtworkRect: { posterRects.art = $0 },
+            // ⛔ NOT WRITTEN TO `heroOffset` — owner 2026-10-18, scroll lag. Nothing reads
+            // `collapse` (see its note), and writing the offset every frame re-ran this whole page
+            // for nothing. Put it back only together with something that reads it.
+            onScroll: { _ in },
             // A tap is the PHOTO, always. The story has its own control in the toolbar now, so the
             // "which did you mean" sheet the round avatar needed is gone from this path.
             onTap: { showProfilePhoto = true; chromeHiddenForPhoto = true },

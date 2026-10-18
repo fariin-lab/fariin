@@ -1501,8 +1501,15 @@ struct StoriesTabView: View {
         // asset when the name is not a symbol.
         // Fariin (official stories, 2026-10-16) has a chat but no profile: no View Profile.
         let official = OfficialChannel.isOfficial(g.authorUid)
-        return [CMAction(title: "Send Message", icon: "ic_menu_chat") { openStoryChat(g) }]
+        // 2026-10-18 (owner): nobody writes to Fariin, so its first entry OPENS its messages. People get
+        // the story viewer's per-person bell too (`StoryNotifyStore`, off by default).
+        let notifyOn = !official && StoryNotifyStore.shared.isOn(g.authorUid)
+        return [CMAction(title: official ? "Open Messages" : "Send Message", icon: "ic_menu_chat") { openStoryChat(g) }]
             + (official ? [] : [CMAction(title: "View Profile", icon: "ic_account") { profileGroup = g }])
+            + (official ? [] : [CMAction(title: notifyOn ? "Mute Notifications" : "Get Notifications",
+                                         icon: notifyOn ? "ic_bell_off" : "ic_notifications") {
+                StoryNotifyStore.shared.toggle(g.authorUid)
+            }])
             // The alert, not the hide: `StoryPrefs.setHidden` happens on the confirmation. See
             // `hideTarget`.
             + [CMAction(title: "Hide Stories", icon: "ic_eye_off", destructive: true) { hideTarget = g }]   // his eye, 2026-10-17

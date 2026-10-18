@@ -3880,6 +3880,16 @@ struct ThreadView: View {
         let mine = (ProfileStore.shared.me?.handle ?? "").lowercased()
         let asked = handle.trimmingCharacters(in: .whitespaces).lowercased()
             .trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+        // ⛔ THE KEYS GO DOWN NOW, BEFORE ANY PUSH — owner 2026-10-18: keyboard up, tap a profile
+        // link, swipe back: the chat showed a bare composer over an empty gap, then the keyboard rose
+        // and everything jumped once the swipe ended. Every branch below leaves this chat, and they
+        // only cleared `inputFocused` inside the Task, in the same SwiftUI pass as the push. The
+        // field's resign then landed after `viewWillDisappear`, where the list refuses keyboard
+        // hides (`isDisappearing`), and UIKit still saw it as the page's first responder, so it put
+        // it back after the pop. Resigning synchronously first, the way the header tap does above,
+        // lets the list settle at rest while it is still on screen and leaves UIKit nothing to restore.
+        inputFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         // ⛔ A PROFILE, NOT THE KEYBOARD — owner, 2026-10-03, later the same day: the keyboard was
         // the wrong answer. As in the reference app, your own name opens your own profile, and the
         // name of the person this chat is with opens their profile page; there is no chat to go to
@@ -8341,8 +8351,16 @@ struct ThreadView: View {
         }
         // The camera button in the field (2026-10-15), the way the GIF opens: keyboard first.
         a.camera = {
+            // 2026-10-18, owner: "camera opens late" with the keyboard up. It waited for `didHide`, so
+            // keyboard-down and camera-up played one after the other. The "+" / GIF timing now: 0.15 s
+            // into the keyboard's fall when it was up, at once when it was not.
+            let keyboardWasUp = keyboard.height > 0
             inputFocused = false
-            keyboard.onceHidden { showCamera = true }
+            if keyboardWasUp {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { showCamera = true }
+            } else {
+                showCamera = true
+            }
         }
         a.send = { if editingMessage != nil { saveEdit() } else { send() } }
         a.dismissBanner = { style in

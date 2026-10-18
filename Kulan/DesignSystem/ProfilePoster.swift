@@ -393,7 +393,9 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
             .onTapGesture(perform: onTap)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { r in
                 guard r.width > 0 else { return }
-                width = r.width
+                // Written only on a CHANGE (owner 2026-10-18, scroll lag): this reader fires on
+                // every frame of a scroll, and the width never changes while it does.
+                if width != r.width { width = r.width }
                 // At rest this is exactly the distance from the top of the SCREEN to the top of the
                 // scroll content, which is the amount the photo has to be pulled up by. Captured
                 // once: re-reading it while scrolling would drag the photo along with the finger
@@ -405,7 +407,11 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
                                    width: photoSide, height: photoSide))
             }
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(scrollSpace)).minY } action: { v in
-                stretch = max(0, v)   // positive only while the scroll rubber-bands
+                // Positive only while the scroll rubber-bands. Written only on a change (owner
+                // 2026-10-18): on an ordinary scroll it is 0 every frame, and rewriting 0 re-ran
+                // this header — and the two blur passes under it — for nothing.
+                let s = max(0, v)
+                if s != stretch { stretch = s }
                 onScroll(v)
             }
     }

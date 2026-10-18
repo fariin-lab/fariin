@@ -466,8 +466,9 @@ struct VerificationInfoSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 18) {
+        // No NavigationStack (2026-10-18): it had no title or buttons, only a bar height the fitted
+        // detent below could not see.
+        VStack(spacing: 18) {
                 Image(systemName: "checkmark.seal.fill")
                     .font(.system(size: 56))
                     .foregroundStyle(.white, Color(uiColor: VerifiedMark.color(for: record)))
@@ -489,26 +490,32 @@ struct VerificationInfoSheet: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
 
-                Spacer(minLength: 8)
-
                 // Owner 2026-10-17: no Done in the corner; one blue "Got it" bar at the bottom.
+                // 2026-10-18 (owner): it was too tall and too far from the text. `.borderedProminent`
+                // put its own padding round the 50 pt label; a plain 50 pt capsule now, 24 pt under
+                // the words, and the sheet is as tall as what it holds instead of a fixed 420.
                 Button { dismiss() } label: {
                     Text("Got it")
                         .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .frame(height: 50)
+                        .background(Capsule().fill(Color(hex: 0x2392FE)))
+                        .contentShape(Capsule())
                 }
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.capsule)
-                .tint(Color(hex: 0x2392FE))
+                .buttonStyle(.plain)
                 .padding(.horizontal, 20)
+                .padding(.top, 6)
                 .padding(.bottom, 12)
             }
             .frame(maxWidth: .infinity)
-            .navigationBarTitleDisplayMode(.inline)
-        }
-        .presentationDetents([.height(420)])
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+            .frame(maxHeight: .infinity, alignment: .top)
+        .presentationDetents([.height(max(300, contentHeight))])
     }
+
+    @State private var contentHeight: CGFloat = 380
 
     /// An older record, or one whose kind this build has not heard of. The mark still means the one
     /// thing every mark means, so say that rather than nothing.

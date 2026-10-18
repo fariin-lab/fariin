@@ -272,7 +272,7 @@ final class MediaDownloads {
     func fetchSize(_ url: String) async -> Int64? {
         if let s = knownSizes[url] { return s }
         guard url.contains("firebasestorage"),
-              let meta = try? await Storage.storage().reference(forURL: url).getMetadata() else { return nil }
+              let meta = try? await Storage.storage().safeReference(forURL: url)?.getMetadata() else { return nil }
         knownSizes[url] = meta.size
         return meta.size
     }
@@ -583,7 +583,7 @@ enum MediaFetch {
                   VideoCache.store(clear, for: messageId) else { return false }
             let me = await MainActor.run { AuthService.shared.uid }
             if cid.contains("_"), authorId != me {
-                try? await Storage.storage().reference(forURL: url).delete()
+                try? await Storage.storage().safeReference(forURL: url)?.delete()
             }
             return true
         }

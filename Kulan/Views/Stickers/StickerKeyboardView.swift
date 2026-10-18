@@ -98,6 +98,9 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         super.init(frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: height),
                    inputViewStyle: .keyboard)
         allowsSelfSizing = true
+        // The pack strip slides up out of the panel when the grid scrolls; it leaves at the panel's top
+        // edge, as the reference app's does, instead of drawing over the composer (owner 2026-10-18).
+        clipsToBounds = true
         autoresizingMask = [.flexibleWidth]
 
         tabs.selectedSegmentIndex = 1
@@ -118,10 +121,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         addSubview(tabThumb)
         addSubview(tabs)
 
-        editButton.setImage(UIImage(systemName: "pencil",
-                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .medium)), for: .normal)
-        editButton.tintColor = .secondaryLabel
-        editButton.accessibilityLabel = "Edit stickers"
+        setPen()
         editButton.addTarget(self, action: #selector(editTapped), for: .touchUpInside)
         addSubview(editButton)
 
@@ -174,11 +174,15 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         let bottomInset = max(safeAreaInsets.bottom, 8)
         // Inset by the side margin and clipped there (owner 2026-10-18: swiping the packs slid them past
         // the panel's rounded edge). The scroll view clips, so icons leave at the margin, not the corner.
-        strip.frame = CGRect(x: M.side, y: M.top, width: w - 50 - M.side, height: M.stripH)
-        editButton.frame = CGRect(x: w - 44 - 6, y: M.top + (M.stripH - M.tabsH) / 2, width: 44, height: M.tabsH)
+        let editW: CGFloat = 64
+        strip.frame = CGRect(x: M.side, y: M.top, width: w - editW - 12 - M.side, height: M.stripH)
+        editButton.frame = CGRect(x: w - editW - 8, y: M.top + (M.stripH - M.tabsH) / 2, width: editW, height: M.tabsH)
         layoutStrip()
         // 160 wide (owner 2026-10-18: "that bar is big"), was 220.
-        tabs.frame = CGRect(x: (w - 160) / 2, y: bounds.height - bottomInset - M.tabsH - 4, width: 160, height: M.tabsH)
+        // Its foot is where the composer's pill rests (owner 2026-10-18, "use the bottom space the
+        // composer uses"): 5 pt into the home-indicator strip, or 8 pt on a phone without one.
+        let footGap = safeAreaInsets.bottom > 0 ? safeAreaInsets.bottom - 5 : 8
+        tabs.frame = CGRect(x: (w - 160) / 2, y: bounds.height - footGap - M.tabsH, width: 160, height: M.tabsH)
         tabGlass.frame = tabs.frame.insetBy(dx: -3, dy: -3)
         tabGlass.layer.cornerRadius = tabGlass.bounds.height / 2
         layoutTabThumb()
@@ -241,10 +245,11 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             b.tintColor = .secondaryLabel
             switch sec.shelf {
             case .recents:
-                b.setImage(UIImage(systemName: "clock"), for: .normal)
+                b.setImage(UIImage(named: "ic_clock_outline")?.withRenderingMode(.alwaysTemplate), for: .normal)   // his icon (owner 2026-10-18)
                 b.accessibilityLabel = "Recently Used"
             case .favorites:
-                b.setImage(UIImage(systemName: "star"), for: .normal)
+                // His icon (owner 2026-10-18), not the system star.
+                b.setImage(UIImage(named: "ic_star_outline")?.withRenderingMode(.alwaysTemplate), for: .normal)
                 b.accessibilityLabel = "Favorites"
             case .pack(let p):
                 let player = StickerPlayerView()
@@ -346,6 +351,23 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     // MARK: Tabs
 
     /// GIFs show in the panel itself now (owner 2026-10-17); Search still hands over to the picker.
+    /// ⛔ THE SWITCH'S WHOLE ROW IS ITS OWN — owner 2026-10-18: reaching for GIFs / Stickers sent the
+    /// sticker under his finger. The reference app's panel keeps its bottom tab band out of the grid:
+    /// a touch anywhere across that band, edge to edge, belongs to the band. Here the band is the
+    /// switch's glass grown 10 pt on top and down to the foot; inside it a touch goes to the switch
+    /// (with some room around it) or nowhere, never through to a sticker.
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if !headerHidden, !editing, !tabs.isHidden, tabs.alpha > 0.01, point.y >= tabGlass.frame.minY - 10 {
+            if tabs.frame.insetBy(dx: -12, dy: -10).contains(point) {
+                // Land on the control at the nearest point, so a touch just beside it still switches.
+                let p = CGPoint(x: min(max(point.x, tabs.frame.minX + 1), tabs.frame.maxX - 1), y: tabs.frame.midY)
+                return tabs.hitTest(convert(p, to: tabs), with: event) ?? tabs
+            }
+            return self
+        }
+        return super.hitTest(point, with: event)
+    }
+
     /// The pill on the chosen half of the switch, set while the transform is identity (bounds-based).
     private func layoutTabThumb() {
         let half = tabs.bounds.width / 2
@@ -376,11 +398,17 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         if editing { endEditing() } else { beginEditing() }
     }
 
+    /// "Edit" / "Done" in a small Liquid Glass capsule (owner 2026-10-18: words, not the pen).
     private func setPen() {
-        let name = editing ? "checkmark" : "pencil"
-        editButton.setImage(UIImage(systemName: name,
-                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .medium)), for: .normal)
-        editButton.tintColor = editing ? .systemBlue : .secondaryLabel
+        var c = UIButton.Configuration.glass()
+        c.title = editing ? "Done" : "Edit"
+        c.cornerStyle = .capsule
+        c.baseForegroundColor = editing ? .systemBlue : .label
+        c.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12)
+        c.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { a in
+            var a = a; a.font = .systemFont(ofSize: 15, weight: .semibold); return a
+        }
+        editButton.configuration = c
         editButton.accessibilityLabel = editing ? "Done" : "Edit stickers"
     }
 
