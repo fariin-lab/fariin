@@ -248,6 +248,10 @@ enum UnknownChatArchiver {
     /// The key the Settings toggle binds to, so there is one spelling of it.
     static let defaultsKey = "chats.autoArchiveUnknown"
     private static let doneKey = "chats.autoArchiveUnknown.done"
+    /// When the Chat Key meaning started for this phone (ms): only chats opened with my key AFTER it
+    /// are moved. Set when the switch goes on, or on the first sweep of a phone that already had it
+    /// on, so a friend's months-old Chat Key chat is never archived by an app update.
+    static let sinceKey = "chats.autoArchiveUnknown.pinSince"
     private static let doneCap = 400
 
     private static var isOn: Bool { UserDefaults.standard.bool(forKey: defaultsKey) }
@@ -271,13 +275,19 @@ enum UnknownChatArchiver {
     /// Every chat-list snapshot. Cheap and off when the setting is off.
     static func sweep(_ convs: [Conversation]) {
         guard isOn else { return }
+        var since = UserDefaults.standard.double(forKey: sinceKey)
+        if since <= 0 {
+            since = Date().timeIntervalSince1970 * 1000
+            UserDefaults.standard.set(since, forKey: sinceKey)
+        }
         let me = ChatService.uid
         guard !me.isEmpty else { return }
         for c in convs {
             // ⛔ 2026-10-18, owner: chats opened WITH MY CHAT KEY by someone else (verifyChatPin
             // writes acceptedVia "pin" and acceptedBy = whoever typed it). A stranger's plain first
             // message is a Message Request already and is left where it is.
-            guard c.acceptedVia == "pin", !c.acceptedBy.isEmpty, c.acceptedBy != me else { continue }
+            guard c.acceptedVia == "pin", !c.acceptedBy.isEmpty, c.acceptedBy != me,
+                  c.acceptedAtMillis >= since else { continue }
             guard !c.isArchived(me) else { continue }
             guard claim(c.id) else { continue }
             // Archive AND mute, which is what the setting says it does. Archiving alone would

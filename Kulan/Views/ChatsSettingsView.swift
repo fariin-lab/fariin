@@ -74,6 +74,11 @@ struct ChatsSettingsView: View {
             // (see UnknownChatArchiver.sweep).
             Section {
                 Toggle("Automatically Archive", isOn: $autoArchiveUnknown).tint(.green)
+                    // From this moment on: chats already opened with the key stay where they are.
+                    .onChange(of: autoArchiveUnknown) { _, on in
+                        UserDefaults.standard.set(on ? Date().timeIntervalSince1970 * 1000 : 0,
+                                                  forKey: UnknownChatArchiver.sinceKey)
+                    }
             } header: {
                 Text("New Chats from Your Chat Key")
             } footer: {

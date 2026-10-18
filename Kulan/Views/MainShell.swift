@@ -2720,7 +2720,17 @@ struct ChatsView: View {
     private var getStartedContext: Bool {
         repo.hasLoaded && !repo.loadFailed && chatFilter == 0 && !selecting
             && chatSearch.trimmingCharacters(in: .whitespaces).isEmpty
+            && accountIsNew
             && !hasRealChat && !getStarted.isFinished(me)
+    }
+
+    /// ⛔ A NEW ACCOUNT ONLY (review 2026-10-18): an empty list is not proof of a new person. A slow
+    /// first load (the 3 s safety net marks it loaded with nothing in it), a new phone, or every chat
+    /// cleared would show the cards to someone who has used the app for months. Joined in the last
+    /// 7 days, and the profile must say so: unknown means no.
+    private var accountIsNew: Bool {
+        guard let joined = profile.me?.joinedAt else { return false }
+        return Date().timeIntervalSince(joined) < 7 * 86_400
     }
 
     private var getStartedCards: [GetStartedCard] {
