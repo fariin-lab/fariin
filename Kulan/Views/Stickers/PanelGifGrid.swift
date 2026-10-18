@@ -45,6 +45,10 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
     // The sticker strip's numbers (StickerKeyboardView.M): 40 pt cells, 4 apart, a 44 pt row.
     private enum M {
         static let barY: CGFloat = 4, barH: CGFloat = 36
+        /// The open search field and its X (system size). The resting row stays 36 tall.
+        static let searchH: CGFloat = 44
+        /// The resting Search pill's share of the row; the shelf icons sit after it (owner 2026-10-18).
+        static let restPillShare: CGFloat = 0.36, restPillMin: CGFloat = 120
         static let stripH: CGFloat = 44, stripCell: CGFloat = 40, stripSpacing: CGFloat = 4, side: CGFloat = 10
     }
 
@@ -55,7 +59,7 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
         grid = UICollectionView(frame: .zero, collectionViewLayout: layout)
         super.init(frame: frame)
         var cfg = UIButton.Configuration.gray()
-        cfg.title = "Search GIFs"
+        cfg.title = "Search"
         cfg.image = UIImage(systemName: "magnifyingglass")
         cfg.imagePadding = 6
         cfg.cornerStyle = .capsule
@@ -64,10 +68,16 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
         search.addAction(UIAction { [weak self] _ in self?.onSearch() }, for: .touchUpInside)
         addSubview(search)
 
-        // Active search capsule: same 36pt gray capsule look as the resting button, with X beside it.
-        searchPill.backgroundColor = .tertiarySystemFill
-        searchPill.layer.cornerRadius = 18
+        // ⛔ SEARCHING: LIQUID GLASS, APPLE SIZE — owner 2026-10-18 (build 969): the open search field
+        // and its X in glass, the system's 44 pt, as the reference app's full-screen GIF search has them.
+        searchPill.backgroundColor = .clear
+        searchPill.layer.cornerRadius = M.searchH / 2
         searchPill.layer.cornerCurve = .continuous
+        searchPill.clipsToBounds = true
+        let pillGlass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+        pillGlass.isUserInteractionEnabled = false
+        pillGlass.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        searchPill.addSubview(pillGlass)
         searchPill.alpha = 0
         searchPill.isUserInteractionEnabled = false
         searchIcon.tintColor = .secondaryLabel
@@ -90,11 +100,11 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
         searchPill.addSubview(searchField)
         addSubview(searchPill)
 
-        var xCfg = UIButton.Configuration.gray()
+        var xCfg = UIButton.Configuration.glass()
         xCfg.cornerStyle = .capsule
         xCfg.contentInsets = .zero
-        xCfg.image = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold))
-        xCfg.baseForegroundColor = .secondaryLabel
+        xCfg.image = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold))
+        xCfg.baseForegroundColor = .label
         cancelButton.configuration = xCfg
         cancelButton.hitOutset = UIEdgeInsets(top: 8, left: 6, bottom: 8, right: 10)
         cancelButton.accessibilityLabel = "Cancel search"
@@ -132,40 +142,49 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
         super.layoutSubviews()
         let w = bounds.width
         let gridTop: CGFloat
+        // ⛔ ONE ROW AT REST — owner 2026-10-18, his screenshot: a short "Search" pill on the left and
+        // the Recent / Favorites / Trending icons beside it, then the GIFs. Searching, the field and
+        // its X take the whole row (glass, 44 pt) and the icons step aside.
+        let restPillW = min(w - 20, max(M.restPillMin, (w * M.restPillShare).rounded()))
+        let rowY = M.barY
+        let rowH = max(M.barH, M.stripH)
         if searching {
             let barY: CGFloat = 8
-            let xSize: CGFloat = 36
+            let xSize = M.searchH
             let gap: CGFloat = 8
             let pillW = max(0, w - 20 - xSize - gap)
-            search.frame = CGRect(x: 10, y: barY, width: pillW, height: M.barH)
+            search.frame = CGRect(x: 10, y: barY, width: pillW, height: M.searchH)
             search.alpha = 0
-            searchPill.frame = CGRect(x: 10, y: barY, width: pillW, height: M.barH)
+            searchPill.frame = CGRect(x: 10, y: barY, width: pillW, height: M.searchH)
             searchPill.alpha = 1
             cancelButton.bounds = CGRect(x: 0, y: 0, width: xSize, height: xSize)
-            cancelButton.center = CGPoint(x: w - 10 - xSize / 2, y: barY + 18)
+            cancelButton.center = CGPoint(x: w - 10 - xSize / 2, y: barY + M.searchH / 2)
             cancelButton.alpha = 1
             cancelButton.transform = .identity
-            // The strip steps aside while searching: the results are the whole page.
-            strip.frame = CGRect(x: 0, y: barY + M.barH + 4, width: w, height: M.stripH)
+            strip.frame = CGRect(x: 10 + restPillW, y: rowY + (rowH - M.stripH) / 2, width: max(0, w - restPillW - 10), height: M.stripH)
             strip.alpha = 0
-            gridTop = barY + M.barH + 8
+            gridTop = barY + M.searchH + 8
         } else {
-            search.frame = CGRect(x: 10, y: M.barY, width: w - 20, height: M.barH)
+            search.frame = CGRect(x: 10, y: rowY + (rowH - M.barH) / 2, width: restPillW, height: M.barH)
             search.alpha = 1
             searchPill.frame = search.frame
             searchPill.alpha = 0
-            cancelButton.bounds = CGRect(x: 0, y: 0, width: 36, height: 36)
-            cancelButton.center = CGPoint(x: w - 10 + 18, y: M.barY + 18)
+            cancelButton.bounds = CGRect(x: 0, y: 0, width: M.searchH, height: M.searchH)
+            cancelButton.center = CGPoint(x: w - 10 + M.searchH / 2, y: rowY + rowH / 2)
             cancelButton.alpha = 0
             cancelButton.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
-            strip.frame = CGRect(x: 0, y: M.barY + M.barH + 2, width: w, height: M.stripH)
+            strip.frame = CGRect(x: 10 + restPillW + 8, y: rowY + (rowH - M.stripH) / 2,
+                                 width: max(0, w - restPillW - 28), height: M.stripH)
             strip.alpha = 1
-            gridTop = strip.frame.maxY + 2
+            gridTop = rowY + rowH + 4
         }
         strip.isUserInteractionEnabled = !searching
         layoutStrip()
-        searchIcon.frame = CGRect(x: 12, y: 9, width: 18, height: 18)
-        searchField.frame = CGRect(x: 36, y: 0, width: max(0, searchPill.bounds.width - 42), height: 36)
+        let ph = searchPill.bounds.height
+        // The glass is sized here, not by autoresizing from a zero-size start (the sticker X lesson).
+        for case let g as UIVisualEffectView in searchPill.subviews { g.frame = searchPill.bounds }
+        searchIcon.frame = CGRect(x: 14, y: (ph - 18) / 2, width: 18, height: 18)
+        searchField.frame = CGRect(x: 40, y: 0, width: max(0, searchPill.bounds.width - 48), height: ph)
         grid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, bounds.height - gridTop))
         grid.contentInset.bottom = max(safeAreaInsets.bottom, 8) + bottomRoom
         emptyLabel.frame = CGRect(x: 32, y: gridTop + 28, width: max(0, w - 64), height: 60)
@@ -204,7 +223,7 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
     }
 
     private func layoutStrip() {
-        var x = M.side
+        var x: CGFloat = 0
         let y = (M.stripH - M.stripCell) / 2
         for b in stripButtons {
             b.frame = CGRect(x: x, y: y, width: M.stripCell, height: M.stripCell)

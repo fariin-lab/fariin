@@ -116,8 +116,15 @@ enum OfficialStoryViews {
     static func presentSheet(rawId: String) {
         guard let host = WebLink.topViewController() else { return }
         NotificationCenter.default.post(name: .init("pauseStory"), object: "officialViews")
-        let vc = UIHostingController(rootView: OfficialStoryViewersSheet(rawId: rawId))
+        // ⛔ SOLID DARK GREY, NEVER GLASS (owner 2026-10-18, build 969: "the sheet is glass, I can't read
+        // the names"). Over a bright story the see-through sheet put white text on a light picture.
+        let ground = UIColor(white: 0.11, alpha: 1)
+        let vc = UIHostingController(rootView: OfficialStoryViewersSheet(rawId: rawId)
+            .preferredColorScheme(.dark)
+            .scrollContentBackground(.hidden)
+            .background(Color(uiColor: ground).ignoresSafeArea()))
         vc.overrideUserInterfaceStyle = .dark
+        vc.view.backgroundColor = ground
         if let sheet = vc.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
             sheet.prefersGrabberVisible = true

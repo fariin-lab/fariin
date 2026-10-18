@@ -1447,8 +1447,14 @@ extension ChatComposerView: UITextViewDelegate {
                 guard let self else { return }
                 self.gifSearchActive = false
                 self.textView.resignRequested = false
-                _ = self.textView.becomeFirstResponder()
-                self.textView.reloadInputViews()
+                // ⛔ NO SYSTEM SLIDE (owner 2026-10-18, build 969: "when it is short, another keyboard
+                // sheet comes in from the bottom"). Taking the responder back from the search field
+                // played the keyboard's own rise, its rounded backdrop coming up after the card had
+                // landed. The card's spring is the only motion; the panel is simply there under it.
+                UIView.performWithoutAnimation {
+                    _ = self.textView.becomeFirstResponder()
+                    self.textView.reloadInputViews()
+                }
             }
             panel.onDidCollapseGifSearch = { [weak self] in
                 // A beat after the card lands, so the panel's own keyboard notes have all arrived.
