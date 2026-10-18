@@ -108,7 +108,8 @@ private final class StickerCreatorFlow: NSObject, PHPickerViewControllerDelegate
                     preview.dismiss(animated: true) { self.start(from: self.host ?? WebLink.topViewController() ?? preview) }
                     return
                 }
-                preview.dismiss(animated: true) { self.finish() }
+                // A short note that it worked (owner 2026-10-18), over the chat it lands back in.
+                preview.dismiss(animated: true) { StickerSavedNote.show(); self.finish() }
             }
             picker.dismiss(animated: false) {
                 // ⛔ OVER, NOT FULL SCREEN — owner 2026-10-17: Save and Cancel both dropped him on the
@@ -249,9 +250,17 @@ private final class StickerPreviewController: UIViewController {
         x.tintColor = .white
         x.accessibilityLabel = "Close"
         x.addAction(UIAction { [weak self] _ in self?.onDone?(nil) }, for: .touchUpInside)
-        x.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
-        x.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // ⚠️ PINNED, NOT AUTORESIZED (owner 2026-10-18, "fix X button icon"): the glass starts at zero
+        // size, so a 44 pt button with flexible width/height grew to 88 when the glass reached 44 and
+        // the glyph sat in the clipped bottom-right corner, a white dot.
+        x.translatesAutoresizingMaskIntoConstraints = false
         cancel.contentView.addSubview(x)
+        NSLayoutConstraint.activate([
+            x.topAnchor.constraint(equalTo: cancel.contentView.topAnchor),
+            x.bottomAnchor.constraint(equalTo: cancel.contentView.bottomAnchor),
+            x.leadingAnchor.constraint(equalTo: cancel.contentView.leadingAnchor),
+            x.trailingAnchor.constraint(equalTo: cancel.contentView.trailingAnchor),
+        ])
 
         imageView.contentMode = .scaleAspectFit
 
@@ -324,5 +333,48 @@ private final class StickerPreviewController: UIViewController {
         saving = true
         save.isEnabled = false
         onDone?(png)
+    }
+}
+
+/// "Sticker saved": a glass pill under the status bar for a moment, then gone. Not a banner and not
+/// a sound; it only confirms the tap did something.
+@MainActor enum StickerSavedNote {
+    static func show(_ text: String = "Sticker saved") {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
+        let pill = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+        pill.isUserInteractionEnabled = false
+        pill.clipsToBounds = true
+        let icon = UIImageView(image: UIImage(systemName: "checkmark.circle.fill",
+                                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)))
+        icon.tintColor = .systemGreen
+        let label = UILabel()
+        label.text = text
+        label.font = .systemFont(ofSize: 15, weight: .semibold)
+        label.textColor = .label
+        let row = UIStackView(arrangedSubviews: [icon, label])
+        row.spacing = 8
+        row.alignment = .center
+        row.translatesAutoresizingMaskIntoConstraints = false
+        pill.contentView.addSubview(row)
+        NSLayoutConstraint.activate([
+            row.centerXAnchor.constraint(equalTo: pill.contentView.centerXAnchor),
+            row.centerYAnchor.constraint(equalTo: pill.contentView.centerYAnchor),
+        ])
+        let size = row.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
+        let w = size.width + 32, h: CGFloat = 44
+        pill.frame = CGRect(x: (window.bounds.width - w) / 2, y: window.safeAreaInsets.top + 8, width: w, height: h)
+        pill.layer.cornerRadius = h / 2
+        window.addSubview(pill)
+        pill.alpha = 0
+        pill.transform = CGAffineTransform(translationX: 0, y: -12)
+        UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0) {
+            pill.alpha = 1
+            pill.transform = .identity
+        }
+        UIView.animate(withDuration: 0.25, delay: 1.8, options: [.curveEaseIn], animations: {
+            pill.alpha = 0
+            pill.transform = CGAffineTransform(translationX: 0, y: -12)
+        }, completion: { _ in pill.removeFromSuperview() })
     }
 }

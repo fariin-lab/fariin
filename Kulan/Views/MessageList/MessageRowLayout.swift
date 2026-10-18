@@ -1232,6 +1232,16 @@ enum MessageRowLayout {
                                  over: mediaRect)
             plan.metaCapsule = r.capsule
             metaRect = r.text
+            // 2026-10-18 (owner): a sticker I MADE is a cut-out photo that fills its box to the
+            // bottom, so the time and the reaction sat on the face. They go on a line under it; the
+            // reaction follows the time (see the sticker branch in `decorations`). Pack art has its
+            // own clear margin and keeps the footer where it was.
+            if m.kind == .sticker, m.sticker?.source == .mine, b.quote == nil {
+                let dy = mediaRect.maxY + 4 - r.capsule.minY
+                plan.metaCapsule = r.capsule.offsetBy(dx: 0, dy: dy)
+                metaRect = r.text.offsetBy(dx: 0, dy: dy)
+                innerY = r.capsule.maxY + dy
+            }
         }
 
         if m.kind == .video {

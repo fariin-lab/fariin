@@ -73,6 +73,9 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     private let tabGlass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
 
     private let tabs = UISegmentedControl(items: ["GIFs", "Stickers"])
+    /// The chosen tab's pill. Our own: clearing the control's track (for the glass under it) also
+    /// takes away its selected thumb, so `selectedSegmentTintColor` alone draws nothing (owner 2026-10-18).
+    private let tabThumb = UIView()
     private let strip = UIScrollView()
     private var stripButtons: [UIButton] = []
     private let grid: UICollectionView
@@ -109,7 +112,10 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         addSubview(tabGlass)
         tabs.setBackgroundImage(UIImage(), for: .normal, barMetrics: .default)
         tabs.setDividerImage(UIImage(), forLeftSegmentState: .normal, rightSegmentState: .normal, barMetrics: .default)
-        tabs.selectedSegmentTintColor = UIColor.label.withAlphaComponent(0.12)
+        tabs.selectedSegmentTintColor = .clear
+        tabThumb.backgroundColor = UIColor.label.withAlphaComponent(0.12)
+        tabThumb.isUserInteractionEnabled = false
+        addSubview(tabThumb)
         addSubview(tabs)
 
         editButton.setImage(UIImage(systemName: "pencil",
@@ -138,6 +144,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         addSubview(gifGrid)
         // The switch floats over both grids (it sits at their foot now).
         bringSubviewToFront(tabGlass)
+        bringSubviewToFront(tabThumb)
         bringSubviewToFront(tabs)
 
         deleteBar.backgroundColor = .secondarySystemBackground
@@ -165,18 +172,22 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         // strip (with the pen at its end) on top, GIFs | Stickers floating over the grid at the foot.
         // Scrolling into the grid sends the strip up and the switch down; scrolling back brings both.
         let bottomInset = max(safeAreaInsets.bottom, 8)
-        strip.frame = CGRect(x: 0, y: M.top, width: w - 50, height: M.stripH)
+        // Inset by the side margin and clipped there (owner 2026-10-18: swiping the packs slid them past
+        // the panel's rounded edge). The scroll view clips, so icons leave at the margin, not the corner.
+        strip.frame = CGRect(x: M.side, y: M.top, width: w - 50 - M.side, height: M.stripH)
         editButton.frame = CGRect(x: w - 44 - 6, y: M.top + (M.stripH - M.tabsH) / 2, width: 44, height: M.tabsH)
         layoutStrip()
-        tabs.frame = CGRect(x: (w - 220) / 2, y: bounds.height - bottomInset - M.tabsH - 4, width: 220, height: M.tabsH)
+        // 160 wide (owner 2026-10-18: "that bar is big"), was 220.
+        tabs.frame = CGRect(x: (w - 160) / 2, y: bounds.height - bottomInset - M.tabsH - 4, width: 160, height: M.tabsH)
         tabGlass.frame = tabs.frame.insetBy(dx: -3, dy: -3)
         tabGlass.layer.cornerRadius = tabGlass.bounds.height / 2
+        layoutTabThumb()
         let up = headerHidden ? strip.frame.maxY : 0
         let down = headerHidden ? bounds.height - tabGlass.frame.minY : 0
         for v in [editButton, strip] as [UIView] { v.transform = CGAffineTransform(translationX: 0, y: -up) }
-        for v in [tabs, tabGlass] as [UIView] { v.transform = CGAffineTransform(translationX: 0, y: down) }
-        for v in [tabs, tabGlass, editButton, strip] as [UIView] { v.alpha = headerHidden ? 0 : 1 }
-        if editing { tabs.alpha = 0; tabGlass.alpha = 0 }   // the Delete bar takes the foot while editing
+        for v in [tabs, tabGlass, tabThumb] as [UIView] { v.transform = CGAffineTransform(translationX: 0, y: down) }
+        for v in [tabs, tabGlass, tabThumb, editButton, strip] as [UIView] { v.alpha = headerHidden ? 0 : 1 }
+        if editing { tabs.alpha = 0; tabGlass.alpha = 0; tabThumb.alpha = 0 }   // the Delete bar takes the foot while editing
         let gridTop = headerHidden ? 0 : strip.frame.maxY
         grid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, bounds.height - gridTop))
         gifGrid.frame = CGRect(x: 0, y: M.top, width: w, height: max(0, bounds.height - M.top))
@@ -255,7 +266,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     }
 
     private func layoutStrip() {
-        var x = M.side
+        var x: CGFloat = 0
         let y = (M.stripH - M.stripCell) / 2
         for b in stripButtons {
             b.frame = CGRect(x: x, y: y, width: M.stripCell, height: M.stripCell)
@@ -264,7 +275,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         if stripButtons.indices.contains(markedStrip) {
             stripHighlight.frame = stripButtons[markedStrip].frame.insetBy(dx: 4, dy: 4)
         }
-        strip.contentSize = CGSize(width: x + M.side - M.stripSpacing, height: M.stripH)
+        strip.contentSize = CGSize(width: x - M.stripSpacing, height: M.stripH)
     }
 
     private var markedStrip = -1
@@ -335,8 +346,19 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     // MARK: Tabs
 
     /// GIFs show in the panel itself now (owner 2026-10-17); Search still hands over to the picker.
+    /// The pill on the chosen half of the switch, set while the transform is identity (bounds-based).
+    private func layoutTabThumb() {
+        let half = tabs.bounds.width / 2
+        let x = tabs.center.x - half + (tabs.selectedSegmentIndex == 0 ? 0 : half)
+        tabThumb.bounds = CGRect(x: 0, y: 0, width: half, height: tabs.bounds.height).insetBy(dx: 1, dy: 1)
+        tabThumb.center = CGPoint(x: x + half / 2, y: tabs.center.y)
+        tabThumb.layer.cornerRadius = tabThumb.bounds.height / 2
+    }
+
     @objc private func tabChanged() {
         UISelectionFeedbackGenerator().selectionChanged()
+        UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) { self.layoutTabThumb() }
         let gifsOn = tabs.selectedSegmentIndex == 0
         if gifsOn { if editing { endEditing() }; gifGrid.loadIfNeeded() }
         UIView.transition(with: self, duration: 0.18, options: [.transitionCrossDissolve, .allowUserInteraction]) {
@@ -369,7 +391,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         setPen()
         updateDeleteButton()
         setNeedsLayout()
-        grid.reloadData()
+        refreshChecks()
     }
 
     private func endEditing() {
@@ -378,7 +400,17 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         deleteBar.isHidden = true
         setPen()
         setNeedsLayout()
-        grid.reloadData()
+        refreshChecks()
+    }
+
+    /// The pen only turns the tick circles on or off. A full reload re-decoded every sticker on screen,
+    /// which read as a flash (owner 2026-10-18); cells scrolled in later get the state in cellForItemAt.
+    private func refreshChecks() {
+        for ip in grid.indexPathsForVisibleItems {
+            guard !isCreate(ip), let s = sticker(at: ip), let c = grid.cellForItem(at: ip) as? StickerCell else { continue }
+            let shelf = sections[ip.section].shelf
+            c.setChecking(editing && shelf.editable, on: picked.contains("\(shelf.key)|\(s.id)"))
+        }
     }
 
     private func updateDeleteButton() {
