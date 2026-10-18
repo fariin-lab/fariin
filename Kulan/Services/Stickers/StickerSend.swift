@@ -11,6 +11,17 @@ import FirebaseFirestore
 //     fariin.com, read only by a phone whose pack lacks the file. Public art, so not sealed.
 //   • mine: the transparent PNG, sealed and uploaded on the photo path (`uploadEncrypted`) but never
 //     re-encoded to JPEG, which would drop the alpha. `imageUrl` + `enc` as a photo carries them.
+//     The file is already final when it is saved (StickerCreator: 512 px max side, scale 1), so a
+//     send never decodes, resizes or re-encodes it: read, seal, put.
+//
+// ⚠️ WHY EACH SEND OF ONE OF MINE UPLOADS AGAIN (owner 2026-10-18, speed pass). Reusing one sealed
+// file for every send is what the reference app does, and the crypto would allow it (the file key
+// is random and wrapped per message). Storage does not: every chat file is named after ITS message
+// (`chat/{cid}/{messageId}.enc`), and delete-for-everyone, disappearing messages and the server's
+// `purgeMessages` delete by that name. A second message pointing at the first one's file would go
+// blank the moment the first is deleted or expires. Doing it properly needs a sticker path of its
+// own in storage.rules plus a server clean-up that knows when the last message using it is gone,
+// which is a deploy, so it waits for the owner. Until then: one put of a 512 px PNG.
 //
 // OLDER BUILDS do not know the type. They fall through to drawing `text`, so `text` carries what
 // they should show: the sealed emoji for a built-in sticker (they draw it big, which is the same
@@ -67,6 +78,12 @@ enum StickerSend {
         let size = png.flatMap(pixelSize) ?? CGSize(width: 512, height: 512)
         let clientId = UUID().uuidString
         let group: [String]? = (conv?.isGroup == true) ? conv?.users : nil
+        // STICKER# (owner 2026-10-18, "custom stickers take too long"): ms since the tap for each
+        // step, so a slow send can be read off the phone. Sizes and times only, never content.
+        let trace = Trace()
+        let kind = sticker.source == .mine ? "mine" : "pack"
+        DiagLog.add("STICKER# start kind=\(kind) bytes=\(png?.count ?? 0) "
+                    + "px=\(Int(size.width))x\(Int(size.height)) group=\(group != nil)")
 
         Task { @MainActor in
             let reply = await replyRef(replyTo, cid: cid)
@@ -77,21 +94,45 @@ enum StickerSend {
             // The open chat claims it at once (`PendingOutbox.didAdd`), which is also what glides
             // the list to the newest message, as every other send does.
             PendingOutbox.add(pending, to: cid)
+            trace.mark("bubble")
             do {
                 try await write(sticker, png: png, size: size, cid: cid, reply: reply,
-                                clientId: clientId, group: group)
+                                clientId: clientId, group: group, trace: trace)
                 StickerStore.shared.noteUsed(sticker)
+                trace.mark("commit")
+                DiagLog.add("STICKER# done kind=\(kind) \(trace.line) ok=1")
             } catch {
                 // The red (!) on the bubble is the failure; the retry path is the resend from the keyboard.
                 PendingOutbox.markFailed(clientId: clientId)
+                DiagLog.add("STICKER# done kind=\(kind) \(trace.line) ok=0 err=\((error as NSError).domain)/\((error as NSError).code)")
             }
+        }
+    }
+
+    /// Timestamps for the STICKER# line. Times only.
+    final class Trace: @unchecked Sendable {
+        private let tap = Date()
+        private let lock = NSLock()
+        private var marks: [String: Int] = [:]
+        private var sentBytes = 0
+        func mark(_ step: String) {
+            let ms = Int(Date().timeIntervalSince(tap) * 1000)
+            lock.lock(); marks[step] = ms; lock.unlock()
+        }
+        func sent(_ n: Int) { lock.lock(); sentBytes = n; lock.unlock() }
+        /// -1 = the step did not happen (a pack sticker never uploads).
+        var line: String {
+            lock.lock(); defer { lock.unlock() }
+            let order = ["bubble", "members", "sealed", "upload", "commit"]
+            return order.map { "\($0)=\(marks[$0] ?? -1)" }.joined(separator: " ") + " sent=\(sentBytes)"
         }
     }
 
     // MARK: - The write
 
     private static func write(_ s: Sticker, png: Data?, size: CGSize, cid: String, reply: ReplyRef?,
-                              clientId: String, group: [String]?, forwarded: Bool = false) async throws {
+                              clientId: String, group: [String]?, forwarded: Bool = false,
+                              trace: Trace? = nil) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // the tap, before any upload
         let db = ChatService.db, uid = ChatService.uid
         var found = await ChatService.freshGroupMembers(cid, group)
@@ -100,17 +141,35 @@ enum StickerSend {
             found = snap?.data()?["users"] as? [String]
         }
         let members = found
+        trace?.mark("members")
         func seal(_ t: String) async throws -> String {
             if let members { return try await Crypto.shared.encryptForGroup(t, members: members) }
             return try await Crypto.shared.encryptForConversation(cid, t)
         }
 
         let convRef = db.collection("conversations").document(cid)
-        if members == nil {
-            let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
-            try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
-        }
         let msgRef = convRef.collection("messages").document()
+
+        // ⛔ NOTHING WAITS IN LINE BEHIND ANYTHING ELSE (owner 2026-10-18, "custom stickers take too
+        // long"). The old order was: the 1:1 conversation write, a full server round trip, THEN the
+        // seal, THEN the upload, THEN the two text seals, THEN the message. Now the file is sealed
+        // and its upload starts first; the conversation write and the text seals run underneath
+        // it, and the message waits only for the slowest of them. Same order the photo path uses
+        // (ChatService `ensureConv`). A built-in sticker has no file, so nothing is uploaded at all.
+        var sealedFile: (cipher: Data, meta: EncMeta)?
+        if s.source == .mine {
+            guard let png else { throw ChatService.ForwardError.sourceUnavailable }
+            if let members { sealedFile = try await Crypto.shared.encryptBytesForGroup(png, members: members) }
+            else { sealedFile = try await Crypto.shared.encryptBytes(cid, png) }
+            trace?.sent(sealedFile?.cipher.count ?? 0)
+        }
+        trace?.mark("sealed")
+        let fileCipher = sealedFile?.cipher, fileMeta = sealedFile?.meta   // constants: the child tasks below
+        let filePath = "chat/\(cid)/\(msgRef.documentID).enc"
+        async let uploaded = uploadIfAny(fileCipher, to: filePath, progressId: clientId)
+        // The 1:1 conversation doc carries `users`, which the message write needs; the Storage put
+        // does not (its rule reads the members from the 1:1 id itself).
+        async let convReady: Void = ensureOneToOne(convRef, cid: cid, uid: uid, isGroup: members != nil)
 
         var msg: [String: Any] = [
             "type": "sticker", "stickerPack": s.packId, "stickerId": s.stickerId,
@@ -122,21 +181,12 @@ enum StickerSend {
         if !s.emoji.isEmpty { msg["emoji"] = s.emoji }
         if forwarded { msg["forwarded"] = true }
 
+        // The text seals, under the upload.
         switch s.source {
         case .bundled:
             msg["imageUrl"] = publicURL(s)
             msg["text"] = try await seal(s.emoji.isEmpty ? oldBuildMarker : s.emoji)
         case .mine:
-            guard let png else { throw ChatService.ForwardError.sourceUnavailable }
-            let cipher: Data, meta: EncMeta
-            if let members { (cipher, meta) = try await Crypto.shared.encryptBytesForGroup(png, members: members) }
-            else { (cipher, meta) = try await Crypto.shared.encryptBytes(cid, png) }
-            let url = try await ChatService.uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).enc",
-                                                            progressId: clientId)
-            // The plaintext PNG under its url, so the confirmed bubble draws at once, alpha intact.
-            if let ui = UIImage(data: png) { DiskImageCache.shared.store(ui, data: png, for: url, owned: true) }
-            msg["imageUrl"] = url
-            msg["enc"] = meta.asDict
             msg["text"] = try await seal(oldBuildMarker)
         }
 
@@ -145,6 +195,18 @@ enum StickerSend {
             var e: [String: Any] = ["id": r.id, "authorId": r.authorId, "text": quote]
             if r.isStatus { e["isStatus"] = true }
             msg["replyTo"] = e
+        }
+
+        try await convReady
+        if s.source == .mine {
+            guard let url = try await uploaded, let fileMeta, let png else {
+                throw ChatService.ForwardError.sourceUnavailable
+            }
+            trace?.mark("upload")
+            // The plaintext PNG under its url, so the confirmed bubble draws at once, alpha intact.
+            if let ui = UIImage(data: png) { DiskImageCache.shared.store(ui, data: png, for: url, owned: true) }
+            msg["imageUrl"] = url
+            msg["enc"] = fileMeta.asDict
         }
 
         try Task.checkCancellation()
@@ -161,6 +223,21 @@ enum StickerSend {
         }
         batch.updateData(convUpdate, forDocument: convRef)
         try await batch.commit()
+    }
+
+    /// The sealed file's upload, or nil with no network at all (a built-in sticker has no file).
+    private static func uploadIfAny(_ cipher: Data?, to path: String, progressId: String) async throws -> String? {
+        guard let cipher else { return nil }
+        return try await ChatService.uploadEncrypted(cipher, to: path, progressId: progressId)
+    }
+
+    /// A 1:1 chat's conversation doc (`users` + `updatedAt`), which the message write needs. A group's
+    /// doc exists from the moment the group is made, so there is nothing to write.
+    private static func ensureOneToOne(_ convRef: DocumentReference, cid: String, uid: String,
+                                       isGroup: Bool) async throws {
+        guard !isGroup else { return }
+        let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
+        try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
     }
 
     /// Forward (ChatService.forwardMessage). A built-in sticker is re-sent by name; one I made is
