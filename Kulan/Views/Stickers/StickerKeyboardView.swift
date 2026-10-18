@@ -90,6 +90,17 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     /// "<shelf key>|<sticker id>": the same sticker can sit in both shelves and is picked per shelf.
     private var picked: Set<String> = []
     private let editButton = UIButton(type: .system)
+    /// The glass under Edit / Done: its own view, sized to the button's slot. The system glass button
+    /// style keeps its own minimum height, so squeezed into this 32 pt slot it drew its title twice,
+    /// the second copy sliding out to the right (owner 2026-10-18, build 969).
+    private let editGlass: UIVisualEffectView = {
+        let g = UIGlassEffect(style: .regular)
+        g.isInteractive = true
+        let v = UIVisualEffectView(effect: g)
+        v.isUserInteractionEnabled = false
+        v.clipsToBounds = true
+        return v
+    }()
     private let tabGlass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
 
     private let tabs = UISegmentedControl(items: ["GIFs", "Stickers"])
@@ -245,6 +256,9 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         let editW: CGFloat = 64
         strip.frame = CGRect(x: M.side, y: M.top, width: w - editW - 12 - M.side, height: M.stripH)
         editButton.frame = CGRect(x: w - editW - 8, y: M.top + (M.stripH - M.tabsH) / 2, width: editW, height: M.tabsH)
+        if editGlass.superview !== editButton { editButton.insertSubview(editGlass, at: 0) }
+        editGlass.frame = editButton.bounds
+        editGlass.layer.cornerRadius = editButton.bounds.height / 2
         layoutStrip()
         // 160 wide (owner 2026-10-18: "that bar is big"), was 220.
         // Its foot is where the composer's pill rests (owner 2026-10-18, "use the bottom space the
@@ -634,16 +648,21 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
 
     /// "Edit" / "Done" in a small Liquid Glass capsule (owner 2026-10-18: words, not the pen).
     private func setPen() {
-        var c = UIButton.Configuration.glass()
+        var c = UIButton.Configuration.plain()
         c.title = editing ? "Done" : "Edit"
-        c.cornerStyle = .capsule
         c.baseForegroundColor = editing ? .systemBlue : .label
-        c.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12)
+        c.contentInsets = .zero
+        c.titleLineBreakMode = .byClipping
         c.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { a in
             var a = a; a.font = .systemFont(ofSize: 15, weight: .semibold); return a
         }
-        editButton.configuration = c
+        // No cross-fade between the two words: one title, swapped in place.
+        UIView.performWithoutAnimation {
+            editButton.configuration = c
+            editButton.layoutIfNeeded()
+        }
         editButton.accessibilityLabel = editing ? "Done" : "Edit stickers"
+        if editGlass.superview !== editButton { editButton.insertSubview(editGlass, at: 0) }
     }
 
     private func beginEditing() {
