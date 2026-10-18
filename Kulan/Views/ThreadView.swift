@@ -3556,6 +3556,11 @@ struct ThreadView: View {
                 Task { @MainActor in showJumpToast(await StickerSend.toggleFavorite(m, cid: cid)) }
             })
         }
+        if let fav = GifFavorites.menuTitle(m) {   // owner 2026-10-18: the panel's GIF Favorites
+            items.append(UIAction(title: fav, image: UIImage(systemName: fav.hasPrefix("Remove") ? "star.slash" : "star")) { _ in
+                showJumpToast(GifFavorites.toggle(m))
+            })
+        }
         items.append(UIAction(title: "Select", image: UIImage(systemName: "checkmark.circle")) { _ in
             setUIMode(.selection); selectedIds = [m.id]   // their order: mode first, then add the item
         })
@@ -3712,6 +3717,11 @@ struct ThreadView: View {
         if let fav = StickerSend.favoriteTitle(m) {
             out.append(CMAction(title: fav, icon: fav.hasPrefix("Remove") ? "star.slash" : "star") {
                 Task { @MainActor in showJumpToast(await StickerSend.toggleFavorite(m, cid: cid)) }
+            })
+        }
+        if let fav = GifFavorites.menuTitle(m) {   // owner 2026-10-18: the panel's GIF Favorites
+            out.append(CMAction(title: fav, icon: fav.hasPrefix("Remove") ? "star.slash" : "star") {
+                showJumpToast(GifFavorites.toggle(m))
             })
         }
         out.append(CMAction(title: "Select", icon: "checkmark.circle") {

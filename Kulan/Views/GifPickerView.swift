@@ -4,12 +4,14 @@ import SwiftUI
 // grid. The small "Powered by GIPHY" attribution is required by Giphy's free terms.
 // The GIFs this account actually sends, newest first — the "Recently used" row (user reference:
 // every big sticker/GIF panel has one). Local to the device, capped, deduped by url.
+// Owner 2026-10-18 (panel Recent / Favorites tabs): kept 40 now, and per account, so a second
+// account signed in on this phone starts with its own lists.
 enum GifRecents {
-    private static let key = "gifRecents.v1"
-    private static let cap = 24
+    private static let store = GifListStore(base: "gifRecents.v1")
+    private static let cap = 40
 
     static func all() -> [GiphyService.Gif] {
-        (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? []).compactMap { d in
+        store.read().compactMap { d in
             guard let url = d["u"] as? String else { return nil }
             return GiphyService.Gif(id: "recent-\(url)", url: url,
                                     width: d["w"] as? Double ?? 1, height: d["h"] as? Double ?? 1)
@@ -17,17 +19,40 @@ enum GifRecents {
     }
 
     static func note(_ g: GiphyService.Gif) {
-        var list = (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? [])
-            .filter { ($0["u"] as? String) != g.url }
+        var list = store.read().filter { ($0["u"] as? String) != g.url }
         list.insert(["u": g.url, "w": g.width, "h": g.height], at: 0)
-        UserDefaults.standard.set(Array(list.prefix(cap)), forKey: key)
+        store.write(Array(list.prefix(cap)))
     }
 
     /// Take one back out. Recents fill themselves without being asked, so there has to be a way to
     /// say "not that one" — otherwise a GIF you sent once by mistake sits in the row for good.
     static func forget(_ url: String) {
-        let list = (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? [])
-            .filter { ($0["u"] as? String) != url }
+        store.write(store.read().filter { ($0["u"] as? String) != url })
+    }
+}
+
+/// One GIF list in UserDefaults under "<base>.<uid>". The first read for an account adopts the old
+/// device-wide list (from before lists were per account) and clears it, so nothing already kept is
+/// lost and it lands on exactly one account.
+struct GifListStore {
+    let base: String
+
+    private var key: String {
+        let uid = ChatService.uid
+        return uid.isEmpty ? base : "\(base).\(uid)"
+    }
+
+    func read() -> [[String: Any]] {
+        let d = UserDefaults.standard
+        let k = key
+        if let list = d.array(forKey: k) as? [[String: Any]] { return list }
+        guard k != base, let legacy = d.array(forKey: base) as? [[String: Any]] else { return [] }
+        d.set(legacy, forKey: k)
+        d.removeObject(forKey: base)
+        return legacy
+    }
+
+    func write(_ list: [[String: Any]]) {
         UserDefaults.standard.set(list, forKey: key)
     }
 }
@@ -37,11 +62,11 @@ enum GifRecents {
 /// something you go back to and a row that reshuffles under your finger every time you use it is
 /// not a shelf, it is another recents row.
 enum GifFavorites {
-    private static let key = "gifFavorites.v1"
+    private static let store = GifListStore(base: "gifFavorites.v1")
     private static let cap = 60
 
     static func all() -> [GiphyService.Gif] {
-        (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? []).compactMap { d in
+        store.read().compactMap { d in
             guard let url = d["u"] as? String else { return nil }
             return GiphyService.Gif(id: "fav-\(url)", url: url,
                                     width: d["w"] as? Double ?? 1, height: d["h"] as? Double ?? 1)
@@ -49,21 +74,35 @@ enum GifFavorites {
     }
 
     static func contains(_ url: String) -> Bool {
-        (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? [])
-            .contains { ($0["u"] as? String) == url }
+        store.read().contains { ($0["u"] as? String) == url }
     }
 
     static func add(_ g: GiphyService.Gif) {
-        var list = (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? [])
+        var list = store.read()
         guard !list.contains(where: { ($0["u"] as? String) == g.url }) else { return }
         list.append(["u": g.url, "w": g.width, "h": g.height])
-        UserDefaults.standard.set(Array(list.prefix(cap)), forKey: key)
+        store.write(Array(list.prefix(cap)))
     }
 
     static func remove(_ url: String) {
-        let list = (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? [])
-            .filter { ($0["u"] as? String) != url }
-        UserDefaults.standard.set(list, forKey: key)
+        store.write(store.read().filter { ($0["u"] as? String) != url })
+    }
+
+    // Long press on a GIF in the chat (owner 2026-10-18), mine or theirs: the url is a public Giphy
+    // link, so keeping it is just keeping the link.
+
+    /// The menu row's title for this message, or nil when it is not a GIF.
+    static func menuTitle(_ m: Message) -> String? {
+        guard m.isGif, !m.deleted, let url = m.imageUrl else { return nil }
+        return contains(url) ? "Remove from Favorites" : "Add to Favorites"
+    }
+
+    /// Adds or removes, and returns the confirmation to show.
+    static func toggle(_ m: Message) -> String {
+        guard m.isGif, let url = m.imageUrl else { return "Couldn't save this GIF" }
+        if contains(url) { remove(url); return "Removed from Favorites" }
+        add(GiphyService.Gif(id: "fav-\(url)", url: url, width: m.width ?? 200, height: m.height ?? 200))
+        return "Added to Favorites"
     }
 }
 

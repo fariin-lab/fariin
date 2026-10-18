@@ -5,8 +5,12 @@ import UIKit
 // and the bar (pinned to keyboardLayoutGuide) rides it for free. Shape and numbers from the
 // reference app: a "GIFs | Stickers" switch on top, a strip of pack icons, then one scrolling grid
 // with a section per shelf (Recently Used, Favorites, each pack). Only tiles on screen animate.
-// GIFs keeps today's picker (its search field needs the real keyboard, which an inputView cannot
-// host), so that tab hands back to the old GIF path.
+// ⛔ GIF SEARCH GROWS THIS SHEET — owner 2026-10-18 (5775aae8 restored onto today's panel): every view
+// lives in `cardView`. Tapping Search GIFs lifts the card out of the keyboard into an overlay on the
+// app window and springs it to full screen; the search field there takes the system keyboard (an
+// inputView cannot host its own text field's keys). X lifts the card into a window above the
+// keyboard, gives the composer its panel back, and springs the card down onto it at the panel's
+// own height before putting it home. See `expandForGifSearch` / `collapseGifSearch`.
 
 /// The panel's height: the last real keyboard's, so the swap does not jump; a per-phone default
 /// until a keyboard has been seen.
@@ -41,11 +45,27 @@ enum StickerPanelHeight {
 final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
     var onSend: (Sticker) -> Void = { _ in }
     var onCreate: () -> Void = {}
-    /// Search GIFs: the composer closes the panel and opens the GIF picker (searching needs keys).
-    var onGifs: () -> Void = {}
     /// A GIF tapped in the panel's own GIFs tab.
     var onSendGif: (GiphyService.Gif) -> Void = { _ in }
+    /// Host window and focus hand-offs for growing GIF search to full screen in place.
+    var hostWindow: () -> UIWindow? = { nil }
+    var onTouch: () -> Void = {}
+    var onBeginGifSearch: () -> Void = {}
+    var onWillCollapseGifSearch: () -> Void = {}
+    var onRestorePanelFocus: () -> Void = {}
+    var onDidCollapseGifSearch: () -> Void = {}
+
+    /// Everything the panel draws. It sits in the panel at rest and leaves it only for GIF search.
+    private let cardView = UIView()
+    /// The card's own background while it is out of the keyboard (the panel's is the keyboard's).
+    private let backdrop = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterial))
     private let gifGrid = PanelGifGrid()
+    private(set) var searchingGifs = false
+    private var transitionGen = 0
+    private var searchOverlay: PassthroughOverlayView?
+    private var collapseWindow: PassthroughWindow?
+    /// The home-indicator inset seen while in the keyboard, for laying the card out while it is away.
+    private var restSafeBottom: CGFloat = 0
 
     private enum Shelf: Equatable {
         case recents, favorites, pack(StickerPack)
@@ -103,6 +123,16 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         clipsToBounds = true
         autoresizingMask = [.flexibleWidth]
 
+        // The card clips too, so the strip still leaves at its top edge while the card is away.
+        // Square at rest (the panel's look); its top corners round only while it is out for search.
+        cardView.layer.cornerCurve = .continuous
+        cardView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        cardView.clipsToBounds = true
+        addSubview(cardView)
+        backdrop.contentView.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.65)
+        backdrop.isHidden = true
+        cardView.addSubview(backdrop)
+
         tabs.selectedSegmentIndex = 1
         let normal = UIFont.systemFont(ofSize: 14, weight: .regular)
         let bold = UIFont.systemFont(ofSize: 14, weight: .semibold)
@@ -112,22 +142,22 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         // ⛔ LIQUID GLASS UNDER THE SWITCH — owner 2026-10-17: the flat grey track read as a web control.
         // The system glass capsule is the track; the control's own track is cleared on top of it.
         tabGlass.clipsToBounds = true
-        addSubview(tabGlass)
+        cardView.addSubview(tabGlass)
         tabs.setBackgroundImage(UIImage(), for: .normal, barMetrics: .default)
         tabs.setDividerImage(UIImage(), forLeftSegmentState: .normal, rightSegmentState: .normal, barMetrics: .default)
         tabs.selectedSegmentTintColor = .clear
         tabThumb.backgroundColor = UIColor.label.withAlphaComponent(0.12)
         tabThumb.isUserInteractionEnabled = false
-        addSubview(tabThumb)
-        addSubview(tabs)
+        cardView.addSubview(tabThumb)
+        cardView.addSubview(tabs)
 
         setPen()
         editButton.addTarget(self, action: #selector(editTapped), for: .touchUpInside)
-        addSubview(editButton)
+        cardView.addSubview(editButton)
 
         strip.showsHorizontalScrollIndicator = false
         strip.alwaysBounceHorizontal = true
-        addSubview(strip)
+        cardView.addSubview(strip)
 
         grid.backgroundColor = .clear
         grid.dataSource = self
@@ -136,16 +166,21 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         grid.register(StickerCell.self, forCellWithReuseIdentifier: StickerCell.id)
         grid.register(ShelfHeader.self, forSupplementaryViewOfKind: UICollectionView.elementKindSectionHeader,
                       withReuseIdentifier: ShelfHeader.id)
-        addSubview(grid)
+        cardView.addSubview(grid)
 
         gifGrid.isHidden = true
         gifGrid.onSend = { [weak self] g in self?.onSendGif(g) }
-        gifGrid.onSearch = { [weak self] in self?.onGifs() }
-        addSubview(gifGrid)
+        gifGrid.onSearch = { [weak self] in self?.expandForGifSearch() }
+        gifGrid.onCancelSearch = { [weak self] in self?.collapseGifSearch() }
+        gifGrid.onSearchFieldEnded = { [weak self] in
+            guard let self, self.searchingGifs else { return }
+            self.collapseGifSearch()
+        }
+        cardView.addSubview(gifGrid)
         // The switch floats over both grids (it sits at their foot now).
-        bringSubviewToFront(tabGlass)
-        bringSubviewToFront(tabThumb)
-        bringSubviewToFront(tabs)
+        cardView.bringSubviewToFront(tabGlass)
+        cardView.bringSubviewToFront(tabThumb)
+        cardView.bringSubviewToFront(tabs)
 
         deleteBar.backgroundColor = .secondarySystemBackground
         deleteBar.isHidden = true
@@ -154,24 +189,51 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         deleteButton.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
         deleteButton.addTarget(self, action: #selector(deleteTapped), for: .touchUpInside)
         deleteBar.addSubview(deleteButton)
-        addSubview(deleteBar)
+        cardView.addSubview(deleteBar)
 
         reload()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    deinit {
+        searchOverlay?.removeFromSuperview()
+        collapseWindow?.isHidden = true
+    }
+
     override var intrinsicContentSize: CGSize { CGSize(width: UIView.noIntrinsicMetric, height: height) }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let w = bounds.width
+        if window != nil { restSafeBottom = safeAreaInsets.bottom }
+        // Only while the card is home. Away, its own animation lays it out; a pass from here (the
+        // panel re-entering the keyboard mid-shrink) would snap its insides to the end frame.
+        guard cardView.superview === self else { return }
+        cardView.frame = bounds
+        layoutCardSubviews()
+    }
+
+    /// The home-indicator inset to lay out with: the panel's own at rest, the remembered one (or the
+    /// app window's) while the card is out, where the panel may have no window to ask.
+    private var safeBottom: CGFloat {
+        if cardView.superview === self, window != nil { return safeAreaInsets.bottom }
+        return restSafeBottom > 0 ? restSafeBottom : (hostWindow()?.safeAreaInsets.bottom ?? safeAreaInsets.bottom)
+    }
+
+    /// Every frame, in the card's own space, so the same code lays it out in the panel, in the full-
+    /// screen overlay, and on the way between.
+    private func layoutCardSubviews() {
+        let cb = cardView.bounds
+        let w = cb.width
+        let h = cb.height
+        backdrop.frame = cb
         // Frames are only valid on an untransformed view; the hide lift is put back on below.
         for v in [tabs, tabGlass, editButton, strip] as [UIView] { v.transform = .identity }
         // ⛔ THE SWITCH SITS AT THE BOTTOM — owner 2026-10-17, as the reference app has it: the pack
         // strip (with the pen at its end) on top, GIFs | Stickers floating over the grid at the foot.
         // Scrolling into the grid sends the strip up and the switch down; scrolling back brings both.
-        let bottomInset = max(safeAreaInsets.bottom, 8)
+        let sb = safeBottom
+        let bottomInset = max(sb, 8)
         // Inset by the side margin and clipped there (owner 2026-10-18: swiping the packs slid them past
         // the panel's rounded edge). The scroll view clips, so icons leave at the margin, not the corner.
         let editW: CGFloat = 64
@@ -181,25 +243,28 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         // 160 wide (owner 2026-10-18: "that bar is big"), was 220.
         // Its foot is where the composer's pill rests (owner 2026-10-18, "use the bottom space the
         // composer uses"): 5 pt into the home-indicator strip, or 8 pt on a phone without one.
-        let footGap = safeAreaInsets.bottom > 0 ? safeAreaInsets.bottom - 5 : 8
-        tabs.frame = CGRect(x: (w - 160) / 2, y: bounds.height - footGap - M.tabsH, width: 160, height: M.tabsH)
+        let footGap = sb > 0 ? sb - 5 : 8
+        tabs.frame = CGRect(x: (w - 160) / 2, y: h - footGap - M.tabsH, width: 160, height: M.tabsH)
         tabGlass.frame = tabs.frame.insetBy(dx: -3, dy: -3)
         tabGlass.layer.cornerRadius = tabGlass.bounds.height / 2
         layoutTabThumb()
-        let up = headerHidden ? strip.frame.maxY : 0
-        let down = headerHidden ? bounds.height - tabGlass.frame.minY : 0
+        // While GIF search has the card, the strip and the switch are out of the way like a scroll hide.
+        let hideBars = headerHidden || searchingGifs
+        let up = hideBars ? strip.frame.maxY : 0
+        let down = hideBars ? h - tabGlass.frame.minY : 0
         for v in [editButton, strip] as [UIView] { v.transform = CGAffineTransform(translationX: 0, y: -up) }
         for v in [tabs, tabGlass, tabThumb] as [UIView] { v.transform = CGAffineTransform(translationX: 0, y: down) }
-        for v in [tabs, tabGlass, tabThumb, editButton, strip] as [UIView] { v.alpha = headerHidden ? 0 : 1 }
+        for v in [tabs, tabGlass, tabThumb, editButton, strip] as [UIView] { v.alpha = hideBars ? 0 : 1 }
         if editing { tabs.alpha = 0; tabGlass.alpha = 0; tabThumb.alpha = 0 }   // the Delete bar takes the foot while editing
         let gridTop = headerHidden ? 0 : strip.frame.maxY
-        grid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, bounds.height - gridTop))
-        gifGrid.frame = CGRect(x: 0, y: M.top, width: w, height: max(0, bounds.height - M.top))
-        gifGrid.bottomRoom = M.tabsH + 16
+        grid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, h - gridTop))
+        gifGrid.frame = CGRect(x: 0, y: M.top, width: w, height: max(0, h - M.top))
+        // Searching, the system keyboard covers the card's foot: room for it under the last row.
+        gifGrid.bottomRoom = searchingGifs ? (StickerPanelHeight.current + 8) : (M.tabsH + 16)
         // Room under the last row for the floating switch (and the Delete bar while editing).
         grid.contentInset.bottom = bottomInset + M.tabsH + 16 + (editing ? 44 : 0)
-        let barH = 44 + safeAreaInsets.bottom
-        deleteBar.frame = CGRect(x: 0, y: bounds.height - barH, width: w, height: barH)
+        let barH = 44 + sb
+        deleteBar.frame = CGRect(x: 0, y: h - barH, width: w, height: barH)
         deleteButton.frame = CGRect(x: 0, y: 0, width: w, height: 44)
         if lastGridWidth != w { lastGridWidth = w; grid.collectionViewLayout.invalidateLayout() }
     }
@@ -209,6 +274,152 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         super.didMoveToWindow()
         // Back on screen: pick up what changed while away (a sticker just sent, one just made).
         if window != nil, !editing { reload() }
+        if window != nil { gifGrid.refreshLocalShelf() }
+    }
+
+    // MARK: GIF search: grow to full screen in place, shrink back on X (owner 2026-10-18)
+
+    private func expandForGifSearch() {
+        guard !searchingGifs else {
+            gifGrid.focusSearchField()
+            return
+        }
+        guard let hostWin = hostWindow() ?? window else { return }
+        transitionGen += 1
+        searchingGifs = true
+        headerHidden = false
+
+        // Where the card is on screen now, in the app window's space.
+        let startFrame: CGRect
+        if let cw = collapseWindow, cardView.superview === cw {
+            // Tapped Search again while it was still shrinking: grow from where it is.
+            startFrame = cardView.layer.presentation()?.frame ?? cardView.frame
+            cw.isHidden = true
+            collapseWindow = nil
+        } else if cardView.window != nil {
+            startFrame = hostWin.convert(cardView.bounds, from: cardView)
+        } else {
+            let panelH = bounds.height > 0 ? bounds.height : height
+            startFrame = CGRect(x: 0, y: hostWin.bounds.height - panelH, width: hostWin.bounds.width, height: panelH)
+        }
+
+        let ov = PassthroughOverlayView(frame: hostWin.bounds)
+        ov.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        ov.targetView = cardView
+        ov.onTouch = { [weak self] in self?.onTouch() }
+        hostWin.addSubview(ov)
+        searchOverlay?.removeFromSuperview()
+        searchOverlay = ov
+
+        backdrop.isHidden = false
+        UIView.performWithoutAnimation {
+            ov.addSubview(cardView)
+            cardView.frame = startFrame
+            layoutCardSubviews()
+            cardView.layoutIfNeeded()
+        }
+
+        gifGrid.setSearching(true)
+        // The composer arms its resign first, so the field can let go for the search field's keys.
+        onBeginGifSearch()
+        gifGrid.focusSearchField()
+
+        let topInset = max(hostWin.safeAreaInsets.top, 12)
+        let expandedFrame = CGRect(x: 0, y: topInset, width: hostWin.bounds.width, height: hostWin.bounds.height - topInset)
+        UIView.animate(withDuration: 0.38, delay: 0, usingSpringWithDamping: 0.92, initialSpringVelocity: 0,
+                       options: [.beginFromCurrentState, .allowUserInteraction]) {
+            self.cardView.frame = expandedFrame
+            self.cardView.layer.cornerRadius = 28
+            self.layoutCardSubviews()
+            self.cardView.layoutIfNeeded()
+        }
+    }
+
+    func collapseGifSearch() {
+        guard searchingGifs else { return }
+        transitionGen += 1
+        let gen = transitionGen
+        searchingGifs = false
+        headerHidden = false
+
+        let hostWin = hostWindow() ?? searchOverlay?.window ?? window
+        let currentFrame = cardView.layer.presentation()?.frame ?? cardView.frame
+
+        gifGrid.setSearching(false)
+        onWillCollapseGifSearch()
+
+        // The card goes into a window above the keyboard's, so the panel coming back under it never
+        // shows through and nothing on the way down is cut by the keyboard.
+        if let scene = hostWin?.windowScene {
+            let maxLevel = scene.windows.map(\.windowLevel.rawValue).max() ?? 10_000_001
+            let cw = PassthroughWindow(windowScene: scene)
+            cw.frame = hostWin?.bounds ?? scene.screen.bounds
+            cw.windowLevel = UIWindow.Level(rawValue: maxLevel + 1)
+            cw.backgroundColor = .clear
+            cw.overrideUserInterfaceStyle = hostWin?.overrideUserInterfaceStyle ?? .unspecified
+            cw.targetView = cardView
+            cw.onTouch = { [weak self] in self?.onTouch() }
+            cw.isHidden = false
+            collapseWindow?.isHidden = true
+            collapseWindow = cw
+
+            UIView.performWithoutAnimation {
+                cw.addSubview(cardView)
+                cardView.frame = currentFrame
+                cardView.layoutIfNeeded()
+                searchOverlay?.removeFromSuperview()
+                searchOverlay = nil
+            }
+        }
+
+        // The field takes the responder back with this panel as its keys: the panel is up again at
+        // once, under the card, so the composer settles on the same height it left.
+        onRestorePanelFocus()
+
+        let winBounds = hostWin?.bounds ?? cardView.superview?.bounds ?? .zero
+        let targetH = bounds.height > 0 ? bounds.height : height
+        let collapsedFrame = CGRect(x: 0, y: winBounds.height - targetH, width: winBounds.width, height: targetH)
+
+        UIView.animate(withDuration: 0.36, delay: 0, usingSpringWithDamping: 0.92, initialSpringVelocity: 0,
+                       options: [.beginFromCurrentState, .allowUserInteraction]) {
+            self.cardView.frame = collapsedFrame
+            self.cardView.layer.cornerRadius = 0
+            self.layoutCardSubviews()
+            self.cardView.layoutIfNeeded()
+        } completion: { [weak self] _ in
+            guard let self, self.transitionGen == gen, !self.searchingGifs else { return }
+            self.putCardHome()
+            self.onDidCollapseGifSearch()
+        }
+    }
+
+    /// Back in the panel, square, keyboard background, no extra window or overlay left behind.
+    private func putCardHome() {
+        UIView.performWithoutAnimation {
+            backdrop.isHidden = true
+            cardView.layer.cornerRadius = 0
+            if cardView.superview !== self { addSubview(cardView) }
+            cardView.frame = bounds
+            layoutCardSubviews()
+            cardView.layoutIfNeeded()
+        }
+        searchOverlay?.removeFromSuperview()
+        searchOverlay = nil
+        collapseWindow?.isHidden = true
+        collapseWindow = nil
+    }
+
+    /// No animation: the chat is leaving, the panel is going, or the field was resigned from outside.
+    func tearDownSearchOverlay() {
+        transitionGen += 1
+        let was = searchingGifs
+        searchingGifs = false
+        gifGrid.setSearching(false)
+        if gifGrid.searchField.isFirstResponder {
+            _ = gifGrid.searchField.resignFirstResponder()
+        }
+        guard was || cardView.superview !== self else { return }
+        putCardHome()
     }
 
     // MARK: Data
@@ -344,20 +555,23 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         guard hide != headerHidden else { return }
         headerHidden = hide
         UIView.animate(withDuration: 0.25, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
-            self.layoutSubviews()
+            self.layoutCardSubviews()
         }
     }
 
     // MARK: Tabs
 
-    /// GIFs show in the panel itself now (owner 2026-10-17); Search still hands over to the picker.
+    /// GIFs show in the panel itself now (owner 2026-10-17), search included (2026-10-18).
     /// ⛔ THE SWITCH'S WHOLE ROW IS ITS OWN — owner 2026-10-18: reaching for GIFs / Stickers sent the
     /// sticker under his finger. The reference app's panel keeps its bottom tab band out of the grid:
     /// a touch anywhere across that band, edge to edge, belongs to the band. Here the band is the
     /// switch's glass grown 10 pt on top and down to the foot; inside it a touch goes to the switch
     /// (with some room around it) or nowhere, never through to a sticker.
+    /// Only while the card is home: its frames are then the panel's own coordinates. While it is out
+    /// for GIF search the panel is empty and the card's window takes the touches.
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        if !headerHidden, !editing, !tabs.isHidden, tabs.alpha > 0.01, point.y >= tabGlass.frame.minY - 10 {
+        if cardView.superview === self, !searchingGifs,
+           !headerHidden, !editing, !tabs.isHidden, tabs.alpha > 0.01, point.y >= tabGlass.frame.minY - 10 {
             if tabs.frame.insetBy(dx: -12, dy: -10).contains(point) {
                 // Land on the control at the nearest point, so a touch just beside it still switches.
                 let p = CGPoint(x: min(max(point.x, tabs.frame.minX + 1), tabs.frame.maxX - 1), y: tabs.frame.midY)
@@ -383,7 +597,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
                        options: [.allowUserInteraction, .beginFromCurrentState]) { self.layoutTabThumb() }
         let gifsOn = tabs.selectedSegmentIndex == 0
         if gifsOn { if editing { endEditing() }; gifGrid.loadIfNeeded() }
-        UIView.transition(with: self, duration: 0.18, options: [.transitionCrossDissolve, .allowUserInteraction]) {
+        UIView.transition(with: cardView, duration: 0.18, options: [.transitionCrossDissolve, .allowUserInteraction]) {
             self.gifGrid.isHidden = !gifsOn
             self.grid.isHidden = gifsOn
             self.strip.isHidden = gifsOn
@@ -669,4 +883,31 @@ private final class ShelfHeader: UICollectionReusableView {
     }
 
     @objc private func editTapped() { onEdit() }
+}
+
+/// The app-window layer the card grows in during GIF search: touches on the card only, the rest of
+/// the screen behind it stays the chat's.
+private final class PassthroughOverlayView: UIView {
+    weak var targetView: UIView?
+    var onTouch: () -> Void = {}
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard let target = targetView else { return nil }
+        let p = convert(point, to: target)
+        guard target.bounds.contains(p) else { return nil }
+        onTouch()
+        return super.hitTest(point, with: event)
+    }
+}
+
+/// The window above the keyboard the card shrinks back down in; same pass-through rule.
+private final class PassthroughWindow: UIWindow {
+    weak var targetView: UIView?
+    var onTouch: () -> Void = {}
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard let target = targetView else { return nil }
+        let p = convert(point, to: target)
+        guard target.bounds.contains(p) else { return nil }
+        onTouch()
+        return super.hitTest(point, with: event)
+    }
 }

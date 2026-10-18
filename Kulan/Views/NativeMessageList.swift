@@ -4015,6 +4015,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // (rather than refusing the hide flag) also covers the change-frame variant, which carries an
         // off-screen end frame and no flag at all.
         if !up, UIApplication.shared.applicationState != .active { return }
+        // GIF search hands the keys from the panel to its own field and back (owner 2026-10-18): the
+        // hide between the two is not a close, so the bar stays where it is. While the search page is
+        // open the bar is under it and the search keys are not its keys, so it does not follow them
+        // either way: it is still at the panel's height when X brings the panel back, no jump.
+        if let bar = composerBar as? ChatComposerView {
+            if bar.gifSearchOpen { return }
+            if !up, bar.holdsKeyboardForGifSearch { return }
+        }
         let announced = up ? overlap : restSafeBottom
         let d = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
         if d > 0 {
@@ -4080,6 +4088,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // that bug. An inactive hide is `syncKeyboardOnReturn`'s: at didBecomeActive it lowers when the
         // field no longer has focus, which is the case when the keys really went away.
         guard UIApplication.shared.applicationState == .active else { return }
+        guard (composerBar as? ChatComposerView)?.holdsKeyboardForGifSearch != true else { return }   // GIF search, see above
         settleKeyboardAtRest()
     }
 

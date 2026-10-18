@@ -663,12 +663,36 @@ final class ChatComposerView: UIView {
         guard window != nil else { pendingFocus = on; return }
         if on {
             textView.resignRequested = false
-            if !textView.isFirstResponder, !textView.becomeFirstResponder() { pendingFocus = true }
-        } else if textView.isFirstResponder {
-            // OUR resign announces itself, so the guard lets it through — see ComposerTextView.
-            textView.resignRequested = true
-            textView.resignFirstResponder()
+            // GIF search holds the keys in its own field; the field comes back when it closes.
+            if !textView.isFirstResponder, !gifSearchActive, !textView.becomeFirstResponder() { pendingFocus = true }
+        } else {
+            if gifSearchActive { endGifSearchNow() }
+            if textView.isFirstResponder {
+                // OUR resign announces itself, so the guard lets it through — see ComposerTextView.
+                textView.resignRequested = true
+                textView.resignFirstResponder()
+            }
         }
+    }
+
+    // ⛔ GIF SEARCH IN THE PANEL — owner 2026-10-18 (5775aae8 restored): the sticker panel grows to full
+    // screen and its search field takes the keys. The field lets go on purpose (`onBeginGifSearch`
+    // arms the resign), its end-editing is not a close, and the list keeps the keyboard guide where
+    // it is (`holdsKeyboardForGifSearch`) until the panel is back at its own height.
+    private var gifSearchActive = false
+    /// True while GIF search is growing, open, or shrinking back to the panel, so
+    /// `MessageListController` keeps the keyboard guide pinned and never drops the composer.
+    private(set) var holdsKeyboardForGifSearch = false
+    /// The search page is open (its field has the keys), as against growing back down to the panel.
+    var gifSearchOpen: Bool { gifSearchActive }
+
+    /// Search closed with no animation (chat leaving, focus taken away): the panel goes with it, so
+    /// the next tap in the field brings the keyboard, as after any other close of the panel.
+    private func endGifSearchNow() {
+        gifSearchActive = false
+        holdsKeyboardForGifSearch = false
+        (textView.inputView as? StickerKeyboardView)?.tearDownSearchOverlay()
+        if stickerPanelUp, !textView.isFirstResponder { setStickerPanel(false, reload: false) }
     }
 
     /// Everything that is a plain assignment: glyphs, colours, the review's data.
@@ -1276,8 +1300,14 @@ final class ChatComposerView: UIView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window == nil { setLive(false); stopPulse() }
-        else if shown.recordingActive { setLive(true) }
+        if window == nil {
+            setLive(false)
+            stopPulse()
+            // Leaving the chat mid GIF search: no full-screen card or extra window left behind.
+            if gifSearchActive || holdsKeyboardForGifSearch { endGifSearchNow() }
+        } else if shown.recordingActive {
+            setLive(true)
+        }
         // Focus asked for before the view had a window is honoured now that it has one.
         if window != nil, let p = pendingFocus { requestFocus(p) }
     }
@@ -1354,7 +1384,8 @@ extension ChatComposerView: UITextViewDelegate {
     /// answers for the BAR, which never is one, so a caller outside this file cannot ask the
     /// question without this. Read by the list controller when the app comes back from the
     /// background and it has to decide whether the keys are still up.
-    var isEditingText: Bool { textView.isFirstResponder }
+    /// GIF search counts: its field holds the keys for this composer.
+    var isEditingText: Bool { textView.isFirstResponder || gifSearchActive }
 
     func textViewDidBeginEditing(_ tv: UITextView) {
         // Arm the resign guard for the presentation — see `ComposerTextView.resignFirstResponder`.
@@ -1364,6 +1395,8 @@ extension ChatComposerView: UITextViewDelegate {
     }
 
     func textViewDidEndEditing(_ tv: UITextView) {
+        // The panel's GIF search field took the keys on purpose: the panel and the focus stay.
+        if gifSearchActive { return }
         // The keys went away with the panel up (scroll, tap on the chat): the next focus is the
         // keyboard again, not the panel.
         if stickerPanelUp { setStickerPanel(false, reload: false) }
@@ -1398,13 +1431,37 @@ extension ChatComposerView: UITextViewDelegate {
             panel.onSend = { [weak self] s in self?.actions.sendSticker(s) }
             panel.onCreate = { [weak self] in self?.actions.createSticker() }
             panel.onSendGif = { [weak self] g in self?.actions.sendGif(g) }
-            panel.onGifs = { [weak self] in
+            // GIF search grows this panel in place (owner 2026-10-18), no more hand-off to the picker.
+            panel.hostWindow = { [weak self] in self?.window }
+            panel.onTouch = { [weak self] in self?.actions.barTouched() }
+            panel.onBeginGifSearch = { [weak self] in
                 guard let self else { return }
-                self.setStickerPanel(false, reload: false)
-                self.actions.gif()
+                self.gifSearchActive = true
+                self.holdsKeyboardForGifSearch = true
+                self.textView.resignRequested = true
+            }
+            panel.onWillCollapseGifSearch = { [weak self] in
+                self?.holdsKeyboardForGifSearch = true
+            }
+            panel.onRestorePanelFocus = { [weak self] in
+                guard let self else { return }
+                self.gifSearchActive = false
+                self.textView.resignRequested = false
+                _ = self.textView.becomeFirstResponder()
+                self.textView.reloadInputViews()
+            }
+            panel.onDidCollapseGifSearch = { [weak self] in
+                // A beat after the card lands, so the panel's own keyboard notes have all arrived.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                    guard let self, !self.gifSearchActive else { return }
+                    self.holdsKeyboardForGifSearch = false
+                }
             }
             textView.inputView = panel
         } else {
+            gifSearchActive = false
+            holdsKeyboardForGifSearch = false
+            (textView.inputView as? StickerKeyboardView)?.tearDownSearchOverlay()
             textView.inputView = nil
         }
         gifButton.icon.image = (on ? UIImage(named: "ic_keyboard") : UIImage(named: "ic_gif"))?
