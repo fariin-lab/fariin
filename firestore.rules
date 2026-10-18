@@ -1631,7 +1631,10 @@ service cloud.firestore {
           // doing — and, when that lookup errors, deny a group that was perfectly legal.
           (
             request.resource.data.get('type', '') == 'group'
-            && request.resource.data.users.size() >= 2
+            // ⛔ ONE IS ENOUGH — owner 2026-10-18: a group may start with only its creator (New
+            // Group's Skip); members are added later. Was >= 2. The creator is still required in
+            // `users` and `admins` (above and below), so it is never anyone else's group.
+            && request.resource.data.users.size() >= 1
             && request.resource.data.users.size() <= 30
             && request.auth.uid in request.resource.data.admins
             // 1:1 audit r3 F1, 2026-10-08: a group is never born at a 1:1 id. Every call and

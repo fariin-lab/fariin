@@ -2,8 +2,8 @@ import SwiftUI
 
 // New Group, two pages (owner 2026-10-18, "start here first" of the group redesign):
 //   1. Select Members: your chats A to Z in grouped cards, round ticks, the search at the bottom,
-//      the people you ticked as faces along the top. Next goes on once someone is ticked (the
-//      create rule needs at least one other member, so there is no Skip).
+//      the people you ticked as faces along the top. Skip with nobody ticked (a group may start
+//      with only you; firestore.rules allows one member), Next once someone is.
 //   2. New Group: the photo circle and the name in one card, Disappearing Messages, the members,
 //      Create. The circle opens the app's own photo sheet (the one Add Story and Create Sticker
 //      use), photos only.
@@ -68,7 +68,7 @@ struct NewGroupView: View {
     private var picked: [Person] { order.compactMap { selected[$0] } }
 
     private var canCreate: Bool {
-        !groupName.trimmingCharacters(in: .whitespaces).isEmpty && !selected.isEmpty && !creating
+        !groupName.trimmingCharacters(in: .whitespaces).isEmpty && !creating
     }
 
     var body: some View {
@@ -147,8 +147,9 @@ struct NewGroupView: View {
                 Button { dismiss() } label: { Image(systemName: "xmark") }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Next") { path.append(.details) }
-                    .disabled(selected.isEmpty)
+                // Skip with nobody ticked (owner 2026-10-18: a group may start with only you),
+                // Next once someone is.
+                Button(selected.isEmpty ? "Skip" : "Next") { path.append(.details) }
                     .fontWeight(.semibold)
             }
         }
@@ -203,7 +204,7 @@ struct NewGroupView: View {
                 Text("New messages in this group disappear for everyone once this time has passed.")
             }
 
-            Section("\(selected.count + 1) Members") {
+            Section(selected.isEmpty ? "1 Member" : "\(selected.count + 1) Members") {
                 ForEach(picked) { p in
                     HStack(spacing: 12) {
                         AvatarView(name: p.name, photoUrl: p.photo, size: 40)
@@ -295,7 +296,7 @@ struct NewGroupView: View {
 
     private func create() {
         let name = groupName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty, !selected.isEmpty else { return }
+        guard !name.isEmpty else { return }
         creating = true; error = nil
         let timer = disappearSeconds
         Task {
