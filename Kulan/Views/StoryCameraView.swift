@@ -38,7 +38,18 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     ///
     /// Serial means the operations happen in the order they were asked for, which is all this ever
     /// needed. It is not a lock and it does not block the main thread.
-    private let sessionQueue = DispatchQueue(label: "story.camera.session")
+    ///
+    /// ⛔ AND ONE QUEUE FOR EVERY CAMERA, NOT ONE EACH — build 969 watchdog kill (owner's .ips,
+    /// 2026-10-18 15:11, 0x8BADF00D "stuck (deadlock)"): five `story.camera.session` threads at once,
+    /// several StoryCameras alive together (each screen makes its own), stopping, rebuilding and
+    /// adding outputs to sessions on the SAME physical camera at the same moment. Inside AVFoundation
+    /// those take each other's session locks; the main thread, delivering a did-stop notification,
+    /// waited on one of them for ever. One process-wide serial queue: no two camera operations ever
+    /// overlap, whichever screen asked. And only one session runs at a time (`Self.running`).
+    private static let sharedSessionQueue = DispatchQueue(label: "story.camera.session")
+    private var sessionQueue: DispatchQueue { Self.sharedSessionQueue }
+    /// The session that is running now, touched only on `sharedSessionQueue`.
+    nonisolated(unsafe) private static weak var running: StoryCamera?
     private let output = AVCapturePhotoOutput()
     private let movieOutput = AVCaptureMovieFileOutput()
     private var input: AVCaptureDeviceInput?
@@ -131,7 +142,8 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     @objc private func sessionInterruptionEnded(_ n: Notification) {
         guard wantsRunning else { return }
         sessionQueue.async { [weak self] in
-            guard let self, !self.session.isRunning else { return }
+            // Only the camera that still owns the lens comes back; an older screen's never does.
+            guard let self, !self.session.isRunning, Self.running === self else { return }
             self.session.startRunning()
         }
     }
@@ -142,7 +154,8 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         guard let err = n.userInfo?[AVCaptureSessionErrorKey] as? AVError,
               err.code == .mediaServicesWereReset, wantsRunning else { return }
         sessionQueue.async { [weak self] in
-            guard let self, !self.session.isRunning else { return }
+            // Only the camera that still owns the lens comes back; an older screen's never does.
+            guard let self, !self.session.isRunning, Self.running === self else { return }
             self.session.startRunning()
         }
     }
@@ -526,6 +539,13 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
             DispatchQueue.main.async { self.denied = !granted }
             guard granted else { return }
             self.sessionQueue.async {
+                // Another camera screen still has the camera (it is closing as this one opens): its
+                // session stops first, on this same queue, so two never run against one lens.
+                if let other = Self.running, other !== self, other.session.isRunning {
+                    other.setTorch(false)
+                    other.session.stopRunning()
+                }
+                Self.running = self
                 self.configureIfNeeded()
                 guard !self.session.isRunning else { return }
                 // A mic attached on an earlier start is still attached; it needs the session again.
@@ -542,6 +562,7 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
             // Before the session goes, or the lamp is left burning on a camera nobody is looking
             // at — backgrounding the app mid-clip is the way to reach that.
             self.setTorch(false)
+            if Self.running === self { Self.running = nil }
             guard self.session.isRunning else { return }
             self.session.stopRunning()
             // And the audio session goes back to what it was before the camera (see `CameraAudio`).
