@@ -126,8 +126,11 @@ struct NewChatView: View {
                             }
                         }
                     } else if sections.isEmpty {
+                        // On the page itself, not in a white card (owner 2026-10-18, his two screenshots).
                         EmptyStateView(title: "No chats yet", icon: "square.and.pencil",
                                        text: "To find someone new, search their username on the Chats page.")
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
                     } else {
                         ForEach(sections, id: \.letter) { section in
                             Section(section.letter) {
