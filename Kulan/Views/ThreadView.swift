@@ -1160,9 +1160,7 @@ struct ThreadView: View {
             // Key accepted, open the text bar automatically". The server has already accepted the
             // key when `keyAccepted` goes up (it writes `accepted`); only this phone's snapshot of
             // the chat lags, so the two locked states are lifted from that moment.
-            // ⛔ NO "WAIT FOR A REPLY" — owner 2026-10-18: one message until they answer made a new
-            // app hard to start on, an invite included. The starter keeps typing; the other person
-            // still gets Accept / Delete / Block in the chat, and "My Friends" privacy still holds.
+            && (requestStance != .awaitingReply || keyAccepted)
             && (!cannotMessageThem || keyAccepted)
             && !otherAccountDeleted   // 2026-09-24 decision D15
     }
@@ -1171,7 +1169,7 @@ struct ThreadView: View {
     /// here now" (not selection, search or the key notice, which are only a moment).
     private var sendingClosed: Bool {
         notAMember || cannotSendAnnouncement || iAmMuted || repo.iBlocked
-            || requestStance == .incoming
+            || requestStance == .incoming || (requestStance == .awaitingReply && !keyAccepted)
             || (cannotMessageThem && !keyAccepted) || otherAccountDeleted
     }
 
@@ -1197,6 +1195,8 @@ struct ThreadView: View {
                 deletedAccountBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if requestStance == .incoming {
                 requestBar.transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else if requestStance == .awaitingReply && !keyAccepted {
+                awaitingReplyBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if cannotMessageThem && !keyAccepted {
                 cannotMessageBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else {
@@ -2105,7 +2105,7 @@ struct ThreadView: View {
             // ⛔ THE KEYBOARD GOES WITH THE COMPOSER — owner, 2026-09-25: after the first message the
             // box became the "Message request sent" card, but the hidden field kept the keyboard,
             // which then sat over the card. A notice has nothing to type into.
-            if new == .incoming { Self.dismissKeyboard() }
+            if new == .awaitingReply || new == .incoming { Self.dismissKeyboard() }
             guard old == .firstMessage, new == .awaitingReply else { return }
             let asked = "chatKeyAsked.\(cid)"
             guard !UserDefaults.standard.bool(forKey: asked) else { return }
@@ -7772,6 +7772,7 @@ struct ThreadView: View {
         if cannotSendAnnouncement { return "Only admins can send messages" }
         if iAmMuted { return "You're muted in this group" }
         if cannotMessageThem { return "You can't message \(title)" }
+        if requestStance == .awaitingReply { return "You can send another message once \(title) replies." }
         if requestStance == .firstMessage { return "That's today's limit for message requests. Try again tomorrow." }
         return "This message can't be sent here."
     }
@@ -7780,6 +7781,7 @@ struct ThreadView: View {
     /// one on a request's first message (plain short text only) and count it as media in a group
     /// (`sendMedia`). `ChatService` strips it on the same terms; this keeps the composer honest.
     private var linkCardAllowed: Bool {
+        if requestStance == .firstMessage { return false }
         guard isGroup, let conv = conversation else { return true }
         return !conv.isRestricted(me, .sendMedia, now: Date().timeIntervalSince1970 * 1000)
     }
@@ -7986,6 +7988,20 @@ struct ThreadView: View {
             // `.onChange`; the field is UIKit now and reports through `input`, so the composer
             // slot is the one place that sees every change, typed or programmatic.
             .onChange(of: input) { _, v in
+                // A first message to a stranger is capped. Trimmed as it is typed rather than
+                // refused on send, so you can see the limit instead of losing what you wrote to it.
+                // 2026-09-24 decision D-composer-4: and by bytes too. The rules measure the SEALED
+                // text (880), which 150 of the widest single characters fit, but 150 joined emoji
+                // (a family, a flag with a tag) are several times that and were refused only after
+                // Send. 4 bytes a character is exactly what the rule's 880 was sized for.
+                let byteCap = MessageRequests.firstMessageLimit * 4
+                if requestStance == .firstMessage,
+                   v.count > MessageRequests.firstMessageLimit || v.utf8.count > byteCap {
+                    var t = String(v.prefix(MessageRequests.firstMessageLimit))
+                    while t.utf8.count > byteCap { t.removeLast() }
+                    input = t
+                    return
+                }
                 // Programmatic set (draft restore / edit teardown) — no typing implications (audit M6).
                 if typingBox.suppressNext { typingBox.suppressNext = false; return }
                 // Don't broadcast "typing" while we're seeding the field for an inline EDIT.
@@ -8243,6 +8259,9 @@ struct ThreadView: View {
         s.focused = inputFocused
         s.editing = editingMessage != nil
         s.attachBusy = sendingPhoto
+        // The one message to a stranger is text only (owner's spec, 2026-09-11 §9; the rules
+        // refuse anything else on it). No "+", no GIF, no mic while it is being written.
+        s.textOnly = requestStance == .firstMessage
         s.banners = composerBanners
         // The bar is shown the REVEALED hold, not the raw touch-down — see `holdRevealed`.
         s.holdStarted = holdStarted && holdRevealed
