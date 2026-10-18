@@ -25,8 +25,11 @@ struct AgreementView: View {
     var body: some View {
         ZStack {
             AuthPalette.page.ignoresSafeArea()
+            // ⛔ LAYOUT — owner 2026-10-18, beside the reference's welcome page: picture high, title
+            // under it, and the legal lines DOWN at the button they belong to, not under the title.
+            // The picture spot holds his logo until his illustration arrives (he is sending it).
             VStack(spacing: 0) {
-                Spacer()
+                Spacer(minLength: 40)
                 // ⛔ HIS LOGO — owner, 2026-09-28, the artwork this spot was waiting for: the same
                 // mark as the launch screen and the sign-in page (`LaunchLogo`, black on a light
                 // phone, white on a dark one).
@@ -36,24 +39,24 @@ struct AgreementView: View {
                     .frame(width: 120, height: 120)
                     .accessibilityLabel("Fariin")
                 Text("Welcome to Fariin")
-                    .font(.system(size: 26, weight: .bold))
+                    .font(.system(size: 28, weight: .bold))
                     .foregroundStyle(.primary)
-                    .padding(.top, 22)
+                    .padding(.top, 40)
+                Spacer()
+                Spacer()
                 Text("Read our [Privacy Policy](https://fariin.com/privacy). Tap \"Agree and continue\" to accept our [Terms](https://fariin.com/terms).")
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
                     .tint(.primary)
                     .environment(\.openURL, OpenURLAction { url in WebLink.open(url); return .handled })
                     .multilineTextAlignment(.center)
-                    .padding(.top, 8)
                 // 16, matching the App Store age rating (16+, set 2026-10-17) and the Terms.
                 Text("You must be 16 or older to use Fariin.")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .padding(.top, 8)
-                Spacer()
-                Spacer()
+                    .padding(.top, 6)
+                    .padding(.bottom, 16)
                 Button(action: onAgree) {
                     Text("Agree and continue").authPrimaryPill()
                 }
