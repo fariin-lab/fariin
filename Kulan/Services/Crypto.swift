@@ -104,6 +104,7 @@ final class Crypto {
         guard list != (ring[uid] ?? []) else { return }
         ring[uid] = Array(list.prefix(8))
         UserDefaults.standard.set(ring, forKey: Self.pubRingDefaultsKey)
+        NotifShare.mirrorRing(ring)   // owner 2026-10-18 readable banners, see persistPubKey
     }
 
     /// box.open against `uid`'s current key, then their earlier ones (see `pubRingDefaultsKey`).
@@ -131,6 +132,9 @@ final class Crypto {
         rememberKeys(uid, [dict[uid], b64].compactMap { $0 })
         dict[uid] = b64
         UserDefaults.standard.set(dict, forKey: Self.pubKeysDefaultsKey)
+        // owner 2026-10-18 readable banners: the notification extension opens a message with the
+        // SENDER's public key, so it needs the same cache (Kulan/Services/NotifShare.swift).
+        NotifShare.mirrorPubKeys(dict)
     }
 
     // One-time synchronous warm start, run lazily on the first decrypt (the chat-list render): load the
@@ -243,6 +247,18 @@ final class Crypto {
         }
         // Single lock-guarded write (memory barrier); the keypair is immutable after this.
         lock.withLock { mySecretKey = skBytes; myPublicKey = pkBytes; pubCache[uid] = pkBytes }
+        // ⛔ READABLE BANNERS — owner 2026-10-18: a COPY of the secret key for the notification
+        // extension, in the App Group's keychain group (Shared/NotifShared.swift), plus the peer key
+        // caches it opens messages with. The private item above is untouched and stays the original.
+        // Written on every identity load, so an install that already had its key gets the copy on
+        // the first launch of this build. Removed by `wipeIdentity` (sign-out) and account deletion.
+        NotifShare.storeIdentity(uid: uid, secretKeyB64: Data(skBytes).base64EncodedString())
+        if let dict = UserDefaults.standard.dictionary(forKey: Self.pubKeysDefaultsKey) as? [String: String] {
+            NotifShare.mirrorPubKeys(dict)
+        }
+        if let ring = UserDefaults.standard.dictionary(forKey: Self.pubRingDefaultsKey) as? [String: [String]] {
+            NotifShare.mirrorRing(ring)
+        }
         // Say so. Anything drawn before this with "…" (no key yet) can redraw now; the chat list
         // only healed when a PEER's key was fetched, so a list whose peers were already warm stayed
         // on "…" until the next message arrived.
@@ -306,6 +322,9 @@ final class Crypto {
         // ciphertext), so a second account on the same phone could take a cache hit for a message its
         // own keys cannot open. Emptying it with the identity closes both.
         previewCache.removeAllObjects()
+        // owner 2026-10-18 readable banners: the extension's copy of the key goes with the identity,
+        // so a signed-out phone shows "New message" again, never text. Sign-in writes it back.
+        NotifShare.clearAccount()
         // ⛔ THE OTHERS' PUBLIC KEYS STAY ON DISK — owner, 2026-09-26, second report after the
         // sign-in fix: "after I log in again the chat list shows … and the text appears after
         // seconds". That wait was this line: every peer's key had to be fetched from the server
@@ -466,6 +485,7 @@ final class Crypto {
                 var dict = (UserDefaults.standard.dictionary(forKey: Self.pubKeysDefaultsKey) as? [String: String]) ?? [:]
                 if dict.removeValue(forKey: uid) != nil {
                     UserDefaults.standard.set(dict, forKey: Self.pubKeysDefaultsKey)
+                    NotifShare.mirrorPubKeys(dict)   // owner 2026-10-18 readable banners
                 }
             case .failed:
                 break   // keep the old key; fetchKeyResult already told the recovery net

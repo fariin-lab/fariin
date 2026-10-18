@@ -50,6 +50,8 @@ targets:
       # 2026-10-08 screen share v3: the shared-memory channel with the BroadcastUpload extension.
       # Lives outside Kulan/ so the folder source above does not pick it up a second time.
       - path: Shared/ScreenShareIPC.swift
+      # owner 2026-10-18 readable banners: what the app and the notification extension share.
+      - path: Shared/NotifShared.swift
     info:
       path: Kulan/Info.plist
       properties:
@@ -147,6 +149,11 @@ targets:
         # real task behind it (Services/BackgroundRefresh.swift: one server read of the chat list
         # into the disk cache). iOS shows the Settings row only for an app that declares it.
         UIBackgroundModes: [voip, audio, fetch]
+        # ⛔ READABLE BANNERS — owner 2026-10-18: the notification extension turns message banners
+        # into Communication Notifications (sender photo + app badge) with an INSendMessageIntent.
+        # iOS only accepts that intent from an app that declares it here AND carries the
+        # com.apple.developer.usernotifications.communication entitlement (Kulan.entitlements).
+        NSUserActivityTypes: [INSendMessageIntent]
         BGTaskSchedulerPermittedIdentifiers: [com.kulan.messenger.native.refresh]
     settings:
       base:
@@ -198,11 +205,17 @@ targets:
   # nothing about the notification itself. No Firebase, no App Group, no keychain: the push carries
   # a signed token, so the extension needs nothing from the app. Its own App ID and profile are made
   # by the Fastfile. Versions follow the app's, which the App Store requires of an extension.
+  # ⛔ owner 2026-10-18 READABLE BANNERS: it now also opens the message's ciphertext (Sodium, the
+  # same library as the app) with a key copy the app keeps in the App Group keychain group, and
+  # sets the sender's name, text and photo (Shared/NotifShared.swift). So it DOES use the App Group
+  # now, and its entitlements file is finally applied (CODE_SIGN_ENTITLEMENTS below; it was written
+  # 2026-10-08 but never wired, so the screen-share check always found no container).
   NotificationService:
     type: app-extension
     platform: iOS
     sources:
       - path: NotificationService
+      - path: Shared/NotifShared.swift
     info:
       path: NotificationService/Info.plist
       properties:
@@ -221,6 +234,13 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.10"
         APPLICATION_EXTENSION_API_ONLY: YES
+        # ⛔ The App ID com.kulan.messenger.native.NotificationService must have the App Group
+        # group.com.kulan.messenger.native ticked in the developer portal BEFORE a build carries
+        # this, or its profile comes back without the group and signing fails (Fastfile note).
+        CODE_SIGN_ENTITLEMENTS: NotificationService/NotificationService.entitlements
+    dependencies:
+      - package: Sodium
+        product: Sodium
 
   # ⛔ THE SCREEN SHARING EXTENSION — 2026-10-07, v3 2026-10-08. iOS starts it when the person taps
   # Start in the system broadcast sheet; it hands NV12 frames and app audio to the app through

@@ -79,5 +79,19 @@
 	<array>
 		<string>group.com.kulan.messenger.native</string>
 	</array>
+	<!-- READABLE BANNERS, owner 2026-10-18. Lets the notification extension turn a message banner
+	     into a Communication Notification: the sender's photo on the left with the small app badge,
+	     the way the reference apps show theirs (INSendMessageIntent, NotificationService/). Without
+	     it `updating(from:)` is refused and the banner keeps the plain app icon (the text still
+	     shows).
+
+	     SAME RULE AS THE KEYS ABOVE: the App ID com.kulan.messenger.native must have the
+	     Communication Notifications capability ticked in the Apple Developer portal before any
+	     build carries this key, or get_provisioning_profile mints a profile without it and the
+	     build dies at the signing step. The Fastfile does not tick it: the App Store Connect API
+	     key it signs with only creates App IDs, capabilities are set by hand (see the App Group
+	     note at the top of fastlane/Fastfile). force: true then picks it up on the next build. -->
+	<key>com.apple.developer.usernotifications.communication</key>
+	<true/>
 </dict>
 </plist>

@@ -3,6 +3,10 @@ default_platform(:ios)
 PROFILE_NAME = "Kulan Native AppStore"
 BUNDLE_ID = "com.kulan.messenger.native"
 # 2026-09-25 delivered ticks: the embedded notification extension (project.yml `NotificationService`).
+# ⛔ owner 2026-10-18 readable banners: ITS APP ID MUST CARRY THE APP GROUP group.com.kulan.messenger.native
+# TOO (ticked by hand, same as below), and the APP's App ID the Communication Notifications capability.
+# Neither is done from here: this lane only creates App IDs, so without the portal ticks the
+# profiles come back without them and signing fails.
 NSE_ID = "com.kulan.messenger.native.NotificationService"
 NSE_PROFILE_NAME = "Kulan Notification Service AppStore"
 # 2026-10-07 screen sharing: the Broadcast Upload extension (project.yml `BroadcastUpload`).

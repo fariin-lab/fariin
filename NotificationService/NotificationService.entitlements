@@ -5,7 +5,11 @@
 	<!-- 1:1 audit #16, owner, 2026-10-08: lets the extension read the screen share keepalive in
 	     the shared container, so banners hide their text while a share is live. The App ID
 	     com.kulan.messenger.native.NotificationService must have this group ticked in the
-	     developer portal first, or its profile comes back without it and signing fails. -->
+	     developer portal first, or its profile comes back without it and signing fails.
+	     owner 2026-10-18 readable banners: this file was never applied (project.yml had no
+	     CODE_SIGN_ENTITLEMENTS for the extension); it is now. The same group is also the keychain
+	     access group the app shares its key copy through (Shared/NotifShared.swift). -->
+
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>group.com.kulan.messenger.native</string>

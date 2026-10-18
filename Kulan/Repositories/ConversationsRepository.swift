@@ -45,7 +45,11 @@ final class ConversationsRepository {
     /// owner 2026-10-18: every change also refreshes `GroupLinkDoor`'s list of my groups by invite
     /// code, so a group link card knows on its first frame whether it says Open Group.
     var conversations: [Conversation] = [] {
-        didSet { GroupLinkDoor.noteConversations(conversations) }
+        didSet {
+            GroupLinkDoor.noteConversations(conversations)
+            // owner 2026-10-18 readable banners: names + photo URLs for the notification extension.
+            NotifShare.noteConversations(conversations)
+        }
     }
     var hasLoaded = false   // false until the first real snapshot -> drives the skeleton
     /// 2026-09-24 audit: the listener ended in an error and no snapshot has arrived since. A failed
