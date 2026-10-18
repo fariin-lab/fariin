@@ -73,6 +73,13 @@ struct ChatSearchOverlay: View {
             ChatSearchPage(query: query, me: me, dark: dark, searching: searching,
                            chats: chats, people: people, personRow: personRow,
                            onOpenChat: onOpenChat, onOpenPerson: onOpenPerson)
+                // ⛔ AFTER THE BAR HAS GONE UP (owner 2026-10-18, build 973: "the Recent heading goes
+                // under the search bar"). The page is laid out at once for the bar's FINAL place, so
+                // while the field was still rising it passed over Recent and the first rows. The
+                // page now fades in once the rise is over (about 0.3s); leaving search is instant.
+                .transition(.asymmetric(
+                    insertion: .opacity.animation(.easeOut(duration: 0.18).delay(0.28)),
+                    removal: .identity))
         }
     }
 }

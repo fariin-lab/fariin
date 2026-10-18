@@ -20,8 +20,8 @@ extension GroupMemberSheet {
             currentRights: conv?.adminRights[uid],
             grantable: conv?.adminRightsOf(me).map(\.rawValue) ?? [],
             mutedUntil: conv?.restrictedUntil[uid] ?? 0,
-            label: conv?.memberLabels[uid] ?? "",
-            canEditLabel: uid == me || (conv?.adminCan(me, .changeInfo) ?? false))
+            role: conv?.roles[uid],
+            canEditRole: conv?.canSetRole(me, uid) ?? false)
     }
 }
 
@@ -187,6 +187,8 @@ struct GroupAdminsView: View {
     @State private var opened: String?
     @State private var showPick = false
     @State private var actionError: String?
+    /// The member picked in Add Admin, waiting for the confirm (owner 2026-10-18: "no confirmation").
+    @State private var pendingAdmin: String?
 
     private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
     private var canAddAdmins: Bool { conv?.adminCan(me, .addAdmins) ?? false }
@@ -225,12 +227,23 @@ struct GroupAdminsView: View {
         .sheet(isPresented: $showPick) {
             NavigationStack {
                 List(others, id: \.self) { uid in
-                    GroupMemberRow(conv: conv, uid: uid, me: me) { promote(uid) }
+                    GroupMemberRow(conv: conv, uid: uid, me: me) { pendingAdmin = uid }
                         .listRowInsets(EdgeInsets())
                 }
                 .navigationTitle("Add Admin")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Cancel") { showPick = false } } }
+                // Making someone an admin hands them power over the group, so it is asked first.
+                .alert("Make \(pendingAdmin.flatMap { conv?.names[$0] } ?? "this member") an admin?",
+                       isPresented: Binding(get: { pendingAdmin != nil }, set: { if !$0 { pendingAdmin = nil } })) {
+                    Button("Cancel", role: .cancel) { pendingAdmin = nil }
+                    Button("Make Admin") {
+                        if let uid = pendingAdmin { promote(uid) }
+                        pendingAdmin = nil
+                    }
+                } message: {
+                    Text("They will be able to manage the group with the rights you give them. You can change or remove them at any time.")
+                }
             }
             .presentationDetents([.medium, .large])
         }
@@ -398,7 +411,7 @@ struct AdminRightsView: View {
 
 // MARK: - Members
 
-/// Every member, searchable, Add Members on top; tap one for their card (remove, mute, admin, label).
+/// Every member, searchable, Add Members on top; tap one for their card (remove, mute, admin, role).
 struct GroupMembersListView: View {
     let cid: String
     private var repo = ConversationsRepository.shared
@@ -423,6 +436,19 @@ struct GroupMembersListView: View {
             if canAdd && query.isEmpty {
                 Section {
                     Button { showAdd = true } label: { Label("Add Members", systemImage: "person.badge.plus") }
+                }
+            }
+            // ⛔ ROLE — owner 2026-10-18: who holds a role, together at the top, so an admin sees
+            // them all in one place. Tap one to change or remove it on their card.
+            let withRoles = shown.filter { conv?.roles[$0] != nil }
+            if !withRoles.isEmpty && query.isEmpty {
+                Section {
+                    ForEach(withRoles, id: \.self) { uid in
+                        GroupMemberRow(conv: conv, uid: uid, me: me) { opened = uid }
+                            .listRowInsets(EdgeInsets())
+                    }
+                } header: { Text("Members with roles") } footer: {
+                    Text("Only admins can give a member a role.")
                 }
             }
             Section(conv?.memberCountLabel.capitalized ?? "Members") {
@@ -545,6 +571,7 @@ struct EditGroupView: View {
     @State private var saving = false
     @State private var error: String?
     @FocusState private var nameFocused: Bool
+    @FocusState private var descFocused: Bool
 
     private var trimmed: String { name.trimmingCharacters(in: .whitespaces) }
     private var trimmedDesc: String { desc.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -559,6 +586,7 @@ struct EditGroupView: View {
 
     var body: some View {
         NavigationStack {
+          ScrollViewReader { proxy in
             List {
                 Section {
                     VStack(spacing: 12) {
@@ -592,6 +620,7 @@ struct EditGroupView: View {
                                                 set: { desc = Limits.oneParagraph($0, max: Self.descChars) }),
                                   axis: .vertical)
                             .lineLimit(1...5)
+                            .focused($descFocused)
                         if descRemaining <= Self.descCounterAppearsAt {
                             Text("\(descRemaining)")
                                 .font(.footnote)
@@ -601,6 +630,7 @@ struct EditGroupView: View {
                                 .accessibilityLabel("\(descRemaining) characters left")
                         }
                     }
+                    .id("descEnd")
                 } footer: {
                     Text("Optional. Shown on the group's info page.")
                 }
@@ -608,6 +638,20 @@ struct EditGroupView: View {
                 if let error { Text(error).foregroundStyle(.red) }
             }
             .listStyle(.insetGrouped)
+            // ⛔ THE LINE BEING TYPED STAYS ABOVE THE KEYS (owner 2026-10-18, build 973: "the
+            // description goes under the keyboard"). A List does not follow a field that grows a line
+            // at a time, so on focus and on every change the page scrolls the card's end into view.
+            .onChange(of: descFocused) { _, on in
+                guard on else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    withAnimation(.smooth(duration: 0.25)) { proxy.scrollTo("descEnd", anchor: .bottom) }
+                }
+            }
+            .onChange(of: desc) { _, _ in
+                guard descFocused else { return }
+                withAnimation(.smooth(duration: 0.2)) { proxy.scrollTo("descEnd", anchor: .bottom) }
+            }
+          }
             .navigationTitle("Edit Group")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -26,6 +26,10 @@ enum StickerCreatorDoor {
 
     /// Posted after a sticker was saved and the creator has closed; the chat's composer opens the panel.
     static let created = Notification.Name("StickerCreatorDoor.created")
+    /// Posted just BEFORE the creator closes after a save (owner 2026-10-18, build 973: "first the
+    /// keyboard, a second later the stickers"). iOS hands the field its focus back during the close,
+    /// with whatever keys it has then; the composer puts the sticker panel on it first.
+    static let willReturn = Notification.Name("StickerCreatorDoor.willReturn")
 
     @MainActor static func present() {
         guard presented == nil, let top = WebLink.topViewController() else { return }
@@ -413,6 +417,7 @@ private struct StickerSaveView: View {
         // A short note that it worked (owner 2026-10-18), over the chat it lands back in.
         // And the chat underneath opens the sticker panel on it (owner 2026-10-18, build 969: after Save
         // the text keyboard came up instead of the stickers, with the new one first among them).
+        NotificationCenter.default.post(name: StickerCreatorDoor.willReturn, object: nil)
         StickerCreatorDoor.close {
             StickerSavedNote.show()
             NotificationCenter.default.post(name: StickerCreatorDoor.created, object: nil)

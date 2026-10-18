@@ -90,7 +90,13 @@ final class RowStickerView: UIView {
             return
         }
 
-        skeleton.setActive(true)
+        // Owner 2026-10-18: a sticker just sent wore a grey box for a beat. Its art is on the phone and
+        // loads in a moment, but the shimmer went up at once and faded over it. Only a load that is
+        // still running after a short wait shows the shimmer; a fast one never does.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            guard let self, self.generation == gen, self.art.contents == nil else { return }
+            self.skeleton.setActive(true)
+        }
         Task { @MainActor [weak self] in
             guard let data = await Self.load(s, url: url, enc: enc, cid: cid, localData: localData) else {
                 // Nothing came: no shimmer forever over an empty box.

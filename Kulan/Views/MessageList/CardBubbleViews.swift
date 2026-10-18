@@ -202,7 +202,24 @@ final class LinkPreviewBubbleView: UIView {
         backing.frame = plan.card
         backing.backgroundColor = tint.withAlphaComponent(0.10)
 
-        if let rect = plan.hero {
+        // owner 2026-10-18: a group card's photo as it travelled in the message is ENCRYPTED, which
+        // the avatar pipeline cannot open; the hero view can. So it sits in the avatar's circle, over
+        // the avatar's fallback. A live photo from `GroupLinkDoor` (no `imageEnc`) takes the avatar.
+        var groupPhotoRect: CGRect?
+        switch p.shape {
+        case .group, .groupUnavailable:
+            if p.imageEnc != nil, p.imageUrl != nil { groupPhotoRect = plan.avatar }
+        default: break
+        }
+        if let rect = groupPhotoRect {
+            hero.isHidden = false
+            hero.frame = rect
+            hero.clipsToBounds = true
+            // `configure` sets the radius (and a continuous curve) from its argument.
+            hero.configure(url: p.imageUrl, enc: p.imageEnc, cid: cid, cornerRadius: rect.width / 2)
+            hero.layer.cornerCurve = .circular
+            backing.insertSubview(hero, aboveSubview: avatar)   // over the fallback, under the words
+        } else if let rect = plan.hero {
             hero.isHidden = false
             hero.frame = rect
             // A story card's picture sits inside the card with its own corners; an article's runs
@@ -225,7 +242,7 @@ final class LinkPreviewBubbleView: UIView {
         if let rect = plan.avatar {
             avatar.isHidden = false
             avatar.frame = rect
-            avatar.configure(name: p.title, photoUrl: p.imageUrl)
+            avatar.configure(name: p.title, photoUrl: groupPhotoRect == nil ? p.imageUrl : nil)
         } else {
             avatar.isHidden = true
         }

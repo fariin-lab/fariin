@@ -50,13 +50,68 @@ struct ProfileAboutContent: View {
     let text: String
     /// The text is a prompt ("Add a description"), not content: drawn in the secondary colour.
     var placeholder = false
+    /// Web links and @usernames in the text can be tapped (owner 2026-10-18: a group's description).
+    var linked = false
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("About", systemImage: "text.alignleft").font(.body)
-            Text(text).foregroundStyle(placeholder ? .secondary : .primary)
+            if linked && !placeholder {
+                Text(Self.linkedText(text))
+                    .tint(Color(hex: 0x0A84FF))
+                    // A web link opens in the in-app browser, an @username on that person's profile
+                    // (our own kulan://u/ link, which the app's deep link routing opens).
+                    .environment(\.openURL, OpenURLAction { url in
+                        switch url.scheme?.lowercased() {
+                        case "http", "https": WebLink.open(url)
+                        case "kulan": UIApplication.shared.open(url)
+                        default: return .discarded
+                        }
+                        return .handled
+                    })
+            } else {
+                Text(text).foregroundStyle(placeholder ? .secondary : .primary)
+            }
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Plain text with its web addresses and @usernames made links. No markdown: a description is
+    /// what the person typed, so a `*` stays a `*`. An address without a scheme opens as https; an
+    /// @ counts only at the start or after a space, so an email address is not a username.
+    static func linkedText(_ text: String) -> AttributedString {
+        var out = AttributedString(text)
+        let ns = text as NSString
+        let all = NSRange(location: 0, length: ns.length)
+        func mark(_ r: NSRange, _ url: URL) {
+            guard let sr = Range(r, in: text),
+                  let lo = AttributedString.Index(sr.lowerBound, within: out),
+                  let hi = AttributedString.Index(sr.upperBound, within: out),
+                  out[lo..<hi].link == nil else { return }
+            out[lo..<hi].link = url
+        }
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            for m in detector.matches(in: text, range: all) {
+                guard var url = m.url else { continue }
+                let scheme = url.scheme?.lowercased() ?? ""
+                guard scheme == "http" || scheme == "https" else { continue }
+                if scheme == "http", !ns.substring(with: m.range).lowercased().hasPrefix("http://"),
+                   var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+                    parts.scheme = "https"
+                    if let secure = parts.url { url = secure }
+                }
+                mark(m.range, url)
+            }
+        }
+        if let re = try? NSRegularExpression(pattern: "(?<![^\\s])@([A-Za-z0-9_.]{1,32})") {
+            for m in re.matches(in: text, range: all) {
+                let handle = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                guard !handle.isEmpty, KulanApp.safeSegment(handle),
+                      let url = URL(string: "kulan://u/\(handle.lowercased())") else { continue }
+                mark(m.range, url)
+            }
+        }
+        return out
     }
 }
 

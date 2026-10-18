@@ -408,8 +408,32 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             self.cardView.layoutIfNeeded()
         } completion: { [weak self] _ in
             guard let self, self.transitionGen == gen, !self.searchingGifs else { return }
-            self.putCardHome()
-            self.onDidCollapseGifSearch()
+            self.homeWhenPanelLands(gen: gen, target: collapsedFrame, tries: 0)
+        }
+    }
+
+    /// ⛔ THE CARD WAITS FOR THE PANEL (owner 2026-10-18, build 973: "it goes small, disappears, and
+    /// another one comes up"). Taking the responder back makes iOS raise this panel with its own
+    /// keyboard slide, which often outlasts the card's spring. Moving the card home while the panel
+    /// was still low dropped it into a view mid-rise: the card vanished and a second panel came up.
+    /// So the card stays on top, already where it belongs, until the panel's on-screen frame (read
+    /// from the presentation layers, the frame as drawn) sits under it. Then the swap shows nothing.
+    /// About a second at most, then home anyway, so nothing can be left floating.
+    private func homeWhenPanelLands(gen: Int, target: CGRect, tries: Int) {
+        guard transitionGen == gen, !searchingGifs else { return }
+        var landed = false
+        if let win = window, let pl = layer.presentation() {
+            let wl = win.layer.presentation() ?? win.layer
+            let f = pl.convert(pl.bounds, to: wl)
+            landed = abs(f.minY - target.minY) < 1 && abs(f.height - target.height) < 1
+        }
+        if landed || tries >= 60 {
+            putCardHome()
+            onDidCollapseGifSearch()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60) { [weak self] in
+            self?.homeWhenPanelLands(gen: gen, target: target, tries: tries + 1)
         }
     }
 
@@ -465,7 +489,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         for p in store.packs { s.append(Section(shelf: .pack(p), stickers: p.stickers)) }
         sections = s
         let anyMine = !store.recents.isEmpty || !store.favorites.isEmpty
-        editButton.isHidden = !anyMine || tabs.selectedSegmentIndex == 0
+        editButton.isHidden = !anyMine || tabs.selectedSegmentIndex == 0 || !AppFeatures.stickerEdit
         if editing && !anyMine { endEditing() }
         grid.reloadData()
         buildStrip()
@@ -636,6 +660,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             self.grid.isHidden = gifsOn
             self.strip.isHidden = gifsOn
             self.editButton.isHidden = gifsOn || (StickerStore.shared.recents.isEmpty && StickerStore.shared.favorites.isEmpty)
+                || !AppFeatures.stickerEdit
         }
         setNeedsLayout()
     }

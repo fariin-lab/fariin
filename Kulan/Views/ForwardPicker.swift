@@ -1,4 +1,5 @@
 import SwiftUI
+import FirebaseFirestore
 
 // Forward a message to one or more chats. Pick chats (multi-select), optionally add your own
 // text, tap Send — the sheet closes INSTANTLY (owner's pick, the reference app model) and the re-sends
@@ -11,12 +12,25 @@ struct ForwardPicker: View {
     var onSent: () -> Void = {}       // fired at close (e.g. exit selection mode)
     var onQueued: (String) -> Void = { _ in }   // toast label ("Sent to Adnan")
     var onFailed: () -> Void = {}     // something didn't arrive after the background run
+    /// SHARING, not forwarding (owner 2026-10-18: Share Group opens this sheet, not the system one).
+    /// The text goes out as the person's own new message: no "Forwarded" line, no forwarding switch.
+    var isShare = false
 
     // Single-message convenience (unchanged call sites).
     init(message: Message, sourceCid: String, onSent: @escaping () -> Void = {},
          onQueued: @escaping (String) -> Void = { _ in }, onFailed: @escaping () -> Void = {}) {
         self.messages = [message]; self.sourceCid = sourceCid
         self.onSent = onSent; self.onQueued = onQueued; self.onFailed = onFailed
+    }
+    /// Share a line of text (a group's invite link) to chats, through this same sheet.
+    init(shareText: String, onQueued: @escaping (String) -> Void = { _ in }) {
+        let me = AuthService.shared.uid ?? ""
+        self.messages = [Message(id: "share-\(UUID().uuidString)",
+                                 data: ["authorId": me, "text": shareText, "type": "text", "createdAt": Timestamp()],
+                                 cid: "", crypto: Crypto.shared)]
+        self.sourceCid = ""
+        self.onQueued = onQueued
+        self.isShare = true
     }
     init(messages: [Message], sourceCid: String, onSent: @escaping () -> Void = {},
          onQueued: @escaping (String) -> Void = { _ in }, onFailed: @escaping () -> Void = {}) {
@@ -239,7 +253,7 @@ struct ForwardPicker: View {
     private func sendAll() {
         // Disable Sharing › No Forwarding (owner, 2026-10-03): every Forward button hides already;
         // this is the last door, for a sheet opened just before the switch was turned on.
-        guard !ChatRestrictions.isOn(.noForwarding, cid: sourceCid) else { return }
+        guard isShare || !ChatRestrictions.isOn(.noForwarding, cid: sourceCid) else { return }
         let targets = selected
         let note = comment.trimmingCharacters(in: .whitespacesAndNewlines)
         // Oldest first so forwarded messages land in the same order they were sent.
@@ -321,7 +335,7 @@ struct ForwardPicker: View {
                 p.createdAt = Date()
                 p.sendState = .sending
                 // The same rule the real send uses, so the bubble never flips when it lands.
-                p.forwarded = ChatService.isForward(m, from: src, to: cid)
+                p.forwarded = !isShare && ChatService.isForward(m, from: src, to: cid)
                 p.reactions = [:]     // reactions belong to the ORIGINAL message, not this copy
                 p.replyTo = nil       // and so does whatever it was replying to over there
                 if p.localImageData == nil { p.localImageData = posters[m.id] }
@@ -348,7 +362,13 @@ struct ForwardPicker: View {
                 for (i, m) in ordered.enumerated() {
                     // Same clientId the bubble above carries, so the echo lands ON it.
                     let clientId = ids[cid]?[i]
-                    do { try await ChatService.forwardMessage(m, from: src, to: cid, clientId: clientId) }
+                    do {
+                        if isShare {
+                            try await ChatService.sendText(cid: cid, text: m.text, clientId: clientId, forwarded: false)
+                        } else {
+                            try await ChatService.forwardMessage(m, from: src, to: cid, clientId: clientId)
+                        }
+                    }
                     catch {
                         anyFailed = true
                         // Nothing is coming to replace this one. Clear it from BOTH places: the chat

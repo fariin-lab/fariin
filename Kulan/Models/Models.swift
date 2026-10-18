@@ -879,6 +879,107 @@ struct Message: Identifiable, Equatable, Codable {
     }
 }
 
+/// ⛔ ROLE — owner 2026-10-18. A member's tag in one group: a few words and, if wanted, one emoji
+/// in front. The second reference app's limits (MemberLabelViewController.swift:89, 24 glyphs; :479,
+/// never an emoji alone). Stored at `roles.{uid}` = {text, emoji?}; firestore.rules checks the shape.
+struct GroupRole: Equatable, Hashable {
+    var text: String
+    var emoji: String?
+
+    /// The longest text. Counted in UTF-16 units, which is never fewer than the characters the
+    /// rules' `size()` counts, so what the editor lets through the server lets through too.
+    static let maxText = 24
+    /// An emoji is one character to the eye but may be several underneath (a flag, a skin tone, a
+    /// family): room for the longest common ones.
+    static let maxEmoji = 16
+
+    init(text: String, emoji: String?) {
+        self.text = text
+        self.emoji = (emoji?.isEmpty ?? true) ? nil : emoji
+    }
+
+    /// From the stored map. Anything without words is no role.
+    init?(_ raw: Any) {
+        guard let m = raw as? [String: Any], let t = m["text"] as? String, !t.isEmpty else { return nil }
+        self.init(text: t, emoji: m["emoji"] as? String)
+    }
+
+    /// "🎨 Designer", or just "Designer".
+    var display: String { emoji.map { "\($0) \(text)" } ?? text }
+
+    /// Clean text as it will be saved: one line, runs of spaces made one, trimmed, cut to the limit.
+    static func clean(_ raw: String) -> String {
+        let one = raw.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+        return fit(one, max: maxText)
+    }
+
+    /// The longest prefix, whole characters only, that stays within `max` UTF-16 units.
+    static func fit(_ s: String, max: Int) -> String {
+        var out = ""
+        for ch in s {
+            if out.utf16.count + String(ch).utf16.count > max { break }
+            out.append(ch)
+        }
+        return out
+    }
+}
+
+/// 2026-10-18 group moderation: the group's `mod` map, written only by Fariin's admin panel
+/// (functions-admin groupModSet / groupDisable). The ladder: a Scam / Fake `label`, then `limited`
+/// (nobody new joins), `suspended` (nobody sends, joins, invites or edits; timed or until lifted),
+/// `disabled` (the same, for good). The rules enforce every step; this only decides what to show.
+/// A suspension whose `until` has passed reads as lifted, as the rules read it.
+struct GroupMod: Equatable, Hashable {
+    var state: String = "ok"
+    var reason: String = ""
+    var label: String = ""        // "", "scam" or "fake"
+    var untilMillis: Double = 0   // 0 = no end date (only meaningful while suspended)
+    var notice: String = ""       // the short public text members see
+
+    init(data: [String: Any]?) {
+        guard let d = data else { return }
+        let s = d["state"] as? String ?? "ok"
+        state = ["ok", "limited", "suspended", "disabled"].contains(s) ? s : "ok"
+        reason = d["reason"] as? String ?? ""
+        let l = d["label"] as? String ?? ""
+        label = ["scam", "fake"].contains(l) ? l : ""
+        untilMillis = ((d["until"] as? Timestamp)?.dateValue().timeIntervalSince1970 ?? 0) * 1000
+        notice = String((d["notice"] as? String ?? "").prefix(200))
+    }
+
+    /// Nobody may send here right now (suspended and not yet over, or disabled).
+    func blocksSending(now: Date = Date()) -> Bool {
+        if state == "disabled" { return true }
+        guard state == "suspended" else { return false }
+        return untilMillis <= 0 || untilMillis > now.timeIntervalSince1970 * 1000
+    }
+
+    /// The sentence in place of the message bar. The server's own notice when it wrote one, else
+    /// a plain line from the reason, with the end date of a timed suspension.
+    var noticeText: String {
+        var text = notice
+        if text.isEmpty {
+            let why: String
+            switch reason {
+            case "spam": why = "spam"
+            case "scam": why = "scams or fraud"
+            case "copyright": why = "copyright complaints"
+            case "fake": why = "impersonation"
+            case "abuse": why = "abuse or violence"
+            case "adult": why = "adult content"
+            case "illegal": why = "illegal content"
+            default: why = "breaking the Fariin rules"
+            }
+            text = state == "disabled" ? "This group was closed for \(why)." : "This group is suspended for \(why)."
+        }
+        if state == "suspended", untilMillis > 0 {
+            let until = Date(timeIntervalSince1970: untilMillis / 1000)
+            text += " Until " + until.formatted(date: .abbreviated, time: .shortened) + "."
+        }
+        return text
+    }
+}
+
 struct Conversation: Identifiable, Equatable, Hashable {
     let id: String            // cid ("uidA_uidB")
     var users: [String]
@@ -954,7 +1055,10 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var membersCanAdd: Bool            // group: non-admins may add members (default false)
     var membersCanEditInfo: Bool       // group: non-admins may edit name/photo/desc (default false)
     var onlyAdminsCall = false         // group: only admins may START a call (joining stays open)
-    var memberLabels: [String: String] = [:]   // group: uid → the short tag shown under their name
+    /// ⛔ ROLE — owner 2026-10-18: uid → the short tag an ADMIN gives a member ("🎨 Designer"),
+    /// shown beside their name in the group's bubbles, the members list and their card. Groups only.
+    /// Replaces the self-set Member Label of the same day (`memberLabels`, never shipped).
+    var roles: [String: GroupRole] = [:]
     /// owner 2026-10-18: the group's SHARED wallpaper (`ChatWallpaper.stored`, or "u:<download
     /// link>" for a photo). Set by whoever may change group info; beats each phone's own pick.
     /// nil = never set, so every phone keeps its own. Groups only; a 1:1 never carries it.
@@ -1004,6 +1108,11 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// owner 2026-10-18: people removed from the group (ChatService.removeGroupMember). They cannot
     /// rejoin by link while listed; Removed Users in Group Settings lets one back.
     var bannedUids: [String] = []
+    /// 2026-10-18 group moderation: where Fariin's moderators have put the group (`mod`, written
+    /// only by the admin panel; the rules refuse any phone's write). See `GroupMod`.
+    var groupMod: GroupMod = GroupMod(data: nil)
+    /// 2026-10-18: the group's verified badge (`verified`, admin panel only).
+    var groupVerified: Bool = false
 
     /// The label for a member whose account is gone. Same words the server writes into `names`.
     static let deletedAccountName = "Deleted Account"
@@ -1071,8 +1180,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.membersCanAdd = data["membersCanAdd"] as? Bool ?? false
         self.membersCanEditInfo = data["membersCanEditInfo"] as? Bool ?? false
         self.onlyAdminsCall = data["onlyAdminsCall"] as? Bool ?? false
-        self.memberLabels = (data["memberLabels"] as? [String: Any] ?? [:]).compactMapValues { $0 as? String }
-            .filter { !$0.value.isEmpty }
+        self.roles = self.convType == "group"
+            ? (data["roles"] as? [String: Any] ?? [:]).compactMapValues { GroupRole($0) }
+            : [:]
         self.groupWallpaper = self.convType == "group" ? data["wallpaper"] as? String : nil
         self.inviteCode = data["inviteCode"] as? String ?? ""
         self.adminRights = stringArrayMap(data["adminRights"])
@@ -1085,6 +1195,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.acceptedAtMillis = ((data["acceptedAt"] as? Timestamp)?.dateValue().timeIntervalSince1970 ?? 0) * 1000
         self.deletedUsers = data["deletedUsers"] as? [String] ?? []
         self.bannedUids = data["bannedUids"] as? [String] ?? []
+        self.groupMod = GroupMod(data: data["mod"] as? [String: Any])
+        self.groupVerified = data["verified"] as? Bool ?? false
         self.restrictedFlags = stringArrayMap(data["restrictedFlags"])
         self.restrictedUntil = doubleMap(data["restrictedUntil"])
         self.lastReactionEnc = data["lastReactionEnc"] as? String
@@ -1186,6 +1298,14 @@ struct Conversation: Identifiable, Equatable, Hashable {
     func adminRightsOf(_ uid: String) -> [Right] {
         Right.allCases.filter { adminCan(uid, $0) }
     }
+    /// ⛔ ROLE — owner 2026-10-18: may `me` give `target` a role? Only admins, never yourself as a
+    /// member. The owner: anyone, admins and themselves included. An admin: needs Change group info,
+    /// and never the owner's. The same test as firestore.rules `roleWriteOK`.
+    func canSetRole(_ me: String, _ target: String) -> Bool {
+        guard isGroup, users.contains(target) else { return false }
+        if isOwner(me) { return true }
+        return adminCan(me, .changeInfo) && !isOwner(target)
+    }
     /// owner 2026-10-18: may `me` promote, demote or edit `target`? The owner: anyone but themselves.
     /// An admin with `addAdmins`: a member (to promote), or an admin they promoted. Never the owner.
     /// The same test as firestore.rules `delegatedAdminEditOK`.
@@ -1199,6 +1319,10 @@ struct Conversation: Identifiable, Equatable, Hashable {
     // Per-member restrictions (the reference app bannedRights). Slugs the client enforces at send time.
     enum Restrict: String, CaseIterable, Identifiable {
         case sendText, sendMedia, sendVoice, sendStickers, sendPolls, sendReactions, pinMessages, addMembers, changeInfo
+        // owner 2026-10-18 (admin delete sheet, "What can this member do?"): `sendMedia` split three
+        // ways. The old flag still means all three, so a restriction written by an older build keeps
+        // its meaning; the sheet writes the finer ones (plus `sendMedia` when all three are off).
+        case sendPhotos, sendFiles, sendLinks
         var id: String { rawValue }
     }
     /// Flags currently restricting `uid` (empty once the `until` timestamp passes). Admins/owner are never restricted.
@@ -1208,7 +1332,23 @@ struct Conversation: Identifiable, Equatable, Hashable {
         return Set(flags)
     }
     func isRestricted(_ uid: String, _ r: Restrict, now: Double) -> Bool {
-        activeRestrictions(uid, now: now).contains(r.rawValue)
+        let active = activeRestrictions(uid, now: now)
+        if active.contains(r.rawValue) { return true }
+        // owner 2026-10-18: the old all-media flag covers each of the three it was split into.
+        switch r {
+        case .sendPhotos, .sendFiles, .sendLinks: return active.contains(Restrict.sendMedia.rawValue)
+        default: return false
+        }
+    }
+    /// owner 2026-10-18: what `uid` may not send right now, in words for the composer's notices
+    /// ("photos and videos, files"). Empty when nothing is held back, or when everything is (the
+    /// muted bar says that one).
+    func blockedSendWords(_ uid: String, now: Double) -> [String] {
+        guard !isMutedMember(uid, now: now) else { return [] }
+        let words: [(Restrict, String)] = [(.sendPhotos, "photos and videos"), (.sendFiles, "files"),
+                                           (.sendVoice, "voice messages"), (.sendStickers, "stickers and GIFs"),
+                                           (.sendLinks, "links")]
+        return words.filter { isRestricted(uid, $0.0, now: now) }.map(\.1)
     }
     /// The "mute everything" preset = every send flag restricted (what the simple Mute action sets).
     static let muteAllFlags: [String] = [Restrict.sendText, .sendMedia, .sendVoice, .sendStickers, .sendPolls, .sendReactions].map(\.rawValue)

@@ -419,8 +419,17 @@ struct MediaDismissHost: UIViewRepresentable {
                 // The constant 0.8 scale + shadow: a 0.2s cock inside the 0.25s timeline → both
                 // complete at progress 0.8 (scrubbed, not recomputed from position).
                 let t = min(1, progress / 0.8)
-                c.transform = CGAffineTransform(scaleX: 1 - 0.2 * t, y: 1 - 0.2 * t)
-                c.layer.shadowOpacity = Float(t)
+                // ⛔ THE STORY EDITOR KEEPS ITS STORY SIZE (owner 2026-10-18, build 973: "it becomes a
+                // full picture; keep the story size when I drag down, like the reference"). Theirs
+                // moves the card under the finger at full size, no shrink, no shadow. It still follows
+                // the finger both ways (his build 972 report), only the shrink is gone.
+                if parent.style == .storyEditor {
+                    c.transform = .identity
+                    c.layer.shadowOpacity = 0
+                } else {
+                    c.transform = CGAffineTransform(scaleX: 1 - 0.2 * t, y: 1 - 0.2 * t)
+                    c.layer.shadowOpacity = Float(t)
+                }
                 // Background AND chrome melt together with the drag: the presented root (black bg +
                 // header + toolbar, media already hidden) is faded as one unit over the live chat —
                 // the reference app's fromView.alpha scrub. Chrome used to vanish instantly here instead.

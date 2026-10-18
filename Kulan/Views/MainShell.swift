@@ -3081,7 +3081,8 @@ struct ChatsView: View {
                 }
             }
             .sheet(item: pendingInvite) { item in
-                JoinGroupSheet(code: item.code).presentationDetents([.large])
+                // owner 2026-10-18: the sheet sizes itself to what it holds (its own detent).
+                JoinGroupSheet(code: item.code)
             }
             .confirmationDialog("Delete \(selection.count) chat\(selection.count == 1 ? "" : "s")?",
                                 isPresented: $showDeleteSelected, titleVisibility: .visible) {

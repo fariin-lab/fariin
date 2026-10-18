@@ -350,6 +350,14 @@ struct ChatHeaderModel: Equatable {
         return verifiedMark(color: color)
     }
 
+    /// 2026-10-18 group moderation: the mark beside a group Fariin labelled Scam or Fake. A red
+    /// warning triangle, flattened like the badge so the bar cannot recolour it.
+    static func warningMark() -> UIImage? {
+        let config = UIImage.SymbolConfiguration(pointSize: 13, weight: .bold)
+            .applying(UIImage.SymbolConfiguration(paletteColors: [.white, .systemRed]))
+        return flat(UIImage(systemName: "exclamationmark.triangle.fill", withConfiguration: config))
+    }
+
     /// The timer, as the old SwiftUI header drew it: 13pt semibold. A TEMPLATE, tinted by the image
     /// view, so it follows the header's light/dark decision instead of freezing one appearance in.
     static func disappearingTimer() -> UIImage? {

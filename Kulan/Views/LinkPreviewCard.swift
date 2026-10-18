@@ -43,6 +43,8 @@ struct LinkPreviewCard: View {
     var body: some View {
         if let handle = profileHandle {
             profileCard(handle)
+        } else if let code = URL(string: preview.url).flatMap({ LinkPreviewService.groupCode(in: $0) }) {
+            groupCard(code)
         } else if let link = URL(string: preview.url).flatMap({ LinkPreviewService.storyLink(in: $0) }) {
             storyCard(id: link.id, handle: link.handle)
         } else {
@@ -114,6 +116,47 @@ struct LinkPreviewCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(fg.opacity(0.10))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    // MARK: - A group
+
+    /// owner 2026-10-18: the SwiftUI copy of the list's group card (`MessageRowLayout`, `.group`):
+    /// photo, name, "N members", View Group or Open Group. Tapping opens `GroupLinkDoor`.
+    @ViewBuilder private func groupCard(_ code: String) -> some View {
+        let live = GroupLinkDoor.cached(code)
+        let fromServer = preview.desc.range(of: #"^[0-9]+ members?$"#, options: .regularExpression) != nil
+        let name = live?.title ?? (fromServer ? preview.title : "Group invite")
+        let line = live?.membersLine ?? (fromServer ? preview.desc : "Fariin group")
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Group {
+                    if let p = live?.photoUrl {
+                        AvatarView(name: name, photoUrl: p, size: 44)
+                    } else if fromServer, let img = preview.imageUrl, let enc = preview.imageEnc {
+                        SecureImageView(imageUrl: img, enc: enc, cid: cid, smallSync: true)
+                            .frame(width: 44, height: 44).clipShape(Circle())
+                    } else {
+                        AvatarView(name: name, photoUrl: nil, size: 44)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name).font(.system(size: 15, weight: .semibold)).foregroundStyle(fg).lineLimit(1)
+                    Text(line).font(.system(size: 13)).foregroundStyle(fg.opacity(0.75)).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 8)
+            Divider().overlay(fg.opacity(0.12))
+            Text(GroupLinkDoor.isMember(code) ? "Open Group" : "View Group")
+                .font(.system(size: 14, weight: .semibold)).foregroundStyle(fg)
+                .frame(maxWidth: .infinity).frame(height: 40)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(fg.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onTapGesture { GroupLinkDoor.open(code, push: true) }
+        .onAppear { GroupLinkDoor.prewarm(code) }
     }
 
     // MARK: - A story

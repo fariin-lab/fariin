@@ -43,6 +43,9 @@ struct SenderChrome: Equatable {
     var showsAvatar: Bool        // last bubble of the cluster — the avatar sits on the baseline
     var avatarUrl: String?
     var verified: Bool
+    /// owner 2026-10-18: their Role in this group ("🎨 Designer", `GroupRole.display`), drawn as a
+    /// small chip after the name and tick inside the first bubble. nil = none.
+    var role: String? = nil
 }
 
 /// The tinted quote box inside a bubble that is a reply.
@@ -307,6 +310,12 @@ enum BubbleBody: Equatable {
             /// One of our story links (fariin.com/<username>/s/<id>): the author's name, the
             /// picture, the caption and a View Story button, which opens it in the app.
             case story(id: String, handle: String?)
+            /// owner 2026-10-18: one of our group links (fariin.com/g/<code>). The profile card's
+            /// shape: the group photo, name, "N members", and View Group, or Open Group when I am
+            /// already in it (`member`, read from `GroupLinkDoor` when the row is built).
+            case group(code: String, member: Bool)
+            /// The link was dead when it was sent, or the server says so now.
+            case groupUnavailable
         }
         var shape: Shape
         var url: String

@@ -450,6 +450,10 @@ struct ThreadView: View {
     @State private var morePickerTarget: Message? // any-emoji picker
     @State private var reactorsTarget: Message?   // "who reacted" sheet
     @State private var pendingDelete: Message?
+    /// owner 2026-10-18: an admin deleting other members' messages in a group (AdminDeleteSheet).
+    @State private var adminDeleteRequest: AdminDeleteRequest?
+    /// owner 2026-10-18: the words of the "You're restricted in this group" alert (voice, media).
+    @State private var restrictedNoticeText = "An admin has turned off voice messages for you."
     // 2026-09-24 decision D14: a tapped failed message opens Resend / Delete instead of resending.
     @State private var failedActionTarget: Message?
     @State private var editingMessage: Message?   // INLINE edit — no modal/sheet
@@ -1154,7 +1158,7 @@ struct ThreadView: View {
     private var canShowComposer: Bool {
         // The UIKit bar lives in the list's controller, so the preview's empty `bottomBarContent`
         // never hid it: `nil` state here is what takes it out (`hideComposer`). See `showsJumpButton`.
-        !preview && !selecting && !searchActive && !notAMember && !cannotSendAnnouncement && !iAmMuted
+        !preview && !selecting && !searchActive && !notAMember && !groupModBlocked && !cannotSendAnnouncement && !iAmMuted
             && !repo.iBlocked && requestStance != .incoming
             // ⛔ A CORRECT CHAT KEY OPENS THE COMPOSER AT ONCE — owner, 2026-10-04: "don't show Chat
             // Key accepted, open the text bar automatically". The server has already accepted the
@@ -1168,7 +1172,7 @@ struct ThreadView: View {
     /// 2026-09-24 decision D-composer-5: the reasons in `canShowComposer` that mean "you cannot send
     /// here now" (not selection, search or the key notice, which are only a moment).
     private var sendingClosed: Bool {
-        notAMember || cannotSendAnnouncement || iAmMuted || repo.iBlocked
+        notAMember || groupModBlocked || cannotSendAnnouncement || iAmMuted || repo.iBlocked
             || requestStance == .incoming || (requestStance == .awaitingReply && !keyAccepted)
             || (cannotMessageThem && !keyAccepted) || otherAccountDeleted
     }
@@ -1184,6 +1188,8 @@ struct ThreadView: View {
                 searchNavBar.transition(.opacity)
             } else if notAMember {
                 removedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else if groupModBlocked {
+                groupModBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if cannotSendAnnouncement {
                 announcementBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if iAmMuted {
@@ -1372,7 +1378,7 @@ struct ThreadView: View {
         // 2026-09-24 feature-audit: the sendVoice restriction, said before a note is recorded.
         .alert("You're restricted in this group", isPresented: $voiceRestricted) {
             Button("OK", role: .cancel) {}
-        } message: { Text("An admin has turned off voice messages for you.") }
+        } message: { Text(restrictedNoticeText) }   // owner 2026-10-18: voice or media
     }
 
     // Split into two halves at an erased boundary: this modifier chain (~28 covers/sheets/alerts on one
@@ -2053,8 +2059,8 @@ struct ThreadView: View {
                              currentRights: conversation?.adminRights[m.id],
                              grantable: conversation?.adminRightsOf(me).map(\.rawValue) ?? [],
                              mutedUntil: conversation?.restrictedUntil[m.id] ?? 0,
-                             label: conversation?.memberLabels[m.id] ?? "",
-                             canEditLabel: m.id == me || (conversation?.adminCan(me, .changeInfo) ?? false))
+                             role: conversation?.roles[m.id],
+                             canEditRole: conversation?.canSetRole(me, m.id) ?? false)
                 .presentationDetents([.medium, .large])
         }
         .fullScreenCover(isPresented: $showGroupCall) { GroupCallView() }
@@ -2075,7 +2081,13 @@ struct ThreadView: View {
                                        onDeleteForMe: { m in deleteForMe(m) },
                                        onMarkDeleted: { m in repo.markDeletedLocally(m.id) },
                                        onRestoreDeleted: { m in repo.restoreAfterFailedDelete(m.id) },
-                                       canDeleteForEveryone: { m in canDeleteForEveryone(m) }))
+                                       canDeleteForEveryone: { m in canDeleteForEveryone(m) },
+                                       // owner 2026-10-18: the admin delete sheet (AdminDeleteSheet).
+                                       adminDeleteRequest: $adminDeleteRequest,
+                                       adminRequestFor: { ms in adminDeleteRequestFor(ms) },
+                                       conversation: conversation,
+                                       loadedByAuthor: { ms in loadedDeletable(by: ms.map(\.authorId)) },
+                                       onAdminProceed: { o in applyAdminDelete(o) }))
         .onChange(of: ConversationsRepository.shared.conversations) { _, list in
             let resolved = list.first { $0.id == cid }   // O(n) ONCE per change, not per render
             if resolved != cachedConv { cachedConv = resolved }
@@ -2851,7 +2863,12 @@ struct ThreadView: View {
     }
 
     private var otherUid: String {
-        cid.split(separator: "_").map(String.init).first { $0 != me } ?? ""
+        // Only a 1:1 id ("uidA_uidB") names another person. A group's id has no "_", and it used to
+        // come back whole as "the other person": a group just created, opened before its document
+        // arrived, showed the 1:1 call buttons for a moment (owner 2026-10-18, build 973).
+        let parts = cid.split(separator: "_").map(String.init)
+        guard parts.count == 2 else { return "" }
+        return parts.first { $0 != me } ?? ""
     }
 
     // Cached conversation: resolved once + refreshed only when it changes (onAppear + onChange
@@ -3235,7 +3252,8 @@ struct ThreadView: View {
         // double tick) exactly like the read cutoff, so it keys this cache and sits in each row's value.
         let deliveredCutoff = repo.otherDeliveredMillis
         // owner audit 2026-10-06 chat #73: group sender names are read while building a row too.
-        let nameTok = isGroup ? "\(conversation?.names.hashValue ?? 0)" : "-"
+        // owner 2026-10-18: and their Role chips, which widen the name band (a height-free, width change).
+        let nameTok = isGroup ? "\(conversation?.names.hashValue ?? 0):\(conversation?.roles.hashValue ?? 0)" : "-"
         // owner audit 2026-10-06 chat #45: grouping and date facts from the one-pass cache.
         let geo = rowGeometry
         // The open Restricted chat request grows Reject / Accept buttons, a HEIGHT change on one row.
@@ -3433,6 +3451,8 @@ struct ThreadView: View {
             // owner audit 2026-10-06 chat #73: the day ("Today" becomes "Yesterday" at midnight, time
             // zone, 12/24-hour) and the group's sender names are read while building a row as well.
             "\(dayTick)", "\(conversation?.names.hashValue ?? 0)",
+            // owner 2026-10-18: the Role chip beside a sender's name is read while building a row too.
+            "\(conversation?.roles.hashValue ?? 0)",
             // The Restricted chat request I can answer: its notice carries Reject / Accept.
             liveRestrictRequestId ?? "-",
         ].joined(separator: "|")
@@ -3457,6 +3477,7 @@ struct ThreadView: View {
             searchTerm: searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
             nameFor: { personName($0) },
             avatarFor: { conversation?.photos[$0] },
+            roleFor: { isGroup ? conversation?.roles[$0]?.display : nil },   // owner 2026-10-18 Role
             resolveOriginal: { id in loadedMessage(id: id) },   // owner audit 2026-10-06 chat #45
             quoteHiddenByBlock: { repo.isHiddenByBlock(id: $0) },
             storyIsLive: { storyId, author in
@@ -3833,6 +3854,7 @@ struct ThreadView: View {
             openProfileHandle(handle)
             return
         }
+        if openGroupLink(url) { return }
         // ⛔ THE LINK TEXT OPENS THE STORY EXACTLY AS ITS CARD DOES — owner 2026-10-13: tapping the
         // picture flew the story out of the card and back into it; tapping the link under it opened
         // the same story with no anchor (`from: ""`), because this route was handed the address
@@ -3864,6 +3886,17 @@ struct ThreadView: View {
     /// refuses yourself). You are already where it leads, so it opens the keyboard. Anyone else's
     /// chat slides in over this one, from the lookup made when the card was drawn
     /// (`ProfileCardDoor`). A name nobody holds says so.
+    private func openGroupLink(_ url: URL) -> Bool {
+        // ⛔ A GROUP LINK OPENS THE JOIN SHEET, NOT A WEB PAGE (owner 2026-10-18). The link, its card
+        // and the card's button all come here: a group I am in opens at once, any other the join
+        // sheet (`GroupLinkDoor`). Both https://fariin.com/g/<code> and kulan://g/<code>.
+        guard Flags.groupsEnabled, case .group(let code)? = KulanApp.route(from: url) else { return false }
+        inputFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        GroupLinkDoor.open(code, push: true)
+        return true
+    }
+
     /// ⛔ A STORY LINK OPENS THE STORY, NOT "Open link?" (owner, 2026-10-11). The link, its card and
     /// the card's View Story button all come here. One that cannot be found says so.
     /// `rowId`: the message whose card was tapped, so the story flies out of that card's picture.
@@ -4064,10 +4097,14 @@ struct ThreadView: View {
                     openProfileHandle(handle)
                     return
                 }
+                if openGroupLink(u) { return }
                 if openStoryLink(u, rowId: id) { return }
                 WebLink.open(u)   // the in-app Safari sheet, not a trip out to Safari
             },
             onTapLinkProfile: { id in
+                // A group card's View Group / Open Group button: the same door as its body.
+                if let m = repo.items.first(where: { $0.rowId == id }), let lp = m.linkPreview,
+                   let u = URL(string: lp.url), openGroupLink(u) { return }
                 guard let m = repo.items.first(where: { $0.rowId == id }), let lp = m.linkPreview,
                       let handle = URL(string: lp.url).flatMap({ LinkPreviewService.profileHandle(in: $0) })
                 else { return }
@@ -4550,6 +4587,65 @@ struct ThreadView: View {
         guard let c = conversation, c.isGroup, c.adminCan(me, .deleteMessages),
               !m.id.contains("-") else { return false }
         return c.isOwner(me) || !c.isOwner(m.authorId)
+    }
+
+    /// owner 2026-10-18: does this delete open AdminDeleteSheet? A group, I hold "Delete messages",
+    /// I may delete EVERY one of them for everyone, and at least one is another member's (not a
+    /// system line). Anything else keeps the alert: a 1:1, my own messages only, a mixed selection
+    /// with something I may only remove from my side.
+    private func adminDeleteRequestFor(_ ms: [Message]) -> AdminDeleteRequest? {
+        guard let c = conversation, c.isGroup, c.adminCan(me, .deleteMessages), !ms.isEmpty,
+              ms.allSatisfy({ canDeleteForEveryone($0) }),
+              ms.contains(where: { $0.authorId != me && !$0.isSystem }) else { return nil }
+        return AdminDeleteRequest(messages: ms)
+    }
+
+    /// owner 2026-10-18: "Delete all from": every LOADED message of these senders that I may delete
+    /// for everyone. There is no server sweep yet, so older history this phone never loaded stays.
+    private func loadedDeletable(by authors: [String]) -> [String: [String]] {
+        let set = Set(authors.filter { $0 != me })
+        var out: [String: [String]] = [:]
+        for m in repo.items where set.contains(m.authorId) && !m.isSystem && canDeleteForEveryone(m) {
+            out[m.authorId, default: []].append(m.id)
+        }
+        return out
+    }
+
+    /// owner 2026-10-18: Proceed on AdminDeleteSheet. The deletes go through the selection's own
+    /// path (tombstones at once, four server calls at a time, put back and said on a refusal); then
+    /// the spam reports, then the ban or the restriction, each its own write.
+    private func applyAdminDelete(_ o: AdminDeleteOutcome) {
+        if !o.deleteIds.isEmpty {
+            selectedIds = Set(o.deleteIds)
+            bulkDelete(everyone: true)
+        }
+        guard !o.reportSpam.isEmpty || !o.ban.isEmpty || !o.restrict.isEmpty else { return }
+        let cid = self.cid
+        let names = conversation?.names ?? [:]
+        func nm(_ u: String) -> String { let n = names[u] ?? ""; return n.isEmpty ? "Member" : n }
+        // No end date, as the reference app's sheet: the ~50 year sentinel the Mute "forever" uses.
+        let forever = (Date().timeIntervalSince1970 + 60 * 60 * 24 * 365 * 50) * 1000
+        Task {
+            for (a, ids) in o.reportSpam {
+                await ChatService.reportSpam(reportedUid: a, cid: cid, messageIds: ids)
+            }
+            var refused = false
+            for a in o.ban {
+                do { try await ChatService.removeGroupMember(cid: cid, uid: a, name: nm(a)) } catch { refused = true }
+            }
+            for (a, f) in o.restrict {
+                do {
+                    try await ChatService.restrictMember(cid: cid, uid: a, name: nm(a), flags: f,
+                                                         until: f.isEmpty ? 0 : forever)
+                } catch { refused = true }
+            }
+            var said: [String] = []
+            if !o.reportSpam.isEmpty { said.append("Reported as spam") }
+            if !o.ban.isEmpty { said.append(o.ban.count == 1 ? "\(nm(o.ban[0])) removed" : "\(o.ban.count) people removed") }
+            if !o.restrict.isEmpty { said.append(o.restrict.count == 1 ? "\(nm(o.restrict.keys.first!)) restricted" : "\(o.restrict.count) people restricted") }
+            let line = refused ? "Some of that couldn't be done" : said.joined(separator: ". ")
+            await MainActor.run { showJumpToast(line) }
+        }
     }
 
     // Does the current selection include any message I may delete for everyone (→ the option is
@@ -5671,6 +5767,20 @@ struct ThreadView: View {
         let _ = VerificationSignal.shared.tick
         if !isGroup, VerificationIndex.of(otherUid)?.showsBadge == true {
             m.titleIcon = ChatHeaderModel.verifiedMark(color: VerifiedMark.color(for: otherUid))
+        }
+        // 2026-10-18 group moderation: a Scam / Fake label (Fariin's moderators) wins over the badge,
+        // with the word in front of the members line; otherwise the group's own verified tick.
+        if isGroup, let conv = conversation {
+            if !conv.groupMod.label.isEmpty {
+                m.titleIcon = ChatHeaderModel.warningMark()
+                let word = conv.groupMod.label == "scam" ? "Scam warning" : "Fake group warning"
+                // Not while the line says "typing…": that one is drawn in the accent colour.
+                if !m.subtitleIsLive {
+                    m.subtitle = [word, m.subtitle].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+                }
+            } else if conv.groupVerified {
+                m.titleIcon = ChatHeaderModel.verifiedMark()
+            }
         }
         // Constant reminder that messages self-delete here — this timer being invisible is how a
         // whole chat history vanished unnoticed.
@@ -7566,7 +7676,11 @@ struct ThreadView: View {
         SelectionToolbar(count: liveSelection.count,
                          deleteEnabled: selectionCanBeDeleted,
                          forwardEnabled: selectionIsForwardable,
-                         onDelete: { showBulkDeleteConfirm = true },
+                         // owner 2026-10-18: other members' messages, as a group admin → the sheet.
+                         onDelete: {
+                             if let r = adminDeleteRequestFor(liveSelection) { adminDeleteRequest = r }
+                             else { showBulkDeleteConfirm = true }
+                         },
                          onForward: { bulkForwardStart() })
             .frame(height: 44)
             // 2026-09-24 feature-audit (delete-message): a bulk Delete for Everyone in flight.
@@ -7713,6 +7827,22 @@ struct ThreadView: View {
         }
     }
 
+    // 2026-10-18 group moderation: Fariin's moderators suspended or disabled this group. Nobody
+    // sends (the rules refuse the message), so the bar is a plain line with the reason instead.
+    // Members still read everything they have.
+    private var groupModBlocked: Bool {
+        guard let conv = conversation, conv.isGroup else { return false }
+        return conv.groupMod.blocksSending()
+    }
+
+    private var groupModBar: some View {
+        composerNotice {
+            Text(conversation?.groupMod.noticeText ?? "")
+                .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+    }
+
     // Announcement mode: a non-admin member can't send (enforced server-side too).
     private var cannotSendAnnouncement: Bool {
         guard let conv = conversation, conv.isGroup else { return false }
@@ -7780,8 +7910,14 @@ struct ThreadView: View {
     /// request limit, the one refusal left on that path.
     private var refusedReason: String {
         if notAMember { return "You're no longer a member of this group" }
+        if groupModBlocked, let conv = conversation { return conv.groupMod.noticeText }
         if cannotSendAnnouncement { return "Only admins can send messages" }
         if iAmMuted { return "You're muted in this group" }
+        // owner 2026-10-18: a partial restriction (AdminDeleteSheet's switches) says which kinds.
+        if isGroup, let conv = conversation {
+            let off = conv.blockedSendWords(me, now: Date().timeIntervalSince1970 * 1000)
+            if !off.isEmpty { return "An admin has turned off \(ListFormatter.localizedString(byJoining: off)) for you." }
+        }
         if cannotMessageThem { return "You can't message \(title)" }
         if requestStance == .awaitingReply { return "You can send another message once \(title) replies." }
         if requestStance == .firstMessage { return "That's today's limit for message requests. Try again tomorrow." }
@@ -7794,7 +7930,8 @@ struct ThreadView: View {
     private var linkCardAllowed: Bool {
         if requestStance == .firstMessage { return false }
         guard isGroup, let conv = conversation else { return true }
-        return !conv.isRestricted(me, .sendMedia, now: Date().timeIntervalSince1970 * 1000)
+        // owner 2026-10-18: `sendLinks` (the old all-media `sendMedia` still counts, Models).
+        return !conv.isRestricted(me, .sendLinks, now: Date().timeIntervalSince1970 * 1000)
     }
 
     /// THEIR request, waiting for me. Accept or Delete, in the conversation itself — his spec was
@@ -8342,6 +8479,16 @@ struct ThreadView: View {
         a.focusChanged = { inputFocused = $0 }
         a.barTouched = { composerTouch.last = Date() }
         a.attach = {
+            // owner 2026-10-18: an admin turned off both photos/videos and files for me (the admin
+            // delete sheet's switches). The server refuses both, so say it here, like voice does.
+            if isGroup, let conv = conversation {
+                let now = Date().timeIntervalSince1970 * 1000
+                if conv.isRestricted(me, .sendPhotos, now: now) && conv.isRestricted(me, .sendFiles, now: now) {
+                    restrictedNoticeText = "An admin has turned off photos, videos and files for you."
+                    voiceRestricted = true
+                    return
+                }
+            }
             // ⛔ ONE DISMISSAL, THEN WAIT FOR THE SYSTEM TO SAY IT IS DOWN — owner, 2026-08-25:
             // tapping "+" with the keyboard up made the keyboard and the composer "fight", and the
             // sheet arrived over the mess. The focus flag is the one route to the responder now
@@ -8530,6 +8677,7 @@ struct ThreadView: View {
         // The server refuses the send (`sendVoice`), so the whole recording was futile, then a red mark.
         if isGroup, let conv = conversation,
            conv.isRestricted(me, .sendVoice, now: Date().timeIntervalSince1970 * 1000) {
+            restrictedNoticeText = "An admin has turned off voice messages for you."   // owner 2026-10-18
             voiceRestricted = true
             return
         }
@@ -11493,10 +11641,31 @@ private struct MessageActionDialogs: ViewModifier {
     /// 2026-09-24 feature-audit (delete-message): ThreadView's `canDeleteForEveryone`, so a group
     /// admin holding "Delete messages" is offered it on other members' messages too.
     var canDeleteForEveryone: (Message) -> Bool = { _ in false }
+    /// owner 2026-10-18: an admin deleting someone else's message in a group gets AdminDeleteSheet,
+    /// not the alert below. `adminRequestFor` is ThreadView's test (nil = the alert as before).
+    @Binding var adminDeleteRequest: AdminDeleteRequest?
+    var adminRequestFor: ([Message]) -> AdminDeleteRequest? = { _ in nil }
+    var conversation: Conversation?
+    var loadedByAuthor: ([Message]) -> [String: [String]] = { _ in [:] }
+    var onAdminProceed: (AdminDeleteOutcome) -> Void = { _ in }
     @State private var deleteFailed = false
 
     func body(content: Content) -> some View {
         content
+            // owner 2026-10-18: the long-press Delete on another member's message, as a group admin.
+            // The alert's binding below never goes up for these, so it cannot flash first.
+            .onChange(of: pendingDelete?.id) { _, id in
+                guard id != nil, let m = pendingDelete, let r = adminRequestFor([m]) else { return }
+                pendingDelete = nil
+                adminDeleteRequest = r
+            }
+            .sheet(item: $adminDeleteRequest) { r in
+                if let c = conversation {
+                    AdminDeleteSheet(conv: c, me: me, selected: r.messages,
+                                     loadedByAuthor: loadedByAuthor(r.messages),
+                                     onProceed: onAdminProceed)
+                }
+            }
             .alert("Couldn't delete for everyone", isPresented: $deleteFailed) {
                 Button("OK", role: .cancel) {}
             } message: {
@@ -11506,7 +11675,7 @@ private struct MessageActionDialogs: ViewModifier {
             // message → "Delete for Everyone" (removes the doc) + "Delete for Me" (local hide);
             // someone else's → "Delete for Me" only.
             .alert("Delete this message?",
-                   isPresented: Binding(get: { pendingDelete != nil },
+                   isPresented: Binding(get: { pendingDelete.map { adminRequestFor([$0]) == nil } ?? false },
                                         set: { if !$0 { pendingDelete = nil } })) {
                 if let m = pendingDelete {
                     // NOT for an unsent message (audit): its id is a local clientId, so the server

@@ -48,6 +48,8 @@ enum EmojiCatalog {
 
 // Full native-emoji grid for "more": categories when idle, name-search when typing.
 struct EmojiMorePicker: View {
+    /// owner 2026-10-18: the Role editor picks its emoji here too, under its own title.
+    var title: String = "React"
     var onPick: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
@@ -76,7 +78,7 @@ struct EmojiMorePicker: View {
                 }
             }
             .searchable(text: $query, prompt: "Search emoji")
-            .navigationTitle("React")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { dismiss() } label: { Image(systemName: "xmark") }.tint(.primary) } }
         }

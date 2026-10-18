@@ -35,6 +35,8 @@ struct GroupInfoView: View {
     @State private var viewerVideo: Message?
     @State private var showCall = false
     @State private var showInvite = false
+    /// The invite link being shared through the app's Send To sheet (Share Group).
+    @State private var shareGroupText: String?
     @State private var showSounds = false
     @State private var showSettings = false
     @State private var showEdit = false
@@ -68,6 +70,8 @@ struct GroupInfoView: View {
                 if showGroupPhoto {
                     ProfilePhotoViewer(name: title, photoUrl: conv?.avatarUrl ?? "",
                                        sourceFrame: avatarFrame, poster: false,
+                                       // Whole photo, square (owner 2026-10-18), not the circle.
+                                       landsSquare: true,
                                        closeSignal: photoCloseTick,
                                        isPresented: $showGroupPhoto)
                         .ignoresSafeArea()
@@ -81,6 +85,10 @@ struct GroupInfoView: View {
                                      confirmReport: $confirmReport, confirmDelete: $confirmDelete,
                                      actionError: $actionError, onGone: { dismiss() }))
             // A full page, pushed (owner 2026-10-18), not a half sheet.
+            .sheet(item: Binding(get: { shareGroupText.map { ShareText(id: $0) } },
+                                 set: { shareGroupText = $0?.id })) { t in
+                ForwardPicker(shareText: t.id)
+            }
             .navigationDestination(isPresented: $showInvite) {
                 InviteLinkSheet(cid: cid, groupTitle: title, groupPhoto: conv?.avatarUrl,
                                 initialCode: conv?.inviteCode ?? "", embedded: true)
@@ -172,7 +180,7 @@ struct GroupInfoView: View {
     private var actionsRow: some View {
         HStack(spacing: 0) {
             if canAdd {
-                Button { showAdd = true } label: { PosterActionIcon(icon: "person.badge.plus", onPhoto: false) }
+                Button { showAdd = true } label: { PosterActionIcon(icon: "ic_add_member", onPhoto: false) }
                     .tint(.primary)
                     .accessibilityLabel("Add Members")
             }
@@ -242,7 +250,9 @@ struct GroupInfoView: View {
         // 2026-10-18 (owner): Share Group sends the group's invite link, and only exists while the
         // group HAS one. A private group (no link) shows nothing here.
         if let code = conv?.inviteCode, !code.isEmpty, let link = URL(string: KulanApp.groupLink(code: code)) {
-            ShareLink(item: link, message: Text("Join \(title) on Fariin")) {
+            // The app's own Send To sheet (owner 2026-10-18), not the system one: the link goes to
+            // chats here as a plain message of mine.
+            Button { shareGroupText = link.absoluteString } label: {
                 Label("Share Group", systemImage: "square.and.arrow.up")
             }
         }
@@ -270,7 +280,8 @@ struct GroupInfoView: View {
 
     /// The description, as the Fariin official chat's About card. Tap to edit, for whoever may.
     private var aboutCard: some View {
-        ProfileAboutContent(text: desc.isEmpty ? "Add a group description" : desc, placeholder: desc.isEmpty)
+        ProfileAboutContent(text: desc.isEmpty ? "Add a group description" : desc, placeholder: desc.isEmpty,
+                            linked: true)
             .profileSurface(plain: cardColor)
             .contentShape(Rectangle())
             // 2026-10-18 (owner): no small pop-up for this any more; the description is edited on the
@@ -434,7 +445,7 @@ enum GroupMembers {
     }
 }
 
-/// One member: photo, name, their label under it (Member Label), and Owner / Admin on the right.
+/// One member: photo, name, their Role under it, and Owner / Admin on the right.
 struct GroupMemberRow: View {
     let conv: Conversation?
     let uid: String
@@ -442,7 +453,7 @@ struct GroupMemberRow: View {
     let onTap: () -> Void
 
     private var name: String { uid == me ? "You" : (conv?.names[uid] ?? "User") }
-    private var role: String? {
+    private var rank: String? {
         if let c = conv, !c.createdBy.isEmpty, c.createdBy == uid { return "Owner" }
         return (conv?.isAdmin(uid) ?? false) ? "Admin" : nil
     }
@@ -456,12 +467,10 @@ struct GroupMemberRow: View {
                         Text(name).foregroundStyle(.primary).lineLimit(1)
                         VerifiedMark(uid: uid, size: 13)
                     }
-                    if let label = conv?.memberLabels[uid], !label.isEmpty {
-                        MemberLabelChip(text: label)
-                    }
+                    if let role = conv?.roles[uid] { RoleChip(role: role) }
                 }
                 Spacer(minLength: 8)
-                if let role { Text(role).foregroundStyle(.secondary) }
+                if let rank { Text(rank).foregroundStyle(.secondary) }
             }
             .padding(.horizontal, 16).padding(.vertical, 9)
             .contentShape(Rectangle())
@@ -470,11 +479,12 @@ struct GroupMemberRow: View {
     }
 }
 
-/// A member's label: one line in the accent colour on a pale capsule (owner's mockup).
-struct MemberLabelChip: View {
-    let text: String
+/// A member's Role (owner 2026-10-18): one line in the accent colour on a pale capsule, the emoji
+/// in front when there is one.
+struct RoleChip: View {
+    let role: GroupRole
     var body: some View {
-        Text(text)
+        Text(role.display)
             .font(.subheadline)
             .lineLimit(1)
             .foregroundStyle(Color.accentColor)
@@ -781,10 +791,8 @@ struct GroupMemberSheet: View {
     var grantable: [String] = []            // owner 2026-10-18: the rights I may hand out (all, for the owner)
     @State private var confirmTransfer = false
     var mutedUntil: Double = 0              // ms; > now = currently restricted
-    var label: String = ""                  // their Member Label ("" = none)
-    var canEditLabel: Bool = false          // it is me, or I hold the change-info right
-    @State private var showLabelEdit = false
-    @State private var labelText = ""
+    var role: GroupRole? = nil              // their Role (owner 2026-10-18), nil = none
+    var canEditRole: Bool = false           // Conversation.canSetRole: admins only, never the owner's by an admin
     @Environment(\.dismiss) private var dismiss
     @State private var profile: UserProfile?
     @State private var confirmRemove = false
@@ -859,7 +867,7 @@ struct GroupMemberSheet: View {
                                 .background(Color.accentColor.opacity(0.15), in: Capsule())
                                 .foregroundStyle(Color.accentColor)
                         }
-                        if !label.isEmpty { MemberLabelChip(text: label) }
+                        if let role { RoleChip(role: role) }
                         if let a = gatedMemberAbout, !a.isEmpty {
                             Text(a).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }
@@ -867,14 +875,15 @@ struct GroupMemberSheet: View {
                     .frame(maxWidth: .infinity)
                     .listRowBackground(Color.clear)
                 }
-                // ⛔ MEMBER LABEL — owner 2026-10-18. Mine to set, or anyone's with change-info.
-                if canEditLabel {
+                // ⛔ ROLE — owner 2026-10-18. Given by admins only (Conversation.canSetRole); a
+                // member never sets their own. Opens its own page, pushed in this sheet's stack.
+                if canEditRole {
                     Section {
-                        Button { labelText = label; showLabelEdit = true } label: {
-                            Label(label.isEmpty ? "Add Member Label" : "Edit Member Label", systemImage: "tag")
+                        NavigationLink {
+                            RoleEditorView(cid: cid, uid: member.id, name: member.name, current: role)
+                        } label: {
+                            Label(role == nil ? "Set Role" : "Edit Role", systemImage: "tag")
                         }
-                    } footer: {
-                        Text("A short label shown under \(member.id == me ? "your" : "their") name in this group.")
                     }
                 }
                 // Anyone can message a fellow member (opens/creates the 1:1).
@@ -992,20 +1001,6 @@ struct GroupMemberSheet: View {
                                                               set: { if !$0 { actionError = nil } })) {
                 Button("OK", role: .cancel) {}
             } message: { Text(actionError ?? "") }
-            .alert("Member Label", isPresented: $showLabelEdit) {
-                TextField("Label", text: $labelText)
-                Button("Save") {
-                    let t = labelText, who = member.id
-                    run { try await ChatService.setMemberLabel(cid: cid, uid: who, t) }
-                }
-                if !label.isEmpty {
-                    Button("Remove", role: .destructive) {
-                        let who = member.id
-                        run { try await ChatService.setMemberLabel(cid: cid, uid: who, "") }
-                    }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: { Text("Up to \(ChatService.memberLabelMax) characters.") }
             // 2026-09-24 fix-all #124: ContactInfoView's two confirms, word for word.
             .darkAlert("Block \(member.name)?",
                        message: "Blocked users will not be able to call you or send you messages.",
@@ -1040,3 +1035,6 @@ struct GroupMemberSheet: View {
         }
     }
 }
+
+/// The text handed to Share Group's sheet, as an `Identifiable` for `.sheet(item:)`.
+private struct ShareText: Identifiable { let id: String }

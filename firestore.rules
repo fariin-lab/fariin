@@ -1385,6 +1385,27 @@ service cloud.firestore {
       }
     }
 
+    // ⛔ GROUP MODERATION — 2026-10-18. Fariin's moderators (the admin panel, functions-admin
+    // groupModSet / groupDisable) put a group on a ladder kept in its server-only `mod` map:
+    //   limited   = nobody new joins (no member add here; the join callables refuse too);
+    //   suspended = nobody sends, adds, invites or changes the group, while `mod.until` is in the
+    //               future (null = until lifted by hand);
+    //   disabled  = the same, for good.
+    // Members keep reading, keep their own private state, and may still leave. An expired
+    // suspension reads as lifted here before the hourly sweep writes it back. No get(): both take
+    // the conversation's data, which every caller already has.
+    function groupModBlocked(d) {
+      let m = d.get('mod', {});
+      return d.get('type', '') == 'group'
+        && (m.get('state', 'ok') == 'disabled'
+            || (m.get('state', 'ok') == 'suspended'
+                && (m.get('until', null) == null || m.get('until', null) > request.time)));
+    }
+    function groupModClosed(d) {
+      return groupModBlocked(d)
+        || (d.get('type', '') == 'group' && d.get('mod', {}).get('state', 'ok') == 'limited');
+    }
+
     // A conversation belongs to exactly two users.
     match /conversations/{cid} {
       // 2026-09-24 fix-all: GUARDED BY exists(), the file's own idiom. A bare `get` of a conversation
@@ -1625,6 +1646,7 @@ service cloud.firestore {
         && request.auth.uid in request.resource.data.users
         && unreadCreateOk()   // 2026-09-24 fix-all: others' badges are born at 0 (or 1 with a first send)
         && !('deletedUsers' in request.resource.data)   // 2026-10-18: the purge's marker, server-only
+        && !request.resource.data.keys().hasAny(['mod', 'verified'])   // 2026-10-18 group moderation: server-only
         && !('wallpaper' in request.resource.data)      // owner 2026-10-18: set later, by update only
         && (
           // THE GROUP BRANCH GOES FIRST, on purpose. A two-member group also satisfies `size() == 2`,
@@ -1710,6 +1732,32 @@ service cloud.firestore {
           && (w == 'none' || w.matches('[gcb]:[A-Za-z0-9_-]{1,64}')
               || w.matches('u:https://firebasestorage[.]googleapis[.]com/.*'));
       }
+      // ⛔ ROLE — owner 2026-10-18: a member's tag in the group (`roles.{uid}` = {text, emoji?}),
+      // given ONLY by an admin. The owner may set anyone's, their own and the admins' included; an
+      // admin needs Change group info and never sets the owner's. Members never set their own.
+      // One person per write, named in `roleEdit.uid` (with `roleEdit.by` = the writer), the same
+      // trick as `adminEdit`: the rules cannot pick the one changed key out of the map, so the write
+      // says who it is about. Text 1-24, emoji optional and short (the app sends one). A role may be
+      // cleared for someone who has left; it is only given to a member. Groups only.
+      function roleWriteOK() {
+        let o = resource.data;
+        let n = request.resource.data;
+        let e = n.get('roleEdit', {});
+        let t = e.get('uid', '');
+        let r = n.get('roles', {}).get(t, null);
+        let owner = o.get('createdBy', '');
+        return o.get('type', '') == 'group'
+          && request.auth.uid in o.get('admins', [])
+          && (request.auth.uid == owner || (adminHasRight('changeInfo') && t != owner))
+          && e.get('by', '') == request.auth.uid
+          && n.get('roles', {}).diff(o.get('roles', {})).affectedKeys().hasOnly([t])
+          && (r == null
+              || (t in n.users
+                  && r is map && r.keys().hasOnly(['text', 'emoji'])
+                  && r.get('text', null) is string
+                  && r.text.size() >= 1 && r.text.size() <= 24
+                  && (!('emoji' in r) || (r.emoji is string && r.emoji.size() >= 1 && r.emoji.size() <= 16))));
+      }
       // owner 2026-10-18: AN ADMIN THE OWNER TRUSTED WITH "Add new admins" (`addAdmins`, never held
       // by a legacy admin with no entry) may run a small part of the team, the reference app's way:
       //   · promote a member, with at most the rights they hold themselves;
@@ -1760,13 +1808,19 @@ service cloud.firestore {
                             'membersCanAdd', 'membersCanEditInfo', 'onlyAdminsCall', 'wallpaper',
                             'restrictedBy', 'restrictRequest', 'noScreenshots', 'noForwarding', 'noSaving'])
               || adminHasRight('changeInfo'))
-          // Member Label: someone else's needs change-info; their own needs nothing.
-          && (!('memberLabels' in keys) || adminHasRight('changeInfo')
-              || n.get('memberLabels', {}).diff(o.get('memberLabels', {})).affectedKeys().hasOnly([request.auth.uid]))
+          // owner 2026-10-18: the self-set Member Label (`memberLabels`, never shipped) gave way to
+          // Role (`roles`, roleWriteOK). Nothing writes the old field; only change-info could.
+          && (!('memberLabels' in keys) || adminHasRight('changeInfo'))
           && (added.size() == 0 || adminHasRight('inviteUsers'))
           && (!('inviteCode' in keys) || adminHasRight('inviteUsers'))
           && (gone.size() == 0 || gone.hasOnly([request.auth.uid]) || adminHasRight('banUsers'))
           && (!keys.hasAny(['restrictedFlags', 'restrictedUntil']) || adminHasRight('banUsers'))
+          // owner 2026-10-18 (admin delete sheet): a restriction is for a plain member. A non-owner
+          // admin never writes one for the owner or for another admin (they are exempt anyway, see
+          // `restrictedIn`; this keeps the map honest so a later demotion does not wake one up).
+          && n.get('restrictedFlags', {}).diff(o.get('restrictedFlags', {})).affectedKeys()
+               .union(n.get('restrictedUntil', {}).diff(o.get('restrictedUntil', {})).affectedKeys())
+               .intersection(o.get('admins', []).toSet().union([o.get('createdBy', '')].toSet())).size() == 0
           && (!('bannedUids' in keys) || adminHasRight('banUsers')
               || (adminHasRight('inviteUsers') && o.get('bannedUids', []).hasAll(n.get('bannedUids', []))))
           && (!('pinnedMessageIds' in keys) || adminHasRight('pinMessages')
@@ -1803,6 +1857,39 @@ service cloud.firestore {
               && n.get('createdBy', '') in n.users
               && n.get('createdBy', '') in n.get('admins', []));
       }
+      // 2026-10-18 group moderation (see groupModBlocked above). Limited or worse: nobody is added.
+      // Suspended or disabled: no info, settings, roles or invite-code change, no new preview line
+      // (no message can be sent), and ownership moves only as the owner leaves. Still allowed: each
+      // member's own state, profile mirrors, leaving, an admin removing or muting members, unpins.
+      // A group the panel never touched has no `mod` at all, so it costs one lookup: the rules stop
+      // evaluating at 1,000 expressions, and the heaviest admin writes are close to that already.
+      function groupModWriteOK() {
+        return !('mod' in resource.data) || groupModRestrictedWriteOK();
+      }
+      // ...and one in good standing (a label only, or restored) only the state test: the set
+      // arithmetic below runs for a limited, suspended or disabled group alone.
+      function groupModRestrictedWriteOK() {
+        return !groupModClosed(resource.data) || groupModClosedWriteOK();
+      }
+      function groupModClosedWriteOK() {
+        let o = resource.data;
+        let n = request.resource.data;
+        let keys = n.diff(o).affectedKeys();
+        let gone = o.get('users', []).toSet().difference(n.get('users', []).toSet());
+        let added = n.get('users', []).toSet().difference(o.get('users', []).toSet());
+        return (added.size() == 0
+              && (!groupModBlocked(o)
+                  || (!keys.hasAny(['title', 'avatarUrl', 'desc', 'wallpaper', 'disappearSeconds', 'onlyAdminsSend',
+                                    'membersCanAdd', 'membersCanEditInfo', 'onlyAdminsCall', 'restrictedBy',
+                                    'restrictRequest', 'noScreenshots', 'noForwarding', 'noSaving',
+                                    'memberLabels', 'roles', 'inviteCode'])
+                      && (!keys.hasAny(['lastMessage', 'lastSender', 'lastImageUrl', 'lastImageEnc', 'lastImages'])
+                          || gone.size() > 0)
+                      && (!('createdBy' in keys) || !(o.get('createdBy', '') in n.get('users', [])))
+                      // no pinning (an unpin, a smaller list, still works)
+                      && (!('pinnedMessageIds' in keys)
+                          || o.get('pinnedMessageIds', []).hasAll(n.get('pinnedMessageIds', []))))));
+      }
       // A member may update the conversation. Membership (`users`) can change ONLY when:
       //   • it's unchanged as a SET (normal sends — the client rewrites order each send), OR
       //   • a group ADMIN is making the change (add/remove/promote), OR
@@ -1813,8 +1900,15 @@ service cloud.firestore {
         // 2026-10-18: `deletedUsers` is written only by the account purge (admin SDK). Without this a
         // member of a 1:1 (which may write any field) could mark the other person "Deleted Account".
         && !('deletedUsers' in request.resource.data.diff(resource.data).affectedKeys())
+        // 2026-10-18 group moderation: `mod` and `verified` belong to the admin panel; no branch,
+        // the owner's included, writes them. And what a restricted group still allows (groupModWriteOK).
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['mod', 'verified'])
+        && groupModWriteOK()
         // owner 2026-10-18: the group wallpaper, groups only and a known shape (groupWallpaperOK).
         && (!('wallpaper' in request.resource.data.diff(resource.data).affectedKeys()) || groupWallpaperOK())
+        // owner 2026-10-18: a member's Role, admins only and a known shape (roleWriteOK). Checked
+        // here, above the branches, so no branch (the 1:1 "any field" one included) lets it by.
+        && (!('roles' in request.resource.data.diff(resource.data).affectedKeys()) || roleWriteOK())
         && (
           // 1:1 ONLY (not a 2-member group): members unchanged as a SET, any field.
           (
@@ -1934,14 +2028,11 @@ service cloud.firestore {
                  'lastReactionToEnc',
                  'names', 'photos', 'posters', 'pinnedMessageIds',
                  // 2026-09-24 decision D13: Mark as Unread flag, pinned to my key by privateMapsUntouched.
-                 'markedUnread', 'memberLabels'
+                 'markedUnread'
                ])
-            // 2026-10-18 Member Label: a member writes only their OWN label, a string of 24 or less.
-            && (!('memberLabels' in request.resource.data.diff(resource.data).affectedKeys())
-                || (request.resource.data.get('memberLabels', {}).diff(resource.data.get('memberLabels', {})).affectedKeys().hasOnly([request.auth.uid])
-                    && (!(request.auth.uid in request.resource.data.get('memberLabels', {}))
-                        || (request.resource.data.memberLabels[request.auth.uid] is string
-                            && request.resource.data.memberLabels[request.auth.uid].size() <= 24))))
+            // owner 2026-10-18: no Member Label here any more. A member's tag is now a Role, which
+            // only an admin gives (roleWriteOK), so a plain member writes neither `memberLabels`
+            // nor `roles`.
             // names/photos/posters are the per-member profile mirrors every chat list reads.
             // A member may refresh THEIR OWN entry only — the map diff is pinned to their uid,
             // so nobody can rewrite another member's name or face. Without this branch a plain
@@ -2268,6 +2359,8 @@ service cloud.firestore {
           // Announcement mode: when onlyAdminsSend is set, only admins may create messages.
           && (convData().get('onlyAdminsSend', false) == false
               || request.auth.uid in convData().get('admins', []))
+          // 2026-10-18 group moderation: nobody sends into a suspended or disabled group.
+          && !groupModBlocked(convData())
           // A pending request carries ONE message. `lastSender` is empty until the request is sent,
           // so the first message passes; after that only the RECIPIENT may write, and their reply is
           // itself the acceptance. The requester's second attempt is refused here, by the database.
@@ -2337,6 +2430,13 @@ service cloud.firestore {
           && (!(request.resource.data.get('type', '') in ['image', 'album', 'video', 'file']
                 || 'linkPreview' in request.resource.data)
               || !restrictedIn(convData(), 'sendMedia'))
+          // owner 2026-10-18 (admin delete sheet, "What can this member do?"): `sendMedia` split in
+          // three. The old flag above still covers all three; each new one covers its own kind.
+          //   photo, album, video → sendPhotos;  file → sendFiles;  a link card → sendLinks
+          && (!(request.resource.data.get('type', '') in ['image', 'album', 'video'])
+              || !restrictedIn(convData(), 'sendPhotos'))
+          && (request.resource.data.get('type', '') != 'file' || !restrictedIn(convData(), 'sendFiles'))
+          && (!('linkPreview' in request.resource.data) || !restrictedIn(convData(), 'sendLinks'))
           && (request.resource.data.get('type', '') != 'audio' || !restrictedIn(convData(), 'sendVoice'))
           // 2026-10-17 (owner, chat stickers): the `sticker` type is held to the same flag as a GIF.
           && (!(request.resource.data.get('type', '') in ['gif', 'sticker'])
@@ -2353,6 +2453,13 @@ service cloud.firestore {
         // below, not this one.
         allow update: if signedIn()
           && request.auth.uid in convData().users
+          // 2026-10-18 group moderation: in a suspended or disabled group nobody edits or reacts.
+          // Delete for Everyone (the tombstone, `deleted: true`) and the call-row and upload
+          // branches still pass: none of them adds anything new to read.
+          && (!groupModBlocked(convData())
+              || !request.resource.data.diff(resource.data).affectedKeys()
+                    .hasAny(['reactions', 'text', 'edited', 'edits', 'editedAt'])
+              || request.resource.data.get('deleted', false) == true)
           && (
             (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
              && ownKeyOnly('reactions')
@@ -2451,6 +2558,7 @@ service cloud.firestore {
           // is refused by the read of it.
           allow delete: if signedIn() && request.auth.uid == voter && request.auth.uid in convData().users;
           allow create, update: if signedIn() && request.auth.uid == voter
+            && !groupModBlocked(convData())   // 2026-10-18 group moderation: no votes while restricted
             && request.auth.uid in convData().users
             && request.resource.data.keys().hasOnly(['options', 'at'])
             && request.resource.data.options is list
@@ -2491,8 +2599,17 @@ service cloud.firestore {
       }
       allow create: if signedIn()
         && request.resource.data.cid is string
-        && canInvite(request.resource.data.cid);
-      allow update, delete: if signedIn()
+        && canInvite(request.resource.data.cid)
+        // 2026-10-18 group moderation: no new link for a limited, suspended or disabled group.
+        && !groupModClosed(get(/databases/$(database)/documents/conversations/$(request.resource.data.cid)).data);
+      // 2026-10-18 group moderation: while it is restricted, a link may only be switched off
+      // (`revoked: true` and nothing else), never edited or switched back on. Deleting stays open.
+      allow update: if signedIn()
+        && canInvite(resource.data.cid)
+        && (!groupModClosed(get(/databases/$(database)/documents/conversations/$(resource.data.cid)).data)
+            || (request.resource.data.get('revoked', false) == true
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revoked'])));
+      allow delete: if signedIn()
         && canInvite(resource.data.cid);
     }
 
@@ -2575,15 +2692,22 @@ service cloud.firestore {
         return conv.get('onlyAdminsCall', false) != true || request.auth.uid in conv.get('admins', []);
       }
       allow read: if signedIn() && !isAdhoc() && isGroupMember();
+      // 2026-10-18 group moderation: no call starts in a suspended or disabled group (groupCallToken
+      // refuses the media token as well). Ending one stays open.
+      function callModOK() {
+        return !groupModBlocked(get(/databases/$(database)/documents/conversations/$(cid)).data);
+      }
       allow create: if signedIn() && !isAdhoc() && isGroupMember() && isStartWrite()
         && !('removedUids' in request.resource.data)
         && startStampNew()
-        && mayStartCall();
+        && mayStartCall()
+        && callModOK();
       // audit M-034 (2026-10-07): somebody the owner removed from this call (still in `removedUids`)
       // may not switch it off for everyone on the way out.
       allow update: if signedIn() && !isAdhoc() && isGroupMember() && groupRemovedKept() && (
            (isStartWrite() && startStampNewOrKept()
              && mayStartCall()   // a start write is a START: joiners never write one
+             && callModOK()
              && (resource.data.get('active', false) != true
                  || resource.data.get('startedBy', '') == request.auth.uid
                  || (resource.data.get('startedAt', null) is timestamp

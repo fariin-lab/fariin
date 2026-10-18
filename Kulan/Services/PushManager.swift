@@ -261,10 +261,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // nothing for ours to route to.
         guard let cid else { return [.banner, .sound, .badge] }
         // 2026-09-26 block rebuild: NOTHING FROM SOMEBODY I BLOCKED, even when the push was already on
-        // its way when I blocked them (the server skips it from then on). The sender is `from`, or
-        // the other half of a 1:1 id for a push from an older server.
+        // its way when I blocked them (the server skips it from then on). The sender is `aid`, or
+        // the other half of a 1:1 id for a push from an older server. 2026-10-18: `aid`, not `from`,
+        // which FCM reserves and refused (every push failed); `from` is still read for safety.
         let me = Auth.auth().currentUser?.uid ?? ""
-        let from = (content.userInfo["from"] as? String)
+        let from = (content.userInfo["aid"] as? String) ?? (content.userInfo["from"] as? String)
             ?? (cid.contains("_") ? cid.split(separator: "_").map(String.init).first { $0 != me } : nil)
         if let from, BlockList.snapshot.contains(from) { return [] }
         // THE THREE IN-APP TOGGLES ARE READ HERE (audit). They were only ever read by

@@ -42,7 +42,11 @@ final class ConversationsRepository {
     private let db = Firestore.firestore()
     private var listener: ListenerRegistration?
 
-    var conversations: [Conversation] = []
+    /// owner 2026-10-18: every change also refreshes `GroupLinkDoor`'s list of my groups by invite
+    /// code, so a group link card knows on its first frame whether it says Open Group.
+    var conversations: [Conversation] = [] {
+        didSet { GroupLinkDoor.noteConversations(conversations) }
+    }
     var hasLoaded = false   // false until the first real snapshot -> drives the skeleton
     /// 2026-09-24 audit: the listener ended in an error and no snapshot has arrived since. A failed
     /// listener used to print and nothing else, and the 3s safety net below then flipped `hasLoaded`,

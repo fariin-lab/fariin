@@ -32,6 +32,8 @@ enum AppFeatures {
     /// Stories tab layout (owner 2026-10-11): true = one person per row (`StoryListRow`), false =
     /// the original two-column card grid, kept whole.
     static var storyList: Bool { RemoteFeatures.value("storyList", default: true) }
+    /// The sticker panel's Edit button (owner 2026-10-18: switch it off from the panel).
+    static var stickerEdit: Bool { RemoteFeatures.value("stickerEdit", default: true) }
     /// The My Profile card under the header in Settings (owner 2026-10-11: hidden). The page it
     /// opens is kept; this is only its door in Settings.
     static var myProfileCard: Bool { RemoteFeatures.value("myProfileCard", default: false) }

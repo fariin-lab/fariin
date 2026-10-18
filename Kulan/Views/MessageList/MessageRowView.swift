@@ -645,6 +645,7 @@ final class MessageRowView: UIView {
     private var avatarView: RowAvatarView?
     private var senderLabel: UILabel?
     private var verifiedView: UIImageView?
+    private var roleChipView: UIView?          // owner 2026-10-18 Role chip after the sender's name
     private var forwardedLabel: UILabel?
     private var forwardedIcon: UIImageView?
     private var tombstoneIcon: UIImageView?
@@ -784,6 +785,7 @@ final class MessageRowView: UIView {
         avatarView?.isHidden = true
         senderLabel?.isHidden = true
         verifiedView?.isHidden = true
+        roleChipView?.isHidden = true
         forwardedLabel?.isHidden = true
         forwardedIcon?.isHidden = true
         failBadge?.isHidden = true
@@ -1328,6 +1330,34 @@ final class MessageRowView: UIView {
             v.frame = rect
         } else {
             verifiedView?.isHidden = true
+        }
+
+        // owner 2026-10-18 ROLE: the chip after the name. The capsule is this view's own layer
+        // (the label inset inside it), so it truncates with a tail like the name does.
+        if let rect = b.roleChip, let attr = b.roleAttr {
+            let chip = roleChipView ?? {
+                let c = UIView()
+                c.isUserInteractionEnabled = false
+                let l = UILabel()
+                l.tag = 1
+                c.addSubview(l)
+                addSubview(c); roleChipView = c; return c
+            }()
+            chip.isHidden = false
+            chip.frame = rect
+            chip.backgroundColor = b.roleTint
+            chip.layer.cornerRadius = rect.height / 2
+            chip.layer.cornerCurve = .circular
+            if let l = chip.viewWithTag(1) as? UILabel {
+                l.attributedText = attr
+                l.lineBreakMode = .byTruncatingTail
+                l.frame = rect.size.width > BubbleMetrics.roleHPad * 2
+                    ? CGRect(x: BubbleMetrics.roleHPad, y: 0,
+                             width: rect.width - BubbleMetrics.roleHPad * 2, height: rect.height)
+                    : .zero
+            }
+        } else {
+            roleChipView?.isHidden = true
         }
     }
 

@@ -33,6 +33,8 @@ struct MessageRowContext {
     var searchTerm: String
     var nameFor: (String) -> String
     var avatarFor: (String) -> String?
+    /// owner 2026-10-18: a group member's Role as the chip shows it, or nil. Groups only.
+    var roleFor: (String) -> String? = { _ in nil }
     var resolveOriginal: (String) -> Message?
     /// The quoted message was sent while I had its author blocked: never shown, so a reply to it
     /// says "Not available" instead of the copy of its words the reply carries.
@@ -281,16 +283,29 @@ enum MessageRowModelBuilder {
             }
         }
 
+        // ⛔ NO NAME ON BARE MEDIA (owner 2026-10-18, build 973: "a picture in a group gets a band
+        // with the name; no name on a sticker, gif or photo, like the reference"). A photo, video,
+        // gif, album or sticker with no caption, quote or Forwarded line is drawn as in a 1:1 chat;
+        // the avatar beside the run still says who sent it. With words on it, the name stays.
+        let bareMedia: Bool = {
+            guard msg.replyTo == nil, !msg.forwarded, !msg.deleted else { return false }
+            switch body {
+            case .media(let m): return m.caption == nil
+            case .album(let a): return a.caption == nil
+            default: return false
+            }
+        }()
         var sender: SenderChrome?
         if ctx.isGroup, !isMe {
             sender = SenderChrome(
                 uid: msg.authorId,
                 name: ctx.nameFor(msg.authorId),
                 colorSeed: msg.authorId,
-                showsName: first,
+                showsName: first && !bareMedia,
                 showsAvatar: last,
                 avatarUrl: ctx.avatarFor(msg.authorId),
-                verified: VerificationIndex.of(msg.authorId)?.showsBadge == true)
+                verified: VerificationIndex.of(msg.authorId)?.showsBadge == true,
+                role: ctx.roleFor(msg.authorId))
         }
 
         var storyReply: StoryReplyChrome?
@@ -615,6 +630,9 @@ enum MessageRowModelBuilder {
         // The handle is read from the URL rather than stored, so every message ever sent — including
         // ones from before profile cards existed — answers the same way with no migration.
         let handle = URL(string: p.url).flatMap { LinkPreviewService.profileHandle(in: $0) }
+        if let code = URL(string: p.url).flatMap({ LinkPreviewService.groupCode(in: $0) }) {
+            return groupLinkBody(p, code: code)
+        }
         let shape: BubbleBody.LinkPreview.Shape
         if handle != nil, p.desc.isEmpty, p.title == "Unavailable" {
             shape = .profileUnavailable
@@ -632,6 +650,33 @@ enum MessageRowModelBuilder {
             shape: shape, url: p.url, title: p.title, desc: p.desc,
             host: URL(string: p.url).flatMap { LinkPreviewService.youtubeID(in: $0) } != nil ? "YouTube" : p.host,
             imageUrl: p.imageUrl, imageEnc: p.imageEnc)
+    }
+
+    /// owner 2026-10-18: a group link's card. What the sender's phone got from the server travels in
+    /// the message (`LinkPreviewService.groupDraft`); a fresher answer this phone already holds
+    /// (`GroupLinkDoor`, looked up when the card is drawn) wins, so the count is today's. A message
+    /// from before group cards carries the WEBSITE's preview (the site banner), which is never shown:
+    /// until the lookup lands it reads as a plain group invite with the letter circle.
+    private static func groupLinkBody(_ p: Message.LinkPreviewData, code: String) -> BubbleBody.LinkPreview {
+        GroupLinkDoor.prewarm(code)
+        let sentDead = p.desc.isEmpty && p.title == "Unavailable"
+        let fromServer = p.desc.range(of: #"^[0-9]+ members?$"#, options: .regularExpression) != nil
+        var title = fromServer ? p.title : "Group invite"
+        var desc = fromServer ? p.desc : "Fariin group"
+        var image = fromServer ? p.imageUrl : nil
+        var enc = fromServer ? p.imageEnc : nil
+        if let live = GroupLinkDoor.cached(code) {
+            title = live.title
+            desc = live.membersLine
+            image = live.photoUrl
+            enc = nil
+        }
+        let member = GroupLinkDoor.isMember(code)
+        let dead = !member && (GroupLinkDoor.refusal(code) != nil || (sentDead && GroupLinkDoor.cached(code) == nil))
+        return BubbleBody.LinkPreview(
+            shape: dead ? .groupUnavailable : .group(code: code, member: member),
+            url: p.url, title: title, desc: desc, host: p.host,
+            imageUrl: image, imageEnc: enc)
     }
 
     private static func fileBody(_ m: Message) -> BubbleBody.FileBody {

@@ -76,6 +76,7 @@ enum OfficialStoryViews {
         let id: String      // uid
         let name: String
         let handle: String
+        var photoUrl: String = ""   // 2026-10-18 (owner): the sheet showed no faces
         let at: Date
     }
     struct Summary: Equatable {
@@ -94,6 +95,7 @@ enum OfficialStoryViews {
             guard let uid = r["uid"] as? String, !uid.isEmpty else { return nil }
             let at = (r["at"] as? NSNumber)?.doubleValue ?? 0
             return Viewer(id: uid, name: r["name"] as? String ?? "", handle: r["handle"] as? String ?? "",
+                          photoUrl: r["photoUrl"] as? String ?? "",
                           at: Date(timeIntervalSince1970: at / 1000))
         }
         return Summary(count: count, viewers: viewers)
@@ -212,7 +214,7 @@ struct OfficialStoryViewersSheet: View {
                         }
                         ForEach(s.viewers) { v in
                             HStack(spacing: 12) {
-                                AvatarView(name: v.name, photoUrl: nil, size: 40)
+                                AvatarView(name: v.name, photoUrl: v.photoUrl.isEmpty ? nil : v.photoUrl, size: 40)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(v.name.isEmpty ? "No name" : v.name).font(.body).lineLimit(1)
                                     if !v.handle.isEmpty {
@@ -287,10 +289,11 @@ struct OfficialStoryAdminFooter: View {
                 .accessibilityLabel("Delete story")
             }
         }
-        .confirmationDialog("Delete this story for everyone?", isPresented: $asking, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) { delete() }
+        // The system alert in the middle of the screen (owner 2026-10-18), not the popover off the bin.
+        .alert("Delete Story?", isPresented: $asking) {
             Button("Cancel", role: .cancel) { resume() }
-        }
+            Button("Delete", role: .destructive) { delete() }
+        } message: { Text("This story will be deleted for everyone.") }
         .alert("Couldn't delete", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
             Button("OK", role: .cancel) { resume() }
         } message: { Text(failure ?? "") }

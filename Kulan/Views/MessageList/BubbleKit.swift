@@ -41,6 +41,13 @@ enum BubbleMetrics {
     static let nameForwardGap: CGFloat = 2
     static let nameToText: CGFloat = 1
     static let nameToBlock: CGFloat = 5
+    /// owner 2026-10-18 ROLE: the chip after the name. The second reference app draws the member
+    /// label as a capsule in the name's colour right after the name (CVComponentSenderName.swift:
+    /// 95-112); these are our own sizes for it. Under `roleMinWidth` of room it is left out.
+    static let roleGap: CGFloat = 6
+    static let roleHPad: CGFloat = 6
+    static let roleVPad: CGFloat = 1.5
+    static let roleMinWidth: CGFloat = 30
     static let reactionOverhang: CGFloat = 13  // how far the badge hangs below the bubble
     /// The reactor's face inside a reaction pill. Sized off the emoji beside it rather than picked:
     /// a circle much larger turns the pill into a row of avatars, and much smaller reads as a dot.
@@ -111,7 +118,7 @@ enum BubbleMetrics {
     private static var fonts = ChatFonts(.large)
 
     private struct ChatFonts {
-        let body, meta, metaItalic, senderName, forwarded, quoteName, quoteText, notice: UIFont
+        let body, meta, metaItalic, senderName, forwarded, quoteName, quoteText, notice, role: UIFont
         init(_ category: UIContentSizeCategory) {
             var c: UIContentSizeCategory = category == .unspecified ? .large : category
             if c > .accessibilityMedium { c = .accessibilityMedium }
@@ -132,6 +139,7 @@ enum BubbleMetrics {
             quoteName = UIFont.systemFont(ofSize: s(12), weight: .semibold)
             quoteText = UIFont.systemFont(ofSize: s(12))
             notice = UIFont.systemFont(ofSize: s(12), weight: .semibold)   // .caption.weight(.semibold)
+            role = UIFont.systemFont(ofSize: s(11), weight: .medium)       // owner 2026-10-18, the Role chip
         }
     }
 
@@ -143,6 +151,7 @@ enum BubbleMetrics {
     static var quoteNameFont: UIFont { fonts.quoteName }
     static var quoteTextFont: UIFont { fonts.quoteText }
     static var noticeFont: UIFont { fonts.notice }
+    static var roleFont: UIFont { fonts.role }
 
     /// The width a row is laid out at. Never `UIScreen` inside a cell: on an iPad in Stage Manager
     /// the list is narrower than the screen, and the sizer and the cell must be handed one number.

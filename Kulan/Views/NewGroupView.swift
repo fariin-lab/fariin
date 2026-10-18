@@ -209,25 +209,32 @@ struct NewGroupView: View {
                 // ⛔ THE WHOLE ROW OPENS IT (owner 2026-10-18, build 969: only "Off" answered a tap; the
                 // words did nothing). A Menu whose label is the full row, not a `.menu` Picker, which on
                 // iOS 26 only takes taps on its value. Off / 1 Day / 1 Week / 1 Month, his list.
-                Menu {
-                    Picker("Disappearing Messages", selection: $disappearSeconds) {
-                        ForEach(Self.disappearChoices, id: \.self) { Text($0.label).tag($0.seconds) }
-                        // The Settings default, when it is none of these.
-                        if !Self.disappearChoices.contains(where: { $0.seconds == disappearSeconds }) {
-                            Text(ChatService.disappearLabel(disappearSeconds).capitalized).tag(disappearSeconds)
+                // ⛔ THE ROW STAYS WHILE THE MENU IS OPEN (owner 2026-10-18, build 973: "the menu opens
+                // and the text disappears"). An iOS 26 menu hides its label while it is up, and the label
+                // was the whole row. The row is drawn on its own now and the menu's label is a clear
+                // layer over it, so only that invisible layer is hidden; the whole row still opens it.
+                HStack {
+                    Text("Disappearing Messages").foregroundStyle(.primary)
+                    Spacer()
+                    Text(Self.disappearChoices.first { $0.seconds == disappearSeconds }?.label
+                         ?? ChatService.disappearLabel(disappearSeconds).capitalized)
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                }
+                .overlay {
+                    Menu {
+                        Picker("Disappearing Messages", selection: $disappearSeconds) {
+                            ForEach(Self.disappearChoices, id: \.self) { Text($0.label).tag($0.seconds) }
+                            // The Settings default, when it is none of these.
+                            if !Self.disappearChoices.contains(where: { $0.seconds == disappearSeconds }) {
+                                Text(ChatService.disappearLabel(disappearSeconds).capitalized).tag(disappearSeconds)
+                            }
                         }
+                    } label: {
+                        Color.clear.contentShape(Rectangle())
                     }
-                } label: {
-                    HStack {
-                        Text("Disappearing Messages").foregroundStyle(.primary)
-                        Spacer()
-                        Text(Self.disappearChoices.first { $0.seconds == disappearSeconds }?.label
-                             ?? ChatService.disappearLabel(disappearSeconds).capitalized)
-                            .foregroundStyle(.secondary)
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-                    }
-                    .contentShape(Rectangle())
+                    .accessibilityLabel("Disappearing Messages")
                 }
             } footer: {
                 Text("New messages in this group disappear for everyone once this time has passed.")

@@ -275,6 +275,15 @@ final class ChatComposerView: UIView {
         build()
         NotificationCenter.default.addObserver(self, selector: #selector(stickerCreated),
                                                name: StickerCreatorDoor.created, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(stickerCreatorWillReturn),
+                                               name: StickerCreatorDoor.willReturn, object: nil)
+    }
+
+    /// The creator is about to close on a saved sticker: the panel goes on the field now, so the
+    /// focus iOS gives back during the close comes up as stickers, never as the text keys.
+    @objc private func stickerCreatorWillReturn() {
+        guard window != nil, !stickerPanelUp else { return }
+        setStickerPanel(true, reload: textView.isFirstResponder)
     }
 
     /// A sticker was just made from this chat's panel: back to the panel, not the text keys.

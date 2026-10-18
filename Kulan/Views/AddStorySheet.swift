@@ -1206,6 +1206,10 @@ struct StoryThumb: View {
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .clipped()
+            // ⛔ THE TAP STAYS IN THE TILE (owner 2026-10-18: "I tap a picture and another opens").
+            // `.clipped()` hides the filled picture's overflow but still lets it take touches, so a tap
+            // near a tile's edge landed on the neighbour's hidden overflow and opened that photo.
+            .contentShape(Rectangle())
             // Two pictures, not one: PhotoKit's cached thumbnail lands more or less at once and the
             // sharp resize replaces it a moment later. See `PhotoGridStore.thumbnails`.
             .task {

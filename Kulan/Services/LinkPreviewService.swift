@@ -91,6 +91,9 @@ actor LinkPreviewService {
             if let handle = Self.profileHandle(in: url) {
                 return await Self.profileDraft(url: url, handle: handle)
             }
+            if let code = Self.groupCode(in: url) {
+                return await Self.groupDraft(url: url, code: code)
+            }
             if let link = Self.storyLink(in: url) {
                 return await Self.storyDraft(url: url, id: link.id, handle: link.handle)
             }
@@ -149,6 +152,46 @@ actor LinkPreviewService {
         guard parts.count == 2, parts[0] == "u" else { return nil }
         let handle = parts[1].trimmingCharacters(in: .whitespaces)
         return handle.isEmpty ? nil : handle
+    }
+
+    /// The invite code in one of OUR group links, `https://fariin.com/g/<code>`, or nil.
+    static func groupCode(in url: URL) -> String? {
+        guard let host = url.host?.lowercased().replacingOccurrences(of: "www.", with: ""),
+              host == "fariin.com" else { return nil }
+        let parts = url.path.split(separator: "/").map(String.init)
+        guard parts.count == 2, parts[0] == "g" else { return nil }
+        let code = parts[1].trimmingCharacters(in: .whitespaces)
+        guard !code.isEmpty, !code.contains("/"), code != ".", code != "..", code.count <= 128,
+              !(code.hasPrefix("__") && code.hasSuffix("__")) else { return nil }
+        return code
+    }
+
+    /// ⛔ A GROUP LINK'S CARD COMES FROM THE SERVER, NOT FROM THE WEB PAGE — owner 2026-10-18: a
+    /// fariin.com/g/<code> link went out with the site's banner. Built here on the sender's phone from
+    /// `groupLinkPreview` (title = group name, desc = "N members", image = the group photo) and sent as
+    /// a snapshot like the profile card. A dead link says so: "Unavailable" with no description, the
+    /// profile card's marker, which the bubble draws as "This link is no longer valid".
+    private static func groupDraft(url: URL, code: String) async -> LinkDraft? {
+        switch await GroupLinkDoor.load(code, lite: true) {
+        case .refused:
+            return LinkDraft(url: url, title: "Unavailable", desc: "", image: nil)
+        case .failed:
+            return nil   // offline: the link goes bare, like any link whose preview could not load
+        case .found(let g):
+            var photo: UIImage?
+            if let p = g.photoUrl {
+                if let warm = DiskImageCache.shared.memoryImage(p) {
+                    photo = warm
+                } else {
+                    photo = await DiskImageCache.shared.image(for: p)
+                }
+                if photo == nil, let u = URL(string: p),
+                   let (data, _) = try? await URLSession.shared.data(from: u) {
+                    photo = UIImage(data: data)
+                }
+            }
+            return LinkDraft(url: url, title: g.title, desc: g.membersLine, image: photo)
+        }
     }
 
     /// The story in one of OUR story links: fariin.com/<username>/s/<id>, or the older /s/<id>.

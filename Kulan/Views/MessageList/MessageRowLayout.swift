@@ -227,6 +227,11 @@ struct BubblePlan {
     var senderName: CGRect?
     var senderNameAttr: NSAttributedString?
     var verifiedMark: CGRect?
+    /// owner 2026-10-18: the sender's Role chip after the name (and tick) inside the first bubble,
+    /// its words, and the tint its capsule is filled with. nil when there is no role or no room.
+    var roleChip: CGRect? = nil
+    var roleAttr: NSAttributedString? = nil
+    var roleTint: UIColor? = nil
     var forwarded: CGRect?
     var forwardedIcon: CGRect?
     var reactions: [CGRect]             // one per chip, row coordinates
@@ -1175,6 +1180,20 @@ enum MessageRowLayout {
                 plan.verifiedMark = CGRect(x: bubbleRect.minX + inset + nameW + 4,
                                            y: nameY + (senderNameSize.height - 11) / 2, width: 11, height: 11)
             }
+            // owner 2026-10-18 ROLE: the chip follows the name and the tick on the same line, in the
+            // name's colour. It is the part that gives way: the name keeps its width, the role
+            // truncates into what is left, and goes altogether when that is too little to read.
+            if let chip = roleChip(b) {
+                let x = bubbleRect.minX + inset + nameW + tick + BubbleMetrics.roleGap
+                let room = bubbleRect.maxX - inset - x
+                let w = min(chip.size.width, room)
+                if w >= BubbleMetrics.roleMinWidth {
+                    plan.roleChip = CGRect(x: x, y: nameY + (senderNameSize.height - chip.size.height) / 2,
+                                           width: w, height: chip.size.height)
+                    plan.roleAttr = chip.attr
+                    plan.roleTint = chip.tint
+                }
+            }
             if b.forwarded {
                 let fy = nameY + senderNameSize.height + BubbleMetrics.nameForwardGap
                 let x = bubbleRect.minX + inset
@@ -1248,8 +1267,28 @@ enum MessageRowLayout {
         guard nameInBubble(b) else { return 0 }
         var w = senderNameSize.width + BubbleMetrics.nameSlack
         if b.sender?.verified == true { w += 4 + 11 }
+        // owner 2026-10-18: a text bubble widens for the Role chip too (the caller caps the column
+        // at the screen's width, so a long one truncates rather than overflowing).
+        if let chip = roleChip(b) { w += BubbleMetrics.roleGap + chip.size.width }
         if b.forwarded { w = max(w, forwardedSize.width) }
         return ceil(w)
+    }
+
+    /// owner 2026-10-18 ROLE: the sender's Role chip, measured on one line: its words in the name's
+    /// colour at the small chip size, the capsule's padding around them, and the tint the capsule is
+    /// filled with. nil when the name is not inside this bubble or the sender has no role. 1:1 rows
+    /// never carry a sender, so never a chip.
+    private static func roleChip(_ b: BubbleRow) -> (attr: NSAttributedString, size: CGSize, tint: UIColor)? {
+        guard nameInBubble(b), let s = b.sender, let role = s.role, !role.isEmpty else { return nil }
+        let color = BubblePalette.senderColor(s.colorSeed)
+        let para = NSMutableParagraphStyle()
+        para.lineBreakMode = .byTruncatingTail
+        let attr = NSAttributedString(string: role, attributes: [
+            .font: BubbleMetrics.roleFont, .foregroundColor: color, .paragraphStyle: para])
+        let text = BubbleText.size(attr, width: .greatestFiniteMagnitude)
+        let size = CGSize(width: ceil(text.width) + BubbleMetrics.roleHPad * 2,
+                          height: ceil(text.height) + BubbleMetrics.roleVPad * 2)
+        return (attr, size, color.withAlphaComponent(0.14))
     }
 
     /// Where a kind's content starts. Under an in-bubble name it is the band plus `gap`; without one
@@ -1913,13 +1952,22 @@ enum MessageRowLayout {
                                     host: host, hostAttr: hostAttr,
                                     divider: nil, button: nil, buttonLabel: nil, buttonAttr: nil))
 
-        case .profile, .profileUnavailable:
+        case .profile, .profileUnavailable, .group, .groupUnavailable:
             // The two profile shapes share one layout and differ only in their words, so they share
             // a case. A binding cannot ride a multi-pattern case — only `.profile` carries a handle
             // — so it is read out below instead.
+            // owner 2026-10-18: a group link's card is this same card: photo, name, "N members",
+            // and View Group (Open Group when I am in it); a dead link says so and has no button.
             var handleText = ""
             var unavailable = true
-            if case .profile(let h) = p.shape { unavailable = false; handleText = h }
+            var unavailableLine = "This account is no longer available"
+            var buttonText = "Send Message"
+            switch p.shape {
+            case .profile(let h): unavailable = false; handleText = h
+            case .group(_, let member): unavailable = false; buttonText = member ? "Open Group" : "View Group"
+            case .groupUnavailable: unavailableLine = "This link is no longer valid"
+            default: break
+            }
 
             let avatarSize: CGFloat = 44, gap: CGFloat = 10
             y = 10
@@ -1930,7 +1978,7 @@ enum MessageRowLayout {
                 attributes: [.font: UIFont.systemFont(ofSize: 15, weight: .semibold),
                              .foregroundColor: textColor])
             let subAttr = NSAttributedString(
-                string: unavailable ? "This account is no longer available"
+                string: unavailable ? unavailableLine
                                     : (p.desc.isEmpty ? "@\(handleText)" : p.desc),
                 attributes: [.font: UIFont.systemFont(ofSize: 13),
                              .foregroundColor: textColor.withAlphaComponent(0.75)])
@@ -1951,7 +1999,7 @@ enum MessageRowLayout {
             if !unavailable {
                 divider = CGRect(x: 0, y: y, width: width, height: BubbleMetrics.hairline)
                 y += BubbleMetrics.hairline
-                let attr = NSAttributedString(string: "Send Message", attributes: [
+                let attr = NSAttributedString(string: buttonText, attributes: [
                     .font: UIFont.systemFont(ofSize: 14, weight: .semibold), .foregroundColor: textColor])
                 let size = lineSizeOf(attr)
                 let b = CGRect(x: 0, y: y, width: width, height: 40)

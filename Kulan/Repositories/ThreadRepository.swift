@@ -1519,8 +1519,15 @@ final class ThreadRepository {
             query = resume
         } else if windowTrimmed, let oldest = messages.map(\.createdAt).min() {
             query = base.start(at: [Timestamp(date: oldest)])
-        } else if let cursor = oldestDoc {
+        } else if let cursor = oldestDoc, cursor.get("createdAt") is Timestamp {
             query = base.start(afterDocument: cursor)
+        } else if oldestDoc != nil, let oldest = messages.map(\.createdAt).min() {
+            // ⛔ BUILD 973 CRASH (owner's .ips, 2026-10-18): `start(afterDocument:)` RAISES an ObjC
+            // exception, uncatchable, when the cursor document has no `createdAt` value (a message whose
+            // server time had not landed yet, or one written without it): "FIRQuery
+            // boundFromSnapshot … ThrowInvalidArgument", from the scroll-up auto load. Such a cursor is
+            // never handed over; the page starts at the oldest time held instead, as after a trim.
+            query = base.start(at: [Timestamp(date: oldest)])
         } else { completion(); return }
         loadingOlder = true
         query

@@ -156,19 +156,21 @@ private extension MessageView {
         .buttonStyle(.plain)
     }
 
+    // Owner 2026-10-18, with a picture of the look he wants: a FILLED dark grey capsule, no outline
+    // and no lock, the words centred in a soft grey. Every "can't reply" bar is this one view.
     func lockedPill(_ text: String) -> some View {
-        HStack(spacing: 6) {
-            Text(text)
-            Image(systemName: "lock.fill")
-        }
-        .font(.system(size: 16))
-        .foregroundColor(.white.opacity(0.55))
-        .lineLimit(1)
-        .minimumScaleFactor(0.8)
-        .frame(maxWidth: .infinity)
-        .frame(height: Constant.MessageView.height)
-        .background(Capsule().stroke(Color.white.opacity(0.28), lineWidth: 1))
-        .allowsHitTesting(false)   // a statement, not a control
+        Text(text)
+            .font(.system(size: 17))
+            .foregroundColor(.white.opacity(0.5))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .frame(maxWidth: .infinity)
+            // The SIZE AND COLOUR OF A ONE-ROW SETTINGS CARD (owner 2026-10-18, second picture):
+            // 52pt tall, the ends fully round, the dark grouped-card grey (#1C1C1E), not the 44pt
+            // field height the reply bar uses.
+            .frame(height: 52)
+            .background(Capsule().fill(Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255)))
+            .allowsHitTesting(false)   // a statement, not a control
     }
 
     @ViewBuilder

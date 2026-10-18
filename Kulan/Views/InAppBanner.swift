@@ -255,7 +255,10 @@ struct InAppBannerCard: View {
         // stroke and a black 28% shadow at radius 18 because it was a flat material that needed
         // help standing off the screen. Adding them on top of real glass is what makes a card look
         // doubled — their legacy path draws a 0.8pt rim only because it has no glass to draw one.
-        .liquidGlass(RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
+        // 2026-10-18 (owner, build 973: "the banner has no liquid glass effects"): INTERACTIVE glass,
+        // the system's own touch response, the light that follows the finger and the flex under a
+        // press, which the plain regular glass does not draw. Taps and the drag are unchanged.
+        .liquidGlass(RoundedRectangle(cornerRadius: Self.corner, style: .continuous), interactive: true)
         .padding(.horizontal, Self.sideInset)
         .padding(.top, topInset(safeTop: safeTop))
         .offset(y: rubberBanded(dragY))
@@ -332,7 +335,9 @@ extension View {
                     // GeometryReader, which is not the view the `if` inserts, so SwiftUI never ran
                     // it and the card just appeared and vanished. The reader is 144pt tall from the
                     // screen's top, so a move by its own height takes the card fully off screen.
-                    .transition(.move(edge: .top))
+                    // 2026-10-18 (owner): the system banner also GROWS a little as it drops, from
+                    // its top edge; a slide alone read flat. Same springs as before.
+                    .transition(.move(edge: .top).combined(with: .scale(scale: 0.9, anchor: .top)))
             }
         }
     }

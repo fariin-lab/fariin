@@ -1190,7 +1190,8 @@ enum ChatService {
         let me = uid
         let mediaBarred = await MainActor.run {
             ConversationsRepository.shared.conversations.first { $0.id == cid }?
-                .isRestricted(me, .sendMedia, now: Date().timeIntervalSince1970 * 1000) ?? false
+                // owner 2026-10-18: `sendLinks` (also true under the old all-media `sendMedia`).
+                .isRestricted(me, .sendLinks, now: Date().timeIntervalSince1970 * 1000) ?? false
         }
         if !mediaBarred, let preview,
            let lp = await sealLinkPreview(preview, cid: cid, members: members, msgId: msgRef.documentID) {
@@ -3733,15 +3734,20 @@ enum ChatService {
         try? await writeSystemMessage(cid: cid, text: "\(name) turned \(on ? "on" : "off") Restricted chat.")
     }
 
-    /// ⛔ MEMBER LABEL — owner 2026-10-18: a short tag under a member's name in the group (the
-    /// reference app's member tags). Anyone may set their own; an admin with the change-info right
-    /// may set anyone's (firestore.rules). Empty removes it. 24 characters, one line.
-    static let memberLabelMax = 24
-    static func setMemberLabel(cid: String, uid member: String, _ text: String) async throws {
-        let clean = String(text.replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespaces).prefix(memberLabelMax))
+    /// ⛔ ROLE — owner 2026-10-18: an admin gives a member a short tag in the group ("🎨 Designer").
+    /// Replaces the self-set Member Label of the same day: members never set their own. The owner
+    /// may set anyone's; an admin needs Change group info and never touches the owner's
+    /// (`Conversation.canSetRole`, firestore.rules `roleWriteOK`). nil or empty text removes it.
+    /// `roleEdit` names the one person the write is about, as `adminEdit` does for the admin team:
+    /// the rules cannot pick the changed key out of the map on their own.
+    static func setRole(cid: String, uid member: String, text: String, emoji: String?) async throws {
+        let clean = GroupRole.clean(text)
+        let mark = emoji.map { GroupRole.fit($0, max: GroupRole.maxEmoji) } ?? ""
+        var role: [String: Any] = ["text": clean]
+        if !mark.isEmpty { role["emoji"] = mark }
         try await db.collection("conversations").document(cid).updateData([
-            "memberLabels.\(member)": clean.isEmpty ? FieldValue.delete() : clean,
+            "roles.\(member)": clean.isEmpty ? FieldValue.delete() : role,
+            "roleEdit": ["uid": member, "by": uid],
         ])
     }
 

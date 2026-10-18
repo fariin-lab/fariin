@@ -297,84 +297,230 @@ struct InviteLinkSheet: View {
     }
 }
 
-// MARK: - Join group sheet (opened from a kulan://g/<code> deep link)
+// MARK: - Join group sheet (a group link: its card, the link itself, a QR code, kulan://g/<code>)
 
+/// ⛔ THE REFERENCE APP'S JOIN SHEET — owner 2026-10-18, with its screenshots. A group link's first tap
+/// opens this, not the group: X top left, the big group photo, the name, "N members", a line, then
+/// up to three of MY contacts who are already in it ("<Name> and 2 others already joined this
+/// group", our own words), and one blue Join Group capsule. A group I am already in never shows it
+/// (`GroupLinkDoor.open` goes to the chat; a stale answer here closes and does the same).
+///
+/// Everything on it comes from `groupLinkPreview` (`GroupLinkDoor`), looked up when the card was
+/// drawn, so it is usually filled on its first frame. The join itself is the old path,
+/// `joinGroupViaInvite`, with its approval rule: a group that reviews requests says Request to Join,
+/// then Request Sent.
 struct JoinGroupSheet: View {
     let code: String
     @Environment(\.dismiss) private var dismiss
-    @State private var invite: GroupInvite?
-    @State private var loading = true
+    @State private var preview: GroupLinkPreview?
+    @State private var refusedText: String?
+    @State private var failedText: String?
     @State private var joining = false
-    @State private var doneMessage: String?
-    /// True only for "Request sent". A refused or failed join used to land on the same page, under
-    /// the same green tick, so a failure read as a success (audit, 2026-09-24).
-    @State private var doneIsSuccess = false
+    @State private var requestSent = false
+    @State private var joinError: String?
+    @State private var contentHeight: CGFloat = 380
+
+    private static let blue = Color(hex: 0x2392FE)
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 18) {
-                if loading {
-                    ProgressView().padding(.top, 60)
-                } else if let msg = doneMessage {
-                    Spacer()
-                    if doneIsSuccess {
-                        Image(systemName: "checkmark.circle.fill").font(.system(size: 54)).foregroundStyle(.green)
-                    } else {
-                        // The same glyph the sheet's own "invalid link" state uses.
-                        Image(systemName: "link.badge.plus").font(.system(size: 48)).foregroundStyle(.secondary)
-                    }
-                    Text(msg).multilineTextAlignment(.center).padding(.horizontal)
-                    Spacer()
-                    Button("Done") { dismiss() }.buttonStyle(.borderedProminent)
-                } else if let inv = invite, inv.isActive {
-                    Spacer()
-                    AvatarView(name: inv.groupTitle, photoUrl: inv.groupPhoto, size: 96)
-                    Text(inv.groupTitle).font(.title2.weight(.bold))
-                    Text(inv.requestApproval ? "Request to join this group" : "You've been invited to join this group")
-                        .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    Spacer()
-                    Button {
-                        join()
-                    } label: {
-                        Text(joining ? "Joining…" : (inv.requestApproval ? "Request to Join" : "Join Group"))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent).controlSize(.large).disabled(joining)
-                    .padding(.horizontal)
-                } else {
-                    Spacer()
-                    Image(systemName: "link.badge.plus").font(.system(size: 48)).foregroundStyle(.secondary)
-                    Text("This invite link is invalid, expired, or full.").multilineTextAlignment(.center).padding(.horizontal)
-                    Spacer()
+        VStack(spacing: 0) {
+            HStack {
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 44, height: 44)
+                        .liquidGlass(Circle(), interactive: true)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+
+            content
+        }
+        .frame(maxWidth: .infinity)
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .presentationDetents([.height(max(300, contentHeight))])
+        .presentationDragIndicator(.hidden)
+        .task { await load() }
+    }
+
+    @ViewBuilder private var content: some View {
+        if let p = preview {
+            groupBody(p)
+        } else if let why = refusedText {
+            message(symbol: "link", why)
+        } else if let why = failedText {
+            VStack(spacing: 16) {
+                message(symbol: "wifi.exclamationmark", why)
+                capsuleButton("Try Again", enabled: true) {
+                    failedText = nil
+                    Task { await load() }
                 }
             }
-            .padding(.bottom, 24)
-            .navigationTitle("Join Group").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() } } }
-            .task { invite = await GroupInviteService.fetchInvite(code: code); loading = false }
+        } else {
+            ProgressView().frame(height: 220)
         }
     }
 
-    private func join() {
+    @ViewBuilder private func groupBody(_ p: GroupLinkPreview) -> some View {
+        VStack(spacing: 0) {
+            AvatarView(name: p.title, photoUrl: p.photoUrl, size: 100)
+                .padding(.top, 2)
+            Text(p.title)
+                .font(.system(size: 22, weight: .semibold))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .padding(.horizontal, 24)
+                .padding(.top, 14)
+            Text(p.membersLine)
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
+
+            if !p.mutuals.isEmpty {
+                Divider().padding(.horizontal, 20).padding(.top, 20)
+                mutualsRow(p).padding(.top, 16).padding(.horizontal, 24)
+            }
+
+            if let joinError {
+                Text(joinError)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 16)
+            } else if requestSent || p.requested {
+                Text("An admin will review your request.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 16)
+            }
+
+            capsuleButton(buttonTitle(p), enabled: !joining && !(requestSent || p.requested)) { join(p) }
+                .padding(.top, 24)
+        }
+    }
+
+    private func buttonTitle(_ p: GroupLinkPreview) -> String {
+        if requestSent || p.requested { return "Request Sent" }
+        if joining { return p.needsApproval ? "Sending…" : "Joining…" }
+        return p.needsApproval ? "Request to Join" : "Join Group"
+    }
+
+    /// Up to three small faces, overlapping, and who they are.
+    @ViewBuilder private func mutualsRow(_ p: GroupLinkPreview) -> some View {
+        HStack(spacing: 10) {
+            HStack(spacing: -8) {
+                ForEach(p.mutuals.prefix(3)) { m in
+                    AvatarView(name: m.name, photoUrl: m.photoUrl, size: 28)
+                        .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2))
+                }
+            }
+            Text(mutualsLine(p))
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func mutualsLine(_ p: GroupLinkPreview) -> String {
+        guard let first = p.mutuals.first else { return "" }
+        let others = max(0, max(p.mutualCount, p.mutuals.count) - 1)
+        if others == 0 { return "\(first.name) already joined this group" }
+        return "\(first.name) and \(others) \(others == 1 ? "other" : "others") already joined this group"
+    }
+
+    private func capsuleButton(_ title: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(enabled ? Color.white : Color.secondary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .background(Capsule().fill(enabled ? Self.blue : Color(.tertiarySystemFill)))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .padding(.horizontal, 20)
+        .padding(.bottom, 12)
+    }
+
+    private func message(symbol: String, _ text: String) -> some View {
+        VStack(spacing: 14) {
+            Image(systemName: symbol).font(.system(size: 44)).foregroundStyle(.secondary)
+            Text(text)
+                .font(.system(size: 16))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+        }
+        .padding(.top, 12)
+        .padding(.bottom, 36)
+    }
+
+    // MARK: - Work
+
+    private func load() async {
+        // The answer the card's lookup already has: on screen in the first frame.
+        if let hit = GroupLinkDoor.cached(code) {
+            if openIfMember(hit) { return }
+            preview = hit
+        }
+        switch await GroupLinkDoor.load(code) {
+        case .found(let p):
+            if openIfMember(p) { return }
+            preview = p
+        case .refused(let why):
+            if preview == nil { refusedText = why }
+        case .failed(let why):
+            if preview == nil { failedText = why }
+        }
+    }
+
+    /// A member never sees the sheet: it closes and the chat opens.
+    private func openIfMember(_ p: GroupLinkPreview) -> Bool {
+        guard p.isMember, let cid = p.cid else { return false }
+        openChat(cid, p)
+        return true
+    }
+
+    private func openChat(_ cid: String, _ p: GroupLinkPreview) {
+        let router = AppRouter.shared
+        router.pendingInviteCode = nil
+        router.pendingChatName = p.title
+        router.pendingChatPhoto = p.photoUrl
+        router.pendingChatId = cid
+        dismiss()
+    }
+
+    private func join(_ p: GroupLinkPreview) {
+        guard !joining else { return }
+        guard NetworkState.shared.isOnline else { joinError = "No internet connection. Try again."; return }
         joining = true
+        joinError = nil
         Task {
             do {
                 let r = try await GroupInviteService.joinViaInvite(code: code)
                 switch r.status {
                 case "joined", "already":
-                    AppRouter.shared.pendingInviteCode = nil
-                    AppRouter.shared.pendingChatId = r.cid
-                    dismiss()
+                    GroupLinkDoor.noteJoined(code, cid: r.cid)
+                    openChat(r.cid, p)
                 case "requested":
-                    doneIsSuccess = true
-                    doneMessage = "Request sent. You'll join once an admin approves."
+                    GroupLinkDoor.noteRequested(code)
+                    requestSent = true
                 default:
-                    doneIsSuccess = false
-                    doneMessage = "Couldn't join. The link may be invalid."
+                    joinError = "Couldn't join. The link may be invalid."
                 }
             } catch {
-                doneIsSuccess = false
-                doneMessage = (error as NSError).localizedDescription
+                joinError = (error as NSError).localizedDescription
             }
             joining = false
         }
