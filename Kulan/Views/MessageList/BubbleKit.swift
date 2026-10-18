@@ -28,6 +28,19 @@ enum BubbleMetrics {
     static let avatarSize: CGFloat = 28
     static let avatarGap: CGFloat = 6
     static let senderNameGap: CGFloat = 3      // VStack spacing above the bubble
+    /// ⛔ THE GROUP SENDER'S NAME IS INSIDE THE FIRST BUBBLE OF A RUN — owner 2026-10-18, with a
+    /// screenshot of "kream" sitting above the bubble: "make it like the reference apps". Their
+    /// numbers, read from source (see `MessageRowLayout.nameInBubble`):
+    /// - 7pt from the bubble's top to the name (ChatMessageBubbleItemNode.swift:2757-2758)
+    /// - the header is name + 8 + badge wide, so the bubble grows to fit it (:2913, :2919)
+    /// - 2pt from the name to the forwarded line under it (:2960)
+    /// - 1pt from the name to the words, 5pt to a quote or a picture (the second reference app,
+    ///   CVComponentMessage.swift:1342-1355 and 1383-1385)
+    static let nameTop: CGFloat = 7
+    static let nameSlack: CGFloat = 8
+    static let nameForwardGap: CGFloat = 2
+    static let nameToText: CGFloat = 1
+    static let nameToBlock: CGFloat = 5
     static let reactionOverhang: CGFloat = 13  // how far the badge hangs below the bubble
     /// The reactor's face inside a reaction pill. Sized off the emoji beside it rather than picked:
     /// a circle much larger turns the pill into a row of avatars, and much smaller reads as a dot.
@@ -112,7 +125,9 @@ enum BubbleMetrics {
             // is floor(chat font × 11/17): 11 at its default 17, which is our body size.
             meta = UIFont.systemFont(ofSize: s(11))
             metaItalic = UIFont.italicSystemFont(ofSize: s(11))
-            senderName = UIFont.systemFont(ofSize: s(12), weight: .semibold)
+            // owner 2026-10-18: the name moved INSIDE the bubble, at the reference app's size:
+            // semibold floor(chat font x 14/17) = 14 at our 17 (ChatMessageBubbleItemNode.swift:1629-1630).
+            senderName = UIFont.systemFont(ofSize: s(14), weight: .semibold)
             forwarded = UIFont.italicSystemFont(ofSize: s(11))
             quoteName = UIFont.systemFont(ofSize: s(12), weight: .semibold)
             quoteText = UIFont.systemFont(ofSize: s(12))

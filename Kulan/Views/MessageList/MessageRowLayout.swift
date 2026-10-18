@@ -473,8 +473,15 @@ enum MessageRowLayout {
             // one-line UILabel that truncates, but a name wider than `maxContent` was measured
             // wrapped, so the row reserved two lines above the bubble and drew one: a gap.
             let oneLine = BubbleText.size(attr, width: .greatestFiniteMagnitude)
-            senderNameSize = CGSize(width: min(oneLine.width, maxContent), height: oneLine.height)
-            y += senderNameSize.height + BubbleMetrics.senderNameGap
+            // The tick's room comes off the cap first, the reference app's own order (the name is
+            // laid out against the width less `credibilityIconWidth`, :2888), so a long name
+            // truncates instead of pushing the tick out of the bubble.
+            let tickRoom: CGFloat = s.verified ? 4 + 11 : 0
+            senderNameSize = CGSize(width: max(0, min(oneLine.width, maxContent - tickRoom)),
+                                    height: oneLine.height)
+            // owner 2026-10-18: inside the bubble it pushes the CONTENT down, not the bubble. Only a
+            // bubble-less message (sticker, big emoji, notice capsule) keeps it floating above.
+            if !nameInBubble(b) { y += senderNameSize.height + BubbleMetrics.senderNameGap }
         }
 
         // The story-reply card is measured with the tags and placed with them — it sits above the
@@ -498,8 +505,14 @@ enum MessageRowLayout {
             let w = ceil(("Forwarded" as NSString)
                 .size(withAttributes: [.font: BubbleMetrics.forwardedFont]).width)
             forwardedSize = CGSize(width: forwardedIconW + 3 + w, height: h)
-            y += h + BubbleMetrics.senderNameGap
+            // Under an in-bubble name the Forwarded line goes in with it, name first (the reference
+            // app's header order: author, then forward info, then reply, :2755-3051).
+            if !nameInBubble(b) { y += h + BubbleMetrics.senderNameGap }
         }
+        // Where the in-bubble name band ends (0 when there is none), and how wide it needs the
+        // content column to be. Every bubble kind below starts its content under it.
+        let nameHeader = nameHeaderBottom(b, senderNameSize: senderNameSize, forwardedSize: forwardedSize)
+        let nameHeaderW = nameHeaderWidth(b, senderNameSize: senderNameSize, forwardedSize: forwardedSize)
 
         // ── Inside the bubble ──
 
@@ -707,9 +720,16 @@ enum MessageRowLayout {
             // portrait picture made it most of the screen; 240 wide keeps it readable and tappable.
             if case .story = lc.shape { contentW = min(maxContent, 240) } else { contentW = maxContent }
         }
+        // At least as wide as the name band, so a one-word reply under a long name still holds the
+        // whole name and its tick (owner 2026-10-18; the reference app's `headerSize.width`, :2919).
+        contentW = max(contentW, nameHeaderW)
         contentW = min(maxContent, ceil(contentW))
 
-        var innerY: CGFloat = vPad
+        // Under the name: 1pt to the words, 5pt to a quote or a link card (the second reference app).
+        var innerY: CGFloat = nameHeader > 0
+            ? nameHeader + ((quoteOuter.height > 0 || linkCard != nil) ? BubbleMetrics.nameToBlock
+                                                                      : BubbleMetrics.nameToText)
+            : vPad
         var quoteRect: CGRect?
         if quoteOuter.height > 0 {
             quoteRect = CGRect(x: hPad, y: innerY, width: contentW, height: quoteOuter.height)
@@ -1140,6 +1160,34 @@ enum MessageRowLayout {
                                                  columnW: columnW, top: tagY, maxWidth: columnW)
             tagY += storyReplyCardSize(sr, maxWidth: columnW).height + BubbleMetrics.senderNameGap
         }
+        if senderNameAttr != nil, nameInBubble(b) {
+            // ⛔ INSIDE THE BUBBLE, TOP-LEFT, ABOVE THE CONTENT — owner 2026-10-18. Every kind left
+            // `nameHeaderBottom` of room at its top. The inset is the kind's own content inset, so
+            // the name lines up with the words (or the quote) under it. A fixed-width bubble (photo,
+            // poll, voice) does not grow for the name; it truncates to fit instead.
+            let inset: CGFloat = (plan.pollPlan != nil || plan.contactPlan != nil) ? 12 : BubbleMetrics.hPad
+            let tick: CGFloat = b.sender?.verified == true ? 4 + 11 : 0
+            let nameW = max(0, min(senderNameSize.width, bubbleRect.width - inset * 2 - tick))
+            let nameY = bubbleRect.minY + BubbleMetrics.nameTop
+            plan.senderName = CGRect(x: bubbleRect.minX + inset, y: nameY,
+                                     width: nameW, height: senderNameSize.height)
+            if b.sender?.verified == true {
+                plan.verifiedMark = CGRect(x: bubbleRect.minX + inset + nameW + 4,
+                                           y: nameY + (senderNameSize.height - 11) / 2, width: 11, height: 11)
+            }
+            if b.forwarded {
+                let fy = nameY + senderNameSize.height + BubbleMetrics.nameForwardGap
+                let x = bubbleRect.minX + inset
+                plan.forwardedIcon = CGRect(x: x, y: fy + (forwardedSize.height - 9) / 2,
+                                            width: forwardedIconW, height: 9)
+                plan.forwarded = CGRect(x: x + forwardedIconW + 3, y: fy,
+                                        width: max(0, min(forwardedSize.width,
+                                                          bubbleRect.width - inset * 2) - forwardedIconW - 3),
+                                        height: forwardedSize.height)
+            }
+            plan.senderNameAttr = senderNameAttr
+            return y
+        }
         if senderNameAttr != nil {
             plan.senderName = CGRect(x: bubbleRect.minX + 12, y: tagY,
                                     width: senderNameSize.width, height: senderNameSize.height)
@@ -1160,6 +1208,56 @@ enum MessageRowLayout {
 
         plan.senderNameAttr = senderNameAttr
         return y
+    }
+
+    // ── The group sender's name inside the bubble (owner 2026-10-18) ──
+
+    /// Does this row's name go INSIDE its bubble? Yes for every incoming bubble that has one, the
+    /// way both reference apps draw a group run: the name in the first bubble's top-left, above the
+    /// text, the quote or the picture. No for what has no bubble to hold it (a sticker, a big emoji)
+    /// and for the notice capsules: those keep the small name floating above, as before. The first
+    /// reference app gives a sticker no name at all (ChatMessageAnimatedStickerItemNode has no author
+    /// line); the second keeps it outside the sticker (CVComponentSenderName.swift:68, borderless).
+    static func nameInBubble(_ b: BubbleRow) -> Bool {
+        guard !b.isMe, let s = b.sender, s.showsName else { return false }
+        switch b.body {
+        case .jumbomoji, .tombstone, .pill:
+            return false
+        case .media(let m):
+            // A sticker sent as a reply keeps its bubble (see `media`), so it holds the name too.
+            return !(m.kind == .sticker && b.quote == nil)
+        default:
+            return true
+        }
+    }
+
+    /// Bubble-local y where the in-bubble name band ends: 7pt of top inset, the name, and the
+    /// Forwarded line under it when the message was forwarded. 0 when the name is not inside.
+    private static func nameHeaderBottom(_ b: BubbleRow, senderNameSize: CGSize,
+                                         forwardedSize: CGSize) -> CGFloat {
+        guard nameInBubble(b) else { return 0 }
+        var h = BubbleMetrics.nameTop + senderNameSize.height
+        if b.forwarded { h += BubbleMetrics.nameForwardGap + forwardedSize.height }
+        return ceil(h)
+    }
+
+    /// How wide the content column must be to hold the name band: the name, the reference app's 8pt
+    /// of slack, and the verified tick (4 + 11). 0 when the name is not inside.
+    private static func nameHeaderWidth(_ b: BubbleRow, senderNameSize: CGSize,
+                                        forwardedSize: CGSize) -> CGFloat {
+        guard nameInBubble(b) else { return 0 }
+        var w = senderNameSize.width + BubbleMetrics.nameSlack
+        if b.sender?.verified == true { w += 4 + 11 }
+        if b.forwarded { w = max(w, forwardedSize.width) }
+        return ceil(w)
+    }
+
+    /// Where a kind's content starts. Under an in-bubble name it is the band plus `gap`; without one
+    /// it is the kind's own top inset, exactly as before.
+    private static func contentTop(_ b: BubbleRow, senderNameSize: CGSize, forwardedSize: CGSize,
+                                   gap: CGFloat = BubbleMetrics.nameToBlock, otherwise: CGFloat) -> CGFloat {
+        let h = nameHeaderBottom(b, senderNameSize: senderNameSize, forwardedSize: forwardedSize)
+        return h > 0 ? h + gap : otherwise
     }
 
     // ── A photo / video / gif bubble ──
@@ -1183,12 +1281,17 @@ enum MessageRowLayout {
         // The quote sits ABOVE the picture, inset like the text bubble's, in its own band.
         var quoteRect: CGRect?
         var quoteInner: QuoteInnerPlan?
-        var innerY: CGFloat = 0
+        // owner 2026-10-18: under an in-bubble name the picture (or its quote) starts below the name
+        // band, full width, the second reference app's layout (name nested at the top, media full
+        // width under it).
+        var innerY: CGFloat = contentTop(b, senderNameSize: senderNameSize,
+                                         forwardedSize: forwardedSize, otherwise: 0)
         if let q = b.quote {
             let (size, inner) = quoteSize(q, textColor: textColor,
                                           maxWidth: max(1, bubbleW - BubbleMetrics.hPad * 2))
             quoteInner = inner
-            innerY = BubbleMetrics.vPad
+            innerY = contentTop(b, senderNameSize: senderNameSize, forwardedSize: forwardedSize,
+                                otherwise: BubbleMetrics.vPad)
             quoteRect = CGRect(x: BubbleMetrics.hPad, y: innerY,
                                width: bubbleW - BubbleMetrics.hPad * 2, height: size.height)
             innerY += size.height + 4
@@ -1343,20 +1446,23 @@ enum MessageRowLayout {
         }()
         let bubbleW = min(maxBubble, max(1, solved.size.width))
 
-        var innerY: CGFloat = 0
+        // Under an in-bubble name (owner 2026-10-18), as in `media`.
+        var innerY: CGFloat = contentTop(b, senderNameSize: senderNameSize,
+                                         forwardedSize: forwardedSize, otherwise: 0)
         var quoteRect: CGRect?
         var quoteInner: QuoteInnerPlan?
         if let q = b.quote {
             let (size, inner) = quoteSize(q, textColor: textColor,
                                           maxWidth: max(1, bubbleW - BubbleMetrics.hPad * 2))
             quoteInner = inner
-            innerY = BubbleMetrics.vPad
+            innerY = contentTop(b, senderNameSize: senderNameSize, forwardedSize: forwardedSize,
+                                otherwise: BubbleMetrics.vPad)
             quoteRect = CGRect(x: BubbleMetrics.hPad, y: innerY,
                                width: bubbleW - BubbleMetrics.hPad * 2, height: size.height)
             innerY += size.height + 4
         }
 
-        let grid = CGRect(x: 0, y: innerY, width: solved.size.width, height: solved.size.height)
+        let grid =CGRect(x: 0, y: innerY, width: solved.size.width, height: solved.size.height)
         innerY = grid.maxY
 
         // See `mediaPlan`: the floating footer sits on the dark capsule in both themes, so it takes
@@ -1477,9 +1583,13 @@ enum MessageRowLayout {
         }
 
         let rowW = slotSize.width + gap + textW
-        let contentW = min(maxContent, max(max(rowW, quoteOuter.width), metaSize.width))
+        // At least the in-bubble name's width (owner 2026-10-18).
+        let contentW = min(maxContent, max(max(rowW, quoteOuter.width), metaSize.width,
+                                           nameHeaderWidth(b, senderNameSize: senderNameSize,
+                                                           forwardedSize: forwardedSize)))
 
-        var innerY = vPad
+        var innerY = contentTop(b, senderNameSize: senderNameSize, forwardedSize: forwardedSize,
+                                otherwise: vPad)
         var quoteRect: CGRect?
         if quoteOuter.height > 0 {
             quoteRect = CGRect(x: hPad, y: innerY, width: contentW, height: quoteOuter.height)
@@ -1571,7 +1681,9 @@ enum MessageRowLayout {
         // width does not, and standing still while the screen grew is what made a long note look
         // short beside another app's. See `VoiceMessageView.widthFraction`.
         let contentW = max(1, maxBubble * VoiceMessageView.widthFraction - hPad * 2)
-        var innerY = vPad
+        // Under an in-bubble name (owner 2026-10-18). The note's width is fixed; the name truncates.
+        var innerY = contentTop(b, senderNameSize: senderNameSize, forwardedSize: forwardedSize,
+                                otherwise: vPad)
 
         var quoteRect: CGRect?
         var quoteInner: QuoteInnerPlan?
@@ -1963,7 +2075,9 @@ enum MessageRowLayout {
         let pad: CGFloat = 12
         let bubbleW = min(columnW, maxBubble * 0.9)
         let contentW = max(1, bubbleW - pad * 2)
-        var innerY = pad
+        // Under an in-bubble name (owner 2026-10-18).
+        var innerY = contentTop(b, senderNameSize: senderNameSize, forwardedSize: forwardedSize,
+                                otherwise: pad)
 
         var quoteRect: CGRect?
         var quoteInner: QuoteInnerPlan?
@@ -2058,14 +2172,17 @@ enum MessageRowLayout {
                                  forwardedSize: CGSize, forwardedIconW: CGFloat) -> BubbleResult {
         let y = startY
         let bubbleW = min(columnW, maxBubble * 0.85)
-        var innerY: CGFloat = 0
+        // Under an in-bubble name (owner 2026-10-18), as in `media`.
+        var innerY: CGFloat = contentTop(b, senderNameSize: senderNameSize,
+                                         forwardedSize: forwardedSize, otherwise: 0)
         var quoteRect: CGRect?
         var quoteInner: QuoteInnerPlan?
         if let q = b.quote {
             let (size, inner) = quoteSize(q, textColor: textColor,
                                           maxWidth: max(1, bubbleW - BubbleMetrics.hPad * 2))
             quoteInner = inner
-            innerY = BubbleMetrics.vPad
+            innerY = contentTop(b, senderNameSize: senderNameSize, forwardedSize: forwardedSize,
+                                otherwise: BubbleMetrics.vPad)
             quoteRect = CGRect(x: BubbleMetrics.hPad, y: innerY,
                                width: bubbleW - BubbleMetrics.hPad * 2, height: size.height)
             innerY += size.height + 4
@@ -2138,11 +2255,14 @@ enum MessageRowLayout {
         if let q = b.quote {
             let (size, inner) = quoteSize(q, textColor: textColor, maxWidth: max(1, bubbleW - pad * 2))
             quoteInner = inner
-            innerY = pad
+            // Under an in-bubble name (owner 2026-10-18).
+            innerY = contentTop(b, senderNameSize: senderNameSize, forwardedSize: forwardedSize,
+                                otherwise: pad)
             quoteRect = CGRect(x: pad, y: innerY, width: bubbleW - pad * 2, height: size.height)
             innerY += size.height + 10
         } else {
-            innerY = pad
+            innerY = contentTop(b, senderNameSize: senderNameSize, forwardedSize: forwardedSize,
+                                otherwise: pad)
         }
 
         let nameAttr = NSAttributedString(string: c.name, attributes: [

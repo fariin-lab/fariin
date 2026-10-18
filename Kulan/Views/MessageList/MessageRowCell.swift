@@ -450,6 +450,13 @@ final class MessageRowCell: UICollectionViewCell {
                 delegate?.rowCellDidTapReactions(self)
                 return
             }
+            // owner 2026-10-18: the group sender's name sits INSIDE the first bubble of a run now, and
+            // a file, location or contact bubble answers a tap anywhere on itself. The name is tested
+            // before them so a tap on it still opens the profile. Its rect never overlaps the content.
+            if let s = b.sender, rowView.hitsSenderName(p) {
+                delegate?.rowCell(self, didTapSender: s.uid)
+                return
+            }
             // The picture opens the viewer. Before the quote test, because a media bubble's quote
             // sits above the picture and the two rects never overlap.
             // A view-once pill opens the one-shot viewer; a pending placeholder opens nothing, and
