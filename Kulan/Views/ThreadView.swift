@@ -1039,7 +1039,12 @@ struct ThreadView: View {
     // inverted list's scroll machine, and this one would insert and remove itself at the exact moment
     // the first message arrives — the worst possible time to move that layout.
     @ViewBuilder private var encryptionNotice: some View {
-        if repo.didInitialLoad, repo.items.isEmpty, !notAMember {
+        // A group with only its own notices in it (the "created the group" line) shows the group's
+        // welcome card instead (owner 2026-10-19). Gone at the first real message.
+        if repo.didInitialLoad, isGroup, !notAMember, !preview, let conv = conversation,
+           !repo.items.contains(where: { !$0.isSystem }) {
+            GroupWelcomeCard(conv: conv, me: me, dark: dark)
+        } else if repo.didInitialLoad, repo.items.isEmpty, !notAMember {
             let line = Text("\(Image(systemName: "lock.fill")) Messages and calls are end-to-end encrypted. Only people in this chat can read or listen to them.")
             // ⛔ LEARN MORE OPENS fariin.com/safety — owner 2026-10-15: the safety page sat where
             // nobody looks; every new chat shows this line, the way the reference app's notice

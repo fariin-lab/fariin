@@ -189,7 +189,8 @@ enum ChatService {
     /// order, behind it. `disappearSeconds`: the creator's choice (0 = off), written in the same
     /// record, so there is no second write or second notice for it.
     static func createGroup(title: String, memberIds: [String], avatarUrl: String? = nil,
-                            disappearSeconds: Int = 0) async throws -> String {
+                            disappearSeconds: Int = 0,
+                            permissions: [String: Bool] = [:]) async throws -> String {
         var memberSet = Set(memberIds); memberSet.insert(uid)
         let users = Array(memberSet)
 
@@ -222,6 +223,8 @@ enum ChatService {
             "updatedAt": FieldValue.serverTimestamp(),
         ]
         if let avatarUrl, !avatarUrl.isEmpty { data["avatarUrl"] = avatarUrl }
+        // The member switches picked on the New Group page, in the group from its first write.
+        for (k, v) in permissions { data[k] = v }
         // Not awaited: the write is on this phone now and the listener sees it; the server's answer
         // comes behind (a refusal is logged; the chat then simply does not stay).
         ref.setData(data) { err in

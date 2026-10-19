@@ -25,7 +25,7 @@ struct NewGroupView: View {
 
     struct Person: Identifiable, Hashable { let id: String; let name: String; let photo: String? }
 
-    private enum Step: Hashable { case details }
+    private enum Step: Hashable { case details, permissions }
 
     @Environment(\.dismiss) private var dismiss
     private var convRepo = ConversationsRepository.shared
@@ -40,6 +40,12 @@ struct NewGroupView: View {
     @State private var selected: [String: Person] = [:]   // uid -> person
     @State private var order: [String] = []                // tap order, for the faces and the list
     @State private var creating = false
+    // The group's member switches, chosen before it exists (owner 2026-10-19). The same four the
+    // group's own Permissions page holds, with the same defaults; written into the new group itself.
+    @State private var membersCanSend = true
+    @State private var membersCanAdd = false
+    @State private var membersCanEdit = false
+    @State private var membersCanCall = true
     @State private var error: String?
     @FocusState private var nameFocused: Bool
 
@@ -79,7 +85,9 @@ struct NewGroupView: View {
     var body: some View {
         NavigationStack(path: $path) {
             membersPage
-                .navigationDestination(for: Step.self) { _ in detailsPage }
+                .navigationDestination(for: Step.self) { step in
+                    if step == .permissions { permissionsPage } else { detailsPage }
+                }
         }
     }
 
@@ -245,7 +253,23 @@ struct NewGroupView: View {
                 Text("New messages in this group disappear for everyone once this time has passed.")
             }
 
-            Section(selected.isEmpty ? "1 Member" : "\(selected.count + 1) Members") {
+            Section {
+                Button { nameFocused = false; path.append(.permissions) } label: {
+                    HStack {
+                        Text("Permissions").foregroundStyle(.primary)
+                        Spacer()
+                        Text(permissionsCount).foregroundStyle(.secondary)
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } footer: {
+                Text("What members can do. You can change this later in the group's settings.")
+            }
+
+            Section("Members · \(selected.count + 1) of \(Self.maxOthersAtCreate + 1)") {
                 ForEach(picked) { p in
                     HStack(spacing: 12) {
                         AvatarView(name: p.name, photoUrl: p.photo, size: 40)
@@ -287,6 +311,37 @@ struct NewGroupView: View {
                 pickLabel: "Set Group Photo")
             .storyAlwaysDark()
         }
+    }
+
+    /// "2/4": how many of the member switches are on, as the group's Permissions row shows it.
+    private var permissionsCount: String {
+        var on = [membersCanSend, membersCanAdd, membersCanEdit]
+        if CallFeatures.groupCalls { on.append(membersCanCall) }
+        return "\(on.filter { $0 }.count)/\(on.count)"
+    }
+
+    private var permissionsPage: some View {
+        List {
+            Section {
+                Toggle(isOn: $membersCanSend) { permLabel("Send messages", "bubble.left.and.bubble.right") }
+                Toggle(isOn: $membersCanAdd) { permLabel("Add members", "person.badge.plus") }
+                Toggle(isOn: $membersCanEdit) { permLabel("Edit group info", "pencil") }
+                if CallFeatures.groupCalls {
+                    Toggle(isOn: $membersCanCall) { permLabel("Start group calls", "phone") }
+                }
+            } header: {
+                Text("What members can do")
+            } footer: {
+                Text("Admins can always do these. Switch one off and only admins can.")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Permissions")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func permLabel(_ title: String, _ icon: String) -> some View {
+        Label { Text(title) } icon: { Image(systemName: icon).foregroundStyle(.primary) }
     }
 
     private var groupAvatarThumb: some View {
@@ -359,10 +414,15 @@ struct NewGroupView: View {
         creating = true; error = nil
         let timer = disappearSeconds
         let photo = avatarData
+        let perms: [String: Bool] = [
+            "onlyAdminsSend": !membersCanSend, "membersCanAdd": membersCanAdd,
+            "membersCanEditInfo": membersCanEdit, "onlyAdminsCall": !membersCanCall,
+        ]
         Task {
             do {
                 // The chat opens now; the photo goes up behind it, not before it (owner 2026-10-18).
-                let cid = try await ChatService.createGroup(title: name, memberIds: order, disappearSeconds: timer)
+                let cid = try await ChatService.createGroup(title: name, memberIds: order, disappearSeconds: timer,
+                                                           permissions: perms)
                 if let photo {
                     Task.detached(priority: .utility) { _ = try? await ChatService.uploadGroupAvatar(cid: cid, data: photo) }
                 }
