@@ -30,6 +30,8 @@ struct GroupInfoView: View {
     @State private var pendingDisappear: Int?   // chosen timer awaiting the "for all members" confirm
     @State private var showAdd = false
     @State private var memberAction: MemberAction?
+    @State private var notice = ""
+    @State private var noticeShown = false
     @State private var profileOf: MemberAction?   // Info on a member's sheet (owner 2026-10-19)
     @State private var confirmLeave = false
     @State private var confirmClear = false
@@ -98,8 +100,31 @@ struct GroupInfoView: View {
         return link.absoluteString
     }
 
+    /// The same capsule the profile page raises: up on a spring, gone after a second and a half.
+    private func flashNotice(_ text: String) {
+        Haptics.notify(.warning)
+        notice = text
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { noticeShown = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            withAnimation(.easeOut(duration: 0.25)) { noticeShown = false }
+        }
+    }
+
     var body: some View {
         AnyView(core)
+            .overlay(alignment: .bottom) {
+                if noticeShown {
+                    Text(notice)
+                        .font(.subheadline.weight(.medium)).foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 18).padding(.vertical, 10)
+                        .background(.black.opacity(0.75), in: Capsule())
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 40)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .allowsHitTesting(false)
+                }
+            }
             .navigationDestination(isPresented: $showMemberChanges) { GroupMemberChangesView(cid: cid) }
             .navigationDestination(item: $profileOf) { m in
                 ContactInfoView(cid: ChatService.convId(me, m.id), name: m.name,
@@ -411,7 +436,8 @@ struct GroupInfoView: View {
             // A group-wide setting: the change-info right edits it, everyone else reads it.
             ProfileInfoRow(title: "Disappearing Messages", icon: "ic_disappearing", value: disappearLabel,
                            chevron: can(.changeInfo)) {
-                if can(.changeInfo) { showDisappear = true }
+                // A tap that did nothing read as broken (owner 2026-10-19): say why instead.
+                if can(.changeInfo) { showDisappear = true } else { flashNotice("Only admins can change this") }
             }
             rowDivider
             ProfileInfoRow(title: "Sounds & Notifications", icon: "ic_notifications",
