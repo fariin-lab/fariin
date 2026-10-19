@@ -427,23 +427,23 @@ struct GroupInfoView: View {
     /// the members card has its own Add Members row (owner 2026-10-19).
     private var actionsRow: some View {
         HStack(spacing: 0) {
-            Button { callTapped(video: false) } label: { actionIcon("phone.fill") }
+            Button { callTapped(video: false) } label: { actionIcon("phone.fill", "Voice") }
                 .tint(.primary)
                 .opacity(callReady ? 1 : 0.45)
                 .accessibilityLabel("Voice Call")
-            Button { callTapped(video: true) } label: { actionIcon("video.fill") }
+            Button { callTapped(video: true) } label: { actionIcon("video.fill", "Video") }
                 .tint(.primary)
                 .opacity(callReady ? 1 : 0.45)
                 .accessibilityLabel("Video Call")
-            Menu { muteMenuItems } label: { actionIcon(muted ? "bell.fill" : "bell.slash.fill") }
+            Menu { muteMenuItems } label: { actionIcon(muted ? "bell.fill" : "bell.slash.fill", muted ? "Unmute" : "Mute") }
                 .tint(.primary)
                 .accessibilityLabel(muted ? "Unmute" : "Mute")
-            Button { onSearch?() } label: { actionIcon("magnifyingglass") }
+            Button { onSearch?() } label: { actionIcon("magnifyingglass", "Search") }
                 .tint(.primary)
                 .disabled(onSearch == nil)
                 .opacity(onSearch == nil ? 0.45 : 1)
                 .accessibilityLabel("Search")
-            Menu { moreMenuItems } label: { actionIcon("ellipsis") }
+            Menu { moreMenuItems } label: { actionIcon("ellipsis", "More") }
                 .tint(.primary)
                 .accessibilityLabel("More")
         }
@@ -451,8 +451,8 @@ struct GroupInfoView: View {
 
     /// The person profile's circle at its own size (owner 2026-10-19: "exactly match the User
     /// Profile").
-    private func actionIcon(_ name: String) -> some View {
-        PosterActionIcon(icon: name, onPhoto: false)
+    private func actionIcon(_ name: String, _ label: String) -> some View {
+        PosterActionIcon(icon: name, onPhoto: false, label: label)
     }
 
     private var mayCall: Bool { CallFeatures.groupCalls && (conv?.canStartCall(me) ?? false) }

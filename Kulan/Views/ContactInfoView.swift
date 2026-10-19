@@ -2059,7 +2059,7 @@ struct ContactInfoView: View {
             // call buttons already carry: an action offered to somebody you have blocked is a button
             // that can only disappoint.
             if source != .chat, !isSelf, !blocked {
-                Button { tapMessage() } label: { PosterActionIcon(icon: "message.fill", onPhoto: hasPhotoHeader) }
+                Button { tapMessage() } label: { PosterActionIcon(icon: "message.fill", onPhoto: hasPhotoHeader, label: "Message") }
                     .tint(.primary)
                     .accessibilityLabel("Message")
             }
@@ -2091,13 +2091,13 @@ struct ContactInfoView: View {
                     // video circle dials straight away. Same `startCall`, same `fromProfile: true`.
                     Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl,
                                                           video: false, fromProfile: true) } label: {
-                        PosterActionIcon(icon: "phone.fill", onPhoto: hasPhotoHeader)
+                        PosterActionIcon(icon: "phone.fill", onPhoto: hasPhotoHeader, label: "Voice")
                     }
                     .tint(.primary)
                     .accessibilityLabel("Voice call")
                     Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl,
                                                           video: true, fromProfile: true) } label: {
-                        PosterActionIcon(icon: "video.fill", onPhoto: hasPhotoHeader)
+                        PosterActionIcon(icon: "video.fill", onPhoto: hasPhotoHeader, label: "Video")
                     }
                     .tint(.primary)
                     .accessibilityLabel("Video call")
@@ -2105,18 +2105,19 @@ struct ContactInfoView: View {
             }
             if !isSelf {
                 Menu { muteMenuItems } label: {
-                    PosterActionIcon(icon: muted ? "ic_bell" : "ic_bell_off", onPhoto: hasPhotoHeader)
+                    PosterActionIcon(icon: muted ? "ic_bell" : "ic_bell_off", onPhoto: hasPhotoHeader,
+                                     label: muted ? "Unmute" : "Mute")
                 }
                 .tint(.primary)
                 .accessibilityLabel(muted ? "Unmute" : "Mute")
             }
             if source == .chat && !isSelf {
-                Button { onSearch() } label: { PosterActionIcon(icon: "magnifyingglass", onPhoto: hasPhotoHeader) }
+                Button { onSearch() } label: { PosterActionIcon(icon: "magnifyingglass", onPhoto: hasPhotoHeader, label: "Search") }
                     .tint(.primary)
                     .accessibilityLabel("Search")
             }
             if !isSelf {
-                Menu { moreMenuItems } label: { PosterActionIcon(icon: "ellipsis", onPhoto: hasPhotoHeader) }
+                Menu { moreMenuItems } label: { PosterActionIcon(icon: "ellipsis", onPhoto: hasPhotoHeader, label: "More") }
                     .tint(.primary)
                     .accessibilityLabel("More")
             }
@@ -2152,7 +2153,7 @@ struct ContactInfoView: View {
                 Label("Video call", systemImage: "video")   // outline
             }
         } label: {
-            PosterActionIcon(icon: "video.fill", onPhoto: hasPhotoHeader)
+            PosterActionIcon(icon: "video.fill", onPhoto: hasPhotoHeader, label: "Call")
         }
         .tint(.primary)
         .accessibilityLabel("Call")
@@ -2175,7 +2176,7 @@ struct ContactInfoView: View {
 
     @ViewBuilder private var glowActionButton: some View {
         if !glowRelationshipKnown {
-            PosterActionIcon(icon: GlowStyle.icon, onPhoto: hasPhotoHeader)
+            PosterActionIcon(icon: GlowStyle.icon, onPhoto: hasPhotoHeader, label: "Glow")
                 .opacity(0.35)
                 .accessibilityLabel("Glow Story")
                 .accessibilityHint("Loading")
@@ -2205,7 +2206,7 @@ struct ContactInfoView: View {
                 // `ic_glow_fill` is that drawing, it already exists, and the filled weight is what a
                 // live glow wears everywhere else in the app — including the Remove row directly
                 // below this one, which was already using it. The two now match.
-                PosterActionIcon(icon: GlowStyle.iconFill, onPhoto: hasPhotoHeader)
+                PosterActionIcon(icon: GlowStyle.iconFill, onPhoto: hasPhotoHeader, label: "Glow")
             }
             .tint(.primary)
             .accessibilityLabel("Remove Glowing")
@@ -2217,7 +2218,7 @@ struct ContactInfoView: View {
             Button { showGlowIntro = true } label: {
                 // `PosterActionIcon` already knows an "ic_*" asset from an SF Symbol name, so his
                 // drawing needed nothing here beyond the new name.
-                PosterActionIcon(icon: GlowStyle.icon, onPhoto: hasPhotoHeader)
+                PosterActionIcon(icon: GlowStyle.icon, onPhoto: hasPhotoHeader, label: "Glow")
             }
             .tint(.primary)
             .accessibilityLabel("Glow Story")

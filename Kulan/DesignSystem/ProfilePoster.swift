@@ -675,8 +675,21 @@ struct PosterActionIcon: View {
     /// True keeps exactly what a profile with a picture has always had, which is the one thing he
     /// asked not to touch.
     var onPhoto: Bool = true
+    /// The action's name under the circle (owner 2026-10-19: group page and person profile).
+    var label: String? = nil
 
     var body: some View {
+        VStack(spacing: 8) {
+            circle
+            if let label {
+                Text(label).font(.footnote).lineLimit(1)
+                    .foregroundStyle(onPhoto ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var circle: some View {
         Group {
             if icon.hasPrefix("ic_") {
                 Image(icon).renderingMode(.template).resizable().scaledToFit()
@@ -697,7 +710,6 @@ struct PosterActionIcon: View {
         // the page sit on a flat colour and are flat themselves. One page, two surfaces, and the
         // line between them is "is it on the picture".
         .modifier(PosterGlassSchemeFix())
-        .frame(maxWidth: .infinity)
     }
 }
 
