@@ -341,19 +341,23 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             // The bar is as wide as its icons, centred in the room Edit leaves, never wider than it.
             // Scrolling into the stickers sends it down, as the switch went; the Delete bar takes
             // the foot while editing, so the bar goes and Done rides above the Delete bar.
-            stripGlass.transform = .identity
+            // ⛔ EDIT IS SMALL AND ON THE BAR'S RIGHT — owner 2026-10-19 (build at 486b4111 showed it at
+            // the top right). The bar stays centred whether Edit shows or not, with Edit's slot kept
+            // free on both sides, so a late show/hide of Edit can never leave the two out of step.
+            for v in [stripGlass, strip, editButton] as [UIView] { v.transform = .identity }
             let pad: CGFloat = 6
-            let editRoom = editButton.isHidden ? 0 : editW + 8
-            let room = w - 2 * M.side - editRoom
+            let smallEditW: CGFloat = 48, smallEditH: CGFloat = 28
+            let room = w - 2 * (M.side + smallEditW + 8)
             let barW = min(room, strip.contentSize.width + 2 * pad)
             let barY = h - footGap - M.stripH
-            let bar = CGRect(x: M.side + (room - barW) / 2, y: barY, width: barW, height: M.stripH)
+            let bar = CGRect(x: (w - barW) / 2, y: barY, width: barW, height: M.stripH)
             stripGlass.frame = bar
             stripGlass.layer.cornerRadius = M.stripH / 2
             strip.frame = bar.insetBy(dx: pad, dy: 0)
-            let editY = editing ? h - (44 + sb) - 8 - M.tabsH : barY + (M.stripH - M.tabsH) / 2
-            editButton.frame = CGRect(x: w - M.side - editW, y: editY, width: editW, height: M.tabsH)
+            let editY = editing ? h - (44 + sb) - 8 - smallEditH : barY + (M.stripH - smallEditH) / 2
+            editButton.frame = CGRect(x: w - M.side - smallEditW, y: editY, width: smallEditW, height: smallEditH)
             editGlass.frame = editButton.bounds
+            editGlass.layer.cornerRadius = smallEditH / 2
             let down = hideBars ? h - barY : 0
             for v in [stripGlass, strip, editButton] as [UIView] { v.transform = CGAffineTransform(translationX: 0, y: down) }
             for v in [stripGlass, strip] as [UIView] { v.alpha = hideBars || editing ? 0 : 1 }
@@ -1026,8 +1030,10 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         c.baseForegroundColor = editing ? .systemBlue : .label
         c.contentInsets = .zero
         c.titleLineBreakMode = .byClipping
+        // 13 at the foot beside the pack bar (owner 2026-10-19 "make small"), 15 in the old top row.
+        let size: CGFloat = stripAtFoot ? 13 : 15
         c.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { a in
-            var a = a; a.font = .systemFont(ofSize: 15, weight: .semibold); return a
+            var a = a; a.font = .systemFont(ofSize: size, weight: .semibold); return a
         }
         // No cross-fade between the two words: one title, swapped in place.
         UIView.performWithoutAnimation {
