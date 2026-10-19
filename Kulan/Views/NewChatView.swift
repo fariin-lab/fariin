@@ -19,7 +19,6 @@ struct NewChatView: View {
     @State private var results: [UserProfile] = []
     @State private var searching = false
     @State private var error: String?
-    @State private var showScan = false
     @State private var showNewGroup = false
     @State private var showNewContact = false
     /// @handles for the people in the list, read from Firestore's ON-DISK cache only.
@@ -126,11 +125,11 @@ struct NewChatView: View {
                             }
                         }
                     } else if sections.isEmpty {
-                        // On the page itself, not in a white card (owner 2026-10-18, his two screenshots).
-                        EmptyStateView(title: "No chats yet", icon: "square.and.pencil",
-                                       text: "To find someone new, search their username on the Chats page.")
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
+                        // One short card, no long text (owner 2026-10-19, his mock; reverses 10-18's
+                        // card-less empty state).
+                        Section {
+                            Text("No chats yet").foregroundStyle(.secondary)
+                        }
                     } else {
                         ForEach(sections, id: \.letter) { section in
                             Section(section.letter) {
@@ -164,23 +163,15 @@ struct NewChatView: View {
                     }
                 }
             }
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: "Name or username")
-            .navigationTitle("New Message")
+            // The field sits at the BOTTOM, the system's own iOS 26 toolbar search (owner 2026-10-19).
+            .searchable(text: $query, placement: .toolbar, prompt: "Search by username")
+            .navigationTitle("New chat")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { dismiss() } label: { Image(systemName: "xmark") }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showScan = true } label: { Image(systemName: "qrcode.viewfinder") }
-                }
-            }
-            .sheet(isPresented: $showScan) {
-                // 2026-09-24 audit: a scanned group invite closes New Chat and opens Join Group.
-                ScanQRView(onGroupInvite: { code in QRGroupInviteRoute.open(code); dismiss() }) { user in
-                    showScan = false; start(user)
-                }
+                // Scan button removed (owner 2026-10-19); scanning stays on the QR code page.
             }
             .sheet(isPresented: $showNewGroup) {
                 // Both sheets go in ONE motion, straight into the group (owner 2026-10-18: the New
