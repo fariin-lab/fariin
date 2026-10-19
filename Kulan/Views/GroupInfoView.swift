@@ -316,6 +316,15 @@ struct GroupInfoView: View {
                 Text(desc).font(.subheadline).foregroundStyle(ink.opacity(0.7))
                     .lineLimit(3).multilineTextAlignment(.center)
                     .padding(.top, 2)
+            } else if canEditInfo {
+                // No description yet: whoever may edit is offered one, the reference app's line
+                // (owner 2026-10-19). It opens the page the Edit button opens.
+                Button { showSettings = true } label: {
+                    Text("Add Group Description").font(.subheadline).foregroundStyle(.tint)
+                        .multilineTextAlignment(.center)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 2)
             }
         }
         .frame(maxWidth: .infinity)
