@@ -54,7 +54,7 @@ struct GroupInfoView: View {
     /// The invite link being shared through the app's Send To sheet (Share Group).
     @State private var shareGroupText: String?
     @State private var showMemberLink = false
-    @State private var showAllMembers = false   // See All, under the first ten members
+    @State private var showAllMembers = false   // the members header's search, and See All under the first five
     @State private var showSounds = false
     @State private var showSettings = false
     @State private var showGroupPhoto = false    // tap the photo → the same morph a person's photo uses
@@ -271,12 +271,13 @@ struct GroupInfoView: View {
     @ViewBuilder private var cards: some View {
         settingsCard
         if iAmAdmin { groupSettingsCard }
-        membersCard
         if !media.isEmpty {
             ProfileMediaCard(cid: cid, media: media, cardColor: cardColor,
                              onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
                              onSeeAll: { showAllMedia = true })
         }
+        // Members between All Media and the red rows (owner's mockup 2026-10-19).
+        membersSection
         exitCard
     }
 
@@ -638,32 +639,72 @@ struct GroupInfoView: View {
 
     // MARK: Members
 
-    /// "All Members" and See All over a loose cloud of up to eleven faces, the biggest in the
-    /// middle. See All is the full, searchable list; a face is that member's card.
-    private var membersCard: some View {
-        VStack(alignment: .leading, spacing: 4) {
+    /// The reference app's members section (owner's mockup 2026-10-19): "N Members" over the card
+    /// with a search button, then Add Members, then the members. The search and See All open the
+    /// full list; a row is that member's card.
+    private var membersSection: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            membersHeader
+            membersCard
+        }
+    }
+
+    /// The reference's section header: headline, secondary grey, 16pt in, the search glyph in the
+    /// same grey at the trailing edge.
+    private var membersHeader: some View {
+        HStack(spacing: 0) {
+            Text(membersTitle).font(.headline).foregroundStyle(.secondary)
+            Spacer(minLength: 8)
             Button { showAllMembers = true } label: {
-                HStack(spacing: 8) {
-                    Text("All Members").font(.headline).foregroundStyle(.primary)
-                    Spacer(minLength: 8)
-                    HStack(spacing: 3) {
-                        Text("See All").font(.subheadline.weight(.medium)).foregroundStyle(.primary)
-                        Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
-                    }
-                }
-                .padding(.horizontal, ProfileMediaCard.inset)
-                .padding(.top, ProfileMediaCard.inset)
-                .contentShape(Rectangle())
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 19))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            MemberBubbleCloud(conv: conv, ids: Array(GroupMembers.sorted(conv, me: me).prefix(MemberBubbleCloud.capacity))) { uid in
-                memberAction = MemberAction(id: uid, name: conv?.names[uid] ?? "User",
-                                            isAdmin: conv?.isAdmin(uid) ?? false)
+            .accessibilityLabel("Search members")
+        }
+        .padding(.leading, 16)
+    }
+
+    private var membersTitle: String {
+        let n = conv?.users.count ?? 0
+        return "\(n) Member\(n == 1 ? "" : "s")"
+    }
+
+    /// The reference shows six members; past six, the first five and See All.
+    private static let membersShown = 6
+    private var hasMoreMembers: Bool { (conv?.users.count ?? 0) > Self.membersShown }
+    private var shownMembers: [String] {
+        let all = GroupMembers.sorted(conv, me: me)
+        return hasMoreMembers ? Array(all.prefix(Self.membersShown - 1)) : all
+    }
+
+    private var membersCard: some View {
+        VStack(spacing: 0) {
+            if canAdd {
+                MemberCircleRow(icon: "plus", title: "Add Members") { showAdd = true }
+                memberDivider
             }
-            .padding(.horizontal, 8)
-            .padding(.bottom, 10)
+            ForEach(Array(shownMembers.enumerated()), id: \.element) { i, uid in
+                if i > 0 { memberDivider }
+                GroupInfoMemberRow(conv: conv, uid: uid, me: me) { openMember(uid) }
+            }
+            if hasMoreMembers {
+                memberDivider
+                MemberCircleRow(icon: "chevron.down", title: "See All") { showAllMembers = true }
+            }
         }
         .profileSurface(plain: cardColor)
+    }
+
+    /// The reference's separator starts at the text: 16 in + the 36pt photo + 12.
+    private var memberDivider: some View { Divider().padding(.leading, 64) }
+
+    private func openMember(_ uid: String) {
+        memberAction = MemberAction(id: uid, name: conv?.names[uid] ?? "User",
+                                    isAdmin: conv?.isAdmin(uid) ?? false)
     }
 
     private func memberSheet(_ m: MemberAction) -> some View {
@@ -816,44 +857,105 @@ private struct GroupFaceCluster: View {
     }
 }
 
-/// All Members as a loose cloud (owner's mockup 2026-10-19): two rows of faces of different sizes,
-/// the biggest in the middle, smaller ones toward the edges. Fixed spots as shares of the card's
-/// width, so it reads organic on every phone and never overlaps.
-private struct MemberBubbleCloud: View {
+/// One member on the group page, the reference app's contact cell (owner's mockup 2026-10-19):
+/// 36pt photo, 12 to the text, the name in the body style with their Role under it as a tinted
+/// pill, Owner / Admin in grey at the end, 7 above and below. The trailing word stays beside a
+/// Role here: that is the reference look the owner asked for.
+private struct GroupInfoMemberRow: View {
     let conv: Conversation?
-    let ids: [String]
-    let onTap: (String) -> Void
+    let uid: String
+    let me: String
+    let onTap: () -> Void
 
-    static let height: CGFloat = 160
-    /// x as a share of the width, y as a share of the height, diameter; the first member (me, then
-    /// the admins) takes the middle.
-    private static let slots: [(x: CGFloat, y: CGFloat, d: CGFloat)] = [
-        (0.50, 0.50, 70), (0.30, 0.33, 54), (0.70, 0.35, 56), (0.32, 0.75, 46),
-        (0.68, 0.74, 48), (0.12, 0.30, 40), (0.88, 0.30, 42), (0.14, 0.72, 36),
-        (0.86, 0.72, 38), (0.50, 0.09, 28), (0.50, 0.91, 28),
-    ]
-    static var capacity: Int { slots.count }
-
-    var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .topLeading) {
-                ForEach(Array(ids.prefix(Self.slots.count).enumerated()), id: \.element) { i, uid in
-                    bubble(i, uid, width: geo.size.width)
-                }
-            }
-            .frame(width: geo.size.width, height: Self.height)
-        }
-        .frame(height: Self.height)
+    private var name: String { uid == me ? "You" : (conv?.names[uid] ?? "User") }
+    private var rank: String? {
+        if let c = conv, !c.createdBy.isEmpty, c.createdBy == uid { return "Owner" }
+        return (conv?.isAdmin(uid) ?? false) ? "Admin" : nil
     }
 
-    private func bubble(_ i: Int, _ uid: String, width: CGFloat) -> some View {
-        let s = Self.slots[i]
-        return GroupFace(name: conv?.names[uid] ?? "User", photo: conv?.photos[uid], size: s.d)
-            .contentShape(Circle())
-            .onTapGesture { onTap(uid) }
-            .position(x: s.x * width, y: s.y * Self.height)
-            .accessibilityLabel(conv?.names[uid] ?? "Member")
-            .accessibilityAddTraits(.isButton)
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                AvatarView(name: name, photoUrl: conv?.photos[uid], size: 36)
+                nameStack
+                Spacer(minLength: 8)
+                if let rank {
+                    Text(rank).font(.subheadline).foregroundStyle(MemberCircleRow.accessoryGrey)
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var nameStack: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Text(name).font(.body).foregroundStyle(.primary).lineLimit(1)
+                VerifiedMark(uid: uid, size: 13)
+            }
+            if let role = conv?.roles[uid] { MemberLabelPill(role: role, uid: uid) }
+        }
+    }
+}
+
+/// A member's Role as the reference draws its member label off a bubble: caption text in the
+/// member's name colour (the chat's sender colour), on a capsule of that colour at 14% (32% at
+/// night), 8 either side and 1 above and below.
+private struct MemberLabelPill: View {
+    let role: GroupRole
+    let uid: String
+    @Environment(\.colorScheme) private var scheme
+
+    private var tint: Color { Color(uiColor: BubblePalette.senderColor(uid)) }
+
+    var body: some View {
+        Text(role.display)
+            .font(.caption)
+            .lineLimit(1)
+            .foregroundStyle(tint)
+            .padding(.horizontal, 8).padding(.vertical, 1)
+            .background(Capsule().fill(tint.opacity(scheme == .dark ? 0.32 : 0.14)))
+    }
+}
+
+/// Add Members and See All: a glyph in a pale circle the size of a member's photo, then the title.
+private struct MemberCircleRow: View {
+    let icon: String
+    let title: String
+    let onTap: () -> Void
+
+    /// The reference's circle fill (its gray02 by day, gray65 at night).
+    static let circleFill = Color(uiColor: UIColor { t in
+        t.userInterfaceStyle == .dark ? UIColor(white: 0x4A / 255.0, alpha: 1) : UIColor(white: 0xF6 / 255.0, alpha: 1)
+    })
+    /// The reference's trailing-label grey (gray45 by day, gray25 at night).
+    static let accessoryGrey = Color(uiColor: UIColor { t in
+        t.userInterfaceStyle == .dark ? UIColor(white: 0xB9 / 255.0, alpha: 1) : UIColor(white: 0x84 / 255.0, alpha: 1)
+    })
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                glyph
+                Text(title).font(.body).foregroundStyle(.primary).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// A bold glyph in the reference's 20pt box, centred in the 36pt circle.
+    private var glyph: some View {
+        Image(systemName: icon)
+            .font(.system(size: 16, weight: .bold))
+            .foregroundStyle(.primary)
+            .frame(width: 20, height: 20)
+            .frame(width: 36, height: 36)
+            .background(Circle().fill(Self.circleFill))
     }
 }
 
