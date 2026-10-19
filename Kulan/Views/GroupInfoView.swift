@@ -862,11 +862,14 @@ private struct GroupFaceCluster: View {
     let conv: Conversation?
     let me: String
 
-    static let side: CGFloat = 200
-    /// Offset from the disc's centre and diameter, largest first.
-    private static let slots: [(x: CGFloat, y: CGFloat, d: CGFloat)] = [
-        (-26, -26, 104), (40, 30, 72), (-6, 56, 50),
-    ]
+    /// The round group photo's size (`GroupInfoView.photoSide`), so a group with no photo and one
+    /// with a photo show the same circle (owner 2026-10-19; it was 200).
+    static let side: CGFloat = 132
+    /// Offset from the disc's centre and diameter, largest first: the 200pt layout, scaled.
+    private static let slots: [(x: CGFloat, y: CGFloat, d: CGFloat)] = {
+        let k = side / 200
+        return [(-26, -26, 104), (40, 30, 72), (-6, 56, 50)].map { ($0.0 * k, $0.1 * k, $0.2 * k) }
+    }()
 
     private var picks: [String] {
         let everyone = GroupMembers.sorted(conv, me: me)
