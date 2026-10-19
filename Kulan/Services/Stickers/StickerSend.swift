@@ -145,7 +145,7 @@ enum StickerSend {
         let members = found
         trace?.mark("members")
         func seal(_ t: String) async throws -> String {
-            if let members { return try await Crypto.shared.encryptForGroup(t, members: members) }
+            if let members { return try await Crypto.shared.sealForGroup(t, members: members, cid: cid) }
             return try await Crypto.shared.encryptForConversation(cid, t)
         }
 
@@ -161,7 +161,7 @@ enum StickerSend {
         var sealedFile: (cipher: Data, meta: EncMeta)?
         if s.source == .mine {
             guard let png else { throw ChatService.ForwardError.sourceUnavailable }
-            if let members { sealedFile = try await Crypto.shared.encryptBytesForGroup(png, members: members) }
+            if let members { sealedFile = try await Crypto.shared.sealBytesForGroup(png, members: members, cid: cid) }
             else { sealedFile = try await Crypto.shared.encryptBytes(cid, png) }
             trace?.sent(sealedFile?.cipher.count ?? 0)
         }

@@ -4382,7 +4382,8 @@ struct ChatRow: View, Equatable {
         // plain words nobody "sent", the badge does not recognise them, and a name in front of one
         // would read as somebody saying it. Call rows are already out — they write an empty
         // lastSender on purpose.
-        guard c.hasPrefix("enc") || previewBadge(c) != nil else { return "" }
+        // 2026-10-19 groups v2: a member's words sent in the clear are plain too; their tag says so.
+        guard c.hasPrefix("enc") || previewBadge(c) != nil || conv.lastIsPlainText else { return "" }
         let n = conv.names[conv.lastSender] ?? "Someone"
         return "\(n.split(separator: " ").first.map(String.init) ?? n): "
     }

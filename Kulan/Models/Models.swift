@@ -1062,6 +1062,27 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var membersCanEditInfo: Bool       // group: non-admins may edit name/photo/desc (default false)
     var onlyAdminsCall = false         // group: only admins may START a call (joining stays open)
     var membersCanShareLink = false    // group: non-admins see Share and the QR of the invite link (owner 2026-10-19)
+    /// 2026-10-19 groups v2 (owner): the group's document says `e2ee == false`, so its new messages
+    /// are NOT end-to-end encrypted (ChatService.groupIsPlain). Server-written; false for every 1:1.
+    var e2eeOff = false
+    /// 2026-10-19 groups v2: written beside a member's PLAIN text in such a group, `plainTag` of that
+    /// `lastMessage`. A notice ("X added Y") is plain words too and does not write it, so the list can
+    /// still tell "Ayaan: hello" from a notice: the tag matches only the text it was written with.
+    var lastPlainTag: String?
+
+    /// A short, stable fingerprint of a summary line (FNV-1a, 64 bits). Not a secret and not a
+    /// security check, only "is this still the line the tag was written for".
+    static func plainTag(_ s: String) -> String {
+        var h: UInt64 = 0xcbf29ce484222325
+        for b in s.utf8 { h ^= UInt64(b); h = h &* 0x100000001b3 }
+        return String(h, radix: 16)
+    }
+
+    /// The newest line is a member's own words, sent in the clear in a group that switched.
+    var lastIsPlainText: Bool {
+        guard let t = lastPlainTag, !t.isEmpty, !lastMessageCipher.isEmpty else { return false }
+        return t == Conversation.plainTag(lastMessageCipher)
+    }
     /// ⛔ ROLE — owner 2026-10-18: uid → the short tag an ADMIN gives a member ("🎨 Designer"),
     /// shown beside their name in the group's bubbles, the members list and their card. Groups only.
     /// Replaces the self-set Member Label of the same day (`memberLabels`, never shipped).
@@ -1195,6 +1216,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.membersCanEditInfo = false
         self.onlyAdminsCall = data["onlyAdminsCall"] as? Bool ?? false
         self.membersCanShareLink = false
+        self.e2eeOff = (data["type"] as? String) == "group" && (data["e2ee"] as? Bool) == false
+        self.lastPlainTag = data["lastPlainTag"] as? String
         self.roles = self.convType == "group"
             ? (data["roles"] as? [String: Any] ?? [:]).compactMapValues { GroupRole($0) }
             : [:]

@@ -47,6 +47,12 @@ struct EncMeta: Codable, Equatable, Hashable {
         if let a { d["a"] = a }
         return d
     }
+
+    /// 2026-10-19 groups v2 (owner): a file stored IN THE CLEAR, in a group that is no longer
+    /// end-to-end encrypted. `v: 0` and no keys; `decryptBytes` hands such bytes back unchanged, so
+    /// every reader of `enc` keeps working without knowing which kind it got. Never used in a 1:1.
+    static let plain = EncMeta(v: 0, n: "", k: "", kn: "")
+    var isPlain: Bool { v == 0 }
 }
 
 final class Crypto {
@@ -731,6 +737,8 @@ final class Crypto {
 
     /// Reverse of encryptBytes. Returns nil if keys are missing or auth fails.
     func decryptBytes(_ cid: String, cipher: Data, meta: EncMeta) async -> Data? {
+        // 2026-10-19 groups v2: a file a group stored in the clear (EncMeta.plain) is the file.
+        if meta.isPlain { return cipher }
         // Group media (meta.w present): unwrap MY copy of the file key with the AUTHOR's key.
         if let wraps = meta.w, let author = meta.a {
             do { try await ensureReady(); _ = await preloadKey(author) } catch {}
@@ -850,6 +858,24 @@ final class Crypto {
     func decrypt(_ raw: String, cid: String, authorId: String) -> String {
         if raw.hasPrefix("encg1:") { return decryptGroup(raw, authorId: authorId) }
         return decrypt(raw, cid: cid)
+    }
+
+    // MARK: - Group seal, with or without end-to-end encryption (owner 2026-10-19)
+    //
+    // Groups stop end-to-end encryption for new messages. A group that switched (its document says
+    // `e2ee == false`, see ChatService.groupIsPlain) carries text and files IN THE CLEAR: protected
+    // in transit and by the database and storage rules, not by keys only the members hold. A group
+    // that has not switched is sealed exactly as before. Every group send path calls these two; 1:1
+    // chats never do. Old "encg1:" messages and sealed files still open through the paths above.
+
+    func sealForGroup(_ text: String, members: [String], cid: String) async throws -> String {
+        if await ChatService.groupIsPlain(cid) { return text }
+        return try await encryptForGroup(text, members: members)
+    }
+
+    func sealBytesForGroup(_ data: Data, members: [String], cid: String) async throws -> (cipher: Data, meta: EncMeta) {
+        if await ChatService.groupIsPlain(cid) { return (data, .plain) }
+        return try await encryptBytesForGroup(data, members: members)
     }
 }
 

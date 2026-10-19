@@ -1521,7 +1521,8 @@ struct AboutView: View {
                 // the public audience unblocked it, but it is not built). fariin.com's meta
                 // description was fixed for exactly this on `fariin-web 6101adf`, and this line was
                 // left saying the broader thing. It should not outrun the app twice.
-                Text("Messages and calls are end-to-end encrypted. Made for Somalia.")
+                // 2026-10-19 groups v2: and groups no longer are, so the line names the chats it covers.
+                Text("One-to-one messages and calls are end-to-end encrypted. Made for Somalia.")
             }
         }
         .navigationTitle("Help & About")

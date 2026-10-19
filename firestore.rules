@@ -1707,6 +1707,12 @@ service cloud.firestore {
         // functions-username setGroupUsername, which claims the name in `usernames` in the same step.
         // `joinApproval` (a public group files join requests instead of adding) is server-only too.
         && !request.resource.data.keys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval'])
+        // 2026-10-19 groups v2 (owner): groups are not end-to-end encrypted. A new group may say so
+        // itself (`e2ee: false`, written by the app's createGroup), and nothing else: `e2ee` is
+        // false-only and groups-only, and the switch time `e2eeOffAt` is the server's alone.
+        && (!('e2ee' in request.resource.data)
+            || (request.resource.data.get('type', '') == 'group' && request.resource.data.e2ee == false))
+        && !('e2eeOffAt' in request.resource.data)
         && !('wallpaper' in request.resource.data)      // owner 2026-10-18: set later, by update only
         && (
           // THE GROUP BRANCH GOES FIRST, on purpose. A two-member group also satisfies `size() == 2`,
@@ -1975,7 +1981,11 @@ service cloud.firestore {
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['mod', 'verified'])
         // 2026-10-19 groups v2: Public/Private and the group's @name are server-only (setGroupUsername),
         // on every branch, the owner's included: the name and the `usernames` record must move together.
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval'])
+        // 2026-10-19 groups v2 step 2B: and whether a group is end-to-end encrypted (`e2ee`,
+        // `e2eeOffAt`) is the server's to change (the groupsE2eeOff migration). In the same list, not
+        // a line of its own: a second diff here pushed a busy admin write past the rules engine's
+        // 1,000-expression ceiling (rules-tests/role-1018).
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt'])
         && groupModWriteOK()
         // owner 2026-10-18: the group wallpaper, groups only and a known shape (groupWallpaperOK).
         && (!('wallpaper' in request.resource.data.diff(resource.data).affectedKeys()) || groupWallpaperOK())
@@ -2104,6 +2114,8 @@ service cloud.firestore {
                  'clearedAt', 'pinOrder', 'blockedBy', 'blockedAt', 'lastPlayedVoice',
                  'lastReactionEnc', 'lastReactionBy', 'lastReactionToAuthor', 'lastReactionAt',
                  'lastReactionToEnc',
+                 // 2026-10-19 groups v2: the list's "a member's words" tag (Conversation.lastPlainTag).
+                 'lastPlainTag',
                  'names', 'photos', 'posters', 'pinnedMessageIds',
                  // 2026-09-24 decision D13: Mark as Unread flag, pinned to my key by privateMapsUntouched.
                  'markedUnread'
@@ -2273,6 +2285,23 @@ service cloud.firestore {
             || (request.resource.data.text is string
                 && request.resource.data.text.size() <= 700000);
         }
+        // 2026-10-19 groups v2 (owner): GROUPS STOP END-TO-END ENCRYPTION for new messages. A group
+        // whose document says `e2ee == false` (server-written, see the conversation rules) takes text
+        // in the clear, held to the app's own ceiling (Limits.messageMaxChars, 65,536) instead of the
+        // sealed one. Sealed envelopes ("encg1:", "enc1:") stay allowed there: older builds keep
+        // sealing and every phone still opens them. A group that has NOT switched still takes only a
+        // sealed text on an ordinary message (no `type`), so no phone puts plain words into a chat
+        // that still promises end-to-end encryption. Notices and other typed messages are as before.
+        // 1:1 chats are untouched.
+        function groupTextOk() {
+          let d = request.resource.data;
+          let t = d.get('text', '');
+          return convData().get('type', '') != 'group'
+            || !(t is string) || t.size() == 0
+            || t.matches('encg?1:.*')
+            || (convData().get('e2ee', true) == false && t.size() <= 65536)
+            || (convData().get('e2ee', true) != false && 'type' in d);
+        }
         // 2026-09-24 decision D-composer-3: a media address is a string, https (or the app's own
         // `sticker://` for a built-in sticker, see BuiltInStickers.scheme), and a sane length. Storage
         // download addresses run to a few hundred characters; GIF-service addresses less.
@@ -2431,6 +2460,7 @@ service cloud.firestore {
              )
           // 2026-09-24 decision D-composer-3: text size and media-address shape, on every message.
           && textWithinCap()
+          && groupTextOk()     // 2026-10-19 groups v2: plain text only in a group that switched
           && mediaUrlsOk()
           && linkPreviewOk()   // 2026-09-24 feature-audit: the card's own fields
           && voiceShapeOk()    // 2026-09-24 feature-audit: duration, waveform, one-time = no waveform
@@ -2568,6 +2598,7 @@ service cloud.firestore {
                 && request.resource.data.diff(resource.data).affectedKeys()
                      .hasOnly(['text', 'edited', 'edits', 'editedAt'])   // 2026-09-24 feature-audit: + history
                 && textWithinCap()   // 2026-09-24 decision D-composer-3: an edit has the same ceiling
+                && groupTextOk()     // 2026-10-19 groups v2: and plain words only where a send may
                 && editAllowedNow()  // 2026-09-24 feature-audit: tombstone, window, restriction
                 && editHistoryOk())  // 2026-09-24 feature-audit: append-only history
             || (request.auth.uid == resource.data.authorId

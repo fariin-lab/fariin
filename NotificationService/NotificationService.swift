@@ -97,7 +97,8 @@ final class NotificationService: UNNotificationServiceExtension {
 
     /// Data keys the server sends (functions/pushPayload.js): `cid`, `aid` (sender uid), `sn` (sender
     /// name, only when the recipient's Message Preview is on), `g` ("1" for a group), `kind` (the
-    /// message type) and `ct` (the ciphertext, when it fits in the push). No `sn` = preview is off,
+    /// message type) and `ct` (the ciphertext, when it fits in the push), or `tx` (the text itself, for
+    /// a group that is no longer end-to-end encrypted, 2026-10-19). No `sn` = preview is off,
     /// and the banner is left exactly as the server sent it: no name, no text, no photo.
     private static func enrich(_ original: UNNotificationContent,
                                completion: @escaping (UNNotificationContent?) -> Void) {
@@ -125,6 +126,9 @@ final class NotificationService: UNNotificationServiceExtension {
         if forMe, let ct = info["ct"] as? String, !ct.isEmpty {
             text = Opener.open(ct, me: me, sender: aid)
         }
+        // 2026-10-19 groups v2: a group that is no longer end-to-end encrypted sends its words as
+        // they are (`tx`, only with Message Preview on), so there is nothing to open.
+        if text == nil, isGroup, let tx = info["tx"] as? String, !tx.isEmpty { text = tx }
         // 1:1: the name this phone shows (a saved contact name wins). Group: the server's sender name,
         // unless I have them saved under another.
         let shownSender = (direct[NotifShared.Chat.name] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? senderName

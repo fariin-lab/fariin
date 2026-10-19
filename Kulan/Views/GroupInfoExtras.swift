@@ -357,12 +357,19 @@ struct GroupLinkQRSheet: View {
 
 // MARK: - Encryption
 
-/// What end-to-end encryption covers in this chat, in our own words.
+/// How a group's messages are protected, in our own words. Opened from the group page only.
 ///
 /// ⛔ REDRAWN (owner 2026-10-19: "our encryption looks super cheap" beside the reference sheet). A
 /// drawn emblem rather than a flat circle, a large title, the promise in full-strength text, and
 /// each covered kind with one line saying what that means. The emblem is shapes and system symbols,
 /// not a picture: the owner's own illustration can take its place (`hero`).
+///
+/// ⛔ GROUPS ARE NOT END-TO-END ENCRYPTED (owner 2026-10-19, groups v2): new group messages are kept
+/// on our servers, which can read them, like the reference app's cloud groups. This sheet used to
+/// promise "no one else can read them, not even Fariin"; that is no longer true for a group, so it
+/// now says what does hold: the connection, the server's access rules, the old sealed messages and
+/// the one-to-one chats. A group the migration has not reached yet is told the same: saying less
+/// than the truth for a moment is the safe direction, claiming encryption that is gone is not.
 struct ChatEncryptionSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
@@ -372,16 +379,15 @@ struct ChatEncryptionSheet: View {
 
     private struct Covered { let icon: String; let title: String; let line: String }
     private let items: [Covered] = [
-        .init(icon: "text.bubble.fill", title: "Text and voice messages",
-              line: "Sealed on your phone before they're sent."),
-        // No calls row: group calls go through a call server and are not proven end-to-end
-        // encrypted, so this sheet does not promise it (2026-10-18). Add it back only once they are.
-        .init(icon: "photo.on.rectangle.angled", title: "Photos, videos and files",
-              line: "Only the people in this chat can open them."),
-        .init(icon: "location.fill", title: "Location",
-              line: "Where you are stays between you and the chat."),
-        // ⛔ NO STORIES ROW (2026-10-19): stories are protected by the server rules, not end-to-end
-        // encrypted (StoriesService: "Rules-protected (v1, not E2EE)"). The old sheet listed them.
+        .init(icon: "network.badge.shield.half.filled", title: "Protected on the way",
+              line: "Messages, photos and files travel over an encrypted connection to our servers."),
+        .init(icon: "person.2.fill", title: "Kept for the members",
+              line: "On our servers, access rules let only the people in this group read its messages."),
+        .init(icon: "clock.arrow.circlepath", title: "Older messages",
+              line: "Messages sent before this change stay end-to-end encrypted."),
+        .init(icon: "lock.fill", title: "Your one-to-one chats",
+              line: "Still end-to-end encrypted. Only you and the other person can read them."),
+        // No calls row and no stories row: neither is end-to-end encrypted (2026-10-18/19).
     ]
 
     var body: some View {
@@ -401,11 +407,11 @@ struct ChatEncryptionSheet: View {
 
                 hero.padding(.top, 4)
 
-                Text("Your chats stay private")
+                Text("How this group is protected")
                     .font(.system(size: 28, weight: .bold))
                     .multilineTextAlignment(.center)
                     .padding(.top, 22)
-                Text("Messages in this chat are locked on your phone and unlocked only on the phones of the people in it. No one else can read them, not even Fariin.")
+                Text("Group messages are protected in transit and on our servers, but they are not end-to-end encrypted. That means Fariin's servers can read them.")
                     .font(.system(size: 17))
                     .foregroundStyle(.primary.opacity(0.78))
                     .multilineTextAlignment(.center)
@@ -454,8 +460,8 @@ struct ChatEncryptionSheet: View {
         .presentationDetents([.large])
     }
 
-    /// A sealed message: the lock on a soft rounded tile, a ring around it, and three of the things
-    /// it covers resting on the ring.
+    /// A shield on a soft rounded tile (not a lock: this group is not end-to-end encrypted), a ring
+    /// around it, and three of the things it covers resting on the ring.
     private var hero: some View {
         ZStack {
             Circle()
@@ -474,7 +480,7 @@ struct ChatEncryptionSheet: View {
                 )
                 .shadow(color: Self.blue.opacity(0.35), radius: 16, y: 8)
                 .overlay(
-                    Image(systemName: "lock.fill")
+                    Image(systemName: "shield.fill")
                         .font(.system(size: 40, weight: .semibold))
                         .foregroundStyle(.white)
                 )

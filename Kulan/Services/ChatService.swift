@@ -224,7 +224,12 @@ enum ChatService {
         ]
         if let avatarUrl, !avatarUrl.isEmpty { data["avatarUrl"] = avatarUrl }
         // The member switches picked on the New Group page, in the group from its first write.
-        for (k, v) in permissions { data[k] = v }
+        for (k, v) in permissions where k != "e2ee" { data[k] = v }
+        // 2026-10-19 groups v2 (owner): a new group is not end-to-end encrypted from its first write
+        // (the rules take `false` and nothing else here). Known locally at once, so the first message,
+        // sent before the server has answered, goes in the clear too (groupIsPlain).
+        data["e2ee"] = false
+        sealMembersLock.withLock { _ = plainGroups.insert(ref.documentID) }
         // Not awaited: the write is on this phone now and the listener sees it; the server's answer
         // comes behind (a refusal is logged; the chat then simply does not stay).
         ref.setData(data) { err in
@@ -963,7 +968,7 @@ enum ChatService {
                                         msgId: String) async -> [String: Any]? {
         func seal(_ s: String) async -> String? {
             guard !s.isEmpty else { return nil }
-            if let members { return try? await Crypto.shared.encryptForGroup(s, members: members) }
+            if let members { return try? await Crypto.shared.sealForGroup(s, members: members, cid: cid) }
             return try? await Crypto.shared.encryptForConversation(cid, s)
         }
         guard let cu = await seal(p.url) else { return nil }
@@ -973,7 +978,7 @@ enum ChatService {
         if let jpeg = p.imageJPEG {
             do {
                 let cipher: Data, meta: EncMeta
-                if let members { (cipher, meta) = try await Crypto.shared.encryptBytesForGroup(jpeg, members: members) }
+                if let members { (cipher, meta) = try await Crypto.shared.sealBytesForGroup(jpeg, members: members, cid: cid) }
                 else { (cipher, meta) = try await Crypto.shared.encryptBytes(cid, jpeg) }
                 let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgId)-lp.enc")
                 // Seed the cache so the sender's own card swaps from draft to server image invisibly.
@@ -1158,8 +1163,30 @@ enum ChatService {
         }
         guard let snap = try? await db.collection("conversations").document(cid).getDocument(source: .server),
               let users = snap.data()?["users"] as? [String] else { return cached }
-        sealMembersLock.withLock { sealMembersConfirmed[cid] = (users, Date()) }
+        let plain = (snap.data()?["e2ee"] as? Bool) == false
+        sealMembersLock.withLock {
+            sealMembersConfirmed[cid] = (users, Date())
+            if plain { plainGroups.insert(cid) }
+        }
         return users
+    }
+
+    /// 2026-10-19 groups v2 (owner): GROUPS ARE NO LONGER END-TO-END ENCRYPTED for new messages.
+    /// A group whose document says `e2ee == false` (written by the server's groupsE2eeOff step, or
+    /// by createGroup for a new group) sends text and files in the clear; the database rules refuse
+    /// plain text in a group that has not switched, so anything unsure seals as before. The answer
+    /// comes from the server read `freshGroupMembers` makes before every group send, else from the
+    /// chat list's copy. The switch only ever goes one way, so a remembered "plain" never goes stale.
+    /// A 1:1 cid ("uidA_uidB") is never plain.
+    private static var plainGroups: Set<String> = []
+    static func groupIsPlain(_ cid: String) async -> Bool {
+        guard !cid.contains("_") else { return false }
+        if sealMembersLock.withLock({ plainGroups.contains(cid) }) { return true }
+        let listed = await MainActor.run {
+            ConversationsRepository.shared.conversations.first { $0.id == cid }?.e2eeOff ?? false
+        }
+        if listed { sealMembersLock.withLock { _ = plainGroups.insert(cid) } }
+        return listed
     }
 
     /// Drop the reused list when this device changes membership itself.
@@ -1173,10 +1200,10 @@ enum ChatService {
                                       replyTo: ReplyRef?, clientId: String?, mentions: [String] = [],
                                       preview: OutgoingLinkPreview? = nil, forwarded: Bool = false,
                                       clientTs: Double, turn: SendTurn) async throws {
-        let cipher = try await Crypto.shared.encryptForGroup(t, members: members)
+        let cipher = try await Crypto.shared.sealForGroup(t, members: members, cid: cid)
         var replyEnc: [String: Any]?
         if let r = replyTo {
-            let rc = try await Crypto.shared.encryptForGroup(r.text, members: members)
+            let rc = try await Crypto.shared.sealForGroup(r.text, members: members, cid: cid)
             var e: [String: Any] = ["id": r.id, "authorId": r.authorId, "text": rc]
             if r.isStatus { e["isStatus"] = true }
             if r.isReaction == true { e["isReaction"] = true }   // the story react bar (see ReplyRef)
@@ -1223,6 +1250,8 @@ enum ChatService {
             "lastSender": uid,
             "updatedAt": FieldValue.serverTimestamp(),
         ]
+        // 2026-10-19 groups v2: words in the clear say they are a member's (Conversation.lastPlainTag).
+        if !cipher.hasPrefix("enc") { convUpdate["lastPlainTag"] = Conversation.plainTag(cipher) }
         for m in members where m != uid {
             convUpdate["unreadCount.\(m)"] = FieldValue.increment(Int64(1))
         }
@@ -1520,7 +1549,7 @@ enum ChatService {
         // byte leaving the phone. Started here, awaited just before the batch that actually needs it.
         var ensureConv: Task<Void, Error>?
         if let members {
-            (cipher, meta) = try await Crypto.shared.encryptBytesForGroup(data, members: members)
+            (cipher, meta) = try await Crypto.shared.sealBytesForGroup(data, members: members, cid: cid)
         } else {
             (cipher, meta) = try await Crypto.shared.encryptBytes(cid, data)
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
@@ -1555,7 +1584,7 @@ enum ChatService {
         let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedCaption.isEmpty {
             if let members {
-                captionCipher = (try? await Crypto.shared.encryptForGroup(trimmedCaption, members: members)) ?? ""
+                captionCipher = (try? await Crypto.shared.sealForGroup(trimmedCaption, members: members, cid: cid)) ?? ""
             } else {
                 captionCipher = (try? await Crypto.shared.encryptForConversation(cid, trimmedCaption)) ?? ""
             }
@@ -1566,7 +1595,7 @@ enum ChatService {
         var replyEnc: [String: Any]?
         if let r = replyTo {
             let rc: Any
-            if let members { rc = try await Crypto.shared.encryptForGroup(r.text, members: members) }
+            if let members { rc = try await Crypto.shared.sealForGroup(r.text, members: members, cid: cid) }
             else { rc = try await Crypto.shared.encryptForConversation(cid, r.text) }
             replyEnc = ["id": r.id, "authorId": r.authorId, "text": rc]
         }
@@ -1578,7 +1607,7 @@ enum ChatService {
         var blurSealed: String?
         if !viewOnce, let ui = sized, let hash = BlurHash.encode(ui) {
             blurSealed = members != nil
-                ? (try? await Crypto.shared.encryptForGroup(hash, members: members!))
+                ? (try? await Crypto.shared.sealForGroup(hash, members: members!, cid: cid))
                 : (try? await Crypto.shared.encryptForConversation(cid, hash))
         }
         // And the real one. Same moment, same seal, same reason as the blurhash above — this is just
@@ -1587,7 +1616,7 @@ enum ChatService {
         var thumbSealed: String?
         if !viewOnce, let tiny = inlineThumb(data) {
             thumbSealed = members != nil
-                ? (try? await Crypto.shared.encryptForGroup(tiny, members: members!))
+                ? (try? await Crypto.shared.sealForGroup(tiny, members: members!, cid: cid))
                 : (try? await Crypto.shared.encryptForConversation(cid, tiny))
         }
 
@@ -1705,7 +1734,7 @@ enum ChatService {
                     if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { return nil }
                     let data = sendJPEG(raw)
                     let cipher: Data, meta: EncMeta
-                    if let sealMembers { (cipher, meta) = try await Crypto.shared.encryptBytesForGroup(data, members: sealMembers) }
+                    if let sealMembers { (cipher, meta) = try await Crypto.shared.sealBytesForGroup(data, members: sealMembers, cid: cid) }
                     else { (cipher, meta) = try await Crypto.shared.encryptBytes(cid, data) }
                     let path = "chat/\(cid)/\(msgId)-\(i).enc"
                     let up: Task<String, Error> = Task { try await uploadEncrypted(cipher, to: path, progressId: itemKey) }
@@ -1747,7 +1776,7 @@ enum ChatService {
         var captionCipher = ""
         let trimmed = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            if let members { captionCipher = (try? await Crypto.shared.encryptForGroup(trimmed, members: members)) ?? "" }
+            if let members { captionCipher = (try? await Crypto.shared.sealForGroup(trimmed, members: members, cid: cid)) ?? "" }
             else { captionCipher = (try? await Crypto.shared.encryptForConversation(cid, trimmed)) ?? "" }
         }
 
@@ -1769,7 +1798,7 @@ enum ChatService {
         // the message, matching the model, which holds a single `blurhash` per message.
         if let firstData = images.first, let ui = UIImage(data: firstData), let hash = BlurHash.encode(ui) {
             let sealed = members != nil
-                ? (try? await Crypto.shared.encryptForGroup(hash, members: members!))
+                ? (try? await Crypto.shared.sealForGroup(hash, members: members!, cid: cid))
                 : (try? await Crypto.shared.encryptForConversation(cid, hash))
             if let sealed, !sealed.isEmpty { msg["blurhash"] = sealed }
         }
@@ -1777,7 +1806,7 @@ enum ChatService {
         // model, and drawn on the grid's first cell while every tile's bytes are still coming.
         if let firstData = images.first, let tiny = inlineThumb(firstData) {
             let sealed = members != nil
-                ? (try? await Crypto.shared.encryptForGroup(tiny, members: members!))
+                ? (try? await Crypto.shared.sealForGroup(tiny, members: members!, cid: cid))
                 : (try? await Crypto.shared.encryptForConversation(cid, tiny))
             if let sealed, !sealed.isEmpty { msg["thumb"] = sealed }
         }
@@ -1860,7 +1889,7 @@ enum ChatService {
         let msgId = msgRef.documentID
 
         @Sendable func seal(_ data: Data) async throws -> (Data, EncMeta) {
-            if let sealMembers { return try await Crypto.shared.encryptBytesForGroup(data, members: sealMembers) }
+            if let sealMembers { return try await Crypto.shared.sealBytesForGroup(data, members: sealMembers, cid: cid) }
             return try await Crypto.shared.encryptBytes(cid, data)
         }
 
@@ -1966,7 +1995,7 @@ enum ChatService {
         var captionCipher = ""
         let trimmed = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            if let members { captionCipher = (try? await Crypto.shared.encryptForGroup(trimmed, members: members)) ?? "" }
+            if let members { captionCipher = (try? await Crypto.shared.sealForGroup(trimmed, members: members, cid: cid)) ?? "" }
             else { captionCipher = (try? await Crypto.shared.encryptForConversation(cid, trimmed)) ?? "" }
         }
 
@@ -1986,7 +2015,7 @@ enum ChatService {
         }
         if let firstTile, let ui = UIImage(data: firstTile), let hash = BlurHash.encode(ui) {
             let sealed = members != nil
-                ? (try? await Crypto.shared.encryptForGroup(hash, members: members!))
+                ? (try? await Crypto.shared.sealForGroup(hash, members: members!, cid: cid))
                 : (try? await Crypto.shared.encryptForConversation(cid, hash))
             if let sealed, !sealed.isEmpty { msg["blurhash"] = sealed }
         }
@@ -1994,7 +2023,7 @@ enum ChatService {
         // a mixed album the same way the hash above does.
         if let firstTile, let tiny = inlineThumb(firstTile) {
             let sealed = members != nil
-                ? (try? await Crypto.shared.encryptForGroup(tiny, members: members!))
+                ? (try? await Crypto.shared.sealForGroup(tiny, members: members!, cid: cid))
                 : (try? await Crypto.shared.encryptForConversation(cid, tiny))
             if let sealed, !sealed.isEmpty { msg["thumb"] = sealed }
         }
@@ -2047,7 +2076,7 @@ enum ChatService {
         let convRef = db.collection("conversations").document(cid)
         let cipher: Data, meta: EncMeta
         if let members {
-            (cipher, meta) = try await Crypto.shared.encryptBytesForGroup(data, members: members)
+            (cipher, meta) = try await Crypto.shared.sealBytesForGroup(data, members: members, cid: cid)
         } else {
             (cipher, meta) = try await Crypto.shared.encryptBytes(cid, data)
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
@@ -2079,7 +2108,7 @@ enum ChatService {
         var replyEnc: [String: Any]?
         if let r = replyTo {
             let rc: Any
-            if let members { rc = try await Crypto.shared.encryptForGroup(r.text, members: members) }
+            if let members { rc = try await Crypto.shared.sealForGroup(r.text, members: members, cid: cid) }
             else { rc = try await Crypto.shared.encryptForConversation(cid, r.text) }
             replyEnc = ["id": r.id, "authorId": r.authorId, "text": rc]
         }
@@ -2155,7 +2184,7 @@ enum ChatService {
         var captionCipher = ""
         let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedCaption.isEmpty {
-            if let m = members { captionCipher = (try? await Crypto.shared.encryptForGroup(trimmedCaption, members: m)) ?? "" }
+            if let m = members { captionCipher = (try? await Crypto.shared.sealForGroup(trimmedCaption, members: m, cid: cid)) ?? "" }
             else { captionCipher = (try? await Crypto.shared.encryptForConversation(cid, trimmedCaption)) ?? "" }
         }
         let convRef = db.collection("conversations").document(cid)
@@ -2163,7 +2192,7 @@ enum ChatService {
         var ensureConv: Task<Void, Error>?
         let thCipher: Data, thMeta: EncMeta
         if let members {
-            (thCipher, thMeta) = try await Crypto.shared.encryptBytesForGroup(poster, members: members)
+            (thCipher, thMeta) = try await Crypto.shared.sealBytesForGroup(poster, members: members, cid: cid)
         } else {
             (thCipher, thMeta) = try await Crypto.shared.encryptBytes(cid, poster)
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
@@ -2189,7 +2218,7 @@ enum ChatService {
         ]
         if let posterImage = UIImage(data: poster), let hash = BlurHash.encode(posterImage) {
             let sealed = members != nil
-                ? (try? await Crypto.shared.encryptForGroup(hash, members: members!))
+                ? (try? await Crypto.shared.sealForGroup(hash, members: members!, cid: cid))
                 : (try? await Crypto.shared.encryptForConversation(cid, hash))
             if let sealed, !sealed.isEmpty { msg["blurhash"] = sealed }
         }
@@ -2197,7 +2226,7 @@ enum ChatService {
         // the poster above has to be fetched before it can be drawn, and this does not.
         if let tiny = inlineThumb(poster) {
             let sealed = members != nil
-                ? (try? await Crypto.shared.encryptForGroup(tiny, members: members!))
+                ? (try? await Crypto.shared.sealForGroup(tiny, members: members!, cid: cid))
                 : (try? await Crypto.shared.encryptForConversation(cid, tiny))
             if let sealed, !sealed.isEmpty { msg["thumb"] = sealed }
         }
@@ -2242,7 +2271,7 @@ enum ChatService {
         guard VideoCache.store(video, for: messageId) else { throw VideoCache.NoRoomError() }
         let cipher: Data, meta: EncMeta
         if let members {
-            (cipher, meta) = try await Crypto.shared.encryptBytesForGroup(video, members: members)
+            (cipher, meta) = try await Crypto.shared.sealBytesForGroup(video, members: members, cid: cid)
         } else {
             (cipher, meta) = try await Crypto.shared.encryptBytes(cid, video)
         }
@@ -2283,7 +2312,7 @@ enum ChatService {
         var captionCipher = ""
         let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedCaption.isEmpty {
-            if let m = members { captionCipher = (try? await Crypto.shared.encryptForGroup(trimmedCaption, members: m)) ?? "" }
+            if let m = members { captionCipher = (try? await Crypto.shared.sealForGroup(trimmedCaption, members: m, cid: cid)) ?? "" }
             else { captionCipher = (try? await Crypto.shared.encryptForConversation(cid, trimmedCaption)) ?? "" }
         }
         let convRef = db.collection("conversations").document(cid)
@@ -2292,8 +2321,8 @@ enum ChatService {
         // the uploads, so it no longer stands in front of them.
         var ensureConv: Task<Void, Error>?
         if let members {
-            (vidCipher, vidMeta) = try await Crypto.shared.encryptBytesForGroup(video, members: members)
-            (thCipher, thMeta) = try await Crypto.shared.encryptBytesForGroup(thumbnail, members: members)
+            (vidCipher, vidMeta) = try await Crypto.shared.sealBytesForGroup(video, members: members, cid: cid)
+            (thCipher, thMeta) = try await Crypto.shared.sealBytesForGroup(thumbnail, members: members, cid: cid)
         } else {
             (vidCipher, vidMeta) = try await Crypto.shared.encryptBytes(cid, video)
             (thCipher, thMeta) = try await Crypto.shared.encryptBytes(cid, thumbnail)
@@ -2352,7 +2381,7 @@ enum ChatService {
         // counting.
         if let poster = UIImage(data: thumbnail), let hash = BlurHash.encode(poster) {
             let sealed = members != nil
-                ? (try? await Crypto.shared.encryptForGroup(hash, members: members!))
+                ? (try? await Crypto.shared.sealForGroup(hash, members: members!, cid: cid))
                 : (try? await Crypto.shared.encryptForConversation(cid, hash))
             if let sealed, !sealed.isEmpty { msg["blurhash"] = sealed }
         }
@@ -2361,7 +2390,7 @@ enum ChatService {
         // costs none: it IS the message.
         if let tiny = inlineThumb(thumbnail) {
             let sealed = members != nil
-                ? (try? await Crypto.shared.encryptForGroup(tiny, members: members!))
+                ? (try? await Crypto.shared.sealForGroup(tiny, members: members!, cid: cid))
                 : (try? await Crypto.shared.encryptForConversation(cid, tiny))
             if let sealed, !sealed.isEmpty { msg["thumb"] = sealed }
         }
@@ -2411,7 +2440,7 @@ enum ChatService {
         let convRef = db.collection("conversations").document(cid)
         let cipher: Data, meta: EncMeta
         if let members {
-            (cipher, meta) = try await Crypto.shared.encryptBytesForGroup(rawData, members: members)
+            (cipher, meta) = try await Crypto.shared.sealBytesForGroup(rawData, members: members, cid: cid)
         } else {
             (cipher, meta) = try await Crypto.shared.encryptBytes(cid, rawData)
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
@@ -2431,7 +2460,7 @@ enum ChatService {
             guard let preview = documentPreviewJPEG(fileName: fileName, data: rawData) else { return [:] }
             let tCipher: Data?, tMeta: EncMeta?
             if let members {
-                (tCipher, tMeta) = (try? await Crypto.shared.encryptBytesForGroup(preview, members: members)) ?? (nil, nil)
+                (tCipher, tMeta) = (try? await Crypto.shared.sealBytesForGroup(preview, members: members, cid: cid)) ?? (nil, nil)
             } else {
                 (tCipher, tMeta) = (try? await Crypto.shared.encryptBytes(cid, preview)) ?? (nil, nil)
             }
@@ -2519,7 +2548,7 @@ enum ChatService {
         var replyEnc: [String: Any]?
         if let r = replyTo {
             let rc: Any
-            if let members { rc = try await Crypto.shared.encryptForGroup(r.text, members: members) }
+            if let members { rc = try await Crypto.shared.sealForGroup(r.text, members: members, cid: cid) }
             else { rc = try await Crypto.shared.encryptForConversation(cid, r.text) }
             var e: [String: Any] = ["id": r.id, "authorId": r.authorId, "text": rc]
             if r.isStatus { e["isStatus"] = true }
@@ -2839,7 +2868,7 @@ enum ChatService {
             members = snap?.data()?["users"] as? [String]
         }
         let enc: String?
-        if let members { enc = try? await Crypto.shared.encryptForGroup(emoji, members: members) }
+        if let members { enc = try? await Crypto.shared.sealForGroup(emoji, members: members, cid: cid) }
         else { enc = try? await Crypto.shared.encryptForConversation(cid, emoji) }
         // Dotted field update — only touches my own key, so concurrent reactions never clobber.
         guard let enc else { return false }
@@ -2857,7 +2886,7 @@ enum ChatService {
             var targetEnc: String?
             if let t = targetText?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
                 let snippet = String(t.prefix(60))
-                if let members { targetEnc = try? await Crypto.shared.encryptForGroup(snippet, members: members) }
+                if let members { targetEnc = try? await Crypto.shared.sealForGroup(snippet, members: members, cid: cid) }
                 else { targetEnc = try? await Crypto.shared.encryptForConversation(cid, snippet) }
             }
             // ⛔ THE PICTURES IT WAS ON — owner, 2026-10-03: the list shows the real photo, an album
@@ -3246,6 +3275,14 @@ enum ChatService {
             "lastMessage": deletedNewest ? "This message was deleted" : summaryText(d),
             "lastSender": d["authorId"] as? String ?? "",
         ]
+        // 2026-10-19 groups v2: a member's words in the clear keep their name in the list
+        // (Conversation.lastPlainTag); a notice or a call row does not get one.
+        let line = update["lastMessage"] as? String ?? ""
+        let kind = d["type"] as? String ?? ""
+        if !convRef.documentID.contains("_"), !deletedNewest, kind != "system", kind != "call",
+           !line.isEmpty, !line.hasPrefix("enc") {
+            update["lastPlainTag"] = Conversation.plainTag(line)
+        }
         // Carry the new newest message's thumbnail, or drop the stale one.
         if let u = d["imageUrl"] as? String, let e = d["enc"] as? [String: Any],
            (d["viewOnce"] as? Bool) != true {
@@ -3424,7 +3461,7 @@ enum ChatService {
         }
         // Re-seal for the group (author = me, since only the author may edit) or the 1:1 pair.
         let cipher = members != nil
-            ? try await Crypto.shared.encryptForGroup(t, members: members!)
+            ? try await Crypto.shared.sealForGroup(t, members: members!, cid: cid)
             : try await Crypto.shared.encryptForConversation(cid, t)
         let convRef = db.collection("conversations").document(cid)
         let msgRef = convRef.collection("messages").document(messageId)
@@ -3453,6 +3490,10 @@ enum ChatService {
             let newest = try? await convRef.collection("messages")
                 .order(by: "createdAt", descending: true).limit(to: 1).getDocuments()
             guard newest?.documents.first?.documentID == messageId else { return nil }
+            // 2026-10-19 groups v2: an edit in the clear keeps its sender's name in the list.
+            if !cid.contains("_"), !cipher.hasPrefix("enc") {
+                return ["lastMessage": cipher, "lastPlainTag": Conversation.plainTag(cipher)]
+            }
             return ["lastMessage": cipher]
         }
     }

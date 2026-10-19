@@ -1045,7 +1045,11 @@ struct ThreadView: View {
            !repo.items.contains(where: { !$0.isSystem }) {
             GroupWelcomeCard(conv: conv, me: me, dark: dark)
         } else if repo.didInitialLoad, repo.items.isEmpty, !notAMember {
-            let line = Text("\(Image(systemName: "lock.fill")) Messages and calls are end-to-end encrypted. Only people in this chat can read or listen to them.")
+            // 2026-10-19 groups v2 (owner): a group that switched is NOT end-to-end encrypted, so it
+            // never wears the lock line. 1:1 chats keep it word for word.
+            let line: Text = (isGroup && conversation?.e2eeOff == true)
+                ? Text("\(Image(systemName: "shield.fill")) Group messages are protected in transit and on our servers. They are not end-to-end encrypted.")
+                : Text("\(Image(systemName: "lock.fill")) Messages and calls are end-to-end encrypted. Only people in this chat can read or listen to them.")
             // ⛔ LEARN MORE OPENS fariin.com/safety — owner 2026-10-15: the safety page sat where
             // nobody looks; every new chat shows this line, the way the reference app's notice
             // leads to its security page. It used to open the safety-number screen, which is a
