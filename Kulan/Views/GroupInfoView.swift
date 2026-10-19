@@ -1913,14 +1913,17 @@ struct GroupMemberSheet: View {
                     if busy { ProgressView().tint(.white) } else { Text("Save Changes") }
                 }
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(hasChanges || busy ? Color.white : Color.white.opacity(0.5))
                 .frame(maxWidth: .infinity).frame(height: Self.saveHeight)
-                .liquidGlass(Capsule(), interactive: true, tint: Color(.systemBlue))
+                // ⛔ SOLID, NEVER SEE-THROUGH (owner 2026-10-19: the rows showed through it). The
+                // see-through glass plus a 0.45 fade on the whole bar let the page read through the
+                // button; now an opaque blue, a dimmer opaque blue while there is nothing to save.
+                .background(Capsule().fill(Color(.systemBlue).opacity(hasChanges || busy ? 1 : 0.35))
+                    .background(Capsule().fill(Color(.systemBackground))))
                 .contentShape(Capsule())
             }
             .buttonStyle(.plain)
             .disabled(!hasChanges || busy)
-            .opacity(hasChanges || busy ? 1 : 0.45)
             .padding(.horizontal, Self.saveSide)
             .padding(.top, 12)
             .padding(.bottom, saveBottomPad)
@@ -1941,11 +1944,10 @@ struct GroupMemberSheet: View {
             .init(color: .black.opacity(0.255), location: 0.617),
             .init(color: .clear, location: 1),
         ], startPoint: .bottom, endPoint: .top)
-        return ZStack {
-            Rectangle().fill(.ultraThinMaterial).opacity(0.6)
-            Color(uiColor: .systemGroupedBackground).opacity(0.75)
-        }
-        .mask(mask)
+        // The page colour at full strength behind the button, fading out above it, so no row
+        // reads through the bar (owner 2026-10-19).
+        return Color(uiColor: .systemGroupedBackground)
+            .mask(mask)
         .ignoresSafeArea(edges: .bottom)
         .allowsHitTesting(false)
     }
