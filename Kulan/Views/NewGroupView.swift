@@ -46,6 +46,7 @@ struct NewGroupView: View {
     @State private var membersCanAdd = false
     @State private var membersCanEdit = false
     @State private var membersCanCall = true
+    @State private var membersCanShare = false
     @State private var error: String?
     @FocusState private var nameFocused: Bool
 
@@ -315,7 +316,7 @@ struct NewGroupView: View {
 
     /// "2/4": how many of the member switches are on, as the group's Permissions row shows it.
     private var permissionsCount: String {
-        var on = [membersCanSend, membersCanAdd, membersCanEdit]
+        var on = [membersCanSend, membersCanAdd, membersCanEdit, membersCanShare]
         if CallFeatures.groupCalls { on.append(membersCanCall) }
         return "\(on.filter { $0 }.count)/\(on.count)"
     }
@@ -326,6 +327,7 @@ struct NewGroupView: View {
                 Toggle(isOn: $membersCanSend) { permLabel("Send messages", "bubble.left.and.bubble.right") }
                 Toggle(isOn: $membersCanAdd) { permLabel("Add members", "person.badge.plus") }
                 Toggle(isOn: $membersCanEdit) { permLabel("Edit group info", "pencil") }
+                Toggle(isOn: $membersCanShare) { permLabel("Share the group link", "link") }
                 if CallFeatures.groupCalls {
                     Toggle(isOn: $membersCanCall) { permLabel("Start group calls", "phone") }
                 }
@@ -417,6 +419,7 @@ struct NewGroupView: View {
         let perms: [String: Bool] = [
             "onlyAdminsSend": !membersCanSend, "membersCanAdd": membersCanAdd,
             "membersCanEditInfo": membersCanEdit, "onlyAdminsCall": !membersCanCall,
+            "membersCanShareLink": membersCanShare,
         ]
         Task {
             do {

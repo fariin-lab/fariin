@@ -1058,6 +1058,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var membersCanAdd: Bool            // group: non-admins may add members (default false)
     var membersCanEditInfo: Bool       // group: non-admins may edit name/photo/desc (default false)
     var onlyAdminsCall = false         // group: only admins may START a call (joining stays open)
+    var membersCanShareLink = false    // group: non-admins see Share and the QR of the invite link (owner 2026-10-19)
     /// ⛔ ROLE — owner 2026-10-18: uid → the short tag an ADMIN gives a member ("🎨 Designer"),
     /// shown beside their name in the group's bubbles, the members list and their card. Groups only.
     /// Replaces the self-set Member Label of the same day (`memberLabels`, never shipped).
@@ -1183,6 +1184,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.membersCanAdd = data["membersCanAdd"] as? Bool ?? false
         self.membersCanEditInfo = data["membersCanEditInfo"] as? Bool ?? false
         self.onlyAdminsCall = data["onlyAdminsCall"] as? Bool ?? false
+        self.membersCanShareLink = data["membersCanShareLink"] as? Bool ?? false
         self.roles = self.convType == "group"
             ? (data["roles"] as? [String: Any] ?? [:]).compactMapValues { GroupRole($0) }
             : [:]

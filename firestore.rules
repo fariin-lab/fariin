@@ -1870,7 +1870,7 @@ service cloud.firestore {
           // (`restrictedBy` and the three older restriction fields) are group rules like the rest.
           && (!keys.hasAny(['title', 'avatarUrl', 'desc', 'disappearSeconds', 'onlyAdminsSend',
                             'membersCanAdd', 'membersCanEditInfo', 'onlyAdminsCall', 'wallpaper',
-                            'restrictedBy', 'restrictRequest', 'noScreenshots', 'noForwarding', 'noSaving'])
+                            'membersCanShareLink', 'restrictedBy', 'restrictRequest', 'noScreenshots', 'noForwarding', 'noSaving'])
               || adminHasRight('changeInfo'))
           // owner 2026-10-18: the self-set Member Label (`memberLabels`, never shipped) gave way to
           // Role (`roles`, roleWriteOK). Nothing writes the old field; only change-info could.
@@ -1945,7 +1945,7 @@ service cloud.firestore {
               && (!groupModBlocked(o)
                   || (!keys.hasAny(['title', 'avatarUrl', 'desc', 'wallpaper', 'disappearSeconds', 'onlyAdminsSend',
                                     'membersCanAdd', 'membersCanEditInfo', 'onlyAdminsCall', 'restrictedBy',
-                                    'restrictRequest', 'noScreenshots', 'noForwarding', 'noSaving',
+                                    'membersCanShareLink', 'restrictRequest', 'noScreenshots', 'noForwarding', 'noSaving',
                                     'memberLabels', 'roles', 'inviteCode'])
                       && (!keys.hasAny(['lastMessage', 'lastSender', 'lastImageUrl', 'lastImageEnc', 'lastImages'])
                           || gone.size() > 0)

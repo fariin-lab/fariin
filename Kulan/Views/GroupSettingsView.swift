@@ -109,7 +109,7 @@ struct GroupSettingsView: View {
     /// "3/4": how many of the member switches on the Permissions page are on.
     private var permissionsCount: String? {
         guard let c = conv else { return nil }
-        var on = [!c.onlyAdminsSend, c.membersCanAdd, c.membersCanEditInfo]
+        var on = [!c.onlyAdminsSend, c.membersCanAdd, c.membersCanEditInfo, c.membersCanShareLink]
         if CallFeatures.groupCalls { on.append(!c.onlyAdminsCall) }
         return "\(on.filter { $0 }.count)/\(on.count)"
     }
@@ -128,6 +128,10 @@ struct GroupSettingsView: View {
             Toggle(isOn: bool(get: { $0.membersCanEditInfo },
                               set: { v in try await ChatService.setGroupPermission(cid: cid, key: "membersCanEditInfo", v) })) {
                 settingLabel("Edit group info", "pencil")
+            }
+            Toggle(isOn: bool(get: { $0.membersCanShareLink },
+                              set: { v in try await ChatService.setGroupPermission(cid: cid, key: "membersCanShareLink", v) })) {
+                settingLabel("Share the group link", "link")
             }
             // Hidden while group calls are (CallFeatures.groupCalls, as on the group info page).
             if CallFeatures.groupCalls {

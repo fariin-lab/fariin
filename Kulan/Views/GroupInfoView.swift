@@ -85,8 +85,14 @@ struct GroupInfoView: View {
     private var muted: Bool { conv?.isMuted(me, now: Date().timeIntervalSince1970 * 1000) ?? false }
     private var cardColor: Color { Color(uiColor: .secondarySystemGroupedBackground) }
     /// The group's invite link, only while it has one (2026-10-18: a private group shows no Share/QR).
+    /// Admins share the link; members only when "Share the group link" is on (owner 2026-10-19,
+    /// a course group whose admins keep the door to themselves).
+    private var mayShareLink: Bool {
+        guard let c = conv else { return false }
+        return c.isAdmin(me) || c.isOwner(me) || c.membersCanShareLink
+    }
     private var inviteLink: String? {
-        guard let code = conv?.inviteCode, !code.isEmpty,
+        guard mayShareLink, let code = conv?.inviteCode, !code.isEmpty,
               let link = URL(string: KulanApp.groupLink(code: code)) else { return nil }
         return link.absoluteString
     }
@@ -280,6 +286,10 @@ struct GroupInfoView: View {
                 GroupActionTile(icon: "square.and.arrow.up", title: "Share", cardColor: cardColor) { shareGroupText = link }
             } else if canAdd {
                 GroupActionTile(icon: "ic_add_member", title: "Add", cardColor: cardColor) { showAdd = true }
+            } else if !(conv?.inviteCode ?? "").isEmpty {
+                // The group has a link, but its admins share it themselves: the tile stays, greyed.
+                GroupActionTile(icon: "square.and.arrow.up", title: "Share", cardColor: cardColor) {}
+                    .disabled(true).opacity(0.45)
             }
             if let onSearch {
                 GroupActionTile(icon: "magnifyingglass", title: "Search", cardColor: cardColor) { onSearch() }
