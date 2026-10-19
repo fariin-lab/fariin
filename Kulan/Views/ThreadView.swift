@@ -62,6 +62,13 @@ enum ChatUIMode {
     }
 }
 
+/// 2026-10-19: groups I was removed from this session, with me already out of `users`. The chat
+/// list drops them, so a later open of the same chat would otherwise find no conversation and
+/// draw a plain composer. Memory only: a fresh launch starts empty.
+@MainActor enum FormerGroups {
+    static var removed: [String: Conversation] = [:]
+}
+
 struct ThreadView: View {
     let cid: String
     let title: String
@@ -2076,7 +2083,7 @@ struct ThreadView: View {
         }
         .fullScreenCover(isPresented: $showGroupCall) { GroupCallView() }
         .safeAreaInset(edge: .top) {
-            if groupCallActive && CallFeatures.groupCalls {
+            if groupCallActive && CallFeatures.groupCalls && !notAMember {
                 GroupCallJoinBar(video: groupCallVideo) {
                     InstantCover.run { showGroupCall = true }   // a cut, not a slide (owner, 2026-10-06)
                     // audit M-059, 2026-10-07: Join only joins. A stale bar (the call ended a moment
@@ -2101,7 +2108,12 @@ struct ThreadView: View {
                                        onAdminProceed: { o in applyAdminDelete(o) }))
         .onChange(of: ConversationsRepository.shared.conversations) { _, list in
             let resolved = list.first { $0.id == cid }   // O(n) ONCE per change, not per render
-            if resolved != cachedConv { cachedConv = resolved }
+            // 2026-10-19: a group that leaves the list while I'm in it. Removed from it, or just
+            // pushed below the list's window? Ask the server once; removed keeps the group page
+            // with me out of `users`, so the "no longer a member" bar shows instead of a 1:1 composer.
+            if resolved == nil, let old = cachedConv, old.isGroup {
+                if old.users.contains(me) { Task { await confirmRemovedFromGroup(old) } }
+            } else if resolved != cachedConv { cachedConv = resolved }
         }
         // ⛔ ASK FOR THE KEY THE MOMENT THE REQUEST IS SENT — owner, 2026-09-11 ("Everyone: new
         // user → 1 message → Message Request → ask for Chat Key → correct key → main chat"). Once
@@ -2154,6 +2166,7 @@ struct ThreadView: View {
         }
         .onAppear {
             cachedConv = ConversationsRepository.shared.conversations.first { $0.id == cid }
+                ?? FormerGroups.removed[cid]   // a group I was removed from earlier this session
             // A preview owns its repository; a real chat shares the live one (`forChat`), so it
             // counts itself in and out rather than stopping a run another screen may be using.
             if preview { repo.start() } else { repo.open() }
@@ -2361,6 +2374,17 @@ struct ThreadView: View {
         // and a locale or 12/24-hour change move every day label and time on the page while nothing
         // in the data does. One tick re-keys the grouping, signature and row-model caches.
         .modifier(DayTickWatcher(tick: $dayTick))
+        // 2026-10-19: a timed member mute ends by the clock, not by a document change, so nothing
+        // redrew the composer when it ran out. Sleep until `restrictedUntil[me]`, then bump a tick
+        // `iAmMuted` reads. A new value (lifted early, extended) restarts the wait.
+        .task(id: isGroup ? (conversation?.restrictedUntil[me] ?? 0) : 0) {
+            let until = isGroup ? (conversation?.restrictedUntil[me] ?? 0) : 0
+            let wait = until / 1000 - Date().timeIntervalSince1970
+            guard wait > 0 else { return }
+            try? await Task.sleep(nanoseconds: UInt64((wait + 0.5) * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            muteLiftTick += 1
+        }
     }
 
     /// The open-time read pass, moved out of `body` unchanged (owner audit 2026-10-06 chat #2/#14;
@@ -2507,6 +2531,8 @@ struct ThreadView: View {
     /// 12/24-hour change. Nothing else re-runs the caches while a chat sits open, so "Today" stayed
     /// "Today" past midnight until the next message happened to land.
     @State private var dayTick = 0
+    /// 2026-10-19: bumped when my timed group mute runs out (see the `.task` beside DayTickWatcher).
+    @State private var muteLiftTick = 0
 
     /// owner audit 2026-10-06 chat #47. A notice is not a bubble: a pin notice, a call row, a group
     /// system row and the "update the app" card carry the ACTOR as their author, so the plain
@@ -4616,8 +4642,18 @@ struct ThreadView: View {
         guard m.sendState == nil, !m.deleted, !m.isCall else { return false }
         if m.authorId == me { return true }
         guard let c = conversation, c.isGroup, c.adminCan(me, .deleteMessages),
-              !m.id.contains("-") else { return false }
+              !isSyntheticAlbumChild(m) else { return false }
         return c.isOwner(me) || !c.isOwner(m.authorId)
+    }
+
+    /// 2026-10-19: a synthetic album child is "<parentId>-<n>" whose parent is a loaded message.
+    /// The old test was "id has a dash", but a text's id is its UUID clientId, so every text had
+    /// one and admins lost Delete for everyone on texts.
+    private func isSyntheticAlbumChild(_ m: Message) -> Bool {
+        guard let dash = m.id.lastIndex(of: "-"),
+              Int(m.id[m.id.index(after: dash)...]) != nil else { return false }
+        let parent = String(m.id[..<dash])
+        return repo.items.contains { $0.id == parent }
     }
 
     /// owner 2026-10-18: does this delete open AdminDeleteSheet? A group, I hold "Delete messages",
@@ -5041,7 +5077,7 @@ struct ThreadView: View {
                 callsEnabled: callsEnabled || liveWithThem)
         }
         // Group Settings "Start group call: Admins only": a member joins from the Join bar instead.
-        if isGroup && CallFeatures.groupCalls && (conversation?.canStartCall(me) ?? true) {
+        if isGroup && CallFeatures.groupCalls && !notAMember && (conversation?.canStartCall(me) ?? true) {
             return .conversation(audio: { startGroupCall(video: false) },
                                  video: { startGroupCall(video: true) },
                                  callsEnabled: callsEnabled)
@@ -7851,6 +7887,27 @@ struct ThreadView: View {
         return !conv.users.contains(AuthService.shared.uid ?? "")
     }
 
+    /// 2026-10-19: the group left the chat list. The rules refuse a non-member's read, so a refusal
+    /// (or a missing doc, or `users` without me) means removed; a good read means it only fell
+    /// below the list's window and the cached copy stays.
+    private func confirmRemovedFromGroup(_ old: Conversation) async {
+        let gone: Bool
+        do {
+            let snap = try await Firestore.firestore().collection("conversations").document(cid)
+                .getDocument(source: .server)
+            gone = !snap.exists || !((snap.data()?["users"] as? [String] ?? []).contains(me))
+        } catch {
+            let e = error as NSError
+            gone = e.domain == FirestoreErrorDomain && e.code == FirestoreErrorCode.permissionDenied.rawValue
+        }
+        guard gone, cachedConv?.id == old.id,
+              !ConversationsRepository.shared.conversations.contains(where: { $0.id == cid }) else { return }
+        var c = old
+        c.users.removeAll { $0 == me }
+        FormerGroups.removed[cid] = c
+        cachedConv = c
+    }
+
     private var removedBar: some View {
         composerNotice {
             Text("You're no longer a member of this group")
@@ -7889,6 +7946,7 @@ struct ThreadView: View {
 
     // A member an admin has restricted (reference-style timed mute) can't send until it expires.
     private var iAmMuted: Bool {
+        _ = muteLiftTick   // read so the expiry tick redraws whatever asks this
         guard let conv = conversation, conv.isGroup else { return false }
         return conv.isMutedMember(AuthService.shared.uid ?? "", now: Date().timeIntervalSince1970 * 1000)
     }

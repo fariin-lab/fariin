@@ -798,12 +798,28 @@ enum MessageRowModelBuilder {
     static let restrictReject = "restrict-reject"
     static let restrictAccept = "restrict-accept"
 
-    /// The four sentences `ChatService` writes about Restricted chat, minus the writer's name:
-    /// "turned on Restricted chat." etc. Nil for any other notice.
+    /// The sentences `ChatService` writes about Restricted chat (and, 2026-10-19, the group's
+    /// Restricted group switch), minus the writer's name: "turned on Restricted chat." etc. Nil for
+    /// any other notice.
     private static func restrictedAction(_ text: String) -> String? {
         let actions = ["turned on Restricted chat.", "turned off Restricted chat.",
-                       "asked to turn off Restricted chat.", "kept Restricted chat on."]
+                       "asked to turn off Restricted chat.", "kept Restricted chat on.",
+                       "turned on Restricted group.", "turned off Restricted group."]
         return actions.first { text.hasSuffix(" " + $0) }
+    }
+
+    /// 2026-10-19: a group notice I wrote ("adnan removed Ali") reads "You removed Ali" on my phone,
+    /// the same swap the Restricted Chat and timer lines make. The stored sentence starts with the
+    /// name my phone had when it wrote it, so the swap happens only when the text still starts with
+    /// my name (or "Someone", the writer's fallback for an empty name); after a rename it stays as
+    /// written. Others' notices are untouched.
+    private static func ownNoticeAsYou(_ m: Message, ctx: MessageRowContext) -> String {
+        guard !m.authorId.isEmpty, m.authorId == ctx.me else { return m.text }
+        let names = [ProfileStore.shared.me?.name ?? "", ctx.nameFor(m.authorId), "Someone"]
+        for name in names where !name.isEmpty && m.text.hasPrefix(name + " ") {
+            return "You" + String(m.text.dropFirst(name.count))
+        }
+        return m.text
     }
 
     private static func systemNotice(_ m: Message, ctx: MessageRowContext) -> NoticeRow {
@@ -825,6 +841,7 @@ enum MessageRowModelBuilder {
                 let who = m.authorId == ctx.me ? "You" : ctx.nameFor(m.authorId)
                 // His wording: "Restricted Chat", as the profile row names it.
                 let words = action.replacingOccurrences(of: "Restricted chat", with: "Restricted Chat")
+                    .replacingOccurrences(of: "Restricted group", with: "Restricted Group")
                 // ⛔ THE OPEN REQUEST CARRIES ITS ANSWER (owner, 2026-10-12): Reject and Accept under
                 // the request, for the person it was asked of, while it is open. Only the one notice
                 // ThreadView names live gets them; older requests and the asker's own copy are a
@@ -838,7 +855,7 @@ enum MessageRowModelBuilder {
             }
             // A request to turn Restricted chat off answers from its own notice, as in the
             // reference app (`ThreadView` reads this target and offers Turn Off / Keep On).
-            return NoticeRow(text: m.text, symbol: nil, style: .pill,
+            return NoticeRow(text: ownNoticeAsYou(m, ctx: ctx), symbol: nil, style: .pill,
                              tapTargetId: m.isRestrictRequest ? Self.restrictRequestTarget : nil,
                              onWallpaper: ctx.onWallpaper, wallpaperBlur: ctx.wallpaperBlur)
         }

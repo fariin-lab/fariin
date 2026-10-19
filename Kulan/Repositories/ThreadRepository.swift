@@ -734,11 +734,17 @@ final class ThreadRepository {
                     let others = (d?["users"] as? [String] ?? []).filter { $0 != uid }
                     let typingMap = d?["typing"] as? [String: Any] ?? [:]
                     let names = d?["names"] as? [String: String] ?? [:]
+                    // 2026-10-19: a member I blocked never shows as typing or recording; their
+                    // messages are hidden, so a header that says they type was a leak.
+                    let blocks = BlockList.snapshot
                     let typers = others.filter {
-                        (typingMap[$0] as? Bool) == true || (typingMap[$0] as? String)?.hasPrefix("text") == true
+                        !blocks.contains($0) &&
+                        ((typingMap[$0] as? Bool) == true || (typingMap[$0] as? String)?.hasPrefix("text") == true)
                     }
                     self.otherTyping = !typers.isEmpty
-                    self.otherRecording = others.contains { (typingMap[$0] as? String)?.hasPrefix("audio") == true }
+                    self.otherRecording = others.contains {
+                        !blocks.contains($0) && (typingMap[$0] as? String)?.hasPrefix("audio") == true
+                    }
                     self.typingNames = typers.map { names[$0] ?? "Someone" }
                     self.armTypingExpiry()
                     if !others.isEmpty {

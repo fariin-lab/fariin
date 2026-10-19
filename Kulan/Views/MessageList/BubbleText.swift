@@ -92,6 +92,7 @@ enum BubbleText {
         // last so it overrides the generic username style above.
         // `count > 1` because a mention token is "@" + the display name, and an unresolved name
         // makes that a bare "@" — which would then bold and tint every at-sign in the message.
+        var mentionRanges: [NSRange] = []
         for token in t.mentionTokens where token.count > 1 {
             var from = 0
             while from < ns.length {
@@ -99,7 +100,17 @@ enum BubbleText {
                 guard r.location != NSNotFound, r.length > 0 else { break }
                 out.addAttribute(.font, value: UIFont.systemFont(ofSize: 17, weight: .semibold), range: r)
                 if !isMe { out.addAttribute(.foregroundColor, value: accent, range: r) }
+                mentionRanges.append(r)
                 from = r.location + r.length
+            }
+        }
+        // 2026-10-19: a display-name mention ("@Amina Yusuf") also matched the @username pattern on
+        // its first word, so a tap opened kulan://u/Amina, a stranger or nobody. Drop the username
+        // link wherever it sits inside a member mention.
+        if !mentionRanges.isEmpty {
+            links.removeAll { run in
+                run.url.scheme == "kulan" && run.url.host == "u"
+                    && mentionRanges.contains { NSIntersectionRange($0, run.range).length > 0 }
             }
         }
         return (out, links)
