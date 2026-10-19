@@ -91,7 +91,9 @@ struct ChatSearchOverlay: View {
                 // while the field was still rising it passed over Recent and the first rows. The
                 // page now fades in once the rise is over (about 0.3s); leaving search is instant.
                 .transition(.asymmetric(
-                    insertion: .opacity.animation(.easeOut(duration: 0.18).delay(0.28)),
+                    // 0.3s from the tap, the reference's content fade, no wait (owner 2026-10-19:
+                    // "Recent appears late"). The list is already hidden, so nothing shows through.
+                    insertion: .opacity.animation(.easeOut(duration: 0.3)),
                     removal: .identity))
         }
     }

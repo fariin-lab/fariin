@@ -766,10 +766,17 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         searchReleaseWork?.cancel()
         if on { searchHold = true; return }
         guard searchHold || tableView.alpha < 1 else { return }
-        // The bar animates back after Cancel; let it land before the footer measures again.
+        // The list comes back AT ONCE, fading in as the search page fades out (owner 2026-10-19:
+        // "after X the chats appear late"; it waited the whole 0.5s hold first).
+        revealAfterSearch()
+        // The bar animates back after Cancel; let it land before the footer measures again, and
+        // put a list that was at its top back there once the bar has settled.
         let w = DispatchWorkItem { [weak self] in
-            self?.searchHold = false
-            self?.revealAfterSearch()
+            guard let self else { return }
+            self.searchHold = false
+            if self.wasAtTopForSearch, !self.tableView.isTracking, !self.tableView.isDecelerating {
+                self.tableView.contentOffset.y = -self.tableView.adjustedContentInset.top
+            }
         }
         searchReleaseWork = w
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: w)
@@ -797,7 +804,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             tableView.contentOffset.y = -tableView.adjustedContentInset.top
         }
         DiagLog.add("SEARCH# end y=\(Int(tableView.contentOffset.y)) top=\(Int(tableView.adjustedContentInset.top))")
-        UIView.animate(withDuration: 0.3) { self.tableView.alpha = 1 }
+        UIView.animate(withDuration: 0.25) { self.tableView.alpha = 1 }
     }
 
     /// ⛔ THE MODE IS TRACKED HERE, NOT READ BACK OFF THE TABLE — audit, 2026-09-11. `isEditing` is
