@@ -817,7 +817,6 @@ struct GroupInfoView: View {
     private func memberSheet(_ m: MemberAction) -> some View {
         GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: m.id,
                               onInfo: { uid in profileOf = MemberAction(id: uid, name: conv?.names[uid] ?? "User", isAdmin: false) })
-            .presentationDetents([.large])
     }
 
     // MARK: Media figures
@@ -1697,23 +1696,22 @@ struct GroupMemberSheet: View {
         }
     }
 
+    // ⛔ SHORT CARD (owner 2026-10-19, after the reference app's member card): the sheet is as tall
+    // as what is on it and never grows. Photo, name, Message/Voice/Video, then the rows that apply:
+    // Make Group Admin, Info, Remove from Group. Rights and tag sit on their own pushed page; only
+    // that page (or the profile) takes the sheet to full height.
+    @State private var showEdit = false
+    @State private var cardHeight: CGFloat = 420
+    private var expanded: Bool { showEdit || showProfileHere }
+
     var body: some View {
         NavigationStack {
-            ScrollView { page }
-            .scrollDismissesKeyboard(.interactively)
-            .background(Color(uiColor: .systemBackground).ignoresSafeArea())
-            .navigationTitle(firstName)
-            .navigationBarTitleDisplayMode(.inline)
+            shortCard
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(isPresented: $showEdit) { editPage }
             .navigationDestination(isPresented: $showProfileHere) {
                 ContactInfoView(cid: ChatService.convId(me, member.id), name: member.name,
                                 photoUrl: gatedMemberPhoto, source: .calls)
-            }
-            .toolbar {
-                // X discards: nothing is written until Done.
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
-                }
-                ToolbarItem(placement: .topBarTrailing) { doneButton }
             }
             .task { profile = await ProfileStore.shared.fetch(member.id) }
             .onAppear {
@@ -1775,19 +1773,51 @@ struct GroupMemberSheet: View {
                        ])
             .onAppear { memberBlocked = BlockList.shared.contains(member.id) }
         }
+        .presentationDetents(expanded ? [.large] : [.height(cardHeight)])
+        .presentationBackground(Color(uiColor: .systemGroupedBackground))
     }
 
-    /// The whole page, top to bottom; each part is its own small view (type-checker limits).
-    private var page: some View {
-        VStack(spacing: 0) {
-            header.padding(.top, 8).padding(.bottom, 24)
-            if mayEditRights { roleSwitch }
-            if mayEditRights && adminSelected { rightsRows }
-            if canEditRole { tagRow }
-            actionRows
+    /// The card itself, measured so the sheet is exactly its height.
+    private var shortCard: some View {
+        VStack(spacing: 16) {
+            header.padding(.top, 28)
+            if member.id != me { tiles }
+            quickRows
         }
-        .padding(.bottom, 32)
-        .animation(.snappy(duration: 0.25), value: adminSelected)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 44)   // clears the home bar: the detent height includes it
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0 }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .overlay(alignment: .topTrailing) {
+            Button { dismiss() } label: {
+                Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .liquidGlass(Circle())
+            }
+            .padding(.top, 14).padding(.trailing, 14)
+            .accessibilityLabel("Close")
+        }
+        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+    }
+
+    /// Rights and tag, the owner's one-page editor, pushed from the card. Done writes it all.
+    private var editPage: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                if mayEditRights { roleSwitch.padding(.top, 12) }
+                if mayEditRights && adminSelected { rightsRows }
+                if canEditRole { tagRow }
+            }
+            .padding(.bottom, 32)
+            .animation(.snappy(duration: 0.25), value: adminSelected)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+        .navigationTitle(firstName)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { doneButton } }
     }
 
     /// Done: live only once something changed, a spinner while it writes.
@@ -1805,10 +1835,10 @@ struct GroupMemberSheet: View {
     private var header: some View {
         VStack(spacing: 6) {
             // Honor THEIR audience settings, like the 1:1 profile does (audit).
-            AvatarView(name: member.name, photoUrl: gatedMemberPhoto, size: 72)
+            AvatarView(name: member.name, photoUrl: gatedMemberPhoto, size: 96)
                 .padding(.bottom, 6)
             HStack(spacing: 6) {
-                Text(member.name).font(.title3.weight(.semibold)).lineLimit(1)
+                Text(member.name).font(.title2.weight(.bold)).lineLimit(1)
                 VerifiedMark(uid: member.id, size: 16, explains: true)
                 headerChip
             }
@@ -1945,29 +1975,77 @@ struct GroupMemberSheet: View {
     private var canMuteRow: Bool { isOther && canRestrict && !member.isAdmin }
     private var canTransfer: Bool { isOther && iAmOwner }
 
-    /// Plain text rows at the foot, each under a thin line. Nothing that applies: no rows.
-    /// No Info or Remove from Group rows (owner 2026-10-19): the photo at the top opens the
-    /// profile, and removing is a swipe on the Members list.
-    private var actionRows: some View {
-        VStack(spacing: 0) {
-            if canMuteRow { rowLine; muteRow }
-            if canTransfer { rowLine; transferRow }
-            if showsRemoveAdmin { rowLine; removeAdminRow }
+    /// Removing a member needs the Restrict-members right; removing an admin is the owner's alone.
+    private var canRemove: Bool { isOther && canRestrict && (!member.isAdmin || iAmOwner) }
+    private var makesAdmin: Bool { mayEditRights && !member.isAdmin }
+
+    /// One card of icon rows under the tiles; only the rows I may use. Make Group Admin promotes at
+    /// once with the default rights (owner 2026-10-19: "quick thing like remove and make admin").
+    @ViewBuilder private var quickRows: some View {
+        let rows = quickRowList
+        if !rows.isEmpty {
+            VStack(spacing: 0) {
+                ForEach(rows.indices, id: \.self) { i in
+                    if i > 0 { Divider().padding(.leading, 62) }
+                    rows[i]
+                }
+            }
+            .profileSurface(plain: card, radius: 16)
         }
     }
 
-    private func textRow(_ title: String, tint: Color) -> some View {
-        Text(title).font(.body).foregroundStyle(tint)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, Self.rowSide).padding(.vertical, 13)
-            .contentShape(Rectangle())
+    private var quickRowList: [AnyView] {
+        var rows: [AnyView] = []
+        if makesAdmin {
+            rows.append(AnyView(iconRow("checkmark.shield", "Make Group Admin") {
+                let cid = cid, uid = member.id, name = member.name, list = rightsList
+                run { try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: list) }
+            }))
+        }
+        if mayEditRights && member.isAdmin {
+            rows.append(AnyView(iconRow("slider.horizontal.3", "Edit Admin Rights") { showEdit = true }))
+        } else if canEditRole {
+            rows.append(AnyView(iconRow("tag", "Member Tag") { showEdit = true }))
+        }
+        if canMuteRow { rows.append(AnyView(muteRow)) }
+        if canTransfer {
+            rows.append(AnyView(iconRow("crown", "Transfer Ownership") { confirmTransfer = true }))
+        }
+        if member.id != me {
+            rows.append(AnyView(iconRow("info.circle", "Info") { openProfile() }))
+        }
+        if showsRemoveAdmin {
+            rows.append(AnyView(iconRow("person.badge.minus", "Dismiss Admin", tint: .red) { confirmDismissAdmin = true }))
+        }
+        if canRemove {
+            rows.append(AnyView(iconRow("minus.circle", "Remove from Group", tint: .red) { confirmRemove = true }))
+        }
+        return rows
+    }
+
+    private func iconRow(_ icon: String, _ title: String, tint: Color = .primary,
+                         action: @escaping () -> Void) -> some View {
+        Button(action: action) { iconLabel(icon, title, tint: tint) }
+            .buttonStyle(.plain)
+            .disabled(busy)
+    }
+
+    private func iconLabel(_ icon: String, _ title: String, tint: Color) -> some View {
+        HStack(spacing: 16) {
+            Image(systemName: icon).font(.system(size: 20)).frame(width: 28)
+            Text(title).font(.body)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 18).padding(.vertical, 14)
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder private var muteRow: some View {
         if isMuted {
             Button {
                 run { try await ChatService.unmuteMember(cid: cid, uid: member.id, name: member.name) }
-            } label: { textRow("Lift restrictions", tint: Color.accentColor) }
+            } label: { iconLabel("speaker.wave.2", "Lift Restrictions", tint: .primary) }
             .buttonStyle(.plain)
             .disabled(busy)
         } else {
@@ -1976,22 +2054,9 @@ struct GroupMemberSheet: View {
                 Button("1 day")   { mute(86400) }
                 Button("1 week")  { mute(604800) }
                 Button("Until I lift it") { mute(0) }
-            } label: { textRow("Mute in this group", tint: Color.accentColor) }
+            } label: { iconLabel("speaker.slash", "Mute in This Group", tint: .primary) }
             .disabled(busy)
         }
-    }
-
-    private var transferRow: some View {
-        Button { confirmTransfer = true } label: { textRow("Transfer ownership", tint: Color.accentColor) }
-            .buttonStyle(.plain)
-            .disabled(busy)
-    }
-
-    /// Straight to the Dismiss confirm, which then writes the same as Done with Member picked.
-    private var removeAdminRow: some View {
-        Button { confirmDismissAdmin = true } label: { textRow("Remove admin", tint: Color.red) }
-            .buttonStyle(.plain)
-            .disabled(busy)
     }
 
     private func openChat() {
@@ -2160,7 +2225,6 @@ struct GroupMembersSheet: View {
             }
             .sheet(item: $opened) { o in
                 GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: o.id)
-                    .presentationDetents([.large])
             }
             .sheet(isPresented: $showAdd) { AddMembersSheet(cid: cid, existing: Set(conv?.users ?? [])) }
             .navigationDestination(isPresented: $showInvite) {

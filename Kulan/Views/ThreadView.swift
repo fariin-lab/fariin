@@ -2079,7 +2079,6 @@ struct ThreadView: View {
                              mutedUntil: conversation?.restrictedUntil[m.id] ?? 0,
                              role: conversation?.roles[m.id],
                              canEditRole: conversation?.canSetRole(me, m.id) ?? false)
-                .presentationDetents([.large])
         }
         .fullScreenCover(isPresented: $showGroupCall) { GroupCallView() }
         .safeAreaInset(edge: .top) {
