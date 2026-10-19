@@ -2106,15 +2106,7 @@ struct ThreadView: View {
                                        conversation: conversation,
                                        loadedByAuthor: { ms in loadedDeletable(by: ms.map(\.authorId)) },
                                        onAdminProceed: { o in applyAdminDelete(o) }))
-        .onChange(of: ConversationsRepository.shared.conversations) { _, list in
-            let resolved = list.first { $0.id == cid }   // O(n) ONCE per change, not per render
-            // 2026-10-19: a group that leaves the list while I'm in it. Removed from it, or just
-            // pushed below the list's window? Ask the server once; removed keeps the group page
-            // with me out of `users`, so the "no longer a member" bar shows instead of a 1:1 composer.
-            if resolved == nil, let old = cachedConv, old.isGroup {
-                if old.users.contains(me) { Task { await confirmRemovedFromGroup(old) } }
-            } else if resolved != cachedConv { cachedConv = resolved }
-        }
+        .onChange(of: ConversationsRepository.shared.conversations) { _, list in conversationsChanged(list) }
         // ⛔ ASK FOR THE KEY THE MOMENT THE REQUEST IS SENT — owner, 2026-09-11 ("Everyone: new
         // user → 1 message → Message Request → ask for Chat Key → correct key → main chat"). Once
         // per chat, remembered on this phone; the awaiting-reply bar keeps the button for after.
@@ -2377,14 +2369,28 @@ struct ThreadView: View {
         // 2026-10-19: a timed member mute ends by the clock, not by a document change, so nothing
         // redrew the composer when it ran out. Sleep until `restrictedUntil[me]`, then bump a tick
         // `iAmMuted` reads. A new value (lifted early, extended) restarts the wait.
-        .task(id: isGroup ? (conversation?.restrictedUntil[me] ?? 0) : 0) {
-            let until = isGroup ? (conversation?.restrictedUntil[me] ?? 0) : 0
-            let wait = until / 1000 - Date().timeIntervalSince1970
-            guard wait > 0 else { return }
-            try? await Task.sleep(nanoseconds: UInt64((wait + 0.5) * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            muteLiftTick += 1
-        }
+        // Named, not inline: this body sits at the type checker's limit (compile 39280078061).
+        .task(id: muteLiftKey) { await waitForMuteLift() }
+    }
+
+    private func conversationsChanged(_ list: [Conversation]) {
+        let resolved = list.first { $0.id == cid }   // O(n) ONCE per change, not per render
+        // 2026-10-19: a group that leaves the list while I'm in it. Removed from it, or just
+        // pushed below the list's window? Ask the server once; removed keeps the group page
+        // with me out of `users`, so the "no longer a member" bar shows instead of a 1:1 composer.
+        if resolved == nil, let old = cachedConv, old.isGroup {
+            if old.users.contains(me) { Task { await confirmRemovedFromGroup(old) } }
+        } else if resolved != cachedConv { cachedConv = resolved }
+    }
+
+    private var muteLiftKey: Double { isGroup ? (conversation?.restrictedUntil[me] ?? 0) : 0 }
+
+    private func waitForMuteLift() async {
+        let wait = muteLiftKey / 1000 - Date().timeIntervalSince1970
+        guard wait > 0 else { return }
+        try? await Task.sleep(nanoseconds: UInt64((wait + 0.5) * 1_000_000_000))
+        guard !Task.isCancelled else { return }
+        muteLiftTick += 1
     }
 
     /// The open-time read pass, moved out of `body` unchanged (owner audit 2026-10-06 chat #2/#14;
