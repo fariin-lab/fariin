@@ -339,9 +339,7 @@ struct GroupInfoView: View {
             }
         }
         Section {
-            Menu { muteMenuItems } label: {
-                Label { Text(muted ? "Unmute" : "Mute") } icon: { MenuIcon(muted ? "ic_menu_unmute" : "ic_menu_mute") }
-            }
+            // No Mute here (owner 2026-10-19): Sounds & Notifications on the page already holds it.
             Button { exportChat() } label: { Label("Export Chat", systemImage: "square.and.arrow.down") }
                 .disabled(exporting)
             Button { showSimilar = true } label: { Label("Create a Similar Group", systemImage: "person.2") }
