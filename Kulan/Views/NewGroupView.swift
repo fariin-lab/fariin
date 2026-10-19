@@ -316,7 +316,7 @@ struct NewGroupView: View {
 
     /// "2/4": how many of the member switches are on, as the group's Permissions row shows it.
     private var permissionsCount: String {
-        var on = [membersCanSend, membersCanAdd, membersCanEdit, membersCanShare]
+        var on = [membersCanSend, membersCanAdd]
         if CallFeatures.groupCalls { on.append(membersCanCall) }
         return "\(on.filter { $0 }.count)/\(on.count)"
     }
@@ -326,8 +326,7 @@ struct NewGroupView: View {
             Section {
                 Toggle(isOn: $membersCanSend) { permLabel("Send messages", "bubble.left.and.bubble.right") }
                 Toggle(isOn: $membersCanAdd) { permLabel("Add members", "person.badge.plus") }
-                Toggle(isOn: $membersCanEdit) { permLabel("Edit group info", "pencil") }
-                Toggle(isOn: $membersCanShare) { permLabel("Share the group link", "link") }
+                // Edit info and share link are admins' only (owner 2026-10-19); both stay false.
                 if CallFeatures.groupCalls {
                     Toggle(isOn: $membersCanCall) { permLabel("Start group calls", "phone") }
                 }
@@ -373,10 +372,11 @@ struct NewGroupView: View {
         }
     }
 
-    /// The create rule allows at most 30 people in a new group, you included (firestore.rules, the
-    /// group branch of the conversation create). Past that the create was refused and the page only
-    /// said "Could not create group" (2026-09-24 audit). The picker stops at 29 others instead.
-    private static let maxOthersAtCreate = 29
+    /// The create rule allows at most `group_members_max` people in a new group, you included
+    /// (firestore.rules, the group branch of the conversation create; admin panel, fallback 30). Past
+    /// that the create was refused and the page only said "Could not create group" (2026-09-24
+    /// audit). The picker stops one short of the cap instead, the other place being yours.
+    private static var maxOthersAtCreate: Int { max(1, AppLimits.shared.groupMembersMax - 1) }
 
     private func toggle(_ p: Person) {
         if selected[p.id] != nil {

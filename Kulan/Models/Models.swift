@@ -1185,9 +1185,11 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.createdAt = (data["createdAt"] as? Timestamp)?.dateValue()
         self.onlyAdminsSend = data["onlyAdminsSend"] as? Bool ?? false
         self.membersCanAdd = data["membersCanAdd"] as? Bool ?? false
-        self.membersCanEditInfo = data["membersCanEditInfo"] as? Bool ?? false
+        // ⛔ ADMINS ONLY, WHATEVER AN OLDER GROUP STORED (owner 2026-10-19): editing group info and
+        // sharing the link have no member switch any more, so a group that had them on reads off.
+        self.membersCanEditInfo = false
         self.onlyAdminsCall = data["onlyAdminsCall"] as? Bool ?? false
-        self.membersCanShareLink = data["membersCanShareLink"] as? Bool ?? false
+        self.membersCanShareLink = false
         self.roles = self.convType == "group"
             ? (data["roles"] as? [String: Any] ?? [:]).compactMapValues { GroupRole($0) }
             : [:]
