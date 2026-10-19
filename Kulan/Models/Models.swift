@@ -18,6 +18,9 @@ enum Flags {
     /// "Create new groups" (owner 2026-10-18, admin panel): OFF hides every way to MAKE a group and
     /// the rules refuse one; groups that exist keep working. Live (`LiveFeatures`), on unless set.
     static var groupCreateEnabled: Bool { groupsEnabled && LiveFeatures.shared.values["groupCreate"] != false }
+    /// The "All Members" bubble cloud on a group's page (owner 2026-10-19): off, every group, or
+    /// the groups the admin panel picks (config/features memberCloud). Live; off unless set.
+    static func memberCloud(for cid: String) -> Bool { LiveFeatures.shared.memberCloud.isOn(for: cid) }
     /// Two-step verification's door in Settings. OFF (owner, 2026-09-25: "turn off 2FA as groups,
     /// we are not ready to finalize"). Only the door closes. An account that ALREADY turned it on
     /// still sees the row, so it can turn it off, and still gets the sign-in password prompt,

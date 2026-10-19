@@ -50,7 +50,12 @@ final class RemoteFeatures {
                 var out: [String: Bool] = [:]
                 for (k, v) in snap.data() ?? [:] { if let b = v as? Bool { out[k] = b } }
                 UserDefaults.standard.set(out, forKey: Self.storeKey)
-                DispatchQueue.main.async { LiveFeatures.shared.values = out }
+                let cloud = MemberCloudSetting(snap.data()?["memberCloud"])
+                UserDefaults.standard.set(cloud.stored, forKey: MemberCloudSetting.storeKey)
+                DispatchQueue.main.async {
+                    LiveFeatures.shared.values = out
+                    LiveFeatures.shared.memberCloud = cloud
+                }
             }
     }
 
@@ -66,5 +71,37 @@ final class RemoteFeatures {
     static let shared = LiveFeatures()
     var values: [String: Bool] =
         (UserDefaults.standard.dictionary(forKey: "remoteFeatures.v1") as? [String: Bool]) ?? [:]
+    /// The group page's member cloud (not a Bool, so it lives beside `values`).
+    var memberCloud = MemberCloudSetting(UserDefaults.standard.dictionary(forKey: MemberCloudSetting.storeKey))
     private init() {}
+}
+
+/// THE GROUP PAGE'S BUBBLE CLOUD (owner 2026-10-19, admin panel): `config/features.memberCloud` =
+/// `{ mode: "off" | "all" | "groups", groups: [conversationId] }`. Missing or anything unexpected
+/// reads as off. Only shows or hides a card, so it applies live.
+struct MemberCloudSetting: Equatable {
+    static let storeKey = "remoteFeatures.memberCloud.v1"
+
+    enum Mode: String { case off, all, groups }
+    let mode: Mode
+    let groups: Set<String>
+
+    init(_ raw: Any?) {
+        let d = raw as? [String: Any]
+        let m = (d?["mode"] as? String).flatMap(Mode.init(rawValue:)) ?? .off
+        let g = (d?["groups"] as? [Any])?.compactMap { $0 as? String } ?? []
+        mode = m
+        groups = Set(g)
+    }
+
+    func isOn(for cid: String) -> Bool {
+        switch mode {
+        case .off: return false
+        case .all: return true
+        case .groups: return groups.contains(cid)
+        }
+    }
+
+    /// The shape saved for the next launch (plist types only).
+    var stored: [String: Any] { ["mode": mode.rawValue, "groups": Array(groups)] }
 }

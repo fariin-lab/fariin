@@ -271,6 +271,8 @@ struct GroupInfoView: View {
     @ViewBuilder private var cards: some View {
         settingsCard
         if iAmAdmin { groupSettingsCard }
+        // The bubble cloud is the admin panel's call (config/features memberCloud), live.
+        if Flags.memberCloud(for: cid) { memberCloudCard }
         if !media.isEmpty {
             ProfileMediaCard(cid: cid, media: media, cardColor: cardColor,
                              onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
@@ -708,6 +710,38 @@ struct GroupInfoView: View {
                                     isAdmin: conv?.isAdmin(uid) ?? false)
     }
 
+    /// "All Members" and See All over a loose cloud of up to eleven faces, the biggest in the
+    /// middle. The whole card is one button to the full, searchable list (owner 2026-10-19: a face
+    /// does NOT open that member's card). Shown only where the admin panel turns it on
+    /// (`Flags.memberCloud`).
+    private var memberCloudCard: some View {
+        Button { showAllMembers = true } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                memberCloudHeader
+                MemberBubbleCloud(conv: conv, ids: Array(GroupMembers.sorted(conv, me: me).prefix(MemberBubbleCloud.capacity)))
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 10)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .profileSurface(plain: cardColor)
+        .accessibilityLabel("All Members, See All")
+    }
+
+    private var memberCloudHeader: some View {
+        HStack(spacing: 8) {
+            Text("All Members").font(.headline).foregroundStyle(.primary)
+            Spacer(minLength: 8)
+            HStack(spacing: 3) {
+                Text("See All").font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+                Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, ProfileMediaCard.inset)
+        .padding(.top, ProfileMediaCard.inset)
+    }
+
     private func memberSheet(_ m: MemberAction) -> some View {
         GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: m.id,
                               onInfo: { uid in profileOf = MemberAction(id: uid, name: conv?.names[uid] ?? "User", isAdmin: false) })
@@ -855,6 +889,44 @@ private struct GroupFaceCluster: View {
         return GroupFace(name: conv?.names[uid] ?? "User", photo: conv?.photos[uid], size: s.d)
             .overlay { Circle().stroke(Color(uiColor: .systemGroupedBackground), lineWidth: i == 0 ? 0 : 3) }
             .offset(x: s.x, y: s.y)
+    }
+}
+
+/// All Members as a loose cloud (owner's mockup 2026-10-19): two rows of faces of different sizes,
+/// the biggest in the middle, smaller ones toward the edges. Fixed spots as shares of the card's
+/// width, so it reads organic on every phone and never overlaps. Faces are not buttons: the card
+/// around the cloud is.
+private struct MemberBubbleCloud: View {
+    let conv: Conversation?
+    let ids: [String]
+
+    static let height: CGFloat = 160
+    /// x as a share of the width, y as a share of the height, diameter; the first member (me, then
+    /// the admins) takes the middle.
+    private static let slots: [(x: CGFloat, y: CGFloat, d: CGFloat)] = [
+        (0.50, 0.50, 70), (0.30, 0.33, 54), (0.70, 0.35, 56), (0.32, 0.75, 46),
+        (0.68, 0.74, 48), (0.12, 0.30, 40), (0.88, 0.30, 42), (0.14, 0.72, 36),
+        (0.86, 0.72, 38), (0.50, 0.09, 28), (0.50, 0.91, 28),
+    ]
+    static var capacity: Int { slots.count }
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(ids.prefix(Self.slots.count).enumerated()), id: \.element) { i, uid in
+                    bubble(i, uid, width: geo.size.width)
+                }
+            }
+            .frame(width: geo.size.width, height: Self.height)
+        }
+        .frame(height: Self.height)
+    }
+
+    private func bubble(_ i: Int, _ uid: String, width: CGFloat) -> some View {
+        let s = Self.slots[i]
+        return GroupFace(name: conv?.names[uid] ?? "User", photo: conv?.photos[uid], size: s.d)
+            .position(x: s.x * width, y: s.y * Self.height)
+            .accessibilityHidden(true)
     }
 }
 
