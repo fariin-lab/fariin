@@ -1696,7 +1696,7 @@ service cloud.firestore {
         request.auth.uid in cid.split('_')
         || request.auth.uid in resource.data.get('users', [])
       );
-      // 1:1 must be exactly 2; a group ("type":"group") may have 2–30 members and the
+      // 1:1 must be exactly 2; a group ("type":"group") may have 1 to group_members_max members and the
       // creator must be in its admins list.
       allow create: if signedIn()
         && request.auth.uid in request.resource.data.users
@@ -1714,7 +1714,8 @@ service cloud.firestore {
             // Group's Skip); members are added later. Was >= 2. The creator is still required in
             // `users` and `admins` (above and below), so it is never anyone else's group.
             && request.resource.data.users.size() >= 1
-            && request.resource.data.users.size() <= 30
+            // 2026-10-19: the cap is config/limits.group_members_max (admin panel, 2..500), not 30.
+            && request.resource.data.users.size() <= appLimit('group_members_max', 30)
             && request.auth.uid in request.resource.data.admins
             // 1:1 audit r3 F1, 2026-10-08: a group is never born at a 1:1 id. Every call and
             // friend check reads `conversations/{a_b}`; a group there (members of the creator's
@@ -1891,7 +1892,8 @@ service cloud.firestore {
               || o.get('pinnedMessageIds', []).hasAll(n.get('pinnedMessageIds', [])));
       }
       // 2026-09-24 audit: two floors every group write keeps, whichever branch lets it through.
-      // 30 members: the create rule and the membersCanAdd branch capped it, the admin branch did not
+      // The member cap (config/limits.group_members_max since 2026-10-19, was 30): the create rule
+      // and the membersCanAdd branch capped it, the admin branch did not
       // (addGroupMembers' own check reads a cached count, so two admins adding at once overshot).
       // Only a write that GROWS the list is held to it, so a group already over 30 from before the
       // cap can still be edited. And a group with admins never ends with none: two admins leaving at
@@ -1899,7 +1901,7 @@ service cloud.firestore {
       // leaving (users empty) and a group that already had no admins are exempt.
       function groupFloorsKept() {
         return (request.resource.data.users.size() <= resource.data.users.size()
-                || request.resource.data.users.size() <= 30)
+                || request.resource.data.users.size() <= appLimit('group_members_max', 30))
           && (resource.data.get('admins', []).size() == 0
               || request.resource.data.get('admins', []).size() > 0
               || request.resource.data.users.size() == 0);
@@ -2156,13 +2158,13 @@ service cloud.firestore {
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'avatarUrl', 'desc', 'wallpaper', 'updatedAt'])
             && !restrictedIn(resource.data, 'changeInfo')   // 2026-09-24 fix-all: the per-member flag
           )
-          // Group NON-admin may ADD members (only additions, max 30) when membersCanAdd is on.
+          // Group NON-admin may ADD members (only additions, max group_members_max) when membersCanAdd is on.
           || (
             resource.data.get('type', '') == 'group'
             && resource.data.get('membersCanAdd', false) == true
             && request.resource.data.users.hasAll(resource.data.users)
             && request.resource.data.users.size() > resource.data.users.size()
-            && request.resource.data.users.size() <= 30
+            && request.resource.data.users.size() <= appLimit('group_members_max', 30)
             // 2026-09-24 fix-all: plus the "X added Y" preview (`lastMessage`, `lastSender` = me), which
             // `addGroupMembers` now writes in the same batch as the add, so the two cannot disagree.
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['users', 'names', 'photos', 'unreadCount', 'updatedAt',

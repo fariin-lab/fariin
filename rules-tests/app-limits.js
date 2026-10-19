@@ -42,6 +42,8 @@ const KNOWN = {
   // be turned DOWN. See `story_expiring_limit_*` in firestore.rules.
   story_expiring_limit_default: 50,
   story_expiring_limit_verified: 100,
+  // Most members in a group (rules group create/add, functions-groups). Keep it 2..500, as the panel does.
+  group_members_max: 30,
 };
 
 // The switches are 0 or 1, and every other value reads as 1 — see `appLimit` in firestore.rules.
