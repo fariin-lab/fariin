@@ -74,10 +74,11 @@ enum GroupInviteService {
     static func createInvite(cid: String, groupTitle: String, groupPhoto: String?,
                              expireAt: Double = 0, usageLimit: Int = 0, requestApproval: Bool = false) async throws -> String {
         // Revoke any existing primary link first, so a group never ends up with two live links (one of
-        // which the admin can no longer see or revoke).
-        if let snap = try? await db.collection("conversations").document(cid).getDocument(),
-           let old = snap.data()?["inviteCode"] as? String, !old.isEmpty {
-            try? await db.collection("invites").document(old).updateData(["revoked": true])
+        // which the admin can no longer see or revoke). 2026-10-19: a failed revoke now stops here
+        // and throws, instead of going on to make a second live link.
+        let snap = try await db.collection("conversations").document(cid).getDocument()
+        if let old = snap.data()?["inviteCode"] as? String, !old.isEmpty {
+            try await db.collection("invites").document(old).updateData(["revoked": true])
         }
         let code = randomCode()
         try await db.collection("invites").document(code).setData([
@@ -92,10 +93,16 @@ enum GroupInviteService {
             "createdBy": AuthService.shared.uid ?? "",
             "createdAt": FieldValue.serverTimestamp(),
         ])
-        // Point the group at its current link so members/admins can find it.
-        try? await db.collection("conversations").document(cid).updateData([
-            "inviteCode": code, "updatedAt": FieldValue.serverTimestamp(),
-        ])
+        // Point the group at its current link so members/admins can find it. If that write fails the
+        // new link is one nobody can see or revoke, so it is revoked again and the error goes up.
+        do {
+            try await db.collection("conversations").document(cid).updateData([
+                "inviteCode": code, "updatedAt": FieldValue.serverTimestamp(),
+            ])
+        } catch {
+            try? await db.collection("invites").document(code).updateData(["revoked": true])
+            throw error
+        }
         return code
     }
 
@@ -107,6 +114,8 @@ enum GroupInviteService {
     /// Admin: revoke the link and clear the group's pointer.
     static func revokeInvite(cid: String, code: String) async throws {
         try await db.collection("invites").document(code).updateData(["revoked": true])
+        // Best effort on purpose: the link is already dead above, and a pointer left at a revoked
+        // code reads as "no link" (GroupInvite.isActive) and is replaced by the next create.
         try? await db.collection("conversations").document(cid).updateData([
             "inviteCode": "", "updatedAt": FieldValue.serverTimestamp(),
         ])
@@ -238,6 +247,12 @@ struct InviteLinkSheet: View {
             .navigationTitle("Group Link").navigationBarTitleDisplayMode(.inline)
             .toolbar { if !embedded { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } } }
             .task { await load() }
+            .alert("Couldn't change the link",
+                   isPresented: Binding(get: { linkError != nil }, set: { if !$0 { linkError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(linkError ?? "")
+            }
             // 2026-09-24 fix-all #126: the code, white behind it so any camera reads it in either theme.
             .sheet(isPresented: $showQR) {
                 VStack(spacing: 16) {
@@ -282,11 +297,17 @@ struct InviteLinkSheet: View {
         if !initialCode.isEmpty { invite = await GroupInviteService.fetchInvite(code: initialCode) }
         loading = false
     }
+    // 2026-10-19: these used to swallow every error with try? and then show the change as made. Now
+    // a failure shows `linkError` and the page keeps (or re-reads) what is really stored.
     private func create() {
         working = true
         Task {
-            let code = try? await GroupInviteService.createInvite(cid: cid, groupTitle: groupTitle, groupPhoto: groupPhoto)
-            if let code { invite = await GroupInviteService.fetchInvite(code: code) }
+            do {
+                let code = try await GroupInviteService.createInvite(cid: cid, groupTitle: groupTitle, groupPhoto: groupPhoto)
+                invite = await GroupInviteService.fetchInvite(code: code)
+            } catch {
+                linkError = "The link was not created. Check your connection and try again."
+            }
             working = false
         }
     }
@@ -294,20 +315,50 @@ struct InviteLinkSheet: View {
         guard let old = invite?.code else { return }
         working = true
         Task {
-            try? await GroupInviteService.revokeInvite(cid: cid, code: old)
-            let code = try? await GroupInviteService.createInvite(cid: cid, groupTitle: groupTitle, groupPhoto: groupPhoto)
-            if let code { invite = await GroupInviteService.fetchInvite(code: code) }
+            do {
+                try await GroupInviteService.revokeInvite(cid: cid, code: old)
+            } catch {
+                linkError = "The link was not reset. Check your connection and try again."
+                working = false
+                return
+            }
+            do {
+                let code = try await GroupInviteService.createInvite(cid: cid, groupTitle: groupTitle, groupPhoto: groupPhoto)
+                invite = await GroupInviteService.fetchInvite(code: code)
+            } catch {
+                // The old link is already off, so the page shows no link rather than a dead one.
+                invite = nil
+                linkError = "The old link was turned off, but a new one was not made. Turn Group Link on to try again."
+            }
             working = false
         }
     }
     private func revoke() {
         guard let code = invite?.code else { return }
-        Task { try? await GroupInviteService.revokeInvite(cid: cid, code: code); invite = nil }
+        working = true
+        Task {
+            do {
+                try await GroupInviteService.revokeInvite(cid: cid, code: code)
+                invite = nil
+            } catch {
+                linkError = "The link is still on. Check your connection and try again."
+            }
+            working = false
+        }
     }
     private func setField(_ fields: [String: Any]) {
         guard let code = invite?.code else { return }
-        Task { try? await GroupInviteService.updateInvite(code: code, fields: fields) }
+        Task {
+            do {
+                try await GroupInviteService.updateInvite(code: code, fields: fields)
+            } catch {
+                // The toggle moved before the write; put it back to what is stored.
+                if let stored = await GroupInviteService.fetchInvite(code: code) { invite = stored }
+                linkError = "The setting was not changed. Check your connection and try again."
+            }
+        }
     }
+    @State private var linkError: String?
 }
 
 // MARK: - Join group sheet (a group link: its card, the link itself, a QR code, kulan://g/<code>)

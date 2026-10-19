@@ -587,14 +587,16 @@ enum ChatService {
         guard !newOnes.isEmpty else { return [] }
         forgetSealMembers(cid)   // 2026-09-24 fix-all #111: the next seal re-reads the member list
         let convRef = db.collection("conversations").document(cid)
-        // Enforce the 30-member cap on growth (the rules only cap it at create time).
+        // The member cap on growth: config/limits.group_members_max (admin panel), fallback 30. The
+        // rules hold the same number on every add; this check only gives a clear message first.
+        let maxMembers = AppLimits.shared.groupMembersMax
         var currentCount = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.users.count ?? 0
         if currentCount == 0 {
             currentCount = ((try? await convRef.getDocument())?.data()?["users"] as? [String])?.count ?? 0
         }
-        if currentCount + newOnes.count > 30 {
+        if currentCount + newOnes.count > maxMembers {
             throw NSError(domain: "ChatService", code: 30,
-                          userInfo: [NSLocalizedDescriptionKey: "A group can have at most 30 members."])
+                          userInfo: [NSLocalizedDescriptionKey: "A group can have at most \(maxMembers) members."])
         }
         var update: [String: Any] = [
             "users": FieldValue.arrayUnion(newOnes),

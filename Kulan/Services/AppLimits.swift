@@ -43,6 +43,7 @@ final class AppLimits {
         static let storiesPerDayVerified = 100
         static let storiesPerHourDefault = 40
         static let storiesPerHourVerified = 40
+        static let groupMembersMax = 30   // appLimit('group_members_max', 30) in firestore.rules
     }
 
     private var listener: ListenerRegistration?
@@ -174,5 +175,12 @@ final class AppLimits {
     /// hourly counter in `firestore.rules`.
     var storiesPerHour: Int {
         tiered("stories_per_hour", Fallback.storiesPerHourDefault, Fallback.storiesPerHourVerified)
+    }
+
+    /// The most people a group may hold, you included. Set from the admin panel (2 to 500); the rules
+    /// (group create and add) and functions-groups (invite join, request approve) read the same key
+    /// with the same fallback of 30.
+    var groupMembersMax: Int {
+        number("group_members_max", Fallback.groupMembersMax)
     }
 }
