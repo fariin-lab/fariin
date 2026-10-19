@@ -575,7 +575,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     /// on a grid only DOWN, only when that grid is at its top, only while grown; elsewhere (strip, tab
     /// band, the GIF search pill) up from rest or down from grown.
     fileprivate func expandShouldBegin(_ pan: UIPanGestureRecognizer) -> Bool {
-        guard !searchingGifs, !editing, !slidingAway, !dragInFlight else { return false }
+        guard AppFeatures.stickerPanelGrow, !searchingGifs, !editing, !slidingAway, !dragInFlight else { return false }
         if cardView.superview === self {
             guard window != nil, hostWindow() != nil else { return false }
         } else {
@@ -605,7 +605,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     // pan and hands it here: same rules as a drag from the band, same handler.
     /// May a drag on the composer's bar start a grow (up from rest) or a shrink (down from grown)?
     func barPanShouldBegin(_ pan: UIPanGestureRecognizer) -> Bool {
-        guard !searchingGifs, !editing, !slidingAway, !dragInFlight else { return false }
+        guard AppFeatures.stickerPanelGrow, !searchingGifs, !editing, !slidingAway, !dragInFlight else { return false }
         if cardView.superview === self {
             guard window != nil, hostWindow() != nil else { return false }
         } else {
@@ -621,7 +621,8 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
 
     /// The grids and the strip wait for this pan to fail, the way theirs makes every pan inside wait.
     fileprivate func expandShouldWait(for other: UIGestureRecognizer) -> Bool {
-        guard other is UIPanGestureRecognizer, let sv = other.view as? UIScrollView else { return false }
+        guard AppFeatures.stickerPanelGrow, other is UIPanGestureRecognizer,
+              let sv = other.view as? UIScrollView else { return false }
         return sv.isDescendant(of: cardView)
     }
 

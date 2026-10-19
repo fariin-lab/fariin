@@ -39,6 +39,11 @@ enum AppFeatures {
     /// and Sticker tabs, keep only one sticker panel"; GIFs stay in the attach sheet, a GIF feature of
     /// his own comes later). Off = the panel is stickers only. The GIF grid code is kept.
     static let stickerPanelGifs = false
+    /// Drag to grow / shrink the sticker panel (owner 2026-10-19, third report of "the same thing
+    /// overlapping" the panel). Growing lifts the panel's card out of the keyboard into a window, and
+    /// the keyboard's own backdrop stays drawn over it, so a lift left the panel looking doubled. Off
+    /// until the panel is our own view in the chat (no keyboard window above it); code kept.
+    static let stickerPanelGrow = false
     /// The My Profile card under the header in Settings (owner 2026-10-11: hidden). The page it
     /// opens is kept; this is only its door in Settings.
     static var myProfileCard: Bool { RemoteFeatures.value("myProfileCard", default: false) }
