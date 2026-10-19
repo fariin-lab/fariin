@@ -1243,8 +1243,9 @@ struct GroupMemberRow: View, Equatable {
                 Spacer(minLength: 8)
                 // Owner / Admin at the reference app's size for this label (owner 2026-10-18): the
                 // subheadline style (15pt), secondary grey, not the 17pt the name uses.
-                // One label only (owner 2026-10-19): a Role stands in for Owner / Admin.
-                if let rank, role == nil { Text(rank).font(.subheadline).foregroundStyle(.secondary) }
+                // Owner / Admin always shows here, tag or no tag (owner 2026-10-19: "don't touch the
+                // Owner and Admin text when I use a label"). The one-chip rule is for the chip only.
+                if let rank { Text(rank).font(.subheadline).foregroundStyle(.secondary) }
             }
             .padding(.horizontal, 16).padding(.vertical, 9)
             .contentShape(Rectangle())
