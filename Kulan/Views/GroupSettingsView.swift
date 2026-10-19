@@ -38,10 +38,26 @@ struct GroupSettingsView: View {
     @State private var reqListener: ListenerRegistration?
     @State private var actionError: String?
 
+    // The edit head (photo, name, description): what is typed, what was last saved, and the save.
+    @State private var editName = ""
+    @State private var editDesc = ""
+    @State private var savedName = ""
+    @State private var savedDesc = ""
+    @State private var editLoaded = false
+    @State private var pickedPhoto: Data?
+    @State private var photoPending = false
+    @State private var showPhotoPicker = false
+    @State private var editSaving = false
+    @State private var editError: String?
+    @FocusState private var nameFocused: Bool
+    @FocusState private var descFocused: Bool
+
     private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
     private func can(_ r: Conversation.Right) -> Bool { conv?.adminCan(me, r) ?? false }
     /// The permissions are group rules: the change-info right edits them, other admins read them.
     private var canEdit: Bool { can(.changeInfo) }
+    /// Who may change the name, photo and description: the group info page's own gate.
+    private var canEditInfo: Bool { can(.changeInfo) || (conv?.membersCanEditInfo ?? false) }
 
     var body: some View {
         // owner 2026-10-18: ONE THING PER SECTION, each with a short header and at most one short
@@ -51,6 +67,9 @@ struct GroupSettingsView: View {
         // Administrators, Members and Removed Users; Privacy last. Nothing else on this page: the
         // admins note lives on the Administrators page. Every door keeps the right it needed before.
         List {
+            // ⛔ THE BAR'S EDIT OPENS THIS PAGE (owner 2026-10-19, his picture): photo, Set New Photo,
+            // name and description at the head, for whoever may edit group info; the rest below.
+            if canEditInfo { editHead }
             if can(.inviteUsers) {
                 Section {
                     NavigationLink { GroupRequestsView(cid: cid) } label: {
@@ -83,11 +102,23 @@ struct GroupSettingsView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Group Settings")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar { doneToolbar }
         .onAppear {
+            loadEditFields()
             guard reqListener == nil, can(.inviteUsers) else { return }
             reqListener = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
         }
+        .onChange(of: conv != nil) { _, _ in loadEditFields() }
         .onDisappear { reqListener?.remove(); reqListener = nil }
+        // The app's own photo sheet, as Edit Group's photo uses.
+        .sheet(isPresented: $showPhotoPicker) {
+            StoryLibraryPicker(
+                onImage: { ui, _ in pickPhoto(ui) },
+                onVideo: { _, _ in },   // `photosOnly`: there is no video tile to pick
+                photosOnly: true,
+                pickLabel: "Set Group Photo")
+            .storyAlwaysDark()
+        }
         .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
                                                           set: { if !$0 { actionError = nil } })) {
             Button("OK", role: .cancel) {}
@@ -176,6 +207,147 @@ struct GroupSettingsView: View {
                     }
                 }
             })
+    }
+
+    // MARK: Edit head
+
+    private var editTrimmedName: String { editName.trimmingCharacters(in: .whitespaces) }
+    private var editTrimmedDesc: String { editDesc.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var editDescRemaining: Int { max(0, EditGroupView.descChars - editDesc.count) }
+    private var editChanged: Bool {
+        photoPending || editTrimmedName != savedName || editTrimmedDesc != savedDesc
+    }
+
+    @ViewBuilder private var editHead: some View {
+        editPhotoSection
+        Section {
+            TextField("Group Name", text: $editName)
+                .textInputAutocapitalization(.words)
+                .submitLabel(.done)
+                .focused($nameFocused)
+        }
+        editDescSection
+        if let editError { Text(editError).foregroundStyle(.red) }
+    }
+
+    /// The round photo (the letter when there is none) and the white Set New Photo capsule.
+    private var editPhotoSection: some View {
+        Section {
+            VStack(spacing: 12) {
+                Button { openPhotoPicker() } label: { editPhoto }
+                    .buttonStyle(.plain)
+                Button { openPhotoPicker() } label: {
+                    Text("Set New Photo").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                        .padding(.horizontal, 20).frame(height: 36)
+                        .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .frame(maxWidth: .infinity)
+            .listRowBackground(Color.clear)
+        }
+    }
+
+    private var editPhoto: some View {
+        ZStack {
+            if let pickedPhoto, let ui = UIImage(data: pickedPhoto) {
+                Image(uiImage: ui).resizable().scaledToFill()
+            } else {
+                AvatarView(name: conv?.title ?? "Group", photoUrl: conv?.avatarUrl, size: 88)
+            }
+        }
+        .frame(width: 88, height: 88)
+        .clipShape(Circle())
+        .contentShape(Circle())
+    }
+
+    /// Edit Group's description card, with the bio's rules (one paragraph, 5 lines, late countdown).
+    private var editDescSection: some View {
+        Section {
+            VStack(alignment: .trailing, spacing: 6) {
+                TextField("Description",
+                          text: Binding(get: { editDesc },
+                                        set: { editDesc = Limits.oneParagraph($0, max: EditGroupView.descChars) }),
+                          axis: .vertical)
+                    .lineLimit(1...5)
+                    .focused($descFocused)
+                if editDescRemaining <= EditGroupView.descCounterAppearsAt {
+                    Text("\(editDescRemaining)")
+                        .font(.footnote)
+                        .monospacedDigit()
+                        .foregroundStyle(editDescRemaining == 0 ? .red : .secondary)
+                        .transition(.opacity)
+                        .accessibilityLabel("\(editDescRemaining) characters left")
+                }
+            }
+        } footer: {
+            Text("Optional. Shown on the group's info page.")
+        }
+        .animation(.smooth(duration: 0.22), value: editDescRemaining <= EditGroupView.descCounterAppearsAt)
+    }
+
+    /// Done, top right: lit only once something in the head changed; saves and stays on the page.
+    @ToolbarContentBuilder private var doneToolbar: some ToolbarContent {
+        if canEditInfo {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { saveEdit() } label: {
+                    if editSaving { ProgressView() } else { Text("Done").fontWeight(.semibold) }
+                }
+                .disabled(editTrimmedName.isEmpty || !editChanged || editSaving)
+            }
+        }
+    }
+
+    private func openPhotoPicker() {
+        nameFocused = false; descFocused = false
+        showPhotoPicker = true
+    }
+
+    /// Fills the fields from the group once, when it is first known.
+    private func loadEditFields() {
+        guard !editLoaded, let c = conv else { return }
+        savedName = c.title.trimmingCharacters(in: .whitespaces)
+        savedDesc = Limits.oneParagraph(c.groupDescription, max: EditGroupView.descChars)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        editName = c.title
+        editDesc = Limits.oneParagraph(c.groupDescription, max: EditGroupView.descChars)
+        editLoaded = true
+    }
+
+    /// A picked photo waits for Done, as it does on Edit Group.
+    private func pickPhoto(_ ui: UIImage) {
+        showPhotoPicker = false
+        Task {
+            if let data = await EditGroupView.groupPhotoData(ui) {
+                pickedPhoto = data; photoPending = true
+            }
+        }
+    }
+
+    /// Edit Group's save (`EditGroupView.commit`); a refusal is said under the fields and the
+    /// page keeps what was typed. On success the page stays, with Done dimmed again.
+    private func saveEdit() {
+        guard let c = conv else { return }
+        let newName = editTrimmedName, newDesc = editTrimmedDesc
+        let oldName = c.title, oldDesc = c.groupDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let photo: Data? = photoPending ? pickedPhoto : nil
+        nameFocused = false; descFocused = false
+        editSaving = true; editError = nil
+        Task {
+            do {
+                try await EditGroupView.commit(cid: cid, name: newName, oldName: oldName,
+                                               desc: newDesc, oldDesc: oldDesc, photo: photo)
+                await MainActor.run {
+                    editSaving = false
+                    savedName = newName; savedDesc = newDesc; editName = newName
+                    if photo != nil { photoPending = false }
+                }
+            } catch {
+                let msg = error.localizedDescription
+                await MainActor.run { editSaving = false; editError = msg }
+            }
+        }
     }
 
     private func settingLabel(_ title: String, _ icon: String, value: String? = nil) -> some View {
@@ -602,8 +774,8 @@ struct EditGroupView: View {
     private var trimmed: String { name.trimmingCharacters(in: .whitespaces) }
     private var trimmedDesc: String { desc.trimmingCharacters(in: .whitespacesAndNewlines) }
     /// A group description's ceiling, the size the large messengers give one.
-    private static let descChars = 255
-    private static let descCounterAppearsAt = 20
+    static let descChars = 255
+    static let descCounterAppearsAt = 20
     private var descRemaining: Int { max(0, Self.descChars - desc.count) }
     private var changed: Bool {
         newPhoto != nil || trimmed != title
@@ -727,12 +899,25 @@ struct EditGroupView: View {
     private func setPhoto(_ ui: UIImage) {
         showPicker = false
         Task {
-            let data = await Task.detached(priority: .userInitiated) { () -> Data? in
-                guard let jpeg = ui.jpegData(compressionQuality: 0.9) else { return nil }
-                return ChatService.downscaledJPEG(jpeg, maxDimension: 1024, quality: 0.8)
-            }.value
-            if let data { newPhoto = data }
+            if let data = await Self.groupPhotoData(ui) { newPhoto = data }
         }
+    }
+
+    /// The picked photo made ready to upload. Shared with the head of Group Settings.
+    static func groupPhotoData(_ ui: UIImage) async -> Data? {
+        await Task.detached(priority: .userInitiated) { () -> Data? in
+            guard let jpeg = ui.jpegData(compressionQuality: 0.9) else { return nil }
+            return ChatService.downscaledJPEG(jpeg, maxDimension: 1024, quality: 0.8)
+        }.value
+    }
+
+    /// The one save both editors use (this sheet and the head of Group Settings): name first, then
+    /// the description, then the photo. Only what changed is written; the first refusal throws.
+    static func commit(cid: String, name: String, oldName: String,
+                       desc: String, oldDesc: String, photo: Data?) async throws {
+        if name != oldName { try await ChatService.renameGroup(cid: cid, title: name) }
+        if desc != oldDesc { try await ChatService.setGroupDescription(cid: cid, text: desc) }
+        if let photo { _ = try await ChatService.uploadGroupAvatar(cid: cid, data: photo) }
     }
 
     /// Name first, then the photo; either refused is said, and the sheet stays.
@@ -742,9 +927,8 @@ struct EditGroupView: View {
         saving = true; error = nil
         Task {
             do {
-                if newName != oldName { try await ChatService.renameGroup(cid: cid, title: newName) }
-                if newDesc != oldDesc { try await ChatService.setGroupDescription(cid: cid, text: newDesc) }
-                if let photo { _ = try await ChatService.uploadGroupAvatar(cid: cid, data: photo) }
+                try await Self.commit(cid: cid, name: newName, oldName: oldName,
+                                      desc: newDesc, oldDesc: oldDesc, photo: photo)
                 await MainActor.run { saving = false; dismiss() }
             } catch {
                 let msg = error.localizedDescription
