@@ -2524,6 +2524,9 @@ struct ProfilePhotoViewer: View {
     /// still the circle the picture is leaving — a square first frame would be the one-frame jump
     /// this viewer keeps being reported for.
     var landsSquare: Bool = false
+    /// With `landsSquare`: land as a 1:1 square the screen's width, the photo cropped to fill it,
+    /// instead of at the photo's own shape (owner 2026-10-19, the group photo: "make it 1:1").
+    var squareCrop: Bool = false
     /// Close REQUEST from outside — the parent bumps this when its toolbar X is tapped, and the
     /// viewer runs the same reverse morph as a drag or backdrop tap. The X lives in the parent's
     /// NAVIGATION BAR because the top strip belongs to UIKit's bar, which sits above this whole
@@ -2541,13 +2544,14 @@ struct ProfilePhotoViewer: View {
     @State private var image: UIImage?
 
     init(name: String, photoUrl: String, sourceFrame: CGRect, poster: Bool = false,
-         landsSquare: Bool = false, closeSignal: Int = 0,
+         landsSquare: Bool = false, squareCrop: Bool = false, closeSignal: Int = 0,
          onClosingBegan: @escaping () -> Void = {}, isPresented: Binding<Bool>) {
         self.name = name
         self.photoUrl = photoUrl
         self.sourceFrame = sourceFrame
         self.poster = poster
         self.landsSquare = landsSquare
+        self.squareCrop = squareCrop
         self.closeSignal = closeSignal
         self.onClosingBegan = onClosingBegan
         _isPresented = isPresented
@@ -2618,8 +2622,10 @@ struct ProfilePhotoViewer: View {
             // photo's real one, which is why the crop opens up as it flies instead of the image
             // stretching.
             let wholePhoto = poster || landsSquare
-            let targetW = wholePhoto ? min(geo.size.width, geo.size.height * imageAspect) : d
-            let targetH = wholePhoto ? targetW / imageAspect : targetW
+            let square = landsSquare && squareCrop
+            let targetW = square ? geo.size.width
+                : (wholePhoto ? min(geo.size.width, geo.size.height * imageAspect) : d)
+            let targetH = square ? targetW : (wholePhoto ? targetW / imageAspect : targetW)
             // Interpolate between the header's rect and where it is going.
             let w = sourceFrame.width  + (targetW - sourceFrame.width)  * progress
             let h = sourceFrame.height + (targetH - sourceFrame.height) * progress

@@ -191,7 +191,7 @@ struct GroupInfoView: View {
                     // Out of the round photo, landing on the whole picture square, as my own photo
                     // does in Settings (owner 2026-10-19: "now is a circle, make it like Settings").
                     ProfilePhotoViewer(name: title, photoUrl: groupPhoto ?? "",
-                                       sourceFrame: artRect.rect, landsSquare: true,
+                                       sourceFrame: artRect.rect, landsSquare: true, squareCrop: true,
                                        closeSignal: photoCloseTick,
                                        isPresented: $showGroupPhoto)
                         .ignoresSafeArea()
