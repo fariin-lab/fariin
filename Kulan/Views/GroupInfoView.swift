@@ -321,7 +321,8 @@ struct GroupInfoView: View {
                 // No description yet: whoever may edit is offered one, the reference app's line
                 // (owner 2026-10-19). It opens the page the Edit button opens.
                 Button { showSettings = true } label: {
-                    Text("Add Group Description").font(.subheadline).foregroundStyle(.tint)
+                    // Blue, not `.tint`: the app's tint is `.primary`, which drew it black.
+                    Text("Add Group Description").font(.subheadline).foregroundStyle(Color.blue)
                         .multilineTextAlignment(.center)
                 }
                 .buttonStyle(.plain)
