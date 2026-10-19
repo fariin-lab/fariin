@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import Photos
 import AVFoundation
+import StoryUI   // StoryCanvas: the editor's wash, drawn into the flying card
 
 // MARK: - Dark, including the parts SwiftUI does not own
 
@@ -300,12 +301,24 @@ struct AddStorySheet: View {
         }
         libraryFlying = true
         Task {
-            let copy = await Self.screenSized(ui)
+            var copy = await Self.screenSized(ui)
+            var rest = StoryEditorView.flyRest(for: ui)
+            // ⛔ THE CANVAS FLIES WITH THE PHOTO — owner 2026-10-19: a wide photo opened on black and
+            // its colour wash came in only after the landing. The editor's card (wash included) was
+            // hidden for the flight and only the photo flew. The reference moves its whole preview
+            // container, wash and all, its bounds opening from the tile's shape to the card. Flying
+            // the card itself, aspect-filled into the tile, is the same picture: the wash grows out
+            // with the photo and the landed card is identical to it. A portrait photo fills the card
+            // already (rest corner 40), so it flies as it did.
+            if let r = rest, r.cornerRadius == 0, let card = StoryEditorView.flyCardRect() {
+                copy = await Self.cardComposite(photo: copy, colourSource: ui, card: card.size, photoRect: r.rect.offsetBy(dx: -card.minX, dy: -card.minY))
+                rest = (card, 40)
+            }
             var item = EditorImage(ui, assetID: assetID)
             item.flyKey = key
             item.arrival = EditorArrival(landed: false)
             let ready = item
-            flyFromTile(key: key, copy: copy, rest: StoryEditorView.flyRest(for: ui), arrival: item.arrival,
+            flyFromTile(key: key, copy: copy, rest: rest, arrival: item.arrival,
                         present: { libraryEditorImage = ready },
                         plain: { libraryEditorImage = EditorImage(ui, assetID: assetID) })
         }
@@ -354,6 +367,22 @@ struct AddStorySheet: View {
         let px = UIScreen.main.bounds.size.applying(.init(scaleX: UIScreen.main.scale, y: UIScreen.main.scale))
         let fitted = AVMakeRect(aspectRatio: ui.size, insideRect: CGRect(origin: .zero, size: px)).size
         return await Task.detached(priority: .userInitiated) { ui.preparingThumbnail(of: fitted) ?? ui }.value
+    }
+
+    /// The story card as the editor first draws it: `StoryCanvas`'s wash (sampled from the full
+    /// picture, as the editor samples it) with the photo at its rest. Off the main thread.
+    private static func cardComposite(photo: UIImage, colourSource: UIImage, card: CGSize, photoRect: CGRect) async -> UIImage {
+        await Task.detached(priority: .userInitiated) {
+            let c = StoryCanvas.colours(of: colourSource)
+            return UIGraphicsImageRenderer(size: card).image { ctx in
+                let cg = ctx.cgContext
+                if let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                      colors: [c.top.cgColor, c.bottom.cgColor] as CFArray, locations: [0, 1]) {
+                    cg.drawLinearGradient(g, start: .zero, end: CGPoint(x: 0, y: card.height), options: [])
+                }
+                photo.draw(in: photoRect)
+            }
+        }.value
     }
 
     /// The flight itself, one for both kinds. `plain` = no tile or no window left to fly in.

@@ -571,6 +571,11 @@ struct StoryEditorView: View {
         let h = card.width * img.height / img.width
         return (CGRect(x: card.minX, y: card.midY - h / 2, width: card.width, height: h), 0)
     }
+    /// The card in window points, for a flight that carries the whole card (`AddStorySheet`).
+    static func flyCardRect() -> CGRect? {
+        guard let win = flyWindow else { return nil }
+        return flyCardRect(in: win)
+    }
     static func flyRest(for image: UIImage, video: Bool = false) -> (rect: CGRect, cornerRadius: CGFloat)? {
         guard let win = flyWindow else { return nil }
         return flyRest(of: image.size, in: flyCardRect(in: win), video: video)
