@@ -504,7 +504,24 @@ struct ChatSearchPage: View {
             // a stored photo url would keep showing a picture they have since hidden. This is the
             // same `get` on `users/{uid}` the app makes everywhere; it is NOT a directory query,
             // and it must never become one (see `ChatService.searchUsers`).
+            // ⛔ OPENS AT ONCE (owner 2026-10-19: "Recent takes time to open"). It waited for the
+            // server's copy of the profile before doing anything. A chat we already have opens
+            // straight away; otherwise the phone's own copy of the profile, and only then the server.
+            let existing = ChatService.convId(me, e.key)
+            if let c = repo.conversations.first(where: { $0.id == existing }) {
+                onOpenChat(c)
+                dismissSearch()
+                return
+            }
             Task {
+                if let u = await ProfileStore.shared.cachedPeer(e.key) {
+                    await MainActor.run {
+                        recents.record(person: u, me: me)
+                        onOpenPerson(u)
+                        dismissSearch()
+                    }
+                    return
+                }
                 if let u = await ProfileStore.shared.fetch(e.key) {
                     await MainActor.run {
                         recents.record(person: u, me: me)
