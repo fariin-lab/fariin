@@ -765,11 +765,39 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     func setSearching(_ on: Bool) {
         searchReleaseWork?.cancel()
         if on { searchHold = true; return }
-        guard searchHold else { return }
+        guard searchHold || tableView.alpha < 1 else { return }
         // The bar animates back after Cancel; let it land before the footer measures again.
-        let w = DispatchWorkItem { [weak self] in self?.searchHold = false }
+        let w = DispatchWorkItem { [weak self] in
+            self?.searchHold = false
+            self?.revealAfterSearch()
+        }
         searchReleaseWork = w
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: w)
+    }
+
+    // ⛔ THE LIST IS COVERED IN THE SAME INSTANT THE FIELD TAKES FOCUS — owner 2026-10-19, fourth
+    // report of "the chats jump up under the header and the keyboard comes before the search page".
+    // The reference app's SearchDisplayController.activate puts its opaque page over the list in
+    // the same pass that asks for the keyboard, before the bar collapses; the list's offset is never
+    // touched. Ours waited for SwiftUI's `isSearching`, one update late, so the bar's collapse moved
+    // the rows in plain sight first. Here, at `.editingDidBegin`, the table goes invisible at once
+    // (the page underneath and the search page's own cover stand in for it), and it comes back
+    // after the bar has settled on close, put back at its top if it was resting there.
+    private var wasAtTopForSearch = false
+
+    @objc private func searchFieldBegan() {
+        wasAtTopForSearch = abs(tableView.contentOffset.y + tableView.adjustedContentInset.top) < 1
+        DiagLog.add("SEARCH# begin atTop=\(wasAtTopForSearch) y=\(Int(tableView.contentOffset.y)) top=\(Int(tableView.adjustedContentInset.top))")
+        tableView.alpha = 0
+    }
+
+    private func revealAfterSearch() {
+        guard tableView.alpha < 1 else { return }
+        if wasAtTopForSearch, !tableView.isTracking {
+            tableView.contentOffset.y = -tableView.adjustedContentInset.top
+        }
+        DiagLog.add("SEARCH# end y=\(Int(tableView.contentOffset.y)) top=\(Int(tableView.adjustedContentInset.top))")
+        UIView.animate(withDuration: 0.3) { self.tableView.alpha = 1 }
     }
 
     /// ⛔ THE MODE IS TRACKED HERE, NOT READ BACK OFF THE TABLE — audit, 2026-09-11. `isEditing` is
@@ -1075,6 +1103,9 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         guard let item = searchHostItem(), let bar = item.searchController?.searchBar else { return }
         // The grey survives the back swipe — see `SearchFieldFill`. Once per field.
         SearchFieldFill.own(bar.searchTextField)
+        // The list hides the moment the field takes focus (`searchFieldBegan`). UIControl drops a
+        // repeat of the same target and action, so this is once per field however often it runs.
+        bar.searchTextField.addTarget(self, action: #selector(searchFieldBegan), for: .editingDidBegin)
         // ⛔ THE X IS APPLE'S AND NOTHING HERE TOUCHES IT — owner 2026-10-16: "the X still sometimes
         // does not appear; why custom? use the native search bar." The bar always was `.searchable`;
         // what was ours was this function hiding the cancel button whenever it judged it a
