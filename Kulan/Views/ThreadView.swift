@@ -8569,9 +8569,18 @@ struct ThreadView: View {
             if replyingTo != nil { replyingTo = nil }
         }
         a.sendGif = { g in sendGif(g) }   // the panel's own GIFs tab (2026-10-17)
+        // ⛔ 2026-10-19, owner: the photo library "jumps" open from the panel's Create tile, not the
+        // native slide. It was presented in the SAME instant the field resigned, so the sheet's rise
+        // ran over the panel's fall in the same frames (the GIF button's build 681 report). Now the
+        // GIF / "+" timing: 0.15 s into the panel's fall when it was up, at once when it was not.
         a.createSticker = {
+            let keyboardWasUp = keyboard.height > 0
             inputFocused = false
-            StickerCreatorDoor.present()
+            if keyboardWasUp {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { StickerCreatorDoor.present() }
+            } else {
+                StickerCreatorDoor.present()
+            }
         }
         // The camera button in the field (2026-10-15), the way the GIF opens: keyboard first.
         a.camera = {
