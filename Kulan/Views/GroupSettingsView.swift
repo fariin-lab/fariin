@@ -120,6 +120,7 @@ struct GroupSettingsView: View {
     @ViewBuilder private var joiningSection: some View {
         if canEdit || can(.inviteUsers) {
             Section {
+                sectionTitle("Joining")
                 if canEdit { typeRow }
                 if isPublicNow && canEdit {
                     NavigationLink { GroupTypeView(cid: cid) } label: {
@@ -135,11 +136,9 @@ struct GroupSettingsView: View {
                 }
                 if can(.inviteUsers) {
                     NavigationLink { GroupRequestsView(cid: cid) } label: {
-                        valueRow("Requests", joinReqs.isEmpty ? "None" : "\(joinReqs.count) waiting")
+                        valueRow("Join requests", joinReqs.isEmpty ? "None" : "\(joinReqs.count) waiting")
                     }
                 }
-            } header: {
-                sectionTitle("Joining")
             }
         }
     }
@@ -196,6 +195,7 @@ struct GroupSettingsView: View {
 
     private var peopleSection: some View {
         Section {
+            sectionTitle("People")
             NavigationLink { GroupMembersListView(cid: cid) } label: {
                 valueRow("Members", "\(conv?.users.count ?? 0)")
             }
@@ -205,86 +205,75 @@ struct GroupSettingsView: View {
             // REMOVED USERS, the people taken out of the group (`bannedUids`).
             if can(.banUsers) || can(.inviteUsers) {
                 NavigationLink { GroupRemovedUsersView(cid: cid) } label: {
-                    valueRow("Removed", "\(conv?.bannedUids.count ?? 0)")
+                    valueRow("Removed members", "\(conv?.bannedUids.count ?? 0)")
                 }
             }
-        } header: {
-            sectionTitle("People")
         }
     }
 
     // MARK: Members can
 
-    /// What every member may do (the old Permissions page). Admins always may; a row without its
-    /// tick leaves it to admins. Change-info admins tap to flip it; everyone else only reads.
+    /// What every member may do (the old Permissions page). On = members may, off = admins only;
+    /// admins always may. Switches, not ticks (owner 2026-10-19: a missing tick did not read as
+    /// "admins only"). Change-info admins flip them; everyone else sees them greyed.
     private var membersCanSection: some View {
         Section {
-            checkRow("Send messages", on: conv.map { !$0.onlyAdminsSend } ?? false) { v in
+            sectionTitle("Members can")
+            switchRow("Send messages", get: { !$0.onlyAdminsSend }) { v in
                 try await ChatService.setOnlyAdminsSend(cid: cid, !v)
             }
-            checkRow("Add members", on: conv?.membersCanAdd ?? false) { v in
+            switchRow("Add members", get: { $0.membersCanAdd }) { v in
                 try await ChatService.setGroupPermission(cid: cid, key: "membersCanAdd", v)
             }
             // "Change group info" is back for members (owner 2026-10-19, later the same day: "add
             // Change group info"). Sharing the link stays the admins'.
-            checkRow("Change group info", on: conv?.membersCanEditInfo ?? false) { v in
+            switchRow("Change group info", get: { $0.membersCanEditInfo }) { v in
                 try await ChatService.setGroupPermission(cid: cid, key: "membersCanEditInfo", v)
             }
             // Hidden while group calls are (CallFeatures.groupCalls, as on the group info page).
             if CallFeatures.groupCalls {
-                checkRow("Start calls", on: conv.map { !$0.onlyAdminsCall } ?? false) { v in
+                switchRow("Start calls", get: { !$0.onlyAdminsCall }) { v in
                     try await ChatService.setGroupPermission(cid: cid, key: "onlyAdminsCall", !v)
                 }
             }
-        } header: {
-            sectionTitle("Members can")
+            footNote("Admins can always do these.")
         }
     }
 
-    /// One tick row. Writes the flipped value at once, like the old switches did.
-    @ViewBuilder
-    private func checkRow(_ title: String, on: Bool,
-                          write: @escaping (Bool) async throws -> Void) -> some View {
-        if canEdit {
-            Button { run { try await write(!on) } } label: { checkLabel(title, on: on) }
-        } else {
-            checkLabel(title, on: on)
-        }
-    }
-
-    private func checkLabel(_ title: String, on: Bool) -> some View {
-        HStack {
-            Text(title).foregroundStyle(.primary)
-            Spacer()
-            if on {
-                Image(systemName: "checkmark").font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(canEdit ? Color.accentColor : Color.secondary)
-            }
-        }
-        .contentShape(Rectangle())
+    /// One switch, written at once through `bool`, which says so if the write is refused.
+    private func switchRow(_ title: String, get: @escaping (Conversation) -> Bool,
+                           write: @escaping (Bool) async throws -> Void) -> some View {
+        Toggle(title, isOn: bool(get: get, set: write))
+            .disabled(!canEdit)
     }
 
     // MARK: Privacy
 
     private var privacySection: some View {
         Section {
+            sectionTitle("Privacy")
             Toggle(isOn: bool(get: { $0.isRestricted },
                               set: { v in try await ChatService.setGroupRestricted(cid, on: v) })) {
-                Text("Restricted group")
+                Text("Protect content")
             }
             .disabled(!canEdit)
-        } header: {
-            sectionTitle("Privacy")
-        } footer: {
-            Text("Stops forwarding, copying, saving and screenshots for everyone.")
-                .font(.footnote).foregroundStyle(.secondary)
+            footNote("Stops forwarding, copying, saving and screenshots for everyone.")
         }
     }
 
     // MARK: Pieces
 
+    /// Headings and notes are plain rows, not section headers/footers: a plain list pins those
+    /// under the nav bar while scrolling, where JOINING sat on top of the rows (owner 2026-10-19).
     private func sectionTitle(_ text: String) -> some View {
-        Text(text.uppercased()).font(.footnote).foregroundStyle(.secondary).textCase(nil)
+        Text(text.uppercased()).font(.footnote).foregroundStyle(.secondary)
+            .padding(.top, 16)
+            .listRowSeparator(.hidden)
+    }
+
+    private func footNote(_ text: String) -> some View {
+        Text(text).font(.footnote).foregroundStyle(.secondary)
+            .listRowSeparator(.hidden, edges: .bottom)
     }
 
     private func valueRow(_ title: String, _ value: String) -> some View {
