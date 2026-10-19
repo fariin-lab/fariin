@@ -421,18 +421,12 @@ struct GroupInfoView: View {
 
     // MARK: Actions
 
-    /// Five equal glass circles, no labels: Add, Video, Mute, Search, More. The person profile's
+    /// Four equal glass circles, no labels: Video, Mute, Search, More. The person profile's
     /// own circle (`PosterActionIcon`). What I may not do stays on the row, greyed, and a tap says
-    /// why (owner 2026-10-19), instead of a hole in the row.
+    /// why (owner 2026-10-19), instead of a hole in the row. No Add circle: the members card has
+    /// its own Add Members row (owner 2026-10-19).
     private var actionsRow: some View {
         HStack(spacing: 0) {
-            // Hidden, not greyed, for someone who may not add (owner 2026-10-19). Every group is
-            // private for now; a public group's own rule comes with groups step 2.
-            if canAdd {
-                Button { addTapped() } label: { actionIcon("person.fill.badge.plus") }
-                    .tint(.primary)
-                    .accessibilityLabel("Add Members")
-            }
             Button { callTapped(video: true) } label: { actionIcon("video.fill") }
                 .tint(.primary)
                 .opacity(callReady ? 1 : 0.45)
@@ -455,10 +449,6 @@ struct GroupInfoView: View {
     /// Profile").
     private func actionIcon(_ name: String) -> some View {
         PosterActionIcon(icon: name, onPhoto: false)
-    }
-
-    private func addTapped() {
-        if canAdd { showAdd = true } else { flashNotice("Only admins can add members") }
     }
 
     private var mayCall: Bool { CallFeatures.groupCalls && (conv?.canStartCall(me) ?? false) }
