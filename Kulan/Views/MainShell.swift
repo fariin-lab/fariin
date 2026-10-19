@@ -4220,10 +4220,19 @@ struct ChatRow: View, Equatable {
             // built-in one at all, and it reads the same words as the text beside it either way.
             // The text is hidden from accessibility so the row speaks it once, not twice.
             .accessibilityLabel(text)
-            Text(text).font(.subheadline.weight(weight))
-                .foregroundStyle(textTint ?? .secondary).lineLimit(1)
+            senderStyled(text, tint: textTint ?? .secondary).font(.subheadline.weight(weight))
+                .lineLimit(1)
                 .accessibilityHidden(true)
         }
+    }
+
+    /// ⛔ THE SENDER'S NAME IN THE TEXT COLOUR, THE MESSAGE IN GREY — owner 2026-10-19: in a group
+    /// row "kream: Photo" was all one grey. Only the "Name: " that `lastSenderPrefix` puts in front
+    /// changes; the rest keeps the colour it had.
+    private func senderStyled(_ text: String, tint: Color) -> Text {
+        let p = lastSenderPrefix
+        guard !p.isEmpty, text.hasPrefix(p) else { return Text(text).foregroundStyle(tint) }
+        return Text(p).foregroundStyle(.primary) + Text(String(text.dropFirst(p.count))).foregroundStyle(tint)
     }
     /// The emoji shown as the row's trailing badge — the same fresh-reaction test the preview text
     /// uses, so the badge and the words always agree. Only when it was aimed at ME in a 1:1 (a badge
@@ -4506,7 +4515,7 @@ struct ChatRow: View, Equatable {
                         .frame(width: 20, height: 20)
                         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 }
-                Text(lastSenderPrefix + photoPreviewLabel).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                senderStyled(lastSenderPrefix + photoPreviewLabel, tint: .secondary).font(.subheadline).lineLimit(1)
             }
         } else if let badge = previewBadge(conv.lastMessageCipher,
                                            mine: (lastIsCall || conv.lastMessageCipher == "This message was deleted")
@@ -4564,7 +4573,7 @@ struct ChatRow: View, Equatable {
             // A newer-version feature this build doesn't recognize → never show the raw marker.
             previewRow("arrow.up.circle.fill", "Message from a newer version")
         } else {
-            Text(lastSenderPrefix + decodedLast)
+            senderStyled(lastSenderPrefix + decodedLast, tint: .secondary)
                 // ⛔ `.subheadline`, like every other preview branch and like the hidden two-line
                 // label that reserves this row's height. A fixed 15 and a semantic 15 are the same
                 // size at the default text setting and diverge at every other one — which would

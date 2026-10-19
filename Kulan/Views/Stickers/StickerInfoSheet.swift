@@ -66,10 +66,8 @@ struct StickerInfoSheet: View {
                     row(favorite ? "Remove from Favorites" : "Add to Favorites", favorite ? "star.slash" : "star") {
                         toggleFavorite()
                     }
-                    if isMine {
-                        Divider().padding(.leading, 56)
-                        row("Edit Sticker", "pencil") { editSticker() }
-                    } else if pack != nil {
+                    // A custom sticker has the Favorites row only (owner 2026-10-19: Edit Sticker removed).
+                    if !isMine, pack != nil {
                         Divider().padding(.leading, 56)
                         row("View sticker pack", "square.grid.2x2") { withAnimation(.easeInOut(duration: 0.25)) { showPack = true } }
                     }
@@ -84,7 +82,7 @@ struct StickerInfoSheet: View {
             guard isMine, minePicture == nil, let png = await StickerSend.minePNG(message, cid: cid) else { return }
             minePicture = UIImage(data: png)
         }
-        .presentationDetents(showPack ? [.large] : [.height(isMine ? 444 : 470)])
+        .presentationDetents(showPack ? [.large] : [.height(isMine ? 390 : 470)])
         .presentationDragIndicator(.hidden)
     }
 
@@ -110,6 +108,8 @@ struct StickerInfoSheet: View {
             _ = await StickerSend.toggleFavorite(message, cid: cid)
             favorite = StickerStore.shared.isFavorite(sticker)
             working = false
+            // Saved or removed, the sheet's job is done (owner 2026-10-19).
+            dismiss()
         }
     }
 
