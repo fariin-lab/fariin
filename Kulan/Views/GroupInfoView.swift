@@ -625,7 +625,8 @@ struct GroupInfoView: View {
     private func inviteRowTapped() {
         if can(.inviteUsers) { showInvite = true }
         else if inviteLink != nil { showMemberLink = true }
-        else { flashNotice("Only admins can manage the invite link") }
+        // Owner 2026-10-19: a member is told why there is no link for them.
+        else { flashNotice("This group is private. Only admins can share its link.") }
     }
 
     private var groupSettingsCard: some View {
