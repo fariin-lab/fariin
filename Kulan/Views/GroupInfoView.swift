@@ -184,25 +184,16 @@ struct GroupInfoView: View {
     }
 
     private var page: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                // ⛔ THE SWITCHER IS A PINNED SECTION HEADER (owner 2026-10-18): it scrolls up with the
-                // page and then stays under the bar while the three sections pass beneath it.
-                LazyVStack(spacing: 20, pinnedViews: [.sectionHeaders]) {
-                    AnyView(topSections)
-                    Section {
-                        // ONE child, not lazy rows: all three anchors exist as soon as the section
-                        // does, so the switcher can scroll to one that is still off screen.
-                        VStack(spacing: 20) { AnyView(lowerSections) }
-                    } header: {
-                        GroupSectionSwitcher(marks: marks) { s in
-                            withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(s.anchorId, anchor: .top) }
-                        }
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 24)
+        ScrollView {
+            // ⛔ NO MEMBERS / MEDIA / SETTINGS BAR (owner 2026-10-19: "remove this, it doesn't make
+            // sense"). The three sections follow each other with their own headings; a bar that
+            // only scrolled to them added a row and explained nothing.
+            LazyVStack(spacing: 20) {
+                AnyView(topSections)
+                VStack(spacing: 20) { AnyView(lowerSections) }
             }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 24)
         }
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
     }
