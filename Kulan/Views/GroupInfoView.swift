@@ -2002,12 +2002,10 @@ struct GroupMemberSheet: View {
                 run { try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: list) }
             }))
         }
+        // No Member Tag or Mute rows on the card (owner 2026-10-19).
         if mayEditRights && member.isAdmin {
             rows.append(AnyView(iconRow("slider.horizontal.3", "Edit Admin Rights") { showEdit = true }))
-        } else if canEditRole {
-            rows.append(AnyView(iconRow("tag", "Member Tag") { showEdit = true }))
         }
-        if canMuteRow { rows.append(AnyView(muteRow)) }
         if canTransfer {
             rows.append(AnyView(iconRow("crown", "Transfer Ownership") { confirmTransfer = true }))
         }
