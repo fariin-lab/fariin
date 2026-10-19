@@ -167,6 +167,9 @@ final class ChatComposerView: UIView {
     /// His own camera drawing (owner 2026-10-15, SVG), drawn like the GIF icon beside it.
     private let cameraButton = IconButton(image: UIImage(named: "ic_camera_field"), size: CGSize(width: 24, height: 24))
     private let micButton = AccessibleActivationView()
+    /// Drag on the bar grows / shrinks the sticker panel while it is up (see `barPanShouldBegin`).
+    private let stickerBarPan = UIPanGestureRecognizer()
+    private let stickerBarPanDelegate = StickerBarPanDelegate()
     /// ⛔ THE REFERENCE APP'S OWN MIC AND PLUS — owner, 2026-09-27, both ringed: "use their recording
     /// icon and + icon". Their `mic` and `plus` vectors (`ic_composer_mic`, `ic_composer_plus`), drawn
     /// at their own 24pt, as their composer draws them. The recording disc keeps `ic_mic`.
@@ -409,6 +412,11 @@ final class ChatComposerView: UIView {
         // is up, shows a keyboard and puts the keys back). The panel's GIFs tab reaches `actions.gif`.
         gifButton.addAction(UIAction { [weak self] _ in self?.toggleStickerPanel() }, for: .touchUpInside)
         StickerPanelHeight.start()
+        stickerBarPan.maximumNumberOfTouches = 1
+        stickerBarPan.addTarget(self, action: #selector(stickerBarPanned(_:)))
+        stickerBarPanDelegate.owner = self
+        stickerBarPan.delegate = stickerBarPanDelegate
+        addGestureRecognizer(stickerBarPan)
         // A tap in the field while the panel is up brings the keys back, as in the reference app.
         let fieldTap = UITapGestureRecognizer(target: self, action: #selector(fieldTappedForKeys))
         fieldTap.cancelsTouchesInView = false
@@ -1545,6 +1553,33 @@ extension ChatComposerView: UITextViewDelegate {
         if c.transform != t { c.transform = t }
     }
 
+    @objc private func stickerBarPanned(_ pan: UIPanGestureRecognizer) {
+        (textView.inputView as? StickerKeyboardView)?.barPanned(pan)
+    }
+
+    /// Not from a button or the mic (its hold is a drag of its own), and not from a field whose text
+    /// scrolls (the reference app's rule: a field taller than its frame keeps its own drag).
+    fileprivate func stickerBarPanShouldReceive(_ touch: UITouch) -> Bool {
+        guard stickerPanelUp, var v = touch.view else { return false }
+        while v !== self {
+            if v is UIControl || v === micButton { return false }
+            if v === textView, textView.contentSize.height > textView.bounds.height + 1 { return false }
+            guard let s = v.superview else { return false }
+            v = s
+        }
+        return true
+    }
+
+    fileprivate func stickerBarPanShouldBegin(_ pan: UIPanGestureRecognizer) -> Bool {
+        guard stickerPanelUp, let panel = textView.inputView as? StickerKeyboardView else { return false }
+        return panel.barPanShouldBegin(pan)
+    }
+
+    /// The field's own pan waits for the bar's, so a vertical drag on it moves the panel.
+    fileprivate func stickerBarPanOutranks(_ other: UIGestureRecognizer) -> Bool {
+        other === textView.panGestureRecognizer
+    }
+
     /// The foot of the navigation bar this chat is shown under, in window space.
     private func navigationBarBottomInWindow() -> CGFloat? {
         var r: UIResponder? = self
@@ -1571,6 +1606,22 @@ extension ChatComposerView: UIGestureRecognizerDelegate {
     // Let the hold coexist with the surrounding scroll/tap gestures without stealing or being stolen.
     func gestureRecognizer(_ g: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+}
+
+/// The bar's sticker-panel pan has its own rules; the composer's delegate lets every gesture run
+/// together, which this one must not (it would scroll the field and move the panel at once).
+@MainActor private final class StickerBarPanDelegate: NSObject, UIGestureRecognizerDelegate {
+    weak var owner: ChatComposerView?
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        owner?.stickerBarPanShouldReceive(touch) ?? false
+    }
+    func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        guard let pan = g as? UIPanGestureRecognizer, let owner else { return false }
+        return owner.stickerBarPanShouldBegin(pan)
+    }
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+        owner?.stickerBarPanOutranks(other) ?? false
+    }
 }
 
 /// A display link retains its target; this breaks the cycle so the bar can be freed.

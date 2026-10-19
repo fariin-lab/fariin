@@ -544,6 +544,27 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         return grown ? v.y > 0 : v.y < 0
     }
 
+    // ⛔ THE BAR DRAGS THE PANEL TOO — owner 2026-10-19 (build 979, "does not support resizing"). The
+    // reference app's grow pan sits on the container holding BOTH its message bar and the panel, so a
+    // drag on the bar (the field, when its text does not scroll) grows / shrinks it. Ours lived only on
+    // the card, whose bands hide on scroll, so most drags never reached it. The composer owns a second
+    // pan and hands it here: same rules as a drag from the band, same handler.
+    /// May a drag on the composer's bar start a grow (up from rest) or a shrink (down from grown)?
+    func barPanShouldBegin(_ pan: UIPanGestureRecognizer) -> Bool {
+        guard !searchingGifs, !editing, !slidingAway else { return false }
+        if cardView.superview === self {
+            guard window != nil, hostWindow() != nil else { return false }
+        } else {
+            guard expansionLive else { return false }
+        }
+        let v = pan.velocity(in: nil)
+        guard abs(v.y) > abs(v.x) else { return false }
+        return currentLift() > 0.5 ? v.y > 0 : v.y < 0
+    }
+
+    /// The composer's bar pan, driven exactly like the card's own.
+    func barPanned(_ pan: UIPanGestureRecognizer) { expandPanned(pan) }
+
     /// The grids and the strip wait for this pan to fail, the way theirs makes every pan inside wait.
     fileprivate func expandShouldWait(for other: UIGestureRecognizer) -> Bool {
         guard other is UIPanGestureRecognizer, let sv = other.view as? UIScrollView else { return false }
