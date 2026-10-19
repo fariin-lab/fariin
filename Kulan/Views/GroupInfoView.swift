@@ -1535,7 +1535,8 @@ struct GroupMembersSheet: View {
     private var repo = ConversationsRepository.shared
     private var me: String { AuthService.shared.uid ?? "" }
     @State private var query = ""
-    @State private var searching = true
+    /// Off at open: the keyboard comes up only when the field is tapped (owner 2026-10-19).
+    @State private var searching = false
     @State private var adminsFirst = false
     @State private var opened: OpenedMember?
     @State private var showAdd = false
