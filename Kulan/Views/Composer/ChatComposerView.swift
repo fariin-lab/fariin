@@ -276,8 +276,10 @@ final class ChatComposerView: UIView {
         clipsToBounds = false
         backgroundColor = .clear
         build()
-        NotificationCenter.default.addObserver(self, selector: #selector(stickerCreated),
+        NotificationCenter.default.addObserver(self, selector: #selector(stickerCreated(_:)),
                                                name: StickerCreatorDoor.created, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(stickerCreatorClosedWithoutSending),
+                                               name: StickerCreatorDoor.closedWithoutSending, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(stickerCreatorWillReturn),
                                                name: StickerCreatorDoor.willReturn, object: nil)
         // ⛔ LIGHT ↔ DARK AT ONCE (owner 2026-10-18: "the composer needs a refresh after I change the
@@ -312,8 +314,17 @@ final class ChatComposerView: UIView {
         setStickerPanel(true, reload: textView.isFirstResponder)
     }
 
-    /// A sticker was just made from this chat's panel: back to the panel, not the text keys.
-    @objc private func stickerCreated() {
+    /// A sticker was just made from this chat's panel with Send (owner 2026-10-19): it goes into
+    /// this chat, and the keys stay down.
+    @objc private func stickerCreated(_ n: Notification) {
+        guard window != nil, let s = n.object as? Sticker else { return }
+        actions.sendSticker(s)
+        // iOS can hand the field its focus back during the creator's close; the keys stay down.
+        if textView.isFirstResponder { requestFocus(false) }
+    }
+
+    /// The creator closed without a send: the panel it was opened from comes back.
+    @objc private func stickerCreatorClosedWithoutSending() {
         guard window != nil else { return }
         if !stickerPanelUp { setStickerPanel(true, reload: textView.isFirstResponder) }
         if !textView.isFirstResponder { requestFocus(true) }

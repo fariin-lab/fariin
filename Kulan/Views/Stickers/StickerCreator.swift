@@ -30,10 +30,16 @@ enum StickerCreatorDoor {
     /// keyboard, a second later the stickers"). iOS hands the field its focus back during the close,
     /// with whatever keys it has then; the composer puts the sticker panel on it first.
     static let willReturn = Notification.Name("StickerCreatorDoor.willReturn")
+    /// Posted when the creator went away WITHOUT a send (X, swipe down): the chat puts the sticker
+    /// panel back, so leaving reads as never having left it (owner 2026-10-19).
+    static let closedWithoutSending = Notification.Name("StickerCreatorDoor.closedWithoutSending")
+    /// Set by Send just before the close, read once when the host goes.
+    @MainActor static var sent = false
 
     @MainActor static func present() {
         guard presented == nil, let top = WebLink.topViewController() else { return }
-        let host = UIHostingController(rootView: StickerCreatorSheet())
+        sent = false
+        let host = DoorHost(rootView: StickerCreatorSheet())
         // The picker is a story surface: always dark, black behind its rounded corners.
         host.view.backgroundColor = .black
         host.overrideUserInterfaceStyle = .dark
@@ -48,6 +54,18 @@ enum StickerCreatorDoor {
         // The presenter, not the host: the host has the Save page up, and dismissing the host
         // itself would only take that down (see `StoryCameraDoor.close`).
         (host.presentingViewController ?? host).dismiss(animated: true, completion: done)
+    }
+
+    /// Tells the chat when the creator has really gone (not when the Save page covers it).
+    private final class DoorHost: UIHostingController<StickerCreatorSheet> {
+        override func viewDidDisappear(_ animated: Bool) {
+            super.viewDidDisappear(animated)
+            guard isBeingDismissed || presentingViewController == nil else { return }
+            if !StickerCreatorDoor.sent {
+                NotificationCenter.default.post(name: StickerCreatorDoor.closedWithoutSending, object: nil)
+            }
+            StickerCreatorDoor.sent = false
+        }
     }
 }
 
@@ -161,6 +179,14 @@ private struct StickerSaveView: View {
     @State private var dismissing = false       // a close is flying: the copy shows the photo
     @State private var closeToken = 0           // bump: MediaDismissHost flies the X close home
     @State private var chromeShown = false
+    // ⛔ THE ORIGINAL IS FRAMED BY HAND — owner 2026-10-19: "I can't put the area I want". A drag
+    // moves the photo and a pinch zooms it inside the square; the photo always covers the square.
+    // Kept in stage points; `save` turns them into the crop. No drag closes this page any more: X does.
+    @State private var cropZoom: CGFloat = 1
+    @State private var cropOffset: CGSize = .zero
+    @State private var zoomAtStart: CGFloat = 1
+    @State private var offsetAtStart: CGSize = .zero
+    @State private var stageSide: CGFloat = 1
 
     // MARK: Geometry (shared by the open, the page and the close)
 
@@ -246,7 +272,9 @@ private struct StickerSaveView: View {
                 .resizable()
                 .scaledToFill()
                 .frame(width: side, height: side)
-                .clipped()
+                // The hand framing, shown only while the photo itself is the sticker.
+                .scaleEffect(framingOn ? cropZoom : 1)
+                .offset(framingOn ? cropOffset : .zero)
                 .opacity(cutout == nil ? 1 : 0)
             if let cutout {
                 Image(uiImage: cutout)
@@ -261,6 +289,63 @@ private struct StickerSaveView: View {
         .clipShape(shape)
         .overlay(shape.strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
         .animation(.spring(response: 0.4, dampingFraction: 0.82), value: cutout != nil)
+        .contentShape(shape)
+        .gesture(framingGesture(side), including: framingOn ? .all : .subviews)
+        .onAppear { stageSide = side }
+        .onChange(of: side) { _, s in stageSide = s }
+    }
+
+    /// The photo is the sticker (Original, or no subject found), so it can be framed.
+    private var framingOn: Bool {
+        guard let art, revealed else { return false }
+        return useOriginal || art.cutout == nil
+    }
+
+    /// The photo's aspect-filled size in the square at zoom 1.
+    private func fillSize(_ side: CGFloat) -> CGSize {
+        let s = item.photo.size
+        guard s.width > 0, s.height > 0 else { return CGSize(width: side, height: side) }
+        let k = side / min(s.width, s.height)
+        return CGSize(width: s.width * k, height: s.height * k)
+    }
+
+    /// Keeps the photo over the whole square: no empty edge at any zoom.
+    private func clamped(_ o: CGSize, zoom: CGFloat, side: CGFloat) -> CGSize {
+        let f = fillSize(side)
+        let maxX = max(0, (f.width * zoom - side) / 2), maxY = max(0, (f.height * zoom - side) / 2)
+        return CGSize(width: min(maxX, max(-maxX, o.width)), height: min(maxY, max(-maxY, o.height)))
+    }
+
+    private func framingGesture(_ side: CGFloat) -> some Gesture {
+        let drag = DragGesture(minimumDistance: 1)
+            .onChanged { v in
+                cropOffset = clamped(CGSize(width: offsetAtStart.width + v.translation.width,
+                                            height: offsetAtStart.height + v.translation.height),
+                                     zoom: cropZoom, side: side)
+            }
+            .onEnded { _ in offsetAtStart = cropOffset }
+        let pinch = MagnifyGesture()
+            .onChanged { v in
+                cropZoom = min(4, max(1, zoomAtStart * v.magnification))
+                cropOffset = clamped(cropOffset, zoom: cropZoom, side: side)
+            }
+            .onEnded { _ in
+                zoomAtStart = cropZoom
+                offsetAtStart = cropOffset
+            }
+        return SimultaneousGesture(drag, pinch)
+    }
+
+    /// The part of the picture the square shows, in the photo's pixels (its `cg`, same pixels).
+    private func framedCrop() -> CGRect {
+        let w = CGFloat(item.cg.width), h = CGFloat(item.cg.height)
+        let s0 = min(w, h)
+        let side = max(1, stageSide)
+        let visible = s0 / cropZoom
+        let pxPerPt = s0 / (side * cropZoom)
+        let cx = w / 2 - cropOffset.width * pxPerPt
+        let cy = h / 2 - cropOffset.height * pxPerPt
+        return CGRect(x: cx - visible / 2, y: cy - visible / 2, width: visible, height: visible)
     }
 
     private func chrome(insets: UIEdgeInsets, stage: CGRect, size: CGSize) -> some View {
@@ -329,7 +414,7 @@ private struct StickerSaveView: View {
                 if saving {
                     ProgressView().tint(.black)
                 } else {
-                    Text("Save Sticker").font(.body.weight(.semibold))
+                    Text("Send Sticker").font(.body.weight(.semibold))
                 }
             }
             .foregroundStyle(.black)
@@ -359,6 +444,7 @@ private struct StickerSaveView: View {
                 targetId: { key },
                 clipRect: { MediaOpenRects.liveViewRect(MediaOpenRects.key(.sticker, "grid")) },
                 closeToken: closeToken,
+                allowsDrag: false,   // a drag frames the photo; X closes (owner 2026-10-19)
                 onDismiss: { instantDismiss() },
                 copyFromMediaFrame: true)
         }
@@ -401,26 +487,28 @@ private struct StickerSaveView: View {
 
     private func save() {
         guard let art, !saving else { return }
-        let image = (useOriginal ? nil : art.cutout) ?? art.rounded
+        // The photo as framed by hand when it is the sticker; the cutout otherwise.
+        let original = framingOn ? (StickerArtMaker.roundedSquare(item.cg, square: framedCrop()) ?? art.rounded) : art.rounded
+        let image = (useOriginal ? nil : art.cutout) ?? original
         guard let png = image.pngData() else {
             saveError = "The sticker couldn't be saved. Try again."
             return
         }
         saving = true
+        let made: Sticker
         do {
-            _ = try StickerStore.shared.addMine(png: png, emoji: "🙂")
+            made = try StickerStore.shared.addMine(png: png, emoji: "🙂")
         } catch {
             saving = false
             saveError = "The sticker couldn't be saved. Check your free space and try again."
             return
         }
-        // A short note that it worked (owner 2026-10-18), over the chat it lands back in.
-        // And the chat underneath opens the sticker panel on it (owner 2026-10-18, build 969: after Save
-        // the text keyboard came up instead of the stickers, with the new one first among them).
-        NotificationCenter.default.post(name: StickerCreatorDoor.willReturn, object: nil)
+        // ⛔ SEND, NOT SAVE — owner 2026-10-19: the button sends the new sticker into the chat it was
+        // made from (it is still kept among his own), and the keys stay down after it. It replaces
+        // the 2026-10-18 return to the panel with the new one in it.
+        StickerCreatorDoor.sent = true
         StickerCreatorDoor.close {
-            StickerSavedNote.show()
-            NotificationCenter.default.post(name: StickerCreatorDoor.created, object: nil)
+            NotificationCenter.default.post(name: StickerCreatorDoor.created, object: made)
         }
     }
 }
@@ -533,12 +621,13 @@ private enum StickerArtMaker {
     }
 
     /// The middle square of the photo, 512 px, with rounded corners (transparent outside them).
-    static func roundedSquare(_ image: CGImage) -> UIImage? {
+    /// `square`: the part to keep, in the image's pixels (the Save page's hand framing); nil = the middle.
+    static func roundedSquare(_ image: CGImage, square: CGRect? = nil) -> UIImage? {
         let w = CGFloat(image.width), h = CGFloat(image.height)
         let s = min(w, h)
-        guard s > 0, let crop = image.cropping(to: CGRect(x: ((w - s) / 2).rounded(), y: ((h - s) / 2).rounded(),
-                                                         width: s, height: s))
-        else { return nil }
+        let area = (square ?? CGRect(x: (w - s) / 2, y: (h - s) / 2, width: s, height: s))
+            .intersection(CGRect(x: 0, y: 0, width: w, height: h)).integral
+        guard s > 0, !area.isEmpty, let crop = image.cropping(to: area) else { return nil }
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         format.opaque = false

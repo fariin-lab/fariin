@@ -49,6 +49,9 @@ struct MediaDismissHost: UIViewRepresentable {
     /// into its tile with the same landing spring (user report: the arrow used a different exit than
     /// the drag). the reference app's model too — their X runs the same dismiss animator the pan drives.
     var closeToken: Int = 0
+    /// false = no drag to close, the screen's own drags own the media (the New Sticker page, owner
+    /// 2026-10-19: a drag there moves the photo to choose the sticker's area, X closes).
+    var allowsDrag = true
     var onDismiss: () -> Void
     /// A drag that sprang back instead of closing, once the viewer is fully back. Separate from
     /// `onHideContent(false)`, which also runs on the way OUT (a close with no copy, the dropped-
@@ -220,6 +223,8 @@ struct MediaDismissHost: UIViewRepresentable {
         func install(from marker: UIView) {
             guard root == nil, let vc = marker.owningViewController else { return }
             root = vc.view
+            // X only: the button close still flies home, there is just no drag to close.
+            guard parent.allowsDrag else { return }
             let g = DirectionalPanGestureRecognizer(direction: .vertical, target: self, action: #selector(handle(_:)))
             g.delegate = self
             // Theirs: `maximumNumberOfTouches = 1`. Two fingers on this editor move the photo.
