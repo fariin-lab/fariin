@@ -589,7 +589,11 @@ final class ChatListSelfSizingTable: UITableView {
         // inset change now keeps a list that was resting at its old top at its new top — except
         // while search opens or closes (`searchInFlight`), which UIKit corrects itself (correcting
         // it twice was build 736, see the warning on `ChatListCell`), and never under a finger.
-        if !searchInFlight, abs(adjustedContentInset.top - oldTop) > 0.5,
+        // ⛔ owner 2026-10-19, tap search -> list jumps under the bar: `searchInFlight` arrives with
+        // SwiftUI's `isSearching`, one update AFTER the bar starts shrinking, so the first inset
+        // change was pinned here AND corrected by UIKit (the build 736 double move). `searchLive`
+        // asks the search controller itself, which is active from the first frame.
+        if !searchInFlight, !(searchLive?() ?? false), abs(adjustedContentInset.top - oldTop) > 0.5,
            abs(contentOffset.y + oldTop) < 1, !isTracking, !isDecelerating {
             contentOffset.y = -adjustedContentInset.top
         }
@@ -598,6 +602,8 @@ final class ChatListSelfSizingTable: UITableView {
     private var lastInsetTop: CGFloat = 0
     /// Search is opening or closing (the controller's `searchHold`): leave the offset to UIKit.
     var searchInFlight = false
+    /// The search controller is active or its field has the keyboard, read live from UIKit.
+    var searchLive: (() -> Bool)?
 
     private func updateFooterHeight() {
         // See `suspendFooterUpdates`: during a transition this would move `contentSize` on every
@@ -707,6 +713,10 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         t.delegate = self
         t.register(ChatListCell.self, forCellReuseIdentifier: ChatListCell.reuseId)
         t.register(ChatListCell.self, forCellReuseIdentifier: ChatListCell.personReuseId)
+        t.searchLive = { [weak self] in
+            guard let sc = self?.searchHostItem()?.searchController else { return false }
+            return sc.isActive || sc.searchBar.searchTextField.isFirstResponder
+        }
         return t
     }()
 
