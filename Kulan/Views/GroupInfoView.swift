@@ -365,10 +365,13 @@ struct GroupInfoView: View {
     /// why (owner 2026-10-19), instead of a hole in the row.
     private var actionsRow: some View {
         HStack(spacing: 0) {
-            Button { addTapped() } label: { actionIcon("person.fill.badge.plus") }
-                .tint(.primary)
-                .opacity(canAdd ? 1 : 0.45)
-                .accessibilityLabel("Add Members")
+            // Hidden, not greyed, for someone who may not add (owner 2026-10-19). Every group is
+            // private for now; a public group's own rule comes with groups step 2.
+            if canAdd {
+                Button { addTapped() } label: { actionIcon("person.fill.badge.plus") }
+                    .tint(.primary)
+                    .accessibilityLabel("Add Members")
+            }
             Button { callTapped(video: true) } label: { actionIcon("video.fill") }
                 .tint(.primary)
                 .opacity(callReady ? 1 : 0.45)
