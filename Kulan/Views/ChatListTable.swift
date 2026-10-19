@@ -800,9 +800,8 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 
     private func revealAfterSearch() {
         guard tableView.alpha < 1 else { return }
-        if wasAtTopForSearch, !tableView.isTracking {
-            tableView.contentOffset.y = -tableView.adjustedContentInset.top
-        }
+        // No offset change here: the bar is still growing back. The settle step in `setSearching`
+        // puts a list that was at its top back there once it has landed.
         DiagLog.add("SEARCH# end y=\(Int(tableView.contentOffset.y)) top=\(Int(tableView.adjustedContentInset.top))")
         UIView.animate(withDuration: 0.25) { self.tableView.alpha = 1 }
     }
