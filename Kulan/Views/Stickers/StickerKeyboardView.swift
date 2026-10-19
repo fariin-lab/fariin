@@ -141,6 +141,10 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     /// takes away its selected thumb, so `selectedSegmentTintColor` alone draws nothing (owner 2026-10-18).
     private let tabThumb = UIView()
     private let strip = UIScrollView()
+    /// ⛔ THE PACK STRIP IS THE BOTTOM BAR — owner 2026-10-19 (his drawing): with the GIF switch gone,
+    /// the strip leaves the top and floats at the foot on a glass capsule, where the switch was.
+    private let stripGlass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+    private var stripAtFoot: Bool { !AppFeatures.stickerPanelGifs }
     private var stripButtons: [UIButton] = []
     private let grid: UICollectionView
     private let deleteBar = UIView()
@@ -233,6 +237,14 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         cardView.bringSubviewToFront(tabGlass)
         cardView.bringSubviewToFront(tabThumb)
         cardView.bringSubviewToFront(tabs)
+        if stripAtFoot {
+            // The strip's bar floats over the grid at the foot, Edit beside it.
+            stripGlass.clipsToBounds = true
+            stripGlass.isUserInteractionEnabled = false
+            cardView.addSubview(stripGlass)
+            cardView.bringSubviewToFront(strip)
+            cardView.bringSubviewToFront(editButton)
+        }
 
         deleteBar.backgroundColor = .secondarySystemBackground
         deleteBar.isHidden = true
@@ -325,6 +337,37 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         for v in [tabs, tabGlass, tabThumb] as [UIView] { v.transform = CGAffineTransform(translationX: 0, y: down) }
         for v in [tabs, tabGlass, tabThumb, editButton, strip] as [UIView] { v.alpha = hideBars ? 0 : 1 }
         if editing { tabs.alpha = 0; tabGlass.alpha = 0; tabThumb.alpha = 0 }   // the Delete bar takes the foot while editing
+        if stripAtFoot {
+            // The bar is as wide as its icons, centred in the room Edit leaves, never wider than it.
+            // Scrolling into the stickers sends it down, as the switch went; the Delete bar takes
+            // the foot while editing, so the bar goes and Done rides above the Delete bar.
+            stripGlass.transform = .identity
+            let pad: CGFloat = 6
+            let editRoom = editButton.isHidden ? 0 : editW + 8
+            let room = w - 2 * M.side - editRoom
+            let barW = min(room, strip.contentSize.width + 2 * pad)
+            let barY = h - footGap - M.stripH
+            let bar = CGRect(x: M.side + (room - barW) / 2, y: barY, width: barW, height: M.stripH)
+            stripGlass.frame = bar
+            stripGlass.layer.cornerRadius = M.stripH / 2
+            strip.frame = bar.insetBy(dx: pad, dy: 0)
+            let editY = editing ? h - (44 + sb) - 8 - M.tabsH : barY + (M.stripH - M.tabsH) / 2
+            editButton.frame = CGRect(x: w - M.side - editW, y: editY, width: editW, height: M.tabsH)
+            editGlass.frame = editButton.bounds
+            let down = hideBars ? h - barY : 0
+            for v in [stripGlass, strip, editButton] as [UIView] { v.transform = CGAffineTransform(translationX: 0, y: down) }
+            for v in [stripGlass, strip] as [UIView] { v.alpha = hideBars || editing ? 0 : 1 }
+            editButton.alpha = hideBars && !editing ? 0 : 1
+            grid.frame = CGRect(x: 0, y: M.top, width: w, height: max(0, h - M.top))
+            gifGrid.frame = CGRect(x: 0, y: M.top, width: w, height: max(0, h - M.top))
+            // Room under the last row for the floating bar (and the Delete bar while editing).
+            grid.contentInset.bottom = bottomInset + M.stripH + 16 + (editing ? 44 : 0)
+            let barH = 44 + sb
+            deleteBar.frame = CGRect(x: 0, y: h - barH, width: w, height: barH)
+            deleteButton.frame = CGRect(x: 0, y: 0, width: w, height: 44)
+            if lastGridWidth != w { lastGridWidth = w; grid.collectionViewLayout.invalidateLayout() }
+            return
+        }
         let gridTop = headerHidden ? 0 : strip.frame.maxY
         grid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, h - gridTop))
         gifGrid.frame = CGRect(x: 0, y: M.top, width: w, height: max(0, h - M.top))
@@ -795,6 +838,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         if editing && !anyMine { endEditing() }
         grid.reloadData()
         buildStrip()
+        if stripAtFoot { layoutCardSubviews() }   // the bar's width follows its icons and Edit
     }
 
     private func isCreate(_ ip: IndexPath) -> Bool { sections[ip.section].shelf == .recents && ip.item == 0 }
@@ -886,7 +930,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         if let a = grid.layoutAttributesForSupplementaryElement(ofKind: UICollectionView.elementKindSectionHeader, at: ip),
            a.frame.height > 0 {
             let maxY = max(0, grid.contentSize.height - grid.bounds.height + grid.contentInset.bottom)
-            grid.setContentOffset(CGPoint(x: 0, y: min(a.frame.minY, maxY)), animated: false)
+            grid.setContentOffset(CGPoint(x: 0, y: min(a.frame.minY - grid.contentInset.top, maxY)), animated: false)
         } else if grid.numberOfItems(inSection: sec) > 0 {
             grid.scrollToItem(at: ip, at: .top, animated: false)
         }
