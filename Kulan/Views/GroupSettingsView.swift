@@ -44,9 +44,14 @@ struct GroupSettingsView: View {
     /// for a moment while a write settles; the page keeps what it last showed instead of reading
     /// that gap as "no group". A plain box, so keeping it never redraws anything.
     private var conv: Conversation? {
+        // The group's own document first (owner 2026-10-19, third report): the page no longer
+        // depends on the chat list having this group in its window at all.
+        if let own = ownConv { held.conv = own; return own }
         if let live = repo.conversations.first(where: { $0.id == cid }) { held.conv = live; return live }
         return held.conv
     }
+    @State private var ownConv: Conversation?
+    @State private var convListener: ListenerRegistration?
     private func can(_ r: Conversation.Right) -> Bool { conv?.adminCan(me, r) ?? false }
     /// The permissions are group rules: the change-info right edits them, other admins read them.
     private var canEdit: Bool { can(.changeInfo) }
@@ -101,10 +106,25 @@ struct GroupSettingsView: View {
         .navigationTitle("Group Settings")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
+            if convListener == nil {
+                convListener = Firestore.firestore().collection("conversations").document(cid)
+                    .addSnapshotListener { snap, _ in
+                        guard let snap, snap.exists, let data = snap.data() else { return }
+                        ownConv = Conversation(id: snap.documentID, data: data)
+                    }
+            }
             guard reqListener == nil, can(.inviteUsers) else { return }
             reqListener = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
         }
-        .onDisappear { reqListener?.remove(); reqListener = nil }
+        // Rights can arrive with the group's own document, after the first appearance.
+        .onChange(of: can(.inviteUsers)) { _, now in
+            guard now, reqListener == nil else { return }
+            reqListener = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
+        }
+        .onDisappear {
+            reqListener?.remove(); reqListener = nil
+            convListener?.remove(); convListener = nil
+        }
         .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
                                                           set: { if !$0 { actionError = nil } })) {
             Button("OK", role: .cancel) {}
