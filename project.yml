@@ -225,6 +225,10 @@ targets:
         NSExtension:
           NSExtensionPointIdentifier: com.apple.usernotifications.service
           NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).NotificationService"
+          # owner 2026-10-19: banners still showed the plain app logo, not the sender's photo.
+          # The extension that hands iOS the INSendMessageIntent declares it too.
+          NSExtensionAttributes:
+            IntentsSupported: [INSendMessageIntent]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kulan.messenger.native.NotificationService
