@@ -783,10 +783,17 @@ enum MessageRowLayout {
         // A call link's "Join Call" button: full width under the words and the time. Added to
         // `innerY` here, so the bubble, and the off-screen sizer that measures through this same
         // function, both carry its height.
-        if case .call? = linkCard?.shape, var placed = linkPlan {
+        // A group invite's Open Group / View Group takes the same place (owner 2026-10-19).
+        var bottomButton: String?
+        switch linkCard?.shape {
+        case .call?: bottomButton = "Join Call"
+        case .group(_, let member)?: bottomButton = member ? "Open Group" : "View Group"
+        default: break
+        }
+        if let bottomButton, var placed = linkPlan {
             innerY += 8
             let button = CGRect(x: hPad, y: innerY, width: contentW, height: 36)
-            let attr = NSAttributedString(string: "Join Call", attributes: [
+            let attr = NSAttributedString(string: bottomButton, attributes: [
                 .font: UIFont.systemFont(ofSize: 14, weight: .semibold), .foregroundColor: textColor])
             let size = lineSizeOf(attr)
             placed.join = button
@@ -1962,9 +1969,14 @@ enum MessageRowLayout {
             var unavailable = true
             var unavailableLine = "This account is no longer available"
             var buttonText = "Send Message"
+            // ⛔ A GROUP INVITE SAYS WHAT IT IS, AND ITS BUTTON CLOSES THE BUBBLE (owner 2026-10-19,
+            // the reference app's invite side by side with ours): "Group invite · 3 members" under
+            // the name, and Open Group / View Group full width under the link and the time (the
+            // call card's Join Call, placed in the bubble layout), not between the card and the link.
+            var isGroupInvite = false
             switch p.shape {
             case .profile(let h): unavailable = false; handleText = h
-            case .group(_, let member): unavailable = false; buttonText = member ? "Open Group" : "View Group"
+            case .group: unavailable = false; isGroupInvite = true
             case .groupUnavailable: unavailableLine = "This link is no longer valid"
             default: break
             }
@@ -1979,6 +1991,7 @@ enum MessageRowLayout {
                              .foregroundColor: textColor])
             let subAttr = NSAttributedString(
                 string: unavailable ? unavailableLine
+                                    : isGroupInvite ? (p.desc.isEmpty ? "Group invite" : "Group invite · \(p.desc)")
                                     : (p.desc.isEmpty ? "@\(handleText)" : p.desc),
                 attributes: [.font: UIFont.systemFont(ofSize: 13),
                              .foregroundColor: textColor.withAlphaComponent(0.75)])
@@ -1990,13 +2003,13 @@ enum MessageRowLayout {
                                 width: avatarSize, height: avatarSize)
             let title = CGRect(x: textX, y: stackTop, width: textW, height: tH)
             let subtitle = CGRect(x: textX, y: stackTop + tH + 1, width: textW, height: sH)
-            y += rowH + (unavailable ? 10 : 8)
+            y += rowH + ((unavailable || isGroupInvite) ? 10 : 8)
 
             var divider: CGRect?
             var button: CGRect?
             var buttonLabel: CGRect?
             var buttonAttr: NSAttributedString?
-            if !unavailable {
+            if !unavailable && !isGroupInvite {
                 divider = CGRect(x: 0, y: y, width: width, height: BubbleMetrics.hairline)
                 y += BubbleMetrics.hairline
                 let attr = NSAttributedString(string: buttonText, attributes: [

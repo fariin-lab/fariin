@@ -515,7 +515,12 @@ final class MessageRowCell: UICollectionViewCell {
             // A call card's Join button, and its card body, both open the call (the body does what
             // tapping the link does). The list debounces, so a double tap joins once.
             if rowView.hitsCallJoin(p) {
-                delegate?.rowCellDidTapCallJoin(self)
+                // A group invite's bottom button opens the group, as its card button used to.
+                if case .text(let t) = b.body, case .group? = t.linkPreview?.shape {
+                    delegate?.rowCellDidTapLinkProfile(self)
+                } else {
+                    delegate?.rowCellDidTapCallJoin(self)
+                }
                 return
             }
             if rowView.hitsLinkCard(p), case .text(let t) = b.body, case .call? = t.linkPreview?.shape {
