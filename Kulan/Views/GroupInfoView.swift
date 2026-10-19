@@ -473,6 +473,8 @@ struct GroupInfoView: View {
         if !CallFeatures.groupCalls { flashNotice("Group calls are not available yet"); return }
         if busyElsewhere { flashNotice("You're already on a call"); return }
         if !mayCall { flashNotice("Only admins can start a call"); return }
+        // Nobody to ring (owner 2026-10-19): said here, not after an empty call screen.
+        if (conv?.users.count ?? 0) <= 1 { flashNotice("You're the only one in this group"); return }
         startCall(video: video)
     }
 

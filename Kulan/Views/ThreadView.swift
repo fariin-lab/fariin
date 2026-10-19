@@ -5111,6 +5111,8 @@ struct ThreadView: View {
     }
 
     private func startGroupCall(video: Bool) {
+        // Nobody to ring (owner 2026-10-19), as on the group info page.
+        if (conversation?.users.count ?? 0) <= 1 { showJumpToast("You're the only one in this group"); return }
         InstantCover.run { showGroupCall = true }   // a cut, not a slide (owner, 2026-10-06)
         Task { await GroupCallService.shared.start(cid: cid, title: title, video: video) }
     }
