@@ -57,7 +57,8 @@ const cases = [
   ['OK      sealed text in a group still end-to-end encrypted', 'ALLOW', 'ALLOW', MEMBER, msgPath, 'create', msg(encg1), null, convMocks(SEALED)],
   ['FIX     plain text in a group still end-to-end encrypted', 'ALLOW', 'DENY', MEMBER, msgPath, 'create', msg('hello everyone'), null, convMocks(SEALED)],
   ['OK      a plain notice in a group still end-to-end encrypted', 'ALLOW', 'ALLOW', MEMBER, msgPath, 'create',
-    msg('uidMember changed the group name', { type: 'system' }), null, convMocks(SEALED)],
+    // 2026-10-19 group fix round S1: a member's notice needs a reason (here "Members can edit info").
+    msg('uidMember changed the group name', { type: 'system' }), null, convMocks(with_(SEALED, { membersCanEditInfo: true }))],
   ['OK      empty text (a sticker) in a group still end-to-end encrypted', 'ALLOW', 'ALLOW', MEMBER, msgPath, 'create',
     msg('', { type: 'sticker', stickerPack: 'p', stickerId: 's' }), null, convMocks(SEALED)],
   // ── a 1:1 is untouched ──

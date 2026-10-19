@@ -1727,6 +1727,10 @@ service cloud.firestore {
             // 2026-10-19: the cap is config/limits.group_members_max (admin panel, 2..500), not 30.
             && request.resource.data.users.size() <= appLimit('group_members_max', 30)
             && request.auth.uid in request.resource.data.admins
+            // 2026-10-19 group fix round S8: the owner is the creator. `createdBy` holds every right
+            // (the admin rules, the owner hand-off), so a create naming somebody else made them the
+            // owner of a group they never made. ChatService.createGroup has written `uid` since June.
+            && request.resource.data.get('createdBy', '') == request.auth.uid
             // 1:1 audit r3 F1, 2026-10-08: a group is never born at a 1:1 id. Every call and
             // friend check reads `conversations/{a_b}`; a group there (members of the creator's
             // choosing, a `lastMessage`, no `startedBy`) read as an old accepted chat. The app
@@ -1898,8 +1902,8 @@ service cloud.firestore {
                .intersection(o.get('admins', []).toSet().union([o.get('createdBy', '')].toSet())).size() == 0
           && (!('bannedUids' in keys) || adminHasRight('banUsers')
               || (adminHasRight('inviteUsers') && o.get('bannedUids', []).hasAll(n.get('bannedUids', []))))
-          && (!('pinnedMessageIds' in keys) || adminHasRight('pinMessages')
-              || o.get('pinnedMessageIds', []).hasAll(n.get('pinnedMessageIds', [])));
+          // 2026-10-19 group fix round S7: without Pin messages, only the clean-up unpin (memberUnpinOK).
+          && (!('pinnedMessageIds' in keys) || adminHasRight('pinMessages') || memberUnpinOK());
       }
       // 2026-09-24 audit: two floors every group write keeps, whichever branch lets it through.
       // The member cap (config/limits.group_members_max since 2026-10-19, was 30): the create rule
@@ -1965,6 +1969,64 @@ service cloud.firestore {
                       // no pinning (an unpin, a smaller list, still works)
                       && (!('pinnedMessageIds' in keys)
                           || o.get('pinnedMessageIds', []).hasAll(n.get('pinnedMessageIds', []))))));
+      }
+      // 2026-10-19 group fix round S7: WHO MAY TAKE A PIN DOWN. Unpinning in a group is an admin's
+      // (Pin messages, or the owner); the pin bar's Unpin shows for nobody else. A plain member's
+      // only unpin is the app's automatic clean-up after a message is deleted (ChatService
+      // deleteMessage -> removePinnedMessage, in every build since 2026-08-11), so that is what this
+      // allows: the list may only shrink, and every id it loses is a message that is gone or a
+      // tombstone. The rules cannot loop, so the old list is walked by index; the app keeps 3 pins
+      // (Limits.pinnedMessagesPerChat, 5 in older builds), and a longer list is never shrunk here.
+      function pinGoneOK(id) {
+        return !exists(/databases/$(database)/documents/conversations/$(cid)/messages/$(id))
+          || get(/databases/$(database)/documents/conversations/$(cid)/messages/$(id)).data.get('deleted', false) == true;
+      }
+      function memberUnpinOK() {
+        let o = resource.data.get('pinnedMessageIds', []);
+        let n = request.resource.data.get('pinnedMessageIds', []);
+        return o is list && n is list && o.hasAll(n)
+          && (n.hasAll(o)
+              || (o.size() <= 6
+                  && (o.size() < 1 || o[0] in n || pinGoneOK(o[0]))
+                  && (o.size() < 2 || o[1] in n || pinGoneOK(o[1]))
+                  && (o.size() < 3 || o[2] in n || pinGoneOK(o[2]))
+                  && (o.size() < 4 || o[3] in n || pinGoneOK(o[3]))
+                  && (o.size() < 5 || o[4] in n || pinGoneOK(o[4]))
+                  && (o.size() < 6 || o[5] in n || pinGoneOK(o[5]))));
+      }
+      // 2026-10-19 group fix round S4: A PLAIN MEMBER'S PREVIEW LINE IS THEIR OWN SEND. Every send path
+      // writes `lastMessage`/`lastSender` = me together with a fresh `updatedAt` (sendText, media,
+      // stickers, GIFs, files, the group call row). So a write shaped like that must name the writer
+      // and come from someone who may send at all (not an announcement-only group's member, not a
+      // member muted from sending). The summary rewrite after a delete or an edit
+      // (ChatService.rewriteSummaryGuarded) leaves `updatedAt` alone on purpose, and it may name the
+      // author of the message before (somebody else, or nobody), so it is not held to this.
+      function memberPreviewOK() {
+        let o = resource.data;
+        let n = request.resource.data;
+        let keys = n.diff(o).affectedKeys();
+        return !('updatedAt' in keys) || !keys.hasAny(['lastMessage', 'lastSender'])
+          || (n.get('lastSender', '') == request.auth.uid
+              && (o.get('onlyAdminsSend', false) == false || request.auth.uid in o.get('admins', []))
+              && !restrictedIn(o, 'sendText'));
+      }
+      // 2026-10-19 group fix round S2/S3: WHAT "Members can add" LETS A MEMBER WRITE. Nobody the group
+      // removed (`bannedUids`; lifting a ban is an admin's, the admin branch), and the mirrors and
+      // badges of the people added only: `names`/`photos`/`unreadCount` keys of nobody else may move
+      // (ChatService.addGroupMembers writes `names.<new>`, `photos.<new>`, `unreadCount.<new>` = 0).
+      // A new badge is 0. The rules cannot read one key out of a changed set, so the values test is
+      // "every number this write brings that the old map did not have is 0".
+      function memberAddOK() {
+        let o = resource.data;
+        let n = request.resource.data;
+        let added = n.users.toSet().difference(o.users.toSet());
+        let ou = o.get('unreadCount', {});
+        let nu = n.get('unreadCount', {});
+        return added.intersection(o.get('bannedUids', []).toSet()).size() == 0
+          && n.get('names', {}).diff(o.get('names', {})).affectedKeys().difference(added).size() == 0
+          && n.get('photos', {}).diff(o.get('photos', {})).affectedKeys().difference(added).size() == 0
+          && nu.diff(ou).affectedKeys().difference(added).size() == 0
+          && nu.values().toSet().difference(ou.values().toSet()).difference([0].toSet()).size() == 0;
       }
       // A member may update the conversation. Membership (`users`) can change ONLY when:
       //   • it's unchanged as a SET (normal sends — the client rewrites order each send), OR
@@ -2165,8 +2227,10 @@ service cloud.firestore {
             // at once, or an unpin on a chat whose list was never written (the `arrayRemove` then
             // creates it empty), changed nothing, and the strict test refused that no-op. A subset
             // still can never pin anything.
+            // 2026-10-19 group fix round S7: and only the clean-up unpin after a delete (memberUnpinOK).
             && (!('pinnedMessageIds' in request.resource.data.diff(resource.data).affectedKeys())
-                || resource.data.get('pinnedMessageIds', []).hasAll(request.resource.data.get('pinnedMessageIds', [])))
+                || memberUnpinOK())
+            && memberPreviewOK()   // 2026-10-19 group fix round S4: a send's preview is the writer's own
           )
           // Group NON-admin may EDIT INFO only when the admin enabled membersCanEditInfo.
           || (
@@ -2191,6 +2255,7 @@ service cloud.firestore {
             && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastMessage', 'lastSender'])
                 || request.resource.data.get('lastSender', '') == request.auth.uid)
             && !restrictedIn(resource.data, 'addMembers')   // 2026-09-24 fix-all: the per-member flag
+            && memberAddOK()   // 2026-10-19 group fix round S2/S3: no banned uid, only the new people's keys
           )
           // Any group member may remove ONLY themselves (leave).
           //
@@ -2403,6 +2468,41 @@ service cloud.firestore {
             && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['editedAt'])
                 || request.resource.data.editedAt == request.time);
         }
+        // 2026-10-19 group fix round S1/M1: GROUP NOTICES (`type: "system"`, the grey centred lines).
+        // Every notice is signed by its writer (`authorId` = me, the create rule's first test; the call
+        // record exemption is `type: "call"` only), and the app names the author on the line. In a
+        // group a notice also needs a reason to exist, one per client path that writes one
+        // (ChatService): an admin or the owner (rename, photo, admins, restrictions, settings,
+        // remove, transfer, "created the group"); "Members can edit info" on (rename and wallpaper by
+        // a member, a separate write before its notice); a member's add in the same batch
+        // (addGroupMembers, the list grows); or my own leave in the same transaction (leaveGroup,
+        // "X left" plus "now an admin / the owner"). `getAfter` sees that batch's result; it is read
+        // only for a notice, so a plain send costs nothing more.
+        function isNotice() {
+          return request.resource.data.get('type', '') == 'system';
+        }
+        function convAfter() {
+          return getAfter(/databases/$(database)/documents/conversations/$(cid)).data;
+        }
+        // A notice written in the same transaction as the writer's own leave.
+        function leaveNotice() {
+          return isNotice() && convData().get('type', '') == 'group'
+            && !(request.auth.uid in convAfter().get('users', []));
+        }
+        // An admin's notice written in the same batch as a removal (removeGroupMember).
+        function removeNotice() {
+          return isNotice() && convData().get('type', '') == 'group'
+            && request.auth.uid in convData().get('admins', [])
+            && convAfter().get('users', []).size() < convData().users.size();
+        }
+        function groupNoticeOK() {
+          let c = convData();
+          return !isNotice() || c.get('type', '') != 'group'
+            || request.auth.uid in c.get('admins', []) || request.auth.uid == c.get('createdBy', '')
+            || c.get('membersCanEditInfo', false) == true
+            || convAfter().get('users', []).size() > c.users.size()
+            || !(request.auth.uid in convAfter().get('users', []));
+        }
         allow read: if signedIn() && request.auth.uid in convData().users;
         allow create: if signedIn()
           && (request.auth.uid == request.resource.data.authorId || isCallRecordForMember())
@@ -2464,11 +2564,18 @@ service cloud.firestore {
           && mediaUrlsOk()
           && linkPreviewOk()   // 2026-09-24 feature-audit: the card's own fields
           && voiceShapeOk()    // 2026-09-24 feature-audit: duration, waveform, one-time = no waveform
+          && groupNoticeOK()   // 2026-10-19 group fix round S1: a group notice needs its reason
           // Announcement mode: when onlyAdminsSend is set, only admins may create messages.
+          // 2026-10-19 group fix round M1: LEAVING ALWAYS WORKS. The leave transaction's own notices
+          // ("X left", the heir lines) are refused by the three send gates below for a member of an
+          // announcement-only group, a muted member and anyone in a suspended group, and with them
+          // the whole leave, in every build. A notice in the same transaction as my own leave passes
+          // them; so does an admin's removal notice in a suspended group (removeGroupMember).
           && (convData().get('onlyAdminsSend', false) == false
-              || request.auth.uid in convData().get('admins', []))
+              || request.auth.uid in convData().get('admins', [])
+              || leaveNotice())
           // 2026-10-18 group moderation: nobody sends into a suspended or disabled group.
-          && !groupModBlocked(convData())
+          && (!groupModBlocked(convData()) || leaveNotice() || removeNotice())
           // A pending request carries ONE message. `lastSender` is empty until the request is sent,
           // so the first message passes; after that only the RECIPIENT may write, and their reply is
           // itself the acceptance. The requester's second attempt is refused here, by the database.
@@ -2536,7 +2643,7 @@ service cloud.firestore {
           // 'sendText' with restrictedUntil still in the future cannot create ANY message. Admins and
           // the owner are ALWAYS exempt in-rule (so a rogue admin can't grief a co-admin/owner by
           // writing a restriction for them). Auto-lifts when the timeout passes.
-          && !restrictedIn(convData(), 'sendText')
+          && (!restrictedIn(convData(), 'sendText') || leaveNotice())   // 2026-10-19 M1: a muted member may leave
           // 2026-09-24 fix-all: THE OTHER SEND FLAGS, one per kind of message, as the client's
           // `Conversation.Restrict` names them. Only `sendText` was ever checked, so a single-flag
           // restriction (media only, say) did nothing on the server. What the server can see:
@@ -2692,10 +2799,20 @@ service cloud.firestore {
       // Pending join requests from invite links. Created + resolved by the join/approve/deny Cloud
       // Functions (admin SDK, which bypasses these rules); group members may READ to show the pending
       // list. No direct client writes.
+      // 2026-10-19 group fix round S10: a request names who asked to join, so it is read by the
+      // people who answer it (the owner, an admin with Add members, the same test as `adminCan`
+      // .inviteUsers) and by the person who asked. The app only listens with that right
+      // (GroupSettingsView); an older build's listener without it now comes back empty.
       match /joinRequests/{ruid} {
-        allow read: if signedIn() && request.auth.uid in convData().users;
+        allow read: if signedIn() && (ruid == request.auth.uid
+          || (request.auth.uid in convData().users
+              && (request.auth.uid == convData().get('createdBy', '')
+                  || (request.auth.uid in convData().get('admins', [])
+                      && (!(request.auth.uid in convData().get('adminRights', {}))
+                          || 'inviteUsers' in convData().get('adminRights', {})[request.auth.uid])))));
         allow write: if false;
       }
+
       // 2026-10-19 groups v2 step 4: each invite link's record (name, time and usage limits, who
       // made it, the faces of the first people in). Server-only: the functions-groups link callables
       // (createGroupLink, editGroupLink, revokeGroupLink, deleteGroupLink, listGroupLinks,
