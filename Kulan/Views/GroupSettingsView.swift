@@ -86,6 +86,15 @@ struct GroupSettingsView: View {
                     settingLabel("Administrators", "person.badge.shield.checkmark",
                                  value: "\(conv?.admins.count ?? 0)")
                 }
+                // The link page the info page's row opens, pushed (owner 2026-10-19, his picture).
+                if can(.inviteUsers) {
+                    NavigationLink {
+                        InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
+                                        initialCode: conv?.inviteCode ?? "", embedded: true)
+                    } label: {
+                        settingLabel("Group invite link", "link")
+                    }
+                }
                 NavigationLink { GroupMembersListView(cid: cid) } label: {
                     settingLabel("Members", "person.2", value: "\(conv?.users.count ?? 0)")
                 }
