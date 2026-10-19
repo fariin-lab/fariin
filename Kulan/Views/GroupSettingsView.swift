@@ -345,6 +345,10 @@ struct GroupRemovedUsersView: View {
     var body: some View {
         List {
             Section {
+                // The empty state sits in the card itself (owner 2026-10-19), not under it.
+                if conv?.bannedUids.isEmpty ?? true {
+                    Text("Nobody has been removed from this group.").foregroundStyle(.secondary)
+                }
                 ForEach(conv?.bannedUids ?? [], id: \.self) { uid in
                     HStack(spacing: 12) {
                         AvatarView(name: conv?.names[uid] ?? "User", photoUrl: conv?.photos[uid], size: 40)
@@ -358,10 +362,6 @@ struct GroupRemovedUsersView: View {
                                 .disabled(busy != nil)
                         }
                     }
-                }
-            } footer: {
-                if conv?.bannedUids.isEmpty ?? true {
-                    Text("Nobody has been removed from this group.")
                 }
             }
         }
