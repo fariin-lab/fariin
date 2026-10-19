@@ -134,9 +134,18 @@ struct SoundsNotificationsView: View {
         }
     }
     private func setMute(_ until: Double) {
+        let was = (muted, mutedUntil)
         muted = until > Date().timeIntervalSince1970 * 1000
         mutedUntil = until
-        Task { await ChatService.setMute(cid, until: until) }
+        // A refused write puts the label back (2026-10-19 fix round): it said "Muted" for a mute
+        // the server never took.
+        Task {
+            let ok = await ChatService.setMute(cid, until: until)
+            // A newer choice since: that one's own result rules.
+            guard !ok, mutedUntil == until else { return }
+            muted = was.0
+            mutedUntil = was.1
+        }
     }
 }
 

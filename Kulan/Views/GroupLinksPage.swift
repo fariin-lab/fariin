@@ -27,6 +27,9 @@ struct GroupLinksPage: View {
     @State private var qrLink: GroupLink?
     @State private var shareText: String?
     @State private var copied = false
+    @State private var copiedTask: Task<Void, Never>?
+    /// Approve New Members as just chosen, shown until the reload after the write.
+    @State private var heldApproval: Bool?
 
     var body: some View {
         List { content }
@@ -86,8 +89,10 @@ struct GroupLinksPage: View {
 
     private func approvalSection(_ p: GroupLink) -> some View {
         Section {
+            // The chosen value is held until the reload after the write lands (2026-10-19 fix
+            // round): the switch flicked back to the old value while the server answered.
             Toggle("Approve New Members", isOn: Binding(
-                get: { p.requestApproval },
+                get: { heldApproval ?? p.requestApproval },
                 set: { on in setApproval(p, on) }))
                 .disabled(working)
         } footer: {
@@ -162,18 +167,25 @@ struct GroupLinksPage: View {
         UIPasteboard.general.string = l.url
         Haptics.notify(.success)
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { copied = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+        // A second copy restarts the toast's time instead of the first copy's timer hiding it early.
+        copiedTask?.cancel()
+        copiedTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.25)) { copied = false }
         }
     }
 
     /// Runs one change, shows its failure, then reloads what the server really holds.
-    private func change(_ fallback: String, _ work: @escaping () async throws -> Void) {
+    /// `after` runs once the reload is in, before the page is live again.
+    private func change(_ fallback: String, after: (() -> Void)? = nil,
+                        _ work: @escaping () async throws -> Void) {
         guard !working else { return }
         working = true
         Task {
             do { try await work() } catch { linkError = GroupInviteService.errorText(error, fallback) }
             await reload()
+            after?()
             working = false
         }
     }
@@ -200,7 +212,9 @@ struct GroupLinksPage: View {
         change("The revoked links were not deleted. Try again.") { _ = try await GroupInviteService.deleteAllRevoked(cid: cid) }
     }
     private func setApproval(_ p: GroupLink, _ on: Bool) {
-        change("The setting was not changed. Try again.") {
+        guard !working else { return }
+        heldApproval = on
+        change("The setting was not changed. Try again.", after: { heldApproval = nil }) {
             _ = try await GroupInviteService.editLink(cid: cid, code: p.code, changes: ["requestApproval": on])
         }
     }

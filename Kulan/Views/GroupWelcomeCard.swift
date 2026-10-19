@@ -14,9 +14,17 @@ struct GroupWelcomeCard: View {
     @State private var showAdd = false
     @State private var showLink = false
 
-    private var amAdmin: Bool { conv.isAdmin(me) || conv.isOwner(me) }
-    private var canEdit: Bool { amAdmin || conv.membersCanEditInfo }
-    private var canAdd: Bool { amAdmin || conv.membersCanAdd }
+    // The admin's own right, not just "is an admin" (2026-10-19 fix round): an admin without
+    // Change group info / Invite users saw tiles whose writes were then refused. Members by the
+    // group's switch, unless restricted from it, as on the group info page.
+    private var now: Double { Date().timeIntervalSince1970 * 1000 }
+    private var canEdit: Bool {
+        conv.adminCan(me, .changeInfo) || (conv.membersCanEditInfo && !conv.isRestricted(me, .changeInfo, now: now))
+    }
+    private var canAdd: Bool {
+        conv.adminCan(me, .inviteUsers) || (conv.membersCanAdd && !conv.isRestricted(me, .addMembers, now: now))
+    }
+    private var canLink: Bool { conv.adminCan(me, .inviteUsers) }
 
     private var startedLine: String {
         if conv.createdBy == me { return "You started this group" }
@@ -61,7 +69,7 @@ struct GroupWelcomeCard: View {
                     if canAdd {
                         GroupActionTile(icon: "ic_add_member", title: "Add Members") { showAdd = true }
                     }
-                    if amAdmin {
+                    if canLink {
                         GroupActionTile(icon: "link", title: "Group Link") { showLink = true }
                     }
                     if canEdit {

@@ -2574,6 +2574,12 @@ struct ProfilePhotoViewer: View {
     @State private var drag: CGSize = .zero
     @State private var zoom: CGFloat = 1
     @State private var closing = false
+    /// Two fingers are pinching right now.
+    @State private var pinching = false
+    /// A drag gesture is between its first change and its end.
+    @State private var dragActive = false
+    /// The current drag met a pinch: it neither moves nor closes the viewer.
+    @State private var dragWasPinch = false
 
     // Solid page when open and resting; the DRAG is what melts the white (fully, not partially).
     private var backdropOpacity: Double {
@@ -2650,16 +2656,44 @@ struct ProfilePhotoViewer: View {
                 .mask { liftMask }
                 .scaleEffect(zoom)
                 .position(x: x, y: y)
+                // ⛔ PINCH AND DRAG (2026-10-19 fix round): a drag that was part of a pinch moved the
+                // photo, left it off centre when the pinch ended, or closed the viewer. Now a drag
+                // touched by a pinch never moves or closes it, the photo goes home on every way out,
+                // and only a mostly vertical drag closes.
                 .gesture(
                     MagnificationGesture()
-                        .onChanged { if !closing { zoom = max(1, $0) } }
-                        .onEnded { _ in withAnimation(.spring(duration: 0.3)) { zoom = 1 } }
+                        .onChanged {
+                            guard !closing else { return }
+                            pinching = true
+                            if dragActive { dragWasPinch = true }
+                            if drag != .zero { drag = .zero }
+                            zoom = max(1, $0)
+                        }
+                        .onEnded { _ in
+                            pinching = false
+                            if !dragActive { dragWasPinch = false }
+                            guard !closing else { return }
+                            withAnimation(.spring(duration: 0.3)) { zoom = 1; drag = .zero }
+                        }
                 )
                 .simultaneousGesture(
                     DragGesture()
-                        .onChanged { if zoom == 1, !closing, progress == 1 { drag = $0.translation } }
+                        .onChanged {
+                            dragActive = true
+                            if pinching { dragWasPinch = true }
+                            guard !dragWasPinch, zoom == 1, !closing, progress == 1 else { return }
+                            drag = $0.translation
+                        }
                         .onEnded { v in
-                            guard zoom == 1, !closing else { return }
+                            dragActive = false
+                            let wasPinch = dragWasPinch || pinching
+                            dragWasPinch = false
+                            guard !closing else { return }
+                            guard !wasPinch, zoom == 1,
+                                  abs(v.translation.height) > abs(v.translation.width) else {
+                                withAnimation(.spring(duration: 0.3)) { drag = .zero }
+                                return
+                            }
                             // the reference app's rule, matched exactly (MediaInteractiveDismiss): progress is the
                             // straight-line distance over distanceToCompletion = 88, and `.ended`
                             // finishes whenever `percentComplete > 0` — ANY real movement closes it,
@@ -2696,8 +2730,16 @@ struct ProfilePhotoViewer: View {
             if let cached = await DiskImageCache.shared.image(for: photoUrl) { image = cached; return }
             if image != nil, DiskImageCache.shared.memoryImage(for: photoUrl) != nil { return }
             // The shared download (2026-09-25): one request with every avatar of the same person.
-            guard case .image(let data) = await ProfilePhotoLoader.shared.fetch(photoUrl),
-                  let ui = UIImage(data: data) else { return }
+            guard case .image(let data) = await ProfilePhotoLoader.shared.fetch(photoUrl) else { return }
+            // Decoded off the main thread and held to display size, as `DiskImageCache.image(for:)`
+            // does (2026-10-19 fix round): a large original decoded on main at first draw stalled
+            // the opening morph and kept a full-size bitmap in memory.
+            let decoded = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+                guard let raw = UIImage(data: data) else { return nil }
+                let bounded = raw.boundedForDisplay()
+                return (bounded === raw ? raw.preparingForDisplay() : bounded) ?? raw
+            }.value
+            guard let ui = decoded, !Task.isCancelled else { return }
             DiskImageCache.shared.store(ui, data: data, for: photoUrl)
             image = ui
         }

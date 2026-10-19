@@ -45,6 +45,12 @@ struct GroupInfoView: View {
     @State private var confirmDelete = false
     /// A refused Leave / Delete Group. Both used to close the page on `try?` whatever happened.
     @State private var actionError: String?
+    /// The members in page order, re-sorted only when `membersKey` changes (see `memberIds`).
+    @State private var sortedIds: [String] = []
+    /// Ends the previous notice's timer, so a second notice gets its full time on screen.
+    @State private var noticeTask: Task<Void, Never>?
+    /// The first load of the link code and the media figures has run (see the `.task` in `core`).
+    @State private var figuresLoaded = false
     @State private var media: [Message] = []
     @State private var showAllMedia = false
     @State private var viewerImage: Message?
@@ -90,8 +96,17 @@ struct GroupInfoView: View {
     // Per-flag admin right check (owner = all; legacy admin with no adminRights entry = all).
     private func can(_ r: Conversation.Right) -> Bool { conv?.adminCan(me, r) ?? false }
     // An admin with the matching right can; members can too when the group's permission is on.
-    private var canEditInfo: Bool { can(.changeInfo) || (conv?.membersCanEditInfo ?? false) }
-    private var canAdd: Bool { can(.inviteUsers) || (conv?.membersCanAdd ?? false) }
+    // A member an admin restricted from it may not, whatever the group's switch (2026-10-19 fix round).
+    private var canEditInfo: Bool {
+        guard let c = conv else { return false }
+        return c.adminCan(me, .changeInfo)
+            || (c.membersCanEditInfo && !c.isRestricted(me, .changeInfo, now: Date().timeIntervalSince1970 * 1000))
+    }
+    private var canAdd: Bool {
+        guard let c = conv else { return false }
+        return c.adminCan(me, .inviteUsers)
+            || (c.membersCanAdd && !c.isRestricted(me, .addMembers, now: Date().timeIntervalSince1970 * 1000))
+    }
     private var title: String { conv?.title ?? "Group" }
     private var muted: Bool { conv?.isMuted(me, now: Date().timeIntervalSince1970 * 1000) ?? false }
     private var pageBackground: Color { Color(uiColor: .systemGroupedBackground) }
@@ -132,13 +147,17 @@ struct GroupInfoView: View {
         Haptics.notify(.warning)
         notice = text
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { noticeShown = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+        // The previous notice's timer is cancelled: it used to hide this one early.
+        noticeTask?.cancel()
+        noticeTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.25)) { noticeShown = false }
         }
     }
 
     var body: some View {
-        AnyView(core)
+        AnyView(coreWithLoads)
             .overlay(alignment: .bottom) {
                 if noticeShown {
                     Text(notice)
@@ -199,7 +218,8 @@ struct GroupInfoView: View {
             }
             .modifier(GroupInfoDialogs(cid: cid, current: conv?.disappearSeconds ?? 0,
                                        showDescEdit: $showDescEdit, descText: $descText,
-                                       showDisappear: $showDisappear, pendingDisappear: $pendingDisappear))
+                                       showDisappear: $showDisappear, pendingDisappear: $pendingDisappear,
+                                       actionError: $actionError))
             .modifier(GroupInfoExits(cid: cid, conv: conv, me: me,
                                      confirmLeave: $confirmLeave, confirmClear: $confirmClear,
                                      confirmReport: $confirmReport, confirmDelete: $confirmDelete,
@@ -248,11 +268,29 @@ struct GroupInfoView: View {
                 }
                 if let fresh = await ChatService.sharedMedia(cid) { media = fresh }
             }
-            // The gallery count and the storage figure, again on every return (the gallery or a
-            // clear may have changed them).
-            .onAppear { Task { await loadMediaFigures() } }
-            // Again on every return: the link page may have reset or turned off the link.
-            .onAppear { Task { await loadShareCode() } }
+    }
+
+    /// `core` with its loads and the member-order cache, apart so neither chain grows too long for
+    /// the type checker.
+    private var coreWithLoads: some View {
+        core
+            // The gallery count, the storage figure and the link's code: once when the page opens
+            // (2026-10-19 fix round: every return from any page ran the server call and the
+            // gallery merge again), then only on coming back from a page that can change them.
+            .task {
+                guard !figuresLoaded else { return }
+                figuresLoaded = true
+                Task { await loadShareCode() }
+                Task { await loadMediaFigures() }
+            }
+            // The link page (here or under Group Settings) may have reset or turned off the link.
+            .onChange(of: showInvite) { _, open in if !open { Task { await loadShareCode() } } }
+            .onChange(of: showSettings) { _, open in if !open { Task { await loadShareCode() } } }
+            // The gallery or a clear may have changed the figures.
+            .onChange(of: showAllMedia) { _, open in if !open { Task { await loadMediaFigures() } } }
+            .onChange(of: showStorage) { _, open in if !open { Task { await loadMediaFigures() } } }
+            // The member order, sorted again only when the members, admins or names change.
+            .onChange(of: membersKey, initial: true) { _, _ in sortedIds = GroupMembers.sorted(conv, me: me) }
     }
 
     private func loadShareCode() async {
@@ -317,10 +355,17 @@ struct GroupInfoView: View {
                     .opacity(showGroupPhoto ? 0 : 1)
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { artRect.rect = $0 }
                     .onTapGesture { showGroupPhoto = true }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Group photo")
+                    .accessibilityAddTraits(.isButton)
             } else {
-                GroupFaceCluster(conv: conv, me: me)
+                GroupFaceCluster(faces: GroupFaceCluster.picks(conv, everyone: memberIds, me: me))
+                    .equatable()
                     // No photo yet: whoever may change it goes straight to Edit Group.
                     .onTapGesture { if canEditInfo { showEdit = true } }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(canEditInfo ? "Add Group Photo" : "Group members")
+                    .accessibilityAddTraits(canEditInfo ? .isButton : [])
             }
             headerCaption(.primary)
             actionsRow.padding(.top, 2)
@@ -440,7 +485,7 @@ struct GroupInfoView: View {
     @ViewBuilder private var muteMenuItems: some View {
         if muted {
             Section(muteUntilLabel) {
-                Button("Unmute") { Task { await ChatService.setMute(cid, until: 0) } }
+                Button("Unmute") { setMuted(0) }
             }
         } else {
             Section("Mute this chat for…") {
@@ -453,7 +498,14 @@ struct GroupInfoView: View {
         }
     }
 
-    private func setMuted(_ until: Double) { Task { await ChatService.setMute(cid, until: until) } }
+    /// The bell reads the group document, which drops a refused write by itself; the refusal is
+    /// also said (2026-10-19 fix round), so a mute that did not take is not left unexplained.
+    private func setMuted(_ until: Double) {
+        Task {
+            let ok = await ChatService.setMute(cid, until: until)
+            if !ok { actionError = "Your mute setting was not changed. Check your connection and try again." }
+        }
+    }
 
     private var muteUntilLabel: String {
         let secs = (conv?.mutedBy[me] ?? 0) / 1000
@@ -701,23 +753,39 @@ struct GroupInfoView: View {
 
     /// The reference shows six members; past six, the first five and See All.
     private static let membersShown = 6
-    private var hasMoreMembers: Bool { (conv?.users.count ?? 0) > Self.membersShown }
-    private var shownMembers: [String] {
-        let all = GroupMembers.sorted(conv, me: me)
-        return hasMoreMembers ? Array(all.prefix(Self.membersShown - 1)) : all
+
+    /// What the member order depends on. The sort runs when one of these changes, not on every
+    /// redraw of the page (2026-10-19 fix round: a large group made each redraw slow).
+    struct MembersKey: Equatable {
+        let users: [String]
+        let admins: [String]
+        let names: [String: String]
+    }
+    private var membersKey: MembersKey {
+        let c = conv
+        return MembersKey(users: c?.users ?? [], admins: c?.admins ?? [], names: c?.names ?? [:])
+    }
+    /// The members in page order, from the cache (`sortedIds`); sorted here only until it fills.
+    private var memberIds: [String] {
+        if sortedIds.isEmpty, let c = conv, !c.users.isEmpty { return GroupMembers.sorted(c, me: me) }
+        return sortedIds
     }
 
     private var membersCard: some View {
-        VStack(spacing: 0) {
+        let c = conv
+        let all = memberIds
+        let hasMore = all.count > Self.membersShown
+        let shown = hasMore ? Array(all.prefix(Self.membersShown - 1)) : all
+        return VStack(spacing: 0) {
             if canAdd {
                 MemberCircleRow(icon: "plus", title: "Add Members") { showAdd = true }
                 memberDivider
             }
-            ForEach(Array(shownMembers.enumerated()), id: \.element) { i, uid in
+            ForEach(Array(shown.enumerated()), id: \.element) { i, uid in
                 if i > 0 { memberDivider }
-                GroupInfoMemberRow(conv: conv, uid: uid, me: me) { openMember(uid) }
+                GroupInfoMemberRow(conv: c, uid: uid, me: me) { openMember(uid) }.equatable()
             }
-            if hasMoreMembers {
+            if hasMore {
                 memberDivider
                 MemberCircleRow(icon: "chevron.down", title: "See All") { showAllMembers = true }
             }
@@ -741,7 +809,8 @@ struct GroupInfoView: View {
         Button { showAllMembers = true } label: {
             VStack(alignment: .leading, spacing: 4) {
                 memberCloudHeader
-                MemberBubbleCloud(conv: conv, ids: Array(GroupMembers.sorted(conv, me: me).prefix(MemberBubbleCloud.capacity)))
+                MemberBubbleCloud(faces: MemberFace.list(conv, Array(memberIds.prefix(MemberBubbleCloud.capacity))))
+                    .equatable()
                     .padding(.horizontal, 8)
                     .padding(.bottom, 10)
             }
@@ -875,9 +944,19 @@ struct GroupFace: View {
 /// A group with no photo (owner's mockup 2026-10-19): a ~200pt glass disc, a little lighter than
 /// the page, holding three members of different sizes that overlap: a large face top-left, a
 /// medium one bottom-right, a small one bottom-centre. Faces with photos take the big places.
-private struct GroupFaceCluster: View {
-    let conv: Conversation?
-    let me: String
+private struct GroupFaceCluster: View, Equatable {
+    /// The three faces, picked by `picks` from the page's cached member order (plain values, so
+    /// the disc is not redrawn while its faces stay the same).
+    let faces: [MemberFace]
+
+    /// Members with a photo take the big places; me only when I am alone.
+    static func picks(_ conv: Conversation?, everyone: [String], me: String) -> [MemberFace] {
+        let others = everyone.filter { $0 != me }
+        let pool = others.isEmpty ? everyone : others
+        let withPhoto = pool.filter { ProfilePhotoIndex.hasPicture(conv?.photos[$0]) }
+        let without = pool.filter { !ProfilePhotoIndex.hasPicture(conv?.photos[$0]) }
+        return MemberFace.list(conv, Array((withPhoto + without).prefix(slots.count)))
+    }
 
     /// The round group photo's size (`GroupInfoView.photoSide`), so a group with no photo and one
     /// with a photo show the same circle (owner 2026-10-19; it was 200).
@@ -889,21 +968,12 @@ private struct GroupFaceCluster: View {
         return base.map { (x: $0.0 * k, y: $0.1 * k, d: $0.2 * k) }
     }()
 
-    private var picks: [String] {
-        let everyone = GroupMembers.sorted(conv, me: me)
-        let others = everyone.filter { $0 != me }
-        let pool = others.isEmpty ? everyone : others
-        let withPhoto = pool.filter { ProfilePhotoIndex.hasPicture(conv?.photos[$0]) }
-        let without = pool.filter { !ProfilePhotoIndex.hasPicture(conv?.photos[$0]) }
-        return Array((withPhoto + without).prefix(Self.slots.count))
-    }
-
     var body: some View {
         ZStack {
             Circle().fill(Color.white.opacity(0.06))
                 .liquidGlass(Circle())
-            ForEach(Array(picks.enumerated()), id: \.element) { i, uid in
-                face(i, uid)
+            ForEach(Array(faces.prefix(Self.slots.count).enumerated()), id: \.element.uid) { i, f in
+                face(i, f)
             }
         }
         .frame(width: Self.side, height: Self.side)
@@ -911,9 +981,9 @@ private struct GroupFaceCluster: View {
     }
 
     /// The smaller faces carry a thin ring of the page so an overlap reads as one face in front.
-    private func face(_ i: Int, _ uid: String) -> some View {
+    private func face(_ i: Int, _ f: MemberFace) -> some View {
         let s = Self.slots[i]
-        return GroupFace(name: conv?.names[uid] ?? "User", photo: conv?.photos[uid], size: s.d)
+        return GroupFace(name: f.name, photo: f.photo, size: s.d)
             .overlay { Circle().stroke(Color(uiColor: .systemGroupedBackground), lineWidth: i == 0 ? 0 : 3) }
             .offset(x: s.x, y: s.y)
     }
@@ -923,9 +993,9 @@ private struct GroupFaceCluster: View {
 /// the biggest in the middle, smaller ones toward the edges. Fixed spots as shares of the card's
 /// width, so it reads organic on every phone and never overlaps. Faces are not buttons: the card
 /// around the cloud is.
-private struct MemberBubbleCloud: View {
-    let conv: Conversation?
-    let ids: [String]
+private struct MemberBubbleCloud: View, Equatable {
+    /// Plain values (2026-10-19 fix round), so the cloud is not redrawn while its faces stay the same.
+    let faces: [MemberFace]
 
     static let height: CGFloat = 160
     /// x as a share of the width, y as a share of the height, diameter; the first member (me, then
@@ -940,8 +1010,8 @@ private struct MemberBubbleCloud: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
-                ForEach(Array(ids.prefix(Self.slots.count).enumerated()), id: \.element) { i, uid in
-                    bubble(i, uid, width: geo.size.width)
+                ForEach(Array(faces.prefix(Self.slots.count).enumerated()), id: \.element.uid) { i, f in
+                    bubble(i, f, width: geo.size.width)
                 }
             }
             .frame(width: geo.size.width, height: Self.height)
@@ -949,11 +1019,22 @@ private struct MemberBubbleCloud: View {
         .frame(height: Self.height)
     }
 
-    private func bubble(_ i: Int, _ uid: String, width: CGFloat) -> some View {
+    private func bubble(_ i: Int, _ f: MemberFace, width: CGFloat) -> some View {
         let s = Self.slots[i]
-        return GroupFace(name: conv?.names[uid] ?? "User", photo: conv?.photos[uid], size: s.d)
+        return GroupFace(name: f.name, photo: f.photo, size: s.d)
             .position(x: s.x * width, y: s.y * Self.height)
             .accessibilityHidden(true)
+    }
+}
+
+/// One face in the no-photo disc or the member cloud, as plain values.
+private struct MemberFace: Equatable {
+    let uid: String
+    let name: String
+    let photo: String?
+
+    static func list(_ conv: Conversation?, _ ids: [String]) -> [MemberFace] {
+        ids.map { MemberFace(uid: $0, name: conv?.names[$0] ?? "User", photo: conv?.photos[$0]) }
     }
 }
 
@@ -961,22 +1042,33 @@ private struct MemberBubbleCloud: View {
 /// 36pt photo, 12 to the text, the name in the body style with their Role under it as a tinted
 /// pill, Owner / Admin in grey at the end, 7 above and below. The trailing word stays beside a
 /// Role here: that is the reference look the owner asked for.
-private struct GroupInfoMemberRow: View {
-    let conv: Conversation?
+private struct GroupInfoMemberRow: View, Equatable {
+    // Plain values, read out of the group once (2026-10-19 fix round): a row whose member did not
+    // change compares equal and is not redrawn when anything else in the group moves.
     let uid: String
-    let me: String
+    let name: String
+    let photo: String?
+    let rank: String?
+    let role: GroupRole?
     let onTap: () -> Void
 
-    private var name: String { uid == me ? "You" : (conv?.names[uid] ?? "User") }
-    private var rank: String? {
-        if let c = conv, !c.createdBy.isEmpty, c.createdBy == uid { return "Owner" }
-        return (conv?.isAdmin(uid) ?? false) ? "Admin" : nil
+    init(conv: Conversation?, uid: String, me: String, onTap: @escaping () -> Void) {
+        self.uid = uid
+        self.name = uid == me ? "You" : (conv?.names[uid] ?? "User")
+        self.photo = conv?.photos[uid]
+        self.rank = GroupMembers.rank(conv, uid)
+        self.role = conv?.roles[uid]
+        self.onTap = onTap
+    }
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.uid == b.uid && a.name == b.name && a.photo == b.photo && a.rank == b.rank && a.role == b.role
     }
 
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 12) {
-                AvatarView(name: name, photoUrl: conv?.photos[uid], size: 36)
+                AvatarView(name: name, photoUrl: photo, size: 36)
                 nameStack
                 Spacer(minLength: 8)
                 if let rank {
@@ -995,7 +1087,7 @@ private struct GroupInfoMemberRow: View {
                 Text(name).font(.body).foregroundStyle(.primary).lineLimit(1)
                 VerifiedMark(uid: uid, size: 13)
             }
-            if let role = conv?.roles[uid] { MemberLabelPill(role: role, uid: uid) }
+            if let role { MemberLabelPill(role: role, uid: uid) }
         }
     }
 }
@@ -1090,46 +1182,69 @@ private struct GroupInfoUpgradeDialogs: ViewModifier {
 
 /// The group's members in the order every list shows them: me, then admins, then by name.
 enum GroupMembers {
+    /// 2026-10-19 fix round: each name lowercased once and the admins put in a Set, instead of
+    /// both on every comparison of the sort (a large group redrew the page slowly).
     static func sorted(_ conv: Conversation?, me: String) -> [String] {
-        (conv?.users ?? []).sorted { a, b in
-            if a == me { return true }
-            if b == me { return false }
-            let aAdmin = conv?.isAdmin(a) ?? false, bAdmin = conv?.isAdmin(b) ?? false
-            if aAdmin != bAdmin { return aAdmin }
-            return (conv?.names[a] ?? "").lowercased() < (conv?.names[b] ?? "").lowercased()
+        guard let c = conv else { return [] }
+        let admins = Set(c.admins)
+        let keys = c.users.map { uid -> (String, Bool, String) in
+            (uid, admins.contains(uid), (c.names[uid] ?? "").lowercased())
         }
+        return keys.sorted { a, b in
+            if a.0 == me { return true }
+            if b.0 == me { return false }
+            if a.1 != b.1 { return a.1 }
+            return a.2 < b.2
+        }.map(\.0)
+    }
+
+    /// "Owner" / "Admin" / nil, the trailing word on a member row.
+    static func rank(_ conv: Conversation?, _ uid: String) -> String? {
+        if let c = conv, !c.createdBy.isEmpty, c.createdBy == uid { return "Owner" }
+        return (conv?.isAdmin(uid) ?? false) ? "Admin" : nil
     }
 }
 
 /// One member: photo, name, their Role under it, and Owner / Admin on the right.
-struct GroupMemberRow: View {
-    let conv: Conversation?
+struct GroupMemberRow: View, Equatable {
+    // Plain values, read out of the group once (2026-10-19 fix round): a row whose member did not
+    // change compares equal and is not redrawn when anything else in the group moves.
     let uid: String
-    let me: String
+    let name: String
+    let photo: String?
+    let rank: String?
+    let role: GroupRole?
     let onTap: () -> Void
 
-    private var name: String { uid == me ? "You" : (conv?.names[uid] ?? "User") }
-    private var rank: String? {
-        if let c = conv, !c.createdBy.isEmpty, c.createdBy == uid { return "Owner" }
-        return (conv?.isAdmin(uid) ?? false) ? "Admin" : nil
+    init(conv: Conversation?, uid: String, me: String, onTap: @escaping () -> Void) {
+        self.uid = uid
+        self.name = uid == me ? "You" : (conv?.names[uid] ?? "User")
+        self.photo = conv?.photos[uid]
+        self.rank = GroupMembers.rank(conv, uid)
+        self.role = conv?.roles[uid]
+        self.onTap = onTap
+    }
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.uid == b.uid && a.name == b.name && a.photo == b.photo && a.rank == b.rank && a.role == b.role
     }
 
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 12) {
-                AvatarView(name: name, photoUrl: conv?.photos[uid], size: 40)
+                AvatarView(name: name, photoUrl: photo, size: 40)
                 // The Role sits on the name's line, right of it (owner 2026-10-18: "not under the
                 // name"). The name gives way first, so a long one truncates before the chip does.
                 HStack(spacing: 6) {
                     Text(name).foregroundStyle(.primary).lineLimit(1)
                     VerifiedMark(uid: uid, size: 13)
-                    if let role = conv?.roles[uid] { RoleChip(role: role).layoutPriority(1) }
+                    if let role { RoleChip(role: role).layoutPriority(1) }
                 }
                 Spacer(minLength: 8)
                 // Owner / Admin at the reference app's size for this label (owner 2026-10-18): the
                 // subheadline style (15pt), secondary grey, not the 17pt the name uses.
                 // One label only (owner 2026-10-19): a Role stands in for Owner / Admin.
-                if let rank, conv?.roles[uid] == nil { Text(rank).font(.subheadline).foregroundStyle(.secondary) }
+                if let rank, role == nil { Text(rank).font(.subheadline).foregroundStyle(.secondary) }
             }
             .padding(.horizontal, 16).padding(.vertical, 9)
             .contentShape(Rectangle())
@@ -1161,6 +1276,17 @@ private struct GroupInfoDialogs: ViewModifier {
     @Binding var descText: String
     @Binding var showDisappear: Bool
     @Binding var pendingDisappear: Int?
+    /// The page's "Could not do that" alert (`GroupInfoExits`), for a timer the server refused.
+    @Binding var actionError: String?
+
+    /// `setDisappear` answers false when nothing was written (2026-10-19 fix round): say so, the
+    /// timer row stays on the value the group really has.
+    private func setTimer(_ seconds: Int) {
+        Task {
+            let ok = await ChatService.setDisappear(cid, seconds: seconds)
+            if !ok { actionError = "The disappearing message timer was not changed. Check your connection and try again." }
+        }
+    }
 
     func body(content: Content) -> some View {
         content
@@ -1174,7 +1300,8 @@ private struct GroupInfoDialogs: ViewModifier {
             // once; turning it ON still asks first, because in a group it deletes for every member.
             .sheet(isPresented: $showDisappear) {
                 DisappearingMessagesView(cid: cid, current: current) { s in
-                    if s == 0 { Task { await ChatService.setDisappear(cid, seconds: 0) } }
+                    // Off only when it is on: "no change" writes nothing, which is not a failure.
+                    if s == 0 { if current != 0 { setTimer(0) } }
                     else if s != current {
                         // After the page has gone, so the question is not asked under a closing sheet.
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { pendingDisappear = s }
@@ -1187,7 +1314,7 @@ private struct GroupInfoDialogs: ViewModifier {
             )) {
                 Button("Cancel", role: .cancel) { pendingDisappear = nil }
                 Button("Turn On") {
-                    if let s = pendingDisappear { Task { await ChatService.setDisappear(cid, seconds: s) } }
+                    if let s = pendingDisappear { setTimer(s) }
                     pendingDisappear = nil
                 }
             } message: {
@@ -1290,7 +1417,8 @@ struct AddMembersSheet: View {
     @State private var known: [String: (name: String, photo: String?)] = [:]
 
     /// Your chats, A to Z, as Select Members groups them.
-    private var lettered: [(letter: String, people: [(id: String, name: String, photo: String?)])] {
+    private func lettered(_ candidates: [(id: String, name: String, photo: String?)])
+        -> [(letter: String, people: [(id: String, name: String, photo: String?)])] {
         let groups = Dictionary(grouping: candidates) { p -> String in
             let f = p.name.trimmingCharacters(in: .whitespaces).uppercased().first
             return f.map { $0.isLetter ? String($0) : "#" } ?? "#"
@@ -1303,7 +1431,10 @@ struct AddMembersSheet: View {
     /// page"): the picked people as chips on top, A to Z under it, results while searching, the
     /// Forward page's rows, X on the left and a blue Add with its spinner inside.
     var body: some View {
-        NavigationStack {
+        // Built once per body (2026-10-19 fix round): the chat list was filtered and sorted twice.
+        let candidates = self.candidates
+        let letterGroups = lettered(candidates)
+        return NavigationStack {
             List {
                 if !selected.isEmpty {
                     Section("Adding · \(selected.count)") {
@@ -1339,7 +1470,7 @@ struct AddMembersSheet: View {
                             Text("Search by name or username to add anyone.").foregroundStyle(.secondary)
                         }
                     }
-                    ForEach(lettered, id: \.letter) { group in
+                    ForEach(letterGroups, id: \.letter) { group in
                         Section(group.letter) {
                             ForEach(group.people, id: \.id) { p in memberPickRow(p.id, p.name, p.photo) }
                         }
@@ -1356,7 +1487,9 @@ struct AddMembersSheet: View {
             }
             .listStyle(.insetGrouped)
             .searchable(text: $query, prompt: "Name or username")
-            .onChange(of: query) { _, q in search(q) }
+            // One search per pause in typing (2026-10-19 fix round): each key used to start its own
+            // search, and a slow early one could land after, and over, the last.
+            .task(id: query) { await search(query) }
             .navigationTitle("Add Members")
             .navigationBarTitleDisplayMode(.inline)
             .alert("Couldn't add members", isPresented: Binding(get: { errorText != nil }, set: { if !$0 { errorText = nil } })) {
@@ -1424,14 +1557,17 @@ struct AddMembersSheet: View {
         .alignmentGuide(.listRowSeparatorLeading) { _ in 52 }
     }
 
-    private func search(_ q: String) {
+    /// Run by `.task(id: query)`: a newer query cancels this one, during the pause or after.
+    private func search(_ q: String) async {
         let trimmed = q.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { results = []; return }
-        Task {
-            var r = await ChatService.searchUsers(prefix: trimmed)
-            if r.isEmpty, let exact = await ChatService.findByHandle(trimmed) { r = [exact] }
-            await MainActor.run { results = r }
-        }
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        guard !Task.isCancelled else { return }
+        var r = await ChatService.searchUsers(prefix: trimmed)
+        guard !Task.isCancelled else { return }
+        if r.isEmpty, let exact = await ChatService.findByHandle(trimmed) { r = [exact] }
+        guard !Task.isCancelled else { return }
+        results = r
     }
 
     private func toggle(_ id: String) {
@@ -1464,6 +1600,8 @@ struct GroupMemberSheet: View {
     private var isMuted: Bool { mutedUntil > Date().timeIntervalSince1970 * 1000 }
 
     @State private var busy = false
+    /// The keyboard is up (the Role field): Save Changes keeps a fixed gap over it.
+    @State private var keyboardUp = false
     @State private var actionError: String?
     // 2026-09-24 fix-all #124
     @State private var showBlock = false
@@ -1580,6 +1718,12 @@ struct GroupMemberSheet: View {
             .scrollDismissesKeyboard(.interactively)
             .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
             .safeAreaInset(edge: .bottom) { saveBar }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                keyboardUp = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                keyboardUp = false
+            }
             .navigationTitle(isOwner || member.isAdmin ? "Admin" : "Member")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(isPresented: $showProfileHere) {
@@ -1752,9 +1896,13 @@ struct GroupMemberSheet: View {
     private static let saveHeight: CGFloat = 52
     private static let saveSide: CGFloat = 30
     private var saveBottomPad: CGFloat {
+        // Over the keyboard a fixed gap (2026-10-19 fix round): the screen-edge sum below is for
+        // the home-indicator band and left the pill sitting on the keys, then jumping as it went.
+        if keyboardUp { return Self.saveOverKeys }
         let w = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
         return max(0, Self.saveSide - (w?.safeAreaInsets.bottom ?? 0))
     }
+    private static let saveOverKeys: CGFloat = 14
 
     /// Save Changes, pinned to the foot: the app's blue glass pill, live only once something changed.
     /// The page scrolls UNDER it, behind a fade of the page colour (saveFade).
@@ -2030,34 +2178,54 @@ struct GroupMembersSheet: View {
 
     private func name(_ uid: String) -> String { uid == me ? "You" : (conv?.names[uid] ?? "User") }
 
-    /// Members matching the search, sorted by name (or admins first, then by name).
-    private var members: [String] {
+    /// Members matching the search, sorted by name (or admins first, then by name). Each member's
+    /// name and rank worked out once, not on every comparison (2026-10-19 fix round).
+    private func members(_ c: Conversation?) -> [String] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        let all = (conv?.users ?? []).filter {
-            q.isEmpty || name($0).lowercased().contains(q) || (conv?.roles[$0]?.display.lowercased().contains(q) ?? false)
+        let admins = Set(c?.admins ?? [])
+        let owner = c?.createdBy
+        let rows = (c?.users ?? []).compactMap { uid -> (uid: String, name: String, rank: Int)? in
+            let n = uid == me ? "You" : (c?.names[uid] ?? "User")
+            guard q.isEmpty || n.lowercased().contains(q)
+                    || (c?.roles[uid]?.display.lowercased().contains(q) ?? false) else { return nil }
+            let rank = owner == uid ? 0 : (admins.contains(uid) ? 1 : 2)
+            return (uid: uid, name: n, rank: rank)
         }
-        return all.sorted { a, b in
-            if adminsFirst {
-                let ra = rank(a), rb = rank(b)
-                if ra != rb { return ra < rb }
-            }
-            return name(a).localizedCaseInsensitiveCompare(name(b)) == .orderedAscending
-        }
+        let byRank = adminsFirst
+        return rows.sorted { a, b in
+            if byRank && a.rank != b.rank { return a.rank < b.rank }
+            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }.map(\.uid)
     }
-    private func rank(_ uid: String) -> Int {
-        if conv?.createdBy == uid { return 0 }
-        return (conv?.isAdmin(uid) ?? false) ? 1 : 2
+
+    /// What the list depends on: the sections are built again only when one of these changes.
+    private struct ListKey: Equatable {
+        let users: [String]
+        let admins: [String]
+        let names: [String: String]
+        let roles: [String: GroupRole]
+        let owner: String
+        let query: String
+        let adminsFirst: Bool
     }
+    private var listKey: ListKey {
+        let c = conv
+        return ListKey(users: c?.users ?? [], admins: c?.admins ?? [], names: c?.names ?? [:],
+                       roles: c?.roles ?? [:], owner: c?.createdBy ?? "", query: query, adminsFirst: adminsFirst)
+    }
+    @State private var cachedSections: [(String, [String])] = []
+    @State private var sectionsBuilt = false
     /// The letter a name files under: A–Z, everything else "#".
     private func letter(_ uid: String) -> String {
         guard let c = name(uid).folding(options: .diacriticInsensitive, locale: .current).first,
               c.isLetter, c.isASCII else { return "#" }
         return String(c).uppercased()
     }
-    private var sections: [(String, [String])] {
-        if adminsFirst { return [("", members)] }
+    private func buildSections() -> [(String, [String])] {
+        let list = members(conv)
+        if adminsFirst { return [("", list)] }
         var out: [(String, [String])] = []
-        for uid in members {
+        for uid in list {
             let l = letter(uid)
             if let i = out.firstIndex(where: { $0.0 == l }) { out[i].1.append(uid) } else { out.append((l, [uid])) }
         }
@@ -2065,12 +2233,16 @@ struct GroupMembersSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
+        let c = conv
+        // The cache once it is built; built here only for the very first frame.
+        let sections = sectionsBuilt ? cachedSections : buildSections()
+        return NavigationStack {
             List {
                 ForEach(sections, id: \.0) { sec in
                     Section {
                         ForEach(sec.1, id: \.self) { uid in
-                            GroupMemberRow(conv: conv, uid: uid, me: me) { opened = OpenedMember(id: uid) }
+                            GroupMemberRow(conv: c, uid: uid, me: me) { opened = OpenedMember(id: uid) }
+                                .equatable()
                                 .listRowInsets(EdgeInsets())
                         }
                     } header: {
@@ -2117,6 +2289,10 @@ struct GroupMembersSheet: View {
                 InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
                                 initialCode: conv?.inviteCode ?? "", embedded: true)
             }
+        }
+        .onChange(of: listKey, initial: true) { _, _ in
+            cachedSections = buildSections()
+            sectionsBuilt = true
         }
     }
 

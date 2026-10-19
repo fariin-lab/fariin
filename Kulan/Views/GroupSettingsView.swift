@@ -35,7 +35,7 @@ struct GroupSettingsView: View {
     init(cid: String) { self.cid = cid }
 
     @State private var joinReqs: [JoinRequest] = []
-    @State private var reqListener: ListenerRegistration?
+    @State private var reqListener = ListenerBox()
     @State private var actionError: String?
     @State private var held = HeldConversation()
 
@@ -51,7 +51,7 @@ struct GroupSettingsView: View {
         return held.conv
     }
     @State private var ownConv: Conversation?
-    @State private var convListener: ListenerRegistration?
+    @State private var convListener = ListenerBox()
     private func can(_ r: Conversation.Right) -> Bool { conv?.adminCan(me, r) ?? false }
     /// The permissions are group rules: the change-info right edits them, other admins read them.
     private var canEdit: Bool { can(.changeInfo) }
@@ -113,25 +113,22 @@ struct GroupSettingsView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Group Settings")
         .navigationBarTitleDisplayMode(.inline)
+        // Started once and kept while a child page is pushed; removed with the page (`ListenerBox`).
         .onAppear {
-            if convListener == nil {
-                convListener = Firestore.firestore().collection("conversations").document(cid)
+            if convListener.reg == nil {
+                convListener.reg = Firestore.firestore().collection("conversations").document(cid)
                     .addSnapshotListener { snap, _ in
                         guard let snap, snap.exists, let data = snap.data() else { return }
                         ownConv = Conversation(id: snap.documentID, data: data)
                     }
             }
-            guard reqListener == nil, can(.inviteUsers) else { return }
-            reqListener = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
+            guard reqListener.reg == nil, can(.inviteUsers) else { return }
+            reqListener.reg = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
         }
         // Rights can arrive with the group's own document, after the first appearance.
         .onChange(of: can(.inviteUsers)) { _, now in
-            guard now, reqListener == nil else { return }
-            reqListener = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
-        }
-        .onDisappear {
-            reqListener?.remove(); reqListener = nil
-            convListener?.remove(); convListener = nil
+            guard now, reqListener.reg == nil else { return }
+            reqListener.reg = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
         }
         .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
                                                           set: { if !$0 { actionError = nil } })) {
@@ -252,19 +249,31 @@ struct GroupAdminsView: View {
     @State private var actionError: String?
     /// The member picked in Add Admin, waiting for the confirm (owner 2026-10-18: "no confirmation").
     @State private var pendingAdmin: String?
+    /// A refusal that came back while the Add Admin sheet was still on screen or going down: an
+    /// alert raised then is lost, so it waits for the sheet's `onDismiss` (2026-10-19 fix round).
+    @State private var pickerShown = false
+    @State private var queuedError: String?
 
     private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
     private var canAddAdmins: Bool { conv?.adminCan(me, .addAdmins) ?? false }
-    private var admins: [String] {
-        GroupMembers.sorted(conv, me: me).filter { conv?.isAdmin($0) ?? false }
-            .sorted { a, _ in a == conv?.createdBy }
-    }
-    private var others: [String] {
-        GroupMembers.sorted(conv, me: me).filter { !(conv?.isAdmin($0) ?? false) }
+    /// The admins (owner first) and everyone else, from one sort of the members.
+    private func split(_ c: Conversation?) -> (admins: [String], others: [String]) {
+        let all = GroupMembers.sorted(c, me: me)
+        let adminSet = Set(c?.admins ?? [])
+        let owner = c?.createdBy
+        var admins = all.filter { adminSet.contains($0) }
+        if let owner, let i = admins.firstIndex(of: owner) {
+            let first = admins.remove(at: i)
+            admins.insert(first, at: 0)
+        }
+        return (admins, all.filter { !adminSet.contains($0) })
     }
 
     var body: some View {
-        List {
+        // Read once per body (2026-10-19 fix round): the group lookup and the sort ran per use.
+        let conv = self.conv
+        let (admins, others) = split(conv)
+        return List {
             // owner 2026-10-18: the owner, or an admin the owner gave "Add new admins".
             if canAddAdmins && !others.isEmpty {
                 Section {
@@ -273,7 +282,7 @@ struct GroupAdminsView: View {
             }
             Section {
                 ForEach(admins, id: \.self) { uid in
-                    GroupMemberRow(conv: conv, uid: uid, me: me) { opened = uid }
+                    GroupMemberRow(conv: conv, uid: uid, me: me) { opened = uid }.equatable()
                         .listRowInsets(EdgeInsets())
                 }
             } footer: {
@@ -288,10 +297,13 @@ struct GroupAdminsView: View {
             GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: o.id)
                 .presentationDetents([.large])
         }
-        .sheet(isPresented: $showPick) {
+        .sheet(isPresented: $showPick, onDismiss: {
+            pickerShown = false
+            if let q = queuedError { queuedError = nil; actionError = q }
+        }) {
             NavigationStack {
                 List(others, id: \.self) { uid in
-                    GroupMemberRow(conv: conv, uid: uid, me: me) { pendingAdmin = uid }
+                    GroupMemberRow(conv: conv, uid: uid, me: me) { pendingAdmin = uid }.equatable()
                         .listRowInsets(EdgeInsets())
                 }
                 .navigationTitle("Add Admin")
@@ -309,6 +321,7 @@ struct GroupAdminsView: View {
                     Text("They will be able to manage the group with the rights you give them. You can change or remove them at any time.")
                 }
             }
+            .onAppear { pickerShown = true }
             .presentationDetents([.medium, .large])
         }
         .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
@@ -326,7 +339,9 @@ struct GroupAdminsView: View {
         Task {
             do { try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: give) } catch {
                 let msg = error.localizedDescription
-                await MainActor.run { actionError = msg }
+                await MainActor.run {
+                    if pickerShown { queuedError = msg } else { actionError = msg }
+                }
             }
         }
     }
@@ -494,7 +509,7 @@ struct GroupMembersListView: View {
         guard let c = conv, uid != me, !c.isOwner(uid), c.adminCan(me, .banUsers) else { return false }
         return c.isOwner(me) || !c.isAdmin(uid)
     }
-    private var shown: [String] {
+    private func filtered(_ conv: Conversation?) -> [String] {
         let all = GroupMembers.sorted(conv, me: me)
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return all }
@@ -502,7 +517,10 @@ struct GroupMembersListView: View {
     }
 
     var body: some View {
-        List {
+        // Read once per body (2026-10-19 fix round): the group lookup and the sort ran per use.
+        let conv = self.conv
+        let shown = filtered(conv)
+        return List {
             if canAdd && query.isEmpty {
                 Section {
                     Button { showAdd = true } label: { Label("Add Members", systemImage: "person.badge.plus") }
@@ -514,7 +532,7 @@ struct GroupMembersListView: View {
             if !withRoles.isEmpty && query.isEmpty {
                 Section {
                     ForEach(withRoles, id: \.self) { uid in
-                        GroupMemberRow(conv: conv, uid: uid, me: me) { opened = uid }
+                        GroupMemberRow(conv: conv, uid: uid, me: me) { opened = uid }.equatable()
                             .listRowInsets(EdgeInsets())
                     }
                 } header: { Text("Members with roles") } footer: {
@@ -523,7 +541,7 @@ struct GroupMembersListView: View {
             }
             Section(conv?.memberCountLabel.capitalized ?? "Members") {
                 ForEach(shown, id: \.self) { uid in
-                    GroupMemberRow(conv: conv, uid: uid, me: me) { opened = uid }
+                    GroupMemberRow(conv: conv, uid: uid, me: me) { opened = uid }.equatable()
                         .listRowInsets(EdgeInsets())
                         // Swipe left to remove, as the Blocked list unblocks (owner 2026-10-19). The
                         // member card's own rule: remove right, never me or the owner, an admin only
@@ -578,8 +596,15 @@ struct GroupRequestsView: View {
     @State private var reqListener: ListenerRegistration?
     @State private var showInvite = false
     @State private var actionError: String?
+    /// The primary link's code from the server (getShareLink), as the group info page reads it;
+    /// nil until it answers or when it fails, then the group doc's old `inviteCode`.
+    @State private var shareCode: String?
 
     private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
+
+    private func loadShareCode() async {
+        do { shareCode = try await GroupInviteService.shareCode(cid: cid) ?? "" } catch { shareCode = nil }
+    }
 
     var body: some View {
         List {
@@ -588,7 +613,7 @@ struct GroupRequestsView: View {
                     HStack {
                         Label("Invite Link", systemImage: "link")
                         Spacer()
-                        Text((conv?.inviteCode ?? "").isEmpty ? "Off" : "On").foregroundStyle(.secondary)
+                        Text((shareCode ?? conv?.inviteCode ?? "").isEmpty ? "Off" : "On").foregroundStyle(.secondary)
                     }
                 }
                 .tint(.primary)
@@ -626,9 +651,11 @@ struct GroupRequestsView: View {
             reqListener = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
         }
         .onDisappear { reqListener?.remove(); reqListener = nil }
-        .sheet(isPresented: $showInvite) {
+        .task { await loadShareCode() }
+        // Again after the link sheet closes: it may have reset or turned off the link.
+        .sheet(isPresented: $showInvite, onDismiss: { Task { await loadShareCode() } }) {
             InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
-                            initialCode: conv?.inviteCode ?? "")
+                            initialCode: shareCode ?? conv?.inviteCode ?? "")
                 .presentationDetents([.medium, .large])
         }
         .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
@@ -831,3 +858,12 @@ struct EditGroupView: View {
 
 /// The Group Settings page's last-seen group (see `GroupSettingsView.conv`).
 final class HeldConversation { var conv: Conversation? }
+
+/// A listener kept for the page's real lifetime (2026-10-19 fix round). `.onDisappear` also fires
+/// when a child page is pushed on top, which dropped the group's listener while Permissions was
+/// open: its switches read a stale group, snapped back and were written twice. Held in `@State`,
+/// the box goes (and removes the listener) only when the page itself leaves the stack.
+final class ListenerBox {
+    var reg: ListenerRegistration?
+    deinit { reg?.remove() }
+}
