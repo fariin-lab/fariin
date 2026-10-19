@@ -64,7 +64,6 @@ struct GroupInfoView: View {
     /// header reports it while scrolling and a re-render per frame is the scroll lag of 2026-10-18.
     @State private var artRect = GroupArtRect()
     /// The colour read out of the group's photo (the person profile's own reading, `ProfilePalette`).
-    @State private var photoPalette: ProfilePalette?
     // 2026-10-18 upgrade.
     @State private var showMemberChanges = false
     @State private var showEncryption = false
@@ -102,14 +101,9 @@ struct GroupInfoView: View {
         return ProfilePhotoIndex.hasPicture(u) ? u : nil
     }
     private var hasGroupPhoto: Bool { groupPhoto != nil }
-    /// The person profile's order (`ContactInfoView.palette`): the photo's own reading, else the
-    /// cached copy read synchronously so the page opens in its colour. No photo, no colour: the
-    /// page keeps the plain background.
-    private var palette: ProfilePalette? {
-        guard let groupPhoto else { return nil }
-        return photoPalette ?? ProfilePalette.warm(url: groupPhoto)
-    }
-    private var posterFadeInto: Color { palette.map { Color(uiColor: $0.page) } ?? pageBackground }
+    /// ⛔ A GROUP PAGE TAKES NO COLOUR FROM ITS PHOTO (owner 2026-10-19, after seeing it on device):
+    /// always the plain grouped background.
+    private var palette: ProfilePalette? { nil }
     /// ContactInfoView's bar rule: iOS 26 is handed light for the glass, iOS 27 reads its backdrop.
     private var barScheme: ColorScheme? {
         guard palette != nil else { return nil }
@@ -186,14 +180,13 @@ struct GroupInfoView: View {
             // The person profile's bar over a photo (ContactInfoView `coreScrollWithBars`): no
             // material over the picture, the glass scheme for this OS, and the chevron held white
             // by the tint so it stays white through the iOS 26 flip.
-            .toolbarBackground(hasGroupPhoto ? .hidden : .automatic, for: .navigationBar)
             .toolbarColorScheme(barScheme, for: .navigationBar)
             .tint(palette != nil ? Color.white : nil)
             .overlay {
                 if showGroupPhoto {
                     // Out of the big header's picture, as a person's photo flies (poster mode).
                     ProfilePhotoViewer(name: title, photoUrl: groupPhoto ?? "",
-                                       sourceFrame: artRect.rect, poster: true,
+                                       sourceFrame: artRect.rect, poster: false,
                                        closeSignal: photoCloseTick,
                                        isPresented: $showGroupPhoto)
                         .ignoresSafeArea()
@@ -253,18 +246,6 @@ struct GroupInfoView: View {
             // The gallery count and the storage figure, again on every return (the gallery or a
             // clear may have changed them).
             .onAppear { Task { await loadMediaFigures() } }
-            // The photo's colour: warm first with no await (the page opens in it), else read it.
-            .task(id: groupPhoto ?? "") { await loadPalette() }
-            .onReceive(NotificationCenter.default.publisher(for: .profilePaletteReady)) { note in
-                guard let u = note.object as? String, u == groupPhoto else { return }
-                photoPalette = ProfilePalette.cached(for: u)
-            }
-    }
-
-    private func loadPalette() async {
-        guard let u = groupPhoto else { photoPalette = nil; return }
-        if let warm = ProfilePalette.warm(url: u) { photoPalette = warm; return }
-        photoPalette = await ProfilePalette.resolve(url: u)
     }
 
     // ⛔ THE OWNER'S MOCKUP, AND ONLY WHAT IS IN IT (2026-10-19): the header, five round glass
@@ -301,39 +282,34 @@ struct GroupInfoView: View {
                              onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
                              onSeeAll: { showAllMedia = true })
         }
+        exitCard
     }
 
     // MARK: Header
 
-    /// A group WITH a photo wears the person profile's big photo header (ContactInfoView
-    /// `posterHeader`), fading into the colour read off that photo. Without one: a glass disc of
-    /// three members' faces. Either way the name, the count and the description, then the actions.
-    @ViewBuilder private var header: some View {
-        if hasGroupPhoto {
-            ProfilePosterHeader(
-                name: title,
-                photoUrl: groupPhoto,
-                scrollSpace: Self.scrollSpace,
-                onArtworkRect: { artRect.rect = $0 },
-                onTap: { showGroupPhoto = true },
-                photoHidden: showGroupPhoto,
-                fadeInto: posterFadeInto,
-                fallbackUrl: groupPhoto,
-                caption: { headerCaption($0) },
-                actions: { actionsRow }
-            )
-        } else {
-            VStack(spacing: 16) {
+    /// ⛔ NO BIG PHOTO HEADER FOR A GROUP (owner 2026-10-19, on device): a group with a photo shows
+    /// it as a round picture; without one, a glass disc of three members' faces. Either way the
+    /// name, the count and the description, then the actions.
+    private var header: some View {
+        VStack(spacing: 16) {
+            if let groupPhoto {
+                AvatarView(name: title, photoUrl: groupPhoto, size: Self.photoSide)
+                    .opacity(showGroupPhoto ? 0 : 1)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { artRect.rect = $0 }
+                    .onTapGesture { showGroupPhoto = true }
+            } else {
                 GroupFaceCluster(conv: conv, me: me)
                     // No photo yet: whoever may change it goes straight to Edit Group.
                     .onTapGesture { if canEditInfo { showEdit = true } }
-                headerCaption(.primary)
-                actionsRow.padding(.top, 2)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 8)
+            headerCaption(.primary)
+            actionsRow.padding(.top, 2)
         }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 8)
     }
+    /// The person profile's no-photo slot (ContactInfoView, 132pt).
+    private static let photoSide: CGFloat = 132
 
     /// Name, "N Members" and the description line, centred.
     private func headerCaption(_ ink: Color) -> some View {
@@ -400,7 +376,7 @@ struct GroupInfoView: View {
     /// The person profile's circle at its own size (owner 2026-10-19: "exactly match the User
     /// Profile").
     private func actionIcon(_ name: String) -> some View {
-        PosterActionIcon(icon: name, onPhoto: hasGroupPhoto)
+        PosterActionIcon(icon: name, onPhoto: false)
     }
 
     private func addTapped() {
@@ -466,13 +442,12 @@ struct GroupInfoView: View {
         menuMemberItems
         menuMediaItems
         menuChatItems
-        menuExitItems
     }
 
     @ViewBuilder private var menuGroupItems: some View {
         Section {
+            // Edit Group is the bar's Edit button now (owner 2026-10-19).
             if canEditInfo {
-                Button { showEdit = true } label: { Label("Edit Group", systemImage: "pencil") }
                 // The description is edited on Edit Group with the bio's rules (2026-10-18).
                 Button { showEdit = true } label: {
                     Label(desc.isEmpty ? "Add Group Description" : "Edit Description", systemImage: "text.alignleft")
@@ -546,19 +521,21 @@ struct GroupInfoView: View {
         }
     }
 
-    @ViewBuilder private var menuExitItems: some View {
-        Section {
-            Button(role: .destructive) { confirmReport = true } label: {
-                Label { Text("Report Group") } icon: { MenuIcon("ic_report") }
-            }
-            Button(role: .destructive) { confirmLeave = true } label: {
-                Label("Leave Group", systemImage: "rectangle.portrait.and.arrow.right")
-            }
+    /// Report, Leave and Delete as red rows at the foot of the page, out of the ••• menu (owner
+    /// 2026-10-19).
+    private var exitCard: some View {
+        VStack(spacing: 0) {
+            ProfileInfoRow(title: "Report Group", icon: "ic_report", tint: .red, chevron: false) { confirmReport = true }
+            rowDivider
+            ProfileInfoRow(title: "Leave Group", icon: "rectangle.portrait.and.arrow.right",
+                           tint: .red, chevron: false) { confirmLeave = true }
             // Only the owner can permanently delete the whole group (for everyone).
             if iAmOwner {
-                Button(role: .destructive) { confirmDelete = true } label: { Label("Delete Group", systemImage: "trash") }
+                rowDivider
+                ProfileInfoRow(title: "Delete Group", icon: "trash", tint: .red, chevron: false) { confirmDelete = true }
             }
         }
+        .profileSurface(plain: cardColor)
     }
 
     private func startCall(video: Bool) {
@@ -751,6 +728,11 @@ struct GroupInfoView: View {
                     Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
                 }
                 .tint(.primary)
+            }
+        } else if canEditInfo {
+            // Edit Group, top right (owner 2026-10-19).
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Edit") { showEdit = true }
             }
         }
     }
