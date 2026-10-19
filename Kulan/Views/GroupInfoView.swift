@@ -421,12 +421,16 @@ struct GroupInfoView: View {
 
     // MARK: Actions
 
-    /// Four equal glass circles, no labels: Video, Mute, Search, More. The person profile's
+    /// Five equal glass circles, no labels: Voice, Video, Mute, Search, More. The person profile's
     /// own circle (`PosterActionIcon`). What I may not do stays on the row, greyed, and a tap says
-    /// why (owner 2026-10-19), instead of a hole in the row. No Add circle: the members card has
-    /// its own Add Members row (owner 2026-10-19).
+    /// why (owner 2026-10-19), instead of a hole in the row. Voice took the Add circle's place:
+    /// the members card has its own Add Members row (owner 2026-10-19).
     private var actionsRow: some View {
         HStack(spacing: 0) {
+            Button { callTapped(video: false) } label: { actionIcon("phone.fill") }
+                .tint(.primary)
+                .opacity(callReady ? 1 : 0.45)
+                .accessibilityLabel("Voice Call")
             Button { callTapped(video: true) } label: { actionIcon("video.fill") }
                 .tint(.primary)
                 .opacity(callReady ? 1 : 0.45)
@@ -532,9 +536,6 @@ struct GroupInfoView: View {
                 Button { changeWallpaper() } label: {
                     Label { Text("Change Wallpaper") } icon: { MenuIcon("ic_wallpaper") }
                 }
-            }
-            if CallFeatures.groupCalls {
-                Button { callTapped(video: false) } label: { Label("Voice Call", systemImage: "phone") }
             }
             // Admins send the link straight away; a member gets the link's own page (owner 2026-10-19).
             if let link = inviteLink {
