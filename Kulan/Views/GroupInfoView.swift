@@ -1557,7 +1557,7 @@ struct GroupMemberSheet: View {
                 VStack(spacing: 20) {
                     header
                     rightsSection
-                    dismissAdminCard
+                    if canEditRole { tagSection }
                     actionsCard
                 }
                 .padding(.horizontal, 16)
@@ -1727,22 +1727,24 @@ struct GroupMemberSheet: View {
             .padding(.horizontal, 16).padding(.vertical, 11)
     }
 
-    /// Red Dismiss Admin on its own, as the reference app draws it.
-    @ViewBuilder private var dismissAdminCard: some View {
-        if mayEditRights && member.isAdmin {
-            Button { confirmDismissAdmin = true } label: {
-                Text("Dismiss Admin").foregroundStyle(.red)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(busy)
-            .profileSurface(plain: card)
-        }
+    /// Red Remove Admin row (owner 2026-10-19: was its own Dismiss Admin card), shown in the
+    /// actions card under Transfer Ownership. Same confirm as before.
+    private var showsRemoveAdmin: Bool { mayEditRights && member.isAdmin }
+
+    // MARK: Save Changes (the reference app's footer button, our blue)
+
+    /// Read from the reference app's admin page footer: a 52pt pill (glass, radius = half the
+    /// height), 30 in from each side, its bottom at least 30 above the screen edge or on the
+    /// home-indicator band, title semibold 17.
+    private static let saveHeight: CGFloat = 52
+    private static let saveSide: CGFloat = 30
+    private var saveBottomPad: CGFloat {
+        let w = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+        return max(0, Self.saveSide - (w?.safeAreaInsets.bottom ?? 0))
     }
 
     /// Save Changes, pinned to the foot: the app's blue glass pill, live only once something changed.
+    /// The page scrolls UNDER it, behind a fade of the page colour (saveFade).
     @ViewBuilder private var saveBar: some View {
         if showsSave {
             Button { saveChanges() } label: {
@@ -1751,36 +1753,141 @@ struct GroupMemberSheet: View {
                 }
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(maxWidth: .infinity).frame(height: 50)
+                .frame(maxWidth: .infinity).frame(height: Self.saveHeight)
                 .liquidGlass(Capsule(), interactive: true, tint: Color(.systemBlue))
                 .contentShape(Capsule())
             }
             .buttonStyle(.plain)
             .disabled(!hasChanges || busy)
             .opacity(hasChanges || busy ? 1 : 0.45)
-            .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 8)
+            .padding(.horizontal, Self.saveSide)
+            .padding(.top, 12)
+            .padding(.bottom, saveBottomPad)
+            .background(saveFade)
         }
     }
 
-    /// The role, typed straight into the card (RoleEditorView's limits); saved by Save Changes.
-    /// Their emoji, when they have one, is kept as it is.
-    private var roleRow: some View {
-        let left = GroupRole.maxText - roleText.utf16.count
-        return HStack(spacing: 14) {
-            Group {
-                if let e = role?.emoji { Text(e).font(.system(size: 18)) }
-                else { Image(systemName: "tag").font(.system(size: 17)) }
+    /// The band behind the button, as the reference app's bottom edge effect: the page colour at
+    /// 0.75, full at the screen edge and easing out to nothing at the band's top, over a light blur
+    /// masked the same way. Runs under the home indicator too.
+    private var saveFade: some View {
+        let mask = LinearGradient(stops: [
+            .init(color: .black, location: 0),
+            .init(color: .black.opacity(0.958), location: 0.16),
+            .init(color: .black.opacity(0.875), location: 0.275),
+            .init(color: .black.opacity(0.736), location: 0.376),
+            .init(color: .black.opacity(0.509), location: 0.488),
+            .init(color: .black.opacity(0.255), location: 0.617),
+            .init(color: .clear, location: 1),
+        ], startPoint: .bottom, endPoint: .top)
+        return ZStack {
+            Rectangle().fill(.ultraThinMaterial).opacity(0.6)
+            Color(uiColor: .systemGroupedBackground).opacity(0.75)
+        }
+        .mask(mask)
+        .ignoresSafeArea(edges: .bottom)
+        .allowsHitTesting(false)
+    }
+
+    // MARK: Member tag (the reference app's rank section)
+
+    private var tagLeft: Int { GroupRole.maxText - roleText.utf16.count }
+    /// What the chat will draw after their name once saved: RoleChip / ThreadView's `role.display`,
+    /// the kept emoji in front. Empty = no tag.
+    private var tagPreviewText: String {
+        let words = cleanedRole
+        guard !words.isEmpty else { return "" }
+        return GroupRole(text: words, emoji: role?.emoji).display
+    }
+    private var tagPlaceholder: String { isOwner ? "owner" : (member.isAdmin || makeAdmin ? "admin" : "member") }
+
+    /// Heading, one card (chat preview over the text field), and a line under it.
+    private var tagSection: some View {
+        VStack(spacing: 8) {
+            HStack {
+                sectionHeader("Member Tag")
+                if tagLeft <= 9 {
+                    Text("\(tagLeft)").font(.footnote.monospacedDigit())
+                        .foregroundStyle(tagLeft <= 5 ? Color.red : Color.secondary)
+                        .padding(.trailing, 16)
+                }
             }
-            .frame(width: 26)
-            TextField("Role, like Designer", text: $roleText)
+            VStack(spacing: 0) {
+                tagPreview
+                Divider().padding(.leading, 16)
+                tagField
+            }
+            .profileSurface(plain: card)
+            sectionFooter("Add a short tag next to \(firstName)'s name.")
+        }
+    }
+
+    private var tagField: some View {
+        HStack(spacing: 8) {
+            if let e = role?.emoji { Text(e).font(.system(size: 18)) }
+            TextField(tagPlaceholder, text: $roleText)
                 .submitLabel(.done)
                 .disabled(busy)
-            if left <= 9 {
-                Text("\(left)").font(.footnote.monospacedDigit())
-                    .foregroundStyle(left <= 5 ? Color.red : Color.secondary)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 14)
+    }
+
+    /// One incoming message as the group will show it. Sizes from the reference app's chat
+    /// bubble: 38pt avatar (letter font 16) 7 in from the edge, bubble corner 16 with a small tail
+    /// corner, text insets 11 / 6, name semibold 14, tag regular 13 on a 17pt pill 5 wider each
+    /// side, its colour at 0.1, time 11. The two grey bars stand in for the message words.
+    private var tagPreview: some View {
+        HStack(alignment: .bottom, spacing: 6) {
+            AvatarView(name: member.name, photoUrl: gatedMemberPhoto, size: 38)
+            tagBubble
+            Spacer(minLength: 36)
+        }
+        .padding(.leading, 7).padding(.trailing, 16)
+        .padding(.vertical, 12)
+    }
+
+    private var tagBubble: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(member.name).font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color(.systemBlue)).lineLimit(1)
+                Spacer(minLength: 0)
+                if !tagPreviewText.isEmpty { tagPill }
+            }
+            skeletonBar(width: nil)
+            HStack(alignment: .bottom, spacing: 8) {
+                skeletonBar(width: 120)
+                Spacer(minLength: 0)
+                Text("8:41 AM").font(.system(size: 11)).foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, 16).padding(.vertical, 18)
+        .padding(.horizontal, 11).padding(.top, 6).padding(.bottom, 6)
+        .frame(minWidth: 200, maxWidth: 280, alignment: .leading)
+        .background(Color(uiColor: BubblePalette.receivedFill),
+                    in: UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 6,
+                                               bottomTrailingRadius: 16, topTrailingRadius: 16,
+                                               style: .continuous))
+        .animation(.snappy(duration: 0.2), value: tagPreviewText)
+    }
+
+    /// Green for admins and members, purple for the owner, as the reference app tints the tag.
+    private var tagTint: Color {
+        isOwner ? Color(red: 0x95 / 255, green: 0x6a / 255, blue: 0xc8 / 255)
+                : Color(red: 0x49 / 255, green: 0xa3 / 255, blue: 0x55 / 255)
+    }
+
+    private var tagPill: some View {
+        Text(tagPreviewText).font(.system(size: 13)).lineLimit(1)
+            .foregroundStyle(tagTint)
+            .padding(.horizontal, 5).frame(height: 17)
+            .background(tagTint.opacity(0.1), in: Capsule())
+    }
+
+    private func skeletonBar(width: CGFloat?) -> some View {
+        Capsule().fill(Color.secondary.opacity(0.22))
+            .frame(width: width, height: 9)
+            .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
+            .padding(.vertical, 2)
     }
 
     private var tiles: some View {
@@ -1802,21 +1909,18 @@ struct GroupMemberSheet: View {
     /// the Restrict-members right, and removing an ADMIN is the owner's alone (firestore.rules
     /// nonOwnerAdminWriteOK).
     @ViewBuilder private var actionsCard: some View {
-        // Admin rights, Make Admin and Dismiss Admin sit above in their own cards (owner 2026-10-19).
-        // Myself with no role to set: no card at all, not an empty one.
-        if canEditRole || canMuteRow || (isOther && iAmOwner) { actionRows }
+        // Admin rights and Make Admin sit above in their own cards, the tag in its own section
+        // (owner 2026-10-19). Nothing that applies: no card at all, not an empty one.
+        if canMuteRow || canTransfer || showsRemoveAdmin { actionRows }
     }
     private var canMuteRow: Bool { isOther && canRestrict && !member.isAdmin }
+    private var canTransfer: Bool { isOther && iAmOwner }
 
     private var actionRows: some View {
-        let other = isOther
         let canMute = canMuteRow
+        let transfer = canTransfer
+        let removeAdmin = showsRemoveAdmin
         return VStack(spacing: 0) {
-            // ⛔ ROLE — owner 2026-10-18. Given by admins only (Conversation.canSetRole).
-            if canEditRole {
-                roleRow
-                if canMute || (other && iAmOwner) { rowDivider }
-            }
             if canMute {
                 if isMuted {
                     ProfileInfoRow(title: "Lift Restrictions", icon: "speaker.wave.2", chevron: false) {
@@ -1833,10 +1937,17 @@ struct GroupMemberSheet: View {
                             .allowsHitTesting(false)
                     }
                 }
-                if other && iAmOwner { rowDivider }
+                if transfer || removeAdmin { rowDivider }
             }
-            if other && iAmOwner {
+            if transfer {
                 ProfileInfoRow(title: "Transfer Ownership", icon: "crown", chevron: false) { confirmTransfer = true }
+                if removeAdmin { rowDivider }
+            }
+            if removeAdmin {
+                ProfileInfoRow(title: "Remove Admin", icon: "minus.circle", tint: .red, chevron: false) {
+                    confirmDismissAdmin = true
+                }
+                .disabled(busy)
             }
             // No Info or Remove from Group rows (owner 2026-10-19): the card at the top opens the
             // profile, and removing is a swipe on the Members list.
