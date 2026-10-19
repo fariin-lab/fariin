@@ -92,6 +92,8 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     /// The panel is leaving with the keys and the card is sliding down after it.
     private var slidingAway = false
     private var lift: CGFloat = 0
+    /// A grow drag is under a finger (the card's pan or the bar's): the other may not start too.
+    private var dragInFlight = false
     private var liftAtStart: CGFloat = 0
     private var liftRange: CGFloat = 0
     private var restCardFrame: CGRect = .zero
@@ -521,7 +523,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     /// on a grid only DOWN, only when that grid is at its top, only while grown; elsewhere (strip, tab
     /// band, the GIF search pill) up from rest or down from grown.
     fileprivate func expandShouldBegin(_ pan: UIPanGestureRecognizer) -> Bool {
-        guard !searchingGifs, !editing, !slidingAway else { return false }
+        guard !searchingGifs, !editing, !slidingAway, !dragInFlight else { return false }
         if cardView.superview === self {
             guard window != nil, hostWindow() != nil else { return false }
         } else {
@@ -551,7 +553,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     // pan and hands it here: same rules as a drag from the band, same handler.
     /// May a drag on the composer's bar start a grow (up from rest) or a shrink (down from grown)?
     func barPanShouldBegin(_ pan: UIPanGestureRecognizer) -> Bool {
-        guard !searchingGifs, !editing, !slidingAway else { return false }
+        guard !searchingGifs, !editing, !slidingAway, !dragInFlight else { return false }
         if cardView.superview === self {
             guard window != nil, hostWindow() != nil else { return false }
         } else {
@@ -580,6 +582,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     @objc private func expandPanned(_ pan: UIPanGestureRecognizer) {
         switch pan.state {
         case .began:
+            dragInFlight = true
             if let a = expandAnimator {
                 // Caught mid-settle: stop where it is drawn and carry on from there.
                 expandAnimator = nil
@@ -596,6 +599,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             let ty = pan.translation(in: nil).y
             applyLift(min(liftRange, max(0, liftAtStart - ty)))
         case .ended, .cancelled, .failed:
+            dragInFlight = false
             guard expansionLive else { return }
             // Their rule: a quarter of the way from where the drag began decides; short of that the
             // panel goes back. Theirs reads a velocity that is always zero; a real flick (600 pt/s)
