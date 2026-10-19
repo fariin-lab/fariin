@@ -56,63 +56,30 @@ struct GroupSettingsView: View {
     /// The permissions are group rules: the change-info right edits them, other admins read them.
     private var canEdit: Bool { can(.changeInfo) }
 
+    /// The primary link's code from the server (getShareLink), as the requests page reads it; nil
+    /// until it answers or when it fails, then the group doc's old `inviteCode`.
+    @State private var shareCode: String?
+    /// Public picked with no link name yet: the Group Type page asks for one and saves it.
+    @State private var showTypePage = false
+    @State private var confirmPrivate = false
+    @State private var savingType = false
+
+    private var isPublicNow: Bool { conv?.isPublic ?? false }
+
     var body: some View {
-        // owner 2026-10-18: ONE THING PER SECTION, each with a short header and at most one short
-        // footer (it was one long Permissions card with pickers and a paragraph under it).
-        // ⛔ OWNER'S LAYOUT, 2026-10-19 (his picture): Requests & Invites alone at the top; one card
-        // with Permissions (the member switches, on their own page, with how many are on),
-        // Administrators, Members and Removed Users; Privacy last. Nothing else on this page: the
-        // admins note lives on the Administrators page. Every door keeps the right it needed before.
+        // ⛔ OWNER'S LAYOUT, 2026-10-19 (second picture): a plain page like the admin sheet, no
+        // cards, thin separators, small grey titles. Joining, People, Members can (the old
+        // Permissions page, now ticks on this page), Privacy. Every row keeps the right it needed.
         List {
-            if can(.inviteUsers) {
-                Section {
-                    NavigationLink { GroupRequestsView(cid: cid) } label: {
-                        settingLabel("Requests & Invites", "link",
-                                     value: joinReqs.isEmpty ? nil : "\(joinReqs.count)")
-                    }
-                }
-            }
-            // 2026-10-19 groups v2: Private or Public (an @name, found in search). Change-info only.
-            if canEdit {
-                Section {
-                    NavigationLink { GroupTypeView(cid: cid) } label: {
-                        settingLabel("Group Type", "globe", value: (conv?.isPublic ?? false) ? "Public" : "Private")
-                    }
-                }
-            }
-            Section {
-                NavigationLink { permissionsPage } label: {
-                    settingLabel("Permissions", "switch.2", value: permissionsCount)
-                }
-                NavigationLink { GroupAdminsView(cid: cid) } label: {
-                    settingLabel("Administrators", "person.badge.shield.checkmark",
-                                 value: "\(conv?.admins.count ?? 0)")
-                }
-                // The link page the info page's row opens, pushed (owner 2026-10-19, his picture).
-                if can(.inviteUsers) {
-                    NavigationLink {
-                        InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
-                                        initialCode: conv?.inviteCode ?? "", embedded: true)
-                    } label: {
-                        settingLabel("Group invite link", "link")
-                    }
-                }
-                NavigationLink { GroupMembersListView(cid: cid) } label: {
-                    settingLabel("Members", "person.2", value: "\(conv?.users.count ?? 0)")
-                }
-                // REMOVED USERS, the people taken out of the group (`bannedUids`).
-                if can(.banUsers) || can(.inviteUsers) {
-                    NavigationLink { GroupRemovedUsersView(cid: cid) } label: {
-                        settingLabel("Removed Users", "person.badge.minus",
-                                     value: "\(conv?.bannedUids.count ?? 0)")
-                    }
-                }
-            }
+            joiningSection
+            peopleSection
+            membersCanSection
             privacySection
         }
-        .listStyle(.insetGrouped)
+        .listStyle(.plain)
         .navigationTitle("Group Settings")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(isPresented: $showTypePage) { GroupTypeView(cid: cid) }
         // Started once and kept while a child page is pushed; removed with the page (`ListenerBox`).
         .onAppear {
             if convListener.reg == nil {
@@ -122,13 +89,24 @@ struct GroupSettingsView: View {
                         ownConv = Conversation(id: snap.documentID, data: data)
                     }
             }
+            // Again on every return: the link page may have reset or turned off the link.
+            if can(.inviteUsers) { Task { await loadShareCode() } }
             guard reqListener.reg == nil, can(.inviteUsers) else { return }
             reqListener.reg = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
         }
         // Rights can arrive with the group's own document, after the first appearance.
         .onChange(of: can(.inviteUsers)) { _, now in
-            guard now, reqListener.reg == nil else { return }
+            guard now else { return }
+            Task { await loadShareCode() }
+            guard reqListener.reg == nil else { return }
             reqListener.reg = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
+        }
+        // The Group Type page's own confirm, word for word: going private gives the link up.
+        .confirmationDialog("Make this group private?", isPresented: $confirmPrivate, titleVisibility: .visible) {
+            Button("Make Private", role: .destructive) { makePrivate() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("fariin.com/\(conv?.publicName ?? "") will stop working. The link stays reserved for this group for 30 days, then anyone can take it.")
         }
         .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
                                                           set: { if !$0 { actionError = nil } })) {
@@ -136,66 +114,192 @@ struct GroupSettingsView: View {
         } message: { Text(actionError ?? "") }
     }
 
-    /// The member switches on their own page (owner 2026-10-18), reached from Permissions.
-    private var permissionsPage: some View {
-        List { membersCanSection }
-            .listStyle(.insetGrouped)
-            .navigationTitle("Permissions")
-            .navigationBarTitleDisplayMode(.inline)
-            .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
-                                                              set: { if !$0 { actionError = nil } })) {
-                Button("OK", role: .cancel) {}
-            } message: { Text(actionError ?? "") }
+    // MARK: Joining
+
+    /// Type and links: change-info admins see Type; the invite link and requests need inviteUsers.
+    @ViewBuilder private var joiningSection: some View {
+        if canEdit || can(.inviteUsers) {
+            Section {
+                if canEdit { typeRow }
+                if isPublicNow && canEdit {
+                    NavigationLink { GroupTypeView(cid: cid) } label: {
+                        valueRow("Public link", "fariin.com/\(conv?.publicName ?? "")")
+                    }
+                } else if can(.inviteUsers) {
+                    NavigationLink {
+                        InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
+                                        initialCode: shareCode ?? conv?.inviteCode ?? "", embedded: true)
+                    } label: {
+                        valueRow("Invite link", inviteValue)
+                    }
+                }
+                if can(.inviteUsers) {
+                    NavigationLink { GroupRequestsView(cid: cid) } label: {
+                        valueRow("Requests", joinReqs.isEmpty ? "None" : "\(joinReqs.count) waiting")
+                    }
+                }
+            } header: {
+                sectionTitle("Joining")
+            }
+        }
     }
 
-    /// "3/4": how many of the member switches on the Permissions page are on.
-    private var permissionsCount: String? {
-        guard let c = conv else { return nil }
-        var on = [!c.onlyAdminsSend, c.membersCanAdd]
-        if CallFeatures.groupCalls { on.append(!c.onlyAdminsCall) }
-        return "\(on.filter { $0 }.count)/\(on.count)"
+    private var typeRow: some View {
+        HStack(spacing: 12) {
+            Text("Type")
+            Spacer(minLength: 12)
+            Picker("Type", selection: typeBinding) {
+                Text("Private").tag(false)
+                Text("Public").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .disabled(savingType)
+        }
     }
 
-    /// What every member may do. Admins always may; a switch turned off leaves it to admins.
-    private var membersCanSection: some View {
+    /// Reads the live group; a pick only asks. Public needs a link name, which the Group Type page
+    /// takes and saves (a private group has none); Private asks first, as that page does.
+    private var typeBinding: Binding<Bool> {
+        Binding(get: { isPublicNow },
+                set: { wantsPublic in
+                    guard wantsPublic != isPublicNow else { return }
+                    if wantsPublic { showTypePage = true } else { confirmPrivate = true }
+                })
+    }
+
+    /// The short link, no https://, or "Off" when the group has none.
+    private var inviteValue: String {
+        let code = shareCode ?? conv?.inviteCode ?? ""
+        guard !code.isEmpty else { return "Off" }
+        return KulanApp.groupLink(code: code).replacingOccurrences(of: "https://", with: "")
+    }
+
+    private func loadShareCode() async {
+        do { shareCode = try await GroupInviteService.shareCode(cid: cid) ?? "" } catch { shareCode = nil }
+    }
+
+    /// The same write the Group Type page makes on its Make Private.
+    private func makePrivate() {
+        guard !savingType else { return }
+        savingType = true
+        Task {
+            do { try await GroupDirectory.setName(cid: cid, name: "") } catch {
+                actionError = error.localizedDescription
+            }
+            savingType = false
+        }
+    }
+
+    // MARK: People
+
+    private var peopleSection: some View {
         Section {
-            Toggle(isOn: bool(get: { !($0.onlyAdminsSend) },
-                              set: { v in try await ChatService.setOnlyAdminsSend(cid: cid, !v) })) {
-                settingLabel("Send messages", "bubble.left.and.bubble.right")
+            NavigationLink { GroupMembersListView(cid: cid) } label: {
+                valueRow("Members", "\(conv?.users.count ?? 0)")
             }
-            Toggle(isOn: bool(get: { $0.membersCanAdd },
-                              set: { v in try await ChatService.setGroupPermission(cid: cid, key: "membersCanAdd", v) })) {
-                settingLabel("Add members", "person.badge.plus")
+            NavigationLink { GroupAdminsView(cid: cid) } label: {
+                valueRow("Admins", "\(conv?.admins.count ?? 0)")
             }
-            // No "Edit group info" or "Share the group link" switch (owner 2026-10-19): only admins
-            // do those. A public group's link is its username, open to all (groups step 2).
-            // Hidden while group calls are (CallFeatures.groupCalls, as on the group info page).
-            if CallFeatures.groupCalls {
-                Toggle(isOn: bool(get: { !($0.onlyAdminsCall) },
-                                  set: { v in try await ChatService.setGroupPermission(cid: cid, key: "onlyAdminsCall", !v) })) {
-                    settingLabel("Start group calls", "phone")
+            // REMOVED USERS, the people taken out of the group (`bannedUids`).
+            if can(.banUsers) || can(.inviteUsers) {
+                NavigationLink { GroupRemovedUsersView(cid: cid) } label: {
+                    valueRow("Removed", "\(conv?.bannedUids.count ?? 0)")
                 }
             }
         } header: {
-            Text("What members can do")
-        } footer: {
-            Text("Admins can always do these. Switch one off and only admins can.")
+            sectionTitle("People")
         }
-        .disabled(!canEdit)
     }
+
+    // MARK: Members can
+
+    /// What every member may do (the old Permissions page). Admins always may; a row without its
+    /// tick leaves it to admins. Change-info admins tap to flip it; everyone else only reads.
+    private var membersCanSection: some View {
+        Section {
+            checkRow("Send messages", on: conv.map { !$0.onlyAdminsSend } ?? false) { v in
+                try await ChatService.setOnlyAdminsSend(cid: cid, !v)
+            }
+            checkRow("Add members", on: conv?.membersCanAdd ?? false) { v in
+                try await ChatService.setGroupPermission(cid: cid, key: "membersCanAdd", v)
+            }
+            // No "Edit group info" or "Share the group link" row (owner 2026-10-19): only admins
+            // do those. A public group's link is its username, open to all (groups step 2).
+            // Hidden while group calls are (CallFeatures.groupCalls, as on the group info page).
+            if CallFeatures.groupCalls {
+                checkRow("Start calls", on: conv.map { !$0.onlyAdminsCall } ?? false) { v in
+                    try await ChatService.setGroupPermission(cid: cid, key: "onlyAdminsCall", !v)
+                }
+            }
+        } header: {
+            sectionTitle("Members can")
+        }
+    }
+
+    /// One tick row. Writes the flipped value at once, like the old switches did.
+    @ViewBuilder
+    private func checkRow(_ title: String, on: Bool,
+                          write: @escaping (Bool) async throws -> Void) -> some View {
+        if canEdit {
+            Button { run { try await write(!on) } } label: { checkLabel(title, on: on) }
+        } else {
+            checkLabel(title, on: on)
+        }
+    }
+
+    private func checkLabel(_ title: String, on: Bool) -> some View {
+        HStack {
+            Text(title).foregroundStyle(.primary)
+            Spacer()
+            if on {
+                Image(systemName: "checkmark").font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(canEdit ? Color.accentColor : Color.secondary)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    // MARK: Privacy
 
     private var privacySection: some View {
         Section {
             Toggle(isOn: bool(get: { $0.isRestricted },
                               set: { v in try await ChatService.setGroupRestricted(cid, on: v) })) {
-                settingLabel("Restricted Group", "circle.slash")
+                Text("Restricted group")
             }
+            .disabled(!canEdit)
         } header: {
-            Text("Privacy")
+            sectionTitle("Privacy")
         } footer: {
-            Text("Stops forwarding, copying, saving and screenshots in this group, for everyone.")
+            Text("Stops forwarding, copying, saving and screenshots for everyone.")
+                .font(.footnote).foregroundStyle(.secondary)
         }
-        .disabled(!canEdit)
+    }
+
+    // MARK: Pieces
+
+    private func sectionTitle(_ text: String) -> some View {
+        Text(text.uppercased()).font(.footnote).foregroundStyle(.secondary).textCase(nil)
+    }
+
+    private func valueRow(_ title: String, _ value: String) -> some View {
+        HStack(spacing: 12) {
+            Text(title)
+            Spacer(minLength: 12)
+            Text(value).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+        }
+    }
+
+    /// Runs a write and says so if it is refused.
+    private func run(_ op: @escaping () async throws -> Void) {
+        Task {
+            do { try await op() } catch {
+                let msg = error.localizedDescription
+                await MainActor.run { actionError = msg }
+            }
+        }
     }
 
     /// A binding onto the live group: reads the conversation, writes through `set`, says so if the
@@ -212,25 +316,6 @@ struct GroupSettingsView: View {
                     }
                 }
             })
-    }
-
-    private func settingLabel(_ title: String, _ icon: String, value: String? = nil) -> some View {
-        HStack(spacing: 12) {
-            Group {
-                if icon.hasPrefix("ic_") {
-                    Image(icon).renderingMode(.template).resizable().scaledToFit().frame(width: 20, height: 20)
-                } else {
-                    Image(systemName: icon).font(.system(size: 16))
-                }
-            }
-            .frame(width: 26)
-            .foregroundStyle(.primary)
-            Text(title)
-            if let value {
-                Spacer()
-                Text(value).foregroundStyle(.secondary)
-            }
-        }
     }
 }
 
