@@ -150,7 +150,7 @@ struct ThreadView: View {
     @State private var albumViewer: AlbumViewerWrap?   // tapped album photo → swipeable album gallery
     @State private var albumScreen: Message?           // tapped a photo GROUP → the album list screen
     @State private var viewerVideo: Message?   // tapped video bubble → full-screen player
-    @State private var stickerSheet: Sticker?  // tapped Fariin sticker → its sheet (2026-10-17)
+    @State private var stickerSheet: StickerSheetItem?  // tapped sticker → its sheet (2026-10-17; custom ones too 2026-10-19)
     @State private var statusUnavailable = false     // tapped a status reply whose story expired
     @State private var sendError: String?
     @State private var afterSendError: (() -> Void)?   // 2026-09-24 fix-all #149: runs when that alert is dismissed
@@ -1521,8 +1521,10 @@ struct ThreadView: View {
             // while single photos and videos fly only the media through MediaOpen. Now that album
             // tiles fly too, leaving this on would run both animations over each other.
         }
-        .sheet(item: $stickerSheet) { s in
-            StickerInfoSheet(sticker: s) { picked in StickerSend.send(picked, cid: cid, replyTo: nil) }
+        .sheet(item: $stickerSheet) { item in
+            StickerInfoSheet(sticker: item.sticker, message: item.message, cid: cid) { picked in
+                StickerSend.send(picked, cid: cid, replyTo: nil)
+            }
         }
         .fullScreenCover(item: $viewerVideo) { msg in
             VideoPlayerScreen(message: msg, cid: cid,
@@ -4001,9 +4003,10 @@ struct ThreadView: View {
             // there is no live rect or no decoded image, so opening can never be blocked.
             onTapMedia: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }) else { return }
-                // A Fariin sticker opens its sheet (owner 2026-10-17); one somebody made opens nothing.
+                // A sticker opens its sheet: a Fariin one (owner 2026-10-17), and one somebody made
+                // (owner 2026-10-19: Favorites and Edit Sticker).
                 if m.isSticker {
-                    if let s = m.sticker, s.source == .bundled { stickerSheet = s }
+                    if let s = m.sticker { stickerSheet = StickerSheetItem(sticker: s, message: m) }
                     return
                 }
                 // A GIF opens nothing — it plays where it sits. That is deliberate and it is also

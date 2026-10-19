@@ -47,6 +47,25 @@ enum StickerCreatorDoor {
         top.present(host, animated: true)
     }
 
+    /// EDIT STICKER (owner 2026-10-19, from a custom sticker's sheet in a chat): the Save page
+    /// straight away with this picture as its photo, no picker under it and no tile to fly from,
+    /// so it opens and closes the plain way. Send and X behave as they do from the picker.
+    @MainActor static func edit(image: UIImage) {
+        guard presented == nil, let top = WebLink.topViewController(),
+              let cg = StickerArtMaker.normalized(image) else { return }
+        sent = false
+        let item = StickerEditItem(photo: UIImage(cgImage: cg), cg: cg, sourceKey: nil,
+                                   arrival: EditorArrival(landed: true))
+        // X has no picker to go back to here: it takes the whole door down.
+        let host = DoorHost(rootView: StickerSaveView(item: item, arrival: item.arrival,
+                                                      onClose: { StickerCreatorDoor.close() }))
+        host.view.backgroundColor = .black
+        host.overrideUserInterfaceStyle = .dark
+        host.modalPresentationStyle = .fullScreen
+        presented = host
+        top.present(host, animated: true)
+    }
+
     /// The sheet and everything it raised, in one motion; `done` once they are gone.
     @MainActor static func close(then done: (() -> Void)? = nil) {
         guard let host = presented else { done?(); return }
@@ -57,7 +76,8 @@ enum StickerCreatorDoor {
     }
 
     /// Tells the chat when the creator has really gone (not when the Save page covers it).
-    private final class DoorHost: UIHostingController<StickerCreatorSheet> {
+    /// Generic so the picker and the Edit Sticker page (`edit`) share it.
+    private final class DoorHost<Content: View>: UIHostingController<Content> {
         override func viewDidDisappear(_ animated: Bool) {
             super.viewDidDisappear(animated)
             guard isBeingDismissed || presentingViewController == nil else { return }
@@ -168,6 +188,9 @@ private struct StickerCreatorSheet: View {
 private struct StickerSaveView: View {
     let item: StickerEditItem
     @ObservedObject var arrival: EditorArrival
+    /// Set when the page is the door's root (`StickerCreatorDoor.edit`): X runs this instead of
+    /// going back to a picker that is not there.
+    var onClose: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
 
     @State private var art: StickerArt?
@@ -454,7 +477,7 @@ private struct StickerSaveView: View {
 
     /// X (owner 2026-10-17): back to the photo library, not out of the flow.
     private func close() {
-        if item.sourceKey != nil { closeToken += 1 } else { dismiss() }
+        if let onClose { onClose() } else if item.sourceKey != nil { closeToken += 1 } else { dismiss() }
     }
 
     /// The copy IS the animation, so the cover goes without its own slide.
