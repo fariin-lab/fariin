@@ -484,7 +484,8 @@ struct GroupMembersListView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .searchable(text: $query, prompt: "Search members")
+        // At the bottom, the system's own iOS 26 Liquid Glass field (owner 2026-10-19).
+        .searchable(text: $query, placement: .toolbar, prompt: "Search members")
         .navigationTitle("Members")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: Binding(get: { opened.map { Opened(id: $0) } }, set: { opened = $0?.id })) { o in
