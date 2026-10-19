@@ -39,19 +39,20 @@ struct MediaGalleryView: View {
     let title: String
     let photoUrl: String?
 
+    // ⛔ THREE TABS, NOT FIVE (owner 2026-10-19, the reference app's Media / Links / Docs beside
+    // ours: "we need to also minimal the tabs"). GIFs live in Media (Show > GIFs narrows to them),
+    // voice messages sit under the documents in Files.
     enum Tab: Hashable, CaseIterable {
-        case media, files, voice, links, gifs
+        case media, links, files
         var label: String {
             switch self {
             case .media: return "Media"
-            case .files: return "Files"
-            case .voice: return "Voice"
             case .links: return "Links"
-            case .gifs:  return "GIFs"
+            case .files: return "Files"
             }
         }
     }
-    enum MediaFilter: Hashable { case all, photos, videos }
+    enum MediaFilter: Hashable { case all, photos, videos, gifs }
 
     @State private var all: [Message] = []
     @State private var loaded = false
@@ -175,6 +176,7 @@ struct MediaGalleryView: View {
         var linkItems: [Message] = []
         var photoCount = 0
         var videoCount = 0
+        var gifCount = 0
     }
     @State private var derived = Derived()
 
@@ -202,12 +204,13 @@ struct MediaGalleryView: View {
         d.expandedAll = all.flatMap { $0.expandedGalleryItems(cid: cid) }.filter { !HiddenMessages.isHidden($0.id) }
         // ⚠️ `!viewOnce` HERE IS A HOLE CLOSED, not a nicety (found 2026-08-11): a view-once photo
         // was never filtered from this grid, so the person it was burned for could reopen it here.
-        d.allMediaItems = d.expandedAll.filter { ($0.isImage || $0.isVideo) && !$0.isGif && !$0.viewOnce }
+        d.allMediaItems = d.expandedAll.filter { ($0.isImage || $0.isVideo || $0.isGif) && !$0.viewOnce }
         d.mediaItems = d.allMediaItems.filter { m in
             switch mediaFilter {
             case .all:    return true
-            case .photos: return m.isImage
+            case .photos: return m.isImage && !m.isGif
             case .videos: return m.isVideo
+            case .gifs:   return m.isGif
             }
         }
         d.mediaSections = sections(d.mediaItems)
@@ -221,6 +224,7 @@ struct MediaGalleryView: View {
         // Counted off `mediaItems`, NOT the whole list: the Show filter can narrow the grid.
         d.photoCount = d.mediaItems.filter { $0.isImage && !$0.isGif }.count
         d.videoCount = d.mediaItems.filter { $0.isVideo }.count
+        d.gifCount = d.mediaItems.filter { $0.isGif }.count
         return d
     }
 
@@ -230,7 +234,7 @@ struct MediaGalleryView: View {
     /// group info page's "Media, Links and Files" row and this page can never disagree (2026-10-18).
     static func itemCount(_ all: [Message], cid: String) -> Int {
         let d = makeDerived(all.filter { !HiddenMessages.isHidden($0.id) }, filter: .all, cid: cid)
-        return d.allMediaItems.count + d.gifItems.count + d.voiceItems.count + d.fileItems.count + d.linkItems.count
+        return d.allMediaItems.count + d.voiceItems.count + d.fileItems.count + d.linkItems.count   // GIFs are in allMediaItems now
     }
 
     private static func galleryRelevant(_ all: [Message]) -> [Message] {
@@ -260,11 +264,13 @@ struct MediaGalleryView: View {
         guard loaded else { return " " }
         func n(_ c: Int, _ one: String) -> String { "\(c) \(one)\(c == 1 ? "" : "s")" }
         switch tab {
-        case .media: return "\(n(photoCount, "photo")), \(n(videoCount, "video"))"
-        case .files: return n(fileItems.count, "file")
-        case .voice: return n(voiceItems.count, "voice message")
+        case .media:
+            let g = derived.gifCount
+            return "\(n(photoCount, "photo")), \(n(videoCount, "video"))" + (g > 0 ? ", \(n(g, "GIF"))" : "")
+        case .files:
+            let v = voiceItems.count
+            return n(fileItems.count, "file") + (v > 0 ? ", \(n(v, "voice message"))" : "")
         case .links: return n(linkItems.count, "link")
-        case .gifs:  return n(gifItems.count, "GIF")
         }
     }
 
@@ -517,9 +523,7 @@ struct MediaGalleryView: View {
         switch t {
         case .media: grid(mediaItems, sections: derived.mediaSections, emptyIcon: "photo.on.rectangle", emptyText: "No media")
         case .files: filesList
-        case .voice: voiceList
         case .links: linksList
-        case .gifs:  grid(gifItems, sections: derived.gifSections, emptyIcon: "square.stack.3d.up", emptyText: "No GIFs")
         }
     }
 
@@ -571,8 +575,8 @@ struct MediaGalleryView: View {
                         // Files: icon disc + name + size + date. Voice: play disc + waveform + date.
                         SkeletonCircle(size: 44)
                         VStack(alignment: .leading, spacing: 7) {
-                            SkeletonBlock(width: t == .voice ? 170 : (i % 2 == 0 ? 180 : 140), height: t == .voice ? 18 : 14)
-                            SkeletonBlock(width: t == .voice ? 44 : 60, height: 10)
+                            SkeletonBlock(width: i % 2 == 0 ? 180 : 140, height: 14)
+                            SkeletonBlock(width: 60, height: 10)
                         }
                         Spacer()
                         SkeletonBlock(width: 52, height: 10)
@@ -650,6 +654,7 @@ struct MediaGalleryView: View {
                     filterButton("All Media", mediaFilter == .all) { mediaFilter = .all }
                     filterButton("Photos", mediaFilter == .photos) { mediaFilter = .photos }
                     filterButton("Videos", mediaFilter == .videos) { mediaFilter = .videos }
+                    filterButton("GIFs", mediaFilter == .gifs) { mediaFilter = .gifs }
                 }
             }
             // Always present INSIDE the menu, disabled when there is nothing to select. A SwiftUI Menu
@@ -678,10 +683,8 @@ struct MediaGalleryView: View {
     private var currentItems: [Message] {
         switch tab {
         case .media: return mediaItems
-        case .gifs:  return gifItems
-        case .voice: return voiceItems
         case .links: return linkItems
-        case .files: return fileItems
+        case .files: return fileItems + voiceItems
         }
     }
     private func filterButton(_ title: String, _ on: Bool, _ action: @escaping () -> Void) -> some View {
@@ -849,21 +852,6 @@ struct MediaGalleryView: View {
 
     // MARK: - Voice list
 
-    private var voiceList: some View {
-        ScrollView {
-            if !loaded { rowsSkeleton(.voice) }
-            if loaded && voiceItems.isEmpty { emptyState("mic", "No voice messages") }
-            LazyVStack(spacing: 0) {
-                ForEach(voiceItems) { m in
-                    voiceRow(m)
-                    Divider().padding(.leading, 64)
-                }
-            }
-        }
-        .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
-        // (No bottom margin for the selection bar: the system bottom toolbar is in the safe area.)
-    }
-
     private func voiceRow(_ m: Message) -> some View {
         let selected = selection.contains(m.id)
         let me = AuthService.shared.uid ?? ""
@@ -941,11 +929,23 @@ struct MediaGalleryView: View {
     private var filesList: some View {
         ScrollView {
             if !loaded { rowsSkeleton(.files) }
-            if loaded && fileItems.isEmpty { emptyState("doc", "No files") }
-            LazyVStack(spacing: 0) {
+            if loaded && fileItems.isEmpty && voiceItems.isEmpty { emptyState("doc", "No files") }
+            LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(fileItems) { m in
                     fileRow(m)
                     Divider().padding(.leading, 64)
+                }
+                // Voice messages under the documents, with their own heading once both are there.
+                if !voiceItems.isEmpty {
+                    if !fileItems.isEmpty {
+                        Text("Voice Messages")
+                            .font(.title3.weight(.bold))
+                            .padding(.horizontal, 16).padding(.top, 22).padding(.bottom, 4)
+                    }
+                    ForEach(voiceItems) { m in
+                        voiceRow(m)
+                        Divider().padding(.leading, 64)
+                    }
                 }
             }
         }
