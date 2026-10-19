@@ -37,8 +37,16 @@ struct GroupSettingsView: View {
     @State private var joinReqs: [JoinRequest] = []
     @State private var reqListener: ListenerRegistration?
     @State private var actionError: String?
+    @State private var held = HeldConversation()
 
-    private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
+    /// ⛔ THE LAST GROUP SEEN, KEPT (owner 2026-10-19: flipping Restricted Group emptied the page,
+    /// "Administrators 0, Members 0", Requests & Invites gone). The chat list can drop this group
+    /// for a moment while a write settles; the page keeps what it last showed instead of reading
+    /// that gap as "no group". A plain box, so keeping it never redraws anything.
+    private var conv: Conversation? {
+        if let live = repo.conversations.first(where: { $0.id == cid }) { held.conv = live; return live }
+        return held.conv
+    }
     private func can(_ r: Conversation.Right) -> Bool { conv?.adminCan(me, r) ?? false }
     /// The permissions are group rules: the change-info right edits them, other admins read them.
     private var canEdit: Bool { can(.changeInfo) }
@@ -449,9 +457,15 @@ struct GroupMembersListView: View {
     @State private var query = ""
     @State private var opened: String?
     @State private var showAdd = false
+    @State private var pendingRemove: String?
+    @State private var removeError: String?
 
     private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
     private var canAdd: Bool { (conv?.adminCan(me, .inviteUsers) ?? false) || (conv?.membersCanAdd ?? false) }
+    private func canRemove(_ uid: String) -> Bool {
+        guard let c = conv, uid != me, !c.isOwner(uid), c.adminCan(me, .banUsers) else { return false }
+        return c.isOwner(me) || !c.isAdmin(uid)
+    }
     private var shown: [String] {
         let all = GroupMembers.sorted(conv, me: me)
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -483,9 +497,34 @@ struct GroupMembersListView: View {
                 ForEach(shown, id: \.self) { uid in
                     GroupMemberRow(conv: conv, uid: uid, me: me) { opened = uid }
                         .listRowInsets(EdgeInsets())
+                        // Swipe left to remove, as the Blocked list unblocks (owner 2026-10-19). The
+                        // member card's own rule: remove right, never me or the owner, an admin only
+                        // by the owner.
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            if canRemove(uid) {
+                                Button("Remove", role: .destructive) { pendingRemove = uid }
+                            }
+                        }
                 }
             }
         }
+        .confirmationDialog("Remove \(conv?.names[pendingRemove ?? ""] ?? "this member") from the group?",
+                            isPresented: Binding(get: { pendingRemove != nil }, set: { if !$0 { pendingRemove = nil } }),
+                            titleVisibility: .visible) {
+            Button("Remove", role: .destructive) {
+                guard let uid = pendingRemove else { return }
+                let name = conv?.names[uid] ?? "User"
+                pendingRemove = nil
+                Task {
+                    do { try await ChatService.removeGroupMember(cid: cid, uid: uid, name: name) }
+                    catch { removeError = error.localizedDescription }
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingRemove = nil }
+        }
+        .alert("Could not remove", isPresented: Binding(get: { removeError != nil }, set: { if !$0 { removeError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(removeError ?? "") }
         .listStyle(.insetGrouped)
         // At the bottom, the system's own iOS 26 Liquid Glass field (owner 2026-10-19).
         .searchable(text: $query, placement: .toolbar, prompt: "Search members")
@@ -761,3 +800,6 @@ struct EditGroupView: View {
         }
     }
 }
+
+/// The Group Settings page's last-seen group (see `GroupSettingsView.conv`).
+final class HeldConversation { var conv: Conversation? }
