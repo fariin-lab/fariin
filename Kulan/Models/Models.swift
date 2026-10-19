@@ -1213,7 +1213,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.membersCanAdd = data["membersCanAdd"] as? Bool ?? false
         // ⛔ ADMINS ONLY, WHATEVER AN OLDER GROUP STORED (owner 2026-10-19): editing group info and
         // sharing the link have no member switch any more, so a group that had them on reads off.
-        self.membersCanEditInfo = false
+        // Change group info is a member switch again (owner 2026-10-19, later); the link stays admins'.
+        self.membersCanEditInfo = data["membersCanEditInfo"] as? Bool ?? false
         self.onlyAdminsCall = data["onlyAdminsCall"] as? Bool ?? false
         self.membersCanShareLink = false
         self.e2eeOff = (data["type"] as? String) == "group" && (data["e2ee"] as? Bool) == false

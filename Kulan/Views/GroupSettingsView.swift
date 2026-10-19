@@ -225,8 +225,11 @@ struct GroupSettingsView: View {
             checkRow("Add members", on: conv?.membersCanAdd ?? false) { v in
                 try await ChatService.setGroupPermission(cid: cid, key: "membersCanAdd", v)
             }
-            // No "Edit group info" or "Share the group link" row (owner 2026-10-19): only admins
-            // do those. A public group's link is its username, open to all (groups step 2).
+            // "Change group info" is back for members (owner 2026-10-19, later the same day: "add
+            // Change group info"). Sharing the link stays the admins'.
+            checkRow("Change group info", on: conv?.membersCanEditInfo ?? false) { v in
+                try await ChatService.setGroupPermission(cid: cid, key: "membersCanEditInfo", v)
+            }
             // Hidden while group calls are (CallFeatures.groupCalls, as on the group info page).
             if CallFeatures.groupCalls {
                 checkRow("Start calls", on: conv.map { !$0.onlyAdminsCall } ?? false) { v in
@@ -659,6 +662,9 @@ struct GroupMembersListView: View {
         .listStyle(.insetGrouped)
         // At the bottom, the system's own iOS 26 Liquid Glass field (owner 2026-10-19).
         .searchable(text: $query, placement: .toolbar, prompt: "Search members")
+        // `.toolbar` placement alone leaves the field at the top on a pushed page; asking for the
+        // system search item in the bottom bar is what puts it at the foot on iOS 26.
+        .toolbar { DefaultToolbarItem(kind: .search, placement: .bottomBar) }
         .navigationTitle("Members")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: Binding(get: { opened.map { Opened(id: $0) } }, set: { opened = $0?.id })) { o in
@@ -693,18 +699,8 @@ struct GroupRequestsView: View {
 
     var body: some View {
         List {
-            Section {
-                Button { showInvite = true } label: {
-                    HStack {
-                        Label("Invite Link", systemImage: "link")
-                        Spacer()
-                        Text((shareCode ?? conv?.inviteCode ?? "").isEmpty ? "Off" : "On").foregroundStyle(.secondary)
-                    }
-                }
-                .tint(.primary)
-            } footer: {
-                Text("Anyone with the link can ask to join or join straight away, as the link is set.")
-            }
+            // The invite link card is gone from here (owner 2026-10-19): the link has its own row
+            // on Group Settings. This page is only the people waiting to join.
             Section("\(joinReqs.count) Request\(joinReqs.count == 1 ? "" : "s")") {
                 if joinReqs.isEmpty {
                     Text("No one is waiting to join.").foregroundStyle(.secondary)
@@ -729,7 +725,7 @@ struct GroupRequestsView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("Requests & Invites")
+        .navigationTitle("Join Requests")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             guard reqListener == nil else { return }
@@ -797,23 +793,19 @@ struct EditGroupView: View {
           ScrollViewReader { proxy in
             List {
                 Section {
-                    // The "Set New Photo" capsule is gone (owner 2026-10-19): a small Liquid Glass
-                    // camera button sits on the photo's top-right edge instead.
-                    Button { nameFocused = false; showPicker = true } label: { photo }
-                        .buttonStyle(.plain)
-                        .overlay(alignment: .topTrailing) {
-                            Button { nameFocused = false; showPicker = true } label: {
-                                Image(systemName: "camera.fill")
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundStyle(.primary)
-                                    .frame(width: 38, height: 38)
-                                    .liquidGlass(Circle())
-                                    .contentShape(Circle())
-                            }
+                    // No badge on the photo; the "Set New Photo" capsule under it, in Liquid Glass
+                    // (owner 2026-10-19, correcting my earlier reading).
+                    VStack(spacing: 12) {
+                        Button { nameFocused = false; showPicker = true } label: { photo }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("Set New Photo")
-                            .offset(x: 4, y: -2)
+                        Button { nameFocused = false; showPicker = true } label: {
+                            Text("Set New Photo").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                                .padding(.horizontal, 20).frame(height: 36)
+                                .liquidGlass(Capsule(), interactive: true)
+                                .contentShape(Capsule())
                         }
+                        .buttonStyle(.plain)
+                    }
                     .frame(maxWidth: .infinity)
                     .listRowBackground(Color.clear)
                 }
