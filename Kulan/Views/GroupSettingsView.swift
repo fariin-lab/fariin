@@ -618,18 +618,23 @@ struct EditGroupView: View {
           ScrollViewReader { proxy in
             List {
                 Section {
-                    VStack(spacing: 12) {
-                        Button { nameFocused = false; showPicker = true } label: { photo }
-                            .buttonStyle(.plain)
-                        // Edit Profile's "Edit Photo" capsule (owner 2026-10-18): the cards' white, 36 tall.
-                        Button { nameFocused = false; showPicker = true } label: {
-                            Text("Set New Photo").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                                .padding(.horizontal, 20).frame(height: 36)
-                                .background(Color(.secondarySystemGroupedBackground), in: Capsule())
-                                .contentShape(Capsule())
-                        }
+                    // The "Set New Photo" capsule is gone (owner 2026-10-19): a small Liquid Glass
+                    // camera button sits on the photo's top-right edge instead.
+                    Button { nameFocused = false; showPicker = true } label: { photo }
                         .buttonStyle(.plain)
-                    }
+                        .overlay(alignment: .topTrailing) {
+                            Button { nameFocused = false; showPicker = true } label: {
+                                Image(systemName: "camera.fill")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(.primary)
+                                    .frame(width: 38, height: 38)
+                                    .liquidGlass(Circle())
+                                    .contentShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Set New Photo")
+                            .offset(x: 4, y: -2)
+                        }
                     .frame(maxWidth: .infinity)
                     .listRowBackground(Color.clear)
                 }
