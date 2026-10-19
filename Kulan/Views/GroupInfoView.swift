@@ -307,9 +307,15 @@ struct GroupInfoView: View {
     /// rest are in the ••• menu of the top bar.
     private var actionsRow: some View {
         HStack(spacing: 10) {
-            if mayCall {
-                GroupActionTile(icon: "ic_call_voice", title: "Call", cardColor: cardColor) { startCall(video: false) }
-                GroupActionTile(icon: "ic_call_video", title: "Video", cardColor: cardColor) { startCall(video: true) }
+            // ⛔ THE CALL TILES STAY, GREYED, WHEN I CANNOT START ONE (owner 2026-10-19): already on
+            // another call, or the group leaves calls to admins. A tap says which, instead of the
+            // tiles vanishing or a tap doing nothing.
+            if CallFeatures.groupCalls {
+                let ready = mayCall && !busyElsewhere
+                GroupActionTile(icon: "ic_call_voice", title: "Call", cardColor: cardColor) { callTapped(video: false) }
+                    .opacity(ready ? 1 : 0.45)
+                GroupActionTile(icon: "ic_call_video", title: "Video", cardColor: cardColor) { callTapped(video: true) }
+                    .opacity(ready ? 1 : 0.45)
             }
             // The app's own Send To sheet (owner 2026-10-18), not the system one: the link goes to
             // chats here as a plain message of mine.
@@ -332,6 +338,21 @@ struct GroupInfoView: View {
     }
 
     private var mayCall: Bool { CallFeatures.groupCalls && (conv?.canStartCall(me) ?? false) }
+
+    /// On a 1:1 call, or on another group's call. This group's own running call is not "busy":
+    /// the tile joins it.
+    private var busyElsewhere: Bool {
+        let s = CallService.shared.state
+        if s == .outgoing || s == .incoming || s == .active || s == .reconnecting { return true }
+        if let other = GroupCallService.shared.activeCid, other != cid { return true }
+        return false
+    }
+
+    private func callTapped(video: Bool) {
+        if busyElsewhere { flashNotice("You're already on a call"); return }
+        if !mayCall { flashNotice("Only admins can start a call"); return }
+        startCall(video: video)
+    }
 
     @ViewBuilder private var muteMenuItems: some View {
         if muted {

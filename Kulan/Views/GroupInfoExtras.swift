@@ -358,21 +358,35 @@ struct GroupLinkQRSheet: View {
 // MARK: - Encryption
 
 /// What end-to-end encryption covers in this chat, in our own words.
+///
+/// ⛔ REDRAWN (owner 2026-10-19: "our encryption looks super cheap" beside the reference sheet). A
+/// drawn emblem rather than a flat circle, a large title, the promise in full-strength text, and
+/// each covered kind with one line saying what that means. The emblem is shapes and system symbols,
+/// not a picture: the owner's own illustration can take its place (`hero`).
 struct ChatEncryptionSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var scheme
 
-    private let items: [(icon: String, text: String)] = [
-        ("text.bubble", "Text and voice messages"),
+    /// Fixed brand blue: `accentColor` is white in dark mode.
+    private static let blue = Color(hex: 0x2C6BED)
+
+    private struct Covered { let icon: String; let title: String; let line: String }
+    private let items: [Covered] = [
+        .init(icon: "text.bubble.fill", title: "Text and voice messages",
+              line: "Sealed on your phone before they're sent."),
         // No calls row: group calls go through a call server and are not proven end-to-end
         // encrypted, so this sheet does not promise it (2026-10-18). Add it back only once they are.
-        ("photo.on.rectangle", "Photos, videos and files"),
-        ("location", "Location"),
-        ("circle.dashed", "Stories"),
+        .init(icon: "photo.on.rectangle.angled", title: "Photos, videos and files",
+              line: "Only the people in this chat can open them."),
+        .init(icon: "location.fill", title: "Location",
+              line: "Where you are stays between you and the chat."),
+        // ⛔ NO STORIES ROW (2026-10-19): stories are protected by the server rules, not end-to-end
+        // encrypted (StoriesService: "Rules-protected (v1, not E2EE)"). The old sheet listed them.
     ]
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 18) {
+            VStack(spacing: 0) {
                 HStack {
                     Spacer()
                     Button { dismiss() } label: {
@@ -384,46 +398,104 @@ struct ChatEncryptionSheet: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Close")
                 }
-                // PLACEHOLDER ART (owner 2026-10-18): an Apple lock in an accent circle holds the spot
-                // until the owner sends his own picture for this sheet.
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 44, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 104, height: 104)
-                    .background(Circle().fill(Color.accentColor))
-                Text("Your messages are private")
-                    .font(.title2.weight(.bold))
+
+                hero.padding(.top, 4)
+
+                Text("Your chats stay private")
+                    .font(.system(size: 28, weight: .bold))
                     .multilineTextAlignment(.center)
-                Text("Everything in this chat is locked on your phone and opened only on the phones of the people in it. Nobody else can read them, and that includes Fariin.")
-                    .font(.body).foregroundStyle(.secondary)
+                    .padding(.top, 22)
+                Text("Messages in this chat are locked on your phone and unlocked only on the phones of the people in it. No one else can read them, not even Fariin.")
+                    .font(.system(size: 17))
+                    .foregroundStyle(.primary.opacity(0.78))
                     .multilineTextAlignment(.center)
-                VStack(spacing: 0) {
-                    ForEach(Array(items.enumerated()), id: \.offset) { i, item in
-                        if i > 0 { Divider().padding(.leading, 56) }
-                        HStack(spacing: 14) {
-                            Image(systemName: item.icon).font(.system(size: 17))
-                                .foregroundStyle(Color.accentColor)
-                                .frame(width: 26)
-                            Text(item.text)
-                            Spacer()
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 10)
+                    .padding(.horizontal, 6)
+
+                VStack(alignment: .leading, spacing: 20) {
+                    ForEach(items, id: \.title) { item in
+                        HStack(alignment: .top, spacing: 14) {
+                            Image(systemName: item.icon)
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(Self.blue)
+                                .frame(width: 40, height: 40)
+                                .background(Self.blue.opacity(scheme == .dark ? 0.22 : 0.11),
+                                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.title).font(.system(size: 17, weight: .semibold))
+                                Text(item.line).font(.system(size: 15)).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 0)
                         }
-                        .padding(.horizontal, 16).padding(.vertical, 14)
                     }
                 }
-                .background(Color(uiColor: .secondarySystemGroupedBackground),
-                            in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .padding(.top, 30)
+                .padding(.horizontal, 4)
+
                 Button {
-                    if let u = URL(string: "https://fariin.com/help") { WebLink.open(u) }
+                    if let u = URL(string: "https://fariin.com/safety") { WebLink.open(u) }
                 } label: {
-                    Text("Learn more").font(.body.weight(.semibold)).foregroundStyle(Color.accentColor)
+                    Text("Learn More")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Self.blue)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(Self.blue.opacity(scheme == .dark ? 0.22 : 0.11), in: Capsule())
                 }
                 .buttonStyle(.plain)
-                .padding(.top, 4)
+                .padding(.top, 34)
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 24)
             .padding(.vertical, 16)
         }
-        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
         .presentationDetents([.large])
+    }
+
+    /// A sealed message: the lock on a soft rounded tile, a ring around it, and three of the things
+    /// it covers resting on the ring.
+    private var hero: some View {
+        ZStack {
+            Circle()
+                .stroke(Self.blue.opacity(0.16), lineWidth: 1.5)
+                .frame(width: 172, height: 172)
+            Circle()
+                .fill(Self.blue.opacity(scheme == .dark ? 0.12 : 0.06))
+                .frame(width: 140, height: 140)
+            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                .fill(LinearGradient(colors: [Color(hex: 0x4A8BFF), Self.blue],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                .frame(width: 96, height: 96)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 30, style: .continuous)
+                        .stroke(.white.opacity(0.25), lineWidth: 1)
+                )
+                .shadow(color: Self.blue.opacity(0.35), radius: 16, y: 8)
+                .overlay(
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 40, weight: .semibold))
+                        .foregroundStyle(.white)
+                )
+            satellite("text.bubble.fill", angle: -140)
+            satellite("photo.fill", angle: -35)
+            satellite("location.fill", angle: 95)
+        }
+        .frame(width: 200, height: 190)
+        .accessibilityHidden(true)
+    }
+
+    private func satellite(_ symbol: String, angle: Double) -> some View {
+        let r: CGFloat = 86
+        let rad = angle * .pi / 180
+        return Image(systemName: symbol)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Self.blue)
+            .frame(width: 34, height: 34)
+            .background(Circle().fill(Color(uiColor: .systemBackground)))
+            .overlay(Circle().stroke(Self.blue.opacity(0.18), lineWidth: 1))
+            .shadow(color: .black.opacity(0.08), radius: 6, y: 3)
+            .offset(x: r * cos(rad), y: r * sin(rad))
     }
 }
