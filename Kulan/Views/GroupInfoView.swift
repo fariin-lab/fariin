@@ -47,6 +47,7 @@ struct GroupInfoView: View {
     @State private var showInvite = false
     /// The invite link being shared through the app's Send To sheet (Share Group).
     @State private var shareGroupText: String?
+    @State private var showMemberLink = false
     @State private var showAllMembers = false   // See All, under the first ten members
     @State private var showSounds = false
     @State private var showSettings = false
@@ -127,6 +128,9 @@ struct GroupInfoView: View {
                 }
             }
             .navigationDestination(isPresented: $showMemberChanges) { GroupMemberChangesView(cid: cid) }
+            .navigationDestination(isPresented: $showMemberLink) {
+                if let link = inviteLink { GroupLinkShareView(title: title, photo: conv?.avatarUrl, link: link) }
+            }
             .navigationDestination(item: $profileOf) { m in
                 ContactInfoView(cid: ChatService.convId(me, m.id), name: m.name,
                                 photoUrl: conv?.photos[m.id], source: .calls)
@@ -310,7 +314,10 @@ struct GroupInfoView: View {
             // The app's own Send To sheet (owner 2026-10-18), not the system one: the link goes to
             // chats here as a plain message of mine.
             if let link = inviteLink {
-                GroupActionTile(icon: "square.and.arrow.up", title: "Share", cardColor: cardColor) { shareGroupText = link }
+                // An admin sends it straight away; a member gets the link's own page (owner 2026-10-19).
+                GroupActionTile(icon: "square.and.arrow.up", title: "Share", cardColor: cardColor) {
+                    if can(.inviteUsers) { shareGroupText = link } else { showMemberLink = true }
+                }
             } else if canAdd {
                 GroupActionTile(icon: "ic_add_member", title: "Add", cardColor: cardColor) { showAdd = true }
             } else if !(conv?.inviteCode ?? "").isEmpty {

@@ -193,6 +193,10 @@ struct InviteLinkSheet: View {
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)
                         }
+                    } footer: {
+                        // The link's state in one line (owner 2026-10-19): how people get in, and who
+                        // may hand the link out.
+                        if let inv { Text(stateLine(inv)) }
                     }
                     if let inv {
                         Section {
@@ -256,6 +260,15 @@ struct InviteLinkSheet: View {
         }
     }
     @State private var showQR = false   // 2026-09-24 fix-all #126, private like the sheet's other state
+
+    private func stateLine(_ inv: GroupInvite) -> String {
+        let membersShare = ConversationsRepository.shared.conversations
+            .first { $0.id == cid }?.membersCanShareLink ?? false
+        let join = inv.requestApproval ? "An admin approves each person who asks to join."
+                                       : "Anyone with the link joins straight away."
+        let share = membersShare ? "Members can share it too." : "Only admins can share it."
+        return "\(join) \(share)"
+    }
     @State private var shareText: String?   // the link, going out through the app's Send To sheet
 
     private func expiryLabel(_ at: Double) -> String {
@@ -538,3 +551,90 @@ private struct InviteStackIfNeeded<Content: View>: View {
 
 /// The link handed to the Send To sheet, as an `Identifiable` for `.sheet(item:)`.
 private struct InviteShareText: Identifiable { let id: String }
+
+/// ⛔ A MEMBER'S LINK PAGE (owner 2026-10-19): when the admins let members share the link, a member
+/// gets the link itself and the ways to send it, and nothing to change. The group's face and the link
+/// in one card, then Copy Link, Send in Fariin, Share, QR Code.
+struct GroupLinkShareView: View {
+    let title: String
+    let photo: String?
+    let link: String
+    @State private var shareText: String?
+    @State private var showQR = false
+    @State private var copied = false
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                HStack(spacing: 14) {
+                    AvatarView(name: title, photoUrl: photo, size: 60)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title).font(.headline).lineLimit(1)
+                        Text(link).font(.subheadline).foregroundStyle(.secondary)
+                            .lineLimit(2).truncationMode(.middle)
+                            .textSelection(.enabled)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(16)
+                .profileSurface(plain: card)
+
+                VStack(spacing: 0) {
+                    row("Copy Link", "doc.on.doc") {
+                        UIPasteboard.general.string = link
+                        Haptics.notify(.success)
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { copied = true }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            withAnimation(.easeOut(duration: 0.25)) { copied = false }
+                        }
+                    }
+                    Divider().padding(.leading, 16)
+                    row("Send in Fariin", "paperplane") { shareText = link }
+                    Divider().padding(.leading, 16)
+                    ShareLink(item: URL(string: link) ?? URL(string: "https://fariin.com")!) {
+                        rowLabel("Share", "square.and.arrow.up")
+                    }
+                    .buttonStyle(.plain)
+                    Divider().padding(.leading, 16)
+                    row("QR Code", "qrcode") { showQR = true }
+                }
+                .profileSurface(plain: card)
+            }
+            .padding(16)
+        }
+        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+        .navigationTitle("Group Link").navigationBarTitleDisplayMode(.inline)
+        .overlay(alignment: .bottom) {
+            if copied {
+                Text("Link copied")
+                    .font(.subheadline.weight(.medium)).foregroundStyle(.white)
+                    .padding(.horizontal, 18).padding(.vertical, 10)
+                    .background(.black.opacity(0.75), in: Capsule())
+                    .padding(.bottom, 40)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .allowsHitTesting(false)
+            }
+        }
+        .sheet(item: Binding(get: { shareText.map { InviteShareText(id: $0) } },
+                             set: { shareText = $0?.id })) { t in
+            ForwardPicker(shareText: t.id)
+        }
+        .sheet(isPresented: $showQR) { GroupLinkQRSheet(title: title, link: link) }
+    }
+
+    private var card: Color { Color(uiColor: .secondarySystemGroupedBackground) }
+
+    private func row(_ title: String, _ icon: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) { rowLabel(title, icon) }.buttonStyle(.plain)
+    }
+
+    private func rowLabel(_ title: String, _ icon: String) -> some View {
+        HStack {
+            Text(title).foregroundStyle(.primary)
+            Spacer()
+            Image(systemName: icon).font(.system(size: 18)).foregroundStyle(.primary)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 15)
+        .contentShape(Rectangle())
+    }
+}
