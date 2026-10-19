@@ -296,7 +296,8 @@ enum StickerSend {
                 return "Couldn't save this sticker"
             }
             do {
-                _ = try store.addMine(png: png, emoji: s.emoji.isEmpty ? "🙂" : s.emoji)
+                // Under the message's own id, so this menu then reads "Remove" (owner 2026-10-19).
+                _ = try store.addMine(png: png, emoji: s.emoji.isEmpty ? "🙂" : s.emoji, keepingId: s.stickerId)
                 return "Saved to Favorites"
             } catch {
                 return "Couldn't save this sticker"

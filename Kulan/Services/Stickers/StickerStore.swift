@@ -220,10 +220,38 @@ final class StickerStore {
 
     // MARK: Favorites
 
-    /// A sticker I drew: written to disk, then first in Favorites.
+    /// A sticker I drew, or one somebody made saved from a chat: written to disk, then first in
+    /// Favorites.
+    ///
+    /// ⛔ ONE STICKER, ONE FAVORITE — owner 2026-10-19: the same custom sticker could be saved again
+    /// from every message it came in, because the copy got a new id the message never matched, so
+    /// the menu kept offering "Save to Favorites". `keepingId` (the message's own sticker id) makes
+    /// the copy answer to that message; and a picture already kept, byte for byte, is moved to the
+    /// front (taking that id) instead of being written a second time.
     @discardableResult
-    func addMine(png: Data, emoji: String) throws -> Sticker {
-        let id = UUID().uuidString.lowercased()
+    func addMine(png: Data, emoji: String, keepingId: String? = nil) throws -> Sticker {
+        if let keepingId, let i = favorites.firstIndex(where: { $0.packId == "mine" && $0.stickerId == keepingId }) {
+            let s = favorites.remove(at: i)
+            favorites.insert(s, at: 0)
+            save()
+            return s
+        }
+        if let i = favorites.firstIndex(where: { $0.source == .mine && mineBytes($0) == png }) {
+            var s = favorites.remove(at: i)
+            if let keepingId, keepingId != s.stickerId, Self.safeStem(keepingId) {
+                let from = Self.mineDir.appendingPathComponent("\(s.stickerId).png")
+                let to = Self.mineDir.appendingPathComponent("\(keepingId).png")
+                if (try? FileManager.default.moveItem(at: from, to: to)) != nil {
+                    let old = s.id
+                    s = Sticker(source: .mine, packId: "mine", stickerId: keepingId, emoji: s.emoji, animated: false)
+                    recents = recents.map { $0.id == old ? s : $0 }
+                }
+            }
+            favorites.insert(s, at: 0)
+            save()
+            return s
+        }
+        let id = keepingId.flatMap { Self.safeStem($0) ? $0 : nil } ?? UUID().uuidString.lowercased()
         try FileManager.default.createDirectory(at: Self.mineDir, withIntermediateDirectories: true)
         try png.write(to: Self.mineDir.appendingPathComponent("\(id).png"), options: .atomic)
         let s = Sticker(source: .mine, packId: "mine", stickerId: id, emoji: emoji, animated: false)
@@ -241,6 +269,15 @@ final class StickerStore {
     }
 
     func isFavorite(_ s: Sticker) -> Bool { favorites.contains { $0.id == s.id } }
+
+    private func mineBytes(_ s: Sticker) -> Data? {
+        try? Data(contentsOf: Self.mineDir.appendingPathComponent("\(s.stickerId).png"))
+    }
+
+    /// A sticker id from a message names a file here, so only a plain stem is used as one.
+    private static func safeStem(_ id: String) -> Bool {
+        !id.isEmpty && id.count <= 64 && id.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" }
+    }
 
     /// Takes stickers out of Favorites. A PNG I made goes with it (only source .mine owns a file),
     /// and so does its recents entry, since it would have no picture left to draw.
@@ -295,6 +332,30 @@ final class StickerStore {
         }
         favorites = saved.favorites.filter(alive)
         recents = Array(saved.recents.filter(alive).prefix(StickerLimits.recents))
+        mergeDuplicateMine()
+    }
+
+    /// Copies of one picture saved before 2026-10-19 (see `addMine`): the first kept, the rest
+    /// dropped with their files, recents pointed at the one kept.
+    private func mergeDuplicateMine() {
+        var seen: [Data: Sticker] = [:]
+        var drop: [String: Sticker] = [:]
+        for s in favorites where s.source == .mine {
+            guard let bytes = mineBytes(s) else { continue }
+            if let kept = seen[bytes] { drop[s.id] = kept } else { seen[bytes] = s }
+        }
+        guard !drop.isEmpty else { return }
+        for s in favorites where drop[s.id] != nil {
+            try? FileManager.default.removeItem(at: Self.mineDir.appendingPathComponent("\(s.stickerId).png"))
+        }
+        favorites.removeAll { drop[$0.id] != nil }
+        var out: [Sticker] = []
+        for r in recents {
+            let s = drop[r.id] ?? r
+            if !out.contains(where: { $0.id == s.id }) { out.append(s) }
+        }
+        recents = out
+        save()
     }
 
     private func save() {
