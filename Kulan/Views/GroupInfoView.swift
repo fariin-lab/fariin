@@ -183,9 +183,10 @@ struct GroupInfoView: View {
             .tint(palette != nil ? Color.white : nil)
             .overlay {
                 if showGroupPhoto {
-                    // Out of the big header's picture, as a person's photo flies (poster mode).
+                    // Out of the round photo, landing on the whole picture square, as my own photo
+                    // does in Settings (owner 2026-10-19: "now is a circle, make it like Settings").
                     ProfilePhotoViewer(name: title, photoUrl: groupPhoto ?? "",
-                                       sourceFrame: artRect.rect, poster: false,
+                                       sourceFrame: artRect.rect, landsSquare: true,
                                        closeSignal: photoCloseTick,
                                        isPresented: $showGroupPhoto)
                         .ignoresSafeArea()
