@@ -22,6 +22,10 @@ struct GroupLinkPreview: Equatable {
     var requested: Bool
     var mutuals: [Mutual]
     var mutualCount: Int
+    /// 2026-10-19 groups v2 step 4: the join page's description and up to three faces (the people
+    /// I talk to first, then other members with a photo). Empty on a `lite` card lookup.
+    var description: String
+    var faces: [Mutual]
 
     var membersLine: String { "\(memberCount) \(memberCount == 1 ? "member" : "members")" }
 
@@ -43,6 +47,14 @@ struct GroupLinkPreview: Equatable {
             return Mutual(uid: uid, name: name, photoUrl: ph.isEmpty ? nil : ph)
         }
         self.mutualCount = (data["mutualCount"] as? NSNumber)?.intValue ?? mutuals.count
+        self.description = (data["description"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // A server from before step 4 sends no faces: the mutuals stand in.
+        let f = (data["faces"] as? [[String: Any]] ?? []).compactMap { m -> Mutual? in
+            guard let uid = m["uid"] as? String else { return nil }
+            let ph = m["photoUrl"] as? String ?? ""
+            return Mutual(uid: uid, name: m["name"] as? String ?? "", photoUrl: ph.isEmpty ? nil : ph)
+        }
+        self.faces = f.isEmpty ? mutuals : f
     }
 }
 

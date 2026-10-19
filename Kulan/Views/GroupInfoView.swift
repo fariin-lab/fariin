@@ -117,8 +117,12 @@ struct GroupInfoView: View {
         guard let c = conv else { return false }
         return c.isAdmin(me) || c.isOwner(me) || c.membersCanShareLink
     }
+    /// 2026-10-19 groups v2 step 4: the primary link's code from the server (getShareLink), "" when
+    /// the group has none. nil until it answers (or when it fails): then the group doc's old
+    /// `inviteCode`, which the server still copies there for builds from before.
+    @State private var shareCode: String?
     private var inviteLink: String? {
-        guard mayShareLink, let code = conv?.inviteCode, !code.isEmpty,
+        guard mayShareLink, let code = shareCode ?? conv?.inviteCode, !code.isEmpty,
               let link = URL(string: KulanApp.groupLink(code: code)) else { return nil }
         return link.absoluteString
     }
@@ -247,6 +251,14 @@ struct GroupInfoView: View {
             // The gallery count and the storage figure, again on every return (the gallery or a
             // clear may have changed them).
             .onAppear { Task { await loadMediaFigures() } }
+            // Again on every return: the link page may have reset or turned off the link.
+            .onAppear { Task { await loadShareCode() } }
+    }
+
+    private func loadShareCode() async {
+        guard mayShareLink else { shareCode = nil; return }
+        // A failed lookup keeps the group doc's code (see `shareCode`); nothing is changed by it.
+        do { shareCode = try await GroupInviteService.shareCode(cid: cid) ?? "" } catch { shareCode = nil }
     }
 
     // ⛔ THE OWNER'S MOCKUP, AND ONLY WHAT IS IN IT (2026-10-19): the header, five round glass
@@ -275,6 +287,10 @@ struct GroupInfoView: View {
     private static let scrollSpace = "groupInfoScroll"
 
     @ViewBuilder private var cards: some View {
+        // 2026-10-19 groups v2: a public group's own link, for every member (copy, share, QR).
+        if let name = conv?.publicName, !name.isEmpty {
+            GroupPublicLinkCard(name: name, title: title, cardColor: cardColor)
+        }
         settingsCard
         if iAmAdmin { groupSettingsCard }
         // The bubble cloud is the admin panel's call (config/features memberCloud), live.
@@ -613,9 +629,13 @@ struct GroupInfoView: View {
             rowDivider
             ProfileInfoRow(title: "Sounds & Notifications", icon: "ic_notifications",
                            value: muted ? "Off" : "On") { showSounds = true }
-            rowDivider
-            ProfileInfoRow(title: "Group invite link", icon: "link",
-                           value: (conv?.inviteCode ?? "").isEmpty ? "Off" : "On") { inviteRowTapped() }
+            // A private group's link is the admins' (owner 2026-10-19): a member sees no row at all.
+            // A public group's link row comes with its username (groups step 2).
+            if can(.inviteUsers) {
+                rowDivider
+                ProfileInfoRow(title: "Group invite link", icon: "link",
+                               value: (shareCode ?? conv?.inviteCode ?? "").isEmpty ? "Off" : "On") { inviteRowTapped() }
+            }
         }
         .profileSurface(plain: cardColor)
     }
@@ -668,16 +688,9 @@ struct GroupInfoView: View {
         HStack(spacing: 0) {
             Text(membersTitle).font(.headline).foregroundStyle(.secondary)
             Spacer(minLength: 8)
-            Button { showAllMembers = true } label: {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 19))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Search members")
+            // No search glyph here (owner 2026-10-19); See All opens the searchable list.
         }
+        .frame(minHeight: 44)
         .padding(.leading, 16)
     }
 

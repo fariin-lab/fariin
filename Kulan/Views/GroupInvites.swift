@@ -2,44 +2,89 @@ import SwiftUI
 import FirebaseFirestore
 import FirebaseFunctions
 
-// Group invite links (reference-style). An invite is a top-level `invites/{code}` doc pointing at a
-// group, with optional expiry + usage cap + "require admin approval". Any signed-in user can READ one
-// (to resolve a kulan://g/<code> deep link); only a group admin can create/edit/revoke. Joining goes
-// through the joinGroupViaInvite Cloud Function (admin SDK) so a stranger never writes the group doc.
+// Group invite links (reference-style). 2026-10-19 groups v2 step 4: THE SERVER OWNS THEM. The
+// app no longer reads or writes `invites/{code}` (firestore.rules says no to both); every link is
+// made, changed, revoked, deleted and listed through the functions-groups callables
+// (createGroupLink, editGroupLink, revokeGroupLink, deleteGroupLink, listGroupLinks, getShareLink).
+// A group has one primary link (the one Share hands out) and any number of extra links with a
+// name, a time limit, a usage limit or admin approval. Joining is still joinGroupViaInvite.
 
 // MARK: - Models
 
-struct GroupInvite: Identifiable, Equatable {
+/// One invite link as `listGroupLinks` and the other link callables send it.
+struct GroupLink: Identifiable, Equatable {
+    enum State { case active, expired, usedUp, revoked }
+    struct Face: Identifiable, Equatable {
+        let uid: String
+        let name: String
+        let photoUrl: String?
+        var id: String { uid }
+    }
     let code: String
-    var cid: String
-    var groupTitle: String
-    var groupPhoto: String?
+    var name: String
+    var isPrimary: Bool
+    var createdBy: String
+    var createdByName: String
+    var createdAt: Double     // ms since epoch
     var expireAt: Double      // ms since epoch, 0 = never
     var usageLimit: Int       // 0 = unlimited
     var usedCount: Int
     var requestApproval: Bool
     var revoked: Bool
+    var joined: [Face]        // the first few people in, still in the group
     var id: String { code }
 
     // An https link, not kulan://. This is the string an admin copies and sends to somebody who
     // by definition is NOT in the group yet, and quite possibly does not have Fariin at all — the
     // one audience a custom scheme cannot reach. See KulanApp.route(from:).
     var url: String { KulanApp.groupLink(code: code) }
-    var isExpired: Bool { expireAt > 0 && expireAt < Date().timeIntervalSince1970 * 1000 }
-    var isFull: Bool { usageLimit > 0 && usedCount >= usageLimit }
-    var isActive: Bool { !revoked && !isExpired && !isFull }
+    /// The link as the page prints it: no "https://".
+    var shortURL: String { url.replacingOccurrences(of: "https://", with: "") }
+    /// A named link shows its name; any other its address.
+    var title: String { name.isEmpty ? shortURL : name }
 
-    init?(code: String, data: [String: Any]) {
-        guard let cid = data["cid"] as? String else { return nil }
+    /// Worked out here, not taken from the server's answer, so a link that expires while the page
+    /// is open turns red without a reload.
+    func state(now: Double = Date().timeIntervalSince1970 * 1000) -> State {
+        if revoked { return .revoked }
+        if expireAt > 0 && expireAt <= now { return .expired }
+        if usageLimit > 0 && usedCount >= usageLimit { return .usedUp }
+        return .active
+    }
+
+    init?(_ d: [String: Any]) {
+        guard let code = d["code"] as? String, KulanApp.safeSegment(code) else { return nil }
         self.code = code
-        self.cid = cid
-        self.groupTitle = data["groupTitle"] as? String ?? "Group"
-        self.groupPhoto = (data["groupPhoto"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        self.expireAt = (data["expireAt"] as? NSNumber)?.doubleValue ?? 0
-        self.usageLimit = (data["usageLimit"] as? NSNumber)?.intValue ?? 0
-        self.usedCount = (data["usedCount"] as? NSNumber)?.intValue ?? 0
-        self.requestApproval = data["requestApproval"] as? Bool ?? false
-        self.revoked = data["revoked"] as? Bool ?? false
+        self.name = d["name"] as? String ?? ""
+        self.isPrimary = d["isPrimary"] as? Bool ?? false
+        self.createdBy = d["createdBy"] as? String ?? ""
+        self.createdByName = d["createdByName"] as? String ?? ""
+        self.createdAt = (d["createdAt"] as? NSNumber)?.doubleValue ?? 0
+        self.expireAt = (d["expireAt"] as? NSNumber)?.doubleValue ?? 0
+        self.usageLimit = (d["usageLimit"] as? NSNumber)?.intValue ?? 0
+        self.usedCount = (d["usedCount"] as? NSNumber)?.intValue ?? 0
+        self.requestApproval = d["requestApproval"] as? Bool ?? false
+        self.revoked = d["revoked"] as? Bool ?? false
+        self.joined = (d["joined"] as? [[String: Any]] ?? []).compactMap { f in
+            guard let uid = f["uid"] as? String else { return nil }
+            let ph = f["photoUrl"] as? String ?? ""
+            return Face(uid: uid, name: f["name"] as? String ?? "", photoUrl: ph.isEmpty ? nil : ph)
+        }
+    }
+}
+
+/// The link page's three lists (`listGroupLinks`).
+struct GroupLinkList: Equatable {
+    var primary: GroupLink?
+    var links: [GroupLink]
+    var revoked: [GroupLink]
+    var isOwner: Bool
+
+    init(_ d: [String: Any]) {
+        primary = (d["primary"] as? [String: Any]).flatMap { GroupLink($0) }
+        links = (d["links"] as? [[String: Any]] ?? []).compactMap { GroupLink($0) }
+        revoked = (d["revoked"] as? [[String: Any]] ?? []).compactMap { GroupLink($0) }
+        isOwner = d["isOwner"] as? Bool ?? false
     }
 }
 
@@ -64,73 +109,83 @@ enum GroupInviteService {
     private static var db: Firestore { Firestore.firestore() }
     private static var fns: Functions { Functions.functions(region: "me-central1") }
 
-    static func randomCode(_ n: Int = 10) -> String {
-        let chars = Array("abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789")   // no look-alikes
-        return String((0..<n).map { _ in chars.randomElement()! })
+    // MARK: Links (all on the server, 2026-10-19 step 4)
+
+    private static func call(_ name: String, _ args: [String: Any]) async throws -> [String: Any] {
+        let res = try await fns.httpsCallable(name).call(args)
+        return res.data as? [String: Any] ?? [:]
     }
 
-    /// Admin: create the group's primary invite link (replaces any existing one). Returns the code.
+    /// The link a link callable answered with; a reply without one is an error, never a silent nil.
+    private static func link(from d: [String: Any]) throws -> GroupLink {
+        guard let l = (d["link"] as? [String: Any]).flatMap({ GroupLink($0) }) else {
+            throw NSError(domain: "GroupLinks", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "The server sent back no link. Try again."])
+        }
+        return l
+    }
+
+    /// The link page: the primary link, the others this admin may see, the revoked ones.
+    static func listLinks(cid: String) async throws -> GroupLinkList {
+        GroupLinkList(try await call("listGroupLinks", ["cid": cid]))
+    }
+
+    /// A new primary link (the first one, or Reset Link: the old one is revoked in the same step).
+    /// The approval setting carries over from the old one unless `requestApproval` is given.
+    static func createPrimaryLink(cid: String, requestApproval: Bool? = nil) async throws -> GroupLink {
+        var args: [String: Any] = ["cid": cid, "primary": true]
+        if let requestApproval { args["requestApproval"] = requestApproval }
+        return try link(from: try await call("createGroupLink", args))
+    }
+
+    /// An extra link. `options`: name, expireAt (ms, 0 = none), usageLimit (0 = none), requestApproval.
+    static func createLink(cid: String, options: [String: Any]) async throws -> GroupLink {
+        var args = options
+        args["cid"] = cid
+        return try link(from: try await call("createGroupLink", args))
+    }
+
+    /// Changes only the keys given; the server keeps the rest.
+    static func editLink(cid: String, code: String, changes: [String: Any]) async throws -> GroupLink {
+        var args = changes
+        args["cid"] = cid
+        args["code"] = code
+        return try link(from: try await call("editGroupLink", args))
+    }
+
+    static func revokeLink(cid: String, code: String) async throws -> GroupLink {
+        try link(from: try await call("revokeGroupLink", ["cid": cid, "code": code]))
+    }
+
+    static func deleteLink(cid: String, code: String) async throws {
+        _ = try await call("deleteGroupLink", ["cid": cid, "code": code])
+    }
+
+    /// Every revoked link this admin may change. Returns how many went.
     @discardableResult
-    static func createInvite(cid: String, groupTitle: String, groupPhoto: String?,
-                             expireAt: Double = 0, usageLimit: Int = 0, requestApproval: Bool = false) async throws -> String {
-        // Revoke any existing primary link first, so a group never ends up with two live links (one of
-        // which the admin can no longer see or revoke). 2026-10-19: a failed revoke now stops here
-        // and throws, instead of going on to make a second live link.
-        let snap = try await db.collection("conversations").document(cid).getDocument()
-        if let old = snap.data()?["inviteCode"] as? String, !old.isEmpty {
-            try await db.collection("invites").document(old).updateData(["revoked": true])
-        }
-        let code = randomCode()
-        try await db.collection("invites").document(code).setData([
-            "cid": cid,
-            "groupTitle": groupTitle,
-            "groupPhoto": groupPhoto ?? "",
-            "expireAt": expireAt,
-            "usageLimit": usageLimit,
-            "usedCount": 0,
-            "requestApproval": requestApproval,
-            "revoked": false,
-            "createdBy": AuthService.shared.uid ?? "",
-            "createdAt": FieldValue.serverTimestamp(),
-        ])
-        // Point the group at its current link so members/admins can find it. If that write fails the
-        // new link is one nobody can see or revoke, so it is revoked again and the error goes up.
-        do {
-            try await db.collection("conversations").document(cid).updateData([
-                "inviteCode": code, "updatedAt": FieldValue.serverTimestamp(),
-            ])
-        } catch {
-            try? await db.collection("invites").document(code).updateData(["revoked": true])
-            throw error
-        }
+    static func deleteAllRevoked(cid: String) async throws -> Int {
+        let d = try await call("deleteGroupLink", ["cid": cid, "allRevoked": true])
+        return (d["deleted"] as? NSNumber)?.intValue ?? 0
+    }
+
+    /// The primary link's code for an admin who shares it; nil when the group has none.
+    static func shareCode(cid: String) async throws -> String? {
+        let d = try await call("getShareLink", ["cid": cid])
+        guard let code = d["code"] as? String, KulanApp.safeSegment(code) else { return nil }
         return code
     }
 
-    /// Admin: edit an existing invite's options in place.
-    static func updateInvite(code: String, fields: [String: Any]) async throws {
-        try await db.collection("invites").document(code).updateData(fields)
-    }
-
-    /// Admin: revoke the link and clear the group's pointer.
-    static func revokeInvite(cid: String, code: String) async throws {
-        try await db.collection("invites").document(code).updateData(["revoked": true])
-        // Best effort on purpose: the link is already dead above, and a pointer left at a revoked
-        // code reads as "no link" (GroupInvite.isActive) and is replaced by the next create.
-        try? await db.collection("conversations").document(cid).updateData([
-            "inviteCode": "", "updatedAt": FieldValue.serverTimestamp(),
-        ])
-    }
-
-    static func fetchInvite(code: String) async -> GroupInvite? {
-        // A code from a link is outside text (audit, 2026-09-24). `document(_:)` does not fail on a
-        // bad id, it raises an ObjC exception `try?` cannot catch: an empty code, or a link like
-        // /g/a%2Fb (decoded to "a/b", a collection path), crashed the app on tap. Such a code can
-        // never be a real invite, so it takes the sheet's own "invalid" answer instead.
-        guard !code.isEmpty, !code.contains("/"), code != ".", code != "..",
-              !(code.hasPrefix("__") && code.hasSuffix("__")) else { return nil }
-        guard let snap = try? await db.collection("invites").document(code).getDocument(),
-              let data = snap.data() else { return nil }
-        return GroupInvite(code: code, data: data)
+    /// Words for a failed link change. The server's own sentence when it refused for a reason the
+    /// person can act on; otherwise `fallback` (offline, timed out, a server fault).
+    static func errorText(_ error: Error, _ fallback: String) -> String {
+        let ns = error as NSError
+        guard ns.domain == FunctionsErrorDomain else {
+            return ns.domain == "GroupLinks" ? ns.localizedDescription : fallback
+        }
+        let told: [FunctionsErrorCode] = [.invalidArgument, .permissionDenied, .notFound,
+                                          .failedPrecondition, .resourceExhausted, .deadlineExceeded]
+        if told.contains(where: { $0.rawValue == ns.code }) { return ns.localizedDescription }
+        return NetworkState.shared.isOnline ? fallback : "No internet connection. Try again."
     }
 
     /// Join via the Cloud Function. Returns (status, cid): "joined" / "already" / "requested".
@@ -163,6 +218,9 @@ enum GroupInviteService {
 
 // MARK: - Invite link sheet (admin)
 
+/// The admin's link page. 2026-10-19 groups v2 step 4: the page itself is `GroupLinksPage`
+/// (GroupLinksPage.swift); this keeps the name and initialiser every caller already uses.
+/// `initialCode` is no longer read: the page asks the server (listGroupLinks).
 struct InviteLinkSheet: View {
     let cid: String
     let groupTitle: String
@@ -172,193 +230,13 @@ struct InviteLinkSheet: View {
     /// and no Done; the page's back button closes it.
     var embedded: Bool = false
     @Environment(\.dismiss) private var dismiss
-    @State private var invite: GroupInvite?
-    @State private var loading = true
-    @State private var working = false
-    @State private var confirmRevoke = false
-    @State private var confirmNewLink = false
-
-    private let expiryOptions: [(String, Double)] = [("Never", 0), ("1 day", 86_400), ("1 week", 604_800), ("1 month", 2_592_000)]
-    private let limitOptions: [(String, Int)] = [("No limit", 0), ("10 uses", 10), ("50 uses", 50), ("100 uses", 100)]
 
     var body: some View {
         InviteStackIfNeeded(on: !embedded) {
-            // ⛔ THE OWNER'S LAYOUT (2026-10-18, his picture): the Group Link switch with the link
-            // under it; Share and Reset Link; Require Admin Approval with one line under it. Copy and
-            // the QR code live in Share's menu now; expiry and usage limit left this page (a link that
-            // already has them keeps them, the server still applies them).
-            List {
-                if loading {
-                    Section { ProgressView().frame(maxWidth: .infinity) }.listRowBackground(Color.clear)
-                } else {
-                    let inv = invite.flatMap { $0.isActive ? $0 : nil }
-                    Section {
-                        Toggle("Group Link", isOn: Binding(
-                            get: { inv != nil || working },
-                            set: { on in if on { create() } else { revoke() } }))
-                            .disabled(working)
-                        if let inv {
-                            Text(inv.url)
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                        }
-                    } footer: {
-                        // The link's state in one line (owner 2026-10-19): how people get in, and who
-                        // may hand the link out.
-                        if let inv { Text(stateLine(inv)) }
-                    }
-                    if let inv {
-                        Section {
-                            Menu {
-                                Button { shareText = inv.url } label: { Label("Send in Fariin", systemImage: "paperplane") }
-                                Button { UIPasteboard.general.string = inv.url } label: { Label("Copy Link", systemImage: "doc.on.doc") }
-                                Button { showQR = true } label: { Label("QR Code", systemImage: "qrcode") }
-                                ShareLink(item: URL(string: inv.url) ?? URL(string: "https://fariin.com")!) {
-                                    Label("More", systemImage: "ellipsis")
-                                }
-                            } label: {
-                                Label("Share", systemImage: "square.and.arrow.up").foregroundStyle(.primary)
-                            }
-                            // It kills the link everyone already has, so it asks first.
-                            Button { confirmNewLink = true } label: {
-                                Label("Reset Link", systemImage: "arrow.clockwise").foregroundStyle(.primary)
-                            }
-                        }
-                        .confirmationDialog("Reset Link", isPresented: $confirmNewLink, titleVisibility: .visible) {
-                            Button("Reset Link", role: .destructive) { regenerate() }
-                            Button("Cancel", role: .cancel) {}
-                        } message: {
-                            Text("The current link stops working for everyone who has it.")
-                        }
-                        Section {
-                            Toggle("Require Admin Approval", isOn: Binding(
-                                get: { inv.requestApproval },
-                                set: { on in setField(["requestApproval": on]); invite?.requestApproval = on }))
-                        } footer: {
-                            Text("An admin has to approve each person who joins with the link.")
-                        }
-                    }
-                }
-            }
-            .sheet(item: Binding(get: { shareText.map { InviteShareText(id: $0) } },
-                                 set: { shareText = $0?.id })) { t in
-                ForwardPicker(shareText: t.id)
-            }
-            .navigationTitle("Group Link").navigationBarTitleDisplayMode(.inline)
-            .toolbar { if !embedded { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } } }
-            .task { await load() }
-            .alert("Couldn't change the link",
-                   isPresented: Binding(get: { linkError != nil }, set: { if !$0 { linkError = nil } })) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(linkError ?? "")
-            }
-            // 2026-09-24 fix-all #126: the code, white behind it so any camera reads it in either theme.
-            .sheet(isPresented: $showQR) {
-                VStack(spacing: 16) {
-                    Text(groupTitle).font(.headline)
-                    if let url = invite?.url, let img = qrImage(from: url) {
-                        Image(uiImage: img)
-                            .interpolation(.none).resizable().scaledToFit()
-                            .padding(16)
-                            .background(.white, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                            .frame(maxWidth: 292)
-                    }
-                    if let url = invite?.url {
-                        Text(url).font(.footnote.monospaced()).foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                }
-                .padding(24)
-                .presentationDetents([.medium])
-            }
+            GroupLinksPage(cid: cid, groupTitle: groupTitle)
+                .toolbar { if !embedded { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } } }
         }
     }
-    @State private var showQR = false   // 2026-09-24 fix-all #126, private like the sheet's other state
-
-    private func stateLine(_ inv: GroupInvite) -> String {
-        let membersShare = ConversationsRepository.shared.conversations
-            .first { $0.id == cid }?.membersCanShareLink ?? false
-        let join = inv.requestApproval ? "An admin approves each person who asks to join."
-                                       : "Anyone with the link joins straight away."
-        let share = membersShare ? "Members can share it too." : "Only admins can share it."
-        return "\(join) \(share)"
-    }
-    @State private var shareText: String?   // the link, going out through the app's Send To sheet
-
-    private func expiryLabel(_ at: Double) -> String {
-        guard at > 0 else { return "Never" }
-        let d = Date(timeIntervalSince1970: at / 1000)
-        let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .short
-        return f.string(from: d)
-    }
-
-    private func load() async {
-        if !initialCode.isEmpty { invite = await GroupInviteService.fetchInvite(code: initialCode) }
-        loading = false
-    }
-    // 2026-10-19: these used to swallow every error with try? and then show the change as made. Now
-    // a failure shows `linkError` and the page keeps (or re-reads) what is really stored.
-    private func create() {
-        working = true
-        Task {
-            do {
-                let code = try await GroupInviteService.createInvite(cid: cid, groupTitle: groupTitle, groupPhoto: groupPhoto)
-                invite = await GroupInviteService.fetchInvite(code: code)
-            } catch {
-                linkError = "The link was not created. Check your connection and try again."
-            }
-            working = false
-        }
-    }
-    private func regenerate() {
-        guard let old = invite?.code else { return }
-        working = true
-        Task {
-            do {
-                try await GroupInviteService.revokeInvite(cid: cid, code: old)
-            } catch {
-                linkError = "The link was not reset. Check your connection and try again."
-                working = false
-                return
-            }
-            do {
-                let code = try await GroupInviteService.createInvite(cid: cid, groupTitle: groupTitle, groupPhoto: groupPhoto)
-                invite = await GroupInviteService.fetchInvite(code: code)
-            } catch {
-                // The old link is already off, so the page shows no link rather than a dead one.
-                invite = nil
-                linkError = "The old link was turned off, but a new one was not made. Turn Group Link on to try again."
-            }
-            working = false
-        }
-    }
-    private func revoke() {
-        guard let code = invite?.code else { return }
-        working = true
-        Task {
-            do {
-                try await GroupInviteService.revokeInvite(cid: cid, code: code)
-                invite = nil
-            } catch {
-                linkError = "The link is still on. Check your connection and try again."
-            }
-            working = false
-        }
-    }
-    private func setField(_ fields: [String: Any]) {
-        guard let code = invite?.code else { return }
-        Task {
-            do {
-                try await GroupInviteService.updateInvite(code: code, fields: fields)
-            } catch {
-                // The toggle moved before the write; put it back to what is stored.
-                if let stored = await GroupInviteService.fetchInvite(code: code) { invite = stored }
-                linkError = "The setting was not changed. Check your connection and try again."
-            }
-        }
-    }
-    @State private var linkError: String?
 }
 
 // MARK: - Join group sheet (a group link: its card, the link itself, a QR code, kulan://g/<code>)
@@ -418,7 +296,8 @@ struct JoinGroupSheet: View {
         if let p = preview {
             groupBody(p)
         } else if let why = refusedText {
-            message(symbol: "link", why)
+            // The server says which way the link died (expired, used up, turned off) in `why`.
+            message(symbol: "link", why, title: "Can't join with this link")
         } else if let why = failedText {
             VStack(spacing: 16) {
                 message(symbol: "wifi.exclamationmark", why)
@@ -446,8 +325,17 @@ struct JoinGroupSheet: View {
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)
                 .padding(.top, 4)
+            // 2026-10-19 groups v2 step 4: what the group is about, as its admins wrote it.
+            if !p.description.isEmpty {
+                Text(p.description)
+                    .font(.system(size: 15))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(4)
+                    .padding(.horizontal, 28)
+                    .padding(.top, 10)
+            }
 
-            if !p.mutuals.isEmpty {
+            if !p.faces.isEmpty {
                 Divider().padding(.horizontal, 20).padding(.top, 20)
                 mutualsRow(p).padding(.top, 16).padding(.horizontal, 24)
             }
@@ -477,16 +365,16 @@ struct JoinGroupSheet: View {
         return p.needsApproval ? "Request to Join" : "Join Group"
     }
 
-    /// Up to three small faces, overlapping, and who they are.
+    /// Up to three small faces, overlapping (people I talk to first), and the ones I know by name.
     @ViewBuilder private func mutualsRow(_ p: GroupLinkPreview) -> some View {
         HStack(spacing: 10) {
             HStack(spacing: -8) {
-                ForEach(p.mutuals.prefix(3)) { m in
+                ForEach(p.faces.prefix(3)) { m in
                     AvatarView(name: m.name, photoUrl: m.photoUrl, size: 28)
                         .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2))
                 }
             }
-            Text(mutualsLine(p))
+            Text(p.mutuals.isEmpty ? p.membersLine : mutualsLine(p))
                 .font(.system(size: 14))
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -518,9 +406,12 @@ struct JoinGroupSheet: View {
         .padding(.bottom, 12)
     }
 
-    private func message(symbol: String, _ text: String) -> some View {
+    private func message(symbol: String, _ text: String, title: String? = nil) -> some View {
         VStack(spacing: 14) {
             Image(systemName: symbol).font(.system(size: 44)).foregroundStyle(.secondary)
+            if let title {
+                Text(title).font(.system(size: 19, weight: .semibold)).multilineTextAlignment(.center)
+            }
             Text(text)
                 .font(.system(size: 16))
                 .multilineTextAlignment(.center)

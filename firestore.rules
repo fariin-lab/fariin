@@ -2665,40 +2665,24 @@ service cloud.firestore {
         allow read: if signedIn() && request.auth.uid in convData().users;
         allow write: if false;
       }
+      // 2026-10-19 groups v2 step 4: each invite link's record (name, time and usage limits, who
+      // made it, the faces of the first people in). Server-only: the functions-groups link callables
+      // (createGroupLink, editGroupLink, revokeGroupLink, deleteGroupLink, listGroupLinks,
+      // getShareLink) read and write it with the admin SDK and hand the app what it may see.
+      match /links/{code} {
+        allow read, write: if false;
+      }
     }
 
-    // Group invite links (code → group). Any signed-in user may READ one (to resolve a
-    // kulan://g/<code> deep link and preview the group before joining). Only an admin of the target
-    // group may create / edit (set expiry, usage limit, approval) / revoke it. The actual membership
-    // add is done by the joinGroupViaInvite Cloud Function (admin SDK), never by a client write here.
+    // Group invite links (code → group). 2026-10-19 groups v2 step 4: THE SERVER OWNS THEM. This
+    // doc is the lookup a code is resolved by, and only the functions-groups callables touch it:
+    // joinGroupViaInvite and groupLinkPreview read it, the link callables (createGroupLink and the
+    // rest, see conversations/{cid}/links) write it. The app used to read it to show the link page
+    // and write it in three loose steps; a stranger holding a code learned the group's link options
+    // from it. Builds from before this change lose their own link page (it read and wrote here);
+    // joining, the link card and the join sheet go through the functions and keep working.
     match /invites/{code} {
-      // GET only (you must already know the exact code) — NOT list, or any signed-in user could
-      // enumerate every group's invite/title/photo and mass-join.
-      allow get: if signedIn();
-      // 2026-09-24 audit: and holding the Add-members right (`Right.inviteUsers`), the same test as
-      // `adminCan` on the client: owner always, an admin with no `adminRights` entry always, an
-      // admin with an entry only when it lists the slug.
-      function canInvite(c) {
-        let conv = get(/databases/$(database)/documents/conversations/$(c)).data;
-        return request.auth.uid in conv.get('admins', [])
-          && (request.auth.uid == conv.get('createdBy', '')
-              || !(request.auth.uid in conv.get('adminRights', {}))
-              || 'inviteUsers' in conv.get('adminRights', {})[request.auth.uid]);
-      }
-      allow create: if signedIn()
-        && request.resource.data.cid is string
-        && canInvite(request.resource.data.cid)
-        // 2026-10-18 group moderation: no new link for a limited, suspended or disabled group.
-        && !groupModClosed(get(/databases/$(database)/documents/conversations/$(request.resource.data.cid)).data);
-      // 2026-10-18 group moderation: while it is restricted, a link may only be switched off
-      // (`revoked: true` and nothing else), never edited or switched back on. Deleting stays open.
-      allow update: if signedIn()
-        && canInvite(resource.data.cid)
-        && (!groupModClosed(get(/databases/$(database)/documents/conversations/$(resource.data.cid)).data)
-            || (request.resource.data.get('revoked', false) == true
-                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revoked'])));
-      allow delete: if signedIn()
-        && canInvite(resource.data.cid);
+      allow read, write: if false;
     }
 
     // Group calls: a single coordination doc per group (active flag + who started). Any member
