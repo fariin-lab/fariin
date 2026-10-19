@@ -223,7 +223,8 @@ struct GroupInfoView: View {
             .modifier(GroupInfoExits(cid: cid, conv: conv, me: me,
                                      confirmLeave: $confirmLeave, confirmClear: $confirmClear,
                                      confirmReport: $confirmReport, confirmDelete: $confirmDelete,
-                                     actionError: $actionError, onGone: { dismiss() }))
+                                     actionError: $actionError, onGone: { dismiss() },
+                                     onReported: { flashNotice("Thanks for reporting. We'll take a look.") }))
             // A full page, pushed (owner 2026-10-18), not a half sheet.
             .sheet(item: Binding(get: { shareGroupText.map { ShareText(id: $0) } },
                                  set: { shareGroupText = $0?.id })) { t in
@@ -1316,6 +1317,8 @@ private struct GroupInfoExits: ViewModifier {
     @Binding var confirmDelete: Bool
     @Binding var actionError: String?
     let onGone: () -> Void
+    /// The page's own notice after a report (owner 2026-10-19: it was silent).
+    var onReported: () -> Void = {}
 
     /// Close only on success (audit, 2026-09-24): a refused leave or delete was swallowed by `try?`
     /// and the page closed anyway.
@@ -1352,6 +1355,7 @@ private struct GroupInfoExits: ViewModifier {
                         ?? conv?.users.first(where: { $0 != me })
                         ?? ""
                     Task { await ChatService.report(reportedUid: target, cid: cid, reason: "group") }
+                    onReported()
                 }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("The group will be reported to moderators for review.") }

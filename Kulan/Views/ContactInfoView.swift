@@ -1383,6 +1383,7 @@ struct ContactInfoView: View {
                                     await MainActor.run { blocked = false; blockFailed = true }
                                 }
                             }
+                            flashShareToast(Self.reportedNote)
                         },
                        ])
             // Cut to one sentence alongside the Block dialog above, and for the same reason. The 24
@@ -1395,6 +1396,7 @@ struct ContactInfoView: View {
                         .cancel(),
                         .destructive("Report") {
                             Task { await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user") }
+                            flashShareToast(Self.reportedNote)
                         },
                         .destructive("Report and Block") {
                             blocked = true
@@ -1404,6 +1406,7 @@ struct ContactInfoView: View {
                                     await MainActor.run { blocked = false; blockFailed = true }
                                 }
                             }
+                            flashShareToast(Self.reportedNote)
                         },
                        ])
             // ⛔ THE PAGE CLOSES AFTER THE DELETE. What he was looking at is a conversation that no
@@ -1748,6 +1751,9 @@ struct ContactInfoView: View {
     /// through the database.
     /// Raise the confirmation, then take it away. Deliberately the same 1.5s and the same pair of
     /// curves the story viewer's `flashSentToast` uses, so the app has one way of saying "done".
+    /// Said after any Report on this page (owner 2026-10-19: reporting was silent).
+    static let reportedNote = "Thanks for reporting. We'll take a look."
+
     private func flashShareToast(_ text: String) {
         shareToast = text
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { shareToastShown = true }
