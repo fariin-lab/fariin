@@ -20,35 +20,63 @@ struct SoundsNotificationsView: View {
     // (0x1C1C1E in dark) sitting on a grey/black grouped-background page, like Settings.
     private var cardColor: Color { Color(uiColor: .secondarySystemGroupedBackground) }
     private var pageBackground: Color { Color(uiColor: .systemGroupedBackground) }
-    private var muteLabel: String { muted ? "Muted" : "Not muted" }
+    @State private var mutedUntil: Double = 0   // ms
+    private var isGroup: Bool { !cid.contains("_") && !OfficialChannel.isOfficial(cid) }
+    /// "Off", "Always", "Until 3:40 PM", or "Until Tue 3:40 PM" past today.
+    private var muteLabel: String {
+        guard muted else { return "Off" }
+        if mutedUntil >= 9_000_000_000_000 || mutedUntil == 0 { return "Always" }
+        let d = Date(timeIntervalSince1970: mutedUntil / 1000)
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate(Calendar.current.isDateInToday(d) ? "jmm" : "EEEjmm")
+        return "Until \(f.string(from: d))"
+    }
+
+    private func heading(_ t: String) -> some View {
+        Text(t).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+            .padding(.horizontal, 16)
+    }
+    private func footnote(_ t: String) -> some View {
+        Text(t).font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 16)
+    }
 
     var body: some View {
+        // ⛔ TWO HEADED CARDS (owner 2026-10-19, from the reference app's page): what you mute is
+        // named by the heading over it. Messages: Mute (with when it ends) and the sound. Calls: the
+        // ring tone, only while the call-sound picker is on (hidden on his order 2026-08-21).
         ScrollView {
-            VStack(spacing: 0) {
-                row("Message Sound", "ic_sound_message", value: messageSound.name) { picker = .message }
-                Divider().padding(.leading, 56)
-                // ⛔ HIDDEN ON HIS ORDER, 2026-08-21, and the divider goes with it or the list ends
-                // on a line under nothing. The picker, the seven tones and the per-chat storage are
-                // all still here — `SoundStore.callSoundPickerEnabled` is the one switch, and while
-                // it is off every call rings the phone's own ringtone.
-                if SoundStore.callSoundPickerEnabled {
-                    row("Call Sound", "ic_sound_call", value: callSound.name) { picker = .call }
+            VStack(alignment: .leading, spacing: 8) {
+                heading("Messages")
+                VStack(spacing: 0) {
+                    // Native dropdown Menu (real Apple context menu), not a popover dialog.
+                    Menu {
+                        if muted { Button("Unmute") { setMute(0) } }
+                        Button("1 hour")  { setMute(ChatService.muteUntil(1)) }
+                        Button("8 hours") { setMute(ChatService.muteUntil(8)) }
+                        Button("1 day")   { setMute(ChatService.muteUntil(24)) }
+                        Button("1 week")  { setMute(ChatService.muteUntil(168)) }
+                        Button("Always")  { setMute(ChatService.muteUntil(nil)) }
+                    } label: {
+                        rowLabel("Mute", "ic_sound_mute", muteLabel)
+                    }
+                    .tint(.primary)
                     Divider().padding(.leading, 56)
+                    row("Message Sound", "ic_sound_message", value: messageSound.name) { picker = .message }
                 }
-                // Native dropdown Menu (real Apple context menu), not a popover dialog.
-                Menu {
-                    if muted { Button("Unmute") { setMute(0) } }
-                    Button("1 hour")  { setMute(ChatService.muteUntil(1)) }
-                    Button("8 hours") { setMute(ChatService.muteUntil(8)) }
-                    Button("1 day")   { setMute(ChatService.muteUntil(24)) }
-                    Button("1 week")  { setMute(ChatService.muteUntil(168)) }
-                    Button("Always")  { setMute(ChatService.muteUntil(nil)) }
-                } label: {
-                    rowLabel("Mute", "ic_sound_mute", muteLabel)
+                .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                // True of the server (onNewMessage): a mention of you still comes through a mute.
+                if isGroup {
+                    footnote("While this group is muted, you're still told when someone mentions you.")
                 }
-                .tint(.primary)
+
+                if SoundStore.callSoundPickerEnabled {
+                    heading("Calls").padding(.top, 16)
+                    VStack(spacing: 0) {
+                        row("Call Sound", "ic_sound_call", value: callSound.name) { picker = .call }
+                    }
+                    .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                }
             }
-            .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             .padding(16)
         }
         .background(pageBackground.ignoresSafeArea())   // grouped-list page so the white card pops, like Settings
@@ -102,10 +130,12 @@ struct SoundsNotificationsView: View {
         if let snap = try? await Firestore.firestore().collection("conversations").document(cid).getDocument(),
            let until = ((snap.data()?["mutedBy"] as? [String: Any])?[me] as? NSNumber)?.doubleValue {
             muted = until > Date().timeIntervalSince1970 * 1000
+            mutedUntil = until
         }
     }
     private func setMute(_ until: Double) {
         muted = until > Date().timeIntervalSince1970 * 1000
+        mutedUntil = until
         Task { await ChatService.setMute(cid, until: until) }
     }
 }
