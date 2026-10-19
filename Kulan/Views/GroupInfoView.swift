@@ -867,8 +867,9 @@ private struct GroupFaceCluster: View {
     static let side: CGFloat = 132
     /// Offset from the disc's centre and diameter, largest first: the 200pt layout, scaled.
     private static let slots: [(x: CGFloat, y: CGFloat, d: CGFloat)] = {
-        let k = side / 200
-        return [(-26, -26, 104), (40, 30, 72), (-6, 56, 50)].map { ($0.0 * k, $0.1 * k, $0.2 * k) }
+        let k: CGFloat = side / 200
+        let base: [(CGFloat, CGFloat, CGFloat)] = [(-26, -26, 104), (40, 30, 72), (-6, 56, 50)]
+        return base.map { (x: $0.0 * k, y: $0.1 * k, d: $0.2 * k) }
     }()
 
     private var picks: [String] {
