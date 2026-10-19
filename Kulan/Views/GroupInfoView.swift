@@ -8,7 +8,7 @@ import Photos
 // is a person's), name and member count, the actions, the description as an About card (the Fariin
 // official chat's), the members, the media, one settings card, and the red card. Who-can-do-what,
 // admins, the member list and invites live on Group Settings (`GroupSettingsView`), not here. Edit
-// opens Group Settings, whose head changes the name, photo and description (owner 2026-10-19).
+// changes the name and the photo (`EditGroupView`).
 //
 // owner 2026-10-18 (upgrade): labelled tiles in place of the round actions (Call, Video, Share or
 // Add, Search), the ••• menu in the top bar with the QR of the invite link beside it, a pinned
@@ -57,6 +57,7 @@ struct GroupInfoView: View {
     @State private var showAllMembers = false   // the members header's search, and See All under the first five
     @State private var showSounds = false
     @State private var showSettings = false
+    @State private var showEdit = false
     @State private var showGroupPhoto = false    // tap the photo → the same morph a person's photo uses
     @State private var photoCloseTick = 0        // toolbar X → viewer close (see ProfilePhotoViewer.closeSignal)
     /// Where the header's photo is drawn, for the viewer's flight. A plain box, not observed: the
@@ -210,6 +211,10 @@ struct GroupInfoView: View {
             }
             .sheet(item: $memberAction) { m in memberSheet(m) }
             .sheet(isPresented: $showAdd) { AddMembersSheet(cid: cid, existing: Set(conv?.users ?? [])) }
+            .sheet(isPresented: $showEdit) {
+                EditGroupView(cid: cid, title: title, photoUrl: conv?.avatarUrl,
+                              description: conv?.groupDescription ?? "")
+            }
             .fullScreenCover(item: $viewerImage) { msg in
                 ImageViewerView(message: msg, cid: cid, rectScope: .profile)
             }
@@ -298,8 +303,8 @@ struct GroupInfoView: View {
                     .onTapGesture { showGroupPhoto = true }
             } else {
                 GroupFaceCluster(conv: conv, me: me)
-                    // No photo yet: whoever may change it goes straight to Group Settings' edit head.
-                    .onTapGesture { if canEditInfo { showSettings = true } }
+                    // No photo yet: whoever may change it goes straight to Edit Group.
+                    .onTapGesture { if canEditInfo { showEdit = true } }
             }
             headerCaption(.primary)
             actionsRow.padding(.top, 2)
@@ -322,8 +327,8 @@ struct GroupInfoView: View {
                     .padding(.top, 2)
             } else if canEditInfo {
                 // No description yet: whoever may edit is offered one, the reference app's line
-                // (owner 2026-10-19). It opens the page the Edit button opens.
-                Button { showSettings = true } label: {
+                // (owner 2026-10-19). It opens Edit Group, as the Edit button does.
+                Button { showEdit = true } label: {
                     // Blue, not `.tint`: the app's tint is `.primary`, which drew it black.
                     Text("Add Group Description").font(.subheadline).foregroundStyle(Color.blue)
                         .multilineTextAlignment(.center)
@@ -457,8 +462,8 @@ struct GroupInfoView: View {
         Section {
             // Edit Group is the bar's Edit button now (owner 2026-10-19).
             if canEditInfo {
-                // The description is edited at the head of Group Settings, with the bio's rules.
-                Button { showSettings = true } label: {
+                // The description is edited on Edit Group with the bio's rules (2026-10-18).
+                Button { showEdit = true } label: {
                     Label(desc.isEmpty ? "Add Group Description" : "Edit Description", systemImage: "text.alignleft")
                 }
                 // The group's wallpaper is everyone's, so only someone who may change group info
@@ -811,9 +816,9 @@ struct GroupInfoView: View {
                 .tint(.primary)
             }
         } else if canEditInfo {
-            // Edit, top right (owner 2026-10-19): pushes Group Settings, its head is the editor.
+            // Edit Group, top right (owner 2026-10-19).
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Edit") { showSettings = true }
+                Button("Edit") { showEdit = true }
             }
         }
     }
