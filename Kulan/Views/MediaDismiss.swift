@@ -433,7 +433,10 @@ struct MediaDismissHost: UIViewRepresentable {
                 // Background AND chrome melt together with the drag: the presented root (black bg +
                 // header + toolbar, media already hidden) is faded as one unit over the live chat —
                 // the reference app's fromView.alpha scrub. Chrome used to vanish instantly here instead.
-                root.alpha = 1 - t
+                // NOT for `.storyEditor`: theirs fades the black and the controls on a 0.25s CLOCK
+                // started in `.began`, not by distance. Setting it here every frame cut that fade
+                // short, so a short drag left them half there and the release snapped (build 979).
+                if parent.style != .storyEditor { root.alpha = 1 - t }
 
             case .ended:
                 guard active else { return }
@@ -709,6 +712,12 @@ struct MediaDismissHost: UIViewRepresentable {
             let animator = parent.style == .storyEditor
                 ? UIViewPropertyAnimator(duration: MediaOpen.storyEditorDuration, timingParameters: MediaOpen.storyEditorCurve)
                 : UIViewPropertyAnimator(duration: 0.26, timingParameters: spring)
+            // A release inside the drag's 0.25s fade-out (`.began`): come back from the alpha on
+            // screen, not from the 0 that fade was heading to, or the black and the controls jump.
+            if parent.style == .storyEditor, let root, let shown = root.layer.presentation()?.opacity {
+                root.layer.removeAnimation(forKey: "opacity")
+                root.alpha = CGFloat(shown)
+            }
             parent.onCancelStart()
             animator.addAnimations {
                 c.center = home

@@ -464,6 +464,11 @@ struct StoryEditorView: View {
     @State private var flyCardHidden = false     // a close owns the picture: the copy draws it
     @State private var flyChromeHidden = false   // …and the controls are faded for it
     @State private var flyCloseToken = 0         // bump: the ✕ flies the photo home
+    /// The CARD's own rect on screen, read before `.position`, for the close's copy to lift off.
+    /// ⛔ NOT `cardRect` (owner 2026-10-19, build 979: "while dragging, the picture stops using the
+    /// story frame and grows taller"). `cardRect` is read after `.position`, which fills its parent,
+    /// so it is the whole canvas from the safe-area top to the tool band's foot, not the 9:16 card.
+    @State private var flyCardFrame: CGRect = .zero
     @State private var flyDiscarded = false      // Discard answered: the close may run with edits
     /// The black band under the card where the tool capsule and NEXT live. A CONSTANT, not a
     /// measured height: the card's frame used to be inset by the bottom bar's measured size, and
@@ -1482,6 +1487,7 @@ struct StoryEditorView: View {
                 Color.black.ignoresSafeArea().opacity(!flies || arrival.landed ? 1 : 0)
                 Group { if Self.renderSkip.contains("content") { Color.clear } else { cardContent(card: card) } }
                     .frame(width: card.width, height: card.height)
+                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { flyCardFrame = $0 }
                     // The card ALWAYS has the rounded story shape (reference). Display-only:
                     // the flatten renders the same space unrounded, and the viewer rounds its
                     // own card exactly like this.
@@ -1531,8 +1537,9 @@ struct StoryEditorView: View {
                                 .shadow(color: .black.opacity(0.35), radius: 2)
                                 .frame(width: 40, height: 40).contentShape(Circle()).editorProbeGlass()
                         }
-                        // The tile flight's pop (`flyPop`); 1 for every other door.
-                        .animation(.easeInOut(duration: 0.2)) { $0.scaleEffect(flyPop) }
+                        // The tile flight's pop (`flyPop`); 1 for every other door. Theirs fades the
+                        // button in over the same 0.2s as the scale (`animateIn(from: .gallery)`).
+                        .animation(.easeInOut(duration: 0.2)) { $0.scaleEffect(flyPop).opacity(flyPop < 1 ? 0 : 1) }
                         Spacer()
                         // (The "Done" that used to sit here while drawing is GONE. The pen carries
                         // its own ✕ and ✓ at the two ends of its bar now — his 2026-08-14 design —
@@ -3636,7 +3643,7 @@ struct StoryEditorView: View {
             .contentShape(Capsule())
         }
         .buttonStyle(StoryPressStyle()).disabled(posting)
-        .animation(.easeInOut(duration: 0.2)) { $0.scaleEffect(flyPop) }   // the tile flight's pop
+        .animation(.easeInOut(duration: 0.2)) { $0.scaleEffect(flyPop).opacity(flyPop < 1 ? 0 : 1) }   // the tile flight's pop
     }
 
     // MARK: - Text overlays
@@ -4112,10 +4119,11 @@ struct StoryEditorView: View {
     /// at the rest it opened on, as theirs flies its `sourceImage`.
     @ViewBuilder private var flyDismissHost: some View {
         if let key = flySourceKey {
-            let rest = Self.flyRest(of: source.size, in: cardRect, video: sourceVideo != nil)
+            let card = flyCardFrame.width > 1 && flyCardFrame.height > 1 ? flyCardFrame : cardRect
+            let rest = Self.flyRest(of: source.size, in: card, video: sourceVideo != nil)
             MediaDismissHost(
                 canBegin: { flyCanClose() },
-                media: { cardRect.width > 1 && cardRect.height > 1 ? (rest.rect, source) : nil },
+                media: { card.width > 1 && card.height > 1 ? (rest.rect, source) : nil },
                 onHideContent: { hide in
                     flyCardHidden = hide
                     // Theirs fades every control over 0.25s the moment the drag is picked up.
@@ -4129,7 +4137,14 @@ struct StoryEditorView: View {
                 copyFromMediaFrame: true,
                 style: .storyEditor,
                 copyCornerRadius: rest.cornerRadius,
-                onCancelStart: { withAnimation(.easeInOut(duration: 0.25)) { flyChromeHidden = false } })
+                // Back on the spring-back's own clock: theirs lays out with `.animated(duration: 0.4,
+                // curve: .spring)` on cancel, the controls' alpha included. A 0.25s ease here
+                // finished well ahead of the picture and read as a pop (build 979).
+                onCancelStart: {
+                    withAnimation(.timingCurve(0.38, 0.7, 0.125, 1, duration: MediaOpen.storyEditorDuration)) {
+                        flyChromeHidden = false
+                    }
+                })
         }
     }
 
