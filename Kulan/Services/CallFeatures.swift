@@ -35,6 +35,10 @@ enum AppFeatures {
     static var storyList: Bool { RemoteFeatures.value("storyList", default: true) }
     /// The sticker panel's Edit button (owner 2026-10-18: switch it off from the panel).
     static var stickerEdit: Bool { RemoteFeatures.value("stickerEdit", default: true) }
+    /// The sticker panel's GIFs | Stickers switch and its GIF grid (owner 2026-10-19: "remove the GIF
+    /// and Sticker tabs, keep only one sticker panel"; GIFs stay in the attach sheet, a GIF feature of
+    /// his own comes later). Off = the panel is stickers only. The GIF grid code is kept.
+    static let stickerPanelGifs = false
     /// The My Profile card under the header in Settings (owner 2026-10-11: hidden). The page it
     /// opens is kept; this is only its door in Settings.
     static var myProfileCard: Bool { RemoteFeatures.value("myProfileCard", default: false) }

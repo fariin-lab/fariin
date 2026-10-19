@@ -194,6 +194,11 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         tabThumb.isUserInteractionEnabled = false
         cardView.addSubview(tabThumb)
         cardView.addSubview(tabs)
+        // Stickers only while the GIF tab is off (`AppFeatures.stickerPanelGifs`): no switch at all,
+        // and the hit test / grow band below skip a hidden one.
+        if !AppFeatures.stickerPanelGifs {
+            for v in [tabs, tabGlass, tabThumb] as [UIView] { v.isHidden = true }
+        }
 
         setPen()
         editButton.addTarget(self, action: #selector(editTapped), for: .touchUpInside)
@@ -326,7 +331,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         // Searching, the system keyboard covers the card's foot: room for it under the last row.
         gifGrid.bottomRoom = searchingGifs ? (StickerPanelHeight.current + 8) : (M.tabsH + 16)
         // Room under the last row for the floating switch (and the Delete bar while editing).
-        grid.contentInset.bottom = bottomInset + M.tabsH + 16 + (editing ? 44 : 0)
+        grid.contentInset.bottom = bottomInset + (tabs.isHidden ? 8 : M.tabsH + 16) + (editing ? 44 : 0)
         let barH = 44 + sb
         deleteBar.frame = CGRect(x: 0, y: h - barH, width: w, height: barH)
         deleteButton.frame = CGRect(x: 0, y: 0, width: w, height: 44)
