@@ -35,9 +35,10 @@ struct BusyOverlay: View {
     var body: some View {
         ZStack {
             Color.clear.contentShape(Rectangle()).ignoresSafeArea()
-            VStack(spacing: 26) {
-                BusyArc()
-                Text(text).font(.system(size: 19)).foregroundStyle(.primary)
+            VStack(spacing: 16) {
+                // Half the first size (owner 2026-10-19: "too big, make it small").
+                BusyArc(size: 44, lineWidth: 5)
+                Text(text).font(.system(size: 17)).foregroundStyle(.primary)
             }
         }
         .accessibilityElement(children: .ignore)
