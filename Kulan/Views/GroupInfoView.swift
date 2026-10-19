@@ -70,6 +70,7 @@ struct GroupInfoView: View {
     @State private var storageMessages: [Message] = []
     @State private var storage: ChatMediaStorage.Usage?
     @State private var confirmClearStorage = false
+    @State private var showStorage = false
     @State private var exportFile: ExportFile?
     @State private var exportError: String?
     @State private var exporting = false
@@ -189,6 +190,11 @@ struct GroupInfoView: View {
             }
             .fullScreenCover(item: $viewerVideo) { msg in
                 VideoPlayerScreen(message: msg, cid: cid, clipProvider: { nil }, rectScope: .profile)
+            }
+            .navigationDestination(isPresented: $showStorage) {
+                ChatStorageView(cid: cid, title: title, messages: storageMessages) {
+                    Task { await loadMediaFigures() }
+                }
             }
             .navigationDestination(isPresented: $showAllMedia) {
                 MediaGalleryView(cid: cid, title: title, photoUrl: conv?.avatarUrl)
@@ -527,11 +533,9 @@ struct GroupInfoView: View {
                 ProfileInfoRow(title: "Media, Links and Files", icon: "photo.on.rectangle",
                                value: galleryCount.map { "\($0)" } ?? " ") { showAllMedia = true }
                 rowDivider
+                // The chat's storage item by item (owner 2026-10-19), not one clear-all.
                 ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
-                               value: storage.map { Self.bytes($0.total) } ?? " ",
-                               chevron: (storage?.clearable ?? 0) > 0) {
-                    if (storage?.clearable ?? 0) > 0 { confirmClearStorage = true }
-                }
+                               value: storage.map { Self.bytes($0.total) } ?? " ") { showStorage = true }
             }
             .profileSurface(plain: cardColor)
         }

@@ -106,6 +106,7 @@ final class ThreadRepository {
     private var listener: ListenerRegistration?
     private var outboxObserver: NSObjectProtocol?
     private var outboxAddObserver: NSObjectProtocol?
+    private var hiddenObserver: NSObjectProtocol?
     private var blockObserver: NSObjectProtocol?
     /// 2026-10-07: back to the front → burn what fell due while the app was asleep, at once.
     private var foregroundObserver: NSObjectProtocol?
@@ -639,6 +640,15 @@ final class ThreadRepository {
                     let claimed = PendingOutbox.take(self.cid)
                     guard !claimed.isEmpty else { return }
                     self.pending.append(contentsOf: claimed)
+                    self.refreshItems()
+                }
+        }
+        // A message hidden "for me" somewhere else (the chat's Storage page, owner 2026-10-19)
+        // leaves this open chat at once, not at the next snapshot.
+        if hiddenObserver == nil {
+            hiddenObserver = NotificationCenter.default.addObserver(
+                forName: .hiddenMessagesChanged, object: nil, queue: .main) { [weak self] n in
+                    guard let self, let id = n.object as? String, self.byId[id] != nil else { return }
                     self.refreshItems()
                 }
         }
@@ -1697,6 +1707,8 @@ final class ThreadRepository {
         outboxObserver = nil
         if let outboxAddObserver { NotificationCenter.default.removeObserver(outboxAddObserver) }
         outboxAddObserver = nil
+        if let hiddenObserver { NotificationCenter.default.removeObserver(hiddenObserver) }
+        hiddenObserver = nil
         if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
         foregroundObserver = nil
         if let blockObserver { NotificationCenter.default.removeObserver(blockObserver) }
