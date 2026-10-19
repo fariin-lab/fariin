@@ -1703,6 +1703,10 @@ service cloud.firestore {
         && unreadCreateOk()   // 2026-09-24 fix-all: others' badges are born at 0 (or 1 with a first send)
         && !('deletedUsers' in request.resource.data)   // 2026-10-18: the purge's marker, server-only
         && !request.resource.data.keys().hasAny(['mod', 'verified'])   // 2026-10-18 group moderation: server-only
+        // 2026-10-19 groups v2: the group type and its public @name are written only by
+        // functions-username setGroupUsername, which claims the name in `usernames` in the same step.
+        // `joinApproval` (a public group files join requests instead of adding) is server-only too.
+        && !request.resource.data.keys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval'])
         && !('wallpaper' in request.resource.data)      // owner 2026-10-18: set later, by update only
         && (
           // THE GROUP BRANCH GOES FIRST, on purpose. A two-member group also satisfies `size() == 2`,
@@ -1969,6 +1973,9 @@ service cloud.firestore {
         // 2026-10-18 group moderation: `mod` and `verified` belong to the admin panel; no branch,
         // the owner's included, writes them. And what a restricted group still allows (groupModWriteOK).
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['mod', 'verified'])
+        // 2026-10-19 groups v2: Public/Private and the group's @name are server-only (setGroupUsername),
+        // on every branch, the owner's included: the name and the `usernames` record must move together.
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval'])
         && groupModWriteOK()
         // owner 2026-10-18: the group wallpaper, groups only and a known shape (groupWallpaperOK).
         && (!('wallpaper' in request.resource.data.diff(resource.data).affectedKeys()) || groupWallpaperOK())
