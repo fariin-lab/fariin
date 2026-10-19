@@ -247,7 +247,7 @@ struct GroupAdminsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: Binding(get: { opened.map { Opened(id: $0) } }, set: { opened = $0?.id })) { o in
             GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: o.id)
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.large])
         }
         .sheet(isPresented: $showPick) {
             NavigationStack {
@@ -489,7 +489,7 @@ struct GroupMembersListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: Binding(get: { opened.map { Opened(id: $0) } }, set: { opened = $0?.id })) { o in
             GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: o.id)
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.large])
         }
         .sheet(isPresented: $showAdd) { AddMembersSheet(cid: cid, existing: Set(conv?.users ?? [])) }
     }

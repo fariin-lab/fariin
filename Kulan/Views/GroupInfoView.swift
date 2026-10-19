@@ -665,7 +665,7 @@ struct GroupInfoView: View {
     private func memberSheet(_ m: MemberAction) -> some View {
         GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: m.id,
                               onInfo: { uid in profileOf = MemberAction(id: uid, name: conv?.names[uid] ?? "User", isAdmin: false) })
-            .presentationDetents([.medium, .large])
+            .presentationDetents([.large])
     }
 
     // MARK: Media figures
@@ -922,7 +922,8 @@ struct GroupMemberRow: View {
                 Spacer(minLength: 8)
                 // Owner / Admin at the reference app's size for this label (owner 2026-10-18): the
                 // subheadline style (15pt), secondary grey, not the 17pt the name uses.
-                if let rank { Text(rank).font(.subheadline).foregroundStyle(.secondary) }
+                // One label only (owner 2026-10-19): a Role stands in for Owner / Admin.
+                if let rank, conv?.roles[uid] == nil { Text(rank).font(.subheadline).foregroundStyle(.secondary) }
             }
             .padding(.horizontal, 16).padding(.vertical, 9)
             .contentShape(Rectangle())
@@ -1262,9 +1263,13 @@ struct GroupMemberSheet: View {
     @State private var showBlock = false
     @State private var showReport = false
     @State private var memberBlocked = false
-    @State private var showRole = false
-    @State private var showRights = false
     @State private var showProfileHere = false
+    // ⛔ ONE PAGE (owner 2026-10-19): rights, Make Admin and the role are edited here and written
+    // together by Save Changes, instead of on their own pushed pages.
+    @State private var baseRights: Set<String> = []
+    @State private var makeAdmin = false
+    @State private var roleText = ""
+    @State private var confirmDismissAdmin = false
     var onInfo: ((String) -> Void)? = nil   // push their profile on the opener's stack
 
     /// Every member action goes through here (audit, 2026-09-24). Each one was `try?` then dismiss:
@@ -1301,43 +1306,103 @@ struct GroupMemberSheet: View {
                                    contactOfMine: PrivacyPrefs.isContact(member.id)) ? p.about : nil
     }
 
-    // ⛔ A SHORT SHEET, THEN THEIR PROFILE (owner 2026-10-19, from the reference app's member card):
-    // the face and name, Message / Voice / Video, then one card of what I may do to them here. Info
-    // opens their regular profile on the group page's own stack, so Back lands on the group again.
-    // Block and Report live on that profile, as for anyone else.
+    // ⛔ EVERYTHING ON ONE PAGE (owner 2026-10-19, after the reference app's admin page): the info
+    // card, the rights switches (or Make Admin), Dismiss Admin, then one card of what else I may do
+    // to them, and Save Changes at the foot. Nothing here pushes but Info, which opens their regular
+    // profile on the group page's own stack, so Back lands on the group again. Block and Report
+    // live on that profile, as for anyone else.
     private var card: Color { Color(uiColor: .secondarySystemGroupedBackground) }
     private var rowDivider: some View { Divider().padding(.leading, 56) }
+
+    // MARK: One-page editing (owner 2026-10-19)
+
+    /// Someone else, and not the owner: the only people this page may change.
+    private var isOther: Bool { member.id != me && !isOwner }
+    private var firstName: String {
+        member.name.split(separator: " ").first.map(String.init) ?? member.name
+    }
+    /// The rights I may hand out, in the model's order (the Edit Admin Rights page's own list).
+    private var shownRights: [Conversation.Right] {
+        Conversation.Right.allCases.filter { grantable.contains($0.rawValue) }
+    }
+    /// What goes out: only rights I may grant, as AdminRightsView.save sends them.
+    private var rightsList: [String] {
+        Conversation.Right.allCases.map(\.rawValue).filter { rights.contains($0) && grantable.contains($0) }
+    }
+    private var mayEditRights: Bool { isOther && canManageAdmins }
+    private var rightsChanged: Bool { mayEditRights && member.isAdmin && rights != baseRights }
+    private var promoting: Bool { mayEditRights && !member.isAdmin && makeAdmin }
+    private var cleanedRole: String { GroupRole.clean(roleText) }
+    private var roleChanged: Bool { canEditRole && cleanedRole != (role?.text ?? "") }
+    private var hasChanges: Bool { rightsChanged || promoting || roleChanged }
+    /// The Save Changes button only on a page with something it could save.
+    private var showsSave: Bool { mayEditRights || canEditRole }
+
+    /// Everything changed on the page in one go: promote (with the switched-on rights) or the new
+    /// rights, then the role. Same calls the old pushed pages made.
+    private func saveChanges() {
+        guard hasChanges else { return }
+        let cid = cid, uid = member.id, name = member.name
+        let list = rightsList
+        let promote = promoting, newRights = rightsChanged
+        let writeRole = roleChanged, roleWords = cleanedRole, roleEmoji = role?.emoji
+        run {
+            if promote {
+                try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: list)
+            } else if newRights {
+                try await ChatService.setAdminRights(cid: cid, uid: uid, rights: list)
+            }
+            if writeRole {
+                try await ChatService.setRole(cid: cid, uid: uid, text: roleWords, emoji: roleEmoji)
+            }
+        }
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 16) {
+                VStack(spacing: 20) {
                     header
-                    // No Message / Voice / Video tiles here (owner 2026-10-19); Info opens the profile.
+                    rightsSection
+                    dismissAdminCard
                     actionsCard
                 }
                 .padding(.horizontal, 16)
+                .padding(.top, 8)
                 .padding(.bottom, 24)
             }
+            .scrollDismissesKeyboard(.interactively)
             .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
-            .navigationTitle("").navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(isPresented: $showRole) {
-                RoleEditorView(cid: cid, uid: member.id, name: member.name, current: role)
-            }
-            .navigationDestination(isPresented: $showRights) {
-                AdminRightsView(cid: cid, uid: member.id, name: member.name,
-                                grantable: grantable, rights: $rights)
-            }
+            .safeAreaInset(edge: .bottom) { saveBar }
+            .navigationTitle(isOwner || member.isAdmin ? "Admin" : "Member")
+            .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(isPresented: $showProfileHere) {
                 ContactInfoView(cid: ChatService.convId(me, member.id), name: member.name,
                                 photoUrl: gatedMemberPhoto, source: .calls)
             }
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
+                }
+            }
             .task { profile = await ProfileStore.shared.fetch(member.id) }
             .onAppear {
                 guard !rightsLoaded else { return }
                 rightsLoaded = true
                 rights = currentRights.map(Set.init) ?? Set(Conversation.Right.defaults.map(\.rawValue))
+                baseRights = rights
+                roleText = role?.text ?? ""
+            }
+            .onChange(of: roleText) { _, new in
+                // Typing or pasting past the limit keeps the first 24, as RoleEditorView does.
+                if new.utf16.count > GroupRole.maxText { roleText = GroupRole.fit(new, max: GroupRole.maxText) }
+            }
+            .confirmationDialog("Dismiss \(member.name) as admin?",
+                                isPresented: $confirmDismissAdmin, titleVisibility: .visible) {
+                Button("Dismiss Admin", role: .destructive) {
+                    run { try await ChatService.demoteGroupAdmin(cid: cid, uid: member.id, name: member.name) }
+                }
+                Button("Cancel", role: .cancel) {}
             }
             .confirmationDialog("Make \(member.name) the owner?",
                                 isPresented: $confirmTransfer, titleVisibility: .visible) {
@@ -1383,29 +1448,143 @@ struct GroupMemberSheet: View {
         }
     }
 
+    /// The info card: photo, name with a grey Owner/Admin chip, @handle and role under.
     private var header: some View {
-        VStack(spacing: 8) {
+        HStack(spacing: 14) {
             // Honor THEIR audience settings, like the 1:1 profile does (audit).
-            AvatarView(name: member.name, photoUrl: gatedMemberPhoto, size: 88)
-            HStack(spacing: 6) {
-                Text(member.name).font(.title2.weight(.bold))
-                VerifiedMark(uid: member.id, size: 17, explains: true)
-            }
-            HStack(spacing: 6) {
+            AvatarView(name: member.name, photoUrl: gatedMemberPhoto, size: 60)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(member.name).font(.headline).lineLimit(1)
+                    VerifiedMark(uid: member.id, size: 15, explains: true)
+                    // One chip only (owner 2026-10-19): their role, when they have one, stands in
+                    // for Owner/Admin.
+                    if let role { RoleChip(role: role) } else if isOwner || member.isAdmin { adminChip }
+                }
                 if let h = profile?.handle, !h.isEmpty {
-                    Text("@\(h)").font(.subheadline).foregroundStyle(.secondary)
+                    Text("@\(h)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                 }
-                if isOwner || member.isAdmin {
-                    Text(isOwner ? "Owner" : "Admin").font(.caption.weight(.semibold))
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Color.accentColor.opacity(0.15), in: Capsule())
-                        .foregroundStyle(Color.accentColor)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 14)
+        .profileSurface(plain: card)
+    }
+
+    private var adminChip: some View {
+        Text(isOwner ? "Owner" : "Admin").font(.caption.weight(.semibold))
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(Color(.systemGray5), in: Capsule())
+            .foregroundStyle(.secondary)
+    }
+
+    /// A grouped-list section heading / footnote, drawn by hand over the plain cards.
+    private func sectionHeader(_ text: String) -> some View {
+        Text(text.uppercased()).font(.footnote).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+    }
+    private func sectionFooter(_ text: String) -> some View {
+        Text(text).font(.footnote).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+    }
+
+    /// One switch per right I may hand out, the Edit Admin Rights page's list. For an admin they
+    /// edit the rights; for a member they come up under Make Admin with the promote defaults.
+    @ViewBuilder private var rightsSection: some View {
+        if mayEditRights {
+            VStack(spacing: 8) {
+                if !member.isAdmin { makeAdminCard }
+                if member.isAdmin || makeAdmin {
+                    sectionHeader("What \(firstName) can do")
+                    rightsCard
+                    sectionFooter("\(firstName) can only do what is switched on here. Nobody but the owner can remove or change the owner.")
                 }
-                if let role { RoleChip(role: role) }
+            }
+            .animation(.snappy(duration: 0.25), value: makeAdmin)
+        }
+    }
+
+    private var makeAdminCard: some View {
+        Toggle("Make Admin", isOn: $makeAdmin)
+            .disabled(busy)
+            .padding(.horizontal, 16).padding(.vertical, 11)
+            .profileSurface(plain: card)
+    }
+
+    private var rightsCard: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(shownRights.enumerated()), id: \.element.id) { i, r in
+                if i > 0 { Divider().padding(.leading, 16) }
+                rightToggle(r)
             }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 4)
+        .profileSurface(plain: card)
+    }
+
+    private func rightToggle(_ r: Conversation.Right) -> some View {
+        Toggle(r.label, isOn: Binding(
+            get: { rights.contains(r.rawValue) },
+            set: { on in if on { rights.insert(r.rawValue) } else { rights.remove(r.rawValue) } }))
+            .disabled(busy)
+            .padding(.horizontal, 16).padding(.vertical, 11)
+    }
+
+    /// Red Dismiss Admin on its own, as the reference app draws it.
+    @ViewBuilder private var dismissAdminCard: some View {
+        if mayEditRights && member.isAdmin {
+            Button { confirmDismissAdmin = true } label: {
+                Text("Dismiss Admin").foregroundStyle(.red)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(busy)
+            .profileSurface(plain: card)
+        }
+    }
+
+    /// Save Changes, pinned to the foot: the app's blue glass pill, live only once something changed.
+    @ViewBuilder private var saveBar: some View {
+        if showsSave {
+            Button { saveChanges() } label: {
+                Group {
+                    if busy { ProgressView().tint(.white) } else { Text("Save Changes") }
+                }
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity).frame(height: 50)
+                .liquidGlass(Capsule(), interactive: true, tint: Color(.systemBlue))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(!hasChanges || busy)
+            .opacity(hasChanges || busy ? 1 : 0.45)
+            .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 8)
+        }
+    }
+
+    /// The role, typed straight into the card (RoleEditorView's limits); saved by Save Changes.
+    /// Their emoji, when they have one, is kept as it is.
+    private var roleRow: some View {
+        let left = GroupRole.maxText - roleText.utf16.count
+        return HStack(spacing: 14) {
+            Group {
+                if let e = role?.emoji { Text(e).font(.system(size: 18)) }
+                else { Image(systemName: "tag").font(.system(size: 17)) }
+            }
+            .frame(width: 26)
+            TextField("Role, like Designer", text: $roleText)
+                .submitLabel(.done)
+                .disabled(busy)
+            if left <= 9 {
+                Text("\(left)").font(.footnote.monospacedDigit())
+                    .foregroundStyle(left <= 5 ? Color.red : Color.secondary)
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 18)
     }
 
     private var tiles: some View {
@@ -1427,30 +1606,20 @@ struct GroupMemberSheet: View {
     /// the Restrict-members right, and removing an ADMIN is the owner's alone (firestore.rules
     /// nonOwnerAdminWriteOK).
     @ViewBuilder private var actionsCard: some View {
-        let other = member.id != me && !isOwner
+        // Admin rights, Make Admin and Dismiss Admin sit above in their own cards (owner 2026-10-19).
+        // Myself with no role to set: no card at all, not an empty one.
+        if canEditRole || member.id != me { actionRows }
+    }
+
+    private var actionRows: some View {
+        let other = isOther
         let canRemove = other && canRestrict && (iAmOwner || !member.isAdmin)
         let canMute = other && canRestrict && !member.isAdmin
-        VStack(spacing: 0) {
-            if other && canManageAdmins {
-                if member.isAdmin {
-                    ProfileInfoRow(title: "Edit Admin Rights", icon: "person.badge.shield.checkmark") { showRights = true }
-                    rowDivider
-                    ProfileInfoRow(title: "Remove as Admin", icon: "person.badge.minus", chevron: false) {
-                        run { try await ChatService.demoteGroupAdmin(cid: cid, uid: member.id, name: member.name) }
-                    }
-                } else {
-                    ProfileInfoRow(title: "Make Group Admin", icon: "person.badge.shield.checkmark", chevron: false) {
-                        // A new admin gets the defaults, cut down to what I may hand out.
-                        let give = Conversation.Right.defaults.map(\.rawValue).filter { grantable.contains($0) }
-                        run { try await ChatService.promoteGroupAdmin(cid: cid, uid: member.id, name: member.name, rights: give) }
-                    }
-                }
-                rowDivider
-            }
+        return VStack(spacing: 0) {
             // ⛔ ROLE — owner 2026-10-18. Given by admins only (Conversation.canSetRole).
             if canEditRole {
-                ProfileInfoRow(title: role == nil ? "Set Role" : "Edit Role", icon: "tag") { showRole = true }
-                rowDivider
+                roleRow
+                if member.id != me { rowDivider }
             }
             if canMute {
                 if isMuted {
@@ -1629,7 +1798,7 @@ struct GroupMembersSheet: View {
             }
             .sheet(item: $opened) { o in
                 GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: o.id)
-                    .presentationDetents([.medium, .large])
+                    .presentationDetents([.large])
             }
             .sheet(isPresented: $showAdd) { AddMembersSheet(cid: cid, existing: Set(conv?.users ?? [])) }
             .navigationDestination(isPresented: $showInvite) {
