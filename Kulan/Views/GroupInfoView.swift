@@ -1804,18 +1804,18 @@ struct GroupMemberSheet: View {
     @ViewBuilder private var actionsCard: some View {
         // Admin rights, Make Admin and Dismiss Admin sit above in their own cards (owner 2026-10-19).
         // Myself with no role to set: no card at all, not an empty one.
-        if canEditRole || member.id != me { actionRows }
+        if canEditRole || canMuteRow || (isOther && iAmOwner) { actionRows }
     }
+    private var canMuteRow: Bool { isOther && canRestrict && !member.isAdmin }
 
     private var actionRows: some View {
         let other = isOther
-        let canRemove = other && canRestrict && (iAmOwner || !member.isAdmin)
-        let canMute = other && canRestrict && !member.isAdmin
+        let canMute = canMuteRow
         return VStack(spacing: 0) {
             // ⛔ ROLE — owner 2026-10-18. Given by admins only (Conversation.canSetRole).
             if canEditRole {
                 roleRow
-                if member.id != me { rowDivider }
+                if canMute || (other && iAmOwner) { rowDivider }
             }
             if canMute {
                 if isMuted {
@@ -1833,21 +1833,13 @@ struct GroupMemberSheet: View {
                             .allowsHitTesting(false)
                     }
                 }
-                rowDivider
+                if other && iAmOwner { rowDivider }
             }
             if other && iAmOwner {
                 ProfileInfoRow(title: "Transfer Ownership", icon: "crown", chevron: false) { confirmTransfer = true }
-                rowDivider
             }
-            if member.id != me {
-                ProfileInfoRow(title: "Info", icon: "info.circle") { openProfile() }
-            }
-            if canRemove {
-                rowDivider
-                ProfileInfoRow(title: "Remove from Group", icon: "minus.circle", tint: .red, chevron: false) {
-                    confirmRemove = true
-                }
-            }
+            // No Info or Remove from Group rows (owner 2026-10-19): the card at the top opens the
+            // profile, and removing is a swipe on the Members list.
         }
         .profileSurface(plain: card)
     }
