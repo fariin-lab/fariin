@@ -64,7 +64,12 @@ final class StickerStore {
         var order: Int
         var enabled: Bool
         var deleted: Bool
+        /// The panel's Hide pack (2026-10-19). The server also sets `enabled` to its opposite, for
+        /// builds that read only that; nil on records from before and in older saved catalogs.
+        var hidden: Bool?
         var stickers: [Item]
+
+        var shown: Bool { enabled && hidden != true && !deleted }
     }
 
     private var shipped: [StickerPack] = []
@@ -94,7 +99,7 @@ final class StickerStore {
                 return RemotePack(id: d.documentID, kind: x["kind"] as? String ?? "",
                                   title: x["title"] as? String ?? "", order: x["order"] as? Int ?? 0,
                                   enabled: x["enabled"] as? Bool ?? true, deleted: x["deleted"] as? Bool ?? false,
-                                  stickers: items)
+                                  hidden: x["hidden"] as? Bool, stickers: items)
             }
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -110,13 +115,15 @@ final class StickerStore {
         var urls: [String: String] = [:]
         var exts: [String: String] = [:]
         var entries: [(order: Int, pack: StickerPack)] = []
+        var off: Set<String> = []   // Sticker.id of every sticker the panel hides, alone or with its pack
         var overrides: [String: RemotePack] = [:]
         for r in remote where r.kind == "bundled" { overrides[r.id] = r }
         for (i, p) in shipped.enumerated() {
             guard let o = overrides[p.id] else { entries.append((i, p)); continue }
-            guard o.enabled else { continue }
+            guard o.shown else { off.formUnion(p.stickers.map(\.id)); continue }
             let hidden = Set(o.stickers.filter { $0.hidden == true }.map(\.id))
             let kept = p.stickers.filter { !hidden.contains($0.stickerId) }
+            off.formUnion(p.stickers.filter { hidden.contains($0.stickerId) }.map(\.id))
             if !kept.isEmpty {
                 entries.append((o.order, StickerPack(id: p.id, title: o.title.isEmpty ? p.title : o.title, stickers: kept)))
             }
@@ -127,7 +134,8 @@ final class StickerStore {
                 if let u = it.url, !u.isEmpty { urls["\(r.id)/\(it.id)"] = u }
                 exts["\(r.id)/\(it.id)"] = it.ext ?? "webp"
             }
-            guard r.enabled, !r.deleted else { continue }
+            guard r.shown else { off.formUnion(r.stickers.map { "\(r.id)/\($0.id)" }); continue }
+            off.formUnion(r.stickers.filter { $0.hidden == true }.map { "\(r.id)/\($0.id)" })
             let items = r.stickers.filter { $0.hidden != true && !($0.url ?? "").isEmpty }.map {
                 Sticker(source: .bundled, packId: r.id, stickerId: $0.id, emoji: $0.emoji ?? "", animated: $0.animated ?? false)
             }
@@ -139,10 +147,19 @@ final class StickerStore {
         let next = entries.enumerated().sorted { a, b in
             a.element.order != b.element.order ? a.element.order < b.element.order : a.offset < b.offset
         }.map(\.element.pack)
-        guard next != packs else { return }
+        guard next != packs || off != hiddenByPanel else { return }
         packs = next
+        hiddenByPanel = off
         NotificationCenter.default.post(name: Self.packsChanged, object: nil)
     }
+
+    /// Stickers the admin panel hides, one by one or with their whole pack (2026-10-19, owner: "I can't
+    /// hide stickers"). Recently Used and Favorites keep them on disk, so showing them again brings them
+    /// back, but the keyboard leaves them out. Messages already sent still draw them (`fileURL`).
+    private(set) var hiddenByPanel: Set<String> = []
+
+    var recentsShown: [Sticker] { recents.filter { $0.source != .bundled || !hiddenByPanel.contains($0.id) } }
+    var favoritesShown: [Sticker] { favorites.filter { $0.source != .bundled || !hiddenByPanel.contains($0.id) } }
 
     /// Server stickers' files on this phone (Caches: not account data, and fine to lose).
     private static var catalogArtDir: URL {

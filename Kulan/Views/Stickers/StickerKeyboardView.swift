@@ -834,11 +834,13 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
 
     @MainActor func reload() {
         let store = StickerStore.shared
-        var s: [Section] = [Section(shelf: .recents, stickers: store.recents)]
-        if !store.favorites.isEmpty { s.append(Section(shelf: .favorites, stickers: store.favorites)) }
+        // The *Shown lists leave out what the admin panel hides (2026-10-19).
+        let recents = store.recentsShown, favorites = store.favoritesShown
+        var s: [Section] = [Section(shelf: .recents, stickers: recents)]
+        if !favorites.isEmpty { s.append(Section(shelf: .favorites, stickers: favorites)) }
         for p in store.packs { s.append(Section(shelf: .pack(p), stickers: p.stickers)) }
         sections = s
-        let anyMine = !store.recents.isEmpty || !store.favorites.isEmpty
+        let anyMine = !recents.isEmpty || !favorites.isEmpty
         editButton.isHidden = !anyMine || tabs.selectedSegmentIndex == 0 || !AppFeatures.stickerEdit
         if editing && !anyMine { endEditing() }
         grid.reloadData()
@@ -1012,7 +1014,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             self.gifGrid.isHidden = !gifsOn
             self.grid.isHidden = gifsOn
             self.strip.isHidden = gifsOn
-            self.editButton.isHidden = gifsOn || (StickerStore.shared.recents.isEmpty && StickerStore.shared.favorites.isEmpty)
+            self.editButton.isHidden = gifsOn || (StickerStore.shared.recentsShown.isEmpty && StickerStore.shared.favoritesShown.isEmpty)
                 || !AppFeatures.stickerEdit
         }
         setNeedsLayout()
