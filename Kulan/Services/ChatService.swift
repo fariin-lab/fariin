@@ -672,13 +672,15 @@ enum ChatService {
         forgetSealMembers(cid)   // 2026-09-24 fix-all #111: the next seal re-reads the member list
         let convRef = db.collection("conversations").document(cid)
         let text = "\(myName()) removed \(name)"
-        let batch = db.batch()
-        batch.setData(["text": text, "authorId": uid, "type": "system",
-                       "createdAt": FieldValue.serverTimestamp()],
-                      forDocument: convRef.collection("messages").document())
-        batch.updateData([
-            "lastMessage": text,
-            "lastSender": uid,
+        // 2026-10-19: no notice when the message rule would refuse mine (admins-only sending and
+        // I'm not one, muted, or the group suspended), the same `canNotice` addGroupMembers uses, so
+        // a refused notice cannot take the removal down with it. The removed member's badge key goes
+        // only with the notice: the rules let a group write touch another member's `unreadCount`
+        // key only inside a send by me (`lastSender` = me).
+        let conv = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })
+        let canNotice = (conv?.canSend(uid, now: Date().timeIntervalSince1970 * 1000) ?? true)
+            && !(conv?.groupMod.blocksSending() ?? false)
+        var update: [String: Any] = [
             "users": FieldValue.arrayRemove([removed]),
             "admins": FieldValue.arrayRemove([removed]),
             // Ban the removed user so they can't rejoin via an invite link (a "kick" must stick). Re-adding
@@ -689,7 +691,17 @@ enum ChatService {
             "restrictedFlags.\(removed)": FieldValue.delete(),
             "restrictedUntil.\(removed)": FieldValue.delete(),
             "updatedAt": FieldValue.serverTimestamp(),
-        ], forDocument: convRef)
+        ]
+        let batch = db.batch()
+        if canNotice {
+            batch.setData(["text": text, "authorId": uid, "type": "system",
+                           "createdAt": FieldValue.serverTimestamp()],
+                          forDocument: convRef.collection("messages").document())
+            update["lastMessage"] = text
+            update["lastSender"] = uid
+            update["unreadCount.\(removed)"] = FieldValue.delete()
+        }
+        batch.updateData(update, forDocument: convRef)
         try await batch.commit()
     }
 
@@ -721,7 +733,14 @@ enum ChatService {
                 let users = data["users"] as? [String] ?? []
                 let admins = data["admins"] as? [String] ?? []
                 let names = data["names"] as? [String: String] ?? [:]
+                // 2026-10-19: the notices only when the message rule would take mine (read from the
+                // server copy just fetched): a member of an admins-only group, a muted member, or a
+                // suspended group leaves without them instead of the refused notice refusing the leave.
+                let fresh = Conversation(id: cid, data: data)
+                let canNotice = fresh.canSend(me, now: Date().timeIntervalSince1970 * 1000)
+                    && !fresh.groupMod.blocksSending()
                 func notice(_ text: String) {
+                    guard canNotice else { return }
                     txn.setData(["text": text, "authorId": me, "type": "system",
                                  "createdAt": FieldValue.serverTimestamp()],
                                 forDocument: convRef.collection("messages").document())
@@ -733,21 +752,23 @@ enum ChatService {
                 ]
                 // If I'm the LAST admin, promote a remaining member in the same write so the group
                 // never ends up with no one who can manage it.
+                let owner = data["createdBy"] as? String ?? ""
+                let ownerHeir: String? = (!owner.isEmpty && owner == me)
+                    ? (admins.first(where: { $0 != me && users.contains($0) }) ?? users.first(where: { $0 != me }))
+                    : nil
                 if admins.filter({ $0 != me }).isEmpty,
                    let heir = users.first(where: { $0 != me }) {
                     convUpdate["admins"] = [heir]   // one field cannot take arrayUnion and arrayRemove at once
-                    // Tell everyone who inherited admin (otherwise the heir never learns).
-                    notice("\(names[heir] ?? "A member") is now an admin")
+                    // Tell everyone who inherited admin (otherwise the heir never learns). 2026-10-19:
+                    // not when the same person is also named the owner below; that line says it all.
+                    if ownerHeir != heir { notice("\(names[heir] ?? "A member") is now an admin") }
                 }
                 // 2026-09-24 decision D23: the OWNER leaving hands ownership on in this same write:
                 // to the longest-serving admin (`admins` keeps promotion order, arrayUnion appends),
                 // else the longest-serving member (`users` keeps join order), who was made admin just
                 // above. Before this `createdBy` kept naming the leaver, and the rules' keep-the-owner
                 // check then refused every other admin's write. The rules allow exactly this hand-off.
-                let owner = data["createdBy"] as? String ?? ""
-                if !owner.isEmpty, owner == me,
-                   let heir = admins.first(where: { $0 != me && users.contains($0) })
-                        ?? users.first(where: { $0 != me }) {
+                if let heir = ownerHeir {
                     convUpdate["createdBy"] = heir
                     // The rules want the new owner in `admins` after the write.
                     if !admins.contains(heir) { convUpdate["admins"] = admins.filter { $0 != me } + [heir] }
@@ -757,8 +778,10 @@ enum ChatService {
                     notice("\(names[heir] ?? "A member") is now the owner")
                 }
                 notice(left)
-                convUpdate["lastMessage"] = left
-                convUpdate["lastSender"] = me
+                if canNotice {
+                    convUpdate["lastMessage"] = left
+                    convUpdate["lastSender"] = me
+                }
                 txn.updateData(convUpdate, forDocument: convRef)
                 return nil
             }, completion: { _, error in
@@ -3784,11 +3807,19 @@ enum ChatService {
     /// Set the per-chat disappearing-message timer (seconds; 0 = off). Shared by both.
     /// NEVER silent (the standard rule): both sides get a centered system notice in the chat
     /// saying who changed it — one member must not be able to flip it secretly.
-    static func setDisappear(_ cid: String, seconds: Int) async {
+    /// 2026-10-19: answers whether the timer is now `seconds`. A refused write (a member without
+    /// the right, no connection) returns false and posts NO notice, so the chat never claims a
+    /// change that did not happen; the caller shows the alert.
+    @discardableResult
+    static func setDisappear(_ cid: String, seconds: Int) async -> Bool {
         let ref = db.collection("conversations").document(cid)
         let current = ((try? await ref.getDocument())?.data()?["disappearSeconds"] as? NSNumber)?.intValue ?? 0
-        guard current != seconds else { return }   // no change → no write, no duplicate notice
-        try? await ref.setData(["disappearSeconds": seconds], merge: true)
+        guard current != seconds else { return true }   // no change → no write, no duplicate notice
+        do {
+            try await ref.setData(["disappearSeconds": seconds], merge: true)
+        } catch {
+            return false
+        }
         let name = await MainActor.run { ProfileStore.shared.me?.name ?? "Someone" }
         // ⛔ "<name> set disappearing message time to 1 week." — owner, 2026-08-25, replacing
         // "turned on disappearing messages (8 hours)". This string is what the chat LIST shows and
@@ -3798,6 +3829,7 @@ enum ChatService {
             ? "\(name) set disappearing message time to \(disappearLabel(seconds))."
             : "\(name) turned off disappearing messages."
         try? await writeSystemMessage(cid: cid, text: text, extra: ["disappearSeconds": seconds])
+        return true
     }
 
     /// Restricted chat (owner, 2026-10-03): ONE switch for BOTH members that sets every restriction
