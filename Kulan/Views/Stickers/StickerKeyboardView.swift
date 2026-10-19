@@ -1218,12 +1218,26 @@ private final class StickerCell: UICollectionViewCell {
     private let plus = UIImageView(image: UIImage(systemName: "plus",
                                                   withConfiguration: UIImage.SymbolConfiguration(pointSize: 24, weight: .medium)))
     private let check = UIImageView()
+    /// The tile's word under the + (owner 2026-10-19: "this + add text said Create").
+    private let plusGlyph = UIImageView(image: UIImage(systemName: "plus",
+                                                       withConfiguration: UIImage.SymbolConfiguration(pointSize: 22, weight: .medium)))
+    private let createLabel = UILabel()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         contentView.addSubview(player)
         plus.tintColor = .secondaryLabel
         plus.contentMode = .center
+        // The tile is `plus`'s own background; the glyph and the word sit on it.
+        plus.image = nil
+        plusGlyph.tintColor = .secondaryLabel
+        plusGlyph.contentMode = .center
+        plus.addSubview(plusGlyph)
+        createLabel.text = "Create"
+        createLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        createLabel.textColor = .secondaryLabel
+        createLabel.textAlignment = .center
+        plus.addSubview(createLabel)
         contentView.addSubview(plus)
         check.contentMode = .scaleAspectFit
         contentView.addSubview(check)
@@ -1235,6 +1249,9 @@ private final class StickerCell: UICollectionViewCell {
         super.layoutSubviews()
         player.frame = contentView.bounds.insetBy(dx: 2, dy: 2)
         plus.frame = contentView.bounds.insetBy(dx: 4, dy: 4)
+        let pb = plus.bounds
+        plusGlyph.frame = CGRect(x: 0, y: pb.midY - 22, width: pb.width, height: 26)
+        createLabel.frame = CGRect(x: 2, y: pb.midY + 6, width: pb.width - 4, height: 16)
         check.frame = CGRect(x: contentView.bounds.width - 22, y: contentView.bounds.height - 22, width: 20, height: 20)
     }
 
