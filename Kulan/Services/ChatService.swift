@@ -3620,6 +3620,25 @@ enum ChatService {
 
     @discardableResult
     static func setPinned(_ cid: String, _ value: Bool) async -> Bool {
+        // ⛔ AT MOST `pinned_chats_max` PINNED CHATS (owner 2026-10-19: 3, set from the admin panel).
+        // Counted on this phone: the pins are per-chat fields, which no rule can count across chats.
+        if value {
+            let full: Bool = await MainActor.run {
+                let me = uid
+                let max = AppLimits.shared.pinnedChatsMax
+                let pinned = ConversationsRepository.shared.conversations
+                    .filter { !OfficialChannel.isOfficial($0.id) && $0.id != cid && $0.isPinned(me) }.count
+                    + (OfficialChannelStore.shared.state.pinned && !OfficialChannel.isOfficial(cid) ? 1 : 0)
+                guard pinned >= max else { return false }
+                let alert = UIAlertController(title: nil,
+                                              message: "You can pin up to \(max) chats. Unpin one to pin this chat.",
+                                              preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+                WebLink.topViewController()?.present(alert, animated: true)
+                return true
+            }
+            if full { return false }
+        }
         if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.setPinned(value); return true }
         return await settingWrite("pin", cid, ["pinnedBy": [uid: value]])
     }
