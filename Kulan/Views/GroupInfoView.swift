@@ -297,7 +297,7 @@ struct GroupInfoView: View {
         if iAmAdmin { groupSettingsCard }
         membersCard
         if !media.isEmpty {
-            ProfileMediaCard(cid: cid, media: media, glass: true,
+            ProfileMediaCard(cid: cid, media: media, cardColor: cardColor,
                              onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
                              onSeeAll: { showAllMedia = true })
         }
@@ -397,9 +397,10 @@ struct GroupInfoView: View {
         }
     }
 
-    /// 68pt: five of the mockup's ~75 do not fit a 393pt phone with the page's insets.
+    /// The person profile's circle at its own size (owner 2026-10-19: "exactly match the User
+    /// Profile").
     private func actionIcon(_ name: String) -> some View {
-        PosterActionIcon(icon: name, diameter: 68, onPhoto: hasGroupPhoto)
+        PosterActionIcon(icon: name, onPhoto: hasGroupPhoto)
     }
 
     private func addTapped() {
@@ -622,7 +623,7 @@ struct GroupInfoView: View {
             ProfileInfoRow(title: "Group invite link", icon: "link",
                            value: (conv?.inviteCode ?? "").isEmpty ? "Off" : "On") { inviteRowTapped() }
         }
-        .profileGlassSurface()
+        .profileSurface(plain: cardColor)
     }
 
     /// Invite links are an admin right (fix-all #226): that admin manages them; a member who may
@@ -635,11 +636,19 @@ struct GroupInfoView: View {
 
     private var groupSettingsCard: some View {
         ProfileInfoRow(title: "Group Settings", icon: "gearshape") { showSettings = true }
-            .profileGlassSurface()
+            .profileSurface(plain: cardColor)
     }
 
-    /// Separators start at the text: 16 inset + 26 icon slot + 14 gap.
-    private var rowDivider: some View { Divider().padding(.leading, 56) }
+    /// The person profile's flat card colour and separator (ContactInfoView `cardColor`,
+    /// `rowDivider`): on a tinted page the palette's own line, else the system one.
+    private var cardColor: Color { Color(uiColor: .secondarySystemGroupedBackground) }
+    @ViewBuilder private var rowDivider: some View {
+        if let palette {
+            Color(uiColor: palette.separator).frame(height: 0.5).padding(.leading, 56)
+        } else {
+            Divider().padding(.leading, 56)
+        }
+    }
 
     private var disappearLabel: String {
         let s = conv?.disappearSeconds ?? 0
@@ -673,7 +682,7 @@ struct GroupInfoView: View {
             .padding(.horizontal, 8)
             .padding(.bottom, 10)
         }
-        .profileGlassSurface()
+        .profileSurface(plain: cardColor)
     }
 
     private func memberSheet(_ m: MemberAction) -> some View {
