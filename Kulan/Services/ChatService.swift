@@ -3640,7 +3640,18 @@ enum ChatService {
             if full { return false }
         }
         if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.setPinned(value); return true }
-        return await settingWrite("pin", cid, ["pinnedBy": [uid: value]])
+        guard value else { return await settingWrite("pin", cid, ["pinnedBy": [uid: value]]) }
+        // ⛔ A NEW PIN GOES TO THE TOP (owner 2026-10-19: it landed 4th). Without a `pinOrder` the
+        // rank was the chat's last-message time, so an older chat sank below the pins already there.
+        // It now takes a rank above every other pin's (`Conversation.pinRank`, higher = higher up).
+        let rank: Double = await MainActor.run {
+            let me = uid
+            let top = ConversationsRepository.shared.conversations
+                .filter { $0.id != cid && $0.isPinned(me) }
+                .map { $0.pinRank(me) }.max() ?? 0
+            return max(top + 1, Date().timeIntervalSince1970 * 1000)
+        }
+        return await settingWrite("pin", cid, ["pinnedBy": [uid: true], "pinOrder": [uid: rank]])
     }
 
     /// Per-user manual order value for a pinned chat (fractional indexing).
