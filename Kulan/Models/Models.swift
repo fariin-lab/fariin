@@ -1070,6 +1070,11 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// link>" for a photo). Set by whoever may change group info; beats each phone's own pick.
     /// nil = never set, so every phone keeps its own. Groups only; a 1:1 never carries it.
     var groupWallpaper: String? = nil
+    /// 2026-10-19 groups v2: a PUBLIC group has an @name in the same namespace as people, so it can be
+    /// found in global search and opened from fariin.com/<name>. Written only by the server
+    /// (functions-username setGroupUsername); "" and false for a private group and every 1:1.
+    var isPublic = false
+    var publicName = ""
     // Per-flag admin rights (the reference app model): uid → granted right slugs. An admin with NO entry
     // has ALL rights (legacy behaviour); the owner (createdBy) always has all. See Conversation.Right.
     var inviteCode: String             // group's current primary invite-link code ("" = none)
@@ -1194,6 +1199,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
             ? (data["roles"] as? [String: Any] ?? [:]).compactMapValues { GroupRole($0) }
             : [:]
         self.groupWallpaper = self.convType == "group" ? data["wallpaper"] as? String : nil
+        let pubName = self.convType == "group" ? (data["username"] as? String ?? "") : ""
+        self.isPublic = !pubName.isEmpty && (data["isPublic"] as? Bool ?? false)
+        self.publicName = self.isPublic ? pubName : ""
         self.inviteCode = data["inviteCode"] as? String ?? ""
         self.adminRights = stringArrayMap(data["adminRights"])
         self.adminBy = (data["adminBy"] as? [String: Any] ?? [:]).compactMapValues { $0 as? String }

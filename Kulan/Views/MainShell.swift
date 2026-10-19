@@ -165,8 +165,9 @@ struct MainShell: View {
         }
         // An invite deep link (kulan://g/<code>) presents its Join sheet from the Chats tab — foreground
         // it so the sheet isn't dropped on a hidden tab.
-        .onChange(of: AppRouter.shared.pendingInviteCode) { _, code in
-            if code != nil { tab = 2 }   // 2 = Chats: Stories took 0 and Calls took 1
+        // 2026-10-19 groups v2: a public group's join page (GroupDirectory.open) likewise.
+        .onChange(of: AppRouter.shared.pendingInviteCode != nil || AppRouter.shared.pendingPublicGroup != nil) { _, on in
+            if on { tab = 2 }   // 2 = Chats: Stories took 0 and Calls took 1
         }
         // Call UI is mounted at the root (CallContainer in RootView) so it survives all
         // navigation. Here we only start listening for incoming calls.
@@ -2325,6 +2326,11 @@ struct ChatsView: View {
                 set: { router.pendingInviteCode = $0?.code })
     }
 
+    private var pendingPublicGroup: Binding<PublicGroupTarget?> {
+        Binding(get: { Flags.groupsEnabled ? router.pendingPublicGroup : nil },
+                set: { router.pendingPublicGroup = $0 })
+    }
+
     /// THE CHAT LIST, AND EVERYTHING THE SCREEN HAS TO HAND IT.
     ///
     /// ⚠️ A PROPERTY OF ITS OWN FOR THE SAME REASON `loadedChatList` IS ONE: this file's type-checker
@@ -3098,6 +3104,8 @@ struct ChatsView: View {
                 // owner 2026-10-18: the sheet sizes itself to what it holds (its own detent).
                 JoinGroupSheet(code: item.code)
             }
+            // 2026-10-19 groups v2: a public group from global search or a fariin.com/<name> link.
+            .sheet(item: pendingPublicGroup) { PublicGroupSheet(target: $0) }
             .confirmationDialog("Delete \(selection.count) chat\(selection.count == 1 ? "" : "s")?",
                                 isPresented: $showDeleteSelected, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) { deleteSelected() }

@@ -123,6 +123,8 @@ struct KulanApp: App {
             // door, onboarding or the two-step page) the lookup has no session and the link was lost;
             // RootView opens it once the app reaches its main screen, the invite code's pattern.
             AppRouter.shared.pendingUserHandle = handle
+        case .name(let name):
+            openNameLink(name)
         case .call(let key):
             joinCallLink(key: key)
         case .story(let id, let handle):
@@ -135,6 +137,29 @@ struct KulanApp: App {
                 guard AuthService.shared.uid != nil else { return }
                 _ = await StoryDoor.openLink(storyId: id, handle: handle)
             }
+        }
+    }
+
+    /// 2026-10-19 groups v2: a bare fariin.com/<name>. People and public groups share one namespace,
+    /// so the server says which this is (`resolveUsername` with groups). A group opens its join page;
+    /// anything else goes down the /u/ path (`pendingUserHandle`), which opens the person or says
+    /// nobody was found. Waits for a session like a call link; signed out, the /u/ path keeps it.
+    private func openNameLink(_ name: String) {
+        guard Flags.groupsEnabled else { AppRouter.shared.pendingUserHandle = name; return }
+        Task { @MainActor in
+            for _ in 0..<40 where AuthService.shared.uid == nil {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            guard AuthService.shared.uid != nil, !DemoMode.active else {
+                AppRouter.shared.pendingUserHandle = name
+                return
+            }
+            let found = await GroupDirectory.resolve(name)
+            guard case .group(let cid) = found else {
+                AppRouter.shared.pendingUserHandle = name
+                return
+            }
+            GroupDirectory.open(cid: cid, name: name)
         }
     }
 
@@ -162,7 +187,8 @@ struct KulanApp: App {
     /// serve `/s/<id>` and the apple-app-site-association file on fariin.com to claim that path, and
     /// neither is done. Parsed now so a link shared today is a link the app already understands the
     /// day those two land, rather than one it has to be taught to recognise afterwards.
-    enum DeepLink: Equatable { case user(String), group(String), story(String, handle: String?), call(key: String) }
+    /// `name`: a bare fariin.com/<name> (2026-10-19 groups v2), a person's or a public group's @name.
+    enum DeepLink: Equatable { case user(String), group(String), story(String, handle: String?), call(key: String), name(String) }
 
     /// The web host every shared link points at. One constant, because the entitlement, the
     /// apple-app-site-association file on fariin.com and the parser below must all name the same
@@ -257,6 +283,15 @@ struct KulanApp: App {
                 let h = parts[0], id = parts[2]
                 guard Self.safeSegment(h), Self.safeSegment(id) else { return nil }
                 return .story(StoryLinkId.full(id), handle: h)
+            }
+            // A public link, /<name> (2026-10-19 groups v2): only the shape a name can have (a letter
+            // first, 5 to 30 letters, digits and _), so the site's own pages never read as one.
+            if parts.count == 1 {
+                let n = parts[0]
+                guard n.range(of: "^[A-Za-z][A-Za-z0-9_]{4,29}$", options: .regularExpression) != nil,
+                      !["download", "privacy", "terms", "support", "help", "about"].contains(n.lowercased())
+                else { return nil }
+                return .name(n)
             }
             guard parts.count >= 2 else { return nil }
             kind = parts[0]

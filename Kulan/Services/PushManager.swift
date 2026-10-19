@@ -366,6 +366,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     /// app is signed in and on its main screen (RootView opens it then). A link tapped while signed
     /// out used to be dropped, because the lookup needs a session.
     var pendingUserHandle: String?
+    /// 2026-10-19 groups v2: the public group join page to show (GroupDirectory.open → `PublicGroupSheet` on the Chats tab).
+    var pendingPublicGroup: PublicGroupTarget?
     var activeChatId: String?     // the chat currently on screen (suppresses its own banners)
     /// A specific message to land on once that chat is open, rather than opening wherever the chat
     /// normally opens. Set beside `pendingChatId`, consumed once by ThreadView.

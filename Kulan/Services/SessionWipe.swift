@@ -181,6 +181,7 @@ enum SessionWipe {
         AppRouter.shared.pendingChatPhoto = nil
         AppRouter.shared.pendingInviteCode = nil
         AppRouter.shared.pendingUserHandle = nil   // 2026-09-24 decision D4: same as the invite code
+        AppRouter.shared.pendingPublicGroup = nil  // 2026-10-19 groups v2: a public group's join page
         // 2026-09-24 audit: the signed-out account's notifications and badge. Left behind, the icon
         // kept showing its unread count on the Welcome screen, and a banner still in Notification
         // Center could be tapped under the NEXT account and open a chat that account is not in.

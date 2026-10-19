@@ -222,9 +222,10 @@ struct ChatSearchOverlay: View {
 /// One row of the search page. Deliberately just a KIND and a KEY: the row's content is looked up
 /// live when the cell is built, so a row never carries a frozen copy of a conversation.
 struct SearchPageRow: Identifiable, Equatable {
-    enum Kind: String, CaseIterable, Equatable { case chat, group, person, recentChat, recentPerson, showMore }
+    /// `publicGroup` (2026-10-19 groups v2): a public group I am not in, from the server's search.
+    enum Kind: String, CaseIterable, Equatable { case chat, group, person, recentChat, recentPerson, showMore, publicGroup }
     let kind: Kind
-    /// Conversation id for a chat or a group, uid for a person.
+    /// Conversation id for a chat or a group (a public group too), uid for a person.
     let key: String
     var id: String { "\(kind.rawValue):\(key)" }
 }
@@ -291,6 +292,11 @@ struct ChatSearchPage: View {
     @State private var showAllPeople = false
     /// Global results shown before Show More (the reference collapses its global section past 3).
     static let globalCollapsed = 3
+    /// 2026-10-19 groups v2: public groups whose @name starts with the query (GroupDirectory.search),
+    /// asked beside the people search with the same 0.4s settle, answered queries kept for the page.
+    @State private var groupHits: [PublicGroupHit] = []
+    @State private var groupCache: [String: [PublicGroupHit]] = [:]
+    @State private var groupSearching = false
 
     init(query: String, me: String, dark: Bool, searching: Bool,
          chats: @escaping () -> [Conversation],
@@ -334,6 +340,7 @@ struct ChatSearchPage: View {
         }
         .onAppear { recents.start() }
         .onChange(of: query) { _, _ in showAllPeople = false }
+        .task(id: query) { await lookUpGroups(query) }
         .alert("Couldn't open", isPresented: $recentPersonOpenFailed) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -348,6 +355,7 @@ struct ChatSearchPage: View {
         var sections: [SearchPageSection] = []
         var chats: [String: Conversation] = [:]
         var people: [String: UserProfile] = [:]
+        var groups: [String: PublicGroupHit] = [:]
         var recents: [String: RecentSearches.Entry] = [:]
         var isEmpty: Bool { sections.allSatisfy { $0.rows.isEmpty } }
     }
@@ -430,6 +438,12 @@ struct ChatSearchPage: View {
         chatRows = recentFirst(chatRows)
         groupRows = recentFirst(groupRows)
         personRows = recentFirst(personRows)
+        // Public groups from the server join the people under Global Search, minus the ones I am in.
+        let mine = Set(repo.conversations.filter { $0.isGroup && $0.users.contains(me) }.map { $0.id })
+        for g in groupHits where !g.isMember && !mine.contains(g.cid) {
+            m.groups[g.cid] = g
+            personRows.append(SearchPageRow(kind: .publicGroup, key: g.cid))
+        }
         if !showAllPeople, personRows.count > Self.globalCollapsed {
             personRows = Array(personRows.prefix(Self.globalCollapsed))
                 + [SearchPageRow(kind: .showMore, key: "global")]
@@ -457,6 +471,8 @@ struct ChatSearchPage: View {
             }
         case .person:
             if let u = m.people[row.key] { personRow(u) }
+        case .publicGroup:
+            if let g = m.groups[row.key] { PublicGroupHitRow(hit: g) }
         case .recentPerson:
             if let e = m.recents[row.key] {
                 RecentPersonRow(uid: e.key, title: e.title, handle: e.handle)
@@ -497,6 +513,11 @@ struct ChatSearchPage: View {
             guard let u = m.people[row.key] else { return }
             recents.record(person: u, me: me)
             onOpenPerson(u)
+            dismissSearch()
+        case .publicGroup:
+            // The join page (or the chat, when I joined meanwhile), presented by the Chats tab.
+            guard let g = m.groups[row.key] else { return }
+            GroupDirectory.open(cid: g.cid, name: g.handle)
             dismissSearch()
         case .recentPerson:
             guard let e = m.recents[row.key] else { return }
@@ -545,6 +566,22 @@ struct ChatSearchPage: View {
         }
     }
 
+    /// The group half of global search. A query answered before is answered again at once; a new
+    /// one waits 0.4s and `.task(id:)` cancels it on the next keystroke, as the people search does.
+    private func lookUpGroups(_ q: String) async {
+        guard Flags.groupsEnabled, q.count >= 3 else { groupHits = []; groupSearching = false; return }
+        let key = q.lowercased()
+        if let hit = groupCache[key] { groupHits = hit; groupSearching = false; return }
+        groupSearching = true
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        if Task.isCancelled { return }
+        let found = await GroupDirectory.search(q)
+        if Task.isCancelled { return }
+        groupCache[key] = found
+        groupHits = found
+        groupSearching = false
+    }
+
     // MARK: Empty states
 
     @ViewBuilder private var emptyState: some View {
@@ -568,7 +605,7 @@ struct ChatSearchPage: View {
             }
             .padding(.horizontal, 40)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if repo.loadingWholeList || searching {
+        } else if repo.loadingWholeList || searching || groupSearching {
             // ⛔ LOOKING IS SHOWN AS LOOKING — owner, 2026-09-27, with the message search's skeleton:
             // "add a loading screen like this while I search a username". It was a bare spinner
             // for older chats and NOTHING at all while the username lookup was out.

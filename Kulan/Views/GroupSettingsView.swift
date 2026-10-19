@@ -72,6 +72,14 @@ struct GroupSettingsView: View {
                     }
                 }
             }
+            // 2026-10-19 groups v2: Private or Public (an @name, found in search). Change-info only.
+            if canEdit {
+                Section {
+                    NavigationLink { GroupTypeView(cid: cid) } label: {
+                        settingLabel("Group Type", "globe", value: (conv?.isPublic ?? false) ? "Public" : "Private")
+                    }
+                }
+            }
             Section {
                 NavigationLink { permissionsPage } label: {
                     settingLabel("Permissions", "switch.2", value: permissionsCount)
