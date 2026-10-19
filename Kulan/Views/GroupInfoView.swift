@@ -1662,6 +1662,9 @@ struct GroupMemberSheet: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 14)
         .profileSurface(plain: card)
+        // The card opens their profile, as Info does (owner 2026-10-19).
+        .contentShape(Rectangle())
+        .onTapGesture { if member.id != me { openProfile() } }
     }
 
     private var adminChip: some View {
