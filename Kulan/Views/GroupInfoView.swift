@@ -30,6 +30,7 @@ struct GroupInfoView: View {
     @State private var pendingDisappear: Int?   // chosen timer awaiting the "for all members" confirm
     @State private var showAdd = false
     @State private var memberAction: MemberAction?
+    @State private var profileOf: MemberAction?   // Info on a member's sheet (owner 2026-10-19)
     @State private var confirmLeave = false
     @State private var confirmClear = false
     @State private var confirmReport = false
@@ -71,7 +72,7 @@ struct GroupInfoView: View {
     @State private var exportError: String?
     @State private var exporting = false
 
-    struct MemberAction: Identifiable { let id: String; let name: String; let isAdmin: Bool }
+    struct MemberAction: Identifiable, Hashable { let id: String; let name: String; let isAdmin: Bool }
 
     private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
     private var iAmAdmin: Bool { conv?.isAdmin(me) ?? false }
@@ -100,6 +101,10 @@ struct GroupInfoView: View {
     var body: some View {
         AnyView(core)
             .navigationDestination(isPresented: $showMemberChanges) { GroupMemberChangesView(cid: cid) }
+            .navigationDestination(item: $profileOf) { m in
+                ContactInfoView(cid: ChatService.convId(me, m.id), name: m.name,
+                                photoUrl: conv?.photos[m.id], source: .calls)
+            }
             .sheet(isPresented: $showAllMembers) { GroupMembersSheet(cid: cid) }
             .sheet(isPresented: $showEncryption) { ChatEncryptionSheet() }
             .sheet(isPresented: $showQR) {
@@ -659,7 +664,8 @@ struct GroupInfoView: View {
     }
 
     private func memberSheet(_ m: MemberAction) -> some View {
-        GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: m.id)
+        GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: m.id,
+                              onInfo: { uid in profileOf = MemberAction(id: uid, name: conv?.names[uid] ?? "User", isAdmin: false) })
             .presentationDetents([.medium, .large])
     }
 
@@ -1132,6 +1138,10 @@ struct GroupMemberSheet: View {
     @State private var showBlock = false
     @State private var showReport = false
     @State private var memberBlocked = false
+    @State private var showRole = false
+    @State private var showRights = false
+    @State private var showProfileHere = false
+    var onInfo: ((String) -> Void)? = nil   // push their profile on the opener's stack
 
     /// Every member action goes through here (audit, 2026-09-24). Each one was `try?` then dismiss:
     /// a refused Make Admin / Remove closed the sheet as if it had worked, and a second tap while the
@@ -1167,136 +1177,37 @@ struct GroupMemberSheet: View {
                                    contactOfMine: PrivacyPrefs.isContact(member.id)) ? p.about : nil
     }
 
+    // ⛔ A SHORT SHEET, THEN THEIR PROFILE (owner 2026-10-19, from the reference app's member card):
+    // the face and name, Message / Voice / Video, then one card of what I may do to them here. Info
+    // opens their regular profile on the group page's own stack, so Back lands on the group again.
+    // Block and Report live on that profile, as for anyone else.
+    private var card: Color { Color(uiColor: .secondarySystemGroupedBackground) }
+    private var rowDivider: some View { Divider().padding(.leading, 56) }
+
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    VStack(spacing: 10) {
-                        // Honor THEIR audience settings, like the 1:1 profile does (audit): this
-                        // sheet showed a member's photo and bio to every fellow group member even
-                        // when they had set those to "No One" / "My Friends".
-                        AvatarView(name: member.name, photoUrl: gatedMemberPhoto, size: 88)
-                        HStack(spacing: 6) {
-                            Text(member.name).font(.title2.weight(.bold))
-                            // A member card is a profile, so the mark explains itself here too.
-                            VerifiedMark(uid: member.id, size: 17, explains: true)
-                        }
-                        if let h = profile?.handle, !h.isEmpty {
-                            Text("@\(h)").font(.subheadline).foregroundStyle(.secondary)
-                        }
-        if isOwner || member.isAdmin {
-                            Text(isOwner ? "Owner" : "Admin").font(.caption.weight(.semibold))
-                                .padding(.horizontal, 8).padding(.vertical, 3)
-                                .background(Color.accentColor.opacity(0.15), in: Capsule())
-                                .foregroundStyle(Color.accentColor)
-                        }
-                        if let role { RoleChip(role: role) }
-                        if let a = gatedMemberAbout, !a.isEmpty {
-                            Text(a).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .listRowBackground(Color.clear)
+            ScrollView {
+                VStack(spacing: 16) {
+                    header
+                    if member.id != me { tiles }
+                    actionsCard
                 }
-                // ⛔ ROLE — owner 2026-10-18. Given by admins only (Conversation.canSetRole); a
-                // member never sets their own. Opens its own page, pushed in this sheet's stack.
-                if canEditRole {
-                    Section {
-                        NavigationLink {
-                            RoleEditorView(cid: cid, uid: member.id, name: member.name, current: role)
-                        } label: {
-                            Label(role == nil ? "Set Role" : "Edit Role", systemImage: "tag")
-                        }
-                    }
-                }
-                // Anyone can message a fellow member (opens/creates the 1:1).
-                if member.id != me {
-                    Section {
-                        Button {
-                            AppRouter.shared.pendingChatName = member.name
-                            AppRouter.shared.pendingChatPhoto = profile?.photoUrl
-                            AppRouter.shared.pendingChatId = ChatService.convId(me, member.id)
-                            // 2026-09-24 audit: create the chat the way every other entry point does.
-                            let other = member.id
-                            Task { await ChatService.openConversation(uid: other) }
-                            dismiss()
-                        } label: { Label("Message", systemImage: "message") }
-                    }
-                    // 2026-09-24 fix-all #124: Block and Report on the member card, the way the
-                    // person's own profile always shows them (ContactInfoView's `dangerCard`: "a user
-                    // who feels unsafe must see the way out"). Same glyphs, same confirms, same
-                    // `ChatService` calls. The block goes on our 1:1 id (the account block list covers
-                    // a chat that does not exist yet); the report names THIS group as where it happened.
-                    Section {
-                        if memberBlocked {
-                            Button {
-                                memberBlocked = false
-                                let other = member.id
-                                Task { await ChatService.setBlocked(ChatService.convId(me, other), false) }
-                            } label: {
-                                Label { Text("Unblock \(member.name)") } icon: { Image(systemName: "checkmark.circle") }
-                            }
-                        } else {
-                            Button(role: .destructive) { showBlock = true } label: {
-                                Label { Text("Block \(member.name)") } icon: { Image("ic_block").renderingMode(.template) }
-                            }
-                        }
-                        Button(role: .destructive) { showReport = true } label: {
-                            Label { Text("Report \(member.name)") } icon: { Image("ic_report").renderingMode(.template) }
-                        }
-                    }
-                }
-                // The owner is protected: no admin can demote or remove them. Promote/demote/rights is
-                // `canManageAdmins` (the owner, or the promoter holding "Add new admins"); removing a
-                // member needs the Restrict-members right, and removing an ADMIN is the owner's alone
-                // (owner 2026-10-18, firestore.rules nonOwnerAdminWriteOK).
-                let canRemove = canRestrict && (iAmOwner || !member.isAdmin)
-                if member.id != me && !isOwner && (canManageAdmins || canRemove || iAmOwner) {
-                    Section {
-                        if canManageAdmins {
-                            if member.isAdmin {
-                                NavigationLink {
-                                    AdminRightsView(cid: cid, uid: member.id, name: member.name,
-                                                    grantable: grantable, rights: $rights)
-                                } label: { Text("Edit Admin Rights") }
-                                Button("Remove Admin") {
-                                    run { try await ChatService.demoteGroupAdmin(cid: cid, uid: member.id, name: member.name) }
-                                }
-                            } else {
-                                Button("Make Admin") {
-                                    // A new admin gets the defaults, cut down to what I may hand out.
-                                    let give = Conversation.Right.defaults.map(\.rawValue).filter { grantable.contains($0) }
-                                    run { try await ChatService.promoteGroupAdmin(cid: cid, uid: member.id, name: member.name, rights: give) }
-                                }
-                            }
-                        }
-                        if iAmOwner {
-                            Button("Transfer Ownership") { confirmTransfer = true }
-                        }
-                        if canRemove {
-                            Button("Remove from Group", role: .destructive) { confirmRemove = true }
-                        }
-                    }
-                }
-                // Restrictions — an admin with the Restrict right can mute a regular member (auto-expiring).
-                if canRestrict && !member.isAdmin && !isOwner && member.id != me {
-                    Section("Restrictions") {
-                        if isMuted {
-                            Button("Lift restrictions") {
-                                run { try await ChatService.unmuteMember(cid: cid, uid: member.id, name: member.name) }
-                            }
-                        } else {
-                            Menu {
-                                Button("1 hour")  { mute(3600) }
-                                Button("1 day")   { mute(86400) }
-                                Button("1 week")  { mute(604800) }
-                                Button("Forever") { mute(0) }
-                            } label: { Label("Mute (can't send)", systemImage: "speaker.slash") }
-                        }
-                    }
-                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
             }
+            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
             .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(isPresented: $showRole) {
+                RoleEditorView(cid: cid, uid: member.id, name: member.name, current: role)
+            }
+            .navigationDestination(isPresented: $showRights) {
+                AdminRightsView(cid: cid, uid: member.id, name: member.name,
+                                grantable: grantable, rights: $rights)
+            }
+            .navigationDestination(isPresented: $showProfileHere) {
+                ContactInfoView(cid: ChatService.convId(me, member.id), name: member.name,
+                                photoUrl: gatedMemberPhoto, source: .calls)
+            }
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
             .task { profile = await ProfileStore.shared.fetch(member.id) }
             .onAppear {
@@ -1345,6 +1256,131 @@ struct GroupMemberSheet: View {
                         .destructive("Report and Block") { blockMember(report: true) },
                        ])
             .onAppear { memberBlocked = BlockList.shared.contains(member.id) }
+        }
+    }
+
+    private var header: some View {
+        VStack(spacing: 8) {
+            // Honor THEIR audience settings, like the 1:1 profile does (audit).
+            AvatarView(name: member.name, photoUrl: gatedMemberPhoto, size: 88)
+            HStack(spacing: 6) {
+                Text(member.name).font(.title2.weight(.bold))
+                VerifiedMark(uid: member.id, size: 17, explains: true)
+            }
+            HStack(spacing: 6) {
+                if let h = profile?.handle, !h.isEmpty {
+                    Text("@\(h)").font(.subheadline).foregroundStyle(.secondary)
+                }
+                if isOwner || member.isAdmin {
+                    Text(isOwner ? "Owner" : "Admin").font(.caption.weight(.semibold))
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Color.accentColor.opacity(0.15), in: Capsule())
+                        .foregroundStyle(Color.accentColor)
+                }
+                if let role { RoleChip(role: role) }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 4)
+    }
+
+    private var tiles: some View {
+        HStack(spacing: 10) {
+            GroupActionTile(icon: "message", title: "Message", cardColor: card) { openChat() }
+            GroupActionTile(icon: "ic_call_voice", title: "Voice", cardColor: card) {
+                CallService.shared.startCall(to: member.id, name: member.name, photo: gatedMemberPhoto,
+                                             video: false, fromProfile: true)
+            }
+            GroupActionTile(icon: "ic_call_video", title: "Video", cardColor: card) {
+                CallService.shared.startCall(to: member.id, name: member.name, photo: gatedMemberPhoto,
+                                             video: true, fromProfile: true)
+            }
+        }
+    }
+
+    /// What I may do to them in this group, then Info, then the red one last. The owner is protected:
+    /// no admin demotes or removes them. Promote/demote/rights is `canManageAdmins`; removing needs
+    /// the Restrict-members right, and removing an ADMIN is the owner's alone (firestore.rules
+    /// nonOwnerAdminWriteOK).
+    @ViewBuilder private var actionsCard: some View {
+        let other = member.id != me && !isOwner
+        let canRemove = other && canRestrict && (iAmOwner || !member.isAdmin)
+        let canMute = other && canRestrict && !member.isAdmin
+        VStack(spacing: 0) {
+            if other && canManageAdmins {
+                if member.isAdmin {
+                    ProfileInfoRow(title: "Edit Admin Rights", icon: "person.badge.shield.checkmark") { showRights = true }
+                    rowDivider
+                    ProfileInfoRow(title: "Remove as Admin", icon: "person.badge.minus", chevron: false) {
+                        run { try await ChatService.demoteGroupAdmin(cid: cid, uid: member.id, name: member.name) }
+                    }
+                } else {
+                    ProfileInfoRow(title: "Make Group Admin", icon: "person.badge.shield.checkmark", chevron: false) {
+                        // A new admin gets the defaults, cut down to what I may hand out.
+                        let give = Conversation.Right.defaults.map(\.rawValue).filter { grantable.contains($0) }
+                        run { try await ChatService.promoteGroupAdmin(cid: cid, uid: member.id, name: member.name, rights: give) }
+                    }
+                }
+                rowDivider
+            }
+            // ⛔ ROLE — owner 2026-10-18. Given by admins only (Conversation.canSetRole).
+            if canEditRole {
+                ProfileInfoRow(title: role == nil ? "Set Role" : "Edit Role", icon: "tag") { showRole = true }
+                rowDivider
+            }
+            if canMute {
+                if isMuted {
+                    ProfileInfoRow(title: "Lift Restrictions", icon: "speaker.wave.2", chevron: false) {
+                        run { try await ChatService.unmuteMember(cid: cid, uid: member.id, name: member.name) }
+                    }
+                } else {
+                    Menu {
+                        Button("1 hour")  { mute(3600) }
+                        Button("1 day")   { mute(86400) }
+                        Button("1 week")  { mute(604800) }
+                        Button("Until I lift it") { mute(0) }
+                    } label: {
+                        ProfileInfoRow(title: "Mute in This Group", icon: "speaker.slash", chevron: false) {}
+                            .allowsHitTesting(false)
+                    }
+                }
+                rowDivider
+            }
+            if other && iAmOwner {
+                ProfileInfoRow(title: "Transfer Ownership", icon: "crown", chevron: false) { confirmTransfer = true }
+                rowDivider
+            }
+            if member.id != me {
+                ProfileInfoRow(title: "Info", icon: "info.circle") { openProfile() }
+            }
+            if canRemove {
+                rowDivider
+                ProfileInfoRow(title: "Remove from Group", icon: "minus.circle", tint: .red, chevron: false) {
+                    confirmRemove = true
+                }
+            }
+        }
+        .profileSurface(plain: card)
+    }
+
+    private func openChat() {
+        AppRouter.shared.pendingChatName = member.name
+        AppRouter.shared.pendingChatPhoto = profile?.photoUrl
+        AppRouter.shared.pendingChatId = ChatService.convId(me, member.id)
+        // 2026-09-24 audit: create the chat the way every other entry point does.
+        let other = member.id
+        Task { await ChatService.openConversation(uid: other) }
+        dismiss()
+    }
+
+    /// On the group page's stack when it handed us `onInfo` (Back returns to the group), else here.
+    private func openProfile() {
+        if let onInfo {
+            let uid = member.id
+            dismiss()
+            onInfo(uid)
+        } else {
+            showProfileHere = true
         }
     }
 
