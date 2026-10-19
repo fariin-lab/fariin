@@ -46,9 +46,10 @@ struct GroupSettingsView: View {
     var body: some View {
         // owner 2026-10-18: ONE THING PER SECTION, each with a short header and at most one short
         // footer (it was one long Permissions card with pickers and a paragraph under it).
-        // ⛔ OWNER'S LAYOUT, 2026-10-18 (his picture): Requests & Invites alone at the top; Admins;
-        // one card with Permissions (the member switches, on their own page, with how many are on),
-        // Members and Removed Users; Privacy last. Every door keeps the right it needed before.
+        // ⛔ OWNER'S LAYOUT, 2026-10-19 (his picture): Requests & Invites alone at the top; one card
+        // with Permissions (the member switches, on their own page, with how many are on),
+        // Administrators, Members and Removed Users; Privacy last. Nothing else on this page: the
+        // admins note lives on the Administrators page. Every door keeps the right it needed before.
         List {
             if can(.inviteUsers) {
                 Section {
@@ -59,16 +60,12 @@ struct GroupSettingsView: View {
                 }
             }
             Section {
+                NavigationLink { permissionsPage } label: {
+                    settingLabel("Permissions", "switch.2", value: permissionsCount)
+                }
                 NavigationLink { GroupAdminsView(cid: cid) } label: {
                     settingLabel("Administrators", "person.badge.shield.checkmark",
                                  value: "\(conv?.admins.count ?? 0)")
-                }
-            } header: { Text("Admins") } footer: {
-                Text("The owner decides what each admin can do.")
-            }
-            Section {
-                NavigationLink { permissionsPage } label: {
-                    settingLabel("Permissions", "switch.2", value: permissionsCount)
                 }
                 NavigationLink { GroupMembersListView(cid: cid) } label: {
                     settingLabel("Members", "person.2", value: "\(conv?.users.count ?? 0)")
@@ -155,7 +152,7 @@ struct GroupSettingsView: View {
         Section {
             Toggle(isOn: bool(get: { $0.isRestricted },
                               set: { v in try await ChatService.setGroupRestricted(cid, on: v) })) {
-                settingLabel("Restricted Group", "ic_restricted_chat")
+                settingLabel("Restricted Group", "circle.slash")
             }
         } header: {
             Text("Privacy")
@@ -241,7 +238,8 @@ struct GroupAdminsView: View {
                         .listRowInsets(EdgeInsets())
                 }
             } footer: {
-                Text("Tap an admin to see what they can do, including removing members.")
+                // Moved here from the Group Settings page (owner's picture, 2026-10-19).
+                Text("The owner decides what each admin can do. Tap an admin to see what they can do, including removing members.")
             }
         }
         .listStyle(.insetGrouped)
