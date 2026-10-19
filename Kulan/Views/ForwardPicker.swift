@@ -358,13 +358,22 @@ struct ForwardPicker: View {
         }
         Task {
             var anyFailed = false
+            // A shared link carries its card, as a pasted one does (owner 2026-10-19: Share Group
+            // arrived as a bare link). Looked up once for every chat, the way Send Contact does it.
+            var sharePreview: ChatService.OutgoingLinkPreview?
+            if isShare, let text = ordered.first?.text, let url = LinkPreviewService.firstURL(in: text),
+               let d = await LinkPreviewService.shared.draft(for: url) {
+                sharePreview = ChatService.OutgoingLinkPreview(url: d.url.absoluteString, title: d.title,
+                                                               desc: d.desc, imageJPEG: d.imageJPEG)
+            }
             for cid in targets {
                 for (i, m) in ordered.enumerated() {
                     // Same clientId the bubble above carries, so the echo lands ON it.
                     let clientId = ids[cid]?[i]
                     do {
                         if isShare {
-                            try await ChatService.sendText(cid: cid, text: m.text, clientId: clientId, forwarded: false)
+                            try await ChatService.sendText(cid: cid, text: m.text, clientId: clientId,
+                                                           preview: sharePreview, forwarded: false)
                         } else {
                             try await ChatService.forwardMessage(m, from: src, to: cid, clientId: clientId)
                         }
