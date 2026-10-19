@@ -550,10 +550,8 @@ struct GroupInfoView: View {
     }
 
     @ViewBuilder private var menuMemberItems: some View {
+        // No Add Members or Media here: the page has both (owner 2026-10-19).
         Section {
-            if canAdd {
-                Button { showAdd = true } label: { Label("Add Members", systemImage: "person.badge.plus") }
-            }
             // Member Labels show on the rows of this list (`GroupMemberRow`).
             Button { showAllMembers = true } label: { Label("Members", systemImage: "person.2") }
             // Who joined, left, was removed or changed admin, newest first (owner 2026-10-18).
@@ -565,10 +563,6 @@ struct GroupInfoView: View {
 
     @ViewBuilder private var menuMediaItems: some View {
         Section {
-            Button { showAllMedia = true } label: {
-                Label(galleryCount.map { "Media, Links and Files (\($0))" } ?? "Media, Links and Files",
-                      systemImage: "photo.on.rectangle")
-            }
             // The chat's storage item by item (owner 2026-10-19), not one clear-all.
             Button { showStorage = true } label: {
                 Label(storage.map { "Storage Used (\(Self.bytes($0.total)))" } ?? "Storage Used",
@@ -582,16 +576,11 @@ struct GroupInfoView: View {
             } label: {
                 Label("Save to Photos: \(saveChoice.label)", systemImage: "square.and.arrow.down")
             }
-            Button { showEncryption = true } label: {
-                Label { Text("Encryption") } icon: { MenuIcon("ic_privacy") }
-            }
         }
     }
 
     @ViewBuilder private var menuChatItems: some View {
         Section {
-            Button { exportChat() } label: { Label("Export Chat", systemImage: "square.and.arrow.up.on.square") }
-                .disabled(exporting)
             Button { showSimilar = true } label: { Label("Create a Similar Group", systemImage: "person.3") }
             Button { confirmClear = true } label: { Label("Clear Chat", systemImage: "eraser") }
         }
