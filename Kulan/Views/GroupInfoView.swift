@@ -1313,7 +1313,7 @@ struct GroupMemberSheet: View {
             ScrollView {
                 VStack(spacing: 16) {
                     header
-                    if member.id != me { tiles }
+                    // No Message / Voice / Video tiles here (owner 2026-10-19); Info opens the profile.
                     actionsCard
                 }
                 .padding(.horizontal, 16)
