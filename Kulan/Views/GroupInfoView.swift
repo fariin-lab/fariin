@@ -15,6 +15,12 @@ import Photos
 // Members · Media · Settings switcher, Member Changes, Media and Storage rows, Save to Photos per
 // chat, Encryption, Export Chat and Create a Similar Group. No empty description card any more:
 // an "Add group description" link under the count instead. The new pieces are in GroupInfoExtras.
+//
+// ⛔ owner's mockup 2026-10-19 REPLACES THE LAYOUT ABOVE: a photo group gets the person profile's
+// big photo header and its colour; no photo, a glass disc of three faces. Then five glass circles
+// (Add, Video, Mute, Search, More), one card (Disappearing, Sounds, Invite link), Group Settings,
+// All Members as a cloud of faces, All Media. Nothing else on the page: every other item is in the
+// ••• menu (`moreMenuItems`). Glass cards here (`profileGlassSurface`); a person's stay flat.
 struct GroupInfoView: View {
     let cid: String
     /// The chat's search, opened from the Search tile (the profile's own wiring).
@@ -54,11 +60,12 @@ struct GroupInfoView: View {
     @State private var showEdit = false
     @State private var showGroupPhoto = false    // tap the photo → the same morph a person's photo uses
     @State private var photoCloseTick = 0        // toolbar X → viewer close (see ProfilePhotoViewer.closeSignal)
-    @State private var avatarFrame: CGRect = .zero
-    @State private var memberQuery = ""
-    @State private var searchingMembers = false
+    /// Where the header's photo is drawn, for the viewer's flight. A plain box, not observed: the
+    /// header reports it while scrolling and a re-render per frame is the scroll lag of 2026-10-18.
+    @State private var artRect = GroupArtRect()
+    /// The colour read out of the group's photo (the person profile's own reading, `ProfilePalette`).
+    @State private var photoPalette: ProfilePalette?
     // 2026-10-18 upgrade.
-    @State private var marks = GroupInfoScrollMarks()
     @State private var showMemberChanges = false
     @State private var showEncryption = false
     @State private var showQR = false
@@ -88,7 +95,27 @@ struct GroupInfoView: View {
     private var canAdd: Bool { can(.inviteUsers) || (conv?.membersCanAdd ?? false) }
     private var title: String { conv?.title ?? "Group" }
     private var muted: Bool { conv?.isMuted(me, now: Date().timeIntervalSince1970 * 1000) ?? false }
-    private var cardColor: Color { Color(uiColor: .secondarySystemGroupedBackground) }
+    private var pageBackground: Color { Color(uiColor: .systemGroupedBackground) }
+    /// The group's photo, only when there is a real one: it decides the big header and the colour.
+    private var groupPhoto: String? {
+        let u = conv?.avatarUrl
+        return ProfilePhotoIndex.hasPicture(u) ? u : nil
+    }
+    private var hasGroupPhoto: Bool { groupPhoto != nil }
+    /// The person profile's order (`ContactInfoView.palette`): the photo's own reading, else the
+    /// cached copy read synchronously so the page opens in its colour. No photo, no colour: the
+    /// page keeps the plain background.
+    private var palette: ProfilePalette? {
+        guard let groupPhoto else { return nil }
+        return photoPalette ?? ProfilePalette.warm(url: groupPhoto)
+    }
+    private var posterFadeInto: Color { palette.map { Color(uiColor: $0.page) } ?? pageBackground }
+    /// ContactInfoView's bar rule: iOS 26 is handed light for the glass, iOS 27 reads its backdrop.
+    private var barScheme: ColorScheme? {
+        guard palette != nil else { return nil }
+        if #available(iOS 27.0, *) { return .dark }
+        return .light
+    }
     /// The group's invite link, only while it has one (2026-10-18: a private group shows no Share/QR).
     /// Admins share the link; members only when "Share the group link" is on (owner 2026-10-19,
     /// a course group whose admins keep the door to themselves).
@@ -156,12 +183,17 @@ struct GroupInfoView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
             .navigationBarBackButtonHidden(showGroupPhoto)
+            // The person profile's bar over a photo (ContactInfoView `coreScrollWithBars`): no
+            // material over the picture, the glass scheme for this OS, and the chevron held white
+            // by the tint so it stays white through the iOS 26 flip.
+            .toolbarBackground(hasGroupPhoto ? .hidden : .automatic, for: .navigationBar)
+            .toolbarColorScheme(barScheme, for: .navigationBar)
+            .tint(palette != nil ? Color.white : nil)
             .overlay {
                 if showGroupPhoto {
-                    ProfilePhotoViewer(name: title, photoUrl: conv?.avatarUrl ?? "",
-                                       sourceFrame: avatarFrame, poster: false,
-                                       // Whole photo, square (owner 2026-10-18), not the circle.
-                                       landsSquare: true,
+                    // Out of the big header's picture, as a person's photo flies (poster mode).
+                    ProfilePhotoViewer(name: title, photoUrl: groupPhoto ?? "",
+                                       sourceFrame: artRect.rect, poster: true,
                                        closeSignal: photoCloseTick,
                                        isPresented: $showGroupPhoto)
                         .ignoresSafeArea()
@@ -221,123 +253,161 @@ struct GroupInfoView: View {
             // The gallery count and the storage figure, again on every return (the gallery or a
             // clear may have changed them).
             .onAppear { Task { await loadMediaFigures() } }
+            // The photo's colour: warm first with no await (the page opens in it), else read it.
+            .task(id: groupPhoto ?? "") { await loadPalette() }
+            .onReceive(NotificationCenter.default.publisher(for: .profilePaletteReady)) { note in
+                guard let u = note.object as? String, u == groupPhoto else { return }
+                photoPalette = ProfilePalette.cached(for: u)
+            }
     }
 
+    private func loadPalette() async {
+        guard let u = groupPhoto else { photoPalette = nil; return }
+        if let warm = ProfilePalette.warm(url: u) { photoPalette = warm; return }
+        photoPalette = await ProfilePalette.resolve(url: u)
+    }
+
+    // ⛔ THE OWNER'S MOCKUP, AND ONLY WHAT IS IN IT (2026-10-19): the header, five round glass
+    // actions, one card of three rows, Group Settings, All Members as a cloud of faces, All Media.
+    // Everything else the page used to carry (About, the member rows, storage, export, QR,
+    // encryption, a similar group, leave / report / delete) is in the ••• action's menu.
     private var page: some View {
         ScrollView {
-            // ⛔ NO MEMBERS / MEDIA / SETTINGS BAR (owner 2026-10-19: "remove this, it doesn't make
-            // sense"). The three sections follow each other with their own headings; a bar that
-            // only scrolled to them added a row and explained nothing.
-            LazyVStack(spacing: 20) {
-                AnyView(topSections)
-                VStack(spacing: 20) { AnyView(lowerSections) }
+            VStack(spacing: 20) {
+                AnyView(header)
+                AnyView(cards)
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 24)
         }
-        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+        // Named so the big header can read its own offset and stretch on a pull.
+        .coordinateSpace(name: Self.scrollSpace)
+        // The person profile's page: one flat colour off the photo, washing in when it is read;
+        // the plain grouped background for a group with no photo.
+        .background { ProfileAdaptiveBackdrop(palette: palette, fallback: pageBackground) }
+        .environment(\.profilePalette, palette)
+        // A coloured page is always the dark family (the profile's rule, owner 2026-08-19).
+        .environment(\.colorScheme, palette != nil ? .dark : scheme)
     }
+    @Environment(\.colorScheme) private var scheme
+    private static let scrollSpace = "groupInfoScroll"
 
-    @ViewBuilder private var topSections: some View {
-        hero
-        actionsRow
-        if !desc.isEmpty { aboutCard.padding(.top, 8) }
-    }
-
-    @ViewBuilder private var lowerSections: some View {
-        // Each anchor rides on top of its section with no gap of its own (the stack's spacing would
-        // otherwise add one per anchor).
-        VStack(spacing: 0) { GroupSectionAnchor(section: .members, marks: marks); membersBlock }
-        VStack(spacing: 0) { GroupSectionAnchor(section: .media, marks: marks); mediaBlock }
-        VStack(spacing: 0) { GroupSectionAnchor(section: .settings, marks: marks); settingsCard }
-        dangerCard.padding(.top, 8)
-        if let label = createdByLabel {
-            Text(label).font(.footnote).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity).multilineTextAlignment(.center)
+    @ViewBuilder private var cards: some View {
+        settingsCard
+        if iAmAdmin { groupSettingsCard }
+        membersCard
+        if !media.isEmpty {
+            ProfileMediaCard(cid: cid, media: media, glass: true,
+                             onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
+                             onSeeAll: { showAllMedia = true })
         }
     }
 
     // MARK: Header
 
-    /// The profile's round header (`ContactInfoView.hero`'s numbers): the 120pt circle, the name,
-    /// and the member count where a person's @handle sits.
-    private var hero: some View {
-        VStack(spacing: 6) {
-            AvatarView(name: title, photoUrl: conv?.avatarUrl, size: 120)
-                .opacity(showGroupPhoto ? 0 : 1)
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { avatarFrame = $0 }
-                .contentShape(Circle())
-                .onTapGesture {
-                    if ProfilePhotoIndex.hasPicture(conv?.avatarUrl) { showGroupPhoto = true }
-                }
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(title).font(.title.weight(.bold))
-                    .lineLimit(2).multilineTextAlignment(.center)
-                // owner 2026-10-18: a small pencil beside the name for whoever may change it.
-                if canEditInfo {
-                    Button { showEdit = true } label: {
-                        Image(systemName: "pencil")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Edit name and picture")
-                }
+    /// A group WITH a photo wears the person profile's big photo header (ContactInfoView
+    /// `posterHeader`), fading into the colour read off that photo. Without one: a glass disc of
+    /// three members' faces. Either way the name, the count and the description, then the actions.
+    @ViewBuilder private var header: some View {
+        if hasGroupPhoto {
+            ProfilePosterHeader(
+                name: title,
+                photoUrl: groupPhoto,
+                scrollSpace: Self.scrollSpace,
+                onArtworkRect: { artRect.rect = $0 },
+                onTap: { showGroupPhoto = true },
+                photoHidden: showGroupPhoto,
+                fadeInto: posterFadeInto,
+                fallbackUrl: groupPhoto,
+                caption: { headerCaption($0) },
+                actions: { actionsRow }
+            )
+        } else {
+            VStack(spacing: 16) {
+                GroupFaceCluster(conv: conv, me: me)
+                    // No photo yet: whoever may change it goes straight to Edit Group.
+                    .onTapGesture { if canEditInfo { showEdit = true } }
+                headerCaption(.primary)
+                actionsRow.padding(.top, 2)
             }
-            Text(conv?.memberCountLabel ?? " ")
-                .font(.body).foregroundStyle(.secondary)
-                .frame(minHeight: 22)
-            // No empty About card any more (owner 2026-10-18): a small link here, only for whoever
-            // may write the description.
-            if desc.isEmpty && canEditInfo {
-                Button { showEdit = true } label: {
-                    Text("Add group description").font(.subheadline.weight(.medium))
-                        .foregroundStyle(Color.accentColor)
-                }
-                .buttonStyle(.plain)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 8)
+        }
+    }
+
+    /// Name, "N Members" and the description line, centred.
+    private func headerCaption(_ ink: Color) -> some View {
+        VStack(spacing: 4) {
+            Text(title).font(.title.weight(.bold)).foregroundStyle(ink)
+                .lineLimit(2).multilineTextAlignment(.center)
+            Text(memberCountText).font(.body).foregroundStyle(ink.opacity(0.7))
+            if !desc.isEmpty {
+                Text(desc).font(.subheadline).foregroundStyle(ink.opacity(0.7))
+                    .lineLimit(3).multilineTextAlignment(.center)
+                    .padding(.top, 2)
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 20)
-        .padding(.bottom, 14)
+        .padding(.horizontal, 8)
     }
 
-    /// The labelled tiles (owner 2026-10-18): Call and Video when group calls are on and I may start
-    /// one, Share while the group has a link (else Add for whoever may add), Search. Mute and the
-    /// rest are in the ••• menu of the top bar.
+    private var memberCountText: String {
+        let n = conv?.users.count ?? 0
+        return "\(Self.compactCount(n)) Member\(n == 1 ? "" : "s")"
+    }
+
+    /// 950, 1.2k, 168k, 1.5M.
+    static func compactCount(_ n: Int) -> String {
+        func short(_ v: Double, _ unit: String) -> String {
+            if v >= 10 { return "\(Int(v))\(unit)" }
+            let tenths = Int((v * 10).rounded(.down))
+            return tenths % 10 == 0 ? "\(tenths / 10)\(unit)" : "\(tenths / 10).\(tenths % 10)\(unit)"
+        }
+        if n < 1000 { return "\(n)" }
+        if n < 1_000_000 { return short(Double(n) / 1000, "k") }
+        return short(Double(n) / 1_000_000, "M")
+    }
+
+    // MARK: Actions
+
+    /// Five equal glass circles, no labels: Add, Video, Mute, Search, More. The person profile's
+    /// own circle (`PosterActionIcon`). What I may not do stays on the row, greyed, and a tap says
+    /// why (owner 2026-10-19), instead of a hole in the row.
     private var actionsRow: some View {
-        HStack(spacing: 10) {
-            // ⛔ THE CALL TILES STAY, GREYED, WHEN I CANNOT START ONE (owner 2026-10-19): already on
-            // another call, or the group leaves calls to admins. A tap says which, instead of the
-            // tiles vanishing or a tap doing nothing.
-            if CallFeatures.groupCalls {
-                let ready = mayCall && !busyElsewhere
-                GroupActionTile(icon: "ic_call_voice", title: "Call", cardColor: cardColor) { callTapped(video: false) }
-                    .opacity(ready ? 1 : 0.45)
-                GroupActionTile(icon: "ic_call_video", title: "Video", cardColor: cardColor) { callTapped(video: true) }
-                    .opacity(ready ? 1 : 0.45)
-            }
-            // The app's own Send To sheet (owner 2026-10-18), not the system one: the link goes to
-            // chats here as a plain message of mine.
-            if let link = inviteLink {
-                // An admin sends it straight away; a member gets the link's own page (owner 2026-10-19).
-                GroupActionTile(icon: "square.and.arrow.up", title: "Share", cardColor: cardColor) {
-                    if can(.inviteUsers) { shareGroupText = link } else { showMemberLink = true }
-                }
-            } else if canAdd {
-                GroupActionTile(icon: "ic_add_member", title: "Add", cardColor: cardColor) { showAdd = true }
-            } else if !(conv?.inviteCode ?? "").isEmpty {
-                // The group has a link, but its admins share it themselves: the tile stays, greyed.
-                GroupActionTile(icon: "square.and.arrow.up", title: "Share", cardColor: cardColor) {}
-                    .disabled(true).opacity(0.45)
-            }
-            if let onSearch {
-                GroupActionTile(icon: "magnifyingglass", title: "Search", cardColor: cardColor) { onSearch() }
-            }
+        HStack(spacing: 0) {
+            Button { addTapped() } label: { actionIcon("person.fill.badge.plus") }
+                .tint(.primary)
+                .opacity(canAdd ? 1 : 0.45)
+                .accessibilityLabel("Add Members")
+            Button { callTapped(video: true) } label: { actionIcon("video.fill") }
+                .tint(.primary)
+                .opacity(callReady ? 1 : 0.45)
+                .accessibilityLabel("Video Call")
+            Menu { muteMenuItems } label: { actionIcon(muted ? "bell.fill" : "bell.slash.fill") }
+                .tint(.primary)
+                .accessibilityLabel(muted ? "Unmute" : "Mute")
+            Button { onSearch?() } label: { actionIcon("magnifyingglass") }
+                .tint(.primary)
+                .disabled(onSearch == nil)
+                .opacity(onSearch == nil ? 0.45 : 1)
+                .accessibilityLabel("Search")
+            Menu { moreMenuItems } label: { actionIcon("ellipsis") }
+                .tint(.primary)
+                .accessibilityLabel("More")
         }
     }
 
+    /// 68pt: five of the mockup's ~75 do not fit a 393pt phone with the page's insets.
+    private func actionIcon(_ name: String) -> some View {
+        PosterActionIcon(icon: name, diameter: 68, onPhoto: hasGroupPhoto)
+    }
+
+    private func addTapped() {
+        if canAdd { showAdd = true } else { flashNotice("Only admins can add members") }
+    }
+
     private var mayCall: Bool { CallFeatures.groupCalls && (conv?.canStartCall(me) ?? false) }
+    private var callReady: Bool { mayCall && !busyElsewhere }
 
     /// On a 1:1 call, or on another group's call. This group's own running call is not "busy":
     /// the tile joins it.
@@ -348,7 +418,10 @@ struct GroupInfoView: View {
         return false
     }
 
+    // ⛔ THE CALL BUTTON STAYS, GREYED, WHEN I CANNOT START ONE (owner 2026-10-19): already on
+    // another call, or the group leaves calls to admins. A tap says which.
     private func callTapped(video: Bool) {
+        if !CallFeatures.groupCalls { flashNotice("Group calls are not available yet"); return }
         if busyElsewhere { flashNotice("You're already on a call"); return }
         if !mayCall { flashNotice("Only admins can start a call"); return }
         startCall(video: video)
@@ -382,28 +455,109 @@ struct GroupInfoView: View {
         return "Muted until \(t)"
     }
 
-    /// The ••• menu. Leave / Report / Delete stay on the red card. Whoever may change group info gets
-    /// the edit items and the wallpaper first; everyone gets Mute, Export, Create Similar and Clear.
+    // MARK: The ••• menu
+
+    /// Everything the mockup leaves off the page, in the system menu: the group, its members, its
+    /// media and data, then Clear and the red exits last. Each piece is its own small builder so
+    /// the menu never becomes one long expression for the type checker.
     @ViewBuilder private var moreMenuItems: some View {
-        if canEditInfo {
-            Section {
-                Button { showEdit = true } label: { Label("Edit Name and Picture", systemImage: "pencil") }
+        menuGroupItems
+        menuMemberItems
+        menuMediaItems
+        menuChatItems
+        menuExitItems
+    }
+
+    @ViewBuilder private var menuGroupItems: some View {
+        Section {
+            if canEditInfo {
+                Button { showEdit = true } label: { Label("Edit Group", systemImage: "pencil") }
                 // The description is edited on Edit Group with the bio's rules (2026-10-18).
-                Button { showEdit = true } label: { Label("Edit Description", systemImage: "text.alignleft") }
-                // owner 2026-10-18: the group's wallpaper is everyone's, so only someone who may change
-                // group info sees this (same test as the name and photo; firestore.rules says the same).
+                Button { showEdit = true } label: {
+                    Label(desc.isEmpty ? "Add Group Description" : "Edit Description", systemImage: "text.alignleft")
+                }
+                // The group's wallpaper is everyone's, so only someone who may change group info
+                // (owner 2026-10-18; firestore.rules says the same).
                 Button { changeWallpaper() } label: {
                     Label { Text("Change Wallpaper") } icon: { MenuIcon("ic_wallpaper") }
                 }
             }
+            if CallFeatures.groupCalls {
+                Button { callTapped(video: false) } label: { Label("Voice Call", systemImage: "phone") }
+            }
+            // Admins send the link straight away; a member gets the link's own page (owner 2026-10-19).
+            if let link = inviteLink {
+                Button {
+                    if can(.inviteUsers) { shareGroupText = link } else { showMemberLink = true }
+                } label: { Label("Share Group", systemImage: "square.and.arrow.up") }
+                Button { showQR = true } label: {
+                    Label { Text("QR Code") } icon: { MenuIcon("ic_qr") }
+                }
+            }
         }
+    }
+
+    @ViewBuilder private var menuMemberItems: some View {
         Section {
-            // No Mute here (owner 2026-10-19): Sounds & Notifications on the page already holds it.
-            Button { exportChat() } label: { Label("Export Chat", systemImage: "square.and.arrow.down") }
-                .disabled(exporting)
-            Button { showSimilar = true } label: { Label("Create a Similar Group", systemImage: "person.2") }
+            if canAdd {
+                Button { showAdd = true } label: { Label("Add Members", systemImage: "person.badge.plus") }
+            }
+            // Member Labels show on the rows of this list (`GroupMemberRow`).
+            Button { showAllMembers = true } label: { Label("Members", systemImage: "person.2") }
+            // Who joined, left, was removed or changed admin, newest first (owner 2026-10-18).
+            Button { showMemberChanges = true } label: {
+                Label("View Member Changes", systemImage: "clock.arrow.circlepath")
+            }
         }
-        Button { confirmClear = true } label: { Label("Clear Chat", systemImage: "trash") }
+    }
+
+    @ViewBuilder private var menuMediaItems: some View {
+        Section {
+            Button { showAllMedia = true } label: {
+                Label(galleryCount.map { "Media, Links and Files (\($0))" } ?? "Media, Links and Files",
+                      systemImage: "photo.on.rectangle")
+            }
+            // The chat's storage item by item (owner 2026-10-19), not one clear-all.
+            Button { showStorage = true } label: {
+                Label(storage.map { "Storage Used (\(Self.bytes($0.total)))" } ?? "Storage Used",
+                      systemImage: "internaldrive")
+            }
+            // This phone only (2026-10-18): follows Settings > Chats, or overrides it for this chat.
+            Menu {
+                Picker("Save to Photos", selection: Binding(get: { saveChoice }, set: { pickSaveChoice($0) })) {
+                    ForEach(AutoSaveToPhotos.ChatChoice.allCases, id: \.self) { c in Text(c.label).tag(c) }
+                }
+            } label: {
+                Label("Save to Photos: \(saveChoice.label)", systemImage: "square.and.arrow.down")
+            }
+            Button { showEncryption = true } label: {
+                Label { Text("Encryption") } icon: { MenuIcon("ic_privacy") }
+            }
+        }
+    }
+
+    @ViewBuilder private var menuChatItems: some View {
+        Section {
+            Button { exportChat() } label: { Label("Export Chat", systemImage: "square.and.arrow.up.on.square") }
+                .disabled(exporting)
+            Button { showSimilar = true } label: { Label("Create a Similar Group", systemImage: "person.3") }
+            Button { confirmClear = true } label: { Label("Clear Chat", systemImage: "eraser") }
+        }
+    }
+
+    @ViewBuilder private var menuExitItems: some View {
+        Section {
+            Button(role: .destructive) { confirmReport = true } label: {
+                Label { Text("Report Group") } icon: { MenuIcon("ic_report") }
+            }
+            Button(role: .destructive) { confirmLeave = true } label: {
+                Label("Leave Group", systemImage: "rectangle.portrait.and.arrow.right")
+            }
+            // Only the owner can permanently delete the whole group (for everyone).
+            if iAmOwner {
+                Button(role: .destructive) { confirmDelete = true } label: { Label("Delete Group", systemImage: "trash") }
+            }
+        }
     }
 
     private func startCall(video: Bool) {
@@ -454,91 +608,37 @@ struct GroupInfoView: View {
 
     private var desc: String { conv?.groupDescription ?? "" }
 
-    /// The description, as the Fariin official chat's About card (links and @usernames tappable).
-    /// Shown only when there IS one (owner 2026-10-18); tap to edit, for whoever may.
-    private var aboutCard: some View {
-        ProfileAboutContent(text: desc, linked: true)
-            .profileSurface(plain: cardColor)
-            .contentShape(Rectangle())
-            // 2026-10-18 (owner): no small pop-up for this any more; the description is edited on the
-            // Edit Group page with the bio's rules, so the card opens that page.
-            .onTapGesture { if canEditInfo { showEdit = true } }
-    }
-
+    /// The mockup's three rows. Each keeps its old gate: a member's tap on what only an admin may
+    /// change says so instead of doing nothing (owner 2026-10-19).
     private var settingsCard: some View {
         VStack(spacing: 0) {
-            // A group-wide setting: the change-info right edits it, everyone else reads it.
-            ProfileInfoRow(title: "Disappearing Messages", icon: "ic_disappearing", value: disappearLabel,
-                           chevron: can(.changeInfo)) {
-                // A tap that did nothing read as broken (owner 2026-10-19): say why instead.
+            ProfileInfoRow(title: "Disappearing Messages", icon: "ic_disappearing", value: disappearLabel) {
                 if can(.changeInfo) { showDisappear = true } else { flashNotice("Only admins can change this") }
             }
             rowDivider
             ProfileInfoRow(title: "Sounds & Notifications", icon: "ic_notifications",
-                           value: muted ? "Muted" : "On") { showSounds = true }
-            // This phone only (2026-10-18): follows Settings > Chats, or overrides it for this chat.
+                           value: muted ? "Off" : "On") { showSounds = true }
             rowDivider
-            saveToPhotosRow
-            rowDivider
-            encryptionRow
-            // Invite links are an admin right (fix-all #226), so only that admin sees the row.
-            if can(.inviteUsers) {
-                rowDivider
-                ProfileInfoRow(title: "Group invite link", icon: "link",
-                               value: (conv?.inviteCode ?? "").isEmpty ? "Off" : "On") { showInvite = true }
-            }
-            if iAmAdmin {
-                rowDivider
-                ProfileInfoRow(title: "Group Settings", icon: "gearshape") { showSettings = true }
-            }
+            ProfileInfoRow(title: "Group invite link", icon: "link",
+                           value: (conv?.inviteCode ?? "").isEmpty ? "Off" : "On") { inviteRowTapped() }
         }
-        .profileSurface(plain: cardColor)
+        .profileGlassSurface()
     }
 
-    /// Default / Always / Never as the system's own menu with its tick, on the row's look.
-    private var saveToPhotosRow: some View {
-        Menu {
-            Picker("Save to Photos", selection: Binding(get: { saveChoice }, set: { pickSaveChoice($0) })) {
-                ForEach(AutoSaveToPhotos.ChatChoice.allCases, id: \.self) { c in Text(c.label).tag(c) }
-            }
-        } label: {
-            HStack(spacing: 14) {
-                Image(systemName: "square.and.arrow.down").font(.system(size: 17)).frame(width: 26)
-                Text("Save to Photos")
-                Spacer()
-                Text(saveChoice.label).foregroundStyle(.secondary)
-                Image(systemName: "chevron.up.chevron.down").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
-            }
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 16).padding(.vertical, 18)
-            .contentShape(Rectangle())
-        }
-        .tint(.primary)
+    /// Invite links are an admin right (fix-all #226): that admin manages them; a member who may
+    /// share gets the link's own page; anyone else is told why.
+    private func inviteRowTapped() {
+        if can(.inviteUsers) { showInvite = true }
+        else if inviteLink != nil { showMemberLink = true }
+        else { flashNotice("Only admins can manage the invite link") }
     }
 
-    /// Encryption, with its one-line promise under the title (the row's two-line form).
-    private var encryptionRow: some View {
-        Button { showEncryption = true } label: {
-            HStack(spacing: 14) {
-                Image("ic_privacy").renderingMode(.template).resizable().scaledToFit()
-                    .frame(width: 21, height: 21)
-                    .frame(width: 26)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Encryption")
-                    Text("Messages are end-to-end encrypted. Tap to learn more.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
-            }
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 16).padding(.vertical, 14)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+    private var groupSettingsCard: some View {
+        ProfileInfoRow(title: "Group Settings", icon: "gearshape") { showSettings = true }
+            .profileGlassSurface()
     }
 
+    /// Separators start at the text: 16 inset + 26 icon slot + 14 gap.
     private var rowDivider: some View { Divider().padding(.leading, 56) }
 
     private var disappearLabel: String {
@@ -546,28 +646,43 @@ struct GroupInfoView: View {
         return s == 0 ? "Off" : ChatService.disappearShortLabel(s)
     }
 
-    // MARK: Media
+    // MARK: Members
 
-    /// The All Media strip when there is any, then Media, Links and Files (opens the gallery) and
-    /// this chat's storage on this phone.
-    private var mediaBlock: some View {
-        VStack(spacing: 12) {
-            if !media.isEmpty {
-                ProfileMediaCard(cid: cid, media: media, cardColor: cardColor,
-                                 onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
-                                 onSeeAll: { showAllMedia = true })
+    /// "All Members" and See All over a loose cloud of up to eleven faces, the biggest in the
+    /// middle. See All is the full, searchable list; a face is that member's card.
+    private var membersCard: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button { showAllMembers = true } label: {
+                HStack(spacing: 8) {
+                    Text("All Members").font(.headline).foregroundStyle(.primary)
+                    Spacer(minLength: 8)
+                    HStack(spacing: 3) {
+                        Text("See All").font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+                        Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+                    }
+                }
+                .padding(.horizontal, ProfileMediaCard.inset)
+                .padding(.top, ProfileMediaCard.inset)
+                .contentShape(Rectangle())
             }
-            VStack(spacing: 0) {
-                ProfileInfoRow(title: "Media, Links and Files", icon: "photo.on.rectangle",
-                               value: galleryCount.map { "\($0)" } ?? " ") { showAllMedia = true }
-                rowDivider
-                // The chat's storage item by item (owner 2026-10-19), not one clear-all.
-                ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
-                               value: storage.map { Self.bytes($0.total) } ?? " ") { showStorage = true }
+            .buttonStyle(.plain)
+            MemberBubbleCloud(conv: conv, ids: Array(GroupMembers.sorted(conv, me: me).prefix(MemberBubbleCloud.capacity))) { uid in
+                memberAction = MemberAction(id: uid, name: conv?.names[uid] ?? "User",
+                                            isAdmin: conv?.isAdmin(uid) ?? false)
             }
-            .profileSurface(plain: cardColor)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 10)
         }
+        .profileGlassSurface()
     }
+
+    private func memberSheet(_ m: MemberAction) -> some View {
+        GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: m.id,
+                              onInfo: { uid in profileOf = MemberAction(id: uid, name: conv?.names[uid] ?? "User", isAdmin: false) })
+            .presentationDetents([.medium, .large])
+    }
+
+    // MARK: Media figures
 
     static func bytes(_ n: Int) -> String {
         n == 0 ? "None" : ByteCountFormatter.string(fromByteCount: Int64(n), countStyle: .file)
@@ -617,171 +732,133 @@ struct GroupInfoView: View {
         }
     }
 
-    // MARK: Members
-
-    private var membersBlock: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(conv?.memberCountLabel.capitalized ?? "Members").font(.headline)
-                Spacer()
-                // owner 2026-10-18: the search opens the members sheet (its own list with its search
-                // bar, as the reference app does), not a field squeezed into this page.
-                Button {
-                    showAllMembers = true
-                } label: {
-                    Image(systemName: searchingMembers ? "xmark" : "magnifyingglass")
-                        .font(.system(size: 17, weight: .medium)).foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(searchingMembers ? "Close search" : "Search members")
-            }
-            .padding(.horizontal, 8)
-            if searchingMembers {
-                TextField("Search members", text: $memberQuery)
-                    .padding(.horizontal, 14).padding(.vertical, 10)
-                    .profileSurface(plain: cardColor, radius: 14)
-            }
-            membersCard
-        }
-    }
-
-    private var membersCard: some View {
-        VStack(spacing: 0) {
-            if canAdd && memberQuery.isEmpty {
-                Button { showAdd = true } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 18, weight: .medium)).foregroundStyle(.secondary)
-                            .frame(width: 40, height: 40)
-                            .background(Circle().fill(Color(.systemGray5)))
-                        Text("Add Members").foregroundStyle(.primary)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 16).padding(.vertical, 9)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            // ⛔ TEN ON THE PAGE (owner 2026-10-18): a big group listed every member here. The first
-            // ten, then See All opens the full, searchable members list in a sheet. A search shows
-            // every match, as before.
-            let all = shownMembers
-            let capped = memberQuery.isEmpty && all.count > Self.membersShown
-            ForEach(Array((capped ? Array(all.prefix(Self.membersShown)) : all).enumerated()), id: \.element) { i, uid in
-                if i > 0 || (canAdd && memberQuery.isEmpty) { rowDivider }
-                GroupMemberRow(conv: conv, uid: uid, me: me) {
-                    memberAction = MemberAction(id: uid, name: conv?.names[uid] ?? "User",
-                                                isAdmin: conv?.isAdmin(uid) ?? false)
-                }
-            }
-            if capped {
-                rowDivider
-                Button { showAllMembers = true } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 16, weight: .medium)).foregroundStyle(.secondary)
-                            .frame(width: 40, height: 40)
-                        Text("See All").foregroundStyle(.primary)
-                        Spacer()
-                        Text("\(all.count)").font(.subheadline).foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 16).padding(.vertical, 9)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            // owner 2026-10-18: who joined, left, was removed or changed admin, newest first.
-            if memberQuery.isEmpty {
-                rowDivider
-                Button { showMemberChanges = true } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .font(.system(size: 17, weight: .medium)).foregroundStyle(.secondary)
-                            .frame(width: 40, height: 40)
-                        Text("View Member Changes").foregroundStyle(.primary)
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
-                    }
-                    .padding(.horizontal, 16).padding(.vertical, 9)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .profileSurface(plain: cardColor)
-    }
-    private static let membersShown = 10
-
-    private var shownMembers: [String] {
-        let all = GroupMembers.sorted(conv, me: me)
-        let q = memberQuery.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return all }
-        return all.filter { (conv?.names[$0] ?? "").lowercased().contains(q) }
-    }
-
-    private func memberSheet(_ m: MemberAction) -> some View {
-        GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: m.id,
-                              onInfo: { uid in profileOf = MemberAction(id: uid, name: conv?.names[uid] ?? "User", isAdmin: false) })
-            .presentationDetents([.medium, .large])
-    }
-
-    // MARK: Exits
-
-    /// The profile's red card, for a group: Leave, Report, and Delete for the owner.
-    private var dangerCard: some View {
-        VStack(spacing: 0) {
-            ProfileInfoRow(title: "Leave Group", icon: "rectangle.portrait.and.arrow.right",
-                           tint: .red, chevron: false) { confirmLeave = true }
-            rowDivider
-            ProfileInfoRow(title: "Report Group", icon: "ic_report", tint: .red, chevron: false) { confirmReport = true }
-            // Only the owner can permanently delete the whole group (for everyone).
-            if iAmOwner {
-                rowDivider
-                ProfileInfoRow(title: "Delete Group", icon: "trash", tint: .red, chevron: false) { confirmDelete = true }
-            }
-        }
-        .profileSurface(plain: cardColor)
-    }
-
-    // "Created by you · 26 Jun 2026", like the reference group screens.
-    // 2026-10-18 (owner): taken off the bottom of the page; nil hides the line wherever it is used.
-    private var createdByLabel: String? {
-        return nil
-        guard let conv, conv.isGroup, !conv.createdBy.isEmpty else { return nil }
-        let who = conv.createdBy == me ? "you" : (conv.names[conv.createdBy] ?? "someone")
-        guard let d = conv.createdAt else { return "Created by \(who)" }
-        let f = DateFormatter(); f.dateStyle = .medium
-        return "Created by \(who) · \(f.string(from: d))"
-    }
-
     @ToolbarContentBuilder private var toolbarContent: some ToolbarContent {
+        // The bar sits above the viewer overlay and eats its touches, so the viewer's X is a bar
+        // item, wired through closeSignal (ContactInfoView's rule). Otherwise the system's own
+        // glass back button is the only thing up there (the mockup).
         if showGroupPhoto {
-            // The bar sits above the viewer overlay and eats its touches, so the viewer's X is a bar
-            // item, wired through closeSignal (ContactInfoView's rule).
             ToolbarItem(placement: .topBarLeading) {
                 Button { photoCloseTick &+= 1 } label: {
                     Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
                 }
                 .tint(.primary)
             }
+        }
+    }
+}
+
+/// The header photo's drawn rect, held outside SwiftUI's observation (see `artRect`).
+final class GroupArtRect { var rect: CGRect = .zero }
+
+// MARK: - Faces
+
+/// One member's face: their photo, or their initial on their own colour pair
+/// (`AvatarPalette.gradient(for:)`, the person profile's letter colours).
+struct GroupFace: View {
+    let name: String
+    let photo: String?
+    let size: CGFloat
+
+    var body: some View {
+        if ProfilePhotoIndex.hasPicture(photo) {
+            AvatarView(name: name, photoUrl: photo, size: size)
         } else {
-            // owner 2026-10-18: the QR of the invite link (only while there is one), then •••.
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                if inviteLink != nil {
-                    Button { showQR = true } label: {
-                        Image("ic_qr").renderingMode(.template).resizable().scaledToFit()
-                            .frame(width: 20, height: 20)
-                    }
-                    .tint(.primary)
-                    .accessibilityLabel("QR code")
+            Circle()
+                .fill(LinearGradient(colors: AvatarPalette.gradient(for: name),
+                                     startPoint: .top, endPoint: .bottom))
+                .frame(width: size, height: size)
+                .overlay {
+                    Text(initial).font(.system(size: size * 0.42, weight: .semibold)).foregroundStyle(.white)
                 }
-                Menu { moreMenuItems } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 17, weight: .semibold))
-                }
-                .tint(.primary)
-                .accessibilityLabel("More")
+        }
+    }
+
+    private var initial: String {
+        name.trimmingCharacters(in: .whitespaces).first.map { String($0).uppercased() } ?? "?"
+    }
+}
+
+/// A group with no photo (owner's mockup 2026-10-19): a ~200pt glass disc, a little lighter than
+/// the page, holding three members of different sizes that overlap: a large face top-left, a
+/// medium one bottom-right, a small one bottom-centre. Faces with photos take the big places.
+private struct GroupFaceCluster: View {
+    let conv: Conversation?
+    let me: String
+
+    static let side: CGFloat = 200
+    /// Offset from the disc's centre and diameter, largest first.
+    private static let slots: [(x: CGFloat, y: CGFloat, d: CGFloat)] = [
+        (-26, -26, 104), (40, 30, 72), (-6, 56, 50),
+    ]
+
+    private var picks: [String] {
+        let everyone = GroupMembers.sorted(conv, me: me)
+        let others = everyone.filter { $0 != me }
+        let pool = others.isEmpty ? everyone : others
+        let withPhoto = pool.filter { ProfilePhotoIndex.hasPicture(conv?.photos[$0]) }
+        let without = pool.filter { !ProfilePhotoIndex.hasPicture(conv?.photos[$0]) }
+        return Array((withPhoto + without).prefix(Self.slots.count))
+    }
+
+    var body: some View {
+        ZStack {
+            Circle().fill(Color.white.opacity(0.06))
+                .liquidGlass(Circle())
+            ForEach(Array(picks.enumerated()), id: \.element) { i, uid in
+                face(i, uid)
             }
         }
+        .frame(width: Self.side, height: Self.side)
+        .contentShape(Circle())
+    }
+
+    /// The smaller faces carry a thin ring of the page so an overlap reads as one face in front.
+    private func face(_ i: Int, _ uid: String) -> some View {
+        let s = Self.slots[i]
+        return GroupFace(name: conv?.names[uid] ?? "User", photo: conv?.photos[uid], size: s.d)
+            .overlay { Circle().stroke(Color(uiColor: .systemGroupedBackground), lineWidth: i == 0 ? 0 : 3) }
+            .offset(x: s.x, y: s.y)
+    }
+}
+
+/// All Members as a loose cloud (owner's mockup 2026-10-19): two rows of faces of different sizes,
+/// the biggest in the middle, smaller ones toward the edges. Fixed spots as shares of the card's
+/// width, so it reads organic on every phone and never overlaps.
+private struct MemberBubbleCloud: View {
+    let conv: Conversation?
+    let ids: [String]
+    let onTap: (String) -> Void
+
+    static let height: CGFloat = 160
+    /// x as a share of the width, y as a share of the height, diameter; the first member (me, then
+    /// the admins) takes the middle.
+    private static let slots: [(x: CGFloat, y: CGFloat, d: CGFloat)] = [
+        (0.50, 0.50, 70), (0.30, 0.33, 54), (0.70, 0.35, 56), (0.32, 0.75, 46),
+        (0.68, 0.74, 48), (0.12, 0.30, 40), (0.88, 0.30, 42), (0.14, 0.72, 36),
+        (0.86, 0.72, 38), (0.50, 0.09, 28), (0.50, 0.91, 28),
+    ]
+    static var capacity: Int { slots.count }
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(ids.prefix(Self.slots.count).enumerated()), id: \.element) { i, uid in
+                    bubble(i, uid, width: geo.size.width)
+                }
+            }
+            .frame(width: geo.size.width, height: Self.height)
+        }
+        .frame(height: Self.height)
+    }
+
+    private func bubble(_ i: Int, _ uid: String, width: CGFloat) -> some View {
+        let s = Self.slots[i]
+        return GroupFace(name: conv?.names[uid] ?? "User", photo: conv?.photos[uid], size: s.d)
+            .contentShape(Circle())
+            .onTapGesture { onTap(uid) }
+            .position(x: s.x * width, y: s.y * Self.height)
+            .accessibilityLabel(conv?.names[uid] ?? "Member")
+            .accessibilityAddTraits(.isButton)
     }
 }
 

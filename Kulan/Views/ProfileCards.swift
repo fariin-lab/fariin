@@ -126,6 +126,9 @@ struct ProfileMediaCard: View {
     var cardColor: Color = Color(uiColor: .secondarySystemGroupedBackground)
     /// Where the open/close flight registers its tiles (`MediaOpenRects`).
     var scope: MediaOpenRects.Scope = .profile
+    /// The see-through glass card (the group page, owner's mockup 2026-10-19) instead of the
+    /// profile's flat one. Off everywhere else, so a person's profile draws exactly what it did.
+    var glass: Bool = false
     let onOpen: (Message) -> Void
     let onSeeAll: () -> Void
 
@@ -183,8 +186,38 @@ struct ProfileMediaCard: View {
             .padding(.bottom, Self.inset)
         }
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .profileSurface(plain: cardColor)
+        .modifier(ProfileCardSurface(glass: glass, plain: cardColor))
         .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .onTapGesture { onSeeAll() }
+    }
+}
+
+/// The flat profile card, or the glass one, decided once by the caller (never mid-visit, so the
+/// card is never rebuilt).
+private struct ProfileCardSurface: ViewModifier {
+    let glass: Bool
+    let plain: Color
+    @ViewBuilder func body(content: Content) -> some View {
+        if glass { content.profileGlassSurface() } else { content.profileSurface(plain: plain) }
+    }
+}
+
+/// A SEE-THROUGH LIQUID GLASS CARD, for the group info page only (owner's mockup 2026-10-19:
+/// glass cards on the tinted page). A person's profile keeps its flat cards (`profileSurface`, the
+/// owner's 2026-08-19 rule for that page). On iOS 26 glass has nothing to refract on a flat page,
+/// so it carries the page palette's card colour as its tint, the round actions' own rule
+/// (`PosterGlassSchemeFix`); with no palette it is plain glass.
+struct ProfileGlassSurface: ViewModifier {
+    let radius: CGFloat
+    @Environment(\.profilePalette) private var palette
+    func body(content: Content) -> some View {
+        content.liquidGlass(RoundedRectangle(cornerRadius: radius, style: .continuous),
+                            tint: palette.map { Color(uiColor: $0.card).opacity(0.55) })
+    }
+}
+
+extension View {
+    func profileGlassSurface(radius: CGFloat = 24) -> some View {
+        modifier(ProfileGlassSurface(radius: radius))
     }
 }
