@@ -4382,7 +4382,10 @@ struct ThreadView: View {
             // Not while a quote jump is hunting for its original: that pages older history too, but
             // the person is looking at a bubble in the middle of the chat, not at the top of it. See
             // `ThreadRepository.jumpPagingInFlight`.
-            loadingOlder: repo.loadingOlder && !repo.jumpPagingInFlight,
+            // Nor while I sit at the newest messages (owner 2026-10-19: "every time I open a group
+            // chat I see that loading"): a short first page pages older history on its own, and
+            // that quiet fetch is not something to show. The spinner is for someone reading up.
+            loadingOlder: repo.loadingOlder && !repo.jumpPagingInFlight && !isAtBottom,
             composerBarHeight: composerBarHeight,   // extra bottom clearance so the newest msg clears the bar
             // The recording's floating pause / continue — drawn and hit-tested by the LIST, which
             // owns the screen above the bar (see `MessageListController.setVoiceControl`).
