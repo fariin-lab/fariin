@@ -10,8 +10,9 @@ import Foundation
 enum CallFeatures {
     /// Group calls: the call buttons on a group, its "Join call" bar, "Add people" in a call, and
     /// the full-screen invitation when someone adds me.
-    /// Unfinished: the admin panel can only switch it OFF (RemoteFeatures).
-    static var groupCalls: Bool { RemoteFeatures.offOnly("groupCalls", default: false) }
+    /// ON for testing (owner 2026-10-19: "just turn it on, we can test it"). The admin panel can
+    /// still switch it OFF live (RemoteFeatures.offOnly), no app release needed.
+    static var groupCalls: Bool { RemoteFeatures.offOnly("groupCalls", default: true) }
     /// Call links: the "Create a Call Link" row and saved links on the Calls tab, and opening a
     /// link's pre-join screen from a chat, a web link or the list. Unfinished: OFF-only remotely.
     static var callLinks: Bool { RemoteFeatures.offOnly("callLinks", default: false) }
