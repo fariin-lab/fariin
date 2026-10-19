@@ -69,6 +69,19 @@ struct ChatSearchOverlay: View {
     }
 
     var body: some View {
+        // ⛔ THE COVER COMES AT ONCE, THE RESULTS AFTER (owner 2026-10-19, third report of "the list
+        // jumps up when I tap search", screenshot: rows sliding under the rising field). The
+        // reference app's `SearchDisplayController.activate` fades an opaque page in the chat list's
+        // colour over the list straight away (alpha 0 -> 1, 0.2s linear) and the results over 0.3s;
+        // `deactivate` fades that page out over 0.3s. The list underneath is never seen moving. Ours
+        // waited 0.28s before covering anything, so the list was on show for the whole rise.
+        if isSearching {
+            Color(uiColor: .systemBackground).ignoresSafeArea()
+                .allowsHitTesting(false)
+                .transition(.asymmetric(
+                    insertion: .opacity.animation(.linear(duration: 0.2)),
+                    removal: .opacity.animation(.easeOut(duration: 0.3))))
+        }
         if isSearching {
             ChatSearchPage(query: query, me: me, dark: dark, searching: searching,
                            chats: chats, people: people, personRow: personRow,
