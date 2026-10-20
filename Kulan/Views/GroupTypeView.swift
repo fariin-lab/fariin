@@ -82,6 +82,7 @@ struct GroupTypeView: View {
 
     @State private var shareCode: String?
     @State private var protectOn: Bool?
+    @State private var showSend = false
     @State private var copied = false
 
     private var inviteURL: String? {
@@ -111,15 +112,15 @@ struct GroupTypeView: View {
                     .background(Capsule().fill(Color(uiColor: .tertiarySystemFill)))
                 }
                 .buttonStyle(.plain)
-                if let u = URL(string: url) {
-                    ShareLink(item: u) {
-                        Text("Share Link").fontWeight(.semibold).foregroundStyle(.white)
-                            .frame(maxWidth: .infinity).frame(height: 48)
-                            // The app's tint is `.primary` (white in dark mode, so the button was blank).
-                            .background(Capsule().fill(Color(hex: 0x2392FE)))
-                    }
-                    .buttonStyle(.plain)
+                // The app's own Share With sheet, as the links page sends (owner 2026-10-20).
+                Button { showSend = true } label: {
+                    Text("Share Link").fontWeight(.semibold).foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).frame(height: 48)
+                        // The app's tint is `.primary` (white in dark mode, so the button was blank).
+                        .background(Capsule().fill(Color(hex: 0x2392FE)))
                 }
+                .buttonStyle(.plain)
+                .sheet(isPresented: $showSend) { ForwardPicker(shareText: url) }
             } else {
                 Text("This group has no invite link on.").foregroundStyle(.secondary)
             }
