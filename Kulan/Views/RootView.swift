@@ -256,6 +256,10 @@ struct RootView: View {
         // story once we reach the main app, so the Story feature (and the viewers swipe) is testable
         // in the browser. Stripped from TestFlight/App Store (Release), so real users never see it.
         .onChange(of: phase) { _, new in
+            // The keyboard leaves with the page that raised it (owner 2026-10-19: after logging in
+            // it stayed up over the chat list, then left an empty band there).
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                            to: nil, from: nil, for: nil)
             #if DEBUG
             if new == .main && !DemoMode.active { Task { await seedPreviewStoryIfNeeded() } }
             #endif
