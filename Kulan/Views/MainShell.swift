@@ -652,6 +652,7 @@ struct CallsView: View {
                last.otherUid == e.otherUid, last.mine == e.mine,
                last.missed == e.missed, last.video == e.video,
                last.adhoc?.roomId == e.adhoc?.roomId,   // never merge two different rooms
+               last.groupCid == e.groupCid,             // nor two different groups (audit 2026-10-20)
                Calendar.current.isDate(last.date, inSameDayAs: e.date) {
                 runs[runs.count - 1].entries.append(e)
             } else {

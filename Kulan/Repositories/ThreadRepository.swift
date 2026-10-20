@@ -121,7 +121,28 @@ final class ThreadRepository {
     private var keyPreloadTask: Task<Void, Never>?
     let cid: String
     /// Where each group's chat starts for me (Conversation.historyStart), kept by the chat screen.
-    nonisolated(unsafe) static var historyStart: [String: Date] = [:]
+    /// Read and written through `cutLock` (a chat can be rebuilt off the main thread).
+    nonisolated(unsafe) private static var historyStartStore: [String: Date] = [:]
+    /// When I came into each group (Conversation.memberSince), for messages sealed before that.
+    nonisolated(unsafe) private static var joinedAtStore: [String: Date] = [:]
+    private static let cutLock = NSLock()
+    static func setCuts(cid: String, historyStart: Date?, joinedAt: Date?) -> Bool {
+        cutLock.lock(); defer { cutLock.unlock() }
+        let changed = historyStartStore[cid] != historyStart || joinedAtStore[cid] != joinedAt
+        historyStartStore[cid] = historyStart
+        joinedAtStore[cid] = joinedAt
+        return changed
+    }
+    private static func cuts(_ cid: String) -> (start: Date?, joined: Date?) {
+        cutLock.lock(); defer { cutLock.unlock() }
+        return (historyStartStore[cid], joinedAtStore[cid])
+    }
+    /// Sign-out: the next account must not inherit these.
+    static func clearCuts() {
+        cutLock.lock(); historyStartStore = [:]; joinedAtStore = [:]; cutLock.unlock()
+    }
+    /// The cut-off changed while the chat is open: draw the list again with it.
+    func reapplyCuts() { refreshItems() }
 
     /// 60, which is the reference messenger's own page size for exactly this job. 40 was a smaller
     /// bite than anybody else takes: on a fast flick the reader clears a page before the next one
@@ -482,10 +503,16 @@ final class ThreadRepository {
         // it was sent even when later texts confirm first (order never shuffles on upload finish).
         var merged = sortedOneTimeline(visible + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) }
                                        + blockNotices(after: visible.first?.createdAt))
-        merged.removeAll { HiddenMessages.isHidden($0.id) || $0.notForMe }   // deleted "for me", or sealed before I joined
+        // Deleted "for me"; or sealed without me and sent BEFORE I came in (audit 2026-10-20: one
+        // sealed by a phone that had not seen me join yet is shown as the lock, not dropped).
+        let cuts = Self.cuts(cid)
+        merged.removeAll { m in
+            HiddenMessages.isHidden(m.id)
+                || (m.notForMe && (cuts.joined.map { m.createdAt < $0.addingTimeInterval(5) } ?? true))
+        }
         // Chat history hidden from new members, and I came in after that: the chat starts at my
         // join (2 s early, so the "joined" line written with it stays).
-        if let start = Self.historyStart[cid] {
+        if let start = cuts.start {
             let cut = start.addingTimeInterval(-2)
             merged.removeAll { $0.createdAt < cut }
         }

@@ -566,6 +566,15 @@ struct ThreadView: View {
             // reference app): the messages are hidden, the reason sits in a pill in the middle, and
             // there is no message bar. A group its owner ENDED keeps its messages (groupModHidesChat).
             .opacity(groupModHidesChat ? 0 : 1)
+            // A timed suspension ends by the clock: the chat comes back then (audit 2026-10-20).
+            .task(id: conversation?.groupMod.untilMillis ?? 0) {
+                let until = conversation?.groupMod.untilMillis ?? 0
+                let wait = until / 1000 - Date().timeIntervalSince1970
+                guard until > 0, wait > 0 else { return }
+                try? await Task.sleep(nanoseconds: UInt64((wait + 0.5) * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                muteLiftTick += 1
+            }
             .allowsHitTesting(!groupModHidesChat)
             .overlay {
                 if groupModHidesChat {
@@ -582,6 +591,7 @@ struct ThreadView: View {
 
     /// Suspended or disabled by Fariin (not ended by its owner): the chat is closed to view.
     private var groupModHidesChat: Bool {
+        _ = muteLiftTick   // re-read when a timed hold runs out
         guard let conv = conversation, conv.isGroup, conv.groupMod.state != "ended" else { return false }
         return conv.groupMod.blocksSending()
     }
@@ -2158,7 +2168,7 @@ struct ThreadView: View {
                              photoHint: conversation?.photos[m.id])
         }
         .fullScreenCover(isPresented: $showGroupCall) { GroupCallView() }
-        .task(id: groupCallActive) { await followGroupCallPeople() }
+        .task(id: groupCallActive && !notAMember && !preview) { await followGroupCallPeople() }
         .modifier(MessageActionDialogs(cid: cid, title: title, me: me,
                                        pendingDelete: $pendingDelete,
                                        onDeleteForMe: { m in deleteForMe(m) },
@@ -2466,8 +2476,10 @@ struct ThreadView: View {
     /// Chat history hidden from new members: where this chat starts for me, for the repository.
     private func noteHistoryStart() {
         let start = cachedConv?.historyStart(for: me)
-        guard ThreadRepository.historyStart[cid] != start else { return }
-        ThreadRepository.historyStart[cid] = start
+        let joined = cachedConv?.memberSince[me].map { Date(timeIntervalSince1970: $0 / 1000) }
+        // Changed while open (the server stamps my join a moment after I come in, or an admin
+        // switches it): the list is drawn again with it now, not at the next message (audit).
+        if ThreadRepository.setCuts(cid: cid, historyStart: start, joinedAt: joined) { repo.reapplyCuts() }
     }
 
     private func conversationsChanged(_ list: [Conversation]) {
@@ -5309,7 +5321,12 @@ struct ThreadView: View {
     private func followGroupCallPeople() async {
         guard groupCallActive, isGroup else { groupCallPeople = []; groupCallMicOn = []; return }
         let fn = Functions.functions(region: "me-central1").httpsCallable("groupCallPeek")
-        while !Task.isCancelled, groupCallActive {
+        while !Task.isCancelled, groupCallActive, !notAMember {
+            // In the call myself: the bar is not shown, so nobody is asked (audit 2026-10-20).
+            if GroupCallService.shared.isActive {
+                try? await Task.sleep(nanoseconds: 12_000_000_000)
+                continue
+            }
             if let r = try? await fn.call(["cid": cid]), let d = r.data as? [String: Any],
                let list = d["people"] as? [[String: Any]] {
                 let uids = list.compactMap { $0["uid"] as? String }

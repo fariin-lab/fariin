@@ -209,8 +209,16 @@ enum ProfilePhotoIndex {
         // The banners' copy of the chats' photos follows (owner 2026-10-20: a message banner showed
         // the app icon). It was written only when the chat list changed, which at launch is before
         // the profiles have loaded, so a 1:1 chat's photo was missing there until the list moved.
-        DispatchQueue.main.async { NotifShare.noteConversations(ConversationsRepository.shared.conversations) }
+        // One pass half a second after the last change, not one per profile (audit 2026-10-20:
+        // launch records hundreds).
+        guard !notifRefreshPending else { return }
+        notifRefreshPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            lock.lock(); notifRefreshPending = false; lock.unlock()
+            NotifShare.noteConversations(ConversationsRepository.shared.conversations)
+        }
     }
+    private static var notifRefreshPending = false
 
     /// Forget everything. Sign-out only: the next account must not inherit the last one's answers.
     static func reset() {
