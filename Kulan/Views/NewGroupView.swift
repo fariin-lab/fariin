@@ -1,4 +1,5 @@
 import SwiftUI
+import FirebaseFunctions
 
 // New Group, two pages (owner 2026-10-18, "start here first" of the group redesign):
 //   1. Select Members: your chats A to Z in grouped cards, round ticks, the search at the bottom,
@@ -422,6 +423,18 @@ struct NewGroupView: View {
             "membersCanShareLink": membersCanShare,
         ]
         Task {
+            // ⛔ AT MOST N GROUPS OWNED (owner 2026-10-20: 10, set from the admin panel). Asked of the
+            // server, which counts them; a check that cannot be answered lets the create go, and the
+            // server's own check on the new group still holds the line.
+            if let r = try? await Functions.functions(region: "me-central1").httpsCallable("groupCreateCheck").call(),
+               let d = r.data as? [String: Any], d["ok"] as? Bool == false {
+                let max = (d["max"] as? Int) ?? AppLimits.shared.groupsOwnedMax
+                await MainActor.run {
+                    self.error = "You can own up to \(max) groups. Delete one, or make someone else its owner, to create a new one."
+                    creating = false
+                }
+                return
+            }
             do {
                 // The chat opens now; the photo goes up behind it, not before it (owner 2026-10-18).
                 let cid = try await ChatService.createGroup(title: name, memberIds: order, disappearSeconds: timer,
