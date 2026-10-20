@@ -1279,11 +1279,11 @@ struct EditGroupView: View {
                             .overlay(alignment: .topTrailing) {
                                 if hasPhoto {
                                     Button { nameFocused = false; confirmRemovePhoto = true } label: {
+                                        // Liquid Glass, like Set New Photo under it (owner 2026-10-20).
                                         Image(systemName: "xmark")
-                                            .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
-                                            .frame(width: 28, height: 28)
-                                            .background(Circle().fill(Color(white: 0.3)))
-                                            .overlay(Circle().stroke(Color(uiColor: .systemGroupedBackground), lineWidth: 2))
+                                            .font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
+                                            .frame(width: 30, height: 30)
+                                            .liquidGlass(Circle(), interactive: true)
                                             .frame(width: 44, height: 44).contentShape(Circle())
                                     }
                                     .buttonStyle(.plain)
