@@ -95,7 +95,12 @@ struct ThreadView: View {
     @State private var groupCallListener: ListenerRegistration?
     @State private var tappedMember: GroupInfoView.MemberAction?
     /// The poll whose results page is open (2026-10-19: the footer of a poll bubble).
-    @State private var pollResultsFor: Message?
+    /// ⛔ ITS ID ONLY, NEVER A `Message` (build 990 crash, 2026-10-20): a `@State` holds its value
+    /// inside this view, and a Message is huge. SwiftUI copies ThreadView many times on the main
+    /// thread's stack while it builds the chat, and the extra size overflowed the stack the moment
+    /// a chat opened (EXC_BAD_ACCESS, stack guard). Keep every @State here small.
+    @State private var pollResultsFor: MessageRef?
+    struct MessageRef: Identifiable { let id: String }
     @State private var replyingTo: Message?
     @State private var photoItem: PhotosPickerItem?
     @State private var photoItems: [PhotosPickerItem] = []
@@ -293,7 +298,7 @@ struct ThreadView: View {
     /// the mic fades into the send button's slot, so a double-tap on Send would otherwise start a
     /// recording. Theirs keeps the same window under its own named constant.
     @State private var lastSendAt = Date.distantPast
-    @State private var infoTarget: Message?        // group message → "read by" info sheet
+    @State private var infoTarget: MessageRef?     // group message → "read by" info sheet (id only, see pollResultsFor)
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     // Keyboard is native (safeAreaBar + .always). But because the list is full-bleed UNDER the composer, the
     // composer's own inset isn't folded — so we measure the bar height and feed it as extra bottom clearance
@@ -457,7 +462,7 @@ struct ThreadView: View {
     // owner audit 2026-10-06 chat #13: arrivals at the bottom while covered still owe a receipt.
     @State private var coveredReadPending = false
     @State private var morePickerTarget: Message? // any-emoji picker
-    @State private var reactorsTarget: Message?   // "who reacted" sheet
+    @State private var reactorsTarget: MessageRef?   // "who reacted" sheet (id only)
     @State private var pendingDelete: Message?
     /// owner 2026-10-18: an admin deleting other members' messages in a group (AdminDeleteSheet).
     @State private var adminDeleteRequest: AdminDeleteRequest?
@@ -468,7 +473,7 @@ struct ThreadView: View {
     @State private var editingMessage: Message?   // INLINE edit — no modal/sheet
     // 2026-09-24 feature-audit: the message whose earlier versions are on screen, and the edits
     // still waiting for the server (their footer shows the sending clock until it answers).
-    @State private var editHistoryTarget: Message?
+    @State private var editHistoryTarget: MessageRef?   // id only
     @State private var editPendingIds: Set<String> = []
     @State private var forwardTarget: Message?    // forward-to-chat picker
     /// A plain flag now that the field is a `UITextView`: in, it asks the field to take or give up
@@ -1807,7 +1812,8 @@ struct ThreadView: View {
         .sheet(item: $morePickerTarget, onDismiss: { CMOverlay.current?.dismiss(animated: true) }) { m in
             EmojiMorePicker { emoji in react(m, emoji) }
         }
-        .sheet(item: $reactorsTarget) { m in
+        .sheet(item: $reactorsTarget) { ref in
+          if let m = repo.items.first(where: { $0.id == ref.id }) {
             // 2026-09-24 feature-audit: the live row, so a reaction added or taken back while the
             // sheet is open shows (the Edit History sheet below reads it the same way).
             // ⛔ MY OWN ROW SAYS MY NAME — owner, 2026-09-28: "when I react it says You; make it my
@@ -1829,10 +1835,13 @@ struct ThreadView: View {
                               guard live.reactions[me] != nil, !live.deleted else { return }   // taking one back is always allowed
                               sendReaction(messageId: live.id, emoji: nil, toAuthor: live.authorId)
                           })
+          }
         }
         // 2026-09-24 feature-audit: a message's earlier versions, in the Reactions sheet's style.
-        .sheet(item: $editHistoryTarget) { m in
-            EditHistorySheet(cid: cid, message: repo.items.first { $0.id == m.id } ?? m)
+        .sheet(item: $editHistoryTarget) { ref in
+            if let m = repo.items.first(where: { $0.id == ref.id }) {
+                EditHistorySheet(cid: cid, message: m)
+            }
         }
         .sheet(item: $forwardTarget) { m in
             ForwardPicker(message: m, sourceCid: cid,
@@ -1842,10 +1851,12 @@ struct ThreadView: View {
         .sheet(isPresented: $showGroupAdd) {
             AddMembersSheet(cid: cid, existing: Set(groupMembers))
         }
-        .sheet(item: $infoTarget) { m in
-            MessageInfoView(message: m, members: groupMembers.filter { $0 != me },
-                            lastRead: repo.memberLastRead,
-                            nameFor: { personName($0) }, photoFor: { conversation?.photos[$0] })
+        .sheet(item: $infoTarget) { ref in
+            if let m = repo.items.first(where: { $0.id == ref.id }) {
+                MessageInfoView(message: m, members: groupMembers.filter { $0 != me },
+                                lastRead: repo.memberLastRead,
+                                nameFor: { personName($0) }, photoFor: { conversation?.photos[$0] })
+            }
         }
         .sheet(isPresented: Binding(get: { bulkForward != nil }, set: { if !$0 { bulkForward = nil } })) {
             if let msgs = bulkForward {
@@ -2070,8 +2081,8 @@ struct ThreadView: View {
             // jumps. #10: superseded by a newer jump or the down arrow.
             goToMessageJump(p.messageId)
         }
-        .sheet(item: $pollResultsFor) { m in
-            if let poll = m.poll {
+        .sheet(item: $pollResultsFor) { t in
+            if let m = repo.items.first(where: { $0.id == t.id }), let poll = m.poll {
                 PollResultsSheet(poll: poll, cid: cid, messageId: m.id, closed: m.pollClosed,
                                  isCreator: m.authorId == me,
                                  names: conversation?.names ?? [:], meName: "You")
@@ -3099,7 +3110,7 @@ struct ThreadView: View {
                     menuActionTick += 1
                     setUIMode(.selection); selectedIds = [m.id]   // their order: mode first, then add the item
                 },
-                onInfo: { infoTarget = $0 },
+                onInfo: { infoTarget = MessageRef(id: $0.id) },
                 onEdit: { m in
                     withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
                     input = m.text
@@ -3110,7 +3121,7 @@ struct ThreadView: View {
                 onConfirmLink: { WebLink.open($0) },   // owner 2026-10-13: no "Open link?", straight in
                 onUserNotFound: { tappedUserNotFound = true },
                 isGroup: isGroup,
-                onTapReactions: { reactorsTarget = msg },
+                onTapReactions: { reactorsTarget = MessageRef(id: msg.id) },
                 onTapSender: { uid in
                     tappedMember = GroupInfoView.MemberAction(
                         id: uid, name: personName(uid), isAdmin: conversation?.isAdmin(uid) ?? false)
@@ -3610,7 +3621,7 @@ struct ThreadView: View {
         }
         if m.edited && !m.deleted {   // 2026-09-24 feature-audit: earlier versions
             items.append(UIAction(title: "Edit History", image: UIImage(systemName: "clock.arrow.circlepath")) { _ in
-                editHistoryTarget = m
+                editHistoryTarget = MessageRef(id: m.id)
             })
         }
         let isPinned = repo.pinnedMessageIds.contains(m.id)
@@ -3789,7 +3800,7 @@ struct ThreadView: View {
             })
         }
         if m.edited && !m.deleted {   // 2026-09-24 feature-audit: earlier versions, either side
-            out.append(CMAction(title: "Edit History", icon: "clock.arrow.circlepath") { editHistoryTarget = m })
+            out.append(CMAction(title: "Edit History", icon: "clock.arrow.circlepath") { editHistoryTarget = MessageRef(id: m.id) })
         }
         if m.isImage && !m.viewOnce && savingAllowed {
             out.append(CMAction(title: "Save Image", icon: "square.and.arrow.down") {
@@ -3811,7 +3822,7 @@ struct ThreadView: View {
             setUIMode(.selection); selectedIds = [m.id]   // their order: mode first, then add the item
         })
         if isGroup && mine && m.sendState == nil {
-            out.append(CMAction(title: "Info", icon: "info.circle") { infoTarget = m })
+            out.append(CMAction(title: "Info", icon: "info.circle") { infoTarget = MessageRef(id: m.id) })
         }
         if canPin && delivered {   // see `delivered` above — a pin on a clientId can never resolve
             out.append(CMAction(title: isPinned ? "Unpin" : "Pin", icon: isPinned ? "pin.slash" : "ic_pin_menu") {
@@ -4194,7 +4205,7 @@ struct ThreadView: View {
             },
             onTapPollResults: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }), m.poll != nil else { return }
-                pollResultsFor = m
+                pollResultsFor = MessageRef(id: m.id)
             },
             onTapContactCard: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }), let card = m.contactCard else { return }
@@ -4211,7 +4222,7 @@ struct ThreadView: View {
                 Task { await ChatService.openConversation(uid: other) }   // 2026-09-24 audit: create it properly
             },
             onTapReactions: { id in
-                if let m = repo.items.first(where: { $0.rowId == id }) { reactorsTarget = m }
+                if let m = repo.items.first(where: { $0.rowId == id }) { reactorsTarget = MessageRef(id: m.id) }
             },
             onTapRetry: { id in
                 // 2026-09-24 decision D14: the tap asks Resend / Delete; the automatic retries still
