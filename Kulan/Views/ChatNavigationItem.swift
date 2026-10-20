@@ -199,8 +199,8 @@ struct ChatNavigationItem: UIViewRepresentable {
             }
         }
 
-        private func tapAudio()  { if case let .conversation(a, _, _) = bar { a?() } }
-        private func tapVideo()  { if case let .conversation(_, v, _) = bar { v?() } }
+        private func tapAudio()  { if case let .conversation(a, _, _, _) = bar { a?() } }
+        private func tapVideo()  { if case let .conversation(_, v, _, _) = bar { v?() } }
         private func tapCancel() { if case let .selection(_, _, c) = bar { c() } }
         private func tapDeleteAll() { if case let .selection(d, _, _) = bar { d() } }
         private func tapCustom(_ id: String) {
