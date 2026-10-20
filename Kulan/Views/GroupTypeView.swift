@@ -47,7 +47,9 @@ struct GroupTypeView: View {
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 if saving { ProgressView() } else {
+                    // Blue, as the tag page's Done (owner 2026-10-20).
                     Button("Save") { save(name) }.disabled(!canSave)
+                        .buttonStyle(.glassProminent).tint(Color(hex: 0x2392FE))
                 }
             }
         }
