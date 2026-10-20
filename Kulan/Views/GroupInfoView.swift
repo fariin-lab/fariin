@@ -347,7 +347,7 @@ struct GroupInfoView: View {
     // MARK: Header
 
     /// ⛔ NO BIG PHOTO HEADER FOR A GROUP (owner 2026-10-19, on device): a group with a photo shows
-    /// it as a round picture; without one, a glass disc of three members' faces. Either way the
+    /// it as a round picture; without one, the group's own round avatar. Either way the
     /// name, the count and the description, then the actions.
     private var header: some View {
         VStack(spacing: 16) {
@@ -360,12 +360,13 @@ struct GroupInfoView: View {
                     .accessibilityLabel("Group photo")
                     .accessibilityAddTraits(.isButton)
             } else {
-                GroupFaceCluster(faces: GroupFaceCluster.picks(conv, everyone: memberIds, me: me))
-                    .equatable()
+                // The group's own round avatar, as everywhere else. No faces bubble (owner
+                // 2026-10-19: "we don't need it any more").
+                AvatarView(name: title, photoUrl: nil, size: Self.photoSide)
                     // No photo yet: whoever may change it goes straight to Edit Group.
                     .onTapGesture { if canEditInfo { showEdit = true } }
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(canEditInfo ? "Add Group Photo" : "Group members")
+                    .accessibilityLabel(canEditInfo ? "Add Group Photo" : "Group photo")
                     .accessibilityAddTraits(canEditInfo ? .isButton : [])
             }
             headerCaption(.primary)
@@ -920,54 +921,6 @@ struct GroupFace: View {
 
     private var initial: String {
         name.trimmingCharacters(in: .whitespaces).first.map { String($0).uppercased() } ?? "?"
-    }
-}
-
-/// A group with no photo (owner's mockup 2026-10-19): a ~200pt glass disc, a little lighter than
-/// the page, holding three members of different sizes that overlap: a large face top-left, a
-/// medium one bottom-right, a small one bottom-centre. Faces with photos take the big places.
-private struct GroupFaceCluster: View, Equatable {
-    /// The three faces, picked by `picks` from the page's cached member order (plain values, so
-    /// the disc is not redrawn while its faces stay the same).
-    let faces: [MemberFace]
-
-    /// Members with a photo take the big places; me only when I am alone.
-    static func picks(_ conv: Conversation?, everyone: [String], me: String) -> [MemberFace] {
-        let others = everyone.filter { $0 != me }
-        let pool = others.isEmpty ? everyone : others
-        let withPhoto = pool.filter { ProfilePhotoIndex.hasPicture(conv?.photos[$0]) }
-        let without = pool.filter { !ProfilePhotoIndex.hasPicture(conv?.photos[$0]) }
-        return MemberFace.list(conv, Array((withPhoto + without).prefix(slots.count)))
-    }
-
-    /// The round group photo's size (`GroupInfoView.photoSide`), so a group with no photo and one
-    /// with a photo show the same circle (owner 2026-10-19; it was 200).
-    static let side: CGFloat = 132
-    /// Offset from the disc's centre and diameter, largest first: the 200pt layout, scaled.
-    private static let slots: [(x: CGFloat, y: CGFloat, d: CGFloat)] = {
-        let k: CGFloat = side / 200
-        let base: [(CGFloat, CGFloat, CGFloat)] = [(-26, -26, 104), (40, 30, 72), (-6, 56, 50)]
-        return base.map { (x: $0.0 * k, y: $0.1 * k, d: $0.2 * k) }
-    }()
-
-    var body: some View {
-        ZStack {
-            Circle().fill(Color.white.opacity(0.06))
-                .liquidGlass(Circle())
-            ForEach(Array(faces.prefix(Self.slots.count).enumerated()), id: \.element.uid) { i, f in
-                face(i, f)
-            }
-        }
-        .frame(width: Self.side, height: Self.side)
-        .contentShape(Circle())
-    }
-
-    /// The smaller faces carry a thin ring of the page so an overlap reads as one face in front.
-    private func face(_ i: Int, _ f: MemberFace) -> some View {
-        let s = Self.slots[i]
-        return GroupFace(name: f.name, photo: f.photo, size: s.d)
-            .overlay { Circle().stroke(Color(uiColor: .systemGroupedBackground), lineWidth: i == 0 ? 0 : 3) }
-            .offset(x: s.x, y: s.y)
     }
 }
 
