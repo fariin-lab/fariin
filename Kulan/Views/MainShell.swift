@@ -2719,8 +2719,11 @@ struct ChatsView: View {
                         // its own so this chain stays inside the type-checker's budget.
                         .overlay(alignment: .topTrailing) { firstChatCueLayer }
                         .overlay(alignment: .bottom) { getStartedLayer }
-                        .onChange(of: hasRealChat, initial: true) { _, has in
-                            if has { getStarted.finish(me) }
+                        // owner 2026-10-19: the cards no longer end at the first chat; an X takes a
+                        // card away. Five real chats end them (the reference's own number): by then
+                        // the list reaches the panel, which would sit over the chats.
+                        .onChange(of: realChatCount >= Self.getStartedChatLimit, initial: true) { _, full in
+                            if full { getStarted.finish(me) }
                         }
                         // The pen (or the tip itself) opened New Message: the tip has done its job.
                         .onChange(of: showNew) { _, open in
@@ -2731,22 +2734,25 @@ struct ChatsView: View {
     // MARK: Get Started (owner 2026-10-18, see GetStartedBanner.swift)
 
     /// A conversation that is a real chat: a message in it (or a group), not the Fariin channel,
-    /// not cleared. Archived ones count, as the reference counts its archived chats. One is enough
-    /// to end Get Started and the tip for good (the owner's rule; the reference waits for five).
-    private var hasRealChat: Bool {
-        repo.conversations.contains { c in
+    /// not cleared. Archived ones count, as the reference counts its archived chats. Five end Get
+    /// Started for good (owner 2026-10-19 reversed "one"); the tip only shows on an empty list.
+    private var realChatCount: Int {
+        repo.conversations.filter { c in
             !OfficialChannel.isOfficial(c.id) && !c.isCleared(me)
                 && (Flags.groupsEnabled || !c.isGroup)
                 && (c.isGroup || !c.lastMessageCipher.isEmpty)
-        }
+        }.count
     }
+    private var hasRealChat: Bool { realChatCount > 0 }
+    private static let getStartedChatLimit = 5
 
     /// The plain chat list with nothing typed, no filter and no selection, after the first answer.
+    /// Shows through the first few chats (owner 2026-10-19); see `getStartedChatLimit`.
     private var getStartedContext: Bool {
         repo.hasLoaded && !repo.loadFailed && chatFilter == 0 && !selecting
             && chatSearch.trimmingCharacters(in: .whitespaces).isEmpty
             && accountIsNew
-            && !hasRealChat && !getStarted.isFinished(me)
+            && realChatCount < Self.getStartedChatLimit && !getStarted.isFinished(me)
     }
 
     /// ⛔ A NEW ACCOUNT ONLY (review 2026-10-18): an empty list is not proof of a new person. A slow
