@@ -409,7 +409,20 @@ struct GroupInfoView: View {
             Text(title).font(.title.weight(.bold)).foregroundStyle(ink)
                 .lineLimit(2).multilineTextAlignment(.center)
             // The count stays under the name (owner 2026-10-20, reversing the same day's removal).
-            Text(memberCountText).font(.body).foregroundStyle(ink.opacity(0.7))
+            // The first faces in front of the count (owner 2026-10-20), people with a photo first.
+            HStack(spacing: 6) {
+                if !countFaces.isEmpty {
+                    HStack(spacing: -7) {
+                        ForEach(Array(countFaces.enumerated()), id: \.element) { i, uid in
+                            AvatarView(name: conv?.names[uid] ?? "", photoUrl: conv?.photos[uid], size: 22)
+                                .overlay(Circle().stroke(Color(uiColor: .systemGroupedBackground), lineWidth: 1.5))
+                                .zIndex(Double(3 - i))
+                        }
+                    }
+                    .accessibilityHidden(true)
+                }
+                Text(memberCountText).font(.body).foregroundStyle(ink.opacity(0.7))
+            }
             if !desc.isEmpty {
                 Text(desc).font(.subheadline).foregroundStyle(ink.opacity(0.7))
                     .lineLimit(3).multilineTextAlignment(.center)
@@ -428,6 +441,14 @@ struct GroupInfoView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 8)
+    }
+
+    /// Up to three members for the faces beside the count, the ones with a photo first.
+    private var countFaces: [String] {
+        let users = conv?.users ?? []
+        let withPhoto = users.filter { !(conv?.photos[$0] ?? "").isEmpty }
+        let rest = users.filter { (conv?.photos[$0] ?? "").isEmpty }
+        return Array((withPhoto + rest).prefix(3))
     }
 
     private var memberCountText: String {
