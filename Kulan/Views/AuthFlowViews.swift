@@ -831,6 +831,10 @@ struct EmailAuthView: View {
                 .ignoresSafeArea(.keyboard)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewportHeight = $0 }
                 .allowsHitTesting(false)
+            // owner 2026-10-20: the keyboard hid the password boxes and "Create account". The UIKit
+            // boxes cannot tell the ScrollView they took focus, so it is told to bring the button
+            // (the bottom of the form) into view once the keyboard is up.
+            ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 14) {
                     VStack(spacing: 6) {
@@ -932,6 +936,7 @@ struct EmailAuthView: View {
                     .disabled(busy || !primaryEnabled)
                     .animation(.easeInOut(duration: 0.15), value: primaryEnabled)
                     .padding(.top, 4)
+                    .id("primaryButton")
 
                     if mode == .login {
                         // The code sign-in lives under Forgot Password (owner, 2026-08-08): six
@@ -1003,6 +1008,9 @@ struct EmailAuthView: View {
                 }
             }
             .animation(.easeOut(duration: 0.15), value: domainChips)
+            .onChange(of: passwordFocused) { revealButton(proxy) }
+            .onChange(of: confirmFocused) { revealButton(proxy) }
+            }
         }
         // ONE sheet in place of the red "already has an account" line, which came after both
         // passwords and left people to find Log In on their own. The main way in is a code, as a
@@ -1070,7 +1078,8 @@ struct EmailAuthView: View {
             Image(systemName: "lock").foregroundStyle(.secondary).frame(width: 22)
             RevealablePasswordField(text: text, secure: !reveal, focused: focused,
                                     placeholder: placeholder, contentType: contentType,
-                                    onSubmit: onSubmit)
+                                    onSubmit: onSubmit,
+                                    returnKey: (mode == .create && placeholder == "Password") ? .next : .go)
             Button { reveal.toggle() } label: {
                 Image(systemName: reveal ? "eye.slash" : "eye")
                     .font(.system(size: 16))
@@ -1084,6 +1093,15 @@ struct EmailAuthView: View {
         .authField(focused: focused.wrappedValue)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.pageSpace)) }
             action: { boxFrames[placeholder] = $0 }
+    }
+
+    /// After the keyboard has finished rising (its inset only exists by then), scroll so the button
+    /// under the password boxes is the last thing above the keyboard.
+    private func revealButton(_ proxy: ScrollViewProxy) {
+        guard passwordFocused || confirmFocused, mode == .create else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("primaryButton", anchor: .bottom) }
+        }
     }
 
     private func switchMode() {
@@ -1207,6 +1225,8 @@ struct RevealablePasswordField: UIViewRepresentable {
     var placeholder: String
     var contentType: UITextContentType
     var onSubmit: () -> Void
+    /// Next on the first of two boxes, Go on the last one.
+    var returnKey: UIReturnKeyType = .go
 
     func makeUIView(context: Context) -> UITextField {
         let tf = UITextField()
@@ -1219,7 +1239,7 @@ struct RevealablePasswordField: UIViewRepresentable {
         tf.autocapitalizationType = .none
         tf.autocorrectionType = .no
         tf.spellCheckingType = .no
-        tf.returnKeyType = .go
+        tf.returnKeyType = returnKey
         tf.textContentType = contentType   // this is what keeps the iOS Passwords offer alive
         tf.isSecureTextEntry = secure
         tf.text = text
@@ -1241,8 +1261,20 @@ struct RevealablePasswordField: UIViewRepresentable {
         }
         applySecure(tf)
         // Focus LAST, so the field is fully dressed before it is allowed to raise a keyboard.
-        if focused, !tf.isFirstResponder { tf.becomeFirstResponder() }
-        else if !focused, tf.isFirstResponder { tf.resignFirstResponder() }
+        // ⛔ Only when the flag CHANGED (owner 2026-10-20: tapping Confirm password would not take
+        // the keyboard). Tapping the second box ends editing in the first, but the first's flag is
+        // written back on the next runloop; any SwiftUI update in that gap (a box frame report) saw
+        // "focused, but not first responder" and pulled the keyboard back to the first box.
+        // `wanted` is only recorded once the field is on screen, so a request made early still lands.
+        let c = context.coordinator
+        guard focused != c.wanted else { return }
+        if focused, !tf.isFirstResponder {
+            if tf.window != nil { c.wanted = true; tf.becomeFirstResponder() }
+            else { DispatchQueue.main.async { [weak tf] in _ = tf?.becomeFirstResponder() } }
+        } else {
+            c.wanted = focused
+            if !focused, tf.isFirstResponder { tf.resignFirstResponder() }
+        }
     }
 
     /// ⚠️ The one UIKit trap in here. Switching secure entry ON while the field is being edited
@@ -1278,6 +1310,8 @@ struct RevealablePasswordField: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextFieldDelegate {
         var parent: RevealablePasswordField
+        /// The focus flag as last acted on, so only a CHANGE moves the keyboard (see updateUIView).
+        var wanted = false
         init(_ parent: RevealablePasswordField) { self.parent = parent }
 
         @objc func editingChanged(_ tf: UITextField) { parent.text = tf.text ?? "" }

@@ -2,6 +2,7 @@ import SwiftUI
 import LocalAuthentication
 import UIKit
 import PhotosUI
+import FirebaseFirestore   // the username pre-check reads `usernames/{name}` directly
 
 struct RootView: View {
     // Equatable must be DECLARED now: Swift synthesises it automatically only for enums with no
@@ -771,14 +772,15 @@ private struct HandleCheckRing: View {
                 if state == .free {
                     TickShape().trim(from: 0, to: mark)
                         .stroke(tint, style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
-                        .frame(width: 10, height: 8)
+                        .frame(width: 9, height: 7)
                 } else if state == .taken {
                     Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(tint)
                         .opacity(mark)
                 }
             }
         }
-        .frame(width: 22, height: 22)
+        // 20pt, owner 2026-10-20 ("the check-mark is too big"): the size of the field's other icons.
+        .frame(width: 20, height: 20)
         .animation(.easeOut(duration: 0.25), value: state)
         .onAppear { settle() }
         .onChange(of: state) { _, s in
@@ -991,6 +993,20 @@ struct OnboardingView: View {
             && (handleState == .free || handleState == .unknown) && !saving
     }
 
+    /// One read of `usernames/{name}`. `.taken` when somebody else owns or holds it, `.free` when no
+    /// document exists, nil when it cannot say (offline, or the name is mine): the callable decides.
+    private static func quickHandleLookup(_ h: String) async -> HandleState? {
+        do {
+            let snap = try await ChatService.db.collection("usernames").document(h.lowercased()).getDocument()
+            guard let nd = snap.data() else { return snap.metadata.isFromCache ? nil : .free }
+            let owner = nd["uid"] as? String ?? ""
+            if owner == ChatService.uid { return nil }
+            return .taken
+        } catch {
+            return nil
+        }
+    }
+
     /// Debounced so it is one read per PAUSE rather than one per keystroke. The previous task is
     /// cancelled on every change, so a fast typist produces exactly one query, not eight.
     private func scheduleHandleCheck() {
@@ -1001,8 +1017,18 @@ struct OnboardingView: View {
 
         handleState = .checking
         checkTask = Task {
-            try? await Task.sleep(nanoseconds: 400_000_000)
+            try? await Task.sleep(nanoseconds: 350_000_000)
             guard !Task.isCancelled else { return }
+            // owner 2026-10-20: "Checking…" took too long. The callable below pays a cold start and
+            // a round trip, so ask the name's own document first (one `get`, allowed by the rules).
+            // A taken name answers right here; a missing document shows free at once, and the
+            // callable still confirms it (reserved words, the 30-day hold) and can overrule it.
+            let quick = await Self.quickHandleLookup(h)
+            if let quick {
+                guard !Task.isCancelled, ChatService.sanitizeHandle(handle) == h else { return }
+                await MainActor.run { handleState = quick }
+                if quick == .taken { return }
+            }
             // 2026-09-24 audit: the SERVER's check, the one Settings' username editor already uses.
             // It throws when it cannot answer, so a failure is no longer "available", and it knows
             // what findByHandle cannot: a name released less than 30 days ago is still held, and
@@ -1012,6 +1038,9 @@ struct OnboardingView: View {
                 let r = try await ChatService.checkHandleAvailable(h)
                 answer = r.available ? .free : ((r.reason == nil || r.reason == "taken") ? .taken : .invalid)
             } catch {
+                // The quick read already answered; a callable that cannot be reached must not
+                // turn that into "couldn't check".
+                if quick != nil { return }
                 answer = .unknown
             }
             guard !Task.isCancelled else { return }
