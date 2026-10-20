@@ -40,12 +40,12 @@ struct GroupWelcomeCard: View {
         VStack(spacing: 14) {
             VStack(spacing: 10) {
                 Button { if canEdit { showEdit = true } } label: {
-                    AvatarView(name: conv.title, photoUrl: conv.avatarUrl, size: 76)
+                    AvatarView(name: conv.title, photoUrl: conv.avatarUrl, size: 92)
                         .overlay(alignment: .bottomTrailing) {
                             if canEdit && (conv.avatarUrl ?? "").isEmpty {
                                 Image(systemName: "camera.fill")
-                                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
-                                    .frame(width: 26, height: 26)
+                                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
+                                    .frame(width: 30, height: 30)
                                     .background(Color.accentColor, in: Circle())
                                     .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2))
                             }
@@ -64,17 +64,18 @@ struct GroupWelcomeCard: View {
                 }
             }
 
+            // Round glass circles with their names, the group page's own (owner 2026-10-19: the
+            // square tiles read boxy).
             if canEdit || canAdd {
-                HStack(spacing: 8) {
+                HStack(spacing: 0) {
                     if canAdd {
-                        GroupActionTile(icon: "ic_add_member", title: "Add Members") { showAdd = true }
+                        circle("ic_add_member", "Add Members") { showAdd = true }
                     }
                     if canLink {
-                        GroupActionTile(icon: "link", title: "Group Link") { showLink = true }
+                        circle("link", "Group Link") { showLink = true }
                     }
                     if canEdit {
-                        GroupActionTile(icon: "pencil",
-                                        title: conv.groupDescription.isEmpty ? "Description" : "Edit") { showEdit = true }
+                        circle("pencil", conv.groupDescription.isEmpty ? "Description" : "Edit") { showEdit = true }
                     }
                 }
             }
@@ -90,11 +91,10 @@ struct GroupWelcomeCard: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(18)
+        .padding(.horizontal, 18).padding(.vertical, 24)
         .frame(maxWidth: 340)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous)
-            .stroke(.white.opacity(0.06), lineWidth: 0.5))
+        // A rounder card in glass instead of the flat grey box.
+        .liquidGlass(RoundedRectangle(cornerRadius: 36, style: .continuous))
         .padding(.horizontal, 20)
         .sheet(isPresented: $showEdit) {
             EditGroupView(cid: conv.id, title: conv.title, photoUrl: conv.avatarUrl,
@@ -105,5 +105,13 @@ struct GroupWelcomeCard: View {
             InviteLinkSheet(cid: conv.id, groupTitle: conv.title, groupPhoto: conv.avatarUrl,
                             initialCode: conv.inviteCode)
         }
+    }
+
+    private func circle(_ icon: String, _ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            PosterActionIcon(icon: icon, diameter: 56, onPhoto: false, label: title)
+        }
+        .tint(.primary)
+        .accessibilityLabel(title)
     }
 }
