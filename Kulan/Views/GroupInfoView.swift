@@ -385,7 +385,7 @@ struct GroupInfoView: View {
         VStack(spacing: 4) {
             Text(title).font(.title.weight(.bold)).foregroundStyle(ink)
                 .lineLimit(2).multilineTextAlignment(.center)
-            Text(memberCountText).font(.body).foregroundStyle(ink.opacity(0.7))
+            // No member count here (owner 2026-10-20): the "N Members ›" heading lower down has it.
             if !desc.isEmpty {
                 Text(desc).font(.subheadline).foregroundStyle(ink.opacity(0.7))
                     .lineLimit(3).multilineTextAlignment(.center)
@@ -404,11 +404,6 @@ struct GroupInfoView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 8)
-    }
-
-    private var memberCountText: String {
-        let n = conv?.users.count ?? 0
-        return "\(Self.compactCount(n)) Member\(n == 1 ? "" : "s")"
     }
 
     /// 950, 1.2k, 168k, 1.5M.
