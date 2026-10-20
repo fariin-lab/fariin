@@ -427,6 +427,9 @@ struct CallRow: Equatable {
     var rim: Bool
     /// Silenced by this phone's Focus: grey title and icon instead of the missed red.
     var silenced: Bool = false
+    /// Group call rows by someone else carry their face beside them (owner 2026-10-20).
+    var callerName: String? = nil
+    var callerPhoto: String? = nil
 }
 
 /// One row of the list. A message can carry a day separator and the unread divider ABOVE it — the

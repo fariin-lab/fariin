@@ -298,6 +298,8 @@ struct CallPlan {
     var discColor: UIColor
     var fill: BubbleFill
     var rim: Bool
+    /// The caller's face beside a group call row (row coordinates), as a group message has.
+    var avatar: CGRect? = nil
 }
 
 enum RowBodyPlan {
@@ -398,8 +400,14 @@ enum MessageRowLayout {
             contentHeight = bottom - p.capsule.minY + 12      // .padding(.vertical, 6)
             body = .notice(p)
         case .call(let c):
-            var p = call(c, originX: contentX, availableWidth: contentW, rowWidth: width)
+            // A group call by someone else leaves the avatar column, as their messages do.
+            let col: CGFloat = c.callerName != nil ? BubbleMetrics.avatarSize + BubbleMetrics.avatarGap : 0
+            var p = call(c, originX: contentX + col, availableWidth: contentW - col, rowWidth: width)
             p.bubble.origin.y += y + 8                        // .padding(.top, 8)
+            if col > 0 {
+                p.avatar = CGRect(x: contentX, y: p.bubble.maxY - BubbleMetrics.avatarSize,
+                                  width: BubbleMetrics.avatarSize, height: BubbleMetrics.avatarSize)
+            }
             contentHeight = p.bubble.height + 8
             body = .call(p)
         }

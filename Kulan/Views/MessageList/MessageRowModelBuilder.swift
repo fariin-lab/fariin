@@ -945,7 +945,10 @@ enum MessageRowModelBuilder {
             // always being the brand accent.
             fill: mine ? myFill(ctx) : receivedFill(ctx),
             rim: !mine && ctx.onWallpaper,
-            silenced: silenced)
+            silenced: silenced,
+            // In a group, whose call it was (owner 2026-10-20: "I don't know who is calling").
+            callerName: ctx.isGroup && !mine ? ctx.nameFor(m.callerUid ?? m.authorId) : nil,
+            callerPhoto: ctx.isGroup && !mine ? ctx.avatarFor(m.callerUid ?? m.authorId) : nil)
     }
 
     private static func durationLabel(_ s: Int) -> String {

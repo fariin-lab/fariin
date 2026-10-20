@@ -771,6 +771,15 @@ final class MessageRowView: UIView {
             v.isHidden = false
             v.frame = c.bubble
             v.configure(c, dark: dark)
+            // The caller's face in a group (2026-10-20), after hideBubbleChrome hid it.
+            if let rect = c.avatar, case .call(let row) = m.content, let name = row.callerName {
+                let a = avatarView ?? {
+                    let a = RowAvatarView(); addSubview(a); avatarView = a; return a
+                }()
+                a.isHidden = false
+                a.frame = rect
+                a.configure(name: name, photoUrl: row.callerPhoto)
+            }
         }
     }
 
