@@ -1255,16 +1255,15 @@ struct EditGroupView: View {
                     .frame(maxWidth: .infinity)
                     .listRowBackground(Color.clear)
                 }
+                // Name and description in ONE card (owner 2026-10-20), a line between them.
                 Section {
                     TextField("Group Name", text: $name)
                         .textInputAutocapitalization(.words)
                         .submitLabel(.done)
                         .focused($nameFocused)
-                }
                 // ⛔ THE BIO'S RULES (owner 2026-10-18: "use the logic you used for the bio"): one
                 // paragraph (a newline never reaches the field, `Limits.oneParagraph`), up to 5 lines,
                 // and a countdown that only appears in the last 20 characters, red at 0.
-                Section {
                     VStack(alignment: .trailing, spacing: 6) {
                         TextField("Description",
                                   text: Binding(get: { desc },
