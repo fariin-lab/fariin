@@ -1956,17 +1956,28 @@ struct GroupMemberSheet: View {
         }
     }
 
+    /// Round glass circles with their names, the group page's own (owner 2026-10-20: the square
+    /// tiles read boxy).
     private var tiles: some View {
-        HStack(spacing: 10) {
-            GroupActionTile(icon: "message", title: "Message", cardColor: card) { openChat() }
-            GroupActionTile(icon: "ic_call_voice", title: "Voice", cardColor: card) {
+        HStack(spacing: 0) {
+            Button { openChat() } label: {
+                PosterActionIcon(icon: "message.fill", diameter: 58, onPhoto: false, label: "Message")
+            }
+            .buttonStyle(.plain)
+            Button {
                 CallService.shared.startCall(to: member.id, name: member.name, photo: gatedMemberPhoto,
                                              video: false, fromProfile: true)
+            } label: {
+                PosterActionIcon(icon: "phone.fill", diameter: 58, onPhoto: false, label: "Voice")
             }
-            GroupActionTile(icon: "ic_call_video", title: "Video", cardColor: card) {
+            .buttonStyle(.plain)
+            Button {
                 CallService.shared.startCall(to: member.id, name: member.name, photo: gatedMemberPhoto,
                                              video: true, fromProfile: true)
+            } label: {
+                PosterActionIcon(icon: "video.fill", diameter: 58, onPhoto: false, label: "Video")
             }
+            .buttonStyle(.plain)
         }
     }
 
