@@ -26,6 +26,7 @@ extension GroupMemberSheet {
             canEditRole: conv?.canSetRole(me, uid) ?? false)
         sheet.onInfo = onInfo
         sheet.onRemoved = onRemoved
+        sheet.photoHint = conv?.photos[uid]
         return sheet
     }
 }

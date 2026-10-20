@@ -1631,8 +1631,12 @@ struct GroupMemberSheet: View {
 
     /// Their audience map, applied the same way ContactInfoView applies it. Sharing a group is not
     /// the same as being a contact, so the "My Friends" test is the real message-history one.
+    /// The group's own copy of their photo, drawn on the first frame while the profile loads
+    /// (owner 2026-10-20: the card opened blank, then the photo and @name pushed it taller).
+    var photoHint: String? = nil
+
     private var gatedMemberPhoto: String? {
-        guard let p = profile else { return nil }
+        guard let p = profile else { return photoHint }
         return PrivacyPrefs.allows(p.privacy, "photo",
                                    contactOfMine: PrivacyPrefs.mayViewPhotoOf(member.id)) ? p.photoUrl : nil
     }
@@ -1726,7 +1730,11 @@ struct GroupMemberSheet: View {
                 ContactInfoView(cid: ChatService.convId(me, member.id), name: member.name,
                                 photoUrl: gatedMemberPhoto, source: .calls)
             }
-            .task { profile = await ProfileStore.shared.fetch(member.id) }
+            .task {
+                // The phone's saved copy first (no network), then the server's (2026-10-20).
+                if profile == nil { profile = await ProfileStore.shared.cachedPeer(member.id) }
+                if let fresh = await ProfileStore.shared.fetch(member.id) { profile = fresh }
+            }
             .onAppear {
                 guard !rightsLoaded else { return }
                 rightsLoaded = true
@@ -1859,9 +1867,10 @@ struct GroupMemberSheet: View {
                 VerifiedMark(uid: member.id, size: 16, explains: true)
                 headerChip
             }
-            if let h = profile?.handle, !h.isEmpty {
-                Text("@\(h)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-            }
+            // The line is always there, blank until the @name is known, so the card's height
+            // does not change (and the sheet does not jump) when the profile lands.
+            Text(profile?.handle.flatMap { $0.isEmpty ? nil : "@\($0)" } ?? " ")
+                .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, Self.rowSide)

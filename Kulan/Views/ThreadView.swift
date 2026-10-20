@@ -2099,7 +2099,8 @@ struct ThreadView: View {
                              mutedUntil: conversation?.restrictedUntil[m.id] ?? 0,
                              role: conversation?.roles[m.id],
                              canEditRole: conversation?.canSetRole(me, m.id) ?? false,
-                             onRemoved: { name in showJumpToast("\(name) was removed from \(title).") })
+                             onRemoved: { name in showJumpToast("\(name) was removed from \(title).") },
+                             photoHint: conversation?.photos[m.id])
         }
         .fullScreenCover(isPresented: $showGroupCall) { GroupCallView() }
         .safeAreaInset(edge: .top) {
