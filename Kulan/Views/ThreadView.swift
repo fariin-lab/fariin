@@ -82,7 +82,10 @@ struct ThreadView: View {
 
     @State private var repo: ThreadRepository
     @State private var input = ""
-    @State private var mentionMap: [String: String] = [:]   // inserted "@name" -> uid (groups)
+    // Inserted "@name" -> the uids picked under it, in pick order (groups). A list: two members
+    // with the same name kept only the last pick, so "@Ahmed" twice pinged the second one twice
+    // and the first never (audit 2026-10-20).
+    @State private var mentionMap: [String: [String]] = [:]
     // 2026-09-24 decision D-composer-5: the composer's caret (UTF-16 offset), so the @mention popup
     // and insertion follow the cursor, not the end of the text; and where to put the caret after an
     // insertion, valid only for the exact text it was computed with (never stale on another text).
@@ -6047,7 +6050,10 @@ struct ThreadView: View {
             caretAfterMention = (input, head.utf16.count)
             composerCaret = head.utf16.count
         }
-        mentionMap[name] = uid
+        var picks = mentionMap[name, default: []]
+        picks.removeAll { $0 == uid }
+        picks.append(uid)
+        mentionMap[name] = picks
         UISelectionFeedbackGenerator().selectionChanged()
     }
 
@@ -6058,20 +6064,21 @@ struct ThreadView: View {
     private func resolveMentions(in text: String) -> [String] {
         var rest = text
         var uids: [String] = []
-        for (name, uid) in mentionMap.sorted(by: { $0.key.count > $1.key.count }) {
+        for (name, picks) in mentionMap.sorted(by: { $0.key.count > $1.key.count }) {
             let token = "@\(name)"
-            var found = false
+            var found = 0
             var from = rest.startIndex
             while let r = rest.range(of: token, range: from..<rest.endIndex) {
                 if r.upperBound < rest.endIndex, rest[r.upperBound].isLetter || rest[r.upperBound].isNumber {
                     from = r.upperBound                  // "@Sam" inside "@Samir": not this one
                 } else {
-                    found = true
+                    found += 1
                     rest.replaceSubrange(r, with: " ")   // taken; a shorter name can't match inside it
                     from = rest.startIndex
                 }
             }
-            if found, !uids.contains(uid) { uids.append(uid) }
+            // As many people as the name is still in the text, the latest picks first.
+            for uid in picks.suffix(found) where !uids.contains(uid) { uids.append(uid) }
         }
         return uids
     }
