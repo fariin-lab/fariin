@@ -109,12 +109,16 @@ struct GroupSettingsView: View {
         } message: { Text(actionError ?? "") }
         // Disappearing Messages, moved here from the group page (owner 2026-10-20). Turning it on
         // asks first: in a group it deletes for every member.
-        .sheet(isPresented: $showDisappear) {
+        // The question after the page is really down (its onDismiss), not on a guessed delay
+        // (audit 2026-10-20: a slow close dropped the alert).
+        .sheet(isPresented: $showDisappear, onDismiss: {
+            if let s = chosenDisappear { chosenDisappear = nil; pendingDisappear = s }
+        }) {
             let current = conv?.disappearSeconds ?? 0
             DisappearingMessagesView(cid: cid, current: current) { s in
                 if s == 0 { if current != 0 { setTimer(0) } }
                 else if s != current {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { pendingDisappear = s }
+                    chosenDisappear = s
                 }
             }
         }
@@ -132,6 +136,7 @@ struct GroupSettingsView: View {
 
     @State private var showDisappear = false
     @State private var pendingDisappear: Int?
+    @State private var chosenDisappear: Int?
 
     private func setTimer(_ seconds: Int) {
         Task {

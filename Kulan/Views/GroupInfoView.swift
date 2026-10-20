@@ -34,6 +34,7 @@ struct GroupInfoView: View {
     @State private var descText = ""
     @State private var showDisappear = false
     @State private var pendingDisappear: Int?   // chosen timer awaiting the "for all members" confirm
+    @State private var chosenDisappear: Int?
     @State private var showAdd = false
     @State private var memberAction: MemberAction?
     @State private var notice = ""
@@ -1313,13 +1314,17 @@ private struct GroupInfoDialogs: ViewModifier {
             // ⛔ THE ONE-TO-ONE CHAT'S PAGE (owner 2026-10-18: "open the page exactly like a normal user's,
             // with all its features"): every preset and Custom, not a three-line menu. Off applies at
             // once; turning it ON still asks first, because in a group it deletes for every member.
-            .sheet(isPresented: $showDisappear) {
+            // The question after the page is really down (its onDismiss), not on a guessed delay
+            // (audit 2026-10-20: a slow close dropped the alert).
+            .sheet(isPresented: $showDisappear, onDismiss: {
+                if let s = chosenDisappear { chosenDisappear = nil; pendingDisappear = s }
+            }) {
                 DisappearingMessagesView(cid: cid, current: current) { s in
                     // Off only when it is on: "no change" writes nothing, which is not a failure.
                     if s == 0 { if current != 0 { setTimer(0) } }
                     else if s != current {
                         // After the page has gone, so the question is not asked under a closing sheet.
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { pendingDisappear = s }
+                        chosenDisappear = s
                     }
                 }
             }
@@ -1748,7 +1753,8 @@ struct GroupMemberSheet: View {
     // Make Group Admin, Info, Remove from Group. Rights and tag sit on their own pushed page; only
     // that page (or the profile) takes the sheet to full height.
     @State private var showEdit = false
-    @State private var cardHeight: CGFloat = 420
+    // The last card measured, so the next opens at about its size instead of jumping from a guess.
+    @State private var cardHeight: CGFloat = MemberCardMemo.height
     @State private var growing = false
     /// Grow to full height first, then push, so no page slides in while the card is short.
     private func growThenPush(_ push: @escaping () -> Void) {
@@ -1868,7 +1874,7 @@ struct GroupMemberSheet: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 44)   // clears the home bar: the detent height includes it
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0 }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0; MemberCardMemo.height = $0 }
         .frame(maxHeight: .infinity, alignment: .top)
         .overlay(alignment: .topTrailing) {
             Button { dismiss() } label: {
@@ -2402,3 +2408,6 @@ struct GroupMembersSheet: View {
         }
     }
 }
+
+/// The member card's last measured height (audit 2026-10-20: each open started at 420 and jumped).
+@MainActor enum MemberCardMemo { static var height: CGFloat = 420 }

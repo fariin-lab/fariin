@@ -2443,6 +2443,8 @@ struct ThreadView: View {
             // An older list copy does not undo what the group's own doc already brought in
             // (`startOwnGroupDoc`; audit 2026-10-20).
         } else if resolved != cachedConv { cachedConv = resolved }
+        // A chat opened before its group was in the list starts the group's own doc now (audit).
+        startOwnGroupDoc()
     }
 
     private var muteLiftKey: Double { isGroup ? (conversation?.restrictedUntil[me] ?? 0) : 0 }

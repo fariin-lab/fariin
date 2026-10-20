@@ -42,6 +42,10 @@ struct GroupLinkQRSheet: View {
         ZStack {
             LinearGradient(colors: [theme.top, theme.bottom], startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
+            // Scrolls only when it does not fit (audit 2026-10-20: on an SE or at large text the close
+            // X and the Share row went off the screen); on a normal phone it sits as before.
+            GeometryReader { geo in
+            ScrollView {
             VStack(spacing: 0) {
                 HStack {
                     Button { dismiss() } label: {
@@ -60,6 +64,10 @@ struct GroupLinkQRSheet: View {
                 Spacer(minLength: 24)
                 swatches
                 actions.padding(.top, 24).padding(.bottom, 24)
+            }
+            .frame(minHeight: geo.size.height)
+            }
+            .scrollBounceBehavior(.basedOnSize)
             }
             if let toast {
                 Text(toast)
