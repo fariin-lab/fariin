@@ -1750,7 +1750,6 @@ struct GroupMemberSheet: View {
     @State private var adminChoice: Bool? = nil
     @State private var roleText = ""
     @State private var roleColor: String?
-    @FocusState private var tagFocused: Bool
     @State private var confirmDismissAdmin = false
     var onInfo: ((String) -> Void)? = nil   // push their profile on the opener's stack
     /// Said by the opener after a removal (owner 2026-10-19: it was silent), with their name.
@@ -2061,9 +2060,7 @@ struct GroupMemberSheet: View {
                     HStack(spacing: 12) {
                         Image(systemName: "tag").foregroundStyle(.secondary)
                         if let e = role?.emoji { Text(e) }
-                        TextField("Add a tag", text: $roleText)
-                            .submitLabel(.done)
-                            .focused($tagFocused)
+                        TagTextField(text: $roleText, autoFocus: canEditRole && !mayEditRights)
                             .disabled(busy)
                         Text("\(roleText.utf16.count)/\(GroupRole.maxText)")
                             .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
@@ -2104,13 +2101,6 @@ struct GroupMemberSheet: View {
         // The photo close under the title (owner 2026-10-20: a large empty band above it).
         .contentMargins(.top, 0, for: .scrollContent)
         .listSectionSpacing(.compact)
-        // A page that is only the tag opens with the keyboard up (owner 2026-10-20), once the sheet
-        // has risen. Not when it also edits admin rights: there the switches come first.
-        .task {
-            guard canEditRole, !mayEditRights else { return }
-            try? await Task.sleep(nanoseconds: 450_000_000)
-            tagFocused = true
-        }
         .navigationTitle(canEditRole && !mayEditRights ? (member.id == me ? "My Tag" : "Tag") : firstName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -2523,3 +2513,23 @@ struct GroupMembersSheet: View {
 
 /// The member card's last measured height (audit 2026-10-20: each open started at 420 and jumped).
 @MainActor enum MemberCardMemo { static var height: CGFloat = 420 }
+
+/// The tag field with its OWN focus (owner 2026-10-20: the keyboard did not come up). The edit page
+/// is a sheet over the member card, and focus held by the card does not reach a field in the sheet,
+/// so the field keeps it here and asks for the keyboard once the sheet has risen.
+private struct TagTextField: View {
+    @Binding var text: String
+    let autoFocus: Bool
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("Add a tag", text: $text)
+            .submitLabel(.done)
+            .focused($focused)
+            .task {
+                guard autoFocus else { return }
+                try? await Task.sleep(nanoseconds: 550_000_000)
+                focused = true
+            }
+    }
+}
