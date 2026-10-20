@@ -593,19 +593,56 @@ struct GroupInfoView: View {
     /// Report, Leave and Delete as red rows at the foot of the page, out of the ••• menu (owner
     /// 2026-10-19).
     private var exitCard: some View {
-        VStack(spacing: 0) {
-            ProfileInfoRow(title: "Report Group", icon: "ic_report", tint: .red, chevron: false) { confirmReport = true }
-            rowDivider
-            ProfileInfoRow(title: "Leave Group", icon: "rectangle.portrait.and.arrow.right",
-                           tint: .red, chevron: false) { confirmLeave = true }
-            // Only the owner can permanently delete the whole group (for everyone).
-            if iAmOwner {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(spacing: 0) {
+                ProfileInfoRow(title: "Report Group", icon: "ic_report", tint: Self.exitRed, chevron: false) { confirmReport = true }
                 rowDivider
-                ProfileInfoRow(title: "Delete Group", icon: "trash", tint: .red, chevron: false) { confirmDelete = true }
+                ProfileInfoRow(title: "Leave Group", icon: "rectangle.portrait.and.arrow.right",
+                               tint: Self.exitRed, chevron: false) { confirmLeave = true }
+                // Only the owner can permanently delete the whole group (for everyone).
+                if iAmOwner {
+                    rowDivider
+                    ProfileInfoRow(title: "Delete Group", icon: "trash", tint: Self.exitRed, chevron: false) { confirmDelete = true }
+                }
+            }
+            .profileSurface(plain: cardColor)
+            if let line = createdLine {
+                Text(line).font(.footnote).foregroundStyle(.secondary)
+                    .padding(.horizontal, 20)
             }
         }
-        .profileSurface(plain: cardColor)
     }
+
+    /// A deeper red than the system one for these rows (owner 2026-10-19: ours read pale). The
+    /// system red stays at night, where the deep one would sink into the dark card.
+    private static let exitRed = Color(uiColor: UIColor { t in
+        t.userInterfaceStyle == .dark ? .systemRed : UIColor(red: 0.80, green: 0.12, blue: 0.22, alpha: 1)
+    })
+
+    /// "Created by Adnan." / "Created yesterday at 3:54 AM." under the red rows, when known.
+    private var createdLine: String? {
+        guard let c = conv else { return nil }
+        var parts: [String] = []
+        if !c.createdBy.isEmpty {
+            let who = c.createdBy == me ? "you" : (c.names[c.createdBy] ?? "")
+            if !who.isEmpty { parts.append("Created by \(who).") }
+        }
+        if let at = c.createdAt {
+            var when = Self.createdFormat.string(from: at)
+            // "Today at…" / "Yesterday at…" read mid-sentence; a real date keeps its capital.
+            if when.hasPrefix("Today") || when.hasPrefix("Yesterday") { when = when.prefix(1).lowercased() + when.dropFirst() }
+            parts.append("Created \(when).")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
+    }
+
+    private static let createdFormat: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        f.doesRelativeDateFormatting = true
+        return f
+    }()
 
     private func startCall(video: Bool) {
         // Just one other person (owner 2026-10-19): a normal ringing call to them, as from their
