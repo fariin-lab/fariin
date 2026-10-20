@@ -22,18 +22,29 @@ struct PublicGroupSheet: View {
 
     private static let blue = Color(hex: 0x2392FE)
 
+    // ⛔ A FULL PAGE, NOT A SHEET (owner 2026-10-20: "open the group page directly, Join at the
+    // bottom; once joined, the composer"). The group up top, Join pinned where the composer will
+    // be; joining opens the chat itself. Messages before joining are still not shown (TODO above).
     var body: some View {
         VStack(spacing: 0) {
             closeBar
-            content
+            ScrollView { content.padding(.top, 24) }
         }
-        .frame(maxWidth: .infinity)
-        .fixedSize(horizontal: false, vertical: true)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
-        .frame(maxHeight: .infinity, alignment: .top)
-        .presentationDetents([.height(max(300, contentHeight))])
-        .presentationDragIndicator(.hidden)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+        .safeAreaInset(edge: .bottom) { joinBar }
         .task { await load() }
+    }
+
+    /// The Join button where the composer sits once you are in.
+    @ViewBuilder private var joinBar: some View {
+        if let p = preview {
+            VStack(spacing: 8) {
+                statusLine(p)
+                capsuleButton(buttonTitle(p), enabled: !joining && !(requestSent || p.requested)) { join(p) }
+            }
+            .padding(.bottom, 8)
+        }
     }
 
     private var closeBar: some View {
@@ -93,9 +104,6 @@ struct PublicGroupSheet: View {
                     .padding(.horizontal, 28)
                     .padding(.top, 14)
             }
-            statusLine(p)
-            capsuleButton(buttonTitle(p), enabled: !joining && !(requestSent || p.requested)) { join(p) }
-                .padding(.top, 24)
         }
     }
 

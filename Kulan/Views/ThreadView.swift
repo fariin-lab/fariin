@@ -1233,6 +1233,12 @@ struct ThreadView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: repo.iBlocked)
+        // Leaving, being muted, announcement mode or a moderation hold swap the bar too; without
+        // these it jumped in with no motion (owner 2026-10-20, after Leave Group).
+        .animation(.easeInOut(duration: 0.25), value: notAMember)
+        .animation(.easeInOut(duration: 0.25), value: iAmMuted)
+        .animation(.easeInOut(duration: 0.25), value: cannotSendAnnouncement)
+        .animation(.easeInOut(duration: 0.25), value: groupModBlocked)
     }
 
     // Split into several layers so each modifier chain stays under the type-checker limit.

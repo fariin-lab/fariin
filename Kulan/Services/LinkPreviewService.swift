@@ -94,6 +94,10 @@ actor LinkPreviewService {
             if let code = Self.groupCode(in: url) {
                 return await Self.groupDraft(url: url, code: code)
             }
+            // A public group's own link, fariin.com/<name> (owner 2026-10-20: it went bare).
+            if case .name(let n)? = KulanApp.route(from: url) {
+                return await Self.publicGroupDraft(url: url, name: n)
+            }
             if let link = Self.storyLink(in: url) {
                 return await Self.storyDraft(url: url, id: link.id, handle: link.handle)
             }
@@ -192,6 +196,22 @@ actor LinkPreviewService {
             }
             return LinkDraft(url: url, title: g.title, desc: g.membersLine, image: photo)
         }
+    }
+
+    /// A public group's card from `publicGroupPreview`, the same shape as an invite link's, so the
+    /// bubble draws it as a group invite ("N members"). A name that is not a group goes bare.
+    private static func publicGroupDraft(url: URL, name: String) async -> LinkDraft? {
+        guard case .found(let g) = await GroupDirectory.preview(name: name, cid: nil) else { return nil }
+        var photo: UIImage?
+        if let p = g.photoUrl {
+            photo = DiskImageCache.shared.memoryImage(p)
+            if photo == nil { photo = await DiskImageCache.shared.image(for: p) }
+            if photo == nil, let u = URL(string: p), let (data, _) = try? await URLSession.shared.data(from: u) {
+                photo = UIImage(data: data)
+            }
+        }
+        let n = g.memberCount
+        return LinkDraft(url: url, title: g.title, desc: "\(n) member\(n == 1 ? "" : "s")", image: photo)
     }
 
     /// The story in one of OUR story links: fariin.com/<username>/s/<id>, or the older /s/<id>.
