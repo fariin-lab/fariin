@@ -334,7 +334,7 @@ struct GroupInfoView: View {
     @ViewBuilder private var cards: some View {
         // 2026-10-19 groups v2: a public group's own link, for every member (copy, share, QR).
         if let name = conv?.publicName, !name.isEmpty {
-            GroupPublicLinkCard(name: name, title: title, cardColor: cardColor)
+            GroupPublicLinkCard(name: name, title: title, cardColor: cardColor, photo: conv?.avatarUrl, memberCount: conv?.users.count)
         }
         settingsCard
         if iAmAdmin { groupSettingsCard }

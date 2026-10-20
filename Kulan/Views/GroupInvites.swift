@@ -561,7 +561,7 @@ struct GroupLinkShareView: View {
                              set: { shareText = $0?.id })) { t in
             ForwardPicker(shareText: t.id)
         }
-        .sheet(isPresented: $showQR) { GroupLinkQRSheet(title: title, link: link) }
+        .sheet(isPresented: $showQR) { GroupLinkQRSheet(title: title, link: link, photo: photo) }
     }
 
     private var card: Color { Color(uiColor: .secondarySystemGroupedBackground) }

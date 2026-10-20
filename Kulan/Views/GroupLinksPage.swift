@@ -26,6 +26,8 @@ struct GroupLinksPage: View {
     }
 
     @State private var list: GroupLinkList?
+    /// The group, for the QR card's photo and member count (owner 2026-10-20).
+    private var groupConv: Conversation? { ConversationsRepository.shared.conversations.first { $0.id == cid } }
     @State private var loadError: String?
     @State private var working = false
     @State private var linkError: String?
@@ -51,7 +53,7 @@ struct GroupLinksPage: View {
                 linkError: $linkError, confirmReset: $confirmReset, confirmOff: $confirmOff,
                 confirmDeleteAll: $confirmDeleteAll, revokeTarget: $revokeTarget,
                 onReset: reset, onOff: turnOff, onDeleteAll: deleteAllRevoked, onRevoke: revoke))
-            .sheet(item: $qrLink) { l in GroupLinkQRSheet(title: groupTitle, link: l.url) }
+            .sheet(item: $qrLink) { l in GroupLinkQRSheet(title: groupTitle, link: l.url, photo: groupConv?.avatarUrl, memberCount: groupConv?.users.count) }
             .sheet(item: Binding(get: { shareText.map { LinkShareText(id: $0) } },
                                  set: { shareText = $0?.id })) { t in
                 ForwardPicker(shareText: t.id)

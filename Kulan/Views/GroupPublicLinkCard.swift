@@ -8,6 +8,8 @@ struct GroupPublicLinkCard: View {
     let name: String
     let title: String
     let cardColor: Color
+    var photo: String? = nil        // for the QR card (owner 2026-10-20: it showed no photo)
+    var memberCount: Int? = nil
 
     @State private var showQR = false
     @State private var showShare = false
@@ -25,7 +27,7 @@ struct GroupPublicLinkCard: View {
                 Button { copy() } label: { Label("Copy Link", systemImage: "doc.on.doc") }
             }
             .profileSurface(plain: cardColor)
-            .sheet(isPresented: $showQR) { GroupLinkQRSheet(title: title, link: link) }
+            .sheet(isPresented: $showQR) { GroupLinkQRSheet(title: title, link: link, photo: photo, memberCount: memberCount) }
             .sheet(isPresented: $showShare) { ForwardPicker(shareText: link) }
     }
 
