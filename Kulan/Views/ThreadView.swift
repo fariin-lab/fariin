@@ -5190,6 +5190,17 @@ struct ThreadView: View {
     /// a per-member restriction or the group's `memberSend` switch. True = held back.
     /// The group's switch for this kind first (2026-10-20, one per kind), then my own restriction
     /// (`r`, the admin's per-member switches; nil where there is none).
+    /// Why the attach sheet's photo grid is closed to me: photos AND videos both off (for everyone,
+    /// or for me alone). One of the two still on keeps the grid; the pick says why the other is not.
+    private var attachMediaOffText: String? {
+        guard isGroup, heldBackText(.sendPhotos, .photos) != nil, heldBackText(.sendPhotos, .videos) != nil
+        else { return nil }
+        if let conv = conversation, !conv.maySend(.photos, me) || !conv.maySend(.videos, me) {
+            return "Photos and videos are off in this group."
+        }
+        return "An admin has turned off photos and videos for you."
+    }
+
     private func heldBackText(_ r: Conversation.Restrict?, _ kind: Conversation.SendKind) -> String? {
         guard isGroup, let conv = conversation else { return nil }
         if !conv.maySend(kind, me) { return "Admins turned off \(kind.words) in this group." }
@@ -5410,6 +5421,12 @@ struct ThreadView: View {
                 // bar inside the strip takes that place, as before.
                 .contentMargins(.bottom, recentsHasSelection ? 0 : Self.attachBarHeight - Self.composerRestDip,
                                 for: .scrollContent)
+                // ⛔ PHOTOS AND VIDEOS OFF FOR ME HERE (owner 2026-10-20): the grid gives way to one quiet
+                // line saying so, before anything is picked. File, Location and the rest stay in the
+                // bar below, each with its own switch.
+                .overlay {
+                    if let why = attachMediaOffText { AttachMediaOffNotice(text: why) }
+                }
                 .overlay(alignment: .bottom) { sourceBar }
                 // ⛔ THE CLOSE SITS TOP-LEFT OF THE SHEET — owner 2026-10-14: "top left, 44, liquid
                 // glass". Shown only at full height once the grid has been scrolled a row; it fades in
@@ -8688,6 +8705,8 @@ struct ThreadView: View {
         // The one message to a stranger is text only (owner's spec, 2026-09-11 §9; the rules
         // refuse anything else on it). No "+", no GIF, no mic while it is being written.
         s.textOnly = requestStance == .firstMessage
+        // Stickers off in this group (owner 2026-10-20): no sticker button, nothing else moves.
+        s.stickersOff = heldBackText(.sendStickers, .stickers) != nil
         s.banners = composerBanners
         // The bar is shown the REVEALED hold, not the raw touch-down — see `holdRevealed`.
         s.holdStarted = holdStarted && holdRevealed
@@ -12323,4 +12342,26 @@ private struct PinBarMenuButton: UIViewRepresentable {
 private struct SplitBody<Content: View>: View {
     let content: () -> Content
     var body: some View { content() }
+}
+
+/// The attach sheet's grid when photos and videos are off for me: an icon and one line, on the
+/// sheet's own background, centred above the source bar.
+private struct AttachMediaOffNotice: View {
+    let text: String
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "photo.badge.exclamationmark")
+                .font(.system(size: 44, weight: .regular))
+                .foregroundStyle(.secondary)
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.bottom, 60)
+        .background(Color(uiColor: .systemGroupedBackground))
+        .accessibilityElement(children: .combine)
+    }
 }

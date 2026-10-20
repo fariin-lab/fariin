@@ -835,9 +835,11 @@ final class ChatComposerView: UIView {
         stripRecording.isUserInteractionEnabled = !s.reviewing
         stripReview.alpha = s.reviewing ? 1 : 0
         stripReview.isUserInteractionEnabled = s.reviewing
-        gifButton.alpha = (!s.recordingActive && !s.hasText && !s.textOnly) ? 1 : 0
+        let fieldIcons: CGFloat = (!s.recordingActive && !s.hasText && !s.textOnly) ? 1 : 0
+        gifButton.alpha = s.stickersOff ? 0 : fieldIcons
+        gifButton.isUserInteractionEnabled = !s.stickersOff
         // Gone while the sticker panel is up (owner 2026-10-18), back when it closes.
-        cameraButton.alpha = stickerPanelUp ? 0 : gifButton.alpha
+        cameraButton.alpha = stickerPanelUp ? 0 : fieldIcons
         // The mic sits ABOVE the pill now, so it must go when the locked strip takes the pill (the "1"
         // lives in its slot then). While a finger holds it only the glyph fades — the view stays, so
         // the gesture keeps tracking; a lock ends the gesture, and then the whole button can leave.
@@ -1547,7 +1549,8 @@ extension ChatComposerView: UITextViewDelegate {
         gifButton.icon.image = (on ? UIImage(named: "ic_keyboard") : UIImage(named: "ic_gif"))?
             .withRenderingMode(.alwaysTemplate)
         gifButton.accessibilityLabel = on ? "Keyboard" : "GIF"
-        let cameraAlpha = on ? 0 : gifButton.alpha
+        // The camera's own rule, not the sticker button's (which may be hidden for this group).
+        let cameraAlpha: CGFloat = on ? 0 : ((!shown.recordingActive && !shown.hasText && !shown.textOnly) ? 1 : 0)
         UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
             self.cameraButton.alpha = cameraAlpha
         }

@@ -40,6 +40,8 @@ struct ChatComposerState: Equatable {
     /// stranger is being written there is no "+", no GIF and no mic, and the pill takes the whole
     /// bar. The rules refuse anything but text on that message; this just does not offer it.
     var textOnly = false
+    /// Stickers are off for me in this group: the sticker button is not shown.
+    var stickersOff = false
     /// Reply / edit / link cards stacked above the field, in this order. Empty while recording.
     var banners: [ChatComposerBanner] = []
 
