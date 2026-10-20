@@ -375,8 +375,11 @@ struct OfficialChatView: View {
     /// The official channel in the UIKit header: its bundled mark for the avatar, its tick in the
     /// reference app's title-icon slot, its tagline as the subtitle.
     private var headerModel: ChatHeaderModel {
-        var m = ChatHeaderModel(name: OfficialChannel.name, photoUrl: nil)
-        m.avatarAsset = UIImage(named: "welcome-mark")
+        // The url rides along so the header redraws when the admins change the picture (the model's
+        // equality ignores the asset).
+        let pic = OfficialConfig.shared
+        var m = ChatHeaderModel(name: OfficialChannel.name, photoUrl: pic.photoUrl.isEmpty ? nil : pic.photoUrl)
+        m.avatarAsset = pic.photo ?? (pic.photoUrl.isEmpty ? UIImage(named: "official-mark") : nil)
         m.subtitle = OfficialChannel.subtitle
         m.titleIcon = ChatHeaderModel.officialTick()
         m.backdrop = WallpaperBlur.headerBackdrop(for: OfficialChannel.cid, dark: dark)
@@ -870,7 +873,8 @@ struct OfficialAvatar: View {
 
     var body: some View {
         Group {
-            if let ui = UIImage(named: "welcome-mark") {
+            // The admins' picture, else the white bubble on black (owner 2026-10-20).
+            if let ui = OfficialConfig.shared.avatar {
                 Image(uiImage: ui).resizable().scaledToFill()
             } else {
                 // The mark is compiled into the app, so this cannot happen in a shipped build. It is

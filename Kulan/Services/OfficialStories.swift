@@ -169,12 +169,17 @@ final class OfficialStories {
     /// launch window, before the image caches settle, and a once-per-launch flag never put it back.
     /// The bytes are made once and kept; storing them again is cheap.
     private static var avatarBytes: (UIImage, Data)? = {
-        guard let img = UIImage(named: "welcome-mark"), let data = img.jpegData(compressionQuality: 0.9)
+        guard let img = UIImage(named: "official-mark"), let data = img.jpegData(compressionQuality: 0.9)
         else { return nil }
         return (img, data)
     }()
     private static func avatarURL() -> String {
-        let urlStr = "https://fariin.local/official-fariin-avatar.jpg"
+        // The admins' picture when there is one (owner 2026-10-20); the bundled mark otherwise.
+        let set = OfficialConfig.shared.photoUrl
+        if !set.isEmpty { return set }
+        // A new name with the new mark, so a phone that cached the blue one under the old name
+        // does not keep showing it.
+        let urlStr = "https://fariin.local/official-fariin-avatar-black.jpg"
         guard let url = URL(string: urlStr), let bytes = avatarBytes else { return urlStr }
         let (img, data) = bytes
         DiskImageCache.shared.store(img, data: data, for: urlStr)

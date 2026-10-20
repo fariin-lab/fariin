@@ -58,15 +58,42 @@ final class OfficialConfig {
     /// means), `gold`, or `none`. Read by `VerifiedTick` and the official chat header.
     private(set) var badge: OfficialBadge = .blue
 
+    /// ⛔ THE FARIIN CHAT'S PICTURE — owner 2026-10-20: the white bubble on black by default, and
+    /// admins change it from the panel (`officialPhotoSet`). Empty = the bundled `official-mark`.
+    /// Kept in UserDefaults so a cold start draws the last picture on its first frame.
+    private(set) var photoUrl: String = UserDefaults.standard.string(forKey: OfficialConfig.photoKey) ?? ""
+    /// The downloaded picture, or nil while it loads (the bundled mark shows meanwhile).
+    private(set) var photo: UIImage?
+    private static let photoKey = "official.photoUrl"
+    /// What every Fariin avatar draws.
+    var avatar: UIImage? { photo ?? UIImage(named: "official-mark") }
+
     var hasAppStoreUrl: Bool { URL(string: appStoreUrl)?.scheme?.hasPrefix("http") == true }
 
     func start() {
         stop()
+        setPhotoUrl(photoUrl)
         listener = Firestore.firestore().collection("config").document("official")
             .addSnapshotListener { [weak self] snap, _ in
                 self?.appStoreUrl = snap?.data()?["appStoreUrl"] as? String ?? ""
                 self?.badge = OfficialBadge(rawValue: snap?.data()?["badge"] as? String ?? "") ?? .blue
+                // A failed read keeps the last picture rather than flashing back to the logo.
+                if let data = snap?.data() { self?.setPhotoUrl(data["photoUrl"] as? String ?? "") }
             }
+    }
+
+    private func setPhotoUrl(_ url: String) {
+        if url != photoUrl {
+            photoUrl = url
+            UserDefaults.standard.set(url, forKey: Self.photoKey)
+        }
+        guard !url.isEmpty else { photo = nil; return }
+        if let warm = ProfilePhotoLoader.shared.cachedAvatar(url) { photo = warm; return }
+        photo = nil
+        Task { @MainActor [weak self] in
+            let img = await ProfilePhotoLoader.shared.avatar(url)
+            if self?.photoUrl == url { self?.photo = img }
+        }
     }
 
     func stop() { listener?.remove(); listener = nil }
