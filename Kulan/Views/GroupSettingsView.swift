@@ -1088,18 +1088,14 @@ struct GroupRequestsView: View {
 
     @ViewBuilder private var requestsSections: some View {
         if joinReqs.isEmpty {
+            // ⛔ ONE QUIET CARD (owner 2026-10-20, with a screenshot): a line in the card, a note under.
             Section {
-                VStack(spacing: 10) {
-                    Image(systemName: "person.badge.clock").font(.system(size: 38)).foregroundStyle(.secondary)
-                    Text("No one is waiting to join").font(.headline)
-                    Text(approvalLine).font(.subheadline).foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity).padding(.vertical, 18)
+                Text("No one is waiting to join.")
+                    .font(.body).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 6)
             } footer: {
-                if links?.primary != nil {
-                    Text("Change this under Invite Link › Approve New Members.")
-                }
+                Text("People who ask to join “\(conv?.title ?? "this group")” with a group link show up here.")
             }
         } else {
             Section("Waiting to join") {
