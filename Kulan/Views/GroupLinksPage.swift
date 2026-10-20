@@ -38,6 +38,7 @@ struct GroupLinksPage: View {
     @State private var editTarget: LinkEditTarget?
     @State private var qrLink: GroupLink?
     @State private var publicQR = false
+    @State private var triedAutoLink = false
     /// The link whose own sheet is up (owner 2026-10-20: a tap opens a sheet, not a menu).
     @State private var detailLink: GroupLink?
     /// What the sheet asked for once it is down (a page sheet cannot open over it).
@@ -264,7 +265,13 @@ struct GroupLinksPage: View {
             GroupLinksCache.lists[cid] = fresh
             loadError = nil
             // A group with no link (turned off before Turn Off went away): one is made at once.
-            if fresh.primary == nil, !working, publicURL == nil { createPrimary() }
+            // Once per page, for a loaded group that is open (audit 2026-10-20: an ended group tried
+            // on every open, and a public one not loaded yet got a stray private link).
+            if fresh.primary == nil, !working, !triedAutoLink, let c = groupConv,
+               !c.isPublic, c.groupMod.state == "ok" {
+                triedAutoLink = true
+                createPrimary()
+            }
         } catch {
             if list == nil {
                 loadError = GroupInviteService.errorText(error, "The links could not be loaded. Try again.")

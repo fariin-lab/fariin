@@ -145,7 +145,7 @@ struct GroupHistoryEvent: Identifiable {
         }
     }
     enum Kind {
-        case created, joined, joinedByLink, added, left, removed
+        case created, joined, joinedByLink, added, left, removed, ended
         case madeAdmin, adminRemoved, owner, restricted, unrestricted
         case renamed, photo, wallpaper, badge
         case slowMode, disappearing, sending, other
@@ -155,7 +155,7 @@ struct GroupHistoryEvent: Identifiable {
             case .created, .joined, .joinedByLink, .added, .left, .removed: return .members
             case .madeAdmin, .adminRemoved, .owner, .restricted, .unrestricted: return .admins
             case .renamed, .photo, .wallpaper, .badge: return .info
-            case .slowMode, .disappearing, .sending, .other: return .settings
+            case .slowMode, .disappearing, .sending, .other, .ended: return .settings
             }
         }
         var icon: String {
@@ -178,11 +178,12 @@ struct GroupHistoryEvent: Identifiable {
             case .disappearing: return "clock.badge.xmark"
             case .sending: return "bubble.left.and.bubble.right"
             case .other: return "gearshape"
+            case .ended: return "xmark.circle"
             }
         }
         var tint: Color {
             switch self {
-            case .left, .removed, .adminRemoved, .restricted: return .red
+            case .left, .removed, .adminRemoved, .restricted, .ended: return .red
             case .owner: return .orange
             case .created, .joined, .joinedByLink, .added, .unrestricted: return .green
             default: return .blue
@@ -207,6 +208,7 @@ struct GroupHistoryEvent: Identifiable {
         if t.hasSuffix("via invite link") { return .joinedByLink }
         if t.hasSuffix(" joined the group") { return .joined }
         if t.hasSuffix(" created the group") { return .created }
+        if t.hasSuffix(" ended the group") { return .ended }
         if t.hasSuffix(" left") || t.hasSuffix(" left the group") { return .left }
         if t.hasSuffix(" as admin") || t.hasSuffix(" as an admin.") { return .adminRemoved }
         if t.hasSuffix(" is now the owner") || t.hasSuffix(" the owner of this group.") { return .owner }

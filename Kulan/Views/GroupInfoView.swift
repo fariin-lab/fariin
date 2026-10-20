@@ -800,6 +800,8 @@ struct GroupInfoView: View {
         .animation(.easeInOut(duration: 0.2), value: joinReqs.isEmpty)
         .profileSurface(plain: cardColor)
         .onAppear { followJoinRequests() }
+        // Made an admin while the page is open: the requests start then (audit 2026-10-20).
+        .onChange(of: can(.inviteUsers)) { _, _ in followJoinRequests() }
     }
 
     private var joinRequestsRow: some View {

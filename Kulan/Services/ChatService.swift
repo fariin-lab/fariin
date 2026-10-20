@@ -858,9 +858,10 @@ enum ChatService {
     /// someone adds me), then I leave. Joining again by a link stays my own choice.
     static func blockGroup(cid: String) async throws {
         guard let me = Auth.auth().currentUser?.uid else { return }
+        // Out first: a leave that fails leaves no block behind on a group I am still in (audit).
+        try await leaveGroup(cid: cid)
         try await db.collection("users").document(me).collection("blockedGroups").document(cid)
             .setData(["at": FieldValue.serverTimestamp()])
-        try await leaveGroup(cid: cid)
     }
 
     /// Chat history for new members (owner 2026-10-20): Hidden stamps the moment (server time);
