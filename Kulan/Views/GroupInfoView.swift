@@ -90,7 +90,10 @@ struct GroupInfoView: View {
 
     struct MemberAction: Identifiable, Hashable { let id: String; let name: String; let isAdmin: Bool }
 
-    private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
+    /// The group's own document first (owner 2026-10-20: a role given or taken showed only after a
+    /// refresh), the chat list's copy until it answers.
+    @State private var live = LiveGroupDoc()
+    private var conv: Conversation? { live.conv ?? repo.conversations.first { $0.id == cid } }
     private var iAmAdmin: Bool { conv?.isAdmin(me) ?? false }
     private var iAmOwner: Bool { conv?.createdBy == me && !(conv?.createdBy.isEmpty ?? true) }
     // Per-flag admin right check (owner = all; legacy admin with no adminRights entry = all).
@@ -261,6 +264,7 @@ struct GroupInfoView: View {
             .fullScreenCover(isPresented: $showCall) { GroupCallView() }
             // Local first (offline + instant), then the server; a failed load leaves what we have.
             .task {
+                live.start(cid)   // roles and rights change in front of you (2026-10-20)
                 saveChoice = AutoSaveToPhotos.choice(for: cid)
                 if let local = ThreadMessageCache.shared.messages(for: cid) {
                     let localMedia = local
@@ -2102,7 +2106,9 @@ struct GroupMembersSheet: View {
     @State private var showInvite = false
 
     private struct OpenedMember: Identifiable { let id: String }
-    private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
+    // The group itself, live (2026-10-20): roles and rights show the moment they change.
+    @State private var live = LiveGroupDoc()
+    private var conv: Conversation? { live.start(cid); return live.conv ?? repo.conversations.first { $0.id == cid } }
     private var canAdd: Bool { (conv?.adminCan(me, .inviteUsers) ?? false) || (conv?.membersCanAdd ?? false) }
     private var canInvite: Bool { conv?.adminCan(me, .inviteUsers) ?? false }
 

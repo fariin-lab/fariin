@@ -385,7 +385,9 @@ struct GroupAdminsView: View {
     /// The member picked in Add Admin; their Add Admin page is pushed in the sheet.
     @State private var pickedAdmin: String?
 
-    private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
+    // The group itself, live (2026-10-20): roles and rights show the moment they change.
+    @State private var live = LiveGroupDoc()
+    private var conv: Conversation? { live.start(cid); return live.conv ?? repo.conversations.first { $0.id == cid } }
     private var canAddAdmins: Bool { conv?.adminCan(me, .addAdmins) ?? false }
     /// The admins (owner first) and everyone else, from one sort of the members.
     private func split(_ c: Conversation?) -> (admins: [String], others: [String]) {
@@ -486,7 +488,9 @@ struct AddAdminPage: View {
     @State private var busy = false
     @State private var actionError: String?
 
-    private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
+    // The group itself, live (2026-10-20): roles and rights show the moment they change.
+    @State private var live = LiveGroupDoc()
+    private var conv: Conversation? { live.start(cid); return live.conv ?? repo.conversations.first { $0.id == cid } }
     private var name: String { conv?.names[uid] ?? "User" }
     private var grantable: [Conversation.Right] {
         let mine = Set(conv?.adminRightsOf(me).map(\.rawValue) ?? [])
@@ -595,7 +599,9 @@ struct GroupRemovedUsersView: View {
     @State private var busy: String?
     @State private var actionError: String?
 
-    private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
+    // The group itself, live (2026-10-20): roles and rights show the moment they change.
+    @State private var live = LiveGroupDoc()
+    private var conv: Conversation? { live.start(cid); return live.conv ?? repo.conversations.first { $0.id == cid } }
 
     var body: some View {
         List {
@@ -735,7 +741,9 @@ struct GroupMembersListView: View {
     @State private var pendingRemove: String?
     @State private var removeError: String?
 
-    private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
+    // The group itself, live (2026-10-20): roles and rights show the moment they change.
+    @State private var live = LiveGroupDoc()
+    private var conv: Conversation? { live.start(cid); return live.conv ?? repo.conversations.first { $0.id == cid } }
     private var canAdd: Bool { (conv?.adminCan(me, .inviteUsers) ?? false) || (conv?.membersCanAdd ?? false) }
     private func canRemove(_ uid: String) -> Bool {
         guard let c = conv, uid != me, !c.isOwner(uid), c.adminCan(me, .banUsers) else { return false }
@@ -833,7 +841,9 @@ struct GroupRequestsView: View {
     /// nil until it answers or when it fails, then the group doc's old `inviteCode`.
     @State private var shareCode: String?
 
-    private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
+    // The group itself, live (2026-10-20): roles and rights show the moment they change.
+    @State private var live = LiveGroupDoc()
+    private var conv: Conversation? { live.start(cid); return live.conv ?? repo.conversations.first { $0.id == cid } }
 
     private func loadShareCode() async {
         do { shareCode = try await GroupInviteService.shareCode(cid: cid) ?? "" } catch { shareCode = nil }
@@ -1171,5 +1181,29 @@ final class HeldConversation { var conv: Conversation? }
 /// the box goes (and removes the listener) only when the page itself leaves the stack.
 final class ListenerBox {
     var reg: ListenerRegistration?
+    deinit { reg?.remove() }
+}
+
+/// ⛔ THE GROUP'S OWN DOCUMENT, LIVE (owner 2026-10-20: "made admin, the page did not show it until I
+/// went back in"). The chat list's feed is a windowed, coalesced query; a page that shows roles and
+/// rights listens to the group itself. A reference type, so holding it in a view's @State costs a
+/// pointer on the stack, not a whole Conversation (see the ThreadView stack note, build 990).
+@Observable
+final class LiveGroupDoc {
+    private(set) var conv: Conversation?
+    @ObservationIgnored private var reg: ListenerRegistration?
+    @ObservationIgnored private var started: String?
+
+    func start(_ cid: String) {
+        guard started != cid, !cid.isEmpty else { return }
+        started = cid
+        reg?.remove()
+        reg = Firestore.firestore().collection("conversations").document(cid)
+            .addSnapshotListener { [weak self] snap, _ in
+                guard let snap, snap.exists, let data = snap.data() else { return }
+                self?.conv = Conversation(id: snap.documentID, data: data)
+            }
+    }
+
     deinit { reg?.remove() }
 }
