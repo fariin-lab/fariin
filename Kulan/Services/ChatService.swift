@@ -969,7 +969,9 @@ enum ChatService {
     /// subset of Conversation.Restrict raw values; `until` is an absolute ms timestamp (0 = clear).
     static func restrictMember(cid: String, uid: String, name: String, flags: [String], until: Double) async throws {
         let convRef = db.collection("conversations").document(cid)
-        if flags.isEmpty || until <= Date().timeIntervalSince1970 * 1000 {
+        // The server's clock, which the rules judge `until` by (audit 2026-10-20: a phone running
+        // behind made a 1 hour mute already over when it landed).
+        if flags.isEmpty || until <= ServerClock.now.timeIntervalSince1970 * 1000 {
             try await convRef.updateData([
                 "restrictedFlags.\(uid)": FieldValue.delete(),
                 "restrictedUntil.\(uid)": FieldValue.delete(),
@@ -989,7 +991,7 @@ enum ChatService {
     /// Convenience: fully mute a member (block all sending) for `seconds` (0 = forever).
     static func muteMember(cid: String, uid: String, name: String, seconds: Double) async throws {
         let forever = 60.0 * 60 * 24 * 365 * 50   // ~50y sentinel = "forever"
-        let until = (Date().timeIntervalSince1970 + (seconds > 0 ? seconds : forever)) * 1000
+        let until = (ServerClock.now.timeIntervalSince1970 + (seconds > 0 ? seconds : forever)) * 1000
         try await restrictMember(cid: cid, uid: uid, name: name, flags: Conversation.muteAllFlags, until: until)
     }
 

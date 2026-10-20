@@ -252,6 +252,9 @@ struct GroupTypeView: View {
                 check = .idle
             } catch {
                 saveError = error.localizedDescription
+                // Taken at Save (someone was quicker): the line under the field says so too, not
+                // "free to use" (audit 2026-10-20).
+                if saveError == GroupNameCheck.taken.text { check = .taken }
             }
             saving = false
         }

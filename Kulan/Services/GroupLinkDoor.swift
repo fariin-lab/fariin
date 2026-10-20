@@ -190,7 +190,9 @@ private let memberCodes = OSAllocatedUnfairLock(initialState: [String: String]()
     static func noteRequested(_ code: String) {
         if var p = cached(code) {
             p.requested = true
-            known[code] = Known(outcome: .found(p), full: true, at: Date())
+            // Trusted for 20 s, not the full two minutes: an admin may decline at once, and the
+            // card should then let the person ask again (audit 2026-10-20).
+            known[code] = Known(outcome: .found(p), full: true, at: Date().addingTimeInterval(20 - trust))
         }
     }
 

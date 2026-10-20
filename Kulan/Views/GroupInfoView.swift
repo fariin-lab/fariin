@@ -1623,7 +1623,8 @@ struct GroupMemberSheet: View {
     private var me: String { AuthService.shared.uid ?? "" }
     private var isOwner: Bool { member.id == ownerUid }
     private var iAmOwner: Bool { ownerUid == me }
-    private var isMuted: Bool { mutedUntil > Date().timeIntervalSince1970 * 1000 }
+    // An admin is never held back (the rules exempt them), so no "Lift Restrictions" for one (audit).
+    private var isMuted: Bool { !member.isAdmin && !isOwner && mutedUntil > ServerClock.now.timeIntervalSince1970 * 1000 }
 
     @State private var busy = false
     @State private var actionError: String?

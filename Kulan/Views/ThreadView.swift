@@ -2450,7 +2450,7 @@ struct ThreadView: View {
     private var muteLiftKey: Double { isGroup ? (conversation?.restrictedUntil[me] ?? 0) : 0 }
 
     private func waitForMuteLift() async {
-        let wait = muteLiftKey / 1000 - Date().timeIntervalSince1970
+        let wait = muteLiftKey / 1000 - ServerClock.now.timeIntervalSince1970
         guard wait > 0 else { return }
         try? await Task.sleep(nanoseconds: UInt64((wait + 0.5) * 1_000_000_000))
         guard !Task.isCancelled else { return }
@@ -4768,7 +4768,14 @@ struct ThreadView: View {
         let names = conversation?.names ?? [:]
         func nm(_ u: String) -> String { let n = names[u] ?? ""; return n.isEmpty ? "Member" : n }
         // No end date, as the reference app's sheet: the ~50 year sentinel the Mute "forever" uses.
-        let forever = (Date().timeIntervalSince1970 + 60 * 60 * 24 * 365 * 50) * 1000
+        let forever = (ServerClock.now.timeIntervalSince1970 + 60 * 60 * 24 * 365 * 50) * 1000
+        // A restriction that already has an end keeps it (audit 2026-10-20: a 1 hour mute changed
+        // here became a forever one). The sheet starts from what they are held back from now.
+        let nowMs = ServerClock.now.timeIntervalSince1970 * 1000
+        let ends: [String: Double] = Dictionary(uniqueKeysWithValues: o.restrict.keys.compactMap { u in
+            guard let t = conversation?.restrictedUntil[u], t > nowMs, t < forever - 86_400_000 else { return nil }
+            return (u, t)
+        })
         Task {
             for (a, ids) in o.reportSpam {
                 await ChatService.reportSpam(reportedUid: a, cid: cid, messageIds: ids)
@@ -4780,7 +4787,7 @@ struct ThreadView: View {
             for (a, f) in o.restrict {
                 do {
                     try await ChatService.restrictMember(cid: cid, uid: a, name: nm(a), flags: f,
-                                                         until: f.isEmpty ? 0 : forever)
+                                                         until: f.isEmpty ? 0 : (ends[a] ?? forever))
                 } catch { refused = true }
             }
             var said: [String] = []
