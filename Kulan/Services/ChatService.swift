@@ -871,7 +871,7 @@ enum ChatService {
         guard !t.isEmpty else { return }
         let convRef = db.collection("conversations").document(cid)
         try await convRef.updateData(["title": t, "updatedAt": FieldValue.serverTimestamp()])
-        try await writeSystemMessage(cid: cid, text: "\(myName()) renamed the group to “\(t)”")
+        try? await writeSystemMessage(cid: cid, text: "\(myName()) renamed the group to “\(t)”")
     }
 
     /// Promote a member to admin (owner, or an admin with "Add new admins") + system message.
@@ -900,7 +900,7 @@ enum ChatService {
             data["restrictedUntil.\(promoted)"] = FieldValue.delete()
         }
         try await convRef.updateData(data)
-        try await writeSystemMessage(cid: cid, text: "\(myName()) made \(name) an admin")
+        try? await writeSystemMessage(cid: cid, text: "\(myName()) made \(name) an admin")
     }
 
     /// Demote an admin back to a regular member (the owner, or the admin who promoted them) + system
@@ -914,7 +914,7 @@ enum ChatService {
             "adminEdit": ["uid": demoted, "by": uid],
             "updatedAt": FieldValue.serverTimestamp(),
         ])
-        try await writeSystemMessage(cid: cid, text: "\(myName()) removed \(name) as admin")
+        try? await writeSystemMessage(cid: cid, text: "\(myName()) removed \(name) as admin")
     }
 
     /// Set an admin's granted per-flag rights (the owner, or the admin who promoted them). `rights`
@@ -975,14 +975,14 @@ enum ChatService {
                 "restrictedUntil.\(uid)": FieldValue.delete(),
                 "updatedAt": FieldValue.serverTimestamp(),
             ])
-            try await writeSystemMessage(cid: cid, text: "\(myName()) lifted the restrictions on \(name)")
+            try? await writeSystemMessage(cid: cid, text: "\(myName()) lifted the restrictions on \(name)")
         } else {
             try await convRef.updateData([
                 "restrictedFlags.\(uid)": flags,
                 "restrictedUntil.\(uid)": until,
                 "updatedAt": FieldValue.serverTimestamp(),
             ])
-            try await writeSystemMessage(cid: cid, text: "\(myName()) restricted \(name)")
+            try? await writeSystemMessage(cid: cid, text: "\(myName()) restricted \(name)")
         }
     }
 
