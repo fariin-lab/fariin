@@ -160,11 +160,17 @@ actor LinkPreviewService {
 
     /// The invite code in one of OUR group links, `https://fariin.com/g/<code>`, or nil.
     static func groupCode(in url: URL) -> String? {
-        guard let host = url.host?.lowercased().replacingOccurrences(of: "www.", with: ""),
-              host == "fariin.com" else { return nil }
+        guard let host = url.host?.lowercased().replacingOccurrences(of: "www.", with: "") else { return nil }
         let parts = url.path.split(separator: "/").map(String.init)
-        guard parts.count == 2, parts[0] == "g" else { return nil }
-        let code = parts[1].trimmingCharacters(in: .whitespaces)
+        let raw: String
+        if host == KulanApp.groupHost, parts.count == 1 {
+            raw = parts[0]                                   // group.fariin.com/<code> (2026-10-20)
+        } else if host == "fariin.com", parts.count == 2, parts[0] == "g" {
+            raw = parts[1]                                   // the old form, still in chats
+        } else {
+            return nil
+        }
+        let code = raw.trimmingCharacters(in: .whitespaces)
         guard !code.isEmpty, !code.contains("/"), code != ".", code != "..", code.count <= 128,
               !(code.hasPrefix("__") && code.hasSuffix("__")) else { return nil }
         return code

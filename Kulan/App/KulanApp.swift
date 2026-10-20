@@ -201,8 +201,11 @@ struct KulanApp: App {
         "\(linkHost)/u/\(handle.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? handle)"
     }
 
+    /// ⛔ GROUP INVITE LINKS LIVE ON THEIR OWN HOST (owner 2026-10-20): https://group.fariin.com/<code>.
+    /// fariin.com/g/<code> is still read, for links already sent.
+    static let groupHost = "group.fariin.com"
     static func groupLink(code: String) -> String {
-        "\(linkHost)/g/\(code.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? code)"
+        "https://\(groupHost)/\(code.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? code)"
     }
 
     /// ⛔ A STORY'S OWN ADDRESS — owner, 2026-09-11, with what Share was actually putting on his
@@ -264,6 +267,11 @@ struct KulanApp: App {
                 guard parts.count == 2, parts[0] == "voice" || parts[0] == "video",
                       let key = CallLinkKey(compact: parts[1]) else { return nil }
                 return .call(key: key.text)
+            }
+            // A GROUP LINK on its own host (owner 2026-10-20): the code is the whole path.
+            if host == KulanApp.groupHost {
+                guard parts.count == 1, Self.safeSegment(parts[0]) else { return nil }
+                return .group(parts[0])
             }
             guard host == "fariin.com" || host == "www.fariin.com" else { return nil }
             if parts.count == 2, parts[0] == "voice" || parts[0] == "video" {
