@@ -28,7 +28,7 @@ struct GroupPublicLinkCard: View {
             }
             .profileSurface(plain: cardColor)
             .sheet(isPresented: $showQR) { GroupLinkQRSheet(title: title, link: link, photo: photo, memberCount: memberCount) }
-            .sheet(isPresented: $showShare) { ForwardPicker(shareText: link) }
+            .sheet(isPresented: $showShare) { SendContactSheet(contactText: link) }
     }
 
     private var row: some View {

@@ -233,7 +233,7 @@ struct GroupInfoView: View {
             // A full page, pushed (owner 2026-10-18), not a half sheet.
             .sheet(item: Binding(get: { shareGroupText.map { ShareText(id: $0) } },
                                  set: { shareGroupText = $0?.id })) { t in
-                ForwardPicker(shareText: t.id)
+                SendContactSheet(contactText: t.id)   // the profile's Share with sheet (owner 2026-10-20)
             }
             .navigationDestination(isPresented: $showInvite) {
                 InviteLinkSheet(cid: cid, groupTitle: title, groupPhoto: conv?.avatarUrl,
