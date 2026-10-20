@@ -3,6 +3,11 @@ name: Store Screenshots
 # 2026-10-20 (owner): uploads fastlane/screenshots to the App Store listing. Manual only.
 on:
   workflow_dispatch:
+  # Also when the pictures change on `work` (a new manual workflow cannot be started until it is
+  # on the default branch).
+  push:
+    branches: [work]
+    paths: ['fastlane/screenshots/**', '.github/workflows/store-screenshots.yml']
 
 jobs:
   screenshots:
