@@ -436,7 +436,8 @@ struct GroupInfoView: View {
             if !desc.isEmpty {
                 // The description reads as text, the count as a label (owner 2026-10-20: the two
                 // looked the same): full ink and the body size, a little more room above it.
-                Text(desc).font(.body).foregroundStyle(ink)
+                // Soft, not full white (owner 2026-10-20): above the count's grey, below the name.
+                Text(desc).font(.body).foregroundStyle(ink.opacity(0.82))
                     .lineLimit(3).multilineTextAlignment(.center)
                     .padding(.top, 6)
             } else if canEditInfo {
