@@ -1885,7 +1885,8 @@ service cloud.firestore {
           // (`restrictedBy` and the three older restriction fields) are group rules like the rest.
           && (!keys.hasAny(['title', 'avatarUrl', 'desc', 'disappearSeconds', 'onlyAdminsSend',
                             'membersCanAdd', 'membersCanEditInfo', 'onlyAdminsCall', 'wallpaper',
-                            'membersCanShareLink', 'restrictedBy', 'restrictRequest', 'noScreenshots', 'noForwarding', 'noSaving'])
+                            'membersCanShareLink', 'restrictedBy', 'restrictRequest', 'noScreenshots', 'noForwarding', 'noSaving',
+                            'memberSend'])
               || adminHasRight('changeInfo'))
           // owner 2026-10-18: the self-set Member Label (`memberLabels`, never shipped) gave way to
           // Role (`roles`, roleWriteOK). Nothing writes the old field; only change-info could.
@@ -1962,7 +1963,7 @@ service cloud.firestore {
                   || (!keys.hasAny(['title', 'avatarUrl', 'desc', 'wallpaper', 'disappearSeconds', 'onlyAdminsSend',
                                     'membersCanAdd', 'membersCanEditInfo', 'onlyAdminsCall', 'restrictedBy',
                                     'membersCanShareLink', 'restrictRequest', 'noScreenshots', 'noForwarding', 'noSaving',
-                                    'memberLabels', 'roles', 'inviteCode'])
+                                    'memberLabels', 'roles', 'inviteCode', 'memberSend'])
                       && (!keys.hasAny(['lastMessage', 'lastSender', 'lastImageUrl', 'lastImageEnc', 'lastImages'])
                           || gone.size() > 0)
                       && (!('createdBy' in keys) || !(o.get('createdBy', '') in n.get('users', [])))
@@ -2358,6 +2359,28 @@ service cloud.firestore {
         // sealed text on an ordinary message (no `type`), so no phone puts plain words into a chat
         // that still promises end-to-end encryption. Notices and other typed messages are as before.
         // 1:1 chats are untouched.
+        // ⛔ WHAT MEMBERS MAY SEND — owner 2026-10-19 ("a teacher wants students to send text, not
+        // memes"). `memberSend` on the group: {media, voice, files, stickers, links}, a missing key
+        // or true = allowed. Admins are never limited; notices always pass. Types: image/video/album
+        // = media, audio = voice, file, sticker/gif = stickers. Links: a link card, or a plain-text
+        // group message with an address in it (an end-to-end encrypted group's text cannot be read
+        // here, so there the app alone keeps links out).
+        function memberSendOk() {
+          let d = request.resource.data;
+          let ms = convData().get('memberSend', {});
+          let t = d.get('type', '');
+          let txt = d.get('text', '');
+          return convData().get('type', '') != 'group'
+            || request.auth.uid in convData().get('admins', [])
+            || t == 'system' || leaveNotice()
+            || ((!(t in ['image', 'video', 'album']) || ms.get('media', true) != false)
+                && (t != 'audio' || ms.get('voice', true) != false)
+                && (t != 'file' || ms.get('files', true) != false)
+                && (!(t in ['sticker', 'gif']) || ms.get('stickers', true) != false)
+                && (ms.get('links', true) != false
+                    || (!('linkPreview' in d)
+                        && !(txt is string && txt.matches('(?si).*(https?://|www[.]).*')))));
+        }
         function groupTextOk() {
           let d = request.resource.data;
           let t = d.get('text', '');
@@ -2565,6 +2588,7 @@ service cloud.firestore {
           && linkPreviewOk()   // 2026-09-24 feature-audit: the card's own fields
           && voiceShapeOk()    // 2026-09-24 feature-audit: duration, waveform, one-time = no waveform
           && groupNoticeOK()   // 2026-10-19 group fix round S1: a group notice needs its reason
+          && memberSendOk()    // 2026-10-19 what members may send (photos, voice, files, stickers, links)
           // Announcement mode: when onlyAdminsSend is set, only admins may create messages.
           // 2026-10-19 group fix round M1: LEAVING ALWAYS WORKS. The leave transaction's own notices
           // ("X left", the heir lines) are refused by the three send gates below for a member of an

@@ -5111,6 +5111,28 @@ struct ThreadView: View {
         }
     }
 
+    /// A kind this member may not send right now, said in the composer's own notice (2026-10-19):
+    /// a per-member restriction or the group's `memberSend` switch. True = held back.
+    private func sendHeldBack(_ r: Conversation.Restrict, _ words: String) -> Bool {
+        guard isGroup, let conv = conversation,
+              conv.isRestricted(me, r, now: Date().timeIntervalSince1970 * 1000) else { return false }
+        let groupWide = Conversation.sendKind(for: r).map { !conv.maySend($0, me) } ?? false
+        restrictedNoticeText = groupWide ? "Admins turned off \(words) in this group."
+                                         : "An admin has turned off \(words) for you."
+        voiceRestricted = true
+        return true
+    }
+
+    /// Photos or videos picked in the "+" sheet while they are off for me: the sheet goes down
+    /// first, then the notice, so the alert is not lost under the sheet.
+    private func mediaHeldBackInSheet() -> Bool {
+        guard isGroup, let conv = conversation,
+              conv.isRestricted(me, .sendPhotos, now: Date().timeIntervalSince1970 * 1000) else { return false }
+        showAttachPanel = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { _ = sendHeldBack(.sendPhotos, "photos and videos") }
+        return true
+    }
+
     private func startGroupCall(video: Bool) {
         // Nobody to ring (owner 2026-10-19), as on the group info page.
         if (conversation?.users.count ?? 0) <= 1 { showJumpToast("You're the only one in this group"); return }
@@ -5164,9 +5186,16 @@ struct ThreadView: View {
                 // now and goes through `attachTile`, which already closes the sheet and waits the
                 // same 0.35s before opening the next screen.
                 onClose: { showAttachPanel = false },
-                onPickPhoto: { ui, assetId, load in openAttachPhoto(ui, assetId: assetId, load: load) },
-                onPickVideo: { poster, assetId, load in openAttachVideo(poster: poster, assetId: assetId, load: load) },
+                onPickPhoto: { ui, assetId, load in
+                    if mediaHeldBackInSheet() { return }
+                    openAttachPhoto(ui, assetId: assetId, load: load)
+                },
+                onPickVideo: { poster, assetId, load in
+                    if mediaHeldBackInSheet() { return }
+                    openAttachVideo(poster: poster, assetId: assetId, load: load)
+                },
                 onSendVideos: { urls, caption in
+                    if mediaHeldBackInSheet() { return }
                     showAttachPanel = false
                     // SELECT + Send → send each selected video directly (no editor). The caption rides
                     // ONCE, on the first video (was duplicated onto every video in the batch).
@@ -5188,6 +5217,7 @@ struct ThreadView: View {
                     }
                 },
                 onSendMixed: { items, caption, clientId in
+                    if mediaHeldBackInSheet() { return }
                     // SELECT + Send with a mix (or 2+) → ONE grouped album message (photos + videos).
                     showAttachPanel = false
                     Task {
@@ -5442,8 +5472,12 @@ struct ThreadView: View {
                     // be the grid's first cell is DELETED rather than kept as a second door. It goes
                     // first because it is the only one of the five that makes something new; the
                     // other four go and fetch something that already exists.
-                    attachTile("ic_gif_tile", "GIF") { attachGif = true }
-                    attachTile("ic_file", "Files") { attachFiles = true }
+                    attachTile("ic_gif_tile", "GIF") {
+                        if !sendHeldBack(.sendStickers, "stickers and GIFs") { attachGif = true }
+                    }
+                    attachTile("ic_file", "Files") {
+                        if !sendHeldBack(.sendFiles, "files") { attachFiles = true }
+                    }
                     attachTile("ic_location", "Location") { attachLocation = true }
                     if isGroup { attachTile("chart.bar", "Poll") { showPollComposer = true } }
                 }
@@ -5954,6 +5988,10 @@ struct ThreadView: View {
     private func send() {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        // Links off for me (the group's switch or my own restriction): the server would refuse
+        // the whole message, so it stays in the field and the notice says why (2026-10-19).
+        if LinkPreviewService.firstURL(in: text) != nil || text.range(of: "www.", options: .caseInsensitive) != nil,
+           sendHeldBack(.sendLinks, "links") { return }
         impact(.light)   // tactile send (parity with voice release)
         // ⛔ BEFORE THE COMPOSER IS TOUCHED. Everything below shrinks the bar — the input clears,
         // the reply banner animates away — and the list is pinned to the bottom, so it follows the
@@ -8024,7 +8062,7 @@ struct ThreadView: View {
         // owner 2026-10-18: a partial restriction (AdminDeleteSheet's switches) says which kinds.
         if isGroup, let conv = conversation {
             let off = conv.blockedSendWords(me, now: Date().timeIntervalSince1970 * 1000)
-            if !off.isEmpty { return "An admin has turned off \(ListFormatter.localizedString(byJoining: off)) for you." }
+            if !off.isEmpty { return "An admin has turned off \(ListFormatter.localizedString(byJoining: off))." }
         }
         if cannotMessageThem { return "You can't message \(title)" }
         if requestStance == .awaitingReply { return "You can send another message once \(title) replies." }
@@ -8580,6 +8618,7 @@ struct ThreadView: View {
         // 2026-09-24 decision D-composer-5: a pasted picture opens the same approval the picker
         // does (one → the photo editor, several → the pager), after the keyboard is down, as "+".
         a.pasteImages = { imgs in
+            if sendHeldBack(.sendPhotos, "photos and videos") { return }
             let pick = Array(imgs.prefix(Limits.mediaPerMessage))
             inputFocused = false
             keyboard.onceHidden {
@@ -8624,6 +8663,7 @@ struct ThreadView: View {
             }
         }
         a.gif = {
+            if sendHeldBack(.sendStickers, "stickers and GIFs") { return }
             // Same as "+", all the way — owner, 2026-08-25, build 681: "the keyboard goes away, but
             // the composer is still visible while the GIF sheet is opening… close the keyboard and
             // composer first, then open the sheet." The picker used to be presented in the same
@@ -8646,10 +8686,14 @@ struct ThreadView: View {
         // 2026-10-17 sticker keyboard: the panel sends in place (it stays up, as in the reference
         // app); the reply being written goes with the sticker and is then done.
         a.sendSticker = { s in
+            if sendHeldBack(.sendStickers, "stickers and GIFs") { return }
             StickerSend.send(s, cid: cid, replyTo: replyingTo?.id)
             if replyingTo != nil { replyingTo = nil }
         }
-        a.sendGif = { g in sendGif(g) }   // the panel's own GIFs tab (2026-10-17)
+        a.sendGif = { g in   // the panel's own GIFs tab (2026-10-17)
+            if sendHeldBack(.sendStickers, "stickers and GIFs") { return }
+            sendGif(g)
+        }
         // ⛔ 2026-10-19, owner: the photo library "jumps" open from the panel's Create tile, not the
         // native slide. It was presented in the SAME instant the field resigned, so the sheet's rise
         // ran over the panel's fall in the same frames (the GIF button's build 681 report). Now the
@@ -8665,6 +8709,7 @@ struct ThreadView: View {
         }
         // The camera button in the field (2026-10-15), the way the GIF opens: keyboard first.
         a.camera = {
+            if sendHeldBack(.sendPhotos, "photos and videos") { return }
             // 2026-10-18, owner: "camera opens late" with the keyboard up. It waited for `didHide`, so
             // keyboard-down and camera-up played one after the other. The "+" / GIF timing now: 0.15 s
             // into the keyboard's fall when it was up, at once when it was not.
@@ -8795,12 +8840,7 @@ struct ThreadView: View {
         }
         // 2026-09-24 feature-audit: a member an admin restricted from voice messages cannot start one.
         // The server refuses the send (`sendVoice`), so the whole recording was futile, then a red mark.
-        if isGroup, let conv = conversation,
-           conv.isRestricted(me, .sendVoice, now: Date().timeIntervalSince1970 * 1000) {
-            restrictedNoticeText = "An admin has turned off voice messages for you."   // owner 2026-10-18
-            voiceRestricted = true
-            return
-        }
+        if sendHeldBack(.sendVoice, "voice messages") { return }   // owner 2026-10-18 / 2026-10-19
         // Permission already DENIED: don't flip into the recording UI (nothing would be captured —
         // the bar ran with a frozen 0:00). Point the user at Settings instead. A first-ever hold
         // (undetermined) still falls through to requestAndStart(), which shows the system prompt.

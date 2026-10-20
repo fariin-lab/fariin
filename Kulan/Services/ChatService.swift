@@ -802,6 +802,16 @@ enum ChatService {
             : "\(myName()) allowed everyone to send messages")
     }
 
+    /// What members may send (owner 2026-10-19): the whole `memberSend` map in one write, and the
+    /// group told in one line when a mode was picked (`notice`), as Announcement mode is.
+    static func setMemberSend(cid: String, _ send: [String: Bool], notice: String? = nil) async throws {
+        try await db.collection("conversations").document(cid).updateData([
+            "memberSend": send,
+            "updatedAt": FieldValue.serverTimestamp(),
+        ])
+        if let notice { try await writeSystemMessage(cid: cid, text: "\(myName()) \(notice)") }
+    }
+
     /// Toggle a member permission (admin): "membersCanAdd" or "membersCanEditInfo".
     static func setGroupPermission(cid: String, key: String, _ value: Bool) async throws {
         try await db.collection("conversations").document(cid).updateData([

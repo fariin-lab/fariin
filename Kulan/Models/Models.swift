@@ -1061,6 +1061,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var membersCanAdd: Bool            // group: non-admins may add members (default false)
     var membersCanEditInfo: Bool       // group: non-admins may edit name/photo/desc (default false)
     var onlyAdminsCall = false         // group: only admins may START a call (joining stays open)
+    /// group: what members may send (2026-10-19), `memberSend` {media, voice, files, stickers,
+    /// links}; a missing key = allowed. firestore.rules `memberSendOk` enforces it.
+    var memberSend: [String: Bool] = [:]
     var membersCanShareLink = false    // group: non-admins see Share and the QR of the invite link (owner 2026-10-19)
     /// 2026-10-19 groups v2 (owner): the group's document says `e2ee == false`, so its new messages
     /// are NOT end-to-end encrypted (ChatService.groupIsPlain). Server-written; false for every 1:1.
@@ -1216,6 +1219,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         // Change group info is a member switch again (owner 2026-10-19, later); the link stays admins'.
         self.membersCanEditInfo = data["membersCanEditInfo"] as? Bool ?? false
         self.onlyAdminsCall = data["onlyAdminsCall"] as? Bool ?? false
+        self.memberSend = data["memberSend"] as? [String: Bool] ?? [:]
         self.membersCanShareLink = false
         self.e2eeOff = (data["type"] as? String) == "group" && (data["e2ee"] as? Bool) == false
         self.lastPlainTag = data["lastPlainTag"] as? String
@@ -1374,6 +1378,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
         return Set(flags)
     }
     func isRestricted(_ uid: String, _ r: Restrict, now: Double) -> Bool {
+        // 2026-10-19: the group-wide switches (`memberSend`) hold back every member the same way,
+        // so every composer check that asks this also honours them.
+        if let k = Self.sendKind(for: r), !maySend(k, uid) { return true }
         let active = activeRestrictions(uid, now: now)
         if active.contains(r.rawValue) { return true }
         // owner 2026-10-18: the old all-media flag covers each of the three it was split into.
@@ -1403,6 +1410,46 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// that is going but not start one (the server's `groupCallToken` and the rules say the same).
     func canStartCall(_ me: String) -> Bool {
         !isGroup || !onlyAdminsCall || admins.contains(me) || isOwner(me)
+    }
+
+    /// The kinds a group can turn off for members (owner 2026-10-19). Admins are never limited.
+    enum SendKind: String, CaseIterable {
+        case media, voice, files, stickers, links
+        var label: String {
+            switch self {
+            case .media: "Photos & videos"
+            case .voice: "Voice messages"
+            case .files: "Files"
+            case .stickers: "Stickers & GIFs"
+            case .links: "Links"
+            }
+        }
+        /// "Admins turned off stickers in this group."
+        var offNotice: String {
+            let what: String = switch self {
+            case .media: "photos and videos"
+            case .voice: "voice messages"
+            case .files: "files"
+            case .stickers: "stickers and GIFs"
+            case .links: "links"
+            }
+            return "Admins turned off \(what) in this group"
+        }
+    }
+
+    static func sendKind(for r: Restrict) -> SendKind? {
+        switch r {
+        case .sendPhotos: .media
+        case .sendFiles: .files
+        case .sendVoice: .voice
+        case .sendStickers: .stickers
+        case .sendLinks: .links
+        default: nil
+        }
+    }
+
+    func maySend(_ kind: SendKind, _ me: String) -> Bool {
+        !isGroup || admins.contains(me) || isOwner(me) || memberSend[kind.rawValue] != false
     }
 
     // Announcement mode: in a group with onlyAdminsSend, non-admins can't send. Also blocks a
