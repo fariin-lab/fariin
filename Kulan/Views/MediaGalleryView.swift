@@ -186,7 +186,7 @@ struct MediaGalleryView: View {
         self.title = title
         self.photoUrl = photoUrl
         if let cached = GalleryCache.seed(cid) {
-            let shown = cached.filter { !HiddenMessages.isHidden($0.id) }
+            let shown = cached.filter { !Self.isGone($0) }
             _all = State(initialValue: shown)
             _loaded = State(initialValue: true)
             _derived = State(initialValue: Self.makeDerived(shown, filter: .all, cid: cid))
@@ -199,7 +199,7 @@ struct MediaGalleryView: View {
 
     private static func makeDerived(_ all: [Message], filter mediaFilter: MediaFilter, cid: String) -> Derived {
         var d = Derived()
-        d.expandedAll = all.flatMap { $0.expandedGalleryItems(cid: cid) }.filter { !HiddenMessages.isHidden($0.id) }
+        d.expandedAll = all.flatMap { $0.expandedGalleryItems(cid: cid) }.filter { !Self.isGone($0) }
         // ⚠️ `!viewOnce` HERE IS A HOLE CLOSED, not a nicety (found 2026-08-11): a view-once photo
         // was never filtered from this grid, so the person it was burned for could reopen it here.
         d.allMediaItems = d.expandedAll.filter { ($0.isImage || $0.isVideo) && !$0.isGif && !$0.viewOnce }
@@ -229,7 +229,7 @@ struct MediaGalleryView: View {
     /// Everything the five tabs would hold for these messages, counted by the page's own lists so the
     /// group info page's "Media, Links and Files" row and this page can never disagree (2026-10-18).
     static func itemCount(_ all: [Message], cid: String) -> Int {
-        let d = makeDerived(all.filter { !HiddenMessages.isHidden($0.id) }, filter: .all, cid: cid)
+        let d = makeDerived(all.filter { !Self.isGone($0) }, filter: .all, cid: cid)
         return d.allMediaItems.count + d.gifItems.count + d.voiceItems.count + d.fileItems.count + d.linkItems.count
     }
 
@@ -350,12 +350,19 @@ struct MediaGalleryView: View {
             // and update the cache. The spinner shows only on the very first load.
             // Hidden ones are dropped on the way IN, so the four lists that read `all` directly
             // (files, voice, links, GIFs) get the same treatment `expandedAll` gives the grid.
-            func visible(_ m: [Message]) -> [Message] { m.filter { !HiddenMessages.isHidden($0.id) } }
+            func visible(_ m: [Message]) -> [Message] { m.filter { !Self.isGone($0) } }
             // The cached copy is already in state from `init` (2026-10-17); this only covers a cache
             // that filled after the page was built.
             if !loaded, let cached = GalleryCache.store[cid] { all = visible(cached); loaded = true }
             // nil = the load failed: keep the cached gallery on screen instead of wiping it (2026-09-24).
-            guard let fetched = await ChatService.galleryContent(cid) else { loaded = true; return }
+            // With nothing cached either, one more try after a moment: a first open offline showed
+            // "no media" for a group full of it (audit 2026-10-20).
+            var answer = await ChatService.galleryContent(cid)
+            if answer == nil, all.isEmpty, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                answer = await ChatService.galleryContent(cid)
+            }
+            guard let fetched = answer else { loaded = true; return }
             let fresh = visible(fetched)
             // Silent refresh: an unchanged answer writes nothing, so nothing on screen moves.
             if fresh != all { all = fresh }
@@ -988,6 +995,11 @@ struct MediaGalleryView: View {
 
     // A synthetic album child carries "<messageId>-<index>"; its real message is the ALBUM. Firestore
     // ids never contain "-", so the first segment is always the parent.
+    /// Hidden by me, or past its disappearing time (audit 2026-10-20: expired media stayed in every
+    /// tab until the server's purge).
+    static func isGone(_ m: Message) -> Bool {
+        HiddenMessages.isHidden(m.id) || (m.expiresAt.map { $0 <= Date() } ?? false)
+    }
     private func parentMessageId(_ id: String) -> String { id.split(separator: "-").first.map(String.init) ?? id }
 
     /// ⛔ HIS OWN OUTLINE BUBBLE, NOT `bubble.left` — owner, 2026-08-23: "go to chat icon update use
@@ -1110,8 +1122,10 @@ struct MediaGalleryView: View {
         // Resolved against the EXPANDED list, because that is what the grid selects from — an album
         // child is not in `all` under the id the tile carries.
         let picked = expandedAll.filter { selection.contains($0.id) }
-        let mine = Set(picked.filter { $0.authorId == me }.map(\.id))
-        let theirs = Set(picked.filter { $0.authorId != me }.map(\.id))
+        // My own album photos picked one by one are hidden here like anyone else's: the server
+        // knows only the album message, and a delete by the tile's id was refused (audit 2026-10-20).
+        let mine = Set(picked.filter { $0.authorId == me && $0.id == parentMessageId($0.id) }.map(\.id))
+        let theirs = Set(picked.map(\.id)).subtracting(mine)
         // Hidden BEFORE the awaits, so the grid can drop everything in one pass below rather than
         // theirs vanishing a beat ahead of mine.
         for id in theirs { HiddenMessages.hide(id) }
@@ -1145,7 +1159,9 @@ struct MediaGalleryView: View {
         // Owner, 2026-10-06 (Share "still not working"): a chat with saving turned off made this
         // tap do nothing at all. It now says why.
         guard !ChatRestrictions.isOn(.noSaving, cid: cid) else { sharingBlocked = true; return }
-        prepareShare(all.filter { selection.contains($0.id) })
+        // The expanded list, as Delete uses: album photos are selected under their own tile ids,
+        // which `all` does not have, so they were dropped without a word (audit 2026-10-20).
+        prepareShare(expandedAll.filter { selection.contains($0.id) })
     }
 
     /// ⛔ THE SHARE SHEET IS PRESENTED BY UIKIT, ON THE TOP-MOST SCREEN — owner, 2026-10-06, second

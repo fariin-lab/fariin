@@ -206,6 +206,15 @@ enum SendQueue {
     static func drainAll() async {
         _ = recoveryObserver  // installs the one-time recovery observer (lazy static)
         let open = AppRouter.shared.activeChatId
+        // A refused send kept 30 days and never answered goes, with its voice file: its chat may be
+        // a group I left for good, where nobody can resend or delete it (audit 2026-10-20).
+        let monthAgo = Date().timeIntervalSince1970 - 30 * 86400
+        for e in allPending() where e.refused == true {
+            let secs = e.createdAt > 1e11 ? e.createdAt / 1000 : e.createdAt   // stored in ms
+            guard secs < monthAgo else { continue }
+            remove(clientId: e.clientId)
+            AudioRecorder.dropInFlight(clientId: e.clientId)
+        }
         // 2026-09-24 decision D-composer-2: a refused send is never re-driven automatically.
         let entries = allPending().filter { $0.cid != open && $0.refused != true }
         for e in entries {

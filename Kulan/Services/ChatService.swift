@@ -1092,10 +1092,7 @@ enum ChatService {
         // right after creation, before the conversations listener has the doc). A group cid
         // is a random id with no "_", so that distinguishes it from a 1:1 "uidA_uidB" cid.
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
-        if members == nil, !cid.contains("_") {
-            let snap = try? await db.collection("conversations").document(cid).getDocument()
-            members = snap?.data()?["users"] as? [String]
-        }
+        if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
         if let members {
             try await sendGroupText(cid: cid, members: members, text: t, replyTo: replyTo, clientId: clientId, mentions: mentions, preview: preview, forwarded: forwarded,
                                     clientTs: clientTs, turn: turn)
@@ -1231,6 +1228,26 @@ enum ChatService {
     /// send is queued either way. A 1:1 cid ("uidA_uidB") passes straight through.
     private static let sealMembersLock = NSLock()
     private static var sealMembersConfirmed: [String: (users: [String], at: Date)] = [:]
+    /// The members from the group's own doc, for a send that had none. A group I was removed from,
+    /// or one deleted, while the send waited offline throws a refusal, so the queue marks it failed
+    /// instead of retrying it on every launch down the 1:1 path (audit 2026-10-20). Offline is not
+    /// a refusal: nil, and the send keeps its retry.
+    static func groupDocMembers(_ cid: String) async throws -> [String]? {
+        do {
+            let snap = try await db.collection("conversations").document(cid).getDocument()
+            if !snap.exists, !snap.metadata.isFromCache {
+                throw NSError(domain: FirestoreErrorDomain, code: FirestoreErrorCode.permissionDenied.rawValue,
+                              userInfo: [NSLocalizedDescriptionKey: "This group is no longer available."])
+            }
+            return snap.data()?["users"] as? [String]
+        } catch let e as NSError where e.domain == FirestoreErrorDomain
+                    && e.code == FirestoreErrorCode.permissionDenied.rawValue {
+            throw e
+        } catch {
+            return nil
+        }
+    }
+
     static func freshGroupMembers(_ cid: String, _ cached: [String]?) async -> [String]? {
         guard !cid.contains("_") else { return cached }
         if let hit = sealMembersLock.withLock({ sealMembersConfirmed[cid] }),
@@ -1615,10 +1632,7 @@ enum ChatService {
         let tap = Date(), trace = UploadTrace()             // PHOTO# timings, 2026-10-17
         let data = sendJPEG(rawData)
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
-        if members == nil, !cid.contains("_") {
-            let snap = try? await db.collection("conversations").document(cid).getDocument()
-            members = snap?.data()?["users"] as? [String]
-        }
+        if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
         let convRef = db.collection("conversations").document(cid)
         let cipher: Data, meta: EncMeta
         // THE CONVERSATION TOUCH IS NOT A PREREQUISITE OF THE UPLOAD. It only ensures the 1:1 doc
@@ -1760,10 +1774,7 @@ enum ChatService {
     static func sendAlbum(cid: String, images: [Data], caption: String, clientId: String? = nil, group: [String]? = nil) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the uploads
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
-        if members == nil, !cid.contains("_") {
-            let snap = try? await db.collection("conversations").document(cid).getDocument()
-            members = snap?.data()?["users"] as? [String]
-        }
+        if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
         let convRef = db.collection("conversations").document(cid)
         let msgRef = convRef.collection("messages").document()
 
@@ -1944,10 +1955,7 @@ enum ChatService {
                                clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the uploads
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
-        if members == nil, !cid.contains("_") {
-            let snap = try? await db.collection("conversations").document(cid).getDocument()
-            members = snap?.data()?["users"] as? [String]
-        }
+        if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
         let convRef = db.collection("conversations").document(cid)
         let msgRef = convRef.collection("messages").document()
 
@@ -2147,10 +2155,7 @@ enum ChatService {
     static func sendAudio(cid: String, data: Data, duration: Double, waveform: [Int] = [], replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false, viewOnce: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
-        if members == nil, !cid.contains("_") {
-            let snap = try? await db.collection("conversations").document(cid).getDocument()
-            members = snap?.data()?["users"] as? [String]
-        }
+        if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
         let convRef = db.collection("conversations").document(cid)
         let cipher: Data, meta: EncMeta
         if let members {
@@ -2255,10 +2260,7 @@ enum ChatService {
                               forwarded: Bool = false) async throws -> String {
         let clientTs = Date().timeIntervalSince1970 * 1000   // when SEND was tapped, not when it landed
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
-        if members == nil, !cid.contains("_") {
-            let snap = try? await db.collection("conversations").document(cid).getDocument()
-            members = snap?.data()?["users"] as? [String]
-        }
+        if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
         var captionCipher = ""
         let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedCaption.isEmpty {
@@ -2337,10 +2339,7 @@ enum ChatService {
     static func attachVideo(cid: String, messageId: String, video: Data,
                             clientId: String? = nil, group: [String]? = nil) async throws {
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
-        if members == nil, !cid.contains("_") {
-            let snap = try? await db.collection("conversations").document(cid).getDocument()
-            members = snap?.data()?["users"] as? [String]
-        }
+        if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
         let msgRef = db.collection("conversations").document(cid).collection("messages").document(messageId)
         // Mailman model: the SENDER's copy lives on their own device from day one — the server object
         // exists only to deliver, and the recipient deletes it on pickup. Stored before the upload so
@@ -2382,10 +2381,7 @@ enum ChatService {
                           width: Double, height: Double, caption: String = "", clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
-        if members == nil, !cid.contains("_") {
-            let snap = try? await db.collection("conversations").document(cid).getDocument()
-            members = snap?.data()?["users"] as? [String]
-        }
+        if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
         // Caption travels INSIDE the video message (sealed like a text message), same as images.
         var captionCipher = ""
         let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2511,10 +2507,7 @@ enum ChatService {
     static func sendFile(cid: String, data rawData: Data, fileName: String, clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
-        if members == nil, !cid.contains("_") {
-            let snap = try? await db.collection("conversations").document(cid).getDocument()
-            members = snap?.data()?["users"] as? [String]
-        }
+        if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
         let convRef = db.collection("conversations").document(cid)
         let cipher: Data, meta: EncMeta
         if let members {
@@ -2614,10 +2607,7 @@ enum ChatService {
     /// Send a GIF (a public Giphy URL — public content, so NOT E2EE; we store the url directly).
     static func sendGif(cid: String, url: String, width: Double, height: Double, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
-        if members == nil, !cid.contains("_") {
-            let snap = try? await db.collection("conversations").document(cid).getDocument()
-            members = snap?.data()?["users"] as? [String]
-        }
+        if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
         // The quote, sealed exactly the way the photo path seals it — group key when this is a
         // group, conversation key otherwise. A GIF was the ONE message type that could not carry a
         // reply: the bubble has always known how to draw one (`replyQuote` in the isGif branch), but
@@ -2941,10 +2931,7 @@ enum ChatService {
         }
         // Group reactions are sealed for ALL members (so everyone sees the emoji); 1:1 to the other.
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
-        if members == nil, !cid.contains("_") {
-            let snap = try? await db.collection("conversations").document(cid).getDocument()
-            members = snap?.data()?["users"] as? [String]
-        }
+        if members == nil, !cid.contains("_") { members = (try? await groupDocMembers(cid)) ?? nil }
         let enc: String?
         if let members { enc = try? await Crypto.shared.sealForGroup(emoji, members: members, cid: cid) }
         else { enc = try? await Crypto.shared.encryptForConversation(cid, emoji) }
@@ -3533,10 +3520,7 @@ enum ChatService {
         let t = newText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
-        if members == nil, !cid.contains("_") {
-            let snap = try? await db.collection("conversations").document(cid).getDocument()
-            members = snap?.data()?["users"] as? [String]
-        }
+        if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
         // Re-seal for the group (author = me, since only the author may edit) or the 1:1 pair.
         let cipher = members != nil
             ? try await Crypto.shared.sealForGroup(t, members: members!, cid: cid)
