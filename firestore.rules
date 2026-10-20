@@ -1534,6 +1534,17 @@ service cloud.firestore {
         return exists(/databases/$(database)/documents/users/$(u))
           ? get(/databases/$(database)/documents/users/$(u)).data.get('msgPolicy', {}) : {};
       }
+      // Requests off for `u` and `u` takes me; one read each (2026-10-20: over 1,000 expressions).
+      function reqOffMayWrite(u) {
+        let ud = exists(/databases/$(database)/documents/users/$(u))
+          ? get(/databases/$(database)/documents/users/$(u)).data : {};
+        let g = msgPolicyGlobal();
+        let o = ud.get('msgPolicy', {});
+        return o.get('requests', g.get('requests', true)) == false
+          && (ud.get('privacy', {}).get('messages', 'everyone') != 'contacts'
+              || g.get('chatKeyVisible', true) == false
+              || o.get('chatKeyRequired', g.get('chatKeyRequired', true)) == false);
+      }
       // Does a stranger's first message to `u` arrive as a request (one short text, then wait)?
       function requestsOnFor(u) {
         return msgPolicyOverride(u).get('requests', msgPolicyGlobal().get('requests', true)) != false;
@@ -2374,6 +2385,19 @@ service cloud.firestore {
         // `pollMulti` is in the clear on every poll. Links and locations: a link card, or a
         // plain-text group message (an end-to-end encrypted group's text cannot be read here, so
         // there the app alone holds links, polls and locations back).
+        function groupSendRestrictOk() {
+          let c = convData();
+          let d = request.resource.data;
+          let t = d.get('type', '');
+          return !(request.auth.uid in c.get('restrictedFlags', {}))
+            || ((!restrictedIn(c, 'sendText') || leaveNotice())
+            && (!(t in ['image', 'album', 'video', 'file'] || 'linkPreview' in d) || !restrictedIn(c, 'sendMedia'))
+            && (!(t in ['image', 'album', 'video']) || !restrictedIn(c, 'sendPhotos'))
+            && (t != 'file' || !restrictedIn(c, 'sendFiles'))
+            && (!('linkPreview' in d) || !restrictedIn(c, 'sendLinks'))
+            && (t != 'audio' || !restrictedIn(c, 'sendVoice'))
+            && (!(t in ['gif', 'sticker']) || !restrictedIn(c, 'sendStickers')));
+        }
         function memberSendOk() {
           let d = request.resource.data;
           let ms = convData().get('memberSend', {});
@@ -2624,7 +2648,7 @@ service cloud.firestore {
                || convData().get('lastSender', '') != request.auth.uid
                // owner 2026-10-18: MESSAGE REQUESTS OFF for the other person: no one-message wait.
                // Their Chat Key setting still holds, for a chat that is not open yet.
-               || (!requestsOnFor(otherHalf()) && strangersMayWrite(otherHalf()))
+               || reqOffMayWrite(otherHalf())
              )
           // A REQUEST IS ONE SHORT TEXT — owner's spec, 2026-09-11 §9, and the database says so.
           //
@@ -2640,16 +2664,14 @@ service cloud.firestore {
           // characters, so 880 lets every legitimate 150-character message through — including
           // 150 emoji — and refuses a patched client's essay. The app counts the 150 itself.
           //
-          // AND THE OTHER PERSON'S PRIVACY, AGAIN. It was only ever checked when the conversation
-          // was CREATED; Remove Friend puts an old conversation back into this state without a
-          // create, so a "My Friends" account would otherwise accept a knock from the person it had
-          // just removed. Checked here, on the knock itself, it holds either way.
+          // The other person's privacy is checked again here: Remove Friend reopens a chat without a create.
           && (
                !isPendingFirstMessage()
                || (
                     // owner 2026-10-18: the short-text shape is a REQUEST's; with Message Requests
                     // off for the other person the first message may be anything a chat carries.
-                    (
+                    (reqOffMayWrite(otherHalf())
+                    || (
                       request.resource.data.text is string
                       && request.resource.data.text.size() <= 880
                       && !request.resource.data.keys().hasAny([
@@ -2659,17 +2681,13 @@ service cloud.firestore {
                            'callerUid', 'callOutcome', 'linkPreview', 'sticker', 'gif', 'location',
                            'poll', 'contact'
                          ])
-                      || !requestsOnFor(otherHalf())
-                    )
                     // ...their privacy, unless the panel has the Chat Key requirement off. The
                     // day's knock budget below holds in every mode.
-                    && strangersMayWrite(otherHalf())
+                      && strangersMayWrite(otherHalf())
+                    ))
                     // ...and not more knocks today than `requests_per_day_default` (20, or the
-                    // number in `config/limits`). A person does not open twenty new chats with
-                    // strangers in a day; a script does. FAILS OPEN when the counter was never
-                    // written, on exactly the terms the story limits set: an app that has never
-                    // written one must not be an app that cannot send. What it stops is the case
-                    // worth stopping, a client that IS counting and keeps going.
+                    // number in `config/limits`). FAILS OPEN when the counter was never written,
+                    // as the story limits do.
                     && (
                          !exists(/databases/$(database)/documents/users/$(request.auth.uid)/limits/requests)
                          || requestBudget().get('windowStart', request.time) < request.time - duration.value(24, 'h')
@@ -2681,29 +2699,11 @@ service cloud.firestore {
           // 'sendText' with restrictedUntil still in the future cannot create ANY message. Admins and
           // the owner are ALWAYS exempt in-rule (so a rogue admin can't grief a co-admin/owner by
           // writing a restriction for them). Auto-lifts when the timeout passes.
-          && (!restrictedIn(convData(), 'sendText') || leaveNotice())   // 2026-10-19 M1: a muted member may leave
-          // 2026-09-24 fix-all: THE OTHER SEND FLAGS, one per kind of message, as the client's
-          // `Conversation.Restrict` names them. Only `sendText` was ever checked, so a single-flag
-          // restriction (media only, say) did nothing on the server. What the server can see:
-          //   photo, album, video, file, and a text carrying a link card → sendMedia
-          //   voice note (`audio`)                                        → sendVoice
-          //   sticker or GIF (`gif`, `sticker`)                           → sendStickers
-          // Polls, locations and contacts are sealed inside the text, so the server cannot tell them
-          // from a text; `sendText` covers them, and the client gates `sendPolls` itself.
-          && (!(request.resource.data.get('type', '') in ['image', 'album', 'video', 'file']
-                || 'linkPreview' in request.resource.data)
-              || !restrictedIn(convData(), 'sendMedia'))
-          // owner 2026-10-18 (admin delete sheet, "What can this member do?"): `sendMedia` split in
-          // three. The old flag above still covers all three; each new one covers its own kind.
-          //   photo, album, video → sendPhotos;  file → sendFiles;  a link card → sendLinks
-          && (!(request.resource.data.get('type', '') in ['image', 'album', 'video'])
-              || !restrictedIn(convData(), 'sendPhotos'))
-          && (request.resource.data.get('type', '') != 'file' || !restrictedIn(convData(), 'sendFiles'))
-          && (!('linkPreview' in request.resource.data) || !restrictedIn(convData(), 'sendLinks'))
-          && (request.resource.data.get('type', '') != 'audio' || !restrictedIn(convData(), 'sendVoice'))
-          // 2026-10-17 (owner, chat stickers): the `sticker` type is held to the same flag as a GIF.
-          && (!(request.resource.data.get('type', '') in ['gif', 'sticker'])
-              || !restrictedIn(convData(), 'sendStickers'))
+          // A muted member's send flags (Conversation.Restrict): photo/album/video/file/link card →
+          // sendMedia (and sendPhotos/sendFiles/sendLinks), voice → sendVoice, gif/sticker →
+          // sendStickers, all else sendText. Groups only: a 1:1 has no restrictions (2026-10-20,
+          // under the 1,000-expression limit).
+          && (convData().get('type', '') != 'group' || groupSendRestrictOk())
           && stickerShapeOk();
         // Participants may edit reactions; the AUTHOR may also edit their own text, and rewrite their
         // own album array (deleting ONE album item for everyone = removing it from the album; the
