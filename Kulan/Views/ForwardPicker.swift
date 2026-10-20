@@ -174,6 +174,9 @@ struct ForwardPicker: View {
                     peopleList
                 }
             }
+            // Shared link: its card starts loading while chats are being picked (owner
+            // 2026-10-20: the shared message arrived late, waiting on the card at Send).
+            .task { warmShareCard() }
             // PINNED UNDER THE TITLE. iOS 26 puts search at the BOTTOM by default, which landed it
             // directly beneath the message box and gave the screen two stacked input fields, so the
             // one you type into read as a second search bar (owner screenshot). Search belongs at the
@@ -248,6 +251,13 @@ struct ForwardPicker: View {
 
     private func toggle(_ id: String) {
         if selected.contains(id) { selected.remove(id) } else { selected.insert(id) }
+    }
+
+    /// Fire-and-forget: the service caches the card, so Send finds it ready. Once per URL there.
+    private func warmShareCard() {
+        guard isShare, let text = messages.first?.text,
+              let url = LinkPreviewService.firstURL(in: text) else { return }
+        Task { _ = await LinkPreviewService.shared.draft(for: url) }
     }
 
     private func sendAll() {
@@ -361,8 +371,9 @@ struct ForwardPicker: View {
             // A shared link carries its card, as a pasted one does (owner 2026-10-19: Share Group
             // arrived as a bare link). Looked up once for every chat, the way Send Contact does it.
             var sharePreview: ChatService.OutgoingLinkPreview?
+            // Warmed when the sheet opened; at most two seconds more, then the link goes without it.
             if isShare, let text = ordered.first?.text, let url = LinkPreviewService.firstURL(in: text),
-               let d = await LinkPreviewService.shared.draft(for: url) {
+               let d = await LinkPreviewService.draft(for: url, within: 2) {
                 sharePreview = ChatService.OutgoingLinkPreview(url: d.url.absoluteString, title: d.title,
                                                                desc: d.desc, imageJPEG: d.imageJPEG)
             }
