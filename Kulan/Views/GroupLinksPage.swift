@@ -107,7 +107,7 @@ struct GroupLinksPage: View {
         Section {
             PrimaryLinkCard(link: p, working: working,
                             onCopy: copy, onShareInApp: { shareText = $0.url }, onQR: { qrLink = $0 },
-                            onCreate: createPrimary)
+                            onCreate: createPrimary, onJoined: { detailLink = $0 })
                 .listRowInsets(EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16))
         } header: {
             Text("Invite Link")
@@ -324,6 +324,8 @@ private struct PrimaryLinkCard: View {
     let onShareInApp: (GroupLink) -> Void
     let onQR: (GroupLink) -> Void
     let onCreate: () -> Void
+    /// "N people joined" opens the link's own sheet with who they are (owner 2026-10-20).
+    var onJoined: (GroupLink) -> Void = { _ in }
 
     // ⛔ NOTHING HIDDEN (owner 2026-10-19: the ⋯ and the Share menu kept the actions out of sight).
     // Tap the link to copy it; four named glass circles under it; Reset and Turn Off are rows on
@@ -332,7 +334,21 @@ private struct PrimaryLinkCard: View {
         VStack(spacing: 14) {
             pill
             buttons
-            if let link { JoinedFacesRow(link: link) }
+            if let link {
+                Button { onJoined(link) } label: {
+                    HStack(spacing: 4) {
+                        JoinedFacesRow(link: link)
+                        if link.usedCount > 0 {
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(link.usedCount == 0)
+                .accessibilityHint("Shows who joined with this link")
+            }
         }
     }
 
