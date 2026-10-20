@@ -1872,37 +1872,13 @@ struct GroupMemberSheet: View {
         }
     }
 
+    /// A switch per right, the same as the Add Admin page (owner 2026-10-19), not a tick.
     private func rightRow(_ r: Conversation.Right) -> some View {
-        let on = rights.contains(r.rawValue)
-        return Button {
-            if on { rights.remove(r.rawValue) } else { rights.insert(r.rawValue) }
-        } label: {
-            HStack(spacing: 8) {
-                Text(shortLabel(r)).font(.body).foregroundStyle(Color.primary)
-                Spacer(minLength: 8)
-                Image(systemName: "checkmark")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(Color(.systemBlue))
-                    .opacity(on ? 1 : 0)
-            }
-            .padding(.horizontal, Self.rowSide).padding(.vertical, 13)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        Toggle(r.shortLabel, isOn: Binding(
+            get: { rights.contains(r.rawValue) },
+            set: { on in if on { rights.insert(r.rawValue) } else { rights.remove(r.rawValue) } }))
+        .padding(.horizontal, Self.rowSide).padding(.vertical, 7)
         .disabled(busy)
-    }
-
-    /// The owner's shorter names for the rights on this page (the model's labels stay as they are).
-    private func shortLabel(_ r: Conversation.Right) -> String {
-        switch r {
-        case .changeInfo:     return "Change info"
-        case .deleteMessages: return "Delete messages"
-        case .banUsers:       return "Remove members"
-        case .inviteUsers:    return "Add members"
-        case .pinMessages:    return "Pin messages"
-        case .manageCalls:    return "Video chats"
-        case .addAdmins:      return "Add admins"
-        }
     }
 
     /// Red Remove admin row (owner 2026-10-19), for an admin I may demote while Admin is still

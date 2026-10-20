@@ -296,12 +296,8 @@ struct GroupAdminsView: View {
     @State private var opened: String?
     @State private var showPick = false
     @State private var actionError: String?
-    /// The member picked in Add Admin, waiting for the confirm (owner 2026-10-18: "no confirmation").
-    @State private var pendingAdmin: String?
-    /// A refusal that came back while the Add Admin sheet was still on screen or going down: an
-    /// alert raised then is lost, so it waits for the sheet's `onDismiss` (2026-10-19 fix round).
-    @State private var pickerShown = false
-    @State private var queuedError: String?
+    /// The member picked in Add Admin; their Add Admin page is pushed in the sheet.
+    @State private var pickedAdmin: String?
 
     private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
     private var canAddAdmins: Bool { conv?.adminCan(me, .addAdmins) ?? false }
@@ -323,13 +319,12 @@ struct GroupAdminsView: View {
         let conv = self.conv
         let (admins, others) = split(conv)
         return List {
-            // owner 2026-10-18: the owner, or an admin the owner gave "Add new admins".
-            if canAddAdmins && !others.isEmpty {
-                Section {
-                    Button { showPick = true } label: { Label("Add Admin", systemImage: "plus") }
-                }
-            }
             Section {
+                // owner 2026-10-18: the owner, or an admin the owner gave "Add new admins". In the
+                // same card as the admins (owner 2026-10-19).
+                if canAddAdmins && !others.isEmpty {
+                    Button { showPick = true } label: { Label("Add Admin", systemImage: "person.badge.plus") }
+                }
                 ForEach(admins, id: \.self) { uid in
                     GroupMemberRow(conv: conv, uid: uid, me: me) { opened = uid }.equatable()
                         .listRowInsets(EdgeInsets())
@@ -345,32 +340,135 @@ struct GroupAdminsView: View {
         .sheet(item: Binding(get: { opened.map { Opened(id: $0) } }, set: { opened = $0?.id })) { o in
             GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: o.id)
         }
-        .sheet(isPresented: $showPick, onDismiss: {
-            pickerShown = false
-            if let q = queuedError { queuedError = nil; actionError = q }
-        }) {
+        .sheet(isPresented: $showPick, onDismiss: { pickedAdmin = nil }) {
+            // Pick a member, then their Add Admin page (rights, tag, the button), in the sheet.
             NavigationStack {
                 List(others, id: \.self) { uid in
-                    GroupMemberRow(conv: conv, uid: uid, me: me) { pendingAdmin = uid }.equatable()
+                    GroupMemberRow(conv: conv, uid: uid, me: me) { pickedAdmin = uid }.equatable()
                         .listRowInsets(EdgeInsets())
                 }
-                .navigationTitle("Add Admin")
+                .navigationTitle("Choose Member")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Cancel") { showPick = false } } }
-                // Making someone an admin hands them power over the group, so it is asked first.
-                .alert("Make \(pendingAdmin.flatMap { conv?.names[$0] } ?? "this member") an admin?",
-                       isPresented: Binding(get: { pendingAdmin != nil }, set: { if !$0 { pendingAdmin = nil } })) {
-                    Button("Cancel", role: .cancel) { pendingAdmin = nil }
-                    Button("Make Admin") {
-                        if let uid = pendingAdmin { promote(uid) }
-                        pendingAdmin = nil
-                    }
-                } message: {
-                    Text("They will be able to manage the group with the rights you give them. You can change or remove them at any time.")
+                .navigationDestination(item: $pickedAdmin) { uid in
+                    AddAdminPage(cid: cid, uid: uid) { showPick = false }
                 }
             }
-            .onAppear { pickerShown = true }
-            .presentationDetents([.medium, .large])
+        }
+        .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
+                                                          set: { if !$0 { actionError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(actionError ?? "") }
+    }
+}
+
+/// An id for `.sheet(item:)`.
+private struct Opened: Identifiable { let id: String }
+
+extension Conversation.Right {
+    /// The owner's short names for the rights on the admin pages (the model's labels stay as they are).
+    var shortLabel: String {
+        switch self {
+        case .changeInfo:     return "Change group info"
+        case .deleteMessages: return "Delete messages"
+        case .banUsers:       return "Remove members"
+        case .inviteUsers:    return "Add members"
+        case .pinMessages:    return "Pin messages"
+        case .manageCalls:    return "Video chats"
+        case .addAdmins:      return "Add admins"
+        }
+    }
+}
+
+// ⛔ ADD ADMIN AS ONE PAGE (owner 2026-10-19): pick a member, then this page: who, a switch for each
+// right I may hand out (the defaults on), their tag, and Add Admin at the foot. It replaces the
+// "Make X an admin?" alert that gave the defaults and left the rights for later.
+struct AddAdminPage: View {
+    let cid: String
+    let uid: String
+    let onDone: () -> Void
+
+    private var repo = ConversationsRepository.shared
+    private var me: String { AuthService.shared.uid ?? "" }
+    init(cid: String, uid: String, onDone: @escaping () -> Void) {
+        self.cid = cid; self.uid = uid; self.onDone = onDone
+    }
+
+    @State private var rights: Set<String> = []
+    @State private var loaded = false
+    @State private var tag = ""
+    @State private var busy = false
+    @State private var actionError: String?
+
+    private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
+    private var name: String { conv?.names[uid] ?? "User" }
+    private var grantable: [Conversation.Right] {
+        let mine = Set(conv?.adminRightsOf(me).map(\.rawValue) ?? [])
+        return Conversation.Right.allCases.filter { mine.contains($0.rawValue) }
+    }
+    private var mayTag: Bool { conv?.adminCan(me, .changeInfo) ?? false }
+
+    var body: some View {
+        List {
+            Section {
+                HStack(spacing: 14) {
+                    AvatarView(name: name, photoUrl: conv?.photos[uid], size: 56)
+                    HStack(spacing: 6) {
+                        Text(name).font(.title3.weight(.semibold)).lineLimit(1)
+                        VerifiedMark(uid: uid, size: 15)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.vertical, 4)
+            }
+            Section {
+                ForEach(grantable, id: \.id) { r in
+                    Toggle(r.shortLabel, isOn: Binding(
+                        get: { rights.contains(r.rawValue) },
+                        set: { on in if on { rights.insert(r.rawValue) } else { rights.remove(r.rawValue) } }))
+                    .disabled(busy)
+                }
+            } header: {
+                Text("What they can do")
+            } footer: {
+                if grantable.contains(.addAdmins) && !rights.contains(Conversation.Right.addAdmins.rawValue) {
+                    Text("They won't be able to make other members admins.")
+                }
+            }
+            if mayTag {
+                Section {
+                    TextField("None", text: $tag).disabled(busy)
+                } header: {
+                    Text("Tag")
+                } footer: {
+                    Text("A short word shown next to \(name)'s name in the group.")
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Add Admin")
+        .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom) {
+            Button { add() } label: {
+                Group {
+                    if busy { ProgressView().tint(.white) } else { Text("Add Admin").fontWeight(.semibold) }
+                }
+                .frame(maxWidth: .infinity, minHeight: 50)
+                .foregroundStyle(.white)
+                .background(Color.accentColor, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(busy)
+            .padding(.horizontal, 20).padding(.bottom, 8)
+        }
+        .onAppear {
+            guard !loaded else { return }
+            loaded = true
+            let mine = Set(grantable.map(\.rawValue))
+            rights = Set(Conversation.Right.defaults.map(\.rawValue).filter { mine.contains($0) })
+        }
+        .onChange(of: tag) { _, new in
+            if new.utf16.count > GroupRole.maxText { tag = GroupRole.fit(new, max: GroupRole.maxText) }
         }
         .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
                                                           set: { if !$0 { actionError = nil } })) {
@@ -378,25 +476,25 @@ struct GroupAdminsView: View {
         } message: { Text(actionError ?? "") }
     }
 
-    private func promote(_ uid: String) {
-        let name = conv?.names[uid] ?? "User"
-        // The defaults, cut down to what I may hand out (all of them, for the owner).
-        let mine = conv?.adminRightsOf(me).map(\.rawValue) ?? []
-        let give = Conversation.Right.defaults.map(\.rawValue).filter { mine.contains($0) }
-        showPick = false
+    /// Promote with the switched-on rights, then the tag if one was typed. Closes on success only.
+    private func add() {
+        guard !busy else { return }
+        busy = true
+        let cid = cid, uid = uid, name = name
+        let list = Conversation.Right.allCases.map(\.rawValue).filter { rights.contains($0) }
+        let words = mayTag ? GroupRole.clean(tag) : ""
         Task {
-            do { try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: give) } catch {
+            do {
+                try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: list)
+                if !words.isEmpty { try await ChatService.setRole(cid: cid, uid: uid, text: words, emoji: nil) }
+                await MainActor.run { busy = false; onDone() }
+            } catch {
                 let msg = error.localizedDescription
-                await MainActor.run {
-                    if pickerShown { queuedError = msg } else { actionError = msg }
-                }
+                await MainActor.run { busy = false; actionError = msg }
             }
         }
     }
 }
-
-/// An id for `.sheet(item:)`.
-private struct Opened: Identifiable { let id: String }
 
 // MARK: - Removed users
 
