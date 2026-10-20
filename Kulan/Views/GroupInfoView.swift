@@ -1947,13 +1947,15 @@ struct GroupMemberSheet: View {
     }
 
     private var adminChip: some View {
-        // Blue with a shield, so the rank never reads as just another tag.
+        // Grey like the tag chip beside it, the icon kept (owner 2026-10-20: "no blue, a normal
+        // grey badge, don't remove the icon").
         Label(isOwner ? "Owner" : "Admin", systemImage: isOwner ? "crown.fill" : "checkmark.shield.fill")
             .labelStyle(.titleAndIcon)
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(Color.blue.opacity(0.14), in: Capsule())
-            .foregroundStyle(Color.blue)
+            .font(.subheadline)
+            .lineLimit(1)
+            .padding(.horizontal, 10).padding(.vertical, 3)
+            .background(Capsule().fill(Color(uiColor: .tertiarySystemFill)))
+            .foregroundStyle(Color.primary)
     }
 
     /// Member | Admin, the native segmented control. Admin for a member = promote on Done (the
