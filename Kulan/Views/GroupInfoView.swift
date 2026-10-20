@@ -1720,6 +1720,11 @@ struct GroupMemberSheet: View {
     @State private var showEdit = false
     @State private var cardHeight: CGFloat = 420
     @State private var growing = false
+    /// "@name", or one blank space so the line keeps its height until the profile is in.
+    private var handleLine: String {
+        guard let h = profile?.handle, !h.isEmpty else { return " " }
+        return "@\(h)"
+    }
     private var expanded: Bool { showEdit || showProfileHere || growing }
 
     var body: some View {
@@ -1870,7 +1875,7 @@ struct GroupMemberSheet: View {
             }
             // The line is always there, blank until the @name is known, so the card's height
             // does not change (and the sheet does not jump) when the profile lands.
-            Text(profile?.handle.flatMap { $0.isEmpty ? nil : "@\($0)" } ?? " ")
+            Text(handleLine)
                 .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
         }
         .frame(maxWidth: .infinity)
