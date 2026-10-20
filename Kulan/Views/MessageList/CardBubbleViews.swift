@@ -599,6 +599,10 @@ final class PollBubbleView: UIView {
             // Single choice REPLACES, and tapping your own answer clears it.
             mine = mine == [i] ? [] : [i]
         }
+        // Recorded here at once (audit 2026-10-20): two quick taps built from the listener's old
+        // copy and kept only the second pick, and slipped past the quiz lock.
+        votes[me] = mine.isEmpty ? nil : mine.sorted()
+        paintVotes()
         PollService.setVote(cid: cid, messageId: body.messageId, options: mine.sorted())
     }
 

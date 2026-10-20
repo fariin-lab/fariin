@@ -138,11 +138,13 @@ struct PollComposerSheet: View {
     let onSend: (_ marker: String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var question = ""
-    @State private var options: [String] = ["", ""]
+    /// Each option keeps its own id (audit 2026-10-20: removing one by index crashed the field
+    /// binding) and its own right-answer mark.
+    struct Opt: Identifiable { let id = UUID(); var text = ""; var right = false }
+    @State private var options: [Opt] = [Opt(), Opt()]
     @State private var multiple = false
     @State private var hideVoters = false
     @State private var quiz = false
-    @State private var correct: Set<Int> = []      // indices into `options` as typed
     @State private var ends: EndChoice = .never
     @State private var sent = false
 
@@ -158,9 +160,9 @@ struct PollComposerSheet: View {
 
     /// The options kept (non-empty), each with whether it was marked right.
     private var kept: [(text: String, right: Bool)] {
-        options.indices.compactMap { i in
-            let t = options[i].trimmingCharacters(in: .whitespacesAndNewlines)
-            return t.isEmpty ? nil : (t, correct.contains(i))
+        options.compactMap { o in
+            let t = o.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : (t, o.right)
         }
     }
     private var canSend: Bool {
@@ -175,9 +177,9 @@ struct PollComposerSheet: View {
                     TextField("Ask a question", text: $question, axis: .vertical).lineLimit(1...3)
                 }
                 Section {
-                    ForEach(options.indices, id: \.self) { i in optionRow(i) }
+                    ForEach(Array(options.enumerated()), id: \.element.id) { i, o in optionRow(i, o.id) }
                     if options.count < 10 {
-                        Button { options.append("") } label: { Label("Add option", systemImage: "plus") }
+                        Button { options.append(Opt()) } label: { Label("Add option", systemImage: "plus") }
                     }
                 } header: {
                     Text("Options")
@@ -185,7 +187,9 @@ struct PollComposerSheet: View {
                     if quiz { Text("Tap the circle next to the right answer.") }
                 }
                 Section {
-                    setting("checklist", "Multiple answers", $multiple)
+                    // A quiz takes one answer (audit 2026-10-20: quiz + multiple locked voters after
+                    // their first pick).
+                    setting("checklist", "Multiple answers", $multiple).disabled(quiz)
                     setting("eye.slash", "Hide who voted", $hideVoters)
                     setting("graduationcap", "Quiz", $quiz)
                     Picker(selection: $ends) {
@@ -199,7 +203,8 @@ struct PollComposerSheet: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle("New Poll").navigationBarTitleDisplayMode(.inline)
-            .onChange(of: multiple) { _, many in if !many, correct.count > 1 { correct = [correct.min()!] } }
+            .onChange(of: quiz) { _, on in if on { multiple = false } }
+            .onChange(of: multiple) { _, many in if !many { keepOneRight() } }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
@@ -231,33 +236,39 @@ struct PollComposerSheet: View {
         }
     }
 
-    private func optionRow(_ i: Int) -> some View {
-        HStack(spacing: 10) {
+    private func optionRow(_ i: Int, _ id: UUID) -> some View {
+        let right = options.first { $0.id == id }?.right ?? false
+        return HStack(spacing: 10) {
             if quiz {
-                Button {
-                    if correct.contains(i) { correct.remove(i) }
-                    else if multiple { correct.insert(i) } else { correct = [i] }
-                } label: {
-                    Image(systemName: correct.contains(i) ? "checkmark.circle.fill" : "circle")
+                Button { mark(id) } label: {
+                    Image(systemName: right ? "checkmark.circle.fill" : "circle")
                         .font(.title3)
-                        .foregroundStyle(correct.contains(i) ? Color.green : Color.secondary)
+                        .foregroundStyle(right ? Color.green : Color.secondary)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(correct.contains(i) ? "Right answer" : "Mark as right answer")
+                .accessibilityLabel(right ? "Right answer" : "Mark as right answer")
             }
-            TextField("Option \(i + 1)", text: $options[i])
+            TextField("Option \(i + 1)", text: Binding(
+                get: { options.first { $0.id == id }?.text ?? "" },
+                set: { v in if let k = options.firstIndex(where: { $0.id == id }) { options[k].text = v } }))
             if options.count > 2 {
-                Button { remove(i) } label: {
+                Button { options.removeAll { $0.id == id } } label: {
                     Image(systemName: "minus.circle.fill").foregroundStyle(.red)
                 }.buttonStyle(.plain)
             }
         }
     }
 
-    /// Removing an option moves the marks after it up one.
-    private func remove(_ i: Int) {
-        options.remove(at: i)
-        correct = Set(correct.compactMap { $0 == i ? nil : ($0 > i ? $0 - 1 : $0) })
+    /// A quiz has one right answer (multiple is off while Quiz is on).
+    private func mark(_ id: UUID) {
+        for k in options.indices { options[k].right = options[k].id == id ? !options[k].right : false }
+    }
+
+    private func keepOneRight() {
+        var seen = false
+        for k in options.indices where options[k].right {
+            if seen { options[k].right = false } else { seen = true }
+        }
     }
 
     private func send() {
@@ -349,7 +360,7 @@ struct PollResultsSheet: View {
                         }
                     } header: {
                         HStack(spacing: 6) {
-                            if poll.correct.contains(i) {
+                            if poll.correct.contains(i), votes[me] != nil || !isOpen {   // only after I voted or it ended (audit)
                                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                             }
                             Text(poll.options[i]).textCase(nil)

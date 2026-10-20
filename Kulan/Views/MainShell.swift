@@ -1088,6 +1088,7 @@ struct CallsView: View {
             .navigationTitle("Calls")
             // Live group calls (2026-10-20): follow my groups while the tab is up.
             .onAppear { liveCalls.sync(groups: ConversationsRepository.shared.conversations) }
+            .onDisappear { liveCalls.stopAll() }   // only while the Calls tab is up (audit)
             .onChange(of: ConversationsRepository.shared.conversations.filter(\.isGroup).map(\.id)) { _, _ in
                 liveCalls.sync(groups: ConversationsRepository.shared.conversations)
             }

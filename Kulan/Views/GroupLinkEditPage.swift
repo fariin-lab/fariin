@@ -49,7 +49,7 @@ struct GroupLinkEditPage: View {
                    isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })) {
                 Button("OK", role: .cancel) {}
             } message: { Text(saveError ?? "") }
-            .confirmationDialog("Revoke Link", isPresented: $confirmRevoke, titleVisibility: .visible) {
+            .alert("Revoke Link", isPresented: $confirmRevoke) {   // centred, not a bubble (audit)
                 Button("Revoke", role: .destructive) { revoke() }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("The link stops working at once. It moves to Revoked Links.") }

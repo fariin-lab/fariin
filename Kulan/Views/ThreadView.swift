@@ -468,6 +468,7 @@ struct ThreadView: View {
     @State private var adminDeleteRequest: AdminDeleteRequest?
     /// owner 2026-10-18: the words of the "You're restricted in this group" alert (voice, media).
     @State private var restrictedNoticeText = "An admin has turned off voice messages for you."
+    @State private var restrictedNoticeTitle = "You're restricted in this group"
     // 2026-09-24 decision D14: a tapped failed message opens Resend / Delete instead of resending.
     @State private var failedActionTarget: Message?
     @State private var editingMessage: Message?   // INLINE edit — no modal/sheet
@@ -1405,7 +1406,7 @@ struct ThreadView: View {
             top.present(a, animated: true)
         }
         // 2026-09-24 feature-audit: the sendVoice restriction, said before a note is recorded.
-        .alert("You're restricted in this group", isPresented: $voiceRestricted) {
+        .alert(restrictedNoticeTitle, isPresented: $voiceRestricted) {
             Button("OK", role: .cancel) {}
         } message: { Text(restrictedNoticeText) }   // owner 2026-10-18: voice or media
     }
@@ -2092,6 +2093,11 @@ struct ThreadView: View {
                 PollResultsSheet(poll: poll, cid: cid, messageId: m.id, closed: m.pollClosed,
                                  isCreator: m.authorId == me,
                                  names: conversation?.names ?? [:], meName: "You")
+            } else {
+                // Deleted or paged out while open (audit): say so, never a blank sheet.
+                ContentUnavailableView("Poll unavailable", systemImage: "chart.bar",
+                                       description: Text("This poll is no longer in the chat."))
+                    .presentationDetents([.medium])
             }
         }
         .sheet(item: $tappedMember) { m in
@@ -5164,9 +5170,11 @@ struct ThreadView: View {
               let last = repo.items.last(where: { $0.authorId == me && !$0.isSystem }) else { return false }
         let left = Double(conv.slowModeSeconds) - Date().timeIntervalSince(last.createdAt)
         guard left > 0 else { return false }
+        // m:ss over a minute, seconds under it (audit: 61 to 119 s read "2 min").
         let n = Int(left.rounded(.up))
-        let wait = n >= 60 ? "\(Int((Double(n) / 60).rounded(.up))) min" : "\(n) sec"
-        restrictedNoticeText = "Slow mode is on. You can send again in \(wait)."
+        let wait = n >= 60 ? String(format: "%d:%02d", n / 60, n % 60) : "\(n) seconds"
+        restrictedNoticeTitle = "Slow mode"
+        restrictedNoticeText = "You can send your next message in \(wait)."
         voiceRestricted = true
         return true
     }
@@ -5175,6 +5183,7 @@ struct ThreadView: View {
         // Slow mode holds every kind back, not only typed text (audit 2026-10-20).
         if slowModeHeldBack() { return true }
         guard let text = heldBackText(r, kind) else { return false }
+        restrictedNoticeTitle = "You're restricted in this group"
         restrictedNoticeText = text
         voiceRestricted = true
         return true
@@ -5184,8 +5193,9 @@ struct ThreadView: View {
     /// first, then the notice, so the alert is not lost under the sheet.
     private func mediaHeldBackInSheet(_ kinds: [Conversation.SendKind]) -> Bool {
         guard let kind = kinds.first(where: { heldBackText(.sendPhotos, $0) != nil }) else { return false }
+        // Said once the sheet is really down (its onDismiss), not on a guessed delay (audit).
+        attachAfterClose = { _ = sendHeldBack(.sendPhotos, kind) }
         showAttachPanel = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { _ = sendHeldBack(.sendPhotos, kind) }
         return true
     }
 
@@ -8693,7 +8703,7 @@ struct ThreadView: View {
             if isGroup, let conv = conversation {
                 let now = Date().timeIntervalSince1970 * 1000
                 if conv.isRestricted(me, .sendPhotos, now: now) && conv.isRestricted(me, .sendFiles, now: now) {
-                    restrictedNoticeText = "An admin has turned off photos, videos and files for you."
+                    restrictedNoticeTitle = "You're restricted in this group"; restrictedNoticeText = "An admin has turned off photos, videos and files for you."
                     voiceRestricted = true
                     return
                 }

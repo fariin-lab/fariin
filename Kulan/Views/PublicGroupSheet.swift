@@ -165,7 +165,10 @@ struct PublicGroupSheet: View {
     // MARK: - Work
 
     private func load() async {
-        switch await GroupDirectory.preview(name: target.name, cid: target.cid) {
+        let answer = await GroupDirectory.preview(name: target.name, cid: target.cid)
+        // Closed while it loaded: nothing opens behind the user's back (audit 2026-10-20).
+        guard !Task.isCancelled else { return }
+        switch answer {
         case .found(let p):
             if p.isMember { openChat(p); return }
             preview = p

@@ -265,6 +265,16 @@ struct GroupInfoView: View {
             // Local first (offline + instant), then the server; a failed load leaves what we have.
             .task {
                 live.start(cid)   // roles and rights change in front of you (2026-10-20)
+                if callListener.reg == nil, CallFeatures.groupCalls {
+                    callListener.reg = Firestore.firestore().collection("groupCalls").document(cid)
+                        .addSnapshotListener { snap, _ in
+                            let d = snap?.data()
+                            var on = (d?["active"] as? Bool) ?? false
+                            if on, let ts = d?["startedAt"] as? Timestamp,
+                               Date().timeIntervalSince(ts.dateValue()) > 4 * 3600 { on = false }
+                            callLive = on
+                        }
+                }
                 saveChoice = AutoSaveToPhotos.choice(for: cid)
                 if let local = ThreadMessageCache.shared.messages(for: cid) {
                     let localMedia = local
@@ -465,7 +475,10 @@ struct GroupInfoView: View {
     }
 
     private var mayCall: Bool { CallFeatures.groupCalls && (conv?.canStartCall(me) ?? false) }
-    private var callReady: Bool { mayCall && !busyElsewhere }
+    private var callReady: Bool { (mayCall || callLive) && !busyElsewhere }
+    /// This group's call is going (its own call doc), so the circles join it.
+    @State private var callLive = false
+    @State private var callListener = ListenerBox()
 
     /// On a 1:1 call, or on another group's call. This group's own running call is not "busy":
     /// the tile joins it.
@@ -481,7 +494,8 @@ struct GroupInfoView: View {
     private func callTapped(video: Bool) {
         if !CallFeatures.groupCalls { flashNotice("Group calls are not available yet"); return }
         if busyElsewhere { flashNotice("You're already on a call"); return }
-        if !mayCall { flashNotice("Only admins can start a call"); return }
+        // Joining a call that is already going is open to every member (audit 2026-10-20).
+        if !mayCall && !callLive { flashNotice("Only admins can start a call"); return }
         // Nobody to ring (owner 2026-10-19): said here, not after an empty call screen.
         if (conv?.users.count ?? 0) <= 1 { flashNotice("You're the only one in this group"); return }
         startCall(video: video)
@@ -650,7 +664,7 @@ struct GroupInfoView: View {
     private func startCall(video: Bool) {
         // Just one other person (owner 2026-10-19): a normal ringing call to them, as from their
         // profile. If I am already on this group's call, the tile goes back to it as before.
-        if GroupCallService.shared.activeCid == nil, let c = conv, c.users.count == 2,
+        if GroupCallService.shared.activeCid == nil, !callLive, let c = conv, c.users.count == 2,
            let other = c.users.first(where: { $0 != me }) {
             CallService.shared.startCall(to: other, name: c.names[other] ?? "User",
                                          photo: c.photos[other], video: video, fromProfile: true)
@@ -1736,6 +1750,11 @@ struct GroupMemberSheet: View {
     @State private var showEdit = false
     @State private var cardHeight: CGFloat = 420
     @State private var growing = false
+    /// Grow to full height first, then push, so no page slides in while the card is short.
+    private func growThenPush(_ push: @escaping () -> Void) {
+        growing = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { push() }
+    }
     /// "@name", or one blank space so the line keeps its height until the profile is in.
     private var handleLine: String {
         guard let h = profile?.handle, !h.isEmpty else { return " " }
@@ -1748,6 +1767,9 @@ struct GroupMemberSheet: View {
             shortCard
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(isPresented: $showEdit) { editPage }
+            // Back to the short card once the pushed page goes (audit 2026-10-20: it stayed tall).
+            .onChange(of: showEdit) { _, on in if !on { growing = false } }
+            .onChange(of: showProfileHere) { _, on in if !on { growing = false } }
             .navigationDestination(isPresented: $showProfileHere) {
                 ContactInfoView(cid: ChatService.convId(me, member.id), name: member.name,
                                 photoUrl: gatedMemberPhoto, source: .calls)
@@ -2048,12 +2070,12 @@ struct GroupMemberSheet: View {
         }
         // No Member Tag or Mute rows on the card (owner 2026-10-19).
         if mayEditRights && member.isAdmin {
-            rows.append(AnyView(iconRow("slider.horizontal.3", "Edit Admin Rights") { showEdit = true }))
+            rows.append(AnyView(iconRow("slider.horizontal.3", "Edit Admin Rights") { growThenPush { showEdit = true } }))
         }
         // My own card: my own tag (owner 2026-10-20). The rules let the owner, and admins with
         // change info, tag themselves.
         if member.id == me && canEditRole {
-            rows.append(AnyView(iconRow("tag", role == nil ? "Add My Tag" : "Edit My Tag") { showEdit = true }))
+            rows.append(AnyView(iconRow("tag", role == nil ? "Add My Tag" : "Edit My Tag") { growThenPush { showEdit = true } }))
         }
         if canTransfer {
             rows.append(AnyView(iconRow("crown", "Transfer Ownership") { confirmTransfer = true }))
@@ -2125,8 +2147,7 @@ struct GroupMemberSheet: View {
         } else {
             // Grow to full height FIRST, then push (owner 2026-10-20: the profile slid in while
             // the card was still short, and the card's empty bottom showed as a white band).
-            growing = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { showProfileHere = true }
+            growThenPush { showProfileHere = true }
         }
     }
 

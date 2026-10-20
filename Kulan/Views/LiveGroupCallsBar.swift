@@ -3,7 +3,7 @@ import FirebaseFirestore
 
 // ⛔ LIVE GROUP CALLS ON THE CALLS TAB (owner 2026-10-20: "a group I'm in has a call going; show it
 // on the Calls page with Join, minimal, our own design"). One quiet row per live call: the group's
-// photo with a small green live dot, its name, "Live · N joined" with the first faces, and a Join
+// photo with a small green live dot, its name, "Voice call · Live", and a Join
 // capsule. Read from each of my groups' own call document (the rules allow a member to read it;
 // there is no cross-group query), for the most recent groups only.
 
@@ -39,6 +39,8 @@ final class LiveGroupCalls {
     }
 
     private func apply(_ cid: String, _ d: [String: Any]?) {
+        // A snapshot queued before `sync` dropped this group must not put it back (audit).
+        guard regs[cid] != nil else { return }
         var active = (d?["active"] as? Bool) ?? false
         // The chat's zombie guard: a call doc older than 4 hours is not live.
         if active, let ts = d?["startedAt"] as? Timestamp, Date().timeIntervalSince(ts.dateValue()) > 4 * 3600 {
@@ -69,7 +71,6 @@ struct LiveGroupCallRow: View {
 
     private var title: String { conv?.title ?? "Group" }
     private var me: String { AuthService.shared.uid ?? "" }
-    private var faces: [String] { Array(live.joined.filter { $0 != me }.prefix(3)) }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -80,17 +81,7 @@ struct LiveGroupCallRow: View {
                 }
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.body.weight(.semibold)).lineLimit(1)
-                HStack(spacing: 6) {
-                    if !faces.isEmpty {
-                        HStack(spacing: -6) {
-                            ForEach(faces, id: \.self) { uid in
-                                AvatarView(name: conv?.names[uid] ?? "", photoUrl: conv?.photos[uid], size: 18)
-                                    .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 1.5))
-                            }
-                        }
-                    }
-                    Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                }
+                Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
             Button(action: onJoin) {
@@ -108,8 +99,8 @@ struct LiveGroupCallRow: View {
     }
 
     private var subtitle: String {
-        let n = live.joined.count
-        let kind = live.video ? "Video call" : "Voice call"
-        return n > 0 ? "\(kind) · \(n) joined" : kind
+        // No count: a group call's doc does not record who is in it (only call rooms do), so a
+        // number here would be wrong (audit 2026-10-20).
+        "\(live.video ? "Video call" : "Voice call") · Live"
     }
 }

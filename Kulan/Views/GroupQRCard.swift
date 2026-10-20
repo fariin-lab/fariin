@@ -33,6 +33,8 @@ struct GroupLinkQRSheet: View {
     @State private var toast: String?
     @State private var saving = false
     @State private var cardImage: UIImage?
+    @State private var photoFull: UIImage?
+    @State private var toastTask: Task<Void, Never>?
 
     private var theme: QRTheme { QRTheme.all[min(max(themeIndex, 0), QRTheme.all.count - 1)] }
 
@@ -69,7 +71,16 @@ struct GroupLinkQRSheet: View {
         }
         .animation(.easeInOut(duration: 0.3), value: themeIndex)
         .presentationDetents([.large])
-        .task(id: themeIndex) { cardImage = renderCard() }
+        .task(id: themeIndex) {
+            // The full photo first, so the shared picture is never missing it (audit 2026-10-20).
+            if photoFull == nil, let p = photo {
+                photoFull = await DiskImageCache.shared.image(for: p)
+                if photoFull == nil, let u = URL(string: p), let (data, _) = try? await URLSession.shared.data(from: u) {
+                    photoFull = UIImage(data: data)
+                }
+            }
+            cardImage = renderCard()
+        }
     }
 
     // MARK: Card
@@ -131,7 +142,7 @@ struct GroupLinkQRSheet: View {
         let art = ZStack {
             LinearGradient(colors: [theme.top, theme.bottom], startPoint: .top, endPoint: .bottom)
             GroupQRCardFace(title: title, photo: photo, memberCount: memberCount, link: link, ink: theme.ink,
-                            photoImage: photo.flatMap { DiskImageCache.shared.smallImageSync($0) })
+                            photoImage: photoFull ?? photo.flatMap { DiskImageCache.shared.smallImageSync($0) })
                 .padding(.horizontal, 32)
                 .padding(.top, 40)
         }
@@ -162,7 +173,11 @@ struct GroupLinkQRSheet: View {
 
     private func flash(_ text: String) {
         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { toast = text }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+        // A new notice restarts the clock instead of being cut short by the last one's (audit).
+        toastTask?.cancel()
+        toastTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.25)) { toast = nil }
         }
     }
