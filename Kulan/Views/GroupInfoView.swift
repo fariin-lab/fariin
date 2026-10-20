@@ -384,6 +384,10 @@ struct GroupInfoView: View {
                 AvatarView(name: title, photoUrl: groupPhoto, size: Self.photoSide)
                     .opacity(showGroupPhoto ? 0 : 1)
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { artRect.rect = $0 }
+                    // Only the circle opens it (owner 2026-10-20: a tap on the name below opened the
+                    // photo; the filled picture reached past its clip for taps).
+                    .frame(width: Self.photoSide, height: Self.photoSide)
+                    .contentShape(Circle())
                     .onTapGesture { showGroupPhoto = true }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("Group photo")
@@ -392,6 +396,8 @@ struct GroupInfoView: View {
                 // The group's own round avatar, as everywhere else. No faces bubble (owner
                 // 2026-10-19: "we don't need it any more").
                 AvatarView(name: title, photoUrl: nil, size: Self.photoSide)
+                    .frame(width: Self.photoSide, height: Self.photoSide)
+                    .contentShape(Circle())
                     // No photo yet: whoever may change it goes straight to Edit Group.
                     .onTapGesture { if canEditInfo { showEdit = true } }
                     .accessibilityElement(children: .ignore)
