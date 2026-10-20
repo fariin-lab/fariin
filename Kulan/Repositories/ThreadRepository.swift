@@ -120,6 +120,8 @@ final class ThreadRepository {
     /// `self`, and it could land after the new screen's cache was fresh and overwrite it.
     private var keyPreloadTask: Task<Void, Never>?
     let cid: String
+    /// Where each group's chat starts for me (Conversation.historyStart), kept by the chat screen.
+    nonisolated(unsafe) static var historyStart: [String: Date] = [:]
 
     /// 60, which is the reference messenger's own page size for exactly this job. 40 was a smaller
     /// bite than anybody else takes: on a fast flick the reader clears a page before the next one
@@ -481,6 +483,12 @@ final class ThreadRepository {
         var merged = sortedOneTimeline(visible + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) }
                                        + blockNotices(after: visible.first?.createdAt))
         merged.removeAll { HiddenMessages.isHidden($0.id) || $0.notForMe }   // deleted "for me", or sealed before I joined
+        // Chat history hidden from new members, and I came in after that: the chat starts at my
+        // join (2 s early, so the "joined" line written with it stays).
+        if let start = Self.historyStart[cid] {
+            let cut = start.addingTimeInterval(-2)
+            merged.removeAll { $0.createdAt < cut }
+        }
 
         // ROW IDS MUST BE UNIQUE. `rowId` is `clientId ?? id`, and the list feeds it straight into a
         // diffable snapshot — `appendItemsWithIdentifiers:` throws an NSInternalInconsistencyException on

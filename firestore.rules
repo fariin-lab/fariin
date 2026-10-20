@@ -1886,7 +1886,7 @@ service cloud.firestore {
           && (!keys.hasAny(['title', 'avatarUrl', 'desc', 'disappearSeconds', 'onlyAdminsSend',
                             'membersCanAdd', 'membersCanEditInfo', 'onlyAdminsCall', 'wallpaper',
                             'membersCanShareLink', 'restrictedBy', 'restrictRequest', 'noScreenshots', 'noForwarding', 'noSaving',
-                            'memberSend', 'slowMode'])
+                            'memberSend', 'slowMode', 'hideHistoryAt'])
               || adminHasRight('changeInfo'))
           // owner 2026-10-18: the self-set Member Label (`memberLabels`, never shipped) gave way to
           // Role (`roles`, roleWriteOK). Nothing writes the old field; only change-info could.
@@ -1963,7 +1963,7 @@ service cloud.firestore {
                   || (!keys.hasAny(['title', 'avatarUrl', 'desc', 'wallpaper', 'disappearSeconds', 'onlyAdminsSend',
                                     'membersCanAdd', 'membersCanEditInfo', 'onlyAdminsCall', 'restrictedBy',
                                     'membersCanShareLink', 'restrictRequest', 'noScreenshots', 'noForwarding', 'noSaving',
-                                    'memberLabels', 'roles', 'inviteCode', 'memberSend', 'slowMode'])
+                                    'memberLabels', 'roles', 'inviteCode', 'memberSend', 'slowMode', 'hideHistoryAt'])
                       && (!keys.hasAny(['lastMessage', 'lastSender', 'lastImageUrl', 'lastImageEnc', 'lastImages'])
                           || gone.size() > 0)
                       && (!('createdBy' in keys) || !(o.get('createdBy', '') in n.get('users', [])))
@@ -2048,7 +2048,7 @@ service cloud.firestore {
         // `e2eeOffAt`) is the server's to change (the groupsE2eeOff migration). In the same list, not
         // a line of its own: a second diff here pushed a busy admin write past the rules engine's
         // 1,000-expression ceiling (rules-tests/role-1018).
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt'])
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt', 'memberSince'])
         && groupModWriteOK()
         // owner 2026-10-18: the group wallpaper, groups only and a known shape (groupWallpaperOK).
         && (!('wallpaper' in request.resource.data.diff(resource.data).affectedKeys()) || groupWallpaperOK())

@@ -159,6 +159,15 @@ struct GroupSettingsView: View {
                 }
                 .foregroundStyle(.primary)
             }
+            // ⛔ CHAT HISTORY FOR NEW MEMBERS (owner 2026-10-20): Visible or Hidden. Change-info admins.
+            if canEdit {
+                NavigationLink {
+                    ChatHistoryForNewMembersPage(cid: cid, hidden: (conv?.hideHistoryAt ?? 0) > 0)
+                } label: {
+                    valueRow("eye.slash", "Chat History for New Members",
+                             (conv?.hideHistoryAt ?? 0) > 0 ? "Hidden" : "Visible")
+                }
+            }
             if conv?.isAdmin(me) ?? false {
                 NavigationLink { GroupHistoryView(cid: cid) } label: {
                     valueRow("clock.arrow.circlepath", "History", "")
@@ -1465,4 +1474,57 @@ final class LiveGroupDoc {
     }
 
     deinit { reg?.remove() }
+}
+
+/// Visible or Hidden, ticked, as the Group Type page picks a type. Hidden: people who join from now
+/// on see the chat from the moment they come in; nobody already in the group loses anything.
+struct ChatHistoryForNewMembersPage: View {
+    let cid: String
+    @State var hidden: Bool
+    @State private var saving = false
+    @State private var error: String?
+
+    var body: some View {
+        List {
+            Section {
+                row("Visible", on: !hidden) { set(false) }
+                row("Hidden", on: hidden) { set(true) }
+            } footer: {
+                Text(hidden
+                     ? "People who join from now on see only messages sent after they join. Members already in the group still see everything."
+                     : "People who join can see the messages sent before they joined.")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Chat History")
+        .navigationBarTitleDisplayMode(.inline)
+        .disabled(saving)
+        .alert("Could not do that", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(error ?? "") }
+    }
+
+    private func row(_ title: String, on: Bool, _ tap: @escaping () -> Void) -> some View {
+        Button(action: tap) {
+            HStack {
+                Text(title).foregroundStyle(.primary)
+                Spacer()
+                if on { Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(Color.accentColor) }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func set(_ value: Bool) {
+        guard value != hidden, !saving else { return }
+        let old = hidden
+        hidden = value
+        saving = true
+        Task {
+            do { try await ChatService.setHideHistory(cid: cid, hidden: value) }
+            catch { hidden = old; self.error = error.localizedDescription }
+            saving = false
+        }
+    }
 }

@@ -1074,6 +1074,18 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var memberSend: [String: Bool] = [:]
     /// group: seconds a member waits between messages (2026-10-20), 0 = off. Admins never wait.
     var slowModeSeconds: Int = 0
+    /// ⛔ CHAT HISTORY FOR NEW MEMBERS (owner 2026-10-20): when it was set to Hidden (ms, 0 = Visible).
+    /// Someone who joins after that sees the chat from the moment they came in, like a new group.
+    var hideHistoryAt: Double = 0
+    /// When each member came in (ms), written by the server (functions-groups stampMemberSince).
+    var memberSince: [String: Double] = [:]
+
+    /// Where `uid`'s chat starts: their join time when they came in after history was hidden,
+    /// nil (everything) otherwise, including for anyone who joined before it was hidden.
+    func historyStart(for uid: String) -> Date? {
+        guard isGroup, hideHistoryAt > 0, let since = memberSince[uid], since >= hideHistoryAt else { return nil }
+        return Date(timeIntervalSince1970: since / 1000)
+    }
     var membersCanShareLink = false    // group: non-admins see Share and the QR of the invite link (owner 2026-10-19)
     /// 2026-10-19 groups v2 (owner): the group's document says `e2ee == false`, so its new messages
     /// are NOT end-to-end encrypted (ChatService.groupIsPlain). Server-written; false for every 1:1.
@@ -1231,6 +1243,12 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.onlyAdminsCall = data["onlyAdminsCall"] as? Bool ?? false
         self.memberSend = data["memberSend"] as? [String: Bool] ?? [:]
         self.slowModeSeconds = (data["slowMode"] as? NSNumber)?.intValue ?? 0
+        func ms(_ v: Any?) -> Double {
+            if let t = v as? Timestamp { return t.dateValue().timeIntervalSince1970 * 1000 }
+            return (v as? NSNumber)?.doubleValue ?? 0
+        }
+        self.hideHistoryAt = ms(data["hideHistoryAt"])
+        self.memberSince = (data["memberSince"] as? [String: Any] ?? [:]).mapValues { ms($0) }
         self.membersCanShareLink = false
         self.e2eeOff = (data["type"] as? String) == "group" && (data["e2ee"] as? Bool) == false
         self.lastPlainTag = data["lastPlainTag"] as? String

@@ -2195,6 +2195,7 @@ struct ThreadView: View {
             cachedConv = ConversationsRepository.shared.conversations.first { $0.id == cid }
                 ?? FormerGroups.removed[cid]   // a group I was removed from earlier this session
             startOwnGroupDoc()
+            noteHistoryStart()
             // A preview owns its repository; a real chat shares the live one (`forChat`), so it
             // counts itself in and out rather than stopping a run another screen may be using.
             if preview { repo.start() } else { repo.open() }
@@ -2427,8 +2428,16 @@ struct ThreadView: View {
                     || fresh.users != old.users || fresh.restrictedFlags != old.restrictedFlags
                     || fresh.restrictedUntil != old.restrictedUntil
                     || fresh.groupMod.blocksSending() != old.groupMod.blocksSending()
-                if changed { cachedConv = fresh }
+                    || fresh.hideHistoryAt != old.hideHistoryAt || fresh.memberSince != old.memberSince
+                if changed { cachedConv = fresh; noteHistoryStart() }
             }
+    }
+
+    /// Chat history hidden from new members: where this chat starts for me, for the repository.
+    private func noteHistoryStart() {
+        let start = cachedConv?.historyStart(for: me)
+        guard ThreadRepository.historyStart[cid] != start else { return }
+        ThreadRepository.historyStart[cid] = start
     }
 
     private func conversationsChanged(_ list: [Conversation]) {
@@ -2444,6 +2453,7 @@ struct ThreadView: View {
         } else if resolved != cachedConv { cachedConv = resolved }
         // A chat opened before its group was in the list starts the group's own doc now (audit).
         startOwnGroupDoc()
+        noteHistoryStart()
     }
 
     private var muteLiftKey: Double { isGroup ? (conversation?.restrictedUntil[me] ?? 0) : 0 }

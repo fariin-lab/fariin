@@ -848,6 +848,18 @@ enum ChatService {
         try await writeSystemMessage(cid: cid, text: "\(myName()) \(what)")
     }
 
+    /// Chat history for new members (owner 2026-10-20): Hidden stamps the moment (server time);
+    /// Visible removes it. The group is told in one line, as other settings do.
+    static func setHideHistory(cid: String, hidden: Bool) async throws {
+        try await db.collection("conversations").document(cid).updateData([
+            "hideHistoryAt": hidden ? FieldValue.serverTimestamp() : FieldValue.delete(),
+            "updatedAt": FieldValue.serverTimestamp(),
+        ])
+        try? await writeSystemMessage(cid: cid, text: hidden
+            ? "\(myName()) hid chat history from new members"
+            : "\(myName()) made chat history visible to new members")
+    }
+
     /// Toggle a member permission (admin): "membersCanAdd" or "membersCanEditInfo".
     static func setGroupPermission(cid: String, key: String, _ value: Bool) async throws {
         try await db.collection("conversations").document(cid).updateData([
