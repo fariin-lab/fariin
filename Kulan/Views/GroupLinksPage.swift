@@ -37,6 +37,7 @@ struct GroupLinksPage: View {
     @State private var revokeTarget: GroupLink?
     @State private var editTarget: LinkEditTarget?
     @State private var qrLink: GroupLink?
+    @State private var publicQR = false
     /// The link whose own sheet is up (owner 2026-10-20: a tap opens a sheet, not a menu).
     @State private var detailLink: GroupLink?
     /// What the sheet asked for once it is down (a page sheet cannot open over it).
@@ -69,6 +70,10 @@ struct GroupLinksPage: View {
                                onRevoke: { afterDetail = { revokeTarget = l } },
                                onDelete: { afterDetail = { delete(l) } })
             }
+            .sheet(isPresented: $publicQR) {
+                GroupLinkQRSheet(title: groupTitle, link: publicURL ?? "https://fariin.com",
+                                 photo: groupConv?.avatarUrl, memberCount: groupConv?.users.count)
+            }
             .sheet(item: $qrLink) { l in GroupLinkQRSheet(title: groupTitle, link: l.url, photo: groupConv?.avatarUrl, memberCount: groupConv?.users.count) }
             .sheet(item: Binding(get: { shareText.map { LinkShareText(id: $0) } },
                                  set: { shareText = $0?.id })) { t in
@@ -81,10 +86,17 @@ struct GroupLinksPage: View {
 
     @ViewBuilder private var content: some View {
         if let list {
-            primarySection(list.primary)
-            if let p = list.primary {
-                linkActionsSection
-                approvalSection(p)
+            // ⛔ A PUBLIC GROUP'S LINK IS ITS PUBLIC NAME (owner 2026-10-20: the page said "No invite
+            // link"): fariin.com/<name> on top, as the reference app shows a public group's address.
+            // Changed under Group Type. Extra links stay under More Links.
+            if let url = publicURL {
+                publicSection(url)
+            } else {
+                primarySection(list.primary)
+                if let p = list.primary {
+                    linkActionsSection
+                    approvalSection(p)
+                }
             }
             moreSection(list.links)
             if !list.revoked.isEmpty { revokedSection(list.revoked) }
@@ -102,6 +114,51 @@ struct GroupLinksPage: View {
     }
 
     // MARK: - Sections
+
+    /// The group's public address when it is public, else nil.
+    private var publicURL: String? {
+        guard let c = groupConv, c.isPublic, !c.publicName.isEmpty else { return nil }
+        return "https://fariin.com/\(c.publicName)"
+    }
+
+    private func publicSection(_ url: String) -> some View {
+        Section {
+            VStack(spacing: 14) {
+                Button { copyText(url) } label: {
+                    HStack(spacing: 8) {
+                        Text(url.replacingOccurrences(of: "https://", with: ""))
+                            .font(.system(size: 17)).foregroundStyle(.primary)
+                            .lineLimit(1).truncationMode(.middle)
+                        Text("Tap to copy").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 16).frame(height: 52).frame(maxWidth: .infinity)
+                    .background(Capsule().fill(Color(.tertiarySystemFill)))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                HStack(spacing: 0) {
+                    publicCircle("doc.on.doc", "Copy") { copyText(url) }
+                    publicCircle("paperplane.fill", "Send") { shareText = url }
+                    ShareLink(item: URL(string: url) ?? URL(string: "https://fariin.com")!) {
+                        PosterActionIcon(icon: "square.and.arrow.up", diameter: 54, onPhoto: false, label: "Share")
+                    }
+                    .buttonStyle(.plain)
+                    publicCircle("qrcode", "QR Code") { publicQR = true }
+                }
+            }
+            .listRowInsets(EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16))
+        } header: {
+            Text("Public Link")
+        } footer: {
+            Text("Anyone can find this group and join it with this link. Change it under Group Type.")
+        }
+    }
+
+    private func publicCircle(_ icon: String, _ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { PosterActionIcon(icon: icon, diameter: 54, onPhoto: false, label: title) }
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+    }
 
     private func primarySection(_ p: GroupLink?) -> some View {
         Section {
@@ -207,7 +264,7 @@ struct GroupLinksPage: View {
             GroupLinksCache.lists[cid] = fresh
             loadError = nil
             // A group with no link (turned off before Turn Off went away): one is made at once.
-            if fresh.primary == nil, !working { createPrimary() }
+            if fresh.primary == nil, !working, publicURL == nil { createPrimary() }
         } catch {
             if list == nil {
                 loadError = GroupInviteService.errorText(error, "The links could not be loaded. Try again.")
@@ -217,8 +274,10 @@ struct GroupLinksPage: View {
         }
     }
 
-    private func copy(_ l: GroupLink) {
-        UIPasteboard.general.string = l.url
+    private func copy(_ l: GroupLink) { copyText(l.url) }
+
+    private func copyText(_ url: String) {
+        UIPasteboard.general.string = url
         Haptics.notify(.success)
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { copied = true }
         // A second copy restarts the toast's time instead of the first copy's timer hiding it early.
