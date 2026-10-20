@@ -426,12 +426,14 @@ struct GroupInfoView: View {
                     }
                     .accessibilityHidden(true)
                 }
-                Text(memberCountText).font(.body).foregroundStyle(ink.opacity(0.7))
+                Text(memberCountText).font(.subheadline).foregroundStyle(ink.opacity(0.55))
             }
             if !desc.isEmpty {
-                Text(desc).font(.subheadline).foregroundStyle(ink.opacity(0.7))
+                // The description reads as text, the count as a label (owner 2026-10-20: the two
+                // looked the same): full ink and the body size, a little more room above it.
+                Text(desc).font(.body).foregroundStyle(ink)
                     .lineLimit(3).multilineTextAlignment(.center)
-                    .padding(.top, 2)
+                    .padding(.top, 6)
             } else if canEditInfo {
                 // No description yet: whoever may edit is offered one, the reference app's line
                 // (owner 2026-10-19). It opens Edit Group, as the Edit button does.
