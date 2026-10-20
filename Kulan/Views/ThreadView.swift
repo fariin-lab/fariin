@@ -2489,9 +2489,15 @@ struct ThreadView: View {
         // with me out of `users`, so the "no longer a member" bar shows instead of a 1:1 composer.
         if resolved == nil, let old = cachedConv, old.isGroup {
             if old.users.contains(me) { Task { await confirmRemovedFromGroup(old) } }
-        } else if let r = resolved, let c = cachedConv, r.updatedAtMillis < c.updatedAtMillis {
-            // An older list copy does not undo what the group's own doc already brought in
-            // (`startOwnGroupDoc`; audit 2026-10-20).
+        } else if var r = resolved, let c = cachedConv, r.updatedAtMillis < c.updatedAtMillis {
+            // An older list copy is still taken (owner 2026-10-20: a group photo wallpaper vanished a
+            // second after it was set, because the copy carrying it was skipped), but it does not
+            // undo the group RULES the group's own doc already brought in (`startOwnGroupDoc`).
+            r.memberSend = c.memberSend; r.slowModeSeconds = c.slowModeSeconds
+            r.onlyAdminsSend = c.onlyAdminsSend; r.admins = c.admins; r.users = c.users
+            r.restrictedFlags = c.restrictedFlags; r.restrictedUntil = c.restrictedUntil
+            r.groupMod = c.groupMod; r.hideHistoryAt = c.hideHistoryAt; r.memberSince = c.memberSince
+            if r != c { cachedConv = r }
         } else if resolved != cachedConv { cachedConv = resolved }
         // A chat opened before its group was in the list starts the group's own doc now (audit).
         startOwnGroupDoc()
