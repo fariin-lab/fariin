@@ -210,7 +210,9 @@ enum SendQueue {
         // a group I left for good, where nobody can resend or delete it (audit 2026-10-20).
         let monthAgo = Date().timeIntervalSince1970 - 30 * 86400
         for e in allPending() where e.refused == true {
-            let secs = e.createdAt > 1e11 ? e.createdAt / 1000 : e.createdAt   // stored in ms
+            // From when it was refused (seconds); an old send refused today keeps its month.
+            let at = e.refusedAt ?? e.createdAt
+            let secs = at > 1e11 ? at / 1000 : at   // createdAt is stored in ms
             guard secs < monthAgo else { continue }
             remove(clientId: e.clientId)
             AudioRecorder.dropInFlight(clientId: e.clientId)

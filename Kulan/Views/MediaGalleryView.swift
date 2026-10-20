@@ -1000,7 +1000,14 @@ struct MediaGalleryView: View {
     static func isGone(_ m: Message) -> Bool {
         HiddenMessages.isHidden(m.id) || (m.expiresAt.map { $0 <= Date() } ?? false)
     }
-    private func parentMessageId(_ id: String) -> String { id.split(separator: "-").first.map(String.init) ?? id }
+    /// The real message behind a tile. A text message's id is its client id, a UUID full of
+    /// dashes, so "before the first dash" is only right for an album child, whose id is not a
+    /// message of its own (audit 2026-10-20: my link messages were treated as album children).
+    private func parentMessageId(_ id: String) -> String {
+        if all.contains(where: { $0.id == id }) { return id }
+        guard let dash = id.lastIndex(of: "-") else { return id }
+        return String(id[..<dash])
+    }
 
     /// ⛔ HIS OWN OUTLINE BUBBLE, NOT `bubble.left` — owner, 2026-08-23: "go to chat icon update use
     /// my custom chat icon the Outline". `ic_chat_outline` is already in the bundle; the Settings

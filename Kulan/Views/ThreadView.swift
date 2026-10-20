@@ -2439,6 +2439,9 @@ struct ThreadView: View {
         // with me out of `users`, so the "no longer a member" bar shows instead of a 1:1 composer.
         if resolved == nil, let old = cachedConv, old.isGroup {
             if old.users.contains(me) { Task { await confirmRemovedFromGroup(old) } }
+        } else if let r = resolved, let c = cachedConv, r.updatedAtMillis < c.updatedAtMillis {
+            // An older list copy does not undo what the group's own doc already brought in
+            // (`startOwnGroupDoc`; audit 2026-10-20).
         } else if resolved != cachedConv { cachedConv = resolved }
     }
 
