@@ -2037,60 +2037,9 @@ struct GroupMemberSheet: View {
             .foregroundStyle(Color.primary)
     }
 
-    /// Member | Admin, the native segmented control. Admin for a member = promote on Done (the
-    /// promote defaults come up ticked); Member for an admin = dismiss on Done, after the confirm.
-    private var roleSwitch: some View {
-        Picker("Role", selection: adminBinding) {
-            Text("Member").tag(false)
-            Text("Admin").tag(true)
-        }
-        .pickerStyle(.segmented)
-        .disabled(busy)
-        .padding(.horizontal, Self.rowSide)
-        .padding(.bottom, 12)
-    }
-
-    /// One row per right I may hand out, the Edit Admin Rights page's list: tap ticks or unticks.
-    private var rightsRows: some View {
-        VStack(spacing: 0) {
-            ForEach(shownRights, id: \.id) { r in
-                rowLine
-                rightRow(r)
-            }
-        }
-    }
-
-    /// A switch per right, the same as the Add Admin page (owner 2026-10-19), not a tick.
-    private func rightRow(_ r: Conversation.Right) -> some View {
-        Toggle(r.shortLabel, isOn: Binding(
-            get: { rights.contains(r.rawValue) },
-            set: { on in if on { rights.insert(r.rawValue) } else { rights.remove(r.rawValue) } }))
-        .padding(.horizontal, Self.rowSide).padding(.vertical, 7)
-        .disabled(busy)
-    }
-
     /// Red Remove admin row (owner 2026-10-19), for an admin I may demote while Admin is still
     /// picked. Same confirm as the Member switch.
     private var showsRemoveAdmin: Bool { mayEditRights && member.isAdmin && adminSelected }
-
-    // MARK: Member tag (one plain row)
-
-    /// "Tag" and the field on one line, the kept emoji in front. Same GroupRole rules as before:
-    /// cleaned on save, held to maxText as you type (onChange above).
-    private var tagRow: some View {
-        VStack(spacing: 0) {
-            rowLine
-            HStack(spacing: 12) {
-                Text("Tag").font(.body)
-                if let e = role?.emoji { Text(e).font(.body) }
-                TextField("None", text: $roleText)
-                    .font(.body)
-                    .submitLabel(.done)
-                    .disabled(busy)
-            }
-            .padding(.horizontal, Self.rowSide).padding(.vertical, 13)
-        }
-    }
 
     /// Round glass circles with their names, the group page's own (owner 2026-10-20: the square
     /// tiles read boxy).

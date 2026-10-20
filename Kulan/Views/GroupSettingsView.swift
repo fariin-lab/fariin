@@ -1388,10 +1388,6 @@ struct EditGroupView: View {
 /// The Group Settings page's last-seen group (see `GroupSettingsView.conv`).
 final class HeldConversation { var conv: Conversation? }
 
-/// A listener kept for the page's real lifetime (2026-10-19 fix round). `.onDisappear` also fires
-/// when a child page is pushed on top, which dropped the group's listener while Permissions was
-/// open: its switches read a stale group, snapped back and were written twice. Held in `@State`,
-/// the box goes (and removes the listener) only when the page itself leaves the stack.
 /// A short capsule over the whole app, for a done action whose page stays (audit 2026-10-20:
 /// removals from the lists said nothing).
 @MainActor enum ToastNotice {
@@ -1430,6 +1426,10 @@ private final class PaddedToastLabel: UILabel {
     }
 }
 
+/// A listener kept for the page's real lifetime (2026-10-19 fix round). `.onDisappear` also fires
+/// when a child page is pushed on top, which dropped the group's listener while Permissions was
+/// open: its switches read a stale group, snapped back and were written twice. Held in `@State`,
+/// the box goes (and removes the listener) only when the page itself leaves the stack.
 final class ListenerBox {
     var reg: ListenerRegistration?
     deinit { reg?.remove() }
