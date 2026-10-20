@@ -9556,11 +9556,11 @@ private struct CallBarOrPin<Pin: View>: View {
                 Spacer(minLength: 8)
                 Text("JOIN")
                     .font(.subheadline.weight(.bold)).foregroundStyle(.white)
-                    .padding(.horizontal, 16).frame(height: 32)
+                    .padding(.horizontal, 16).frame(minHeight: 32)
                     .background(Capsule().fill(Color.green))
             }
-            .padding(.leading, 10).padding(.trailing, 8)
-            .frame(height: 52)
+            .padding(.leading, 10).padding(.trailing, 8).padding(.vertical, 4)
+            .frame(minHeight: 52)
             .liquidGlass(RoundedRectangle(cornerRadius: 26, style: .continuous), interactive: true)
             .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
         }

@@ -357,10 +357,13 @@ struct GroupHistoryView: View {
         Button(action: action) {
             Text(title).font(.subheadline.weight(.semibold))
                 .foregroundStyle(on ? Color(uiColor: .systemBackground) : Color.primary)
-                .padding(.horizontal, 14).frame(height: 34)
+                .padding(.horizontal, 14).frame(minHeight: 34)
                 .background(Capsule().fill(on ? Color.primary : Color(uiColor: .secondarySystemGroupedBackground)))
+                .padding(.vertical, 5)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 
     /// "By whom": everyone, or one person's changes only.

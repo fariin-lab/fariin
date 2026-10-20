@@ -1513,6 +1513,7 @@ struct ChatHistoryForNewMembersPage: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 
     private func set(_ value: Bool) {

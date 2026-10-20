@@ -2071,7 +2071,7 @@ struct GroupMemberSheet: View {
                                     .frame(width: 26, height: 26)
                                     .padding(3)
                                     .overlay(Circle().stroke(on ? Color(hex: c.rgb) : .clear, lineWidth: 2))
-                                    .frame(maxWidth: .infinity)
+                                    .frame(maxWidth: .infinity, minHeight: 44)
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -2147,7 +2147,8 @@ struct GroupMemberSheet: View {
             AvatarView(name: member.name, photoUrl: gatedMemberPhoto, size: 96)
                 .padding(.bottom, 6)
             HStack(spacing: 6) {
-                Text(member.name).font(.title2.weight(.bold)).lineLimit(1)
+                // The name gives way last (audit 2026-10-20: a long tag squeezed it to "Ab…").
+                Text(member.name).font(.title2.weight(.bold)).lineLimit(1).layoutPriority(1)
                 VerifiedMark(uid: member.id, size: 16, explains: true)
                 headerChip
             }

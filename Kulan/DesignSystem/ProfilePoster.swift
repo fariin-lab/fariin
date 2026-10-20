@@ -682,7 +682,7 @@ struct PosterActionIcon: View {
         VStack(spacing: 8) {
             circle
             if let label {
-                Text(label).font(.footnote).lineLimit(1)
+                Text(label).font(.footnote).lineLimit(1).minimumScaleFactor(0.7)
                     .foregroundStyle(onPhoto ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
             }
         }
