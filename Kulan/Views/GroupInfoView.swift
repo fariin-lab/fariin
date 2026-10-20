@@ -572,11 +572,16 @@ struct GroupInfoView: View {
         Section {
             // This phone only (2026-10-18): follows Settings > Chats, or overrides it for this chat.
             Menu {
-                Picker("Save to Photos", selection: Binding(get: { saveChoice }, set: { pickSaveChoice($0) })) {
-                    ForEach(AutoSaveToPhotos.ChatChoice.allCases, id: \.self) { c in Text(c.label).tag(c) }
+                // Just On / Off (owner 2026-10-20: no "Default (Off)"). The untouched state shows
+                // what it does today, the Settings switch's value.
+                Picker("Save to Photos", selection: Binding(
+                    get: { saveOn },
+                    set: { pickSaveChoice($0 ? .always : .never) })) {
+                    Text("On").tag(true)
+                    Text("Off").tag(false)
                 }
             } label: {
-                Label("Save to Photos: \(saveChoice.label)", systemImage: "square.and.arrow.down")
+                Label("Save to Photos: \(saveOn ? "On" : "Off")", systemImage: "square.and.arrow.down")
             }
         }
     }
@@ -912,6 +917,14 @@ struct GroupInfoView: View {
 
     /// Always asks for Photos access on the tap, as the Settings switch does (a refusal from a
     /// background save would otherwise leave "Always" showing while nothing is saved).
+    private var saveOn: Bool {
+        switch saveChoice {
+        case .always: true
+        case .never: false
+        case .standard: AutoSaveToPhotos.isOn
+        }
+    }
+
     private func pickSaveChoice(_ c: AutoSaveToPhotos.ChatChoice) {
         AutoSaveToPhotos.setChoice(c, for: cid)
         saveChoice = c
