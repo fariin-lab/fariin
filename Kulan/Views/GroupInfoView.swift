@@ -175,7 +175,7 @@ struct GroupInfoView: View {
                         .allowsHitTesting(false)
                 }
             }
-            .navigationDestination(isPresented: $showMemberChanges) { GroupMemberChangesView(cid: cid) }
+            .navigationDestination(isPresented: $showMemberChanges) { GroupHistoryView(cid: cid) }
             .navigationDestination(isPresented: $showMemberLink) {
                 if let link = inviteLink { GroupLinkShareView(title: title, photo: conv?.avatarUrl, link: link) }
             }
@@ -578,7 +578,7 @@ struct GroupInfoView: View {
         Section {
             // Who joined, left, was removed or changed admin, newest first (owner 2026-10-18).
             Button { showMemberChanges = true } label: {
-                Label("View Member Changes", systemImage: "clock.arrow.circlepath")
+                Label("History", systemImage: "clock.arrow.circlepath")
             }
         }
     }
@@ -2093,11 +2093,13 @@ struct GroupMemberSheet: View {
         if !rows.isEmpty {
             VStack(spacing: 0) {
                 ForEach(rows.indices, id: \.self) { i in
-                    if i > 0 { Divider().padding(.leading, 62) }
+                    if i > 0 { Divider().padding(.leading, 58) }
                     rows[i]
                 }
             }
-            .profileSurface(plain: card, radius: 16)
+            // The system's inset-grouped card (owner 2026-10-20: "Apple's size and corners"): rows
+            // 52 tall, 16 in from the edge, and the large continuous corner iOS 26 cards wear.
+            .profileSurface(plain: card, radius: 26)
         }
     }
 
@@ -2120,7 +2122,7 @@ struct GroupMemberSheet: View {
             rows.append(AnyView(iconRow("crown", "Transfer Ownership") { confirmTransfer = true }))
         }
         if member.id != me {
-            rows.append(AnyView(iconRow("info.circle", "Info") { openProfile() }))
+            rows.append(AnyView(iconRow("person.crop.circle", "Open Profile") { openProfile() }))
         }
         if showsRemoveAdmin {
             rows.append(AnyView(iconRow("person.badge.minus", "Dismiss Admin", tint: .red) { confirmDismissAdmin = true }))
@@ -2139,13 +2141,14 @@ struct GroupMemberSheet: View {
     }
 
     private func iconLabel(_ icon: String, _ title: String, tint: Color) -> some View {
-        HStack(spacing: 16) {
-            Image(systemName: icon).font(.system(size: 20)).frame(width: 28)
+        HStack(spacing: 14) {
+            Image(systemName: icon).font(.system(size: 17, weight: .regular)).frame(width: 28)
             Text(title).font(.body)
             Spacer(minLength: 0)
         }
         .foregroundStyle(tint)
-        .padding(.horizontal, 18).padding(.vertical, 14)
+        .padding(.horizontal, 16)
+        .frame(minHeight: 52)
         .contentShape(Rectangle())
     }
 

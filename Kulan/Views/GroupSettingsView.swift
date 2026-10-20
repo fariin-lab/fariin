@@ -160,8 +160,8 @@ struct GroupSettingsView: View {
                 .foregroundStyle(.primary)
             }
             if conv?.isAdmin(me) ?? false {
-                NavigationLink { GroupMemberChangesView(cid: cid) } label: {
-                    valueRow("clock.arrow.circlepath", "Member Changes", "")
+                NavigationLink { GroupHistoryView(cid: cid) } label: {
+                    valueRow("clock.arrow.circlepath", "History", "")
                 }
             }
         }

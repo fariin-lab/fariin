@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import FirebaseFirestore
 import Observation
 
@@ -126,12 +127,37 @@ struct GroupSectionAnchor: View {
     }
 }
 
-// MARK: - Member changes
+// MARK: - History
 
-/// One join, leave, removal or admin change, read back from the group's own notice line.
-struct GroupMemberEvent: Identifiable {
+/// One line of the group's history, read back from its notice line (`type: "system"`): what
+/// happened, who did it (the line's author), when, and which shelf it goes on.
+struct GroupHistoryEvent: Identifiable {
+    enum Category: String, CaseIterable, Identifiable {
+        case members, admins, info, settings
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .members: return "Members"
+            case .admins: return "Admins"
+            case .info: return "Group Info"
+            case .settings: return "Settings"
+            }
+        }
+    }
     enum Kind {
-        case created, joined, joinedByLink, added, left, removed, madeAdmin, adminRemoved, owner
+        case created, joined, joinedByLink, added, left, removed
+        case madeAdmin, adminRemoved, owner, restricted, unrestricted
+        case renamed, photo, wallpaper, badge
+        case slowMode, disappearing, sending, other
+
+        var category: Category {
+            switch self {
+            case .created, .joined, .joinedByLink, .added, .left, .removed: return .members
+            case .madeAdmin, .adminRemoved, .owner, .restricted, .unrestricted: return .admins
+            case .renamed, .photo, .wallpaper, .badge: return .info
+            case .slowMode, .disappearing, .sending, .other: return .settings
+            }
+        }
         var icon: String {
             switch self {
             case .created: return "sparkles"
@@ -139,14 +165,27 @@ struct GroupMemberEvent: Identifiable {
             case .joinedByLink: return "link"
             case .left: return "rectangle.portrait.and.arrow.right"
             case .removed: return "person.badge.minus"
-            case .madeAdmin, .owner: return "star"
-            case .adminRemoved: return "star.slash"
+            case .madeAdmin: return "checkmark.shield"
+            case .adminRemoved: return "shield.slash"
+            case .owner: return "crown"
+            case .restricted: return "hand.raised"
+            case .unrestricted: return "hand.thumbsup"
+            case .renamed: return "pencil"
+            case .photo: return "photo"
+            case .wallpaper: return "paintpalette"
+            case .badge: return "checkmark.seal"
+            case .slowMode: return "timer"
+            case .disappearing: return "clock.badge.xmark"
+            case .sending: return "bubble.left.and.bubble.right"
+            case .other: return "gearshape"
             }
         }
         var tint: Color {
             switch self {
-            case .left, .removed, .adminRemoved: return .red
-            default: return .accentColor
+            case .left, .removed, .adminRemoved, .restricted: return .red
+            case .owner: return .orange
+            case .created, .joined, .joinedByLink, .added, .unrestricted: return .green
+            default: return .blue
             }
         }
     }
@@ -154,90 +193,258 @@ struct GroupMemberEvent: Identifiable {
     let kind: Kind
     let text: String
     let at: Date
+    let actor: String
 
     /// The notice texts the app and the server write (ChatService, functions-groups, the moderation
-    /// texts in functions-admin). Matched on their fixed endings, most specific first, so "removed X
-    /// as admin" is not read as a removal and the wallpaper / label notices are not members at all.
+    /// texts in functions-admin), matched on their fixed words, most specific first, so "removed X as
+    /// admin" is not read as a removal. Nil for a line that is not a group change (a call row, a
+    /// screenshot notice).
     static func kind(of raw: String) -> Kind? {
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if t.hasSuffix(" joined via invite link") { return .joinedByLink }
+        let l = t.lowercased()
+        // "joined the group via invite link" is what functions-groups writes (audit 2026-10-20:
+        // the old " joined via invite link" never matched, so link joins were missing here).
+        if t.hasSuffix("via invite link") { return .joinedByLink }
         if t.hasSuffix(" joined the group") { return .joined }
         if t.hasSuffix(" created the group") { return .created }
-        if t.hasSuffix(" left") { return .left }
+        if t.hasSuffix(" left") || t.hasSuffix(" left the group") { return .left }
         if t.hasSuffix(" as admin") || t.hasSuffix(" as an admin.") { return .adminRemoved }
         if t.hasSuffix(" is now the owner") || t.hasSuffix(" the owner of this group.") { return .owner }
         if t.hasSuffix(" an admin") { return .madeAdmin }
+        if l.contains("lifted the restrictions") { return .unrestricted }
+        if l.contains(" restricted ") && !l.contains("restricted chat") && !l.contains("restricted group")
+            && !l.contains("messaging to admins") { return .restricted }
+        if l.contains("renamed the group") { return .renamed }
+        if l.contains("wallpaper") { return .wallpaper }
+        if l.contains("verified badge") || l.contains(" label") { return .badge }
+        if l.contains("group photo") { return .photo }
+        if l.contains("slow mode") { return .slowMode }
+        if l.contains("disappearing messages") { return .disappearing }
+        if l.contains("admins only") || l.contains("everyone to send") || l.contains("restricted chat")
+            || l.contains("restricted group") || l.contains("members can") || l.contains("members may") { return .sending }
         if t.hasSuffix(" from the group.") { return .removed }
-        let notMembers = ["wallpaper", "label", "verified badge", "restrictions"]
-        if notMembers.contains(where: { t.contains($0) }) { return nil }
         if t.contains(" removed ") { return .removed }
         if t.contains(" added ") { return .added }
         return nil
     }
 }
 
-/// Member Changes: who joined, left, was removed or changed admin, newest first. Read-only, built from
-/// the group's notice lines (`type: "system"`), the same lines the chat shows in the middle.
+/// ⛔ HISTORY (owner 2026-10-20: "rename it History, read how the reference app's works, then make
+/// our own"). Every change the group's notice lines record, newest first, on day shelves: who did
+/// it (their photo, a small badge for what), the line itself, and the time. A strip of kinds
+/// (All, Members, Admins, Group Info, Settings), a "by whom" menu and search narrow it; a long press
+/// shows the line in the chat. Admins only (Group Settings shows the row to them alone).
+///
+/// What it is built from, honestly: the notice lines, which say what changed in words but keep no
+/// old/new values, so a change shows as its sentence, not a before and after. They are kept for as
+/// long as the group keeps its messages, not a fixed window.
 ///
 /// ⚠️ THE READ IS ONE EQUALITY QUERY on `type`, with no `createdAt` order: an order would need a
-/// composite index (type + createdAt) that firestore.indexes.json does not have, and that is a
-/// server change. The single-field index answers the equality alone, so the newest-first order is
-/// made here, after the read, and the read is capped. The chat's cached lines are merged in so the
-/// page has something offline, and the footer says so when the cap was reached.
-struct GroupMemberChangesView: View {
+/// composite index (type + createdAt) that firestore.indexes.json does not have. The single-field
+/// index answers the equality alone, so newest-first is made here, after the read, which is capped.
+/// The chat's cached lines are merged in so the page has something offline.
+struct GroupHistoryView: View {
     let cid: String
-    @State private var events: [GroupMemberEvent] = []
+    @Environment(\.dismiss) private var dismiss
+    @State private var events: [GroupHistoryEvent] = []
     @State private var loading = true
     @State private var failed = false
     @State private var capped = false
+    @State private var shelf: GroupHistoryEvent.Category?
+    @State private var actor: String?
+    @State private var query = ""
     private static let cap = 1500
+
+    private var conv: Conversation? { ConversationsRepository.shared.conversations.first { $0.id == cid } }
+    private var me: String { AuthService.shared.uid ?? "" }
+
+    private func name(_ uid: String) -> String {
+        if uid == me { return "You" }
+        let n = conv?.names[uid] ?? ""
+        return n.isEmpty ? "Someone" : n
+    }
+
+    private var shown: [GroupHistoryEvent] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        return events.filter { e in
+            (shelf == nil || e.kind.category == shelf)
+                && (actor == nil || e.actor == actor)
+                && (q.isEmpty || e.text.lowercased().contains(q))
+        }
+    }
+
+    /// Day shelves, newest day first: "Today", "Yesterday", then the date.
+    private var days: [(key: Date, items: [GroupHistoryEvent])] {
+        let cal = Calendar.current
+        let grouped = Dictionary(grouping: shown) { cal.startOfDay(for: $0.at) }
+        return grouped.keys.sorted(by: >).map { ($0, grouped[$0] ?? []) }
+    }
+
+    private static func dayTitle(_ d: Date) -> String {
+        let cal = Calendar.current
+        if cal.isDateInToday(d) { return "Today" }
+        if cal.isDateInYesterday(d) { return "Yesterday" }
+        let sameYear = cal.component(.year, from: d) == cal.component(.year, from: Date())
+        return d.formatted(sameYear ? .dateTime.weekday(.wide).day().month(.wide)
+                                    : .dateTime.day().month(.wide).year())
+    }
+
+    /// The people who did something here, most active first, for the "by whom" menu.
+    private var actors: [String] {
+        let counts = Dictionary(grouping: events, by: \.actor).mapValues(\.count)
+        return counts.keys.filter { !$0.isEmpty }.sorted { (counts[$0] ?? 0, name($1)) > (counts[$1] ?? 0, name($0)) }
+    }
 
     var body: some View {
         List {
             Section {
-                ForEach(events) { e in
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: e.kind.icon)
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(e.kind.tint)
-                            .frame(width: 34, height: 34)
-                            .background(Circle().fill(e.kind.tint.opacity(0.14)))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(e.text).foregroundStyle(.primary)
-                            Text(e.at.formatted(date: .abbreviated, time: .shortened))
-                                .font(.footnote).foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 2)
+                shelves
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+            }
+            if events.isEmpty {
+                Section { emptyState.listRowBackground(Color.clear) }
+            } else if shown.isEmpty {
+                Section {
+                    ContentUnavailableView.search(text: query.isEmpty ? "" : query)
+                        .listRowBackground(Color.clear)
                 }
-            } footer: {
-                if loading && events.isEmpty {
-                    HStack { Spacer(); ProgressView(); Spacer() }
-                } else if failed && events.isEmpty {
-                    Text("Could not load the changes. Check your connection and try again.")
-                } else if events.isEmpty {
-                    Text("No member changes yet.")
-                } else if capped || failed {
-                    Text("Showing the changes this phone could load. Older ones may be missing.")
+            } else {
+                ForEach(days, id: \.key) { day in
+                    Section {
+                        ForEach(day.items) { e in row(e) }
+                    } header: {
+                        Text(Self.dayTitle(day.key))
+                    }
+                }
+                Section {} footer: {
+                    Text(capped || failed
+                         ? "Showing what this phone could load. Older changes may be missing."
+                         : "Only admins see History.")
                 }
             }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("Member Changes")
+        .listSectionSpacing(.compact)
+        .animation(.snappy(duration: 0.25), value: shelf)
+        .animation(.snappy(duration: 0.25), value: actor)
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search history")
+        .navigationTitle("History")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { actorMenu } }
+        .refreshable { await load() }
         .task { await load() }
     }
+
+    // MARK: Pieces
+
+    /// The kinds as sliding capsules; the picked one filled.
+    private var shelves: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                chip("All", on: shelf == nil) { shelf = nil }
+                ForEach(GroupHistoryEvent.Category.allCases) { c in
+                    chip(c.title, on: shelf == c) { shelf = (shelf == c ? nil : c) }
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 4)
+        }
+    }
+
+    private func chip(_ title: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(.subheadline.weight(.semibold))
+                .foregroundStyle(on ? Color(uiColor: .systemBackground) : Color.primary)
+                .padding(.horizontal, 14).frame(height: 34)
+                .background(Capsule().fill(on ? Color.primary : Color(uiColor: .secondarySystemGroupedBackground)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// "By whom": everyone, or one person's changes only.
+    private var actorMenu: some View {
+        Menu {
+            Button { actor = nil } label: {
+                if actor == nil { Label("Everyone", systemImage: "checkmark") } else { Text("Everyone") }
+            }
+            Divider()
+            ForEach(actors, id: \.self) { u in
+                Button { actor = u } label: {
+                    if actor == u { Label(name(u), systemImage: "checkmark") } else { Text(name(u)) }
+                }
+            }
+        } label: {
+            Image(systemName: actor == nil ? "person.2" : "person.2.fill")
+        }
+        .accessibilityLabel(actor == nil ? "Show changes by" : "Showing changes by \(name(actor ?? ""))")
+    }
+
+    private func row(_ e: GroupHistoryEvent) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            AvatarView(name: name(e.actor), photoUrl: conv?.photos[e.actor], size: 38)
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: e.kind.icon)
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 18, height: 18)
+                        .background(Circle().fill(e.kind.tint))
+                        .overlay(Circle().stroke(Color(uiColor: .secondarySystemGroupedBackground), lineWidth: 2))
+                        .offset(x: 3, y: 3)
+                }
+            Text(sentence(e))
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(e.at.formatted(date: .omitted, time: .shortened))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 3)
+        .contextMenu {
+            Button {
+                NotificationCenter.default.post(name: .goToMessage, object: GoToMessage(cid: cid, messageId: e.id))
+            } label: { Label("Show in Chat", systemImage: "bubble.left") }
+            Button {
+                UIPasteboard.general.string = e.text
+            } label: { Label("Copy", systemImage: "doc.on.doc") }
+        }
+    }
+
+    /// The line with whoever did it in bold, when the line starts with their name.
+    private func sentence(_ e: GroupHistoryEvent) -> AttributedString {
+        var out = AttributedString(e.text)
+        let who = conv?.names[e.actor] ?? ""
+        if !who.isEmpty, e.text.hasPrefix(who), let r = out.range(of: who) {
+            out[r].font = .subheadline.weight(.semibold)
+        }
+        return out
+    }
+
+    @ViewBuilder private var emptyState: some View {
+        if loading {
+            HStack { Spacer(); ProgressView(); Spacer() }.padding(.vertical, 40)
+        } else if failed {
+            ContentUnavailableView("Couldn't load history", systemImage: "wifi.exclamationmark",
+                                   description: Text("Check your connection, then pull down to try again."))
+        } else {
+            ContentUnavailableView("No history yet", systemImage: "clock.arrow.circlepath",
+                                   description: Text("Changes to members, admins and the group's settings show up here."))
+        }
+    }
+
+    // MARK: Load
 
     @MainActor private func load() async {
         var lines: [String: Message] = [:]
         for m in ThreadMessageCache.shared.messages(for: cid) ?? [] where m.isSystem { lines[m.id] = m }
-        events = Self.events(from: lines)
+        if events.isEmpty { events = Self.events(from: lines) }
         guard !cid.isEmpty else { loading = false; return }   // an empty id throws an NSException
         do {
             let snap = try await Firestore.firestore().collection("conversations").document(cid)
                 .collection("messages").whereField("type", isEqualTo: "system")
                 .limit(to: Self.cap).getDocuments()
             capped = snap.documents.count >= Self.cap
+            failed = false
             for d in snap.documents {
                 lines[d.documentID] = Message(id: d.documentID, data: d.data(), cid: cid, crypto: Crypto.shared)
             }
@@ -248,10 +455,10 @@ struct GroupMemberChangesView: View {
         loading = false
     }
 
-    private static func events(from lines: [String: Message]) -> [GroupMemberEvent] {
-        lines.values.compactMap { m -> GroupMemberEvent? in
-            guard !m.deleted, let k = GroupMemberEvent.kind(of: m.text) else { return nil }
-            return GroupMemberEvent(id: m.id, kind: k, text: m.text, at: m.createdAt)
+    private static func events(from lines: [String: Message]) -> [GroupHistoryEvent] {
+        lines.values.compactMap { m -> GroupHistoryEvent? in
+            guard !m.deleted, let k = GroupHistoryEvent.kind(of: m.text) else { return nil }
+            return GroupHistoryEvent(id: m.id, kind: k, text: m.text, at: m.createdAt, actor: m.authorId)
         }
         .sorted { $0.at > $1.at }
     }
