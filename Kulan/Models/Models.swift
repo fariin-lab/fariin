@@ -361,6 +361,10 @@ struct Message: Identifiable, Equatable, Codable {
     /// vanishing and leaving the other person wondering what they missed. The content is stripped
     /// server-side and the media is deleted from Storage, so what remains is a few bytes of marker.
     var deleted: Bool = false
+    /// ⛔ SENT BEFORE I WAS IN THE GROUP (owner 2026-10-20: a row of locks after joining an old
+    /// end-to-end group). It was sealed only for the members of that moment, so it can never be read
+    /// here; the chat leaves it out, as the big apps do with history from before you joined.
+    var notForMe: Bool = false
     /// 2026-09-24 feature-audit (delete-message): set only when a group admin deleted someone else's
     /// message, so its author is not told "You deleted this message". Nil = the author did it.
     var deletedBy: String? = nil
@@ -741,6 +745,7 @@ struct Message: Identifiable, Equatable, Codable {
         self.id = id
         self.authorId = data["authorId"] as? String ?? ""
         self.text = crypto.decrypt(data["text"] as? String ?? "", cid: cid, authorId: data["authorId"] as? String ?? "")
+        self.notForMe = crypto.groupEnvelopeSkipsMe(data["text"] as? String ?? "")
         self.type = data["type"] as? String
         self.imageUrl = data["imageUrl"] as? String
         self.audioUrl = data["audioUrl"] as? String

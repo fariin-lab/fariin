@@ -480,7 +480,7 @@ final class ThreadRepository {
         // it was sent even when later texts confirm first (order never shuffles on upload finish).
         var merged = sortedOneTimeline(visible + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) }
                                        + blockNotices(after: visible.first?.createdAt))
-        merged.removeAll { HiddenMessages.isHidden($0.id) }   // drop messages the user deleted "for me"
+        merged.removeAll { HiddenMessages.isHidden($0.id) || $0.notForMe }   // deleted "for me", or sealed before I joined
 
         // ROW IDS MUST BE UNIQUE. `rowId` is `clientId ?? id`, and the list feeds it straight into a
         // diffable snapshot — `appendItemsWithIdentifiers:` throws an NSInternalInconsistencyException on

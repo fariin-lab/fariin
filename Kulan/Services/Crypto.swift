@@ -829,6 +829,17 @@ final class Crypto {
     }
 
     /// Decrypt a group message. Needs the AUTHOR's uid (sender pubkey) — opens my own wrap.
+    /// A sealed group message (an old end-to-end group, "encg1:") that was never sealed for me: I
+    /// was not a member when it was sent, so no key on this phone can ever open it. Only a
+    /// readable envelope with no entry for me counts; a damaged one is not this.
+    func groupEnvelopeSkipsMe(_ raw: String) -> Bool {
+        guard raw.hasPrefix("encg1:"), let me = currentUid() else { return false }
+        guard let data = Data(base64Encoded: String(raw.dropFirst("encg1:".count))),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let wraps = obj["w"] as? [String: String] else { return false }
+        return wraps[me] == nil
+    }
+
     func decryptGroup(_ raw: String, authorId: String) -> String {
         guard raw.hasPrefix("encg1:") else { return raw }
         warmIfNeeded()
