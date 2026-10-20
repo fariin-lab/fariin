@@ -75,13 +75,17 @@ struct IncomingGroupCallLayer: View {
                 service.reevaluateInvites()
             }
         }
-        // The ring window is 90s from the start; past it the invitation goes away by itself.
+        // Past the service's ring window the invitation goes away by itself. Asked again every few
+        // seconds while it stays (audit 2026-10-20): the card waited 90s against a 60s ring, and a
+        // person added late, whose own ring started after the call's, was asked once and never again.
         .task(id: service.incomingInvite?.roomId) {
             guard let invite = service.incomingInvite else { return }
-            let left = 90 - Date().timeIntervalSince(invite.startedAt)
-            if left > 0 { try? await Task.sleep(nanoseconds: UInt64(left * 1_000_000_000)) }
-            guard !Task.isCancelled else { return }
-            service.reevaluateInvites()
+            while !Task.isCancelled, service.incomingInvite?.roomId == invite.roomId {
+                let left = GroupCallService.ringWindow + 0.5 - Date().timeIntervalSince(invite.startedAt)
+                try? await Task.sleep(nanoseconds: UInt64(max(left, 5) * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                service.reevaluateInvites()
+            }
         }
         .fullScreenCover(isPresented: $showRoom, onDismiss: {
             service.presentsRoomScreen = false

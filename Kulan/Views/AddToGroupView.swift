@@ -48,12 +48,12 @@ struct AddToGroupView: View {
             } message: { Text(notice ?? "") }
             // Native bottom action sheet (image-2 look), attached at the top level so it never anchors to a
             // row and adapts into a popover. Replaces the manual UIAlertController that rendered as a bubble.
-            .confirmationDialog("Add New Member",
+            // A centred alert (iOS 26 shows a confirmation dialog as a bubble).
+            .alert("Add New Member",
                 isPresented: Binding(get: { pendingGroup != nil }, set: { if !$0 { pendingGroup = nil } }),
-                titleVisibility: .visible,
                 presenting: pendingGroup) { g in
-                    Button("Add to Group") { add(to: g) }
                     Button("Cancel", role: .cancel) { }
+                    Button("Add") { add(to: g) }
                 } message: { g in
                     Text("Add \"\(contactName)\" to \"\(g.displayName(me))\"?")
                 }
@@ -62,15 +62,16 @@ struct AddToGroupView: View {
 
     @ViewBuilder private func groupRow(_ g: Conversation) -> some View {
         let already = g.users.contains(contactUid)
+        let blocked = already ? nil : cannotAdd(g)
         Button {
-            guard !already, working == nil else { return }
+            guard !already, blocked == nil, working == nil else { return }
             pendingGroup = g   // → native .confirmationDialog (bottom action sheet, with Cancel)
         } label: {
             HStack(spacing: 12) {
                 AvatarView(name: g.displayName(me), photoUrl: g.displayPhoto(me), size: 44)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(g.displayName(me)).foregroundStyle(already ? .secondary : .primary)
-                    Text(already ? "Already a member" : g.memberCountLabel)
+                    Text(g.displayName(me)).foregroundStyle(already || blocked != nil ? .secondary : .primary)
+                    Text(already ? "Already a member" : (blocked ?? g.memberCountLabel))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -79,7 +80,18 @@ struct AddToGroupView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(already || working != nil)
+        .disabled(already || blocked != nil || working != nil)
+    }
+
+    /// Why I can't add anyone to this group, said on the row before the tap instead of a server
+    /// error after it (audit 2026-10-20). The same test the group's member page uses.
+    private func cannotAdd(_ g: Conversation) -> String? {
+        let now = Date().timeIntervalSince1970 * 1000
+        let allowed = g.adminCan(me, .inviteUsers)
+            || (g.membersCanAdd && !g.isRestricted(me, .addMembers, now: now))
+        if !allowed { return "Only admins can add members" }
+        if g.users.count >= AppLimits.shared.groupMembersMax { return "Group is full" }
+        return nil
     }
 
     // Native UIKit action sheet — always a BOTTOM sheet with a Cancel on iPhone (unlike SwiftUI's

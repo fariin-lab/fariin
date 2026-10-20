@@ -1016,6 +1016,7 @@ struct GroupRequestsView: View {
     init(cid: String) { self.cid = cid }
 
     @State private var joinReqs: [JoinRequest] = []
+    @State private var busyReqs = Set<String>()   // one tap per person while it is answered
     @State private var reqListener: ListenerRegistration?
     @State private var showInvite = false
     @State private var actionError: String?
@@ -1061,7 +1062,13 @@ struct GroupRequestsView: View {
         .task { links = try? await GroupInviteService.listLinks(cid: cid) }
         .sheet(isPresented: $showAdd) { AddMembersSheet(cid: cid, existing: Set(conv?.users ?? [])) }
         // Again after the link sheet closes: it may have reset or turned off the link.
-        .sheet(isPresented: $showInvite, onDismiss: { Task { await loadShareCode() } }) {
+        .sheet(isPresented: $showInvite, onDismiss: {
+            Task {
+                await loadShareCode()
+                // The link page may have turned approval on or off: the line below says which.
+                if let fresh = try? await GroupInviteService.listLinks(cid: cid) { links = fresh }
+            }
+        }) {
             InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
                             initialCode: shareCode ?? conv?.inviteCode ?? "")
                 .presentationDetents([.medium, .large])
@@ -1096,14 +1103,14 @@ struct GroupRequestsView: View {
                         AvatarView(name: r.name, photoUrl: r.photo, size: 40)
                         Text(r.name).foregroundStyle(.primary).lineLimit(1)
                         Spacer(minLength: 8)
-                        Button { act { try await GroupInviteService.denyJoin(cid: cid, uid: r.uid) } } label: {
+                        Button { answer(r.uid) { try await GroupInviteService.denyJoin(cid: cid, uid: r.uid) } } label: {
                             Text("Decline").font(.subheadline.weight(.semibold))
                                 .padding(.horizontal, 12).padding(.vertical, 7)
                                 .background(Capsule().fill(Color(.tertiarySystemFill)))
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Decline \(r.name)")
-                        Button { act { try await GroupInviteService.approveJoin(cid: cid, uid: r.uid) } } label: {
+                        Button { answer(r.uid) { try await GroupInviteService.approveJoin(cid: cid, uid: r.uid) } } label: {
                             Text("Approve").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                                 .padding(.horizontal, 12).padding(.vertical, 7)
                                 .background(Capsule().fill(Color.accentColor))
@@ -1111,6 +1118,8 @@ struct GroupRequestsView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("Approve \(r.name)")
                     }
+                    .disabled(busyReqs.contains(r.uid))
+                    .opacity(busyReqs.contains(r.uid) ? 0.5 : 1)
                 }
             }
         }
@@ -1168,6 +1177,17 @@ struct GroupRequestsView: View {
                 let msg = error.localizedDescription
                 await MainActor.run { actionError = msg }
             }
+        }
+    }
+
+    /// Approve or Decline, once: a second tap while the first is answered would come back as
+    /// "already handled" and show an error over a request that worked (audit 2026-10-20).
+    private func answer(_ uid: String, _ op: @escaping () async throws -> Void) {
+        guard !busyReqs.contains(uid) else { return }
+        busyReqs.insert(uid)
+        act {
+            defer { Task { @MainActor in busyReqs.remove(uid) } }
+            try await op()
         }
     }
 }

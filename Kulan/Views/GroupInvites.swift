@@ -211,7 +211,10 @@ enum GroupInviteService {
     static func joinRequests(cid: String, _ cb: @escaping ([JoinRequest]) -> Void) -> ListenerRegistration {
         db.collection("conversations").document(cid).collection("joinRequests")
             .addSnapshotListener { snap, _ in
-                cb(snap?.documents.map { JoinRequest(uid: $0.documentID, data: $0.data()) } ?? [])
+                // A refused or failed read keeps the last list, so waiting people are never shown
+                // as "No one is waiting" (audit 2026-10-20).
+                guard let snap else { return }
+                cb(snap.documents.map { JoinRequest(uid: $0.documentID, data: $0.data()) })
             }
     }
 }

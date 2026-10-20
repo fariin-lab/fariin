@@ -15,6 +15,7 @@ final class LiveGroupCalls {
         let id: String          // the group's cid
         let video: Bool
         let joined: [String]    // uids that came in (the call doc's own list)
+        var startedAt: Date? = nil
     }
 
     private(set) var calls: [Live] = []
@@ -47,11 +48,16 @@ final class LiveGroupCalls {
             active = false
         }
         byCid[cid] = active ? Live(id: cid, video: (d?["video"] as? Bool) ?? false,
-                                   joined: d?["joined"] as? [String] ?? []) : nil
+                                   joined: d?["joined"] as? [String] ?? [],
+                                   startedAt: (d?["startedAt"] as? Timestamp)?.dateValue()) : nil
         publish()
     }
 
     private func publish() {
+        // The 4-hour guard again on every publish (each Calls tab visit): a doc left active sends
+        // no new snapshot, so the row stayed past the limit (audit 2026-10-20).
+        let cutoff = Date().addingTimeInterval(-4 * 3600)
+        for (cid, l) in byCid where (l.startedAt ?? .distantFuture) < cutoff { byCid[cid] = nil }
         let next = byCid.values.sorted { $0.id < $1.id }
         if next != calls { calls = next }
     }

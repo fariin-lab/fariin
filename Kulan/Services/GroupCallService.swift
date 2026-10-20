@@ -502,8 +502,13 @@ final class GroupCallService: ObservableObject {
                 // starter's recordId and reset startedAt/startedBy). Audit M-020, 2026-10-07: its
                 // `active: true` merge was refused by the rules for every non-starter anyway, so it
                 // is gone; the joiner only reads which call it is in, so its leave closes that one.
-                let d = try? await ref.getDocument().data()
-                if gen == joinGeneration, activeCid == cid { groupRecordId = d?["recordId"] as? String }
+                // From the server, and only a live call's id (audit 2026-10-20): a cached or
+                // just-ended doc gave the last call's id, and the last one out then could not close
+                // this call, which stayed "live" on the Join bars.
+                let d = try? await ref.getDocument(source: .server).data()
+                if gen == joinGeneration, activeCid == cid, d?["active"] as? Bool == true {
+                    groupRecordId = d?["recordId"] as? String
+                }
             }
         } catch {
             if gen != joinGeneration { await abandonJoin(); return }   // owner audit 2026-10-06 #4
