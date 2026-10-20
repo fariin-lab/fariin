@@ -531,10 +531,7 @@ struct GroupInfoView: View {
         Section {
             // Edit Group is the bar's Edit button now (owner 2026-10-19).
             if canEditInfo {
-                // The description is edited on Edit Group with the bio's rules (2026-10-18).
-                Button { showEdit = true } label: {
-                    Label(desc.isEmpty ? "Add Group Description" : "Edit Description", systemImage: "text.alignleft")
-                }
+                // No Edit Description here (owner 2026-10-19): the bar's Edit opens the same page.
                 // The group's wallpaper is everyone's, so only someone who may change group info
                 // (owner 2026-10-18; firestore.rules says the same).
                 Button { changeWallpaper() } label: {
