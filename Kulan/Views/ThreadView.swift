@@ -557,6 +557,11 @@ struct ThreadView: View {
 
     private var threadScroll: some View {
         ScrollViewReader { proxy in scrollStack(proxy) }
+            // Nobody to call (owner 2026-10-20): said in a centred alert. Here, not on the body's
+            // chain, which is past the type-checker's budget.
+            .alert("Call failed", isPresented: $showSoloCall) {
+                Button("OK", role: .cancel) {}
+            } message: { Text("You are the only person in this group.") }
             // ⛔ A GROUP FARIIN SUSPENDED OR CLOSED SHOWS NOTHING BUT WHY (owner 2026-10-20, after the
             // reference app): the messages are hidden, the reason sits in a pill in the middle, and
             // there is no message bar. A group its owner ENDED keeps its messages (groupModHidesChat).
@@ -2153,10 +2158,6 @@ struct ThreadView: View {
                              photoHint: conversation?.photos[m.id])
         }
         .fullScreenCover(isPresented: $showGroupCall) { GroupCallView() }
-        // Nobody to call (owner 2026-10-20): said in a centred alert.
-        .alert("Call failed", isPresented: $showSoloCall) {
-            Button("OK", role: .cancel) {}
-        } message: { Text("You are the only person in this group.") }
         .task(id: groupCallActive) { await followGroupCallPeople() }
         .modifier(MessageActionDialogs(cid: cid, title: title, me: me,
                                        pendingDelete: $pendingDelete,
