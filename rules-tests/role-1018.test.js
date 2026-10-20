@@ -79,7 +79,8 @@ const cases = [
   ['FIX     25 characters', 'ALLOW', 'DENY', ADMIN, convPath, 'update', give(ADMIN, MEMBER, { text: 'x'.repeat(25) }), g, convMocks(g)],
   ['FIX     an emoji with no words', 'ALLOW', 'DENY', ADMIN, convPath, 'update', give(ADMIN, MEMBER, { text: '', emoji: '🎨' }), g, convMocks(g)],
   ['FIX     an emoji field 17 long', 'ALLOW', 'DENY', ADMIN, convPath, 'update', give(ADMIN, MEMBER, { text: 'Lead', emoji: 'x'.repeat(17) }), g, convMocks(g)],
-  ['FIX     an extra key in the role', 'ALLOW', 'DENY', ADMIN, convPath, 'update', give(ADMIN, MEMBER, { text: 'Lead', color: 'red' }), g, convMocks(g)],
+  ['FIX     an extra key in the role', 'ALLOW', 'DENY', ADMIN, convPath, 'update', give(ADMIN, MEMBER, { text: 'Lead', badge: 'x' }), g, convMocks(g)],
+  ['OK      a role with a colour (2026-10-20)', 'ALLOW', 'ALLOW', ADMIN, convPath, 'update', give(ADMIN, MEMBER, { text: 'Lead', color: 'red' }), g, convMocks(g)],
   ['FIX     a role that is a plain string', 'ALLOW', 'DENY', ADMIN, convPath, 'update', give(ADMIN, MEMBER, 'Lead'), g, convMocks(g)],
   ['FIX     a role for someone not in the group', 'ALLOW', 'DENY', ADMIN, convPath, 'update', give(ADMIN, GONE, R), g, convMocks(g)],
   // ── one person per write, named honestly ──

@@ -3931,11 +3931,13 @@ enum ChatService {
     /// (`Conversation.canSetRole`, firestore.rules `roleWriteOK`). nil or empty text removes it.
     /// `roleEdit` names the one person the write is about, as `adminEdit` does for the admin team:
     /// the rules cannot pick the changed key out of the map on their own.
-    static func setRole(cid: String, uid member: String, text: String, emoji: String?) async throws {
+    static func setRole(cid: String, uid member: String, text: String, emoji: String?,
+                        color: String? = nil) async throws {
         let clean = GroupRole.clean(text)
         let mark = emoji.map { GroupRole.fit($0, max: GroupRole.maxEmoji) } ?? ""
         var role: [String: Any] = ["text": clean]
         if !mark.isEmpty { role["emoji"] = mark }
+        if let color, GroupRole.rgb(color) != nil { role["color"] = color }
         try await db.collection("conversations").document(cid).updateData([
             "roles.\(member)": clean.isEmpty ? FieldValue.delete() : role,
             "roleEdit": ["uid": member, "by": uid],

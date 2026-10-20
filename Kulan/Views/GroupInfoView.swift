@@ -1329,12 +1329,14 @@ struct GroupMemberRow: View, Equatable {
 struct RoleChip: View {
     let role: GroupRole
     var body: some View {
+        // Its own colour when it has one (owner 2026-10-20), else the plain chip as before.
+        let tint = GroupRole.rgb(role.color).map { Color(hex: $0) } ?? Color.accentColor
         Text(role.display)
             .font(.subheadline)
             .lineLimit(1)
-            .foregroundStyle(Color.accentColor)
+            .foregroundStyle(tint)
             .padding(.horizontal, 10).padding(.vertical, 3)
-            .background(Capsule().fill(Color.accentColor.opacity(0.14)))
+            .background(Capsule().fill(tint.opacity(0.14)))
     }
 }
 
@@ -1711,6 +1713,7 @@ struct GroupMemberSheet: View {
     /// The Member | Admin switch: nil until touched, so it opens on what they are now.
     @State private var adminChoice: Bool? = nil
     @State private var roleText = ""
+    @State private var roleColor: String?
     @FocusState private var tagFocused: Bool
     @State private var confirmDismissAdmin = false
     var onInfo: ((String) -> Void)? = nil   // push their profile on the opener's stack
@@ -1789,7 +1792,9 @@ struct GroupMemberSheet: View {
     /// Member picked for a current admin: dismissed as admin on Done, after the confirm.
     private var demoting: Bool { mayEditRights && member.isAdmin && !adminSelected }
     private var cleanedRole: String { GroupRole.clean(roleText) }
-    private var roleChanged: Bool { canEditRole && cleanedRole != (role?.text ?? "") }
+    private var roleChanged: Bool {
+        canEditRole && (cleanedRole != (role?.text ?? "") || (!cleanedRole.isEmpty && roleColor != role?.color))
+    }
     private var hasChanges: Bool { rightsChanged || promoting || demoting || roleChanged }
     /// Done only on a page with something it could save.
     private var showsSave: Bool { mayEditRights || canEditRole }
@@ -1807,7 +1812,7 @@ struct GroupMemberSheet: View {
         let cid = cid, uid = member.id, name = member.name
         let list = rightsList
         let promote = !demote && promoting, newRights = !demote && rightsChanged
-        let writeRole = roleChanged, roleWords = cleanedRole, roleEmoji = role?.emoji
+        let writeRole = roleChanged, roleWords = cleanedRole, roleEmoji = role?.emoji, roleTint = roleColor
         run {
             if demote {
                 try await ChatService.demoteGroupAdmin(cid: cid, uid: uid, name: name)
@@ -1817,7 +1822,7 @@ struct GroupMemberSheet: View {
                 try await ChatService.setAdminRights(cid: cid, uid: uid, rights: list)
             }
             if writeRole {
-                try await ChatService.setRole(cid: cid, uid: uid, text: roleWords, emoji: roleEmoji)
+                try await ChatService.setRole(cid: cid, uid: uid, text: roleWords, emoji: roleEmoji, color: roleTint)
             }
         }
     }
@@ -1869,6 +1874,7 @@ struct GroupMemberSheet: View {
                 rights = currentRights.map(Set.init) ?? Set(Conversation.Right.defaults.map(\.rawValue))
                 baseRights = rights
                 roleText = role?.text ?? ""
+                roleColor = role?.color
             }
             .onChange(of: roleText) { _, new in
                 // Typing or pasting past the limit keeps the first 24, as RoleEditorView does.
@@ -2022,6 +2028,25 @@ struct GroupMemberSheet: View {
                         Text("\(roleText.utf16.count)/\(GroupRole.maxText)")
                             .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
                     }
+                    // The tag's colour (owner 2026-10-20): eight dots, the chosen one ringed.
+                    HStack(spacing: 0) {
+                        ForEach(GroupRole.colors, id: \.name) { c in
+                            let on = (roleColor ?? "grey") == c.name
+                            Button { roleColor = c.name == "grey" ? nil : c.name } label: {
+                                Circle().fill(Color(hex: c.rgb))
+                                    .frame(width: 26, height: 26)
+                                    .padding(3)
+                                    .overlay(Circle().stroke(on ? Color(hex: c.rgb) : .clear, lineWidth: 2))
+                                    .frame(maxWidth: .infinity)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(c.name.capitalized)
+                            .accessibilityAddTraits(on ? .isSelected : [])
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    .disabled(busy)
                 } header: {
                     Text("Tag")
                 } footer: {
@@ -2036,6 +2061,9 @@ struct GroupMemberSheet: View {
             }
         }
         .scrollDismissesKeyboard(.interactively)
+        // The photo close under the title (owner 2026-10-20: a large empty band above it).
+        .contentMargins(.top, 0, for: .scrollContent)
+        .listSectionSpacing(.compact)
         // A page that is only the tag opens with the keyboard up (owner 2026-10-20), once the sheet
         // has risen. Not when it also edits admin rights: there the switches come first.
         .task {
@@ -2103,7 +2131,7 @@ struct GroupMemberSheet: View {
     /// The tag as it reads right now: the field while it can be edited, else the saved one.
     private var liveTag: GroupRole? {
         let words = canEditRole ? cleanedRole : (role?.text ?? "")
-        return words.isEmpty ? nil : GroupRole(text: words, emoji: role?.emoji)
+        return words.isEmpty ? nil : GroupRole(text: words, emoji: role?.emoji, color: canEditRole ? roleColor : role?.color)
     }
 
     /// One chip only (owner 2026-10-19): the tag, when there is one, stands in for Owner/Admin.

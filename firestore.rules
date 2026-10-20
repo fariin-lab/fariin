@@ -1843,7 +1843,10 @@ service cloud.firestore {
           && n.get('roles', {}).diff(o.get('roles', {})).affectedKeys().hasOnly([t])
           && (r == null
               || (t in n.users
-                  && r is map && r.keys().hasOnly(['text', 'emoji'])
+                  // 'color' (2026-10-20): the tag's colour name. Its value is not checked here: any
+                  // check on it pushed a busy admin write past the 1,000-expression ceiling, and the
+                  // app draws only its own eight names (an unknown one is plain grey).
+                  && r is map && r.keys().hasOnly(['text', 'emoji', 'color'])
                   && r.get('text', null) is string
                   && r.text.size() >= 1 && r.text.size() <= 24
                   && (!('emoji' in r) || (r.emoji is string && r.emoji.size() >= 1 && r.emoji.size() <= 16))));

@@ -898,6 +898,18 @@ struct Message: Identifiable, Equatable, Codable {
 struct GroupRole: Equatable, Hashable {
     var text: String
     var emoji: String?
+    /// One of `GroupRole.colors` (owner 2026-10-20: "I can add a colour to a tag"), nil = plain grey.
+    var color: String? = nil
+
+    /// The eight tag colours, by the name the rules accept, in the order the editor shows them.
+    static let colors: [(name: String, rgb: UInt)] = [
+        ("grey", 0x8E8E93), ("blue", 0x2392FE), ("green", 0x22A55B), ("teal", 0x14B8A6),
+        ("orange", 0xF59E0B), ("red", 0xEF4444), ("pink", 0xEC4899), ("purple", 0x8B5CF6),
+    ]
+    static func rgb(_ name: String?) -> UInt? {
+        guard let name, name != "grey" else { return nil }
+        return colors.first { $0.name == name }?.rgb
+    }
 
     /// The longest text. Counted in UTF-16 units, which is never fewer than the characters the
     /// rules' `size()` counts, so what the editor lets through the server lets through too.
@@ -906,15 +918,16 @@ struct GroupRole: Equatable, Hashable {
     /// family): room for the longest common ones.
     static let maxEmoji = 16
 
-    init(text: String, emoji: String?) {
+    init(text: String, emoji: String?, color: String? = nil) {
         self.text = text
         self.emoji = (emoji?.isEmpty ?? true) ? nil : emoji
+        self.color = GroupRole.rgb(color) == nil ? nil : color
     }
 
     /// From the stored map. Anything without words is no role.
     init?(_ raw: Any) {
         guard let m = raw as? [String: Any], let t = m["text"] as? String, !t.isEmpty else { return nil }
-        self.init(text: t, emoji: m["emoji"] as? String)
+        self.init(text: t, emoji: m["emoji"] as? String, color: m["color"] as? String)
     }
 
     /// "🎨 Designer", or just "Designer".
