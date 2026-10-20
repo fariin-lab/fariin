@@ -140,4 +140,27 @@ platform :ios do
       skip_waiting_for_build_processing: true
     )
   end
+
+  # 2026-10-20 (owner): the App Store screenshots (fastlane/screenshots/en-US, 1290x2796), the
+  # pictures TestFlight shows under Preview. Pictures only: no build, no text, nothing submitted.
+  desc "Upload the App Store screenshots"
+  lane :screenshots do
+    api_key = app_store_connect_api_key(
+      key_id: ENV["ASC_KEY_ID"],
+      issuer_id: ENV["ASC_ISSUER_ID"],
+      key_filepath: ENV["ASC_KEY_PATH"]
+    )
+    deliver(
+      api_key: api_key,
+      app_identifier: BUNDLE_ID,
+      skip_binary_upload: true,
+      skip_metadata: true,
+      skip_app_version_update: true,
+      overwrite_screenshots: true,
+      screenshots_path: "./fastlane/screenshots",
+      submit_for_review: false,
+      run_precheck_before_submit: false,
+      force: true
+    )
+  end
 end
