@@ -1583,6 +1583,7 @@ struct GroupMemberSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var profile: UserProfile?
     @State private var confirmRemove = false
+    @State private var confirmPromote = false
     @State private var rights: Set<String> = []
     @State private var rightsLoaded = false
     private var me: String { AuthService.shared.uid ?? "" }
@@ -1752,6 +1753,15 @@ struct GroupMemberSheet: View {
                 // Typing or pasting past the limit keeps the first 24, as RoleEditorView does.
                 if new.utf16.count > GroupRole.maxText { roleText = GroupRole.fit(new, max: GroupRole.maxText) }
             }
+            .alert("Make \(member.name) an admin?", isPresented: $confirmPromote) {
+                Button("Cancel", role: .cancel) {}
+                Button("Make Admin") {
+                    let cid = cid, uid = member.id, name = member.name, list = rightsList
+                    run { try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: list) }
+                }
+            } message: {
+                Text("They will be able to manage the group with the usual admin rights. You can change or remove them any time.")
+            }
             .alert("Dismiss \(member.name) as admin?",
                                 isPresented: $confirmDismissAdmin) {
                 // Same write as Done with Member picked: demote, then the tag if it changed.
@@ -1892,19 +1902,21 @@ struct GroupMemberSheet: View {
 
     /// One chip only (owner 2026-10-19): the tag, when there is one, stands in for Owner/Admin.
     /// Follows the Tag field and the Member | Admin switch as they change.
+    /// ⛔ BOTH, side by side (owner 2026-10-20: "admin is the real badge, label is the label"):
+    /// Owner / Admin is their rank, the tag is just a word, and one never hides the other.
     @ViewBuilder private var headerChip: some View {
-        if let t = liveTag {
-            RoleChip(role: t)
-        } else if isOwner || adminSelected {
-            adminChip
-        }
+        if isOwner || adminSelected { adminChip }
+        if let t = liveTag { RoleChip(role: t) }
     }
 
     private var adminChip: some View {
-        Text(isOwner ? "Owner" : "Admin").font(.caption.weight(.semibold))
+        // Blue with a shield, so the rank never reads as just another tag.
+        Label(isOwner ? "Owner" : "Admin", systemImage: isOwner ? "crown.fill" : "checkmark.shield.fill")
+            .labelStyle(.titleAndIcon)
+            .font(.caption.weight(.semibold))
             .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(Color(.systemGray5), in: Capsule())
-            .foregroundStyle(.secondary)
+            .background(Color.blue.opacity(0.14), in: Capsule())
+            .foregroundStyle(Color.blue)
     }
 
     /// Member | Admin, the native segmented control. Admin for a member = promote on Done (the
@@ -2016,14 +2028,17 @@ struct GroupMemberSheet: View {
     private var quickRowList: [AnyView] {
         var rows: [AnyView] = []
         if makesAdmin {
-            rows.append(AnyView(iconRow("checkmark.shield", "Make Group Admin") {
-                let cid = cid, uid = member.id, name = member.name, list = rightsList
-                run { try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: list) }
-            }))
+            // Asked first (owner 2026-10-20): it hands them power over the group.
+            rows.append(AnyView(iconRow("checkmark.shield", "Make Group Admin") { confirmPromote = true }))
         }
         // No Member Tag or Mute rows on the card (owner 2026-10-19).
         if mayEditRights && member.isAdmin {
             rows.append(AnyView(iconRow("slider.horizontal.3", "Edit Admin Rights") { showEdit = true }))
+        }
+        // My own card: my own tag (owner 2026-10-20). The rules let the owner, and admins with
+        // change info, tag themselves.
+        if member.id == me && canEditRole {
+            rows.append(AnyView(iconRow("tag", role == nil ? "Add My Tag" : "Edit My Tag") { showEdit = true }))
         }
         if canTransfer {
             rows.append(AnyView(iconRow("crown", "Transfer Ownership") { confirmTransfer = true }))

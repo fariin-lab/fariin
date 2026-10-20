@@ -116,7 +116,7 @@ struct GroupSettingsView: View {
                         valueRow("person.2", "Group Type", isPublicNow ? "Public" : "Private")
                     }
                 }
-                if !isPublicNow && can(.inviteUsers) {
+                if can(.inviteUsers) {   // public groups have invite links too (owner 2026-10-20)
                     NavigationLink {
                         InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
                                         initialCode: shareCode ?? conv?.inviteCode ?? "", embedded: true)
@@ -126,7 +126,7 @@ struct GroupSettingsView: View {
                 }
                 if can(.inviteUsers) {
                     NavigationLink { GroupRequestsView(cid: cid) } label: {
-                        valueRow("person.badge.clock", "Requests & Invites",
+                        valueRow("person.badge.clock", "Join Requests",
                                  joinReqs.isEmpty ? "None" : "\(joinReqs.count)")
                     }
                 }
@@ -772,7 +772,7 @@ struct GroupMembersListView: View {
                         // by the owner.
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             if canRemove(uid) {
-                                Button("Remove", role: .destructive) { pendingRemove = uid }
+                                Button("Remove", role: .destructive) { pendingRemove = uid }.tint(.red)   // the app tint is .primary (black)
                             }
                         }
                 }
@@ -850,20 +850,10 @@ struct GroupRequestsView: View {
     private var canAdd: Bool { (conv?.adminCan(me, .inviteUsers) ?? false) || (conv?.membersCanAdd ?? false) }
 
     var body: some View {
-        List {
-            Section {
-                Picker("Show", selection: $tab) {
-                    Text(joinReqs.isEmpty ? "Requests" : "Requests (\(joinReqs.count))").tag(0)
-                    Text("Invites").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets())
-            }
-            if tab == 0 { requestsSections } else { invitesSections }
-        }
+        // Requests only (owner 2026-10-20): the invite links have their own page and card.
+        List { requestsSections }
         .listStyle(.insetGrouped)
-        .navigationTitle("Requests & Invites")
+        .navigationTitle("Join Requests")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             guard reqListener == nil else { return }

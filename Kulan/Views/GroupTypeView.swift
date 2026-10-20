@@ -38,7 +38,7 @@ struct GroupTypeView: View {
     var body: some View {
         List {
             typeSection
-            if showPublic { linkSection }
+            if showPublic { linkSection } else { privateSections }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Group Type")
@@ -54,7 +54,16 @@ struct GroupTypeView: View {
         .onAppear(perform: start)
         .onDisappear { convListener?.remove(); convListener = nil }
         .task(id: name) { await runCheck() }
-        .confirmationDialog("Make this group private?", isPresented: $confirmPrivate, titleVisibility: .visible) {
+        .task { await loadShareCode() }
+        .overlay(alignment: .bottom) {
+            if copied {
+                Text("Link copied").font(.subheadline.weight(.medium))
+                    .padding(.horizontal, 18).padding(.vertical, 10)
+                    .liquidGlass(Capsule()).padding(.bottom, 40)
+                    .transition(.opacity)
+            }
+        }
+        .alert("Make this group private?", isPresented: $confirmPrivate) {
             Button("Make Private", role: .destructive) { save("") }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -64,6 +73,78 @@ struct GroupTypeView: View {
                                                       set: { if !$0 { saveError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(saveError ?? "") }
+    }
+
+    // MARK: Private: the invite link and content protection here (owner 2026-10-20)
+
+    @State private var shareCode: String?
+    @State private var copied = false
+
+    private var inviteURL: String? {
+        let code = shareCode ?? conv?.inviteCode ?? ""
+        return code.isEmpty ? nil : KulanApp.groupLink(code: code)
+    }
+
+    private func loadShareCode() async {
+        shareCode = try? await GroupInviteService.shareCode(cid: cid)
+    }
+
+    @ViewBuilder private var privateSections: some View {
+        Section {
+            if let url = inviteURL {
+                Button {
+                    UIPasteboard.general.string = url
+                    Haptics.notify(.success)
+                    withAnimation { copied = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { withAnimation { copied = false } }
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(url.replacingOccurrences(of: "https://", with: ""))
+                            .lineLimit(1).truncationMode(.middle).foregroundStyle(.primary)
+                        Text("Tap to copy").font(.caption).foregroundStyle(.secondary).fixedSize()
+                    }
+                    .frame(maxWidth: .infinity).frame(height: 48)
+                    .background(Capsule().fill(Color(uiColor: .tertiarySystemFill)))
+                }
+                .buttonStyle(.plain)
+                if let u = URL(string: url) {
+                    ShareLink(item: u) {
+                        Text("Share Link").fontWeight(.semibold).foregroundStyle(.white)
+                            .frame(maxWidth: .infinity).frame(height: 48)
+                            .background(Capsule().fill(Color.accentColor))
+                    }
+                    .buttonStyle(.plain)
+                }
+            } else {
+                Text("This group has no invite link on.").foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Invite link")
+        } footer: {
+            Text("People can join your group with this link. You can reset it any time.")
+        }
+        .listRowSeparator(.hidden)
+        Section {
+            NavigationLink {
+                InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
+                                initialCode: shareCode ?? conv?.inviteCode ?? "", embedded: true)
+            } label: {
+                Label("Manage Invite Links", systemImage: "link")
+            }
+        } footer: {
+            Text("Make extra links that end after a time or a number of people.")
+        }
+        Section {
+            Toggle("Protect Content", isOn: Binding(
+                get: { conv?.isRestricted ?? false },
+                set: { v in Task { do { try await ChatService.setGroupRestricted(cid, on: v) } catch { saveError = error.localizedDescription } } }))
+        } header: {
+            Text("Forwarding from this group")
+        } footer: {
+            Text((conv?.isRestricted ?? false)
+                 ? "Members can't forward, copy, save or screenshot content from this group."
+                 : "Members can copy, save and forward content from this group.")
+        }
     }
 
     private var typeSection: some View {
