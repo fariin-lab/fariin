@@ -61,7 +61,30 @@ final class MsgPolicy: @unchecked Sendable {
 
     func start(uid: String) {
         stop()
-        configListener = Firestore.firestore().collection("config").document("msgPolicy")
+        attach(uid: uid)
+    }
+
+    /// 2026-10-20 (owner): after `FirestoreHub.swap` both listeners belong to the stuck client. Let
+    /// go of them off-main and attach again on the fresh one, for the same account. The overrides
+    /// stay (not a sign-out). Added once, on the first `attach`.
+    @ObservationIgnored private var attachedUid: String?
+    @ObservationIgnored private var swapObserver: NSObjectProtocol?
+    private func watchSwaps() {
+        guard swapObserver == nil else { return }
+        swapObserver = NotificationCenter.default.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.configListener != nil, let uid = self.attachedUid else { return }
+            FirestoreHub.drop([self.configListener, self.meListener])
+            self.configListener = nil
+            self.meListener = nil
+            self.attach(uid: uid)
+        }
+    }
+
+    private func attach(uid: String) {
+        watchSwaps()
+        attachedUid = uid
+        configListener = FirestoreHub.db.collection("config").document("msgPolicy")
             .addSnapshotListener { [weak self] snap, _ in
                 // An error keeps the last good answer; a missing document is today's behaviour.
                 guard let snap else { return }
@@ -71,7 +94,7 @@ final class MsgPolicy: @unchecked Sendable {
                                        chatKeyVisible: d["chatKeyVisible"] as? Bool ?? true))
             }
         guard !uid.isEmpty else { return }
-        meListener = Firestore.firestore().collection("users").document(uid)
+        meListener = FirestoreHub.db.collection("users").document(uid)
             .addSnapshotListener { [weak self] snap, _ in
                 guard let snap else { return }
                 self?.record(uid: uid, data: snap.data())
@@ -82,6 +105,7 @@ final class MsgPolicy: @unchecked Sendable {
     func stop() {
         configListener?.remove(); configListener = nil
         meListener?.remove(); meListener = nil
+        attachedUid = nil
         lock.lock(); overrides = [:]; lock.unlock()
     }
 

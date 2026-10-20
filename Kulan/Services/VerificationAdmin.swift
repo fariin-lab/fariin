@@ -21,7 +21,7 @@ import FirebaseFirestore
 // change did not occur.
 
 enum VerificationAdmin {
-    private static var db: Firestore { Firestore.firestore() }
+    private static var db: Firestore { FirestoreHub.db }
 
     /// 2026-09-24 decision D-verify-txn: carries a refusal out of the transaction block as the typed
     /// error the screen matches on (an error set through the block's NSError pointer is not).

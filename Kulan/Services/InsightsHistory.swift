@@ -295,7 +295,7 @@ struct InsightsDayRow: Identifiable, Equatable {
         let uid = AuthService.shared.uid ?? ""
         guard !uid.isEmpty else { phase = .failed; return }
         if phase != .loaded { phase = .loading }
-        let account = Firestore.firestore().collection("users").document(uid)
+        let account = FirestoreHub.db.collection("users").document(uid)
         let from = InsightsCalendar.adding(-(Self.reach - 1), to: InsightsCalendar.startOfDay(Date()))
         do {
             let daySnap = try await account.collection("insightsDaily")

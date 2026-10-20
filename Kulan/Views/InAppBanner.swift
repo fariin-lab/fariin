@@ -100,7 +100,7 @@ final class InAppBannerCenter {
     /// hand us the previous one. Nil = keep the push's own body (a marker we do not name, a key not
     /// ready, or no network).
     static func previewBody(cid: String) async -> String? {
-        guard let snap = try? await Firestore.firestore().collection("conversations").document(cid)
+        guard let snap = try? await FirestoreHub.db.collection("conversations").document(cid)
                 .getDocument(source: .server),
               let d = snap.data(), let raw = d["lastMessage"] as? String, !raw.isEmpty else { return nil }
         if raw.hasPrefix("📷") { return "Photo" }

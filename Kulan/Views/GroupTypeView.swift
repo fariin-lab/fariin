@@ -56,6 +56,16 @@ struct GroupTypeView: View {
         .disabled(!canEdit)
         .onAppear(perform: start)
         .onDisappear { convListener?.remove(); convListener = nil }
+        // 2026-10-20 (owner): after `FirestoreHub.swap` the group listener belongs to the stuck
+        // client. Let go of it off-main and listen again on the fresh one. A save that was waiting
+        // on the stuck client never returns, so Save is freed for a retry.
+        .onReceive(NotificationCenter.default.publisher(for: FirestoreHub.swapped)) { _ in
+            saving = false
+            guard convListener != nil else { return }
+            FirestoreHub.drop([convListener])
+            convListener = nil
+            start()
+        }
         .task(id: name) { await runCheck() }
         .task { await loadShareCode() }
         .overlay(alignment: .bottom) {
@@ -235,7 +245,7 @@ struct GroupTypeView: View {
     private func start() {
         if !seeded { seeded = true; name = conv?.publicName ?? "" }
         guard convListener == nil else { return }
-        convListener = Firestore.firestore().collection("conversations").document(cid)
+        convListener = FirestoreHub.db.collection("conversations").document(cid)
             .addSnapshotListener { snap, _ in
                 guard let snap, snap.exists, let data = snap.data() else { return }
                 let c = Conversation(id: snap.documentID, data: data)

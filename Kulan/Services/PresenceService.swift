@@ -25,7 +25,7 @@ enum PresenceService {
         var data: [String: Any] = ["online": share ? online : false]
         if share { data["lastActive"] = FieldValue.serverTimestamp() }
 
-        let db = Firestore.firestore()
+        let db = FirestoreHub.db
         try? await db.collection("users").document(uid)
             .collection("presence").document("state").setData(data, merge: true)
 

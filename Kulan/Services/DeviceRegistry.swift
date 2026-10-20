@@ -34,8 +34,30 @@ final class DeviceRegistry: ObservableObject {
                     if !registry.registered { registry.start() } else { registry.watchThisDevice() }
                 }
             }
+        // 2026-10-20 (owner): after `FirestoreHub.swap` the watcher belongs to the stuck client, and
+        // a heartbeat or registration write may be waiting on it for ever. Let go of the watcher
+        // off-main, start a new heartbeat (the old task ends at its next turn, it is cancelled), and
+        // watch or register again on the fresh client.
+        swapObserver = NotificationCenter.default.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated {
+                    let registry = DeviceRegistry.shared
+                    guard registry.uid != nil else { return }
+                    FirestoreHub.drop([registry.watcher])
+                    registry.watcher = nil
+                    if registry.registered {
+                        let beating = registry.heartbeat != nil
+                        registry.stopHeartbeat()
+                        if beating { registry.startHeartbeat() }
+                        registry.watchThisDevice()
+                    } else {
+                        registry.start()
+                    }
+                }
+            }
     }
     private var recoveredObserver: NSObjectProtocol?
+    private var swapObserver: NSObjectProtocol?
 
     /// Set when the server says this device's record is gone: someone signed us out from
     /// another phone. RootView watches this and performs the sign-out.
@@ -44,7 +66,7 @@ final class DeviceRegistry: ObservableObject {
     private var watcher: ListenerRegistration?
     private var registered = false
 
-    private var db: Firestore { Firestore.firestore() }
+    private var db: Firestore { FirestoreHub.db }
     private var uid: String? { Auth.auth().currentUser?.uid }
 
     /// This install's id. Empty only if iOS refuses to give one, in which case we skip the

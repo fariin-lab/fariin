@@ -247,7 +247,7 @@ struct PostedStory: Identifiable, Equatable, Codable {
         }
 
         state = .loading
-        let db = Firestore.firestore()
+        let db = FirestoreHub.db
         do {
             let snap = try await db.collection("users").document(uid)
                 .collection("publicStories")

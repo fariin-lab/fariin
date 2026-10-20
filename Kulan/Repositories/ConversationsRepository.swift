@@ -37,9 +37,32 @@ final class ConversationsRepository {
                 repo.retryPinnedExtras()
             }
         }
+        // 2026-10-20 (owner): the Firestore client froze and `FirestoreHub` swapped in a fresh one.
+        // The list listener and every pinned extra belong to the stuck client, so all of them attach
+        // again on the new one, whether or not they had failed.
+        NotificationCenter.default.addObserver(forName: FirestoreHub.swapped, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { ConversationsRepository.shared.reattachAfterSwap() }
+        }
     }
 
-    private let db = Firestore.firestore()
+    /// 2026-10-20 (owner): after `FirestoreHub.swapped`. Old handles go to `FirestoreHub.drop` (removed
+    /// off the main thread) and are set nil first, so `attach()`'s own `stop()` never calls `remove()`
+    /// on them here. The pinned extras come back with the new window's first snapshot
+    /// (`syncPinnedExtras` attaches every remembered one that has no handle); their rows stay on screen.
+    private func reattachAfterSwap() {
+        guard !DemoMode.active, listener != nil || loadFailed,
+              let uid = Auth.auth().currentUser?.uid, uid == listenerUid else { return }
+        FirestoreHub.drop([listener] + pinnedExtraListeners.values.map { Optional($0) })
+        listener = nil
+        pinnedExtraListeners = [:]
+        listRetryWork?.cancel(); listRetryWork = nil
+        listRetries = 0
+        // A page asked of the stuck client never answers; `loadOlder` would wait behind it for ever.
+        loadingOlder = false
+        attach()
+    }
+
+    private var db: Firestore { FirestoreHub.db }
     private var listener: ListenerRegistration?
 
     /// owner 2026-10-18: every change also refreshes `GroupLinkDoor`'s list of my groups by invite

@@ -23,7 +23,20 @@ import FirebaseFunctions
 @MainActor
 final class GroupCallRinging {
     static let shared = GroupCallRinging()
-    private init() {}
+    private init() {
+        // 2026-10-20 (owner): the Firestore client froze and `FirestoreHub` swapped in a fresh one. A
+        // ring that is up follows its room on the new client; its 60s timeout keeps running as it was.
+        swapObserver = NotificationCenter.default.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.listener != nil, let r = self.ring, self.phase == .ringing else { return }
+                    FirestoreHub.drop([self.listener])
+                    self.listener = nil
+                    self.attachRoomListener(r)
+                }
+            }
+    }
+    private var swapObserver: NSObjectProtocol?
 
     private struct Ring {
         let roomKind: String     // "adhoc" (multi-person) or "group" (a group chat's call)
@@ -179,9 +192,24 @@ final class GroupCallRinging {
     /// ring: a cached copy may be an older call in the same group.
     private func watchRoom(_ r: Ring, until deadline: TimeInterval?) {
         stopWatchingRoom()
+        attachRoomListener(r)
+        // 60s from when the server sent it; never under 5s or over 60s from now, whatever the
+        // two clocks say.
+        let uuid = r.uuid
+        let left = min(Self.ringWindow, max(5, (deadline ?? .greatestFiniteMagnitude) - Date().timeIntervalSince1970))
+        timeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(left * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.ring?.uuid == uuid, self.phase == .ringing else { return }
+            self.finishRing(.unanswered)
+        }
+    }
+
+    /// The room listener on its own, so a Firestore client swap can attach it again without
+    /// restarting the ring's timeout (2026-10-20, owner).
+    private func attachRoomListener(_ r: Ring) {
         let uuid = r.uuid
         let me = Auth.auth().currentUser?.uid ?? ""
-        listener = Firestore.firestore().collection("groupCalls").document(r.roomId)
+        listener = FirestoreHub.db.collection("groupCalls").document(r.roomId)
             .addSnapshotListener(includeMetadataChanges: true) { [weak self] snap, error in
                 let failed = error != nil
                 let cached = snap?.metadata.isFromCache ?? true
@@ -209,14 +237,6 @@ final class GroupCallRinging {
                     }
                 }
             }
-        // 60s from when the server sent it; never under 5s or over 60s from now, whatever the
-        // two clocks say.
-        let left = min(Self.ringWindow, max(5, (deadline ?? .greatestFiniteMagnitude) - Date().timeIntervalSince1970))
-        timeoutTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(left * 1_000_000_000))
-            guard !Task.isCancelled, let self, self.ring?.uuid == uuid, self.phase == .ringing else { return }
-            self.finishRing(.unanswered)
-        }
     }
 
     private func stopWatchingRoom() {

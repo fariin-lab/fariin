@@ -61,7 +61,7 @@ enum OfficialStoryViews {
 
         let named = StoryReceiptPrefs.isOn
         let viewId = named ? uid : hashedId(uid: uid)
-        Firestore.firestore().collection("officialStories").document(raw)
+        FirestoreHub.db.collection("officialStories").document(raw)
             .collection("views").document(viewId)
             .setData(["at": FieldValue.serverTimestamp(), "named": named]) { err in
                 if let err { print("official story view not written:", err.localizedDescription) }

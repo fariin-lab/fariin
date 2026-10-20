@@ -60,7 +60,7 @@ final class Crypto {
     private init() {}
 
     private let sodium = Sodium()
-    private let db = Firestore.firestore()
+    private var db: Firestore { FirestoreHub.db }
     // Legacy APP-SCOPED key names (one keypair per device, whoever was signed in). This path is
     // INERT since the 2026-08-03 rename: nothing has ever written a `fariin_` app-scoped key, so
     // the migration branch in initKeys() can no longer fire. Left in place rather than deleted

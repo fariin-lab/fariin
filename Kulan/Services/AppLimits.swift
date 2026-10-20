@@ -58,7 +58,8 @@ final class AppLimits {
 
     func start() {
         stop()
-        listener = Firestore.firestore().collection("config").document("limits")
+        watchSwaps()
+        listener = FirestoreHub.db.collection("config").document("limits")
             .addSnapshotListener { [weak self] snap, _ in
                 // ⚠️ AN ERROR LEAVES THE LAST GOOD VALUES ALONE. A dropped listener, a rules refusal
                 // during a sign-out, a blip — none of those are a reason to fall back to the shipped
@@ -74,6 +75,20 @@ final class AppLimits {
     /// phone to inherit — and clearing them would drop a raised limit back to the shipped one for the
     /// second between one sign-in and the next snapshot.
     func stop() { listener?.remove(); listener = nil }
+
+    /// 2026-10-20 (owner): after `FirestoreHub.swap` the listener belongs to the stuck client. Let go
+    /// of it off-main and attach again on the fresh one. The values stay. Added once, on first start.
+    @ObservationIgnored private var swapObserver: NSObjectProtocol?
+    private func watchSwaps() {
+        guard swapObserver == nil else { return }
+        swapObserver = NotificationCenter.default.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.listener != nil else { return }
+            FirestoreHub.drop([self.listener])
+            self.listener = nil
+            self.start()
+        }
+    }
 
     // MARK: - Reading one
 

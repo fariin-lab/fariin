@@ -38,6 +38,17 @@ final class StickerStore {
         authHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
             MainActor.assumeIsolated { self?.watchCatalog(signedIn: user != nil) }
         }
+        // 2026-10-20 (owner): after `FirestoreHub.swap` the catalog listener belongs to the stuck
+        // client. Let go of it off-main and watch again on the fresh one. The catalog stays.
+        swapObserver = NotificationCenter.default.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.catalogListener != nil else { return }
+                FirestoreHub.drop([self.catalogListener])
+                self.catalogListener = nil
+                self.watchCatalog(signedIn: Auth.auth().currentUser != nil)
+            }
+        }
     }
 
     // MARK: Packs from the admin panel (2026-10-18)
@@ -76,6 +87,7 @@ final class StickerStore {
     private var remote: [RemotePack] = []
     @ObservationIgnored private var authHandle: AuthStateDidChangeListenerHandle?
     @ObservationIgnored private var catalogListener: ListenerRegistration?
+    @ObservationIgnored private var swapObserver: NSObjectProtocol?
     @ObservationIgnored private var downloading: Set<String> = []
 
     /// Bumped when a server sticker's file lands, so a grid can draw what was a shimmer.
@@ -86,7 +98,7 @@ final class StickerStore {
     private func watchCatalog(signedIn: Bool) {
         catalogListener?.remove(); catalogListener = nil
         guard signedIn else { return }
-        catalogListener = Firestore.firestore().collection("stickerPacks").addSnapshotListener { [weak self] snap, _ in
+        catalogListener = FirestoreHub.db.collection("stickerPacks").addSnapshotListener { [weak self] snap, _ in
             guard let snap else { return }   // refused or offline: keep the last catalog
             let packs: [RemotePack] = snap.documents.map { d in
                 let x = d.data()

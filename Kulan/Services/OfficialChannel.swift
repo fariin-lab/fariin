@@ -72,8 +72,9 @@ final class OfficialConfig {
 
     func start() {
         stop()
+        watchSwaps()
         setPhotoUrl(photoUrl)
-        listener = Firestore.firestore().collection("config").document("official")
+        listener = FirestoreHub.db.collection("config").document("official")
             .addSnapshotListener { [weak self] snap, _ in
                 self?.appStoreUrl = snap?.data()?["appStoreUrl"] as? String ?? ""
                 self?.badge = OfficialBadge(rawValue: snap?.data()?["badge"] as? String ?? "") ?? .blue
@@ -98,9 +99,23 @@ final class OfficialConfig {
 
     func stop() { listener?.remove(); listener = nil }
 
+    /// 2026-10-20 (owner): after `FirestoreHub.swap` the listener belongs to the stuck client. Let go
+    /// of it off-main and attach again on the fresh one. Added once, on the first start.
+    @ObservationIgnored private var swapObserver: NSObjectProtocol?
+    private func watchSwaps() {
+        guard swapObserver == nil else { return }
+        swapObserver = NotificationCenter.default.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.listener != nil else { return }
+            FirestoreHub.drop([self.listener])
+            self.listener = nil
+            self.start()
+        }
+    }
+
     /// Owner only (rules: `config/official` is `adminIsOwner()`).
     func setBadge(_ b: OfficialBadge) async throws {
-        try await Firestore.firestore().collection("config").document("official")
+        try await FirestoreHub.db.collection("config").document("official")
             // `badgeBy` is required by the rules and copied into the admin log (adminOfficialBadgeAudit).
             .setData(["badge": b.rawValue, "badgeBy": Auth.auth().currentUser?.uid ?? ""], merge: true)
         badge = b
@@ -109,7 +124,7 @@ final class OfficialConfig {
     /// Owner only; the rules enforce that, not this.
     func setAppStoreUrl(_ url: String) async throws {
         let clean = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        try await Firestore.firestore().collection("config").document("official")
+        try await FirestoreHub.db.collection("config").document("official")
             .setData(["appStoreUrl": clean], merge: true)
         appStoreUrl = clean
     }
@@ -554,6 +569,19 @@ final class OfficialChannelStore {
                 let store = OfficialChannelStore.shared
                 if store.listenerFailed { store.start() }
             }
+        // 2026-10-20 (owner): after `FirestoreHub.swap` all three listeners belong to the stuck
+        // client. Let go of them off-main and start again on the fresh one. What is on screen stays
+        // (`start` keeps `answered`), so the channel does not blink.
+        swapObserver = NotificationCenter.default.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { _ in
+                let store = OfficialChannelStore.shared
+                guard store.broadcastListener != nil || store.listenerFailed else { return }
+                FirestoreHub.drop([store.broadcastListener, store.personalListener, store.stateListener])
+                store.broadcastListener = nil
+                store.personalListener = nil
+                store.stateListener = nil
+                store.start()
+            }
         // Time passing is an event only the app can see: a scheduled announcement falls due or one
         // expires while the app was in the background, where no timer fires. Coming back is the
         // moment to look again.
@@ -564,7 +592,7 @@ final class OfficialChannelStore {
             }
     }
 
-    private let db = Firestore.firestore()
+    private var db: Firestore { FirestoreHub.db }
     private var broadcastListener: ListenerRegistration?
     private var personalListener: ListenerRegistration?
     private var stateListener: ListenerRegistration?
@@ -582,6 +610,7 @@ final class OfficialChannelStore {
     private var failedSources: Set<String> = []
     private var listenerFailed: Bool { !failedSources.isEmpty }
     private var recoveredObserver: NSObjectProtocol?
+    private var swapObserver: NSObjectProtocol?
     private var foregroundObserver: NSObjectProtocol?
 
     /// Everything the server has that could ever be for me, unfiltered. Kept raw so the due-timer can
@@ -1061,7 +1090,7 @@ enum AnnouncementStats {
         UserDefaults.standard.set(true, forKey: key)
 
         let shard = Int.random(in: 0..<shardCount)
-        Firestore.firestore()
+        FirestoreHub.db
             .collection("announcements").document(a.id)
             .collection("readShards").document("\(shard)")
             .setData(["count": FieldValue.increment(Int64(1))], merge: true)
@@ -1069,7 +1098,7 @@ enum AnnouncementStats {
 
     /// Adds the hundred shards up. Admin screens only.
     static func readTotal(_ announcementId: String) async -> Int {
-        let snap = try? await Firestore.firestore()
+        let snap = try? await FirestoreHub.db
             .collection("announcements").document(announcementId)
             .collection("readShards").getDocuments()
         return (snap?.documents ?? []).reduce(0) { $0 + (($1.data()["count"] as? NSNumber)?.intValue ?? 0) }

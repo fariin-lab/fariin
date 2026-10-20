@@ -84,17 +84,18 @@ struct GroupSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         // Started once and kept while a child page is pushed; removed with the page (`ListenerBox`).
         .onAppear {
-            if convListener.reg == nil {
-                convListener.reg = Firestore.firestore().collection("conversations").document(cid)
-                    .addSnapshotListener { snap, _ in
-                        guard let snap, snap.exists, let data = snap.data() else { return }
-                        ownConv = Conversation(id: snap.documentID, data: data)
-                    }
-            }
+            attachListeners()
             // Again on every return: the link page may have reset or turned off the link.
             if can(.inviteUsers) { Task { await loadShareCode() } }
-            guard reqListener.reg == nil, can(.inviteUsers) else { return }
-            reqListener.reg = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
+        }
+        // 2026-10-20 (owner): after `FirestoreHub.swap` both listeners belong to the stuck client.
+        // Let go of them off-main and attach again on the fresh one; what is on screen stays.
+        .onReceive(NotificationCenter.default.publisher(for: FirestoreHub.swapped)) { _ in
+            guard convListener.reg != nil || reqListener.reg != nil else { return }
+            FirestoreHub.drop([convListener.reg, reqListener.reg])
+            convListener.reg = nil
+            reqListener.reg = nil
+            attachListeners()
         }
         // Rights can arrive with the group's own document, after the first appearance.
         .onChange(of: can(.inviteUsers)) { _, now in
@@ -217,6 +218,19 @@ struct GroupSettingsView: View {
 
     private func loadShareCode() async {
         do { shareCode = try await GroupInviteService.shareCode(cid: cid) ?? "" } catch { shareCode = nil }
+    }
+
+    /// Started once and kept while a child page is pushed (`ListenerBox`); again after a swap.
+    private func attachListeners() {
+        if convListener.reg == nil {
+            convListener.reg = FirestoreHub.db.collection("conversations").document(cid)
+                .addSnapshotListener { snap, _ in
+                    guard let snap, snap.exists, let data = snap.data() else { return }
+                    ownConv = Conversation(id: snap.documentID, data: data)
+                }
+        }
+        guard reqListener.reg == nil, can(.inviteUsers) else { return }
+        reqListener.reg = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
     }
 
     // MARK: People
@@ -1079,6 +1093,14 @@ struct GroupRequestsView: View {
             reqListener = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
         }
         .onDisappear { reqListener?.remove(); reqListener = nil }
+        // 2026-10-20 (owner): after `FirestoreHub.swap` the requests listener belongs to the stuck
+        // client. Let go of it off-main and listen again on the fresh one.
+        .onReceive(NotificationCenter.default.publisher(for: FirestoreHub.swapped)) { _ in
+            busyReqs = []   // an answer waiting on the stuck client never returns; free the rows
+            guard reqListener != nil else { return }
+            FirestoreHub.drop([reqListener])
+            reqListener = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
+        }
         .task { await loadShareCode() }
         .task { links = try? await GroupInviteService.listLinks(cid: cid) }
         .sheet(isPresented: $showAdd) { AddMembersSheet(cid: cid, existing: Set(conv?.users ?? [])) }
@@ -1482,12 +1504,27 @@ final class LiveGroupDoc {
     private(set) var conv: Conversation?
     @ObservationIgnored private var reg: ListenerRegistration?
     @ObservationIgnored private var started: String?
+    @ObservationIgnored private var swapObserver: NSObjectProtocol?
+
+    /// 2026-10-20 (owner): after `FirestoreHub.swap` the listener belongs to the stuck client. Let go
+    /// of it off-main and listen again on the fresh one; `conv` stays on screen meanwhile. Every page
+    /// that holds one of these follows the swap without code of its own.
+    init() {
+        swapObserver = NotificationCenter.default.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { [weak self] _ in
+            guard let self, let cid = self.started else { return }
+            FirestoreHub.drop([self.reg])
+            self.reg = nil
+            self.started = nil
+            self.start(cid)
+        }
+    }
 
     func start(_ cid: String) {
         guard started != cid, !cid.isEmpty else { return }
         started = cid
         reg?.remove()
-        reg = Firestore.firestore().collection("conversations").document(cid)
+        reg = FirestoreHub.db.collection("conversations").document(cid)
             .addSnapshotListener { [weak self] snap, error in
                 guard let self else { return }
                 // Removed, or the group deleted, while a page is open (audit 2026-10-20): the read
@@ -1506,7 +1543,10 @@ final class LiveGroupDoc {
             }
     }
 
-    deinit { reg?.remove() }
+    deinit {
+        reg?.remove()
+        if let swapObserver { NotificationCenter.default.removeObserver(swapObserver) }
+    }
 }
 
 /// Visible or Hidden, ticked, as the Group Type page picks a type. Hidden: people who join from now

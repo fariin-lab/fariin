@@ -106,7 +106,7 @@ struct InviteCodeItem: Identifiable { var id: String { code }; let code: String 
 // MARK: - Service
 
 enum GroupInviteService {
-    private static var db: Firestore { Firestore.firestore() }
+    private static var db: Firestore { FirestoreHub.db }
     private static var fns: Functions { Functions.functions(region: "me-central1") }
 
     // MARK: Links (all on the server, 2026-10-19 step 4)

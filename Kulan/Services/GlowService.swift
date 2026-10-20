@@ -104,7 +104,7 @@ import FirebaseFirestore
     var displayGlowers: Set<String> { GlowDemo.isOn ? glowers.union(GlowDemo.glowerIds) : glowers }
     var displayGlowing: Set<String> { GlowDemo.isOn ? glowing.union(GlowDemo.glowingIds) : glowing }
 
-    private let db = Firestore.firestore()
+    private var db: Firestore { FirestoreHub.db }
     private var glowersListener: ListenerRegistration?
     private var glowingListener: ListenerRegistration?
     private var glowersLoaded = false
@@ -129,6 +129,29 @@ import FirebaseFirestore
         guard !newUid.isEmpty else { return }
         seenUpTo = UserDefaults.standard.object(forKey: Self.seenKey(for: newUid)) as? Date
             ?? Date(timeIntervalSince1970: 0)
+        attach(newUid)
+    }
+
+    /// 2026-10-20 (owner): after `FirestoreHub.swap` both listeners belong to the stuck client. Let
+    /// go of them off-main and attach again on the fresh one for the same uid. The sets stay on
+    /// screen (not a sign-out). Added once, on the first `attach`.
+    private var swapObserver: NSObjectProtocol?
+    private func watchSwaps() {
+        guard swapObserver == nil else { return }
+        swapObserver = NotificationCenter.default.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.uid.isEmpty else { return }
+                FirestoreHub.drop([self.glowersListener, self.glowingListener])
+                self.glowersListener = nil
+                self.glowingListener = nil
+                self.attach(self.uid)
+            }
+        }
+    }
+
+    private func attach(_ newUid: String) {
+        watchSwaps()
         // ⚠️ TWO LISTENERS, NOT ONE OR-QUERY. The rules can only prove a `list` is owner-scoped
         // when the query pins ONE field to the caller's uid; an `or` across from/to is not provable
         // and would be refused wholesale. Two queries, each provable, unioned here.

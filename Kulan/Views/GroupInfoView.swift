@@ -279,16 +279,7 @@ struct GroupInfoView: View {
             // Local first (offline + instant), then the server; a failed load leaves what we have.
             .task {
                 live.start(cid)   // roles and rights change in front of you (2026-10-20)
-                if callListener.reg == nil, CallFeatures.groupCalls {
-                    callListener.reg = Firestore.firestore().collection("groupCalls").document(cid)
-                        .addSnapshotListener { snap, _ in
-                            let d = snap?.data()
-                            var on = (d?["active"] as? Bool) ?? false
-                            if on, let ts = d?["startedAt"] as? Timestamp,
-                               Date().timeIntervalSince(ts.dateValue()) > 4 * 3600 { on = false }
-                            callLive = on
-                        }
-                }
+                followGroupCall()
                 saveChoice = AutoSaveToPhotos.choice(for: cid)
                 if let local = ThreadMessageCache.shared.messages(for: cid) {
                     let localMedia = local
@@ -298,6 +289,32 @@ struct GroupInfoView: View {
                     if !localMedia.isEmpty { media = Array(localMedia) }
                 }
                 if let fresh = await ChatService.sharedMedia(cid) { media = fresh }
+            }
+            // 2026-10-20 (owner): after `FirestoreHub.swap` the call and requests listeners belong
+            // to the stuck client. Let go of them off-main and attach again on the fresh one (the
+            // group document follows by itself, `LiveGroupDoc`).
+            .onReceive(NotificationCenter.default.publisher(for: FirestoreHub.swapped)) { _ in
+                guard callListener.reg != nil || joinReqBox.reg != nil else { return }
+                let hadCall = callListener.reg != nil
+                let hadReqs = joinReqBox.reg != nil
+                FirestoreHub.drop([callListener.reg, joinReqBox.reg])
+                callListener.reg = nil
+                joinReqBox.reg = nil
+                if hadCall { followGroupCall() }
+                if hadReqs { followJoinRequests() }
+            }
+    }
+
+    /// The group call's live flag, for the Call button; started once per page.
+    private func followGroupCall() {
+        guard callListener.reg == nil, CallFeatures.groupCalls else { return }
+        callListener.reg = FirestoreHub.db.collection("groupCalls").document(cid)
+            .addSnapshotListener { snap, _ in
+                let d = snap?.data()
+                var on = (d?["active"] as? Bool) ?? false
+                if on, let ts = d?["startedAt"] as? Timestamp,
+                   Date().timeIntervalSince(ts.dateValue()) > 4 * 3600 { on = false }
+                callLive = on
             }
     }
 

@@ -6,7 +6,7 @@ import FirebaseFirestore
 // indices only — the server can't read what the options mean, and each voter owns their own vote doc.
 
 enum PollService {
-    private static var db: Firestore { Firestore.firestore() }
+    private static var db: Firestore { FirestoreHub.db }
     private static var me: String { AuthService.shared.uid ?? "" }
 
     private static func votesRef(_ cid: String, _ messageId: String) -> CollectionReference {
@@ -50,8 +50,18 @@ enum PollService {
 /// time, and a big poll was read again from the server). Main thread only.
 private final class PollVotesHub {
     static let shared = PollVotesHub()
+    private init() {
+        // 2026-10-20 (owner): the Firestore client froze and `FirestoreHub` swapped in a fresh one.
+        // Every votes listener belongs to the stuck client: it is let go off the main thread, and each
+        // poll still on screen listens again on the new client. The views keep their handles.
+        NotificationCenter.default.addObserver(forName: FirestoreHub.swapped, object: nil, queue: .main) { [weak self] _ in
+            self?.reattachAfterSwap()
+        }
+    }
     private struct Entry {
         var reg: ListenerRegistration?
+        /// How the listener was attached, kept for a Firestore client swap (2026-10-20, owner).
+        var start: (() -> ListenerRegistration)?
         var votes: [String: [Int]]?
         var subs: [UUID: ([String: [Int]]) -> Void] = [:]
         var idleSince = 0   // bumped on each release, so an older teardown timer does nothing
@@ -59,15 +69,25 @@ private final class PollVotesHub {
     private var entries: [String: Entry] = [:]
 
     func subscribe(key: String, _ cb: @escaping ([String: [Int]]) -> Void,
-                   start: () -> ListenerRegistration) -> ListenerRegistration {
+                   start: @escaping () -> ListenerRegistration) -> ListenerRegistration {
         let id = UUID()
         var e = entries[key] ?? Entry()
         e.subs[id] = cb
         e.idleSince += 1
+        e.start = start
         if e.reg == nil { e.reg = start() }
         entries[key] = e
         if let v = e.votes { cb(v) }   // the last answer at once, no wait for the server
         return PollVotesHandle { [weak self] in self?.release(key: key, id: id) }
+    }
+
+    private func reattachAfterSwap() {
+        FirestoreHub.drop(entries.values.map(\.reg))
+        for (key, var e) in entries {
+            guard !e.subs.isEmpty, let start = e.start else { entries[key] = nil; continue }
+            e.reg = start()
+            entries[key] = e
+        }
     }
 
     func deliver(key: String, _ votes: [String: [Int]]) {

@@ -36,7 +36,7 @@ final class StoryNotifyStore {
     @discardableResult
     func toggle(_ author: String) -> Bool {
         guard let me = Auth.auth().currentUser?.uid, !author.isEmpty, author != me else { return false }
-        let ref = Firestore.firestore().collection("users").document(me)
+        let ref = FirestoreHub.db.collection("users").document(me)
             .collection("storyNotify").document(author)
         if on.contains(author) {
             on.remove(author)
@@ -61,7 +61,7 @@ final class StoryNotifyStore {
         defer { if loadingFor == me { loadingFor = nil } }
         // Another account's list goes the moment the account changes, not when this one arrives.
         if loadedFor != me { on = []; loadedFor = nil }
-        guard let snap = try? await Firestore.firestore().collection("users").document(me)
+        guard let snap = try? await FirestoreHub.db.collection("users").document(me)
             .collection("storyNotify").getDocuments(),
               Auth.auth().currentUser?.uid == me else { return }
         // Union, not replace: one tapped while this was on its way is already in `on` and its write

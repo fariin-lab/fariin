@@ -98,7 +98,7 @@ enum DiagLog {
         let answered = Once()
         Task {
             do {
-                _ = try await Firestore.firestore().collection("users").document(uid).getDocument(source: .cache)
+                _ = try await FirestoreHub.db.collection("users").document(uid).getDocument(source: .cache)
                 if answered.claim() { add("  cache read answered in \(ms(since: began))ms") }
             } catch {
                 if answered.claim() { add("  cache read failed in \(ms(since: began))ms: \(error.localizedDescription)") }
@@ -115,7 +115,7 @@ enum DiagLog {
         }
         let writes = Once()
         Task {
-            try? await Firestore.firestore().waitForPendingWrites()
+            try? await FirestoreHub.db.waitForPendingWrites()
             if writes.claim() { add("  pending writes confirmed in \(ms(since: began))ms") }
         }
         Task {
@@ -142,7 +142,7 @@ enum DiagLog {
                 }
                 let info = Bundle.main.infoDictionary
                 do {
-                    try await Firestore.firestore().collection("users").document(uid)
+                    try await FirestoreHub.db.collection("users").document(uid)
                         .collection("diag").document().setData([
                             "text": text,
                             "build": info?["CFBundleVersion"] as? String ?? "?",

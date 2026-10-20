@@ -233,7 +233,7 @@ enum SoundStore {
     /// that APNs can name, so they (and the Note default) stay "default".
     private static func syncPushSound(_ cid: String, _ sound: NotificationSound) {
         guard let uid = Auth.auth().currentUser?.uid else { return }
-        let ref = Firestore.firestore().document("users/\(uid)/push/sounds")
+        let ref = FirestoreHub.db.document("users/\(uid)/push/sounds")
         let value: Any
         if sound.id == NotificationSound.none.id { value = "none" }
         else if let file = sound.bundleFile { value = file }
@@ -251,7 +251,7 @@ enum SoundStore {
         for k in d.dictionaryRepresentation().keys where k.hasPrefix("sound_") { d.removeObject(forKey: k) }
         // 2026-09-24 fix-all #174: and the server's copy, so background pushes go back to default too.
         if let uid = Auth.auth().currentUser?.uid {
-            Task { try? await Firestore.firestore().document("users/\(uid)/push/sounds").delete() }
+            Task { try? await FirestoreHub.db.document("users/\(uid)/push/sounds").delete() }
         }
     }
 

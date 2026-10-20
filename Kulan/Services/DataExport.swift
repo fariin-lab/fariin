@@ -76,7 +76,7 @@ enum DataExport {
         // Devices: one read of the account's own device records, which the rules let it read.
         out += "DEVICES\n"
         do {
-            let snap = try await Firestore.firestore().collection("users").document(uid)
+            let snap = try await FirestoreHub.db.collection("users").document(uid)
                 .collection("devices").getDocuments()
             let devices = snap.documents.compactMap(DeviceSession.init)
             if devices.isEmpty { out += "  None\n" }
@@ -157,7 +157,7 @@ enum DataExport {
 
         let snap: QuerySnapshot
         do {
-            snap = try await Firestore.firestore().collection("conversations").document(cid)
+            snap = try await FirestoreHub.db.collection("conversations").document(cid)
                 .collection("messages").order(by: "createdAt").getDocuments()
         } catch {
             throw Failure.unreadable
@@ -190,7 +190,7 @@ enum DataExport {
 
         let snap: QuerySnapshot
         do {
-            snap = try await Firestore.firestore().collection("conversations").document(cid)
+            snap = try await FirestoreHub.db.collection("conversations").document(cid)
                 .collection("messages").order(by: "createdAt", descending: true)
                 .limit(to: cap).getDocuments()
         } catch {

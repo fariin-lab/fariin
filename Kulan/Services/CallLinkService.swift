@@ -251,7 +251,7 @@ final class CallLinkService {
     private var me: String? { Auth.auth().currentUser?.uid }
 
     private func listRef(_ uid: String) -> CollectionReference {
-        Firestore.firestore().collection("users").document(uid).collection("callLinks")
+        FirestoreHub.db.collection("users").document(uid).collection("callLinks")
     }
 
     /// Sign-out/delete: drop the previous account's links.
@@ -427,7 +427,7 @@ final class CallLinkService {
 
     /// Whether the link was revoked, from its own doc. nil when it cannot be read.
     func isRevoked(_ link: some CallLinkRef) async -> Bool? {
-        guard let snap = try? await Firestore.firestore().collection("callLinks")
+        guard let snap = try? await FirestoreHub.db.collection("callLinks")
             .document(link.roomId).getDocument(), let d = snap.data() else { return nil }
         return d["revoked"] as? Bool ?? false
     }
@@ -440,7 +440,7 @@ final class CallLinkService {
         guard let oldKey = old.linkKey else { throw NSError(domain: "CallLink", code: 2) }
         var name = links.first(where: { $0.roomId == old.roomId })?.name
         if name == nil,
-           let enc = try? await Firestore.firestore().collection("callLinks").document(old.roomId)
+           let enc = try? await FirestoreHub.db.collection("callLinks").document(old.roomId)
                .getDocument().data()?["encName"] as? String {
             name = oldKey.decryptName(enc)
         }
@@ -498,14 +498,14 @@ final class CallLinkService {
 
     /// The link's call type from its own doc: true = Video (every link made before the setting).
     func isVideo(_ link: some CallLinkRef) async -> Bool? {
-        guard let snap = try? await Firestore.firestore().collection("callLinks")
+        guard let snap = try? await FirestoreHub.db.collection("callLinks")
             .document(link.roomId).getDocument(), let d = snap.data() else { return nil }
         return (d["video"] as? Bool) ?? true
     }
 
     /// The current approval setting, read from the link's own doc. nil when it cannot be read.
     func approval(for link: some CallLinkRef) async -> Bool? {
-        guard let snap = try? await Firestore.firestore().collection("callLinks")
+        guard let snap = try? await FirestoreHub.db.collection("callLinks")
             .document(link.roomId).getDocument(),
               let r = snap.data()?["restrictions"] as? String else { return nil }
         return r == "adminApproval"

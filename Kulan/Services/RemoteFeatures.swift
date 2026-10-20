@@ -44,7 +44,8 @@ final class RemoteFeatures {
     /// rule AppLimits follows: a dropped listener is not a reason to undo the owner's last choice.
     func start() {
         stop()
-        listener = Firestore.firestore().collection("config").document("features")
+        watchSwaps()
+        listener = FirestoreHub.db.collection("config").document("features")
             .addSnapshotListener { snap, _ in
                 guard let snap, snap.exists else { return }
                 var out: [String: Bool] = [:]
@@ -60,6 +61,20 @@ final class RemoteFeatures {
     }
 
     func stop() { listener?.remove(); listener = nil }
+
+    /// 2026-10-20 (owner): after `FirestoreHub.swap` the listener belongs to the stuck client. Let go
+    /// of it off-main and attach again on the fresh one. Added once, on the first `start()`.
+    private var swapObserver: NSObjectProtocol?
+    private func watchSwaps() {
+        guard swapObserver == nil else { return }
+        swapObserver = NotificationCenter.default.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.listener != nil else { return }
+            FirestoreHub.drop([self.listener])
+            self.listener = nil
+            self.start()
+        }
+    }
 }
 
 /// ⛔ THE SWITCHES THAT APPLY AT ONCE — owner 2026-10-18 ("Create new groups" from the admin panel,

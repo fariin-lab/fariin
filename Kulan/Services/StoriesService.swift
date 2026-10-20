@@ -569,7 +569,7 @@ enum StoryReceiptPrefs {
     private static var watchedUid = ""
 
     private static func ref(_ uid: String) -> DocumentReference {
-        Firestore.firestore().collection("users").document(uid)
+        FirestoreHub.db.collection("users").document(uid)
             .collection("private").document("storyPrefs")
     }
 
@@ -605,7 +605,20 @@ enum StoryReceiptPrefs {
         authHandle = Auth.auth().addStateDidChangeListener { _, user in
             StoryReceiptPrefs.watch(uid: user?.uid ?? "")
         }
+        // 2026-10-20 (owner): after `FirestoreHub.swap` the watch belongs to the stuck client. Let
+        // go of it off-main and watch the same account again on the fresh one.
+        swapObserver = NotificationCenter.default.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { _ in
+            typealias P = StoryReceiptPrefs
+            guard !P.watchedUid.isEmpty else { return }
+            let uid = P.watchedUid
+            FirestoreHub.drop([P.prefsWatch])
+            P.prefsWatch = nil
+            P.watchedUid = ""
+            P.watch(uid: uid)
+        }
     }
+    private static var swapObserver: NSObjectProtocol?
 
     private static func watch(uid: String) {
         guard uid != watchedUid else { return }
@@ -740,12 +753,119 @@ enum StoryPhoto {
     }
 }
 
+/// One wait in the story post queue, opened by whichever comes first: the post ahead finishing, or a
+/// Firestore swap (`StoriesService.waitBehind`). Opening twice is harmless.
+private final class StoryQueueGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var opened = false
+
+    var isOpen: Bool { lock.lock(); defer { lock.unlock() }; return opened }
+
+    func arm(_ c: CheckedContinuation<Void, Never>) {
+        lock.lock()
+        if opened { lock.unlock(); c.resume(); return }
+        continuation = c
+        lock.unlock()
+    }
+
+    func open() {
+        lock.lock()
+        let c = continuation
+        continuation = nil
+        opened = true
+        lock.unlock()
+        c?.resume()
+    }
+}
+
 @Observable
 final class StoriesService {
     static let shared = StoriesService()
-    private init() {}
+    private init() {
+        // 2026-10-20 (owner): a swapped Firestore client (`FirestoreHub.swap`). See `leaveStuckPosts`.
+        swapObserver = NotificationCenter.default.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                let service = StoriesService.shared
+                service.leaveStuckPosts()
+                // The viewers sheet's watcher, on the same story, on the fresh client.
+                let watching = service.viewCountWatchId
+                if !watching.isEmpty {
+                    FirestoreHub.drop([service.viewCountWatch])
+                    service.viewCountWatch = nil
+                    service.viewCountWatchId = ""
+                    service.watchViewCount(storyId: watching)
+                }
+            }
+        }
+    }
+    @ObservationIgnored private var swapObserver: NSObjectProtocol?
 
-    private let db = Firestore.firestore()
+    // MARK: - Posts across a Firestore swap (2026-10-20)
+
+    /// Posts whose upload has begun, keyed by placeholder id, each with the way to hand it back to
+    /// its outbox ticket. Cleared when the post ends (`finishRunning`).
+    @ObservationIgnored private var runningPosts: [String: (photo: Bool, handBack: @MainActor () -> Void)] = [:]
+    /// Posts left behind on a swap: when (if ever) their old task returns, it touches nothing.
+    @ObservationIgnored private var leftBehind: Set<String> = []
+
+    @MainActor private func markRunning(_ pendingId: String, photo: Bool, handBack: @escaping @MainActor () -> Void) {
+        runningPosts[pendingId] = (photo, handBack)
+    }
+
+    /// The post's task has returned. True when it was left behind on a swap, and the caller must then
+    /// leave the ticket, the placeholder and the error alone (the retry owns them now).
+    @MainActor private func finishRunning(_ pendingId: String) -> Bool {
+        runningPosts[pendingId] = nil
+        return leftBehind.remove(pendingId) != nil
+    }
+
+    /// ⛔ A POST STUCK ON THE OLD CLIENT MUST NOT HOLD THE QUEUE FOR EVER. Owner 2026-10-20 ("fix it
+    /// so I never have to refresh"). Posts queue behind each other (`uploadTask`), so one post whose
+    /// write waits on the stuck client blocked every later post until a restart. On the swap:
+    /// - every post that was waiting its turn is let go (`waitBehind` watches the generation);
+    /// - a new post no longer queues behind anything from before the swap;
+    /// - a post that was mid-upload is handed back to its outbox ticket and sent again on the fresh
+    ///   client: a photo through `StoryOutbox.retry` (the reconnect door), a video from its ticket
+    ///   with the same story ids. Its placeholder goes; the retry draws its own.
+    @MainActor private func leaveStuckPosts() {
+        let stuck = runningPosts
+        runningPosts = [:]
+        for pid in stuck.keys {
+            leftBehind.insert(pid)
+            queuedUploads[pid] = nil
+            inFlight.removeAll { $0.id == pid }
+        }
+        uploading = !inFlight.isEmpty
+        uploadTask = nil
+        currentUploadToken = nil
+        guard !stuck.isEmpty else { return }
+        DiagLog.add("stories: \(stuck.count) post(s) handed back to the outbox after the swap")
+        for entry in stuck.values { entry.handBack() }
+        if stuck.values.contains(where: { $0.photo }), let me = AuthService.shared.uid {
+            StoryOutbox.retry(for: me)
+        }
+    }
+
+    /// Waits for the post ahead in the queue, or for a Firestore swap after `generation`, whichever
+    /// comes first. The post ahead may be waiting on the stuck client and never finish.
+    private static func waitBehind(_ previous: Task<Void, Never>?, generation: Int) async {
+        guard let previous else { return }
+        let gate = StoryQueueGate()
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            gate.arm(c)
+            Task { await previous.value; gate.open() }
+            Task { @MainActor in
+                while !gate.isOpen, FirestoreHub.generation == generation {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+                gate.open()
+            }
+        }
+    }
+
+    private var db: Firestore { FirestoreHub.db }
     private var uid: String { Auth.auth().currentUser?.uid ?? "" }
 
     // Optimistic upload state — drives the "Uploading…" indicator + spinner ring in the story row.
@@ -881,6 +1001,7 @@ final class StoriesService {
         // Don't cancel an in-flight post (that silently DESTROYED the 1st story when a 2nd was
         // posted) — QUEUE instead: the new task waits for the previous one, so both post in order.
         let previous = uploadTask
+        let queuedOn = FirestoreHub.generation   // a swap frees this post from the queue (`waitBehind`)
         // PER-POST, not a constant, and the url must be fresh per post as well as unique: StoryUI's
         // ImageLoader keeps decoded images in StoryMemoryCache keyed by absoluteString, so a reused
         // path could serve post A's picture as post B's placeholder (for a video, A's poster: his
@@ -967,18 +1088,25 @@ final class StoriesService {
                     }
                 }
             }
-            _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
+            await Self.waitBehind(previous, generation: queuedOn)   // chain behind any in-flight post (posts queue, never cancel each other)
+            // On a Firestore swap this post is handed back to its outbox ticket (`leaveStuckPosts`).
+            await self.markRunning(pendingId, photo: true) {
+                StoryOutbox.release(ticket)
+            }
             var failure: String?
             var cancelled = false
             do {
                 try await postStory(image: image, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected, repostOf: repostOf, storyId: docId, replaceExisting: resumed)
+                if await self.finishRunning(pendingId) { return }   // left behind on a swap: the retry owns it
                 StoryOutbox.forget(ticket)   // it landed; there is nothing to resume
             }
             catch is CancellationError {
+                if await self.finishRunning(pendingId) { return }
                 cancelled = true              // user hit cancel → postStory removed the doc
                 StoryOutbox.forget(ticket)    // …and a cancelled post must not come back next launch
             }
             catch {
+                if await self.finishRunning(pendingId) { return }
                 // ⚠️ A RULE REFUSAL DOES NOT GET A SECOND CHANCE — see `isPermanentPostFailure`. The
                 // ticket is torn up here, or the next launch resumes a post the server has already
                 // refused and shows the same alert again, forever.
@@ -1101,7 +1229,10 @@ final class StoriesService {
     /// Firestore delivers these callbacks on the main queue, which is where the box is touched.
     func watchStoryGone(_ storyId: String, authorUid: String,
                         onGone: @escaping @MainActor () -> Void) -> () -> Void {
-        final class Box { var reg: ListenerRegistration?; var stopped = false; var fired = false }
+        final class Box {
+            var reg: ListenerRegistration?; var stopped = false; var fired = false
+            var swapObserver: NSObjectProtocol?
+        }
         let box = Box()
         let gone: () -> Void = {
             guard !box.stopped, !box.fired else { return }
@@ -1112,27 +1243,43 @@ final class StoriesService {
             let ns = e as NSError
             return ns.domain == FirestoreErrorDomain && ns.code == 7
         }
-        let mirror = db.collection("users").document(authorUid)
-            .collection("publicStories").document(storyId)
-        box.reg = db.collection("stories").document(storyId).addSnapshotListener { snap, error in
-            guard !box.stopped else { return }
-            if let error {
-                guard denied(error) else { return }
-                box.reg?.remove()
-                box.reg = mirror.addSnapshotListener { snap, error in
-                    if let error { if denied(error) { gone() }; return }
-                    guard let snap, !snap.metadata.isFromCache else { return }
-                    if !snap.exists { gone() }
+        // Both references built at attach time, from the client in use then (see the swap below).
+        func attach() {
+            let db = FirestoreHub.db
+            let mirror = db.collection("users").document(authorUid)
+                .collection("publicStories").document(storyId)
+            box.reg = db.collection("stories").document(storyId).addSnapshotListener { snap, error in
+                guard !box.stopped else { return }
+                if let error {
+                    guard denied(error) else { return }
+                    box.reg?.remove()
+                    box.reg = mirror.addSnapshotListener { snap, error in
+                        if let error { if denied(error) { gone() }; return }
+                        guard let snap, !snap.metadata.isFromCache else { return }
+                        if !snap.exists { gone() }
+                    }
+                    return
                 }
-                return
+                guard let snap, !snap.metadata.isFromCache else { return }
+                if !snap.exists { gone() }
             }
-            guard let snap, !snap.metadata.isFromCache else { return }
-            if !snap.exists { gone() }
+        }
+        attach()
+        // 2026-10-20 (owner): after `FirestoreHub.swap` the watch belongs to the stuck client. Let go
+        // of it off-main and watch again on the fresh one. Removed by the stop below.
+        box.swapObserver = NotificationCenter.default.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { _ in
+            guard !box.stopped else { return }
+            FirestoreHub.drop([box.reg])
+            box.reg = nil
+            attach()
         }
         return {
             box.stopped = true
             box.reg?.remove()
             box.reg = nil
+            if let o = box.swapObserver { NotificationCenter.default.removeObserver(o) }
+            box.swapObserver = nil
         }
     }
 
@@ -1754,6 +1901,7 @@ final class StoriesService {
         }
         // Same queueing as postStoryBackground: never cancel an in-flight post, chain behind it.
         let previous = uploadTask
+        let queuedOn = FirestoreHub.generation   // a swap frees this post from the queue (`waitBehind`)
         // Its own entry in the queue, exactly as a photo post takes one — see `PendingUpload`.
         // THE PLACEHOLDER WEARS THE CANVAS THE EXPORT IS ABOUT TO BAKE. His report: "when is
         // uploading it's showing blur, when upload finished it's showing different color… use one is
@@ -1785,17 +1933,34 @@ final class StoriesService {
         let token = UUID()
         currentUploadToken = token
         uploadTask = Task {
-            _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
+            await Self.waitBehind(previous, generation: queuedOn)   // chain behind any in-flight post (posts queue, never cancel each other)
+            // On a Firestore swap this post starts again from its own ticket, same story ids, as a
+            // launch resume would (`leaveStuckPosts`). The parts already landed are written again
+            // over themselves (same ids), never twice.
+            await self.markRunning(pending.id, photo: false) { [weak self] in
+                VideoStoryOutbox.release(ticketId)
+                self?.postVideoStoryBackground(videoURL: videoURL, thumbnail: thumbnail, muted: muted, burn: burn,
+                                               trim: trim, caption: caption, stickers: stickers,
+                                               excluded: excluded, included: included, everyone: everyone,
+                                               allowsReplies: allowsReplies, tag: tag,
+                                               captureProtected: captureProtected, repostOf: repostOf,
+                                               resumeTicket: ticketId, storyIds: partIds, done: done)
+            }
             var failure: String?
             var cancelled = false
             do {
                 try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected, repostOf: repostOf,
                                          storyIds: partIds, done: done, replaceExisting: replaceExisting,
                                          onPartDone: { VideoStoryOutbox.markDone(ticketId, storyId: $0) })
+                if await self.finishRunning(pending.id) { return }   // left behind on a swap: the restart owns it
                 VideoStoryOutbox.forget(ticketId)          // it landed; nothing to resume
             }
-            catch is CancellationError { cancelled = true; VideoStoryOutbox.forget(ticketId) }
+            catch is CancellationError {
+                if await self.finishRunning(pending.id) { return }
+                cancelled = true; VideoStoryOutbox.forget(ticketId)
+            }
             catch {
+                if await self.finishRunning(pending.id) { return }
                 failure = Self.friendlyPostError(error)
                 // A refusal that will never succeed is dropped; anything else waits for next launch.
                 if Self.isPermanentPostFailure(error) { VideoStoryOutbox.forget(ticketId) }
@@ -2686,9 +2851,29 @@ private enum StoryRowCache {
 @Observable
 final class StoriesRepository {
     static let shared = StoriesRepository()
-    private init() {}
+    private init() {
+        // 2026-10-20 (owner): after `FirestoreHub.swap` the four listeners belong to the stuck
+        // client. Let go of them off-main and attach again on the fresh one for the same account.
+        // The row stays as it is: `start` resets the "server has spoken" flags, so the fresh client's
+        // empty first cache answer is ignored, not drawn (`ignoreColdEmpty`).
+        swapObserver = NotificationCenter.default.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                let repo = StoriesRepository.shared
+                guard let me = repo.listeningUid else { return }
+                FirestoreHub.drop([repo.othersReg, repo.othersLegacyReg, repo.mineReg, repo.ctxReg])
+                repo.othersReg = nil
+                repo.othersLegacyReg = nil
+                repo.mineReg = nil
+                repo.ctxReg = nil
+                repo.othersLegacyFromServer = false   // `stop` leaves this one; the fresh cache is empty
+                repo.start(me)
+            }
+        }
+    }
+    @ObservationIgnored private var swapObserver: NSObjectProtocol?
 
-    private let db = Firestore.firestore()
+    private var db: Firestore { FirestoreHub.db }
     var mine: StoryGroup?            // my own story (the "My Status" cell)
     var others: [StoryGroup] = []    // friends' stories, unseen-first
     // True once rebuild() has PUBLISHED at least once — i.e. the groups above are real knowledge,

@@ -449,7 +449,7 @@ struct GroupHistoryView: View {
         if events.isEmpty { events = Self.events(from: lines) }
         guard !cid.isEmpty else { loading = false; return }   // an empty id throws an NSException
         do {
-            let snap = try await Firestore.firestore().collection("conversations").document(cid)
+            let snap = try await FirestoreHub.db.collection("conversations").document(cid)
                 .collection("messages").whereField("type", isEqualTo: "system")
                 .limit(to: Self.cap).getDocuments()
             capped = snap.documents.count >= Self.cap

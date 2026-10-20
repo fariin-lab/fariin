@@ -52,7 +52,7 @@ enum OfficialStoryCompose {
         guard let img = UIImage(data: jpeg), let cg = img.cgImage else {
             throw Failure.message("This picture could not be read.")
         }
-        let id = Firestore.firestore().collection("officialStories").document().documentID
+        let id = FirestoreHub.db.collection("officialStories").document().documentID
         try await upload(jpeg, to: "officialStories/\(id)/media.jpg", type: "image/jpeg")
         try await call(id: id, kind: "image", width: cg.width, height: cg.height, duration: 0,
                        caption: caption, draft: draft)
@@ -75,7 +75,7 @@ enum OfficialStoryCompose {
                                                     holeCorner: b?.holeCorner ?? 0) else {
             throw Failure.message("Couldn't process this video.")
         }
-        let id = Firestore.firestore().collection("officialStories").document().documentID
+        let id = FirestoreHub.db.collection("officialStories").document().documentID
         try await upload(p.data, to: "officialStories/\(id)/media.mp4", type: "video/mp4")
         try await upload(p.thumbnail, to: "officialStories/\(id)/thumb.jpg", type: "image/jpeg")
         try await call(id: id, kind: "video", width: Int(p.width), height: Int(p.height),

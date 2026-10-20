@@ -10,7 +10,7 @@ import CryptoKit     // MD5 only, to recognise our own upload after a lost reply
 
 /// Write-side operations (port of the RN Db writes). All E2EE goes through Crypto.
 enum ChatService {
-    static var db: Firestore { Firestore.firestore() }
+    static var db: Firestore { FirestoreHub.db }
     // Falls back to AuthService.shared.uid so this is NEVER empty when signed in (incl. the
     // Firebase-free demo, where currentUser is nil but AuthService holds "demo-me"). An empty uid
     // built dotted field paths like "unreadCount." — an INVALID Firestore path that raises an ObjC
@@ -1447,6 +1447,12 @@ enum ChatService {
                 previous = nil   // a finished turn holds nothing, so the line never grows
                 if Self.tails[cid] === self { Self.tails[cid] = nil }
             }
+        }
+
+        /// 2026-10-20 (owner): after `FirestoreHub.swapped`. Turns taken on the stuck client end their
+        /// lines, so the first send on the fresh client does not sit out `maxWait` behind them.
+        static func releaseAll() {
+            lock.withLock { tails.removeAll() }
         }
 
         /// Waits until the send before this one has committed (or given up), at most `maxWait`.
@@ -3686,6 +3692,18 @@ enum ChatService {
     // is at most one round trip behind. Coalesce on flight, never on a clock.
     private static var readInFlight: Set<String> = []
     private static var readTrailing: Set<String> = []
+
+    /// 2026-10-20 (owner): called by `SendQueue` on `FirestoreHub.swapped`. A read receipt or a send
+    /// turn waiting on the stuck client never finishes, and `readInFlight` would hold that chat's
+    /// receipts back for the rest of the process. Both start over on the fresh client.
+    @MainActor
+    static func releaseAfterSwap() {
+        let owed = readInFlight.union(readTrailing)
+        readInFlight.removeAll()
+        readTrailing.removeAll()
+        SendTurn.releaseAll()
+        owed.forEach { markReadThrottled($0) }
+    }
     @MainActor
     static func markReadThrottled(_ cid: String) {
         if readInFlight.contains(cid) { readTrailing.insert(cid); return }

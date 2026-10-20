@@ -147,6 +147,11 @@ final class ConnectionStatus {
             forName: SessionRecovery.recovered, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.afterRecovery() }
             })
+        // 2026-10-20 (owner): the Firestore client froze and `FirestoreHub` swapped in a fresh one.
+        observers.append(center.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.afterSwap() }
+            })
         observers.append(center.addObserver(
             forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.becameActive() }
@@ -173,6 +178,25 @@ final class ConnectionStatus {
         recoveredAt = Date()
         probeReadStarted = nil
         probeReadGen += 1
+        guard let uid = probeUid else { return }
+        watch(uid: uid, force: true)
+    }
+
+    /// 2026-10-20 (owner): after `FirestoreHub.swapped`. The probe belongs to the stuck client: it is
+    /// let go off the main thread (`FirestoreHub.drop`) and attached on the fresh one. The reads and the
+    /// pending-writes wait still marked in flight were asked of the stuck client and never answer;
+    /// left set, the watchdog would call the fresh client stalled 20s later. All of them start over,
+    /// and the new connection gets its 20s, as after a recovery.
+    private func afterSwap() {
+        recoveredAt = Date()
+        probeReadStarted = nil
+        probeReadGen += 1
+        heartbeatStarted = nil
+        heartbeatGen += 1
+        writesWaitStarted = nil
+        writesWaitGen += 1
+        FirestoreHub.drop([probe])
+        probe = nil
         guard let uid = probeUid else { return }
         watch(uid: uid, force: true)
     }
@@ -242,7 +266,7 @@ final class ConnectionStatus {
         heartbeatStarted = Date()
         Task { [weak self] in
             do {
-                _ = try await Firestore.firestore().collection("users").document(uid)
+                _ = try await FirestoreHub.db.collection("users").document(uid)
                     .getDocument(source: .server)
                 guard let self, self.heartbeatGen == gen else { return }
                 self.heartbeatStarted = nil
@@ -276,7 +300,7 @@ final class ConnectionStatus {
         let gen = writesWaitGen
         writesWaitStarted = Date()
         Task { [weak self] in
-            try? await Firestore.firestore().waitForPendingWrites()
+            try? await FirestoreHub.db.waitForPendingWrites()
             guard let self, self.writesWaitGen == gen else { return }
             self.writesWaitStarted = nil
         }
@@ -303,7 +327,7 @@ final class ConnectionStatus {
         guard let uid else { return }
         DiagLog.uploadIfPending(uid: uid)
         let gen = probeGen
-        probe = Firestore.firestore().collection("users").document(uid)
+        probe = FirestoreHub.db.collection("users").document(uid)
             .addSnapshotListener(includeMetadataChanges: true) { [weak self] snap, error in
                 if let snap {
                     let meta = snap.metadata
@@ -409,7 +433,7 @@ final class ConnectionStatus {
         let gen = probeReadGen
         probeReadStarted = Date()
         do {
-            _ = try await Firestore.firestore().collection("users").document(uid)
+            _ = try await FirestoreHub.db.collection("users").document(uid)
                 .getDocument(source: .server)
             if gen == probeReadGen { probeReadStarted = nil }
             serverAnswered()

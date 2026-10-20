@@ -102,7 +102,7 @@ enum HiddenMessages {
 /// already-decrypted messages so each snapshot only decrypts new/changed docs.
 @Observable
 final class ThreadRepository {
-    private let db = Firestore.firestore()
+    private var db: Firestore { FirestoreHub.db }
     private var listener: ListenerRegistration?
     private var outboxObserver: NSObjectProtocol?
     private var outboxAddObserver: NSObjectProtocol?
@@ -713,6 +713,15 @@ final class ThreadRepository {
                     self?.reattachIfDead(includePresence: true)
                 }
         }
+        // 2026-10-20 (owner): the old Firestore client froze and `FirestoreHub` swapped in a fresh
+        // one. Every listener of this chat belongs to the stuck client, dead or not, so all of them
+        // come back on the new one, and a page or cursor tied to the old client is let go.
+        if swappedObserver == nil {
+            swappedObserver = NotificationCenter.default.addObserver(
+                forName: FirestoreHub.swapped, object: nil, queue: .main) { [weak self] _ in
+                    self?.reattachAfterSwap()
+                }
+        }
         // Owner audit 2026-10-06 chat #68: an older page that failed, or came only from the local
         // cache, was not asked again until the reader scrolled; a reader resting at the top saw
         // nothing arrive after the signal came back. Ask once more when it does, if they are still
@@ -972,7 +981,7 @@ final class ThreadRepository {
         if let conv = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) {
             return conv.users
         }
-        if let snap = try? await Firestore.firestore().collection("conversations").document(cid).getDocument(),
+        if let snap = try? await FirestoreHub.db.collection("conversations").document(cid).getDocument(),
            let users = snap.data()?["users"] as? [String] {
             return users
         }
@@ -1067,6 +1076,8 @@ final class ThreadRepository {
     /// The message listener ended in an error and no snapshot has arrived since.
     private var listenerFailed = false
     private var recoveredObserver: NSObjectProtocol?
+    /// 2026-10-20 (owner): `FirestoreHub.swapped`, the Firestore client was replaced by a fresh one.
+    private var swappedObserver: NSObjectProtocol?
     /// Owner audit 2026-10-06 chat #72: the pending retry, so `stop()` can cancel it. It used to be a
     /// bare `asyncAfter` that nothing could take back: an error, then leaving the chat within the
     /// backoff (up to a minute), and the retry re-attached all four listeners to a closed chat with
@@ -1118,6 +1129,31 @@ final class ThreadRepository {
         }
         listenerRetries = 0
         start()
+    }
+
+    /// 2026-10-20 (owner): after `FirestoreHub.swapped`. The old handles are let go off the main
+    /// thread (`FirestoreHub.drop`), set nil first so `start()`'s own `stop()` never calls `remove()`
+    /// on them here, then `start()` attaches the same four listeners to the fresh client.
+    private func reattachAfterSwap() {
+        guard !cid.isEmpty, !DemoMode.isDemoConversation(cid), listener != nil || listenerFailed else { return }
+        FirestoreHub.drop([listener, convListener, userListener, presenceListener])
+        listener = nil; convListener = nil; userListener = nil; presenceListener = nil
+        // The older-page cursor is a snapshot of the stuck client, and the held resume query was built
+        // on it: page on by value from the oldest message held instead (the same path as after a trim).
+        if oldestDoc != nil { windowTrimmed = true }
+        resumeOlderQuery = nil
+        resumeHeld = false
+        // A page asked of the stuck client never answers, and `loadingOlder` would hold every later
+        // page behind it. Ask again on the fresh client and hand its waiters that answer.
+        let waiters = olderWaiters
+        olderWaiters = []
+        let wasLoading = loadingOlder
+        loadingOlder = false
+        listenerRetries = 0
+        start()
+        if wasLoading || !waiters.isEmpty {
+            loadOlder { waiters.forEach { $0() } }
+        }
     }
 
     private func retryStartSoon() {
@@ -1756,6 +1792,8 @@ final class ThreadRepository {
         blockObserver = nil
         if let recoveredObserver { NotificationCenter.default.removeObserver(recoveredObserver) }
         recoveredObserver = nil
+        if let swappedObserver { NotificationCenter.default.removeObserver(swappedObserver) }
+        swappedObserver = nil
         if let networkObserver { NotificationCenter.default.removeObserver(networkObserver) }
         networkObserver = nil
         // #72: a backoff retry still waiting must not re-attach a chat that has been stopped.

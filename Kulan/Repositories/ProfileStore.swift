@@ -22,9 +22,20 @@ final class ProfileStore {
         NotificationCenter.default.addObserver(forName: .networkCameBack, object: nil, queue: .main) { _ in
             Task { await ProfileStore.shared.refetchFailed() }
         }
+        // 2026-10-20 (owner): the Firestore client froze and `FirestoreHub` swapped in a fresh one. The
+        // privacy listener belongs to the stuck client even when it looks alive: let it go off the
+        // main thread and attach again on the new client.
+        NotificationCenter.default.addObserver(forName: FirestoreHub.swapped, object: nil, queue: .main) { _ in
+            let store = ProfileStore.shared
+            guard store.privacyListener != nil else { return }
+            FirestoreHub.drop([store.privacyListener])
+            store.privacyListener = nil
+            store.startPrivacySync()
+            Task { await store.refetchFailed() }
+        }
     }
 
-    private let db = Firestore.firestore()
+    private var db: Firestore { FirestoreHub.db }
     var me: UserProfile?
     /// A photo change that is on screen but not yet on the server. Nothing blocks on it; it exists so
     /// a screen can say so if it wants to, and so two changes cannot overlap unnoticed.

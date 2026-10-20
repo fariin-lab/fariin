@@ -182,7 +182,7 @@ struct NotificationsSettingsView: View {
         let previewMissing = d.object(forKey: "notif.preview") == nil
         let soundMissing = d.object(forKey: "notif.sound") == nil
         guard previewMissing || soundMissing,
-              let data = try? await Firestore.firestore().collection("users").document(me).getDocument().data()
+              let data = try? await FirestoreHub.db.collection("users").document(me).getDocument().data()
         else { return }
         if previewMissing, d.object(forKey: "notif.preview") == nil,
            let p = data["notifPreview"] as? Bool { messagePreview = p }
@@ -462,6 +462,18 @@ struct DevicesView: View {
             if loaded, !old.isEmpty { SecurityCheckup.settingChanged() }
         }
         .onDisappear { listener?.remove(); listener = nil }
+        // 2026-10-20 (owner): a swapped Firestore client (`FirestoreHub.swap`) leaves the list's
+        // listener on the stuck one. Let go of it off-main and listen again on the fresh one; the
+        // rows on screen stay. An op that was waiting on the stuck client never returns, so its
+        // spinner and the disabled buttons are freed for a retry.
+        .onReceive(NotificationCenter.default.publisher(for: FirestoreHub.swapped)) { _ in
+            working = false
+            signingOut = []
+            guard listener != nil else { return }
+            FirestoreHub.drop([listener])
+            listener = nil
+            startListening()
+        }
         .task {
             freshLeft = await DeviceRegistry.shared.freshSessionRemaining()
             autoDays = await DeviceRegistry.shared.autoSignOutDays()

@@ -842,7 +842,7 @@ final class CallService: NSObject {
     private var pendingOffer: [String: String]?      // cached incoming offer → answer without a server round-trip
     private var appliedRemoteRestart = 0             // last restart version we applied
 
-    private let db = Firestore.firestore()
+    private var db: Firestore { FirestoreHub.db }
     private var pc: RTCPeerConnection?
     private var listeners: [ListenerRegistration] = []
     private var incomingListener: ListenerRegistration?
@@ -1108,7 +1108,7 @@ final class CallService: NSObject {
         peerTrustPending = true
         let peer = otherUid
         Task { [weak self] in
-            let snap = try? await Firestore.firestore().collection("conversations").document(cid).getDocument()
+            let snap = try? await FirestoreHub.db.collection("conversations").document(cid).getDocument()
             await MainActor.run {
                 guard let self, self.otherUid == peer else { return }
                 if let data = snap?.data() {
@@ -4900,7 +4900,7 @@ final class CallService: NSObject {
     /// ends at once with "This account no longer exists", no row, and the next tap is refused up front.
     private func checkAccountExists(_ uid: String, attempt: Int) {
         Task { [weak self] in
-            guard let snap = try? await Firestore.firestore().collection("users").document(uid)
+            guard let snap = try? await FirestoreHub.db.collection("users").document(uid)
                     .getDocument(source: .server) else { return }
             let gone = !snap.exists || (snap.data()?["isHidden"] as? Bool) == true
             await MainActor.run {
@@ -5035,7 +5035,7 @@ final class CallService: NSObject {
                     _ = try? await Auth.auth().currentUser?.getIDTokenResult(forcingRefresh: true)
                     var stillGone = false
                     do {
-                        let fresh = try await Firestore.firestore().collection("calls").document(id).getDocument(source: .server)
+                        let fresh = try await FirestoreHub.db.collection("calls").document(id).getDocument(source: .server)
                         stillGone = !fresh.exists
                     } catch {
                         let ns = error as NSError
@@ -5279,11 +5279,54 @@ final class CallService: NSObject {
             }
             self.reattachCallListeners("recovery")
         }
+        // 2026-10-20 (owner): the Firestore client froze and `FirestoreHub` swapped in a fresh one.
+        // Every listener here belongs to the stuck client, so the ring listener and a live call's
+        // signalling come back on the new one, and the call carries on without a restart.
+        NotificationCenter.default.addObserver(forName: FirestoreHub.swapped, object: nil, queue: .main) { [weak self] _ in
+            self?.reattachAfterSwap()
+        }
         NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification,
                                                object: nil, queue: .main) { [weak self] _ in
             guard let self, self.incomingWanted, self.incomingDead || !self.incomingHeardServer else { return }
             print("[Recovery] incoming calls: attached again on foreground")
             self.observeIncoming()
+        }
+    }
+
+    /// 2026-10-20 (owner): after `FirestoreHub.swapped`. The old registrations go to `FirestoreHub.drop`
+    /// (removed off the main thread, never `remove()` here: the stuck client can hold the caller) and
+    /// are set nil and taken out of `listeners` first, so the attach paths below find nothing to
+    /// remove. The kept call doc and candidates references were built on the stuck client; they are
+    /// rebuilt on the fresh one from the same paths before the call's listeners attach again.
+    private func reattachAfterSwap() {
+        let old: [ListenerRegistration?] = [incomingListener, ringingWatcher, callDocListener, candidatesListener]
+        FirestoreHub.drop(old)
+        let gone = old.compactMap { $0 }
+        listeners.removeAll { l in gone.contains { $0 === l } }
+        incomingListener = nil
+        // `ringingWatcher` non-nil means "this ring is still wanted" (see the watcher), so remember it.
+        let ringWanted = ringingWatcher != nil
+        ringingWatcher = nil
+        callDocListener = nil
+        candidatesListener = nil
+        if let ref = callDocWatch { callDocWatch = db.document(ref.path) }
+        if let col = candidatesWatch { candidatesWatch = db.collection(col.path) }
+        if incomingWanted {
+            print("[Recovery] incoming calls: attached again on the fresh Firestore client")
+            observeIncoming()
+        }
+        guard state != .idle, state != .ended, let id = callId else { return }
+        if ringWanted, ringingWatchId == id {
+            print("[Recovery] call ring watch: attached again after the client swap")
+            watchRingingCancel(id)
+        }
+        if let ref = callDocWatch, ref.documentID == id {
+            print("[Recovery] call signalling: attached again after the client swap")
+            observeCallDoc(ref)
+        }
+        if let col = candidatesWatch, col.parent?.documentID == id {
+            print("[Recovery] call routes: attached again after the client swap")
+            observeRemoteCandidates(col)
         }
     }
 

@@ -288,7 +288,29 @@ enum SessionRecovery {
     @MainActor static func noteWedged(_ why: String) {
         guard !wedged, Auth.auth().currentUser != nil else { return }
         wedged = true
-        DiagLog.add("WEDGED (\(why)): fresh start when the app leaves the screen")
+        // 2026-10-20 (owner: "fix it so I never have to refresh"): first, a fresh Firestore client in
+        // this same process (FirestoreHub.swap), so he keeps using the app without noticing. Only if
+        // that cannot be done (no user, swap limit spent, sign-in on the fresh app silent) does the
+        // old net below stay armed: a fresh process the next time he leaves the app.
+        DiagLog.add("WEDGED (\(why)): swapping to a fresh client")
+        Task { @MainActor in
+            guard await FirestoreHub.swap(why) else {
+                DiagLog.add("  no swap: fresh start when the app leaves the screen")
+                armEndProcess()
+                return
+            }
+            wedged = false
+            stallStep = 0
+            stallEpisodeRecovered = false
+            nextStallAt = .distantPast
+            unrecovered = false
+            lastRecoveredAt = Date()
+            NotificationCenter.default.post(name: recovered, object: nil)
+        }
+    }
+
+    @MainActor private static func armEndProcess() {
+        guard wedged, wedgedObserver == nil else { return }
         wedgedObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
                 MainActor.assumeIsolated { endProcessWhenFree() }
@@ -308,6 +330,7 @@ enum SessionRecovery {
             guard UIApplication.shared.applicationState == .background else { return }
             DiagLog.add("process ends for a fresh start")
             DiagLog.flush()
+            UserDefaults.standard.synchronize()   // the text send queue lives there
             exit(0)
         }
     }
@@ -391,7 +414,8 @@ enum SessionRecovery {
         // what he saw. Each half now gets `switchTimeout`; an unanswered switch is logged, the
         // enable is still sent (it queues behind the disable, so the network is never left off),
         // and the next stall is free to try again at its spaced time.
-        let db = Firestore.firestore()
+        let db = FirestoreHub.db
+        let gen = FirestoreHub.generation
         let offAnswered = await answered(within: switchTimeout) {
             do { try await db.disableNetwork() } catch { print("[Recovery] disableNetwork failed:", error) }
         }
@@ -401,6 +425,8 @@ enum SessionRecovery {
         guard offAnswered, onAnswered else {
             print("[Recovery] stall: the network switch did not answer in \(Int(switchTimeout))s, trying again later")
             DiagLog.add("  network switch DID NOT ANSWER (off \(offAnswered), on \(onAnswered))")
+            // Already swapped to a fresh client while this switch sat on the stuck one.
+            guard FirestoreHub.generation == gen else { return }
             noteWedged("network switch")
             return
         }

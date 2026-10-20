@@ -98,7 +98,7 @@ enum CallPrivacyIndex {
     /// press is decided on something current rather than on whatever was cached at first sight.
     static func refresh(_ uid: String) async {
         guard !uid.isEmpty else { return }
-        guard let snap = try? await Firestore.firestore().collection("users").document(uid).getDocument(),
+        guard let snap = try? await FirestoreHub.db.collection("users").document(uid).getDocument(),
               let p = snap.data()?["privacy"] as? [String: String] else { return }
         await MainActor.run { record(uid: uid, privacy: p) }
     }

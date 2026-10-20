@@ -48,7 +48,7 @@ struct SecurityNotificationsView: View {
         defer { loading = false }
         guard let uid else { return }
         do {
-            let snap = try await Firestore.firestore().collection("users").document(uid).getDocument()
+            let snap = try await FirestoreHub.db.collection("users").document(uid).getDocument()
             // ⚠️ The nil-coalesce is the "absent means off" rule, and it must stay on both sides of
             // the wire — see the file note.
             alerts = (snap.data()?["securityAlerts"] as? Bool) ?? false
@@ -67,7 +67,7 @@ struct SecurityNotificationsView: View {
             return
         }
         do {
-            try await Firestore.firestore().collection("users").document(uid)
+            try await FirestoreHub.db.collection("users").document(uid)
                 .setData(["securityAlerts": on], merge: true)
             error = nil
         } catch {

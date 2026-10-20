@@ -97,7 +97,32 @@ final class GroupCallService: ObservableObject {
                                queue: .main) { _ in
                 Task { @MainActor in GroupCallService.shared.appCameBack() }
             },
+            // 2026-10-20 (owner): the Firestore client froze and `FirestoreHub` swapped in a fresh one.
+            center.addObserver(forName: FirestoreHub.swapped, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { GroupCallService.shared.reattachAfterSwap() }
+            },
         ]
+    }
+
+    /// 2026-10-20 (owner): after `FirestoreHub.swapped`. Every listener here belongs to the stuck
+    /// client. Each live one goes to `FirestoreHub.drop` (removed off the main thread, never
+    /// `remove()` here) and attaches again on the fresh client to the same room, link or group,
+    /// without the resets its start path makes (the request list, the invites I declined and the
+    /// group's roles stay as they are). The LiveKit room itself is not Firestore and carries on.
+    private func reattachAfterSwap() {
+        FirestoreHub.drop([roomListener, requestsListener, myRequestListener, linkDocListener,
+                           inviteListener, groupRoleListener])
+        let hadRoom = roomListener != nil, hadRequests = requestsListener != nil
+        let hadWait = myRequestListener != nil || linkDocListener != nil
+        let hadInvites = inviteListener != nil, hadRoles = groupRoleListener != nil
+        roomListener = nil; requestsListener = nil; myRequestListener = nil; linkDocListener = nil
+        inviteListener = nil; groupRoleListener = nil
+        if hadRoom, let id = roomListenerId { listenRoom(id) }
+        if hadRequests, let id = requestsRoomId { attachRequests(id) }
+        if hadWait, let w = waitingLink { attachWaitListeners(roomId: w.roomId) }
+        if hadInvites, let uid = inviteUid { attachInvites(uid) }
+        if hadRoles, case .group(let cid)? = activeRoom { attachGroupRoles(cid) }
+        print("[Recovery] group call: listeners attached again on the fresh Firestore client")
     }
     private var appObservers: [NSObjectProtocol] = []
 
@@ -287,7 +312,7 @@ final class GroupCallService: ObservableObject {
     var isLink: Bool { if case .link(_, _)? = activeRoom { return true }; return false }
     var myUid: String { Auth.auth().currentUser?.uid ?? "" }
 
-    private var db: Firestore { Firestore.firestore() }
+    private var db: Firestore { FirestoreHub.db }
     private var functions: Functions { Functions.functions(region: "me-central1") }
     private var roomListener: ListenerRegistration?
     private var requestsListener: ListenerRegistration?
@@ -450,7 +475,7 @@ final class GroupCallService: ObservableObject {
             // nothing is published yet. A read that fails refuses too: re-ringing the whole group by
             // mistake is the worse outcome.
             if requireLive, room.remoteParticipants.isEmpty {
-                let snap = try? await Firestore.firestore().collection("groupCalls").document(cid)
+                let snap = try? await FirestoreHub.db.collection("groupCalls").document(cid)
                     .getDocument(source: .server)
                 guard gen == joinGeneration else { await abandonJoin(); return }
                 guard snap?.data()?["active"] as? Bool == true else {
@@ -476,7 +501,7 @@ final class GroupCallService: ObservableObject {
             // 2026-09-24 fix-all #97: an empty room means this tap STARTED the call rather than
             // joined one, and the starter writes the call's record into the chat.
             let startedHere = room.remoteParticipants.isEmpty
-            let ref = Firestore.firestore().collection("groupCalls").document(cid)
+            let ref = FirestoreHub.db.collection("groupCalls").document(cid)
             if startedHere {
                 let recordId = "gcall_\(UUID().uuidString)"
                 // Mark the call active so other members see a "Join call" bar + get rung. A fresh
@@ -537,7 +562,7 @@ final class GroupCallService: ObservableObject {
     /// lives in the group's chat.
     private static func writeRecord(cid: String, id: String, video: Bool) async {
         guard let me = Auth.auth().currentUser?.uid else { return }
-        let convRef = Firestore.firestore().collection("conversations").document(cid)
+        let convRef = FirestoreHub.db.collection("conversations").document(cid)
         try? await convRef.collection("messages").document(id).setData([
             "type": "call",
             "authorId": me,
@@ -715,6 +740,11 @@ final class GroupCallService: ObservableObject {
         groupRoleListener?.remove(); groupRoleListener = nil
         groupConv = nil
         guard case .group(let cid)? = activeRoom else { return }
+        attachGroupRoles(cid)
+    }
+
+    /// The listener alone, keeping `groupConv`, for a Firestore client swap (2026-10-20, owner).
+    private func attachGroupRoles(_ cid: String) {
         groupRoleListener = db.collection("conversations").document(cid).addSnapshotListener { [weak self] snap, _ in
             guard let snap, let data = snap.data() else { return }
             let id = snap.documentID
@@ -1339,7 +1369,7 @@ final class GroupCallService: ObservableObject {
         guard knock != nil || closes else { return }
         Self.withBackgroundTime("group-call-end") {
             if let knock {
-                try? await Firestore.firestore().collection("callLinks").document(knock)
+                try? await FirestoreHub.db.collection("callLinks").document(knock)
                     .collection("requests").document(me).delete()
             }
             // Link calls have no doc to end here; the ad-hoc doc has no chat record to close.
@@ -1371,7 +1401,7 @@ final class GroupCallService: ObservableObject {
                 return
             }
         }
-        let db = Firestore.firestore()
+        let db = FirestoreHub.db
         let ref = db.collection("groupCalls").document(cid)
         let ended: [String: Any]? = await withCheckedContinuation { (cont: CheckedContinuation<[String: Any]?, Never>) in
             db.runTransaction({ txn, errPtr -> Any? in
@@ -2142,8 +2172,12 @@ final class GroupCallService: ObservableObject {
         if let name = refused.first, isActive { showToast("Couldn't add \(name)") }
     }
 
+    /// The room `roomListener` follows, for a Firestore client swap (2026-10-20, owner).
+    private var roomListenerId: String?
+
     private func listenRoom(_ roomId: String) {
         roomListener?.remove()
+        roomListenerId = roomId
         roomListener = db.collection("groupCalls").document(roomId).addSnapshotListener { [weak self] snap, _ in
             guard let d = snap?.data(with: .estimate) else { return }
             Task { @MainActor [weak self] in
@@ -2153,10 +2187,9 @@ final class GroupCallService: ObservableObject {
         }
     }
 
-    private func beginWaiting(roomId: String, key: String, video: Bool) {
-        waitingForApproval = true
-        waitingLink = (roomId: roomId, key: key, video: video)
-        sawMyRequest = false
+    /// The joiner's two listeners while parked at a link's door, split out of `beginWaiting` so a
+    /// Firestore client swap attaches them again without restarting the wait (2026-10-20, owner).
+    private func attachWaitListeners(roomId: String) {
         myRequestListener?.remove()
         myRequestListener = db.collection("callLinks").document(roomId)
             .collection("requests").document(myUid)
@@ -2183,6 +2216,13 @@ final class GroupCallService: ObservableObject {
                 guard let r = d?["restrictions"] as? String, r != "adminApproval" else { return }
                 Task { @MainActor [weak self] in self?.approvalTurnedOff() }
             }
+    }
+
+    private func beginWaiting(roomId: String, key: String, video: Bool) {
+        waitingForApproval = true
+        waitingLink = (roomId: roomId, key: key, video: video)
+        sawMyRequest = false
+        attachWaitListeners(roomId: roomId)
         // Audit M-070 / M-024, 2026-10-07: the knock is renewed every minute (the token call
         // rewrites the request's `at`, so the creator's list keeps a person really waiting and drops
         // one who left without a clean exit), and after two minutes with no answer the wait ends:
@@ -2270,9 +2310,18 @@ final class GroupCallService: ObservableObject {
         }
     }
 
+    /// The link `requestsListener` follows, for a Firestore client swap (2026-10-20, owner).
+    private var requestsRoomId: String?
+
     private func listenRequests(_ roomId: String) {
         requestsListener?.remove()
         requestDocs = []; requestSeen = [:]   // audit M-070: another link's list starts afresh
+        attachRequests(roomId)
+    }
+
+    /// The listener alone, without the reset above, so a client swap keeps the list it has.
+    private func attachRequests(_ roomId: String) {
+        requestsRoomId = roomId
         requestsListener = db.collection("callLinks").document(roomId).collection("requests")
             .whereField("status", isEqualTo: "pending")
             .addSnapshotListener { [weak self] snap, _ in
@@ -2364,6 +2413,12 @@ final class GroupCallService: ObservableObject {
         }
         glareJoin = nil
         guard let uid else { return }
+        attachInvites(uid)
+    }
+
+    /// The invite listener alone, without the resets above (2026-10-20, owner: a client swap keeps
+    /// the invites I already declined).
+    private func attachInvites(_ uid: String) {
         inviteListener = db.collection("groupCalls")
             // array-contains ALONE: adding `active ==` / `kind ==` here needs a composite index that
             // does not exist, and a query missing its index fails silently = no invite ever shows.

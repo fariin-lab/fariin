@@ -127,7 +127,7 @@ struct SoundsNotificationsView: View {
         // still said "Not muted" here.
         if OfficialChannel.isOfficial(cid) { muted = OfficialChannelStore.shared.state.isMutedNow; return }
         let me = AuthService.shared.uid ?? ""
-        if let snap = try? await Firestore.firestore().collection("conversations").document(cid).getDocument(),
+        if let snap = try? await FirestoreHub.db.collection("conversations").document(cid).getDocument(),
            let until = ((snap.data()?["mutedBy"] as? [String: Any])?[me] as? NSNumber)?.doubleValue {
             muted = until > Date().timeIntervalSince1970 * 1000
             mutedUntil = until

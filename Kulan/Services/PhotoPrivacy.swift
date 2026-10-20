@@ -43,7 +43,7 @@ final class PhotoPrivacy {
     }
 
     private func col(_ uid: String) -> CollectionReference {
-        Firestore.firestore().collection("users").document(uid).collection("photoHiddenFrom")
+        FirestoreHub.db.collection("users").document(uid).collection("photoHiddenFrom")
     }
 
     func load() async {
@@ -59,7 +59,7 @@ final class PhotoPrivacy {
         guard let me = Auth.auth().currentUser?.uid else { return }
         let fresh = uids.filter { $0 != me && !hidden.contains($0) }
         guard !fresh.isEmpty else { return }
-        let batch = Firestore.firestore().batch()
+        let batch = FirestoreHub.db.batch()
         for u in fresh { batch.setData(["at": FieldValue.serverTimestamp()], forDocument: col(me).document(u)) }
         try await batch.commit()
         hidden.insert(contentsOf: fresh, at: 0)

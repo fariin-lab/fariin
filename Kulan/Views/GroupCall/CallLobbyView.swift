@@ -305,7 +305,7 @@ struct CallLobbyView: View {
         // or missing. The creator keeps the server's say: a revoked link's call can still be running
         // and the server lets its creator back in.
         guard let k = CallLinkKey(text: lobby.key) else { return }
-        let doc = try? await Firestore.firestore().collection("callLinks").document(k.roomId).getDocument()
+        let doc = try? await FirestoreHub.db.collection("callLinks").document(k.roomId).getDocument()
         let d = doc?.data()
         let creator = (d?["creatorUid"] as? String) == service.myUid
         let expired = (d?["expiresAt"] as? Timestamp).map { $0.dateValue() < Date() } ?? false

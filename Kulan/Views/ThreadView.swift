@@ -2222,7 +2222,8 @@ struct ThreadView: View {
         // Both retry triggers, as ONE modifier taking two method references — see `RetrySweep`.
         .modifier(RetrySweep(itemCount: repo.items.count,
                              onNetworkBack: signalReturned,
-                             onFirstLoad: sweepOnFirstLoad))
+                             onFirstLoad: sweepOnFirstLoad,
+                             onClientSwap: firestoreSwapped))
         // Owner, 2026-10-14: arriving from the No answer page's "Record voice message", the recorder
         // starts at once, locked hands-free, the same state a hold dragged up to the lock leaves.
         .task {
@@ -2458,7 +2459,7 @@ struct ThreadView: View {
     @State private var ownGroupDoc = ListenerBox()
     private func startOwnGroupDoc() {
         guard ownGroupDoc.reg == nil, cachedConv?.isGroup ?? false else { return }
-        ownGroupDoc.reg = Firestore.firestore().collection("conversations").document(cid)
+        ownGroupDoc.reg = FirestoreHub.db.collection("conversations").document(cid)
             .addSnapshotListener { snap, _ in
                 guard let snap, snap.exists, let data = snap.data() else { return }
                 let fresh = Conversation(id: snap.documentID, data: data)
@@ -5347,7 +5348,7 @@ struct ThreadView: View {
     // Watch the group's call doc so a "Join call" bar appears when a call is active.
     private func startGroupCallListener() {
         groupCallListener?.remove()
-        groupCallListener = Firestore.firestore().collection("groupCalls").document(cid)
+        groupCallListener = FirestoreHub.db.collection("groupCalls").document(cid)
             .addSnapshotListener { snap, _ in
                 let d = snap?.data()
                 var active = (d?["active"] as? Bool) ?? false
@@ -6347,6 +6348,32 @@ struct ThreadView: View {
     private func signalReturned() {
         autoRetried.removeAll()
         autoRetryFailedMedia()
+    }
+
+    /// 2026-10-20 (owner): `FirestoreHub.swapped`, the Firestore client froze and a fresh one took
+    /// over. The repository re-attaches its own listeners (its own observer); this view's two go to
+    /// `FirestoreHub.drop` (removed off the main thread) and attach again on the new client. Then the
+    /// open chat's queued sends go out again: a send waiting on the stuck client never comes back, so
+    /// its claim is released first (`SendQueue.releaseClaimsAfterSwap`, once per swap whichever
+    /// observer runs first). No double message: a text is written at `messages/{clientId}` and
+    /// `alreadySent` is asked before each one.
+    private func firestoreSwapped() {
+        if groupCallListener != nil {
+            FirestoreHub.drop([groupCallListener])
+            groupCallListener = nil
+            startGroupCallListener()
+        }
+        if ownGroupDoc.reg != nil {
+            FirestoreHub.drop([ownGroupDoc.reg])
+            ownGroupDoc.reg = nil
+            startOwnGroupDoc()
+        }
+        guard !preview else { return }
+        Task { @MainActor in
+            SendQueue.releaseClaimsAfterSwap()
+            await drainSendQueue()
+        }
+        signalReturned()
     }
 
     /// ⚠️ NOT `onAppear`. The pendings are restored by `repo.start()`, which is asynchronous, so a
@@ -8159,7 +8186,7 @@ struct ThreadView: View {
     private func confirmRemovedFromGroup(_ old: Conversation) async {
         let gone: Bool
         do {
-            let snap = try await Firestore.firestore().collection("conversations").document(cid)
+            let snap = try await FirestoreHub.db.collection("conversations").document(cid)
                 .getDocument(source: .server)
             gone = !snap.exists || !((snap.data()?["users"] as? [String] ?? []).contains(me))
         } catch {
@@ -12002,10 +12029,13 @@ private struct RetrySweep: ViewModifier {
     let itemCount: Int
     let onNetworkBack: () -> Void
     let onFirstLoad: () -> Void
+    /// 2026-10-20 (owner): the Firestore client was swapped (`FirestoreHub.swapped`).
+    let onClientSwap: () -> Void
 
     func body(content: Content) -> some View {
         content
             .onReceive(NotificationCenter.default.publisher(for: .networkCameBack)) { _ in onNetworkBack() }
+            .onReceive(NotificationCenter.default.publisher(for: FirestoreHub.swapped)) { _ in onClientSwap() }
             .onChange(of: itemCount) { _, _ in onFirstLoad() }
     }
 }

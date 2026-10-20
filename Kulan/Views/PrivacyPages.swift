@@ -90,7 +90,7 @@ enum PrivacyPrefs {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         Task {
             do {
-                try await Firestore.firestore().collection("users").document(uid)
+                try await FirestoreHub.db.collection("users").document(uid)
                     .setData(["privacy": [key: a.rawValue]], merge: true)
                 // Photo privacy is enforced by storage.rules; a new name makes every viewer ask
                 // again instead of drawing their cached copy (2026-09-25).
@@ -126,7 +126,7 @@ enum PrivacyPrefs {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         Task {
             do {
-                try await Firestore.firestore().collection("users").document(uid)
+                try await FirestoreHub.db.collection("users").document(uid)
                     .setData(["privacy": [key: on ? "true" : "false"]], merge: true)
             } catch {
                 let m = "This setting could not be saved. \(error.localizedDescription)"

@@ -320,14 +320,30 @@ final class StoryAudienceStore {
     /// yet", not "none", and nothing may be written over it.
     private(set) var linksLoaded = false
     private var loadedFor = ""
-    private let db = Firestore.firestore()
+    private var db: Firestore { FirestoreHub.db }
     private static let mirrorKey = "storyAudienceMirror"
     private static let selectedKey = "storyAudienceSelected"
 
     private init() {
         selectedId = UserDefaults.standard.string(forKey: Self.selectedKey) ?? StoryAudience.myFriendsId
         loadMirror()
+        // 2026-10-20 (owner): after `FirestoreHub.swap` both listeners belong to the stuck client.
+        // Let go of them off-main and start again on the fresh one for the same account. The lists
+        // and links on screen stay (not a sign-out), and so does `linksLoaded`.
+        swapObserver = NotificationCenter.default.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { [weak self] _ in
+            guard let self, !self.loadedFor.isEmpty else { return }
+            let uid = self.loadedFor
+            let wasLoaded = self.linksLoaded
+            FirestoreHub.drop([self.listener, self.linkListener])
+            self.listener = nil
+            self.linkListener = nil
+            self.loadedFor = ""
+            self.start(uid: uid)
+            if wasLoaded { self.linksLoaded = true }
+        }
     }
+    @ObservationIgnored private var swapObserver: NSObjectProtocol?
 
     /// Everything the pickers draw, in the order they draw it: the two built-ins, then the custom
     /// lists oldest first so a new one appears at the bottom where it was added.

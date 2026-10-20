@@ -11,6 +11,20 @@ import FirebaseFunctions
 @MainActor @Observable
 final class LiveGroupCalls {
     static let shared = LiveGroupCalls()
+    private init() {
+        // 2026-10-20 (owner): the Firestore client froze and `FirestoreHub` swapped in a fresh one.
+        // Every group's call listener belongs to the stuck client: let them go off the main thread and
+        // follow the same groups on the new one. The rows already shown stay until it answers.
+        NotificationCenter.default.addObserver(forName: FirestoreHub.swapped, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                let live = LiveGroupCalls.shared
+                let cids = Array(live.regs.keys)
+                FirestoreHub.drop(live.regs.values.map { Optional($0) })
+                live.regs = [:]
+                cids.forEach { live.attach($0) }
+            }
+        }
+    }
 
     struct Live: Identifiable, Equatable {
         let id: String          // the group's cid
@@ -31,13 +45,15 @@ final class LiveGroupCalls {
         for (cid, r) in regs where !want.contains(cid) {
             r.remove(); regs[cid] = nil; byCid[cid] = nil
         }
-        for cid in want where regs[cid] == nil {
-            regs[cid] = Firestore.firestore().collection("groupCalls").document(cid)
-                .addSnapshotListener { [weak self] snap, _ in
-                    Task { @MainActor in self?.apply(cid, snap?.data()) }
-                }
-        }
+        for cid in want where regs[cid] == nil { attach(cid) }
         publish()
+    }
+
+    private func attach(_ cid: String) {
+        regs[cid] = FirestoreHub.db.collection("groupCalls").document(cid)
+            .addSnapshotListener { [weak self] snap, _ in
+                Task { @MainActor in self?.apply(cid, snap?.data()) }
+            }
     }
 
     private func apply(_ cid: String, _ d: [String: Any]?) {

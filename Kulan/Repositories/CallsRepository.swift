@@ -102,9 +102,21 @@ struct AdhocCallInfo: Hashable {
 @Observable
 final class CallsRepository {
     static let shared = CallsRepository()
-    private init() {}
+    private init() {
+        // 2026-10-20 (owner): the Firestore client froze and `FirestoreHub` swapped in a fresh one. A
+        // load waiting on the stuck client never ends, and `loading` would turn every later load away.
+        // Its answer is retired (`generation`) and the log is read again on the fresh client.
+        NotificationCenter.default.addObserver(forName: FirestoreHub.swapped, object: nil, queue: .main) { _ in
+            let repo = CallsRepository.shared
+            guard repo.loading else { return }
+            repo.generation &+= 1
+            repo.loading = false
+            repo.reloadRequested = false
+            Task { await repo.load(force: true) }
+        }
+    }
 
-    private let db = Firestore.firestore()
+    private var db: Firestore { FirestoreHub.db }
     var calls: [CallEntry] = []
     var loading = false
     var hasLoaded = false   // false until the first load finishes -> drives the skeleton

@@ -70,18 +70,7 @@ final class OfficialStories {
             seededFor = uid
             if let saved = Self.loadSaved(uid: uid) { publish(saved, save: false) }
         }
-        if stampWatch == nil {
-            // Firestore calls back on the main queue.
-            stampWatch = Firestore.firestore().document("config/officialStoriesStamp").addSnapshotListener { snap, _ in
-                guard let at = snap?.data()?["at"] as? Timestamp else { return }
-                MainActor.assumeIsolated {
-                    let me = OfficialStories.shared
-                    defer { me.lastStamp = at }
-                    // The first answer only records where we are; a later move is a change.
-                    if let was = me.lastStamp, was != at { me.refresh(force: true) }
-                }
-            }
-        }
+        if stampWatch == nil { attachStampWatch() }
         guard force || Date().timeIntervalSince(lastFetch) > 5 * 60 else { return }
         fetching = true
         Task {
@@ -90,6 +79,38 @@ final class OfficialStories {
             guard let stories else { return }   // a failed call keeps what is on screen
             lastFetch = Date()
             publish(stories)
+        }
+    }
+
+    private func attachStampWatch() {
+        watchSwaps()
+        // Firestore calls back on the main queue.
+        stampWatch = FirestoreHub.db.document("config/officialStoriesStamp").addSnapshotListener { snap, _ in
+            guard let at = snap?.data()?["at"] as? Timestamp else { return }
+            MainActor.assumeIsolated {
+                let me = OfficialStories.shared
+                defer { me.lastStamp = at }
+                // The first answer only records where we are; a later move is a change.
+                if let was = me.lastStamp, was != at { me.refresh(force: true) }
+            }
+        }
+    }
+
+    /// 2026-10-20 (owner): after `FirestoreHub.swap` the stamp listener belongs to the stuck client.
+    /// Let go of it off-main and watch again on the fresh one. `lastStamp` stays, so a stamp that
+    /// moved while the old client was stuck counts as a change and re-asks the feed.
+    private var swapObserver: NSObjectProtocol?
+    private func watchSwaps() {
+        guard swapObserver == nil else { return }
+        swapObserver = NotificationCenter.default.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                let me = OfficialStories.shared
+                guard me.stampWatch != nil else { return }
+                FirestoreHub.drop([me.stampWatch])
+                me.stampWatch = nil
+                me.attachStampWatch()
+            }
         }
     }
 

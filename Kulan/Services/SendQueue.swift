@@ -115,6 +115,35 @@ enum SendQueue {
         if cleared > 0 { Task { @MainActor in await drainAll() } }
     }
 
+    /// 2026-10-20 (owner): the Firestore client froze and `FirestoreHub` swapped in a fresh one. A send
+    /// waiting on the stuck client never comes back, so its `beginSending` claim would turn away every
+    /// retry for the rest of the process. The claims go and the queue drains on the fresh client.
+    /// No double message: a text is written at `messages/{clientId}` (the replay from the old cache on
+    /// the next launch names the same document), and `alreadySent` is asked first.
+    private static let swapObserver: NSObjectProtocol = NotificationCenter.default.addObserver(
+        forName: FirestoreHub.swapped, object: nil, queue: .main) { _ in
+        MainActor.assumeIsolated {
+            releaseClaimsAfterSwap()
+            ChatService.releaseAfterSwap()
+        }
+        Task { @MainActor in await drainAll() }
+    }
+
+    /// The generation whose stuck claims were already let go (ThreadView also calls this before it
+    /// drains the open chat, whichever observer runs first).
+    @MainActor private static var releasedGeneration = 0
+
+    /// Lets go of every `beginSending` claim made on the stuck client. Once per swap.
+    @MainActor static func releaseClaimsAfterSwap() {
+        guard releasedGeneration != FirestoreHub.generation else { return }
+        releasedGeneration = FirestoreHub.generation
+        lock.lock()
+        let n = inFlight.count
+        inFlight.removeAll()
+        lock.unlock()
+        print("[Recovery] send queue: released \(n) send claim(s) held by the old Firestore client")
+    }
+
     private static let key = "sendQueue.v1"
     private static let lock = NSLock()
 
@@ -205,6 +234,7 @@ enum SendQueue {
     @MainActor
     static func drainAll() async {
         _ = recoveryObserver  // installs the one-time recovery observer (lazy static)
+        _ = swapObserver      // 2026-10-20 (owner): and the one for a Firestore client swap
         let open = AppRouter.shared.activeChatId
         // A refused send kept 30 days and never answered goes, with its voice file: its chat may be
         // a group I left for good, where nobody can resend or delete it (audit 2026-10-20).
@@ -271,7 +301,7 @@ enum SendQueue {
     /// True if a message with this clientId already exists on the server (the send DID land before the
     /// app died) — so we must NOT re-send it.
     static func alreadySent(cid: String, clientId: String) async -> Bool {
-        let db = Firestore.firestore()
+        let db = FirestoreHub.db
         let snap = try? await db.collection("conversations").document(cid).collection("messages")
             .whereField("clientId", isEqualTo: clientId).limit(to: 1).getDocuments()
         return (snap?.documents.isEmpty == false)

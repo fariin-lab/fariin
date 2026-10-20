@@ -97,7 +97,7 @@ enum MessageRequests {
     /// Also happens IMPLICITLY when you reply. Answering someone is accepting them; making you tap a
     /// button first would be ceremony for its own sake.
     static func accept(_ cid: String) async throws {
-        try await Firestore.firestore().collection("conversations").document(cid)
+        try await FirestoreHub.db.collection("conversations").document(cid)
             .setData(["accepted": true], merge: true)
         // If "Automatically Archive" was what put this chat in the archive, saying yes takes it
         // back out — you just accepted the person, and a normal chat lives in the chat list.
@@ -130,7 +130,7 @@ enum MessageRequests {
     /// something they had not.
     static func decline(_ cid: String) async throws {
         let me = ChatService.uid
-        let db = Firestore.firestore()
+        let db = FirestoreHub.db
         // THE DECLINE IS REMEMBERED FIRST — owner's spec, 2026-09-11 §10. One document under my own
         // uid, keyed by theirs, stamped with the server's clock; the conversation `create` rule
         // reads it and refuses a new request from this person for `declineCooldownDays`. Written
@@ -166,7 +166,7 @@ enum MessageRequests {
     static func unfriend(_ cid: String) async throws {
         let me = ChatService.uid
         guard let other = cid.split(separator: "_").map(String.init).first(where: { $0 != me }) else { return }
-        try await Firestore.firestore().collection("conversations").document(cid).setData([
+        try await FirestoreHub.db.collection("conversations").document(cid).setData([
             "accepted": false,
             "startedBy": other,
             "lastSender": "",
@@ -212,7 +212,7 @@ enum MessageRequests {
     static func countDaily(_ name: String) async {
         let me = ChatService.uid
         guard !me.isEmpty else { return }
-        let ref = Firestore.firestore().collection("users").document(me)
+        let ref = FirestoreHub.db.collection("users").document(me)
             .collection("limits").document(name)
         let snap = try? await ref.getDocument()
         let data = snap?.data() ?? [:]

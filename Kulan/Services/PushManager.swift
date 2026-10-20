@@ -83,7 +83,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // REAL on-disk offline persistence (the win the JS SDK couldn't do in Hermes).
         let settings = FirestoreSettings()
         settings.cacheSettings = PersistentCacheSettings()
-        Firestore.firestore().settings = settings
+        FirestoreHub.db.settings = settings
 
         Messaging.messaging().delegate = self
         UNUserNotificationCenter.current().delegate = self
@@ -336,7 +336,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         let known = await MainActor.run { ConversationsRepository.shared.conversations.contains { $0.id == cid } }
         if known { return true }
         do {
-            let snap = try await Firestore.firestore().collection("conversations").document(cid).getDocument()
+            let snap = try await FirestoreHub.db.collection("conversations").document(cid).getDocument()
             guard snap.exists, let users = snap.data()?["users"] as? [String] else { return false }
             return users.contains(me)
         } catch {
@@ -456,7 +456,7 @@ enum Push {
     /// (harmless no-op once stage 4 deletes them). Two separate writes on purpose:
     /// registering in the new home must never be hostage to the old home's cleanup.
     static func saveToken(field: String, token: String, uid: String) {
-        let user = Firestore.firestore().collection("users").document(uid)
+        let user = FirestoreHub.db.collection("users").document(uid)
         user.collection("push").document("tokens")
             .setData([field: FieldValue.arrayUnion([token])], merge: true)
         // Only OUR token comes off — this account's other, not-yet-updated devices keep
@@ -475,7 +475,7 @@ enum Push {
         // Audit M-004, 2026-10-07: and under `voipCancelTokens`, in the same write. That field tells
         // the server this build handles a cancel push (kind "callcancel" / "groupringcancel"); the
         // server sends those only there, so an older build never gets a push it would ring for.
-        Firestore.firestore().collection("users").document(uid).collection("push").document("tokens")
+        FirestoreHub.db.collection("users").document(uid).collection("push").document("tokens")
             .setData(["groupRingTokens": FieldValue.arrayUnion([token]),
                       "voipCancelTokens": FieldValue.arrayUnion([token]),
                       // 1:1 audit r3 F6/J8, 2026-10-08: this build names the caller itself (from its
@@ -563,7 +563,7 @@ enum Push {
         // sign-out and keep announcing to whoever picks the phone up next.
         OfficialPushTopics.leaveAll()
         guard let uid = Auth.auth().currentUser?.uid else { return }
-        let db = Firestore.firestore()
+        let db = FirestoreHub.db
         let doc = db.collection("users").document(uid)
         var updates: [String: Any] = [:]
         if let token = Messaging.messaging().fcmToken { updates["fcmTokens"] = FieldValue.arrayRemove([token]) }

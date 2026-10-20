@@ -21,7 +21,7 @@ enum DeliveryReceipts {
 
     static func mark(_ convs: [Conversation], me: String) {
         guard !me.isEmpty else { return }
-        let db = Firestore.firestore()
+        let db = FirestoreHub.db
         var batch: WriteBatch?
         var count = 0
         for c in convs {

@@ -123,7 +123,8 @@ final class AdminStore {
     func start() {
         guard let uid = AuthService.shared.uid else { return }
         stop()
-        listener = Firestore.firestore().collection("admins").document(uid)
+        watchSwaps()
+        listener = FirestoreHub.db.collection("admins").document(uid)
             .addSnapshotListener { [weak self] snap, _ in
                 guard let self else { return }
                 // The rules let anybody read their OWN admin document and nobody else's, so a normal
@@ -134,12 +135,26 @@ final class AdminStore {
 
     func stop() { listener?.remove(); listener = nil }
     func reset() { stop(); me = nil }
+
+    /// 2026-10-20 (owner): after `FirestoreHub.swap` the listener belongs to the stuck client. Let go
+    /// of it off-main and attach again on the fresh one. `me` stays. Added once, on the first start.
+    @ObservationIgnored private var swapObserver: NSObjectProtocol?
+    private func watchSwaps() {
+        guard swapObserver == nil else { return }
+        swapObserver = NotificationCenter.default.addObserver(
+            forName: FirestoreHub.swapped, object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.listener != nil else { return }
+            FirestoreHub.drop([self.listener])
+            self.listener = nil
+            self.start()
+        }
+    }
 }
 
 // MARK: - Sending
 
 enum AnnouncementAdmin {
-    private static var db: Firestore { Firestore.firestore() }
+    private static var db: Firestore { FirestoreHub.db }
 
     /// A draft on its way to becoming an announcement. Held as one value so the compose screen, the
     /// preview and the write all read the same thing.

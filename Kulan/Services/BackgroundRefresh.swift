@@ -35,7 +35,7 @@ enum BackgroundRefresh {
         schedule()   // keep the chain going whatever this run's outcome
         guard let uid = Auth.auth().currentUser?.uid else { task.setTaskCompleted(success: true); return }
         let work = Task {
-            let ok = (try? await Firestore.firestore().collection("conversations")
+            let ok = (try? await FirestoreHub.db.collection("conversations")
                 .whereField("users", arrayContains: uid)
                 .order(by: "updatedAt", descending: true)
                 .limit(to: rows)

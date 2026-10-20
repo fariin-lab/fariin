@@ -2402,7 +2402,7 @@ struct ContactInfoView: View {
         // stranger sees it, so there is no chat between us to read. Everything above this line is
         // about the PERSON and still runs; only the conversation half is skipped.
         guard !cid.isEmpty else { loaded = true; return }
-        if let snap = try? await Firestore.firestore().collection("conversations").document(cid).getDocument(),
+        if let snap = try? await FirestoreHub.db.collection("conversations").document(cid).getDocument(),
            let d = snap.data() {
             let me = AuthService.shared.uid ?? ""
             let muteUntil = ((d["mutedBy"] as? [String: Any])?[me] as? NSNumber)?.doubleValue ?? 0
@@ -2415,7 +2415,7 @@ struct ContactInfoView: View {
         // 2026-09-24 decision D8: somebody blocked with no chat (or before one) is on my account's
         // block list only; the page must offer Unblock for them too.
         if !blocked, !otherUid.isEmpty, !otherUid.contains("/"), let me = AuthService.shared.uid, !me.isEmpty,
-           let snap = try? await Firestore.firestore().collection("users").document(me)
+           let snap = try? await FirestoreHub.db.collection("users").document(me)
                .collection("blocked").document(otherUid).getDocument(),
            snap.exists {
             blocked = true

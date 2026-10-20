@@ -387,7 +387,7 @@ enum MessageSearch {
         let convs = await MainActor.run {
             searchableConversations(me: me).filter { only?.contains($0.id) ?? true }
         }
-        let db = Firestore.firestore()
+        let db = FirestoreHub.db
         var out = SearchCorpus()
         // Fetch all chats CONCURRENTLY instead of sequentially — N serial round-trips
         // become a parallel fan-out, so the search index loads much faster on big accounts.
@@ -498,7 +498,7 @@ extension MessageSearch {
 
     static func loadChat(cid: String, isGroup: Bool, me: String, limit: Int = 1000) async -> [InChatMessage] {
         if let hit = corpusCache[cid], Date().timeIntervalSince(hit.at) < 120 { return hit.corpus }
-        let db = Firestore.firestore()
+        let db = FirestoreHub.db
         guard let snap = try? await db.collection("conversations").document(cid)
             .collection("messages")
             .order(by: "createdAt", descending: true)

@@ -29,6 +29,20 @@ final class BlockList {
         NotificationCenter.default.addObserver(forName: SessionRecovery.recovered, object: nil, queue: .main) { _ in
             BlockList.shared.start()
         }
+        // 2026-10-20 (owner): a swapped Firestore client (`FirestoreHub.swap`) leaves both listeners
+        // on the stuck one. Let go of them off-main and attach both again on the fresh client. The
+        // list itself stays: same person, not a sign-out.
+        NotificationCenter.default.addObserver(forName: FirestoreHub.swapped, object: nil, queue: .main) { _ in
+            BlockList.shared.reattachAfterSwap()
+        }
+    }
+
+    private func reattachAfterSwap() {
+        guard listenerUid != nil else { return }
+        FirestoreHub.drop([listListener, historyListener])
+        listListener = nil
+        historyListener = nil
+        start()
     }
 
     /// uid → when I blocked them, in ms. A block still on its way to the server carries the local
@@ -119,7 +133,7 @@ final class BlockList {
             restored = true
             publish(entries: saved.entries, spans: saved.spans, loadedFor: uid)
         }
-        let me = Firestore.firestore().collection("users").document(uid)
+        let me = FirestoreHub.db.collection("users").document(uid)
         listListener = me.collection("blocked").addSnapshotListener { [weak self] snap, error in
             // A late snapshot must not hand one account's list to the next one on this phone.
             guard Auth.auth().currentUser?.uid == uid else { return }
@@ -273,7 +287,7 @@ final class BlockList {
         guard let me = Auth.auth().currentUser?.uid, !me.isEmpty,
               !other.isEmpty, other != me, !other.contains("/") else { return false }
         let current = Self.snapshot
-        let db = Firestore.firestore()
+        let db = FirestoreHub.db
         let meRef = db.collection("users").document(me)
         let listRef = meRef.collection("blocked").document(other)
         let cid = ChatService.convId(me, other)
@@ -351,7 +365,7 @@ final class BlockList {
 
     private func moveOldBlock(me: String, other: String, cid: String, blocked: Bool, at: Double, cleared: Double) async {
         let current = Self.snapshot
-        let db = Firestore.firestore()
+        let db = FirestoreHub.db
         let meRef = db.collection("users").document(me)
         let now = Date().timeIntervalSince1970 * 1000
         let stamp = { (ms: Double) in Timestamp(date: Date(timeIntervalSince1970: min(ms, now) / 1000)) }

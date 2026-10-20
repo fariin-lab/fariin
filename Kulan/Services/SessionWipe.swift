@@ -33,7 +33,7 @@ enum SessionWipe {
         }
         let left = UInt64(max(0.2, deadline.timeIntervalSinceNow) * 1_000_000_000)
         await withTaskGroup(of: Void.self) { tasks in
-            tasks.addTask { try? await Firestore.firestore().waitForPendingWrites() }
+            tasks.addTask { try? await FirestoreHub.db.waitForPendingWrites() }
             tasks.addTask { try? await Task.sleep(nanoseconds: left) }
             await tasks.next()
             tasks.cancelAll()
