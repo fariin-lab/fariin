@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import FirebaseFirestore
 
 // ⛔ GROUP SETTINGS — owner 2026-10-18: who-can-do-what and the group's management, on their own
@@ -334,12 +335,10 @@ struct GroupSettingsView: View {
 
     /// One kind: a tick (allowed) or an empty circle (admins only); tap flips it.
     private func mediaTickRow(_ k: Conversation.SendKind) -> some View {
-        let on = conv?.memberSend[k.rawValue] != false
+        let on = conv?.membersMaySend(k) ?? true
         return Button {
             guard canEdit else { return }
-            var next = conv?.memberSend ?? [:]
-            next[k.rawValue] = !on
-            run { try await ChatService.setMemberSend(cid: cid, next) }
+            run { try await writeKind(k, !on) }
         } label: {
             HStack(spacing: 14) {
                 Image(systemName: on ? "checkmark.circle.fill" : "circle")
@@ -360,7 +359,8 @@ struct GroupSettingsView: View {
 
     private var slowModeSection: some View {
         let current = conv?.slowModeSeconds ?? 0
-        let index = Self.slowSteps.firstIndex { $0.0 == current } ?? 0
+        // The nearest step, so a value no step names (another client's) never reads as Off.
+        let index = Self.slowSteps.indices.min { abs(Self.slowSteps[$0].0 - current) < abs(Self.slowSteps[$1].0 - current) } ?? 0
         return Section {
             VStack(spacing: 6) {
                 HStack {
@@ -393,7 +393,7 @@ struct GroupSettingsView: View {
     // MARK: Media & content (owner 2026-10-20: one switch for all, then each kind on its own)
 
     private var mediaOnCount: Int {
-        Conversation.SendKind.allCases.filter { conv?.memberSend[$0.rawValue] != false }.count
+        Conversation.SendKind.allCases.filter { conv?.membersMaySend($0) ?? true }.count
     }
 
     /// "Media & content · 7 of 9 ›", which opens its own page, like every row in Group Settings.
@@ -422,10 +422,8 @@ struct GroupSettingsView: View {
             }
             Section {
                 ForEach(Conversation.SendKind.allCases, id: \.self) { k in
-                    Toggle(isOn: bool(get: { $0.memberSend[k.rawValue] != false }, set: { v in
-                        var next = conv?.memberSend ?? [:]
-                        next[k.rawValue] = v
-                        try await ChatService.setMemberSend(cid: cid, next)
+                    Toggle(isOn: bool(get: { $0.membersMaySend(k) }, set: { v in
+                        try await writeKind(k, v)
                     })) {
                         Label(k.label, systemImage: k.icon)
                     }
@@ -438,6 +436,16 @@ struct GroupSettingsView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Media & content")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// One kind; while the old `media` key is still there, its photos/videos partner is written too.
+    private func writeKind(_ k: Conversation.SendKind, _ on: Bool) async throws {
+        var pair: (String, Bool)?
+        if conv?.memberSend["media"] != nil, k == .photos || k == .videos {
+            let other: Conversation.SendKind = k == .photos ? .videos : .photos
+            pair = (other.rawValue, conv?.membersMaySend(other) ?? true)
+        }
+        try await ChatService.setMemberSendKind(cid: cid, k.rawValue, on, pair: pair)
     }
 
     private func setAllMedia(_ on: Bool) {
@@ -636,6 +644,7 @@ struct AddAdminPage: View {
     @State private var tag = ""
     @State private var busy = false
     @State private var actionError: String?
+    @State private var promoted = false
 
     // The group itself, live (2026-10-20): roles and rights show the moment they change.
     @State private var live = LiveGroupDoc()
@@ -722,14 +731,23 @@ struct AddAdminPage: View {
         let cid = cid, uid = uid, name = name
         let list = Conversation.Right.allCases.map(\.rawValue).filter { rights.contains($0) }
         let words = mayTag ? GroupRole.clean(tag) : ""
+        let already = promoted
         Task {
             do {
-                try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: list)
+                // Once promoted, a retry only saves the tag (audit 2026-10-20: a failed tag left
+                // the button live and a second tap promoted, and posted the notice, again).
+                if !already {
+                    try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: list)
+                    await MainActor.run { promoted = true }
+                }
                 if !words.isEmpty { try await ChatService.setRole(cid: cid, uid: uid, text: words, emoji: nil) }
                 await MainActor.run { busy = false; onDone() }
             } catch {
                 let msg = error.localizedDescription
-                await MainActor.run { busy = false; actionError = msg }
+                await MainActor.run {
+                    busy = false
+                    actionError = promoted ? "\(name) is an admin now, but the tag was not saved. \(msg)" : msg
+                }
             }
         }
     }
@@ -895,7 +913,12 @@ struct GroupMembersListView: View {
     // The group itself, live (2026-10-20): roles and rights show the moment they change.
     @State private var live = LiveGroupDoc()
     private var conv: Conversation? { live.start(cid); return live.conv ?? repo.conversations.first { $0.id == cid } }
-    private var canAdd: Bool { (conv?.adminCan(me, .inviteUsers) ?? false) || (conv?.membersCanAdd ?? false) }
+    // A member an admin kept from adding sees no Add (audit 2026-10-20; the rules refuse it).
+    private var canAdd: Bool {
+        guard let c = conv else { return false }
+        return c.adminCan(me, .inviteUsers)
+            || (c.membersCanAdd && !c.isRestricted(me, .addMembers, now: Date().timeIntervalSince1970 * 1000))
+    }
     private func canRemove(_ uid: String) -> Bool {
         guard let c = conv, uid != me, !c.isOwner(uid), c.adminCan(me, .banUsers) else { return false }
         return c.isOwner(me) || !c.isAdmin(uid)
@@ -952,8 +975,10 @@ struct GroupMembersListView: View {
                 let name = conv?.names[uid] ?? "User"
                 pendingRemove = nil
                 Task {
-                    do { try await ChatService.removeGroupMember(cid: cid, uid: uid, name: name) }
-                    catch { removeError = error.localizedDescription }
+                    do {
+                        try await ChatService.removeGroupMember(cid: cid, uid: uid, name: name)
+                        await MainActor.run { ToastNotice.show("\(name) was removed from the group.") }
+                    } catch { removeError = error.localizedDescription }
                 }
             }
             Button("Cancel", role: .cancel) { pendingRemove = nil }
@@ -1014,7 +1039,12 @@ struct GroupRequestsView: View {
     @State private var links: GroupLinkList?
     @State private var showAdd = false
     private var me: String { AuthService.shared.uid ?? "" }
-    private var canAdd: Bool { (conv?.adminCan(me, .inviteUsers) ?? false) || (conv?.membersCanAdd ?? false) }
+    // A member an admin kept from adding sees no Add (audit 2026-10-20; the rules refuse it).
+    private var canAdd: Bool {
+        guard let c = conv else { return false }
+        return c.adminCan(me, .inviteUsers)
+            || (c.membersCanAdd && !c.isRestricted(me, .addMembers, now: Date().timeIntervalSince1970 * 1000))
+    }
 
     var body: some View {
         // Requests only (owner 2026-10-20): the invite links have their own page and card.
@@ -1326,6 +1356,44 @@ final class HeldConversation { var conv: Conversation? }
 /// when a child page is pushed on top, which dropped the group's listener while Permissions was
 /// open: its switches read a stale group, snapped back and were written twice. Held in `@State`,
 /// the box goes (and removes the listener) only when the page itself leaves the stack.
+/// A short capsule over the whole app, for a done action whose page stays (audit 2026-10-20:
+/// removals from the lists said nothing).
+@MainActor enum ToastNotice {
+    static func show(_ text: String) {
+        guard let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first
+        else { return }
+        let label = PaddedToastLabel()
+        label.text = text
+        label.font = .preferredFont(forTextStyle: .subheadline)
+        label.textColor = .label
+        label.numberOfLines = 2
+        label.textAlignment = .center
+        label.backgroundColor = .secondarySystemBackground
+        label.layer.cornerRadius = 18
+        label.layer.masksToBounds = true
+        let maxW = window.bounds.width - 48
+        let size = label.sizeThatFits(CGSize(width: maxW, height: 200))
+        let w = min(maxW, size.width), h = size.height
+        label.frame = CGRect(x: (window.bounds.width - w) / 2,
+                             y: window.bounds.height - window.safeAreaInsets.bottom - h - 70, width: w, height: h)
+        label.alpha = 0
+        window.addSubview(label)
+        UIView.animate(withDuration: 0.25) { label.alpha = 1 }
+        UIView.animate(withDuration: 0.3, delay: 1.8, options: []) { label.alpha = 0 } completion: { _ in
+            label.removeFromSuperview()
+        }
+    }
+}
+
+private final class PaddedToastLabel: UILabel {
+    private let inset = UIEdgeInsets(top: 10, left: 18, bottom: 10, right: 18)
+    override func drawText(in rect: CGRect) { super.drawText(in: rect.inset(by: inset)) }
+    override func sizeThatFits(_ size: CGSize) -> CGSize {
+        let s = super.sizeThatFits(CGSize(width: size.width - inset.left - inset.right, height: size.height))
+        return CGSize(width: s.width + inset.left + inset.right, height: s.height + inset.top + inset.bottom)
+    }
+}
+
 final class ListenerBox {
     var reg: ListenerRegistration?
     deinit { reg?.remove() }

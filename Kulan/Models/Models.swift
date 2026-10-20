@@ -1462,7 +1462,17 @@ struct Conversation: Identifiable, Equatable, Hashable {
     }
 
     func maySend(_ kind: SendKind, _ me: String) -> Bool {
-        !isGroup || admins.contains(me) || isOwner(me) || memberSend[kind.rawValue] != false
+        guard isGroup, !admins.contains(me), !isOwner(me) else { return true }
+        return membersMaySend(kind)
+    }
+
+    /// The group's own switch for a kind, admins aside. Builds 990/991 wrote one `media` key for
+    /// photos and videos: it still counts until a newer switch is written.
+    func membersMaySend(_ kind: SendKind) -> Bool {
+        if kind == .photos || kind == .videos, memberSend[kind.rawValue] == nil {
+            return memberSend["media"] != false
+        }
+        return memberSend[kind.rawValue] != false
     }
 
     // Announcement mode: in a group with onlyAdminsSend, non-admins can't send. Also blocks a

@@ -5172,6 +5172,8 @@ struct ThreadView: View {
     }
 
     private func sendHeldBack(_ r: Conversation.Restrict?, _ kind: Conversation.SendKind) -> Bool {
+        // Slow mode holds every kind back, not only typed text (audit 2026-10-20).
+        if slowModeHeldBack() { return true }
         guard let text = heldBackText(r, kind) else { return false }
         restrictedNoticeText = text
         voiceRestricted = true

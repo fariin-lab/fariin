@@ -2168,7 +2168,12 @@ struct GroupMembersSheet: View {
     // The group itself, live (2026-10-20): roles and rights show the moment they change.
     @State private var live = LiveGroupDoc()
     private var conv: Conversation? { live.start(cid); return live.conv ?? repo.conversations.first { $0.id == cid } }
-    private var canAdd: Bool { (conv?.adminCan(me, .inviteUsers) ?? false) || (conv?.membersCanAdd ?? false) }
+    // A member an admin kept from adding sees no Add (audit 2026-10-20; the rules refuse it).
+    private var canAdd: Bool {
+        guard let c = conv else { return false }
+        return c.adminCan(me, .inviteUsers)
+            || (c.membersCanAdd && !c.isRestricted(me, .addMembers, now: Date().timeIntervalSince1970 * 1000))
+    }
     private var canInvite: Bool { conv?.adminCan(me, .inviteUsers) ?? false }
 
     private func name(_ uid: String) -> String { uid == me ? "You" : (conv?.names[uid] ?? "User") }
@@ -2276,7 +2281,8 @@ struct GroupMembersSheet: View {
                 }
             }
             .sheet(item: $opened) { o in
-                GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: o.id)
+                GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: o.id,
+                                      onRemoved: { ToastNotice.show("\($0) was removed from the group.") })
             }
             .sheet(isPresented: $showAdd) { AddMembersSheet(cid: cid, existing: Set(conv?.users ?? [])) }
             .navigationDestination(isPresented: $showInvite) {

@@ -2375,8 +2375,8 @@ service cloud.firestore {
           return convData().get('type', '') != 'group'
             || request.auth.uid in convData().get('admins', [])
             || t == 'system' || leaveNotice()
-            || ((!(t in ['image', 'album']) || ms.get('photos', true) != false)
-                && (!(t in ['video', 'album']) || ms.get('videos', true) != false)
+            || ((!(t in ['image', 'album']) || ms.get('photos', ms.get('media', true)) != false)
+                && (!(t in ['video', 'album']) || ms.get('videos', ms.get('media', true)) != false)
                 && (t != 'audio' || ms.get('voice', true) != false)
                 && (t != 'file' || ms.get('files', true) != false)
                 && (t != 'sticker' || ms.get('stickers', true) != false)

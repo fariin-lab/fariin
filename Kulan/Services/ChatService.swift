@@ -812,6 +812,18 @@ enum ChatService {
         if let notice { try await writeSystemMessage(cid: cid, text: "\(myName()) \(notice)") }
     }
 
+    /// One kind only (audit 2026-10-20): a field-path write, so two admins flipping different kinds
+    /// at once do not overwrite each other. Photos/videos also drop the old `media` key.
+    static func setMemberSendKind(cid: String, _ kind: String, _ on: Bool, pair: (String, Bool)? = nil) async throws {
+        var data: [String: Any] = ["memberSend.\(kind)": on, "updatedAt": FieldValue.serverTimestamp()]
+        // The old `media` key goes; `pair` keeps the other of photos/videos what it said.
+        if let pair {
+            data["memberSend.\(pair.0)"] = pair.1
+            data["memberSend.media"] = FieldValue.delete()
+        }
+        try await db.collection("conversations").document(cid).updateData(data)
+    }
+
     /// Slow mode (2026-10-20): seconds between a member's messages, 0 = off, with a line in the group.
     static func setGroupSlowMode(cid: String, seconds: Int) async throws {
         try await db.collection("conversations").document(cid).updateData([
@@ -859,17 +871,24 @@ enum ChatService {
     static func promoteGroupAdmin(cid: String, uid promoted: String, name: String,
                                   rights: [String] = Conversation.Right.defaults.map(\.rawValue)) async throws {
         let convRef = db.collection("conversations").document(cid)
-        try await convRef.updateData([
+        var data: [String: Any] = [
             "admins": FieldValue.arrayUnion([promoted]),
             "adminRights.\(promoted)": rights,
             "adminBy.\(promoted)": uid,
             "adminEdit": ["uid": promoted, "by": uid],
-            // An admin is never restricted — clear any lingering mute so a later demote can't silently
-            // re-apply a stale "forever" restriction.
-            "restrictedFlags.\(promoted)": FieldValue.delete(),
-            "restrictedUntil.\(promoted)": FieldValue.delete(),
             "updatedAt": FieldValue.serverTimestamp(),
-        ])
+        ]
+        // An admin is never restricted: clear any lingering mute so a later demote can't silently
+        // re-apply a stale "forever" restriction. Only someone who may lift restrictions writes
+        // these (the rules want Remove members for them); for anyone else they stay, harmlessly,
+        // since admins are exempt (audit 2026-10-20: a delegated admin's promote was refused).
+        let conv = await MainActor.run { ConversationsRepository.shared.conversations.first { $0.id == cid } }
+        let me = uid
+        if conv?.isOwner(me) == true || conv?.adminCan(me, .banUsers) == true {
+            data["restrictedFlags.\(promoted)"] = FieldValue.delete()
+            data["restrictedUntil.\(promoted)"] = FieldValue.delete()
+        }
+        try await convRef.updateData(data)
         try await writeSystemMessage(cid: cid, text: "\(myName()) made \(name) an admin")
     }
 
