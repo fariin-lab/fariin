@@ -361,7 +361,6 @@ struct GroupInfoView: View {
             GroupPublicLinkCard(name: name, title: title, cardColor: cardColor, photo: conv?.avatarUrl, memberCount: conv?.users.count)
         }
         settingsCard
-        if iAmAdmin { groupSettingsCard }
         // The bubble cloud is the admin panel's call (config/features memberCloud), live.
         if Flags.memberCloud(for: cid) { memberCloudCard }
         if !media.isEmpty {
@@ -772,8 +771,16 @@ struct GroupInfoView: View {
                            value: storage.map { Self.bytes($0.total) } ?? "") { showStorage = true }
             // No invite link row here (owner 2026-10-20: it is in Group Settings, shown twice). The
             // link lives on the Group Settings page, for the admins who manage it.
+            // Group Settings (and Join Requests) in this same card (owner 2026-10-20: one card).
+            if iAmAdmin {
+                rowDivider
+                groupSettingsRows
+            }
         }
         .profileSurface(plain: cardColor)
+        .onAppear { followJoinRequests() }
+        // Made an admin while the page is open: the requests start then (audit 2026-10-20).
+        .onChange(of: can(.inviteUsers)) { _, _ in followJoinRequests() }
     }
 
     /// Invite links are an admin right (fix-all #226): that admin manages them; a member who may
@@ -788,20 +795,13 @@ struct GroupInfoView: View {
     // ⛔ JOIN REQUESTS UNDER GROUP SETTINGS, IN ONE CARD (owner 2026-10-20): only while someone is
     // waiting, and only to an admin who may let people in (the owner, or `inviteUsers`). The faces
     // of the first three people asking; the row opens the requests page.
-    private var groupSettingsCard: some View {
-        VStack(spacing: 0) {
-            ProfileInfoRow(title: "Group Settings", icon: "ic_group_settings") { showSettings = true }
-            if can(.inviteUsers) && !joinReqs.isEmpty {
-                rowDivider
-                joinRequestsRow
-                    .transition(.opacity)
-            }
+    @ViewBuilder private var groupSettingsRows: some View {
+        ProfileInfoRow(title: "Group Settings", icon: "ic_group_settings") { showSettings = true }
+        if can(.inviteUsers) && !joinReqs.isEmpty {
+            rowDivider
+            joinRequestsRow
+                .transition(.opacity)
         }
-        .animation(.easeInOut(duration: 0.2), value: joinReqs.isEmpty)
-        .profileSurface(plain: cardColor)
-        .onAppear { followJoinRequests() }
-        // Made an admin while the page is open: the requests start then (audit 2026-10-20).
-        .onChange(of: can(.inviteUsers)) { _, _ in followJoinRequests() }
     }
 
     private var joinRequestsRow: some View {
