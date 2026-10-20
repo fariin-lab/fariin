@@ -95,6 +95,9 @@ struct ThreadView: View {
     @State private var showGroupCall = false
     @State private var groupCallActive = false
     @State private var groupCallVideo = false
+    /// Who is in the group's call (the media server's list, `groupCallPeek`), for the join bar.
+    @State private var groupCallPeople: [String] = []
+    @State private var groupCallMicOn: Set<String> = []
     @State private var groupCallListener: ListenerRegistration?
     @State private var tappedMember: GroupInfoView.MemberAction?
     /// The poll whose results page is open (2026-10-19: the footer of a poll bubble).
@@ -620,7 +623,14 @@ struct ThreadView: View {
         // top of the chat list's preview: "don't show pin bar". A preview is the messages only.
         if !searchActive && !preview {   // search owns the top area — the pin bar hides while searching
             keyChangeNotice
-            pinnedBar
+            // ⛔ A LIVE CALL TAKES THE PIN BAR'S PLACE (owner 2026-10-20): the people in it, the
+            // group's name, who has their mic on, and Join. The pins come back when it ends.
+            CallBarOrPin(showCall: groupCallActive && CallFeatures.groupCalls && !notAMember,
+                         title: title, video: groupCallVideo,
+                         people: groupCallPeople.map { CallBarPerson(uid: $0, name: personName($0),
+                                                                     photo: conversation?.photos[$0],
+                                                                     mic: groupCallMicOn.contains($0)) },
+                         onJoin: joinLiveGroupCall) { pinnedBar }
                 // Measure the pin bar's height and feed it to the list so the floating date pill drops BELOW
                 // it (the reference app behavior). 0 when nothing is pinned (pinnedBar is empty) → the pill stays put.
                 .background {
@@ -2118,18 +2128,7 @@ struct ThreadView: View {
                              photoHint: conversation?.photos[m.id])
         }
         .fullScreenCover(isPresented: $showGroupCall) { GroupCallView() }
-        .safeAreaInset(edge: .top) {
-            if groupCallActive && CallFeatures.groupCalls && !notAMember {
-                GroupCallJoinBar(video: groupCallVideo) {
-                    InstantCover.run { showGroupCall = true }   // a cut, not a slide (owner, 2026-10-06)
-                    // audit M-059, 2026-10-07: Join only joins. A stale bar (the call ended a moment
-                    // ago) used to start a brand-new call that rang the whole group again; with
-                    // `requireLive` an ended call is refused with "Call ended" instead. Only the
-                    // Call button creates.
-                    Task { await GroupCallService.shared.start(cid: cid, title: title, video: groupCallVideo, requireLive: true) }
-                }
-            }
-        }
+        .task(id: groupCallActive) { await followGroupCallPeople() }
         .modifier(MessageActionDialogs(cid: cid, title: title, me: me,
                                        pendingDelete: $pendingDelete,
                                        onDeleteForMe: { m in deleteForMe(m) },
@@ -5250,6 +5249,30 @@ struct ThreadView: View {
         }
         InstantCover.run { showGroupCall = true }   // a cut, not a slide (owner, 2026-10-06)
         Task { await GroupCallService.shared.start(cid: cid, title: title, video: video) }
+    }
+
+    /// Join only joins (audit M-059, 2026-10-07): with `requireLive` an ended call is refused with
+    /// "Call ended" instead of starting a new one that rings the whole group. Only the Call button creates.
+    private func joinLiveGroupCall() {
+        InstantCover.run { showGroupCall = true }   // a cut, not a slide (owner, 2026-10-06)
+        Task { await GroupCallService.shared.start(cid: cid, title: title, video: groupCallVideo, requireLive: true) }
+    }
+
+    /// Who is in the call, asked of the server every 12 s while the bar shows: the media room's
+    /// people (uids, mic on or off). Nothing outside the room hears who is speaking this second.
+    private func followGroupCallPeople() async {
+        guard groupCallActive, isGroup else { groupCallPeople = []; groupCallMicOn = []; return }
+        let fn = Functions.functions(region: "me-central1").httpsCallable("groupCallPeek")
+        while !Task.isCancelled, groupCallActive {
+            if let r = try? await fn.call(["cid": cid]), let d = r.data as? [String: Any],
+               let list = d["people"] as? [[String: Any]] {
+                let uids = list.compactMap { $0["uid"] as? String }
+                let mics = Set(list.filter { $0["mic"] as? Bool == true }.compactMap { $0["uid"] as? String })
+                if uids != groupCallPeople { groupCallPeople = uids }
+                if mics != groupCallMicOn { groupCallMicOn = mics }
+            }
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+        }
     }
 
     // Watch the group's call doc so a "Join call" bar appears when a call is active.
@@ -9412,28 +9435,102 @@ enum ViewedOnce {
     }
 }
 
-/// The green "Group call in progress · Join" bar over a group chat.
-/// audit M-016, 2026-10-07: it showed whenever I was not IN a call, so while a join was still
-/// connecting, or while I waited at a link's door for approval, a tap started a second join on the
-/// one shared room. It now hides for those too. It is its own small view so it can watch the group
-/// service (the thread does not, and only re-read `isActive` when something else redrew it).
-private struct GroupCallJoinBar: View {
+struct CallBarPerson: Equatable {
+    let uid: String
+    let name: String
+    let photo: String?
+    let mic: Bool
+}
+
+/// ⛔ THE LIVE CALL BAR, IN THE PIN BAR'S PLACE (owner 2026-10-20, with a screenshot): the faces of
+/// the people in the call, the group's name with who is in it under it, and a green Join, in the
+/// same glass capsule the pin bar wears. Shown while a call runs and I am not in it, connecting to
+/// it, or waiting at its door (audit M-016); otherwise the pins. Its own small view so it can watch
+/// the group service (the thread does not).
+private struct CallBarOrPin<Pin: View>: View {
     @ObservedObject private var service = GroupCallService.shared
+    let showCall: Bool
+    let title: String
     let video: Bool
+    let people: [CallBarPerson]
     let onJoin: () -> Void
+    @ViewBuilder let pin: () -> Pin
+
+    private var callShown: Bool {
+        showCall && !service.isActive && !service.connecting && !service.waitingForApproval
+    }
 
     var body: some View {
-        if !service.isActive && !service.connecting && !service.waitingForApproval {
-            Button(action: onJoin) {
-                HStack(spacing: 8) {
-                    Image(systemName: video ? "video.fill" : "phone.fill")
-                    Text("Group call in progress").fontWeight(.medium)
-                    Spacer()
-                    Text("Join").fontWeight(.semibold)
+        if callShown { bar.transition(.move(edge: .top).combined(with: .opacity)) } else { pin() }
+    }
+
+    private static func list(_ n: [String]) -> String {
+        switch n.count {
+        case 0: return ""
+        case 1: return n[0]
+        case 2: return "\(n[0]) and \(n[1])"
+        default: return "\(n[0]), \(n[1]) and \(n.count - 2) more"
+        }
+    }
+
+    private var subtitle: String {
+        let talking = people.filter(\.mic).map(\.name)
+        if !talking.isEmpty { return Self.list(talking) + (talking.count == 1 ? " has the mic on" : " have the mic on") }
+        if !people.isEmpty { return Self.list(people.map(\.name)) + " in the call" }
+        return video ? "Video call" : "Voice call"
+    }
+
+    private var bar: some View {
+        Button(action: onJoin) {
+            HStack(spacing: 10) {
+                faces
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+                    HStack(spacing: 4) {
+                        if people.contains(where: \.mic) {
+                            Image(systemName: "waveform").font(.caption2.weight(.semibold)).foregroundStyle(.green)
+                        }
+                        Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }
-                .font(.subheadline).foregroundStyle(.white)
-                .padding(.horizontal, 16).padding(.vertical, 10)
-                .background(Color.green)
+                Spacer(minLength: 8)
+                Text("JOIN")
+                    .font(.subheadline.weight(.bold)).foregroundStyle(.white)
+                    .padding(.horizontal, 16).frame(height: 32)
+                    .background(Capsule().fill(Color.green))
+            }
+            .padding(.leading, 10).padding(.trailing, 8)
+            .frame(height: 52)
+            .liquidGlass(RoundedRectangle(cornerRadius: 26, style: .continuous), interactive: true)
+            .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 20)
+        .padding(.top, 6).padding(.bottom, 2)
+        .accessibilityLabel("\(title), \(subtitle). Join")
+    }
+
+    /// Up to three photos, overlapping, a green dot on whoever has the mic on; the call icon while
+    /// the list is not in yet.
+    @ViewBuilder private var faces: some View {
+        if people.isEmpty {
+            Image(systemName: video ? "video.fill" : "phone.fill")
+                .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                .frame(width: 34, height: 34)
+                .background(Circle().fill(Color.green))
+        } else {
+            HStack(spacing: -10) {
+                ForEach(Array(people.prefix(3).enumerated()), id: \.element.uid) { i, p in
+                    AvatarView(name: p.name, photoUrl: p.photo, size: 34)
+                        .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2))
+                        .overlay(alignment: .bottomTrailing) {
+                            if p.mic {
+                                Circle().fill(Color.green).frame(width: 10, height: 10)
+                                    .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 1.5))
+                            }
+                        }
+                        .zIndex(Double(3 - i))
+                }
             }
         }
     }
