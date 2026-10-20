@@ -662,14 +662,9 @@ struct GroupInfoView: View {
     }()
 
     private func startCall(video: Bool) {
-        // Just one other person (owner 2026-10-19): a normal ringing call to them, as from their
-        // profile. If I am already on this group's call, the tile goes back to it as before.
-        if GroupCallService.shared.activeCid == nil, !callLive, let c = conv, c.users.count == 2,
-           let other = c.users.first(where: { $0 != me }) {
-            CallService.shared.startCall(to: other, name: c.names[other] ?? "User",
-                                         photo: c.photos[other], video: video, fromProfile: true)
-            return
-        }
+        // Always the group's call, however few are in it (owner 2026-10-20; see ThreadView
+        // startGroupCall). Nobody else in it: said, as in the chat.
+        if (conv?.users.count ?? 0) <= 1 { return }
         Task { await GroupCallService.shared.start(cid: cid, title: title, video: video) }
         InstantCover.run { showCall = true }   // a cut, not a slide (owner, 2026-10-06)
     }

@@ -18,6 +18,9 @@ struct CallEntry: Identifiable, Hashable {
     /// Set only on a multi-person (ad-hoc) call; nil on every 1:1 row. For those rows `id` and `cid`
     /// are the room id, `callerUid` is whoever started it, and `name` is the people's title.
     var adhoc: AdhocCallInfo? = nil
+    /// Set on a group chat's call (owner 2026-10-20: "group calls show the group's photo and
+    /// name"): the group's cid. Its row shows the group and calls the group again.
+    var groupCid: String? = nil
 
     var mine: Bool { callerUid == (Auth.auth().currentUser?.uid ?? "") }
     /// A live row still reading "ringing" after 120s is a call nobody finalised (both phones died
@@ -173,10 +176,9 @@ final class CallsRepository {
             // unread badges, no reordering — but their timed-out call still wrote a shared record,
             // so the Calls tab showed "Missed call" and badged it red (audit).
             .filter { !$0.isBlockedByMe(me) }
-            // 2026-09-24 fix-all #97: groups carry call records now (GroupCallService.writeRecord),
-            // but every row here calls ONE person back, and a group's "other uid" is just some
-            // member. Group call history is the bubble in the group's own chat.
-            .filter { !$0.isGroup }
+            // 2026-09-24 fix-all #97: groups carry call records (GroupCallService.writeRecord).
+            // Owner 2026-10-20: they are listed too, as the GROUP (its photo and name), and a tap
+            // calls the group again, never one member.
 
         // Fetch every chat's call records CONCURRENTLY (was sequential = N round-trips in
         // series). Each task builds its own CallEntry list off-main; results merged after.
@@ -186,11 +188,15 @@ final class CallsRepository {
         await withTaskGroup(of: (String, [CallEntry]?).self) { group in
             for c in convs {
                 group.addTask {
-                    let other = c.otherUid(me), name = c.name(for: me), photo = c.photoUrl(for: me)
+                    let group = c.isGroup
+                    let other = group ? "" : c.otherUid(me)
+                    let name = group ? (c.title.isEmpty ? "Group" : c.title) : c.name(for: me)
+                    let photo = group ? c.avatarUrl : c.photoUrl(for: me)
                     guard let snap = try? await database.collection("conversations").document(c.id)
                         .collection("messages").whereField("type", isEqualTo: "call").getDocuments()
                     else { return (c.id, nil) }
-                    return (c.id, Self.entries(snap.documents, cid: c.id, name: name, photo: photo, other: other))
+                    return (c.id, Self.entries(snap.documents, cid: c.id, name: name, photo: photo, other: other,
+                                               group: group))
                 }
             }
             for await (cid, chunk) in group {
@@ -228,11 +234,12 @@ final class CallsRepository {
 
     /// One chat's call rows as history entries (shared by the full load and the post-call refresh).
     private static func entries(_ docs: [QueryDocumentSnapshot], cid: String,
-                                name: String, photo: String?, other: String) -> [CallEntry] {
+                                name: String, photo: String?, other: String,
+                                group: Bool = false) -> [CallEntry] {
         docs.map { d in
             let data = d.data()
             let ts = data["createdAt"] as? Timestamp
-            return CallEntry(
+            var e = CallEntry(
                 id: d.documentID, cid: cid,
                 name: name, photoUrl: photo, otherUid: other,
                 callerUid: data["callerUid"] as? String ?? "",
@@ -240,6 +247,8 @@ final class CallsRepository {
                 video: data["callVideo"] as? Bool ?? false,
                 durationSec: (data["callDuration"] as? NSNumber)?.intValue ?? 0,
                 date: ts?.dateValue() ?? Date(timeIntervalSince1970: 0))
+            if group { e.groupCid = cid }
+            return e
         }
     }
 

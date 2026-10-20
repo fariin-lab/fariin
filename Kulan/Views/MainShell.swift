@@ -752,9 +752,24 @@ struct CallsView: View {
                 call: call,
                 count: run.entries.count,
                 live: isLiveCall(run),
-                onProfile: { profileTarget = call },
+                onProfile: {
+                    // A group's (i) opens the group's chat; a person's opens their profile.
+                    if let g = call.groupCid {
+                        AppRouter.shared.pendingChatName = call.name
+                        AppRouter.shared.pendingChatPhoto = call.photoUrl
+                        AppRouter.shared.pendingChatId = g
+                    } else {
+                        profileTarget = call
+                    }
+                },
                 onCall: {   // the ROW: call back the same way (video stays video), no confirm
                     if bringLiveCallForward() { return }   // 2026-09-24 decision D26
+                    if let g = call.groupCid {
+                        // The group again: its call (joined if one is running), never one member.
+                        InstantCover.run { showLiveCall = true }
+                        Task { await GroupCallService.shared.start(cid: g, title: call.name, video: call.video) }
+                        return
+                    }
                     CallService.shared.startCall(to: call.otherUid, name: call.name,
                                                  photo: call.photoUrl, video: call.video)
                 }

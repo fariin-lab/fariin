@@ -5239,14 +5239,9 @@ struct ThreadView: View {
     private func startGroupCall(video: Bool) {
         // Nobody to ring (owner 2026-10-19), as on the group info page.
         if (conversation?.users.count ?? 0) <= 1 { showJumpToast("You're the only one in this group"); return }
-        // Just one other person (owner 2026-10-19, as the reference app does): a normal ringing call
-        // to them, not an empty group room. A group call already going is joined as before.
-        if !groupCallActive, let c = conversation, c.users.count == 2,
-           let other = c.users.first(where: { $0 != me }) {
-            CallService.shared.startCall(to: other, name: c.names[other] ?? "User",
-                                         photo: c.photos[other], video: video)
-            return
-        }
+        // ⛔ A CALL STARTED IN A GROUP IS THE GROUP'S CALL, with any number of members (owner
+        // 2026-10-20: the two-member shortcut placed a personal call, so the chat list and Calls said
+        // "you called Zaki" for a call made in the group). The other member is rung by the group ring.
         InstantCover.run { showGroupCall = true }   // a cut, not a slide (owner, 2026-10-06)
         Task { await GroupCallService.shared.start(cid: cid, title: title, video: video) }
     }
