@@ -10,6 +10,8 @@ import SwiftUI
 
 struct PublicGroupSheet: View {
     let target: PublicGroupTarget
+    /// Pushed onto the Chats stack: the system back button, no X of its own.
+    var pushed = false
     @Environment(\.dismiss) private var dismiss
 
     @State private var preview: PublicGroupPreview?
@@ -27,8 +29,8 @@ struct PublicGroupSheet: View {
     // be; joining opens the chat itself. Messages before joining are still not shown (TODO above).
     var body: some View {
         VStack(spacing: 0) {
-            closeBar
-            ScrollView { content.padding(.top, 24) }
+            if !pushed { closeBar }
+            ScrollView { content.padding(.top, pushed ? 8 : 24) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())

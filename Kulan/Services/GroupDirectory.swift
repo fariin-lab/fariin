@@ -270,7 +270,7 @@ enum GroupNameCheck: Equatable {
 }
 
 /// What the join page is for: a cid (from search) and/or an @name (from a link).
-struct PublicGroupTarget: Identifiable, Equatable {
+struct PublicGroupTarget: Identifiable, Equatable, Hashable {
     var cid: String?
     var name: String?
     var id: String { (cid ?? "") + "|" + (name ?? "") }

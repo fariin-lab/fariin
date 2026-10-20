@@ -3181,7 +3181,8 @@ struct ChatsView: View {
                 JoinGroupSheet(code: item.code)
             }
             // 2026-10-19 groups v2: a public group from global search or a fariin.com/<name> link.
-            .fullScreenCover(item: pendingPublicGroup) { PublicGroupSheet(target: $0) }   // a full page (2026-10-20)
+            // Pushed from the right like any page (owner 2026-10-20: it came up from the bottom).
+            .navigationDestination(item: pendingPublicGroup) { PublicGroupSheet(target: $0, pushed: true) }
             .confirmationDialog("Delete \(selection.count) chat\(selection.count == 1 ? "" : "s")?",
                                 isPresented: $showDeleteSelected, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) { deleteSelected() }
