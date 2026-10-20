@@ -47,18 +47,24 @@ const with_ = (base, over) => ({ ...base, ...over });
 const cases = [
   ["OK      text in an open group", "ALLOW", "ALLOW", MEMBER, msgPath, "create", msg("hello"), null, convMocks(PLAIN)],
   ["OK      photo in an open group", "ALLOW", "ALLOW", MEMBER, msgPath, "create", msg("", { type: "image", imageUrl: "https://x.test/a", enc: { v: 0, n: "", k: "", kn: "" } }), null, convMocks(PLAIN)],
-  ["FIX     photo with media off", "ALLOW", "DENY", MEMBER, msgPath, "create", msg("", { type: "image", imageUrl: "https://x.test/a", enc: { v: 0, n: "", k: "", kn: "" } }), null, convMocks(with_(PLAIN, { memberSend: { media: false } }))],
-  ["OK      admin photo with media off", "ALLOW", "ALLOW", OWNER, msgPath, "create", msg("", { authorId: OWNER, type: "image", imageUrl: "https://x.test/a", enc: { v: 0, n: "", k: "", kn: "" } }), null, convMocks(with_(PLAIN, { memberSend: { media: false } }))],
+  ["FIX     photo with media off", "ALLOW", "DENY", MEMBER, msgPath, "create", msg("", { type: "image", imageUrl: "https://x.test/a", enc: { v: 0, n: "", k: "", kn: "" } }), null, convMocks(with_(PLAIN, { memberSend: { photos: false } }))],
+  ["OK      admin photo with media off", "ALLOW", "ALLOW", OWNER, msgPath, "create", msg("", { authorId: OWNER, type: "image", imageUrl: "https://x.test/a", enc: { v: 0, n: "", k: "", kn: "" } }), null, convMocks(with_(PLAIN, { memberSend: { photos: false } }))],
   ["FIX     sticker with stickers off", "ALLOW", "DENY", MEMBER, msgPath, "create", msg("", { type: "sticker", stickerPack: "p", stickerId: "s" }), null, convMocks(with_(PLAIN, { memberSend: { stickers: false } }))],
   ["OK      sticker with only links off", "ALLOW", "ALLOW", MEMBER, msgPath, "create", msg("", { type: "sticker", stickerPack: "p", stickerId: "s" }), null, convMocks(with_(PLAIN, { memberSend: { links: false } }))],
   ["FIX     text with a link, links off", "ALLOW", "DENY", MEMBER, msgPath, "create", msg("see https://spam.test now"), null, convMocks(with_(PLAIN, { memberSend: { links: false } }))],
   ["FIX     text with WWW., links off", "ALLOW", "DENY", MEMBER, msgPath, "create", msg("WWW.spam.test"), null, convMocks(with_(PLAIN, { memberSend: { links: false } }))],
   ["OK      plain text, links off", "ALLOW", "ALLOW", MEMBER, msgPath, "create", msg("homework is page 4"), null, convMocks(with_(PLAIN, { memberSend: { links: false } }))],
   ["OK      text with a link, links on", "ALLOW", "ALLOW", MEMBER, msgPath, "create", msg("see https://ok.test"), null, convMocks(with_(PLAIN, { memberSend: { links: true } }))],
-  ["OK      notice with everything off", "ALLOW", "ALLOW", MEMBER, msgPath, "create", msg("uidMember changed the group name", { type: "system" }), null, convMocks(with_(PLAIN, { membersCanEditInfo: true, memberSend: { media: false, voice: false, files: false, stickers: false, links: false } }))],
+  ["OK      notice with everything off", "ALLOW", "ALLOW", MEMBER, msgPath, "create", msg("uidMember changed the group name", { type: "system" }), null, convMocks(with_(PLAIN, { membersCanEditInfo: true, memberSend: { photos: false, videos: false, voice: false, files: false, stickers: false, gifs: false, links: false, polls: false, location: false } }))],
   ["OK      owner sets memberSend", "ALLOW", "ALLOW", OWNER, convPath, "update", with_(PLAIN, { memberSend: { stickers: false } }), PLAIN, convMocks(PLAIN)],
   ["GUARD   member sets memberSend", "DENY", "DENY", MEMBER, convPath, "update", with_(PLAIN, { memberSend: { stickers: true } }), with_(PLAIN, { memberSend: { stickers: false } }), convMocks(with_(PLAIN, { memberSend: { stickers: false } }))],
   ["GUARD   info-editing member sets memberSend", "DENY", "DENY", MEMBER, convPath, "update", with_(PLAIN, { membersCanEditInfo: true, memberSend: { stickers: false } }), with_(PLAIN, { membersCanEditInfo: true }), convMocks(with_(PLAIN, { membersCanEditInfo: true }))],
+  ["OK      video with only photos off", "ALLOW", "ALLOW", MEMBER, msgPath, "create", msg("", { type: "video", videoUrl: "https://x.test/v" }), null, convMocks(with_(PLAIN, { memberSend: { photos: false } }))],
+  ["FIX     video with videos off", "ALLOW", "DENY", MEMBER, msgPath, "create", msg("", { type: "video", videoUrl: "https://x.test/v" }), null, convMocks(with_(PLAIN, { memberSend: { videos: false } }))],
+  ["FIX     gif with gifs off", "ALLOW", "DENY", MEMBER, msgPath, "create", msg("", { type: "gif", gifUrl: "https://x.test/g" }), null, convMocks(with_(PLAIN, { memberSend: { gifs: false } }))],
+  ["OK      gif with only stickers off", "ALLOW", "ALLOW", MEMBER, msgPath, "create", msg("", { type: "gif", gifUrl: "https://x.test/g" }), null, convMocks(with_(PLAIN, { memberSend: { stickers: false } }))],
+  ["FIX     poll with polls off", "ALLOW", "DENY", MEMBER, msgPath, "create", msg("fariin-poll:abc", { pollMulti: false }), null, convMocks(with_(PLAIN, { memberSend: { polls: false } }))],
+  ["FIX     location with location off", "ALLOW", "DENY", MEMBER, msgPath, "create", msg("fariin-location:1|2|x"), null, convMocks(with_(PLAIN, { memberSend: { location: false } }))],
 ];
 
 async function run(t, source, [, , , uid, p, method, after, before, mocks], expectation) {

@@ -1063,8 +1063,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var membersCanAdd: Bool            // group: non-admins may add members (default false)
     var membersCanEditInfo: Bool       // group: non-admins may edit name/photo/desc (default false)
     var onlyAdminsCall = false         // group: only admins may START a call (joining stays open)
-    /// group: what members may send (2026-10-19), `memberSend` {media, voice, files, stickers,
-    /// links}; a missing key = allowed. firestore.rules `memberSendOk` enforces it.
+    /// group: what members may send (2026-10-20), `memberSend` {photos, videos, voice, files,
+    /// stickers, gifs, links, polls, location}; a missing key = allowed. firestore.rules
+    /// `memberSendOk` enforces it.
     var memberSend: [String: Bool] = [:]
     var membersCanShareLink = false    // group: non-admins see Share and the QR of the invite link (owner 2026-10-19)
     /// 2026-10-19 groups v2 (owner): the group's document says `e2ee == false`, so its new messages
@@ -1380,9 +1381,6 @@ struct Conversation: Identifiable, Equatable, Hashable {
         return Set(flags)
     }
     func isRestricted(_ uid: String, _ r: Restrict, now: Double) -> Bool {
-        // 2026-10-19: the group-wide switches (`memberSend`) hold back every member the same way,
-        // so every composer check that asks this also honours them.
-        if let k = Self.sendKind(for: r), !maySend(k, uid) { return true }
         let active = activeRestrictions(uid, now: now)
         if active.contains(r.rawValue) { return true }
         // owner 2026-10-18: the old all-media flag covers each of the three it was split into.
@@ -1414,39 +1412,49 @@ struct Conversation: Identifiable, Equatable, Hashable {
         !isGroup || !onlyAdminsCall || admins.contains(me) || isOwner(me)
     }
 
-    /// The kinds a group can turn off for members (owner 2026-10-19). Admins are never limited.
+    /// The kinds a group can turn off for members, each on its own (owner 2026-10-20: "a switch
+    /// for each, not modes"). Admins are never limited. firestore.rules `memberSendOk` holds them.
     enum SendKind: String, CaseIterable {
-        case media, voice, files, stickers, links
+        case photos, videos, voice, files, stickers, gifs, links, polls, location
         var label: String {
             switch self {
-            case .media: "Photos & videos"
+            case .photos: "Photos"
+            case .videos: "Videos"
             case .voice: "Voice messages"
             case .files: "Files"
-            case .stickers: "Stickers & GIFs"
+            case .stickers: "Stickers"
+            case .gifs: "GIFs"
             case .links: "Links"
+            case .polls: "Polls"
+            case .location: "Location"
             }
         }
-        /// "Admins turned off stickers in this group."
-        var offNotice: String {
-            let what: String = switch self {
-            case .media: "photos and videos"
+        var icon: String {
+            switch self {
+            case .photos: "photo"
+            case .videos: "video"
+            case .voice: "mic"
+            case .files: "doc"
+            case .stickers: "face.smiling"
+            case .gifs: "sparkles.rectangle.stack"
+            case .links: "link"
+            case .polls: "chart.bar.xaxis"
+            case .location: "location"
+            }
+        }
+        /// The words in "Admins turned off ___ in this group."
+        var words: String {
+            switch self {
+            case .photos: "photos"
+            case .videos: "videos"
             case .voice: "voice messages"
             case .files: "files"
-            case .stickers: "stickers and GIFs"
+            case .stickers: "stickers"
+            case .gifs: "GIFs"
             case .links: "links"
+            case .polls: "polls"
+            case .location: "location sharing"
             }
-            return "Admins turned off \(what) in this group"
-        }
-    }
-
-    static func sendKind(for r: Restrict) -> SendKind? {
-        switch r {
-        case .sendPhotos: .media
-        case .sendFiles: .files
-        case .sendVoice: .voice
-        case .sendStickers: .stickers
-        case .sendLinks: .links
-        default: nil
         }
     }
 

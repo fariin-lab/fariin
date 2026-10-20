@@ -184,9 +184,8 @@ struct GroupSettingsView: View {
     /// The member switches and Protect Content, on their own page.
     private var permissionsPage: some View {
         List {
-            modeSection
             membersCanSection
-            if !(conv?.onlyAdminsSend ?? false) { sendSection }
+            if !(conv?.onlyAdminsSend ?? false) { mediaRowSection }
             privacySection
         }
         .listStyle(.insetGrouped)
@@ -223,87 +222,61 @@ struct GroupSettingsView: View {
         }
     }
 
-    // MARK: Modes and what members may send (owner 2026-10-19)
+    // MARK: Media & content (owner 2026-10-20: one switch for all, then each kind on its own)
 
-    /// Ready-made settings, one tap each: Open chat (everything on), Classroom (text, voice, files,
-    /// photos; no stickers, GIFs or links), Announcements (only admins send). Anything else is
-    /// shown as Custom; the switches below fine-tune.
-    private enum Mode: String, CaseIterable { case open, classroom, announcements }
-    private static let classroomSend: [String: Bool] =
-        ["media": true, "voice": true, "files": true, "stickers": false, "links": false]
-    private static let openSend: [String: Bool] =
-        Dictionary(uniqueKeysWithValues: Conversation.SendKind.allCases.map { ($0.rawValue, true) })
-
-    private var currentMode: Mode? {
-        guard let c = conv else { return nil }
-        if c.onlyAdminsSend { return .announcements }
-        let on = { (k: Conversation.SendKind) in c.memberSend[k.rawValue] != false }
-        if Conversation.SendKind.allCases.allSatisfy(on) { return .open }
-        if on(.media) && on(.voice) && on(.files) && !on(.stickers) && !on(.links) { return .classroom }
-        return nil
+    private var mediaOnCount: Int {
+        Conversation.SendKind.allCases.filter { conv?.memberSend[$0.rawValue] != false }.count
     }
 
-    private var modeSection: some View {
+    /// "Media & content · 7 of 9 ›", which opens its own page, like every row in Group Settings.
+    private var mediaRowSection: some View {
         Section {
-            modeRow(.open, "bubble.left.and.bubble.right", "Open chat", "Everyone can send anything.")
-            modeRow(.classroom, "graduationcap", "Classroom", "Text, photos, voice and files. No stickers, GIFs or links.")
-            modeRow(.announcements, "megaphone", "Announcements", "Only admins send. Members read and react.")
-        } header: {
-            Text("Group mode")
-        } footer: {
-            if currentMode == nil { Text("Custom: set by the switches below.") }
-        }
-    }
-
-    private func modeRow(_ m: Mode, _ icon: String, _ title: String, _ line: String) -> some View {
-        Button { pick(m) } label: {
-            HStack(spacing: 14) {
-                Image(systemName: icon).font(.system(size: 17)).frame(width: 26)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).foregroundStyle(.primary)
-                    Text(line).font(.footnote).foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 8)
-                if currentMode == m {
-                    Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(Color.accentColor)
-                }
+            NavigationLink { mediaPage } label: {
+                valueRow("photo.on.rectangle", "Media & content",
+                         "\(mediaOnCount) of \(Conversation.SendKind.allCases.count)")
             }
-            .foregroundStyle(.primary)
-            .contentShape(Rectangle())
+        } footer: {
+            Text("What members can send besides text.")
         }
-        .buttonStyle(.plain)
-        .disabled(!canEdit)
     }
 
-    private func pick(_ m: Mode) {
-        guard canEdit, m != currentMode, let c = conv else { return }
+    private var mediaPage: some View {
+        List {
+            Section {
+                Toggle(isOn: Binding(
+                    get: { mediaOnCount == Conversation.SendKind.allCases.count },
+                    set: { on in setAllMedia(on) })) {
+                    Text("Allow all").fontWeight(.semibold)
+                }
+                .disabled(!canEdit)
+            } footer: {
+                Text("Turn this off to stop all media at once. Admins can always send everything.")
+            }
+            Section {
+                ForEach(Conversation.SendKind.allCases, id: \.self) { k in
+                    Toggle(isOn: bool(get: { $0.memberSend[k.rawValue] != false }, set: { v in
+                        var next = conv?.memberSend ?? [:]
+                        next[k.rawValue] = v
+                        try await ChatService.setMemberSend(cid: cid, next)
+                    })) {
+                        Label(k.label, systemImage: k.icon)
+                    }
+                    .disabled(!canEdit)
+                }
+            } header: {
+                Text("Members can send")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Media & content")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func setAllMedia(_ on: Bool) {
+        let all = Dictionary(uniqueKeysWithValues: Conversation.SendKind.allCases.map { ($0.rawValue, on) })
         run {
-            switch m {
-            case .announcements:
-                if !c.onlyAdminsSend { try await ChatService.setOnlyAdminsSend(cid: cid, true) }
-            case .open, .classroom:
-                if c.onlyAdminsSend { try await ChatService.setOnlyAdminsSend(cid: cid, false) }
-                try await ChatService.setMemberSend(cid: cid, m == .open ? Self.openSend : Self.classroomSend,
-                                                    notice: m == .open ? "set the group to Open chat"
-                                                                       : "set the group to Classroom")
-            }
-        }
-    }
-
-    /// One switch per kind; off = members cannot send it (admins still can).
-    private var sendSection: some View {
-        Section {
-            ForEach(Conversation.SendKind.allCases, id: \.self) { k in
-                switchRow(k.label, get: { $0.memberSend[k.rawValue] != false }) { v in
-                    var next = conv?.memberSend ?? [:]
-                    next[k.rawValue] = v
-                    try await ChatService.setMemberSend(cid: cid, next)
-                }
-            }
-        } header: {
-            Text("Members can send")
-        } footer: {
-            Text("Admins can always send everything.")
+            try await ChatService.setMemberSend(cid: cid, all,
+                                                notice: on ? "allowed all media" : "turned off all media for members")
         }
     }
 

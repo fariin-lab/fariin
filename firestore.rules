@@ -2359,27 +2359,33 @@ service cloud.firestore {
         // sealed text on an ordinary message (no `type`), so no phone puts plain words into a chat
         // that still promises end-to-end encryption. Notices and other typed messages are as before.
         // 1:1 chats are untouched.
-        // ⛔ WHAT MEMBERS MAY SEND — owner 2026-10-19 ("a teacher wants students to send text, not
-        // memes"). `memberSend` on the group: {media, voice, files, stickers, links}, a missing key
-        // or true = allowed. Admins are never limited; notices always pass. Types: image/video/album
-        // = media, audio = voice, file, sticker/gif = stickers. Links: a link card, or a plain-text
-        // group message with an address in it (an end-to-end encrypted group's text cannot be read
-        // here, so there the app alone keeps links out).
+        // ⛔ WHAT MEMBERS MAY SEND — owner 2026-10-19/20: a switch for each kind. `memberSend` on
+        // the group: {photos, videos, voice, files, stickers, gifs, links, polls, location}, a
+        // missing key or true = allowed. Admins are never limited; notices always pass. Types:
+        // image = photos, video = videos, album = both, audio = voice, file, sticker, gif. Polls:
+        // `pollMulti` is in the clear on every poll. Links and locations: a link card, or a
+        // plain-text group message (an end-to-end encrypted group's text cannot be read here, so
+        // there the app alone holds links, polls and locations back).
         function memberSendOk() {
           let d = request.resource.data;
           let ms = convData().get('memberSend', {});
           let t = d.get('type', '');
           let txt = d.get('text', '');
+          let plain = txt is string;
           return convData().get('type', '') != 'group'
             || request.auth.uid in convData().get('admins', [])
             || t == 'system' || leaveNotice()
-            || ((!(t in ['image', 'video', 'album']) || ms.get('media', true) != false)
+            || ((!(t in ['image', 'album']) || ms.get('photos', true) != false)
+                && (!(t in ['video', 'album']) || ms.get('videos', true) != false)
                 && (t != 'audio' || ms.get('voice', true) != false)
                 && (t != 'file' || ms.get('files', true) != false)
-                && (!(t in ['sticker', 'gif']) || ms.get('stickers', true) != false)
+                && (t != 'sticker' || ms.get('stickers', true) != false)
+                && (t != 'gif' || ms.get('gifs', true) != false)
+                && (!('pollMulti' in d) || ms.get('polls', true) != false)
+                && (ms.get('location', true) != false || !(plain && txt.matches('fariin-location:.*')))
                 && (ms.get('links', true) != false
                     || (!('linkPreview' in d)
-                        && !(txt is string && txt.matches('(?si).*(https?://|www[.]).*')))));
+                        && !(plain && txt.matches('(?si).*(https?://|www[.]).*')))));
         }
         function groupTextOk() {
           let d = request.resource.data;
