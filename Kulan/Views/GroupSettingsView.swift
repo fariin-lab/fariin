@@ -1351,14 +1351,25 @@ struct EditGroupView: View {
     }
 
     /// Name first, then the photo; either refused is said, and the sheet stays.
+    /// What the last Save already wrote, so a retry after a failed later step does not rename the
+    /// group twice (two "renamed the group" rows; audit 2026-10-20).
+    @State private var savedName: String?
+    @State private var savedDesc: String?
+
     private func save() {
-        let newName = trimmed, photo = newPhoto, oldName = title
-        let newDesc = trimmedDesc, oldDesc = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newName = trimmed, photo = newPhoto, oldName = savedName ?? title
+        let newDesc = trimmedDesc, oldDesc = savedDesc ?? description.trimmingCharacters(in: .whitespacesAndNewlines)
         saving = true; error = nil
         Task {
             do {
-                if newName != oldName { try await ChatService.renameGroup(cid: cid, title: newName) }
-                if newDesc != oldDesc { try await ChatService.setGroupDescription(cid: cid, text: newDesc) }
+                if newName != oldName {
+                    try await ChatService.renameGroup(cid: cid, title: newName)
+                    await MainActor.run { savedName = newName }
+                }
+                if newDesc != oldDesc {
+                    try await ChatService.setGroupDescription(cid: cid, text: newDesc)
+                    await MainActor.run { savedDesc = newDesc }
+                }
                 if let photo { _ = try await ChatService.uploadGroupAvatar(cid: cid, data: photo) }
                 await MainActor.run { saving = false; dismiss() }
             } catch {

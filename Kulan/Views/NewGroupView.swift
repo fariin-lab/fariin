@@ -80,7 +80,7 @@ struct NewGroupView: View {
     private var picked: [Person] { order.compactMap { selected[$0] } }
 
     private var canCreate: Bool {
-        !groupName.trimmingCharacters(in: .whitespaces).isEmpty && !creating
+        !groupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !creating
     }
 
     var body: some View {
@@ -405,7 +405,7 @@ struct NewGroupView: View {
     }
 
     private func create() {
-        let name = groupName.trimmingCharacters(in: .whitespaces)
+        let name = String(groupName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(100))
         guard !name.isEmpty else { return }
         // "Create new groups" switched off from the admin panel while this page was open (owner
         // 2026-10-18). The rules refuse it anyway; this says so in words instead of "Try again".
@@ -427,7 +427,14 @@ struct NewGroupView: View {
                 let cid = try await ChatService.createGroup(title: name, memberIds: order, disappearSeconds: timer,
                                                            permissions: perms)
                 if let photo {
-                    Task.detached(priority: .utility) { _ = try? await ChatService.uploadGroupAvatar(cid: cid, data: photo) }
+                    // Once more after a moment (the group may not be on the server yet), then said
+                    // (audit 2026-10-20: a failed photo left the group bare without a word).
+                    Task.detached(priority: .utility) {
+                        if (try? await ChatService.uploadGroupAvatar(cid: cid, data: photo)) != nil { return }
+                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        if (try? await ChatService.uploadGroupAvatar(cid: cid, data: photo)) != nil { return }
+                        await MainActor.run { ToastNotice.show("The group photo was not saved. Set it in Edit.") }
+                    }
                 }
                 await MainActor.run {
                     creating = false

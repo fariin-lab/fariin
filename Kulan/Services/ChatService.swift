@@ -211,7 +211,8 @@ enum ChatService {
         let ref = db.collection("conversations").document()
         var data: [String: Any] = [
             "type": "group",
-            "title": title.trimmingCharacters(in: .whitespaces),
+            // The same 100 the rename keeps to, and no name made of line breaks (audit 2026-10-20).
+            "title": String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(100)),
             "users": users,
             "admins": [uid],
             "createdBy": uid,
@@ -232,8 +233,11 @@ enum ChatService {
         sealMembersLock.withLock { _ = plainGroups.insert(ref.documentID) }
         // Not awaited: the write is on this phone now and the listener sees it; the server's answer
         // comes behind (a refusal is logged; the chat then simply does not stay).
+        // Refused: said, not only logged (audit 2026-10-20: the chat opened and then went away).
         ref.setData(data) { err in
-            if let err { print("[createGroup] write refused: \(err.localizedDescription)") }
+            guard let err else { return }
+            print("[createGroup] write refused: \(err.localizedDescription)")
+            Task { @MainActor in ToastNotice.show("Could not create the group. Try again.") }
         }
         let cid = ref.documentID
         Task.detached(priority: .userInitiated) {
