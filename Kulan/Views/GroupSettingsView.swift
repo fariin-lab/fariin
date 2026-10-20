@@ -61,27 +61,21 @@ struct GroupSettingsView: View {
     /// The primary link's code from the server (getShareLink), as the requests page reads it; nil
     /// until it answers or when it fails, then the group doc's old `inviteCode`.
     @State private var shareCode: String?
-    /// Public picked with no link name yet: the Group Type page asks for one and saves it.
-    @State private var showTypePage = false
-    @State private var confirmPrivate = false
-    @State private var savingType = false
 
     private var isPublicNow: Bool { conv?.isPublic ?? false }
 
     var body: some View {
-        // ⛔ OWNER'S LAYOUT, 2026-10-19 (second picture): a plain page like the admin sheet, no
-        // cards, thin separators, small grey titles. Joining, People, Members can (the old
-        // Permissions page, now ticks on this page), Privacy. Every row keeps the right it needed.
+        // ⛔ SHORT CARDS THAT OPEN THEIR OWN PAGES (owner 2026-10-19, later: "when you tap you get
+        // the options you need, instead of one flat page"). Joining (Group Type, link, requests),
+        // People (members, admins, removed), Permissions. Every row keeps the right it needed.
         List {
             joiningSection
             peopleSection
-            membersCanSection
-            privacySection
+            permissionsSection
         }
-        .listStyle(.plain)
+        .listStyle(.insetGrouped)
         .navigationTitle("Group Settings")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(isPresented: $showTypePage) { GroupTypeView(cid: cid) }
         // Started once and kept while a child page is pushed; removed with the page (`ListenerBox`).
         .onAppear {
             if convListener.reg == nil {
@@ -103,13 +97,6 @@ struct GroupSettingsView: View {
             guard reqListener.reg == nil else { return }
             reqListener.reg = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
         }
-        // The Group Type page's own confirm, word for word: going private gives the link up.
-        .confirmationDialog("Make this group private?", isPresented: $confirmPrivate, titleVisibility: .visible) {
-            Button("Make Private", role: .destructive) { makePrivate() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("fariin.com/\(conv?.publicName ?? "") will stop working. The link stays reserved for this group for 30 days, then anyone can take it.")
-        }
         .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
                                                           set: { if !$0 { actionError = nil } })) {
             Button("OK", role: .cancel) {}
@@ -122,52 +109,28 @@ struct GroupSettingsView: View {
     @ViewBuilder private var joiningSection: some View {
         if canEdit || can(.inviteUsers) {
             Section {
-                sectionTitle("Joining")
-                if canEdit { typeRow }
-                if isPublicNow && canEdit {
+                // Private / Public and the public link name live on the Group Type page.
+                if canEdit {
                     NavigationLink { GroupTypeView(cid: cid) } label: {
-                        valueRow("Public link", "fariin.com/\(conv?.publicName ?? "")")
+                        valueRow("person.2", "Group Type", isPublicNow ? "Public" : "Private")
                     }
-                } else if can(.inviteUsers) {
+                }
+                if !isPublicNow && can(.inviteUsers) {
                     NavigationLink {
                         InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
                                         initialCode: shareCode ?? conv?.inviteCode ?? "", embedded: true)
                     } label: {
-                        valueRow("Invite link", inviteValue)
+                        valueRow("link", "Invite Link", inviteValue == "Off" ? "Off" : "On")
                     }
                 }
                 if can(.inviteUsers) {
                     NavigationLink { GroupRequestsView(cid: cid) } label: {
-                        valueRow("Join requests", joinReqs.isEmpty ? "None" : "\(joinReqs.count) waiting")
+                        valueRow("person.badge.clock", "Join Requests",
+                                 joinReqs.isEmpty ? "None" : "\(joinReqs.count)")
                     }
                 }
             }
         }
-    }
-
-    private var typeRow: some View {
-        HStack(spacing: 12) {
-            Text("Type")
-            Spacer(minLength: 12)
-            Picker("Type", selection: typeBinding) {
-                Text("Private").tag(false)
-                Text("Public").tag(true)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            .disabled(savingType)
-        }
-    }
-
-    /// Reads the live group; a pick only asks. Public needs a link name, which the Group Type page
-    /// takes and saves (a private group has none); Private asks first, as that page does.
-    private var typeBinding: Binding<Bool> {
-        Binding(get: { isPublicNow },
-                set: { wantsPublic in
-                    guard wantsPublic != isPublicNow else { return }
-                    if wantsPublic { showTypePage = true } else { confirmPrivate = true }
-                })
     }
 
     /// The short link, no https://, or "Off" when the group has none.
@@ -181,46 +144,59 @@ struct GroupSettingsView: View {
         do { shareCode = try await GroupInviteService.shareCode(cid: cid) ?? "" } catch { shareCode = nil }
     }
 
-    /// The same write the Group Type page makes on its Make Private.
-    private func makePrivate() {
-        guard !savingType else { return }
-        savingType = true
-        Task {
-            do { try await GroupDirectory.setName(cid: cid, name: "") } catch {
-                actionError = error.localizedDescription
-            }
-            savingType = false
-        }
-    }
-
     // MARK: People
 
     private var peopleSection: some View {
         Section {
-            sectionTitle("People")
             NavigationLink { GroupMembersListView(cid: cid) } label: {
-                valueRow("Members", "\(conv?.users.count ?? 0)")
+                valueRow("person.3", "Members", "\(conv?.users.count ?? 0)")
             }
             NavigationLink { GroupAdminsView(cid: cid) } label: {
-                valueRow("Admins", "\(conv?.admins.count ?? 0)")
+                valueRow("checkmark.shield", "Administrators", "\(conv?.admins.count ?? 0)")
             }
             // REMOVED USERS, the people taken out of the group (`bannedUids`).
             if can(.banUsers) || can(.inviteUsers) {
                 NavigationLink { GroupRemovedUsersView(cid: cid) } label: {
-                    valueRow("Removed members", "\(conv?.bannedUids.count ?? 0)")
+                    valueRow("person.crop.circle.badge.minus", "Removed Members", "\(conv?.bannedUids.count ?? 0)")
                 }
             }
         }
     }
 
-    // MARK: Members can
+    // MARK: Permissions
 
-    /// What every member may do (the old Permissions page). On = members may, off = admins only;
-    /// admins always may. Switches, not ticks (owner 2026-10-19: a missing tick did not read as
-    /// "admins only"). Change-info admins flip them; everyone else sees them greyed.
+    /// How many of the member switches are on, for the row's "3/4".
+    private var permissionCount: (on: Int, of: Int) {
+        guard let c = conv else { return (0, 0) }
+        var flags = [!c.onlyAdminsSend, c.membersCanAdd, c.membersCanEditInfo]
+        if CallFeatures.groupCalls { flags.append(!c.onlyAdminsCall) }
+        return (flags.filter { $0 }.count, flags.count)
+    }
+
+    private var permissionsSection: some View {
+        Section {
+            NavigationLink { permissionsPage } label: {
+                valueRow("key", "Permissions", "\(permissionCount.on)/\(permissionCount.of)")
+            }
+        }
+    }
+
+    /// The member switches and Protect Content, on their own page.
+    private var permissionsPage: some View {
+        List {
+            membersCanSection
+            privacySection
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Permissions")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// What every member may do. On = members may, off = admins only; admins always may.
+    /// Switches, not ticks (owner 2026-10-19: a missing tick did not read as "admins only").
+    /// Change-info admins flip them; everyone else sees them greyed.
     private var membersCanSection: some View {
         Section {
-            sectionTitle("Members can")
             switchRow("Send messages", get: { !$0.onlyAdminsSend }) { v in
                 try await ChatService.setOnlyAdminsSend(cid: cid, !v)
             }
@@ -238,7 +214,10 @@ struct GroupSettingsView: View {
                     try await ChatService.setGroupPermission(cid: cid, key: "onlyAdminsCall", !v)
                 }
             }
-            footNote("Admins can always do these.")
+        } header: {
+            Text("Members can")
+        } footer: {
+            Text("Turned off, only admins can do it. Admins can always do these.")
         }
     }
 
@@ -253,33 +232,24 @@ struct GroupSettingsView: View {
 
     private var privacySection: some View {
         Section {
-            sectionTitle("Privacy")
             Toggle(isOn: bool(get: { $0.isRestricted },
                               set: { v in try await ChatService.setGroupRestricted(cid, on: v) })) {
-                Text("Protect content")
+                Text("Protect Content")
             }
             .disabled(!canEdit)
-            footNote("Stops forwarding, copying, saving and screenshots for everyone.")
+        } header: {
+            Text("Content")
+        } footer: {
+            Text("Stops forwarding, copying, saving and screenshots for everyone.")
         }
     }
 
     // MARK: Pieces
 
-    /// Headings and notes are plain rows, not section headers/footers: a plain list pins those
-    /// under the nav bar while scrolling, where JOINING sat on top of the rows (owner 2026-10-19).
-    private func sectionTitle(_ text: String) -> some View {
-        Text(text.uppercased()).font(.footnote).foregroundStyle(.secondary)
-            .padding(.top, 16)
-            .listRowSeparator(.hidden)
-    }
-
-    private func footNote(_ text: String) -> some View {
-        Text(text).font(.footnote).foregroundStyle(.secondary)
-            .listRowSeparator(.hidden, edges: .bottom)
-    }
-
-    private func valueRow(_ title: String, _ value: String) -> some View {
-        HStack(spacing: 12) {
+    /// A row in the cards: the outline glyph the group page uses, the title, the value in grey.
+    private func valueRow(_ icon: String, _ title: String, _ value: String) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon).font(.system(size: 17)).frame(width: 26)
             Text(title)
             Spacer(minLength: 12)
             Text(value).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
