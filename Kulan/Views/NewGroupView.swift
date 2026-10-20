@@ -270,7 +270,7 @@ struct NewGroupView: View {
                 Text("What members can do. You can change this later in the group's settings.")
             }
 
-            Section("Members · \(selected.count + 1) of \(Self.maxOthersAtCreate + 1)") {
+            Section {   // no "Members · N of 30" heading (owner 2026-10-20)
                 ForEach(picked) { p in
                     HStack(spacing: 12) {
                         AvatarView(name: p.name, photoUrl: p.photo, size: 40)
