@@ -431,7 +431,8 @@ struct GroupInfoView: View {
                     }
                     .accessibilityHidden(true)
                 }
-                Text(memberCountText).font(.subheadline).foregroundStyle(ink.opacity(0.55))
+                // The reference app's subtitle (owner 2026-10-20): 16 pt regular, its grey.
+                Text(memberCountText).font(.system(size: 16)).foregroundStyle(Color(hex: 0x8E8E93))
             }
             if !desc.isEmpty {
                 // The description reads as text, the count as a label (owner 2026-10-20: the two
@@ -444,8 +445,8 @@ struct GroupInfoView: View {
                 // No description yet: whoever may edit is offered one, the reference app's line
                 // (owner 2026-10-19). It opens Edit Group, as the Edit button does.
                 Button { showEdit = true } label: {
-                    // Blue, not `.tint`: the app's tint is `.primary`, which drew it black.
-                    Text("Add Group Description").font(.subheadline).foregroundStyle(Color.blue)
+                    // A grey prompt, not a blue link (owner 2026-10-20, from the reference app).
+                    Text("Add group description...").font(.body).foregroundStyle(Color(hex: 0x8E8E93))
                         .multilineTextAlignment(.center)
                 }
                 .buttonStyle(.plain)

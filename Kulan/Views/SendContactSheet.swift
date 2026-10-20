@@ -343,7 +343,7 @@ struct SendContactSheet: View {
                 // quieter of the two states; the text does not have to say it twice.
                 // Black on the light-mode Copy Link, white everywhere else — on the blue Send in
                 // both themes, and on the dark-mode wash his 2026-08-21 white-text rule was about.
-                .foregroundStyle(selected.isEmpty && !dark ? Color.black : Color.white)
+                .foregroundStyle(Color.white)
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
                 // ⛔ GREY WHILE IT COPIES, BLUE ONCE IT SENDS (owner 2026-08-22: "make it grey
@@ -363,10 +363,8 @@ struct SendContactSheet: View {
                 //
                 // Dark keeps the system's own wash, which reads perfectly well there and is what he
                 // signed off.
-                .background(selected.isEmpty
-                            ? (dark ? Color(.tertiarySystemFill) : Color(.systemGray3))
-                            : Color.accentColor,
-                            in: Capsule())
+                // Blue in both states now (owner 2026-10-20: "copy link button make blue").
+                .background(Color.accentColor, in: Capsule())
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
