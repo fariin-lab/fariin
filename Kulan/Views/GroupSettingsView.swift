@@ -125,7 +125,7 @@ struct GroupSettingsView: View {
                 }
                 if can(.inviteUsers) {
                     NavigationLink { GroupRequestsView(cid: cid) } label: {
-                        valueRow("person.badge.clock", "Join Requests",
+                        valueRow("person.badge.clock", "Requests & Invites",
                                  joinReqs.isEmpty ? "None" : "\(joinReqs.count)")
                     }
                 }
@@ -753,35 +753,31 @@ struct GroupRequestsView: View {
         do { shareCode = try await GroupInviteService.shareCode(cid: cid) ?? "" } catch { shareCode = nil }
     }
 
+    // ⛔ REQUESTS & INVITES (owner 2026-10-19: "only requests; add the second page, our own way").
+    // Requests: who is waiting, Approve / Decline, and an empty state that says whether the link
+    // asks for approval at all. Invites: who came in through each of the group's links, and the
+    // two ways to bring more people (the link, Add Members).
+    @State private var tab = 0
+    @State private var links: GroupLinkList?
+    @State private var showAdd = false
+    private var me: String { AuthService.shared.uid ?? "" }
+    private var canAdd: Bool { (conv?.adminCan(me, .inviteUsers) ?? false) || (conv?.membersCanAdd ?? false) }
+
     var body: some View {
         List {
-            // The invite link card is gone from here (owner 2026-10-19): the link has its own row
-            // on Group Settings. This page is only the people waiting to join.
-            Section("\(joinReqs.count) Request\(joinReqs.count == 1 ? "" : "s")") {
-                if joinReqs.isEmpty {
-                    Text("No one is waiting to join.").foregroundStyle(.secondary)
+            Section {
+                Picker("Show", selection: $tab) {
+                    Text(joinReqs.isEmpty ? "Requests" : "Requests (\(joinReqs.count))").tag(0)
+                    Text("Invites").tag(1)
                 }
-                ForEach(joinReqs) { r in
-                    HStack(spacing: 12) {
-                        AvatarView(name: r.name, photoUrl: r.photo, size: 34)
-                        Text(r.name).foregroundStyle(.primary).lineLimit(1)
-                        Spacer(minLength: 8)
-                        Button { act { try await GroupInviteService.approveJoin(cid: cid, uid: r.uid) } } label: {
-                            Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(.green)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Approve \(r.name)")
-                        Button { act { try await GroupInviteService.denyJoin(cid: cid, uid: r.uid) } } label: {
-                            Image(systemName: "xmark.circle.fill").font(.title3).foregroundStyle(.red)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Decline \(r.name)")
-                    }
-                }
+                .pickerStyle(.segmented)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets())
             }
+            if tab == 0 { requestsSections } else { invitesSections }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("Join Requests")
+        .navigationTitle("Requests & Invites")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             guard reqListener == nil else { return }
@@ -789,6 +785,8 @@ struct GroupRequestsView: View {
         }
         .onDisappear { reqListener?.remove(); reqListener = nil }
         .task { await loadShareCode() }
+        .task { links = try? await GroupInviteService.listLinks(cid: cid) }
+        .sheet(isPresented: $showAdd) { AddMembersSheet(cid: cid, existing: Set(conv?.users ?? [])) }
         // Again after the link sheet closes: it may have reset or turned off the link.
         .sheet(isPresented: $showInvite, onDismiss: { Task { await loadShareCode() } }) {
             InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
@@ -799,6 +797,95 @@ struct GroupRequestsView: View {
                                                           set: { if !$0 { actionError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(actionError ?? "") }
+    }
+
+    // MARK: Requests
+
+    @ViewBuilder private var requestsSections: some View {
+        if joinReqs.isEmpty {
+            Section {
+                VStack(spacing: 10) {
+                    Image(systemName: "person.badge.clock").font(.system(size: 38)).foregroundStyle(.secondary)
+                    Text("No one is waiting to join").font(.headline)
+                    Text(approvalLine).font(.subheadline).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity).padding(.vertical, 18)
+            } footer: {
+                if links?.primary != nil {
+                    Text("Change this under Invite Link › Approve New Members.")
+                }
+            }
+        } else {
+            Section("Waiting to join") {
+                ForEach(joinReqs) { r in
+                    HStack(spacing: 12) {
+                        AvatarView(name: r.name, photoUrl: r.photo, size: 40)
+                        Text(r.name).foregroundStyle(.primary).lineLimit(1)
+                        Spacer(minLength: 8)
+                        Button { act { try await GroupInviteService.denyJoin(cid: cid, uid: r.uid) } } label: {
+                            Text("Decline").font(.subheadline.weight(.semibold))
+                                .padding(.horizontal, 12).padding(.vertical, 7)
+                                .background(Capsule().fill(Color(.tertiarySystemFill)))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Decline \(r.name)")
+                        Button { act { try await GroupInviteService.approveJoin(cid: cid, uid: r.uid) } } label: {
+                            Text("Approve").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                                .padding(.horizontal, 12).padding(.vertical, 7)
+                                .background(Capsule().fill(Color.accentColor))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Approve \(r.name)")
+                    }
+                }
+            }
+        }
+    }
+
+    private var approvalLine: String {
+        guard let p = links?.primary else { return "People who ask to join through a link show up here." }
+        return p.requestApproval
+            ? "Approve New Members is on: people who use the link wait here for an admin."
+            : "Approve New Members is off: people who use the link join straight away."
+    }
+
+    // MARK: Invites
+
+    @ViewBuilder private var invitesSections: some View {
+        let active = ([links?.primary].compactMap { $0 } + (links?.links ?? [])).filter { $0.state() == .active }
+        if links == nil {
+            Section { ProgressView().frame(maxWidth: .infinity) }
+        } else if active.isEmpty {
+            Section {
+                Text("This group has no invite link on.").foregroundStyle(.secondary)
+            }
+        }
+        ForEach(active) { l in
+            Section {
+                if l.joined.isEmpty {
+                    Text("No one has joined with this link yet.").foregroundStyle(.secondary)
+                }
+                ForEach(l.joined) { f in
+                    HStack(spacing: 12) {
+                        AvatarView(name: f.name, photoUrl: f.photoUrl, size: 36)
+                        Text(f.name.isEmpty ? "Member" : f.name).lineLimit(1)
+                    }
+                }
+            } header: {
+                Text(l.isPrimary ? "Main link" : l.title)
+            } footer: {
+                Text("\(l.usedCount) joined\(l.usageLimit > 0 ? " of \(l.usageLimit)" : "")")
+            }
+        }
+        Section {
+            Button { showInvite = true } label: { Label("Share Invite Link", systemImage: "link") }
+            if canAdd {
+                Button { showAdd = true } label: { Label("Add Members", systemImage: "person.badge.plus") }
+            }
+        } header: {
+            Text("Invite more people")
+        }
     }
 
     /// 2026-09-24 audit: approve/deny refusals (group full, already handled) are said, not swallowed.
