@@ -828,7 +828,8 @@ struct GroupInfoView: View {
 
     private func memberSheet(_ m: MemberAction) -> some View {
         GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: m.id,
-                              onInfo: { uid in profileOf = MemberAction(id: uid, name: conv?.names[uid] ?? "User", isAdmin: false) })
+                              onInfo: { uid in profileOf = MemberAction(id: uid, name: conv?.names[uid] ?? "User", isAdmin: false) },
+                              onRemoved: { name in flashNotice("\(name) was removed from \(title).") })
     }
 
     // MARK: Media figures
@@ -1561,6 +1562,8 @@ struct GroupMemberSheet: View {
     @State private var roleText = ""
     @State private var confirmDismissAdmin = false
     var onInfo: ((String) -> Void)? = nil   // push their profile on the opener's stack
+    /// Said by the opener after a removal (owner 2026-10-19: it was silent), with their name.
+    var onRemoved: ((String) -> Void)? = nil
 
     /// Every member action goes through here (audit, 2026-09-24). Each one was `try?` then dismiss:
     /// a refused Make Admin / Remove closed the sheet as if it had worked, and a second tap while the
@@ -1710,7 +1713,11 @@ struct GroupMemberSheet: View {
             .confirmationDialog("Remove \(member.name) from the group?",
                                 isPresented: $confirmRemove, titleVisibility: .visible) {
                 Button("Remove", role: .destructive) {
-                    run { try await ChatService.removeGroupMember(cid: cid, uid: member.id, name: member.name) }
+                    let name = member.name, done = onRemoved
+                    run {
+                        try await ChatService.removeGroupMember(cid: cid, uid: member.id, name: name)
+                        await MainActor.run { done?(name) }
+                    }
                 }
                 Button("Cancel", role: .cancel) {}
             }

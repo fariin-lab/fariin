@@ -9,7 +9,8 @@ import FirebaseFirestore
 extension GroupMemberSheet {
     /// The member card, filled from the group the same way wherever it is opened.
     static func make(cid: String, conv: Conversation?, me: String, uid: String,
-                     onInfo: ((String) -> Void)? = nil) -> GroupMemberSheet {
+                     onInfo: ((String) -> Void)? = nil,
+                     onRemoved: ((String) -> Void)? = nil) -> GroupMemberSheet {
         var sheet = GroupMemberSheet(
             cid: cid,
             member: GroupInfoView.MemberAction(id: uid, name: conv?.names[uid] ?? "User",
@@ -24,6 +25,7 @@ extension GroupMemberSheet {
             role: conv?.roles[uid],
             canEditRole: conv?.canSetRole(me, uid) ?? false)
         sheet.onInfo = onInfo
+        sheet.onRemoved = onRemoved
         return sheet
     }
 }
