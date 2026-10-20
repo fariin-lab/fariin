@@ -1224,6 +1224,8 @@ struct EditGroupView: View {
     @State private var desc = ""
     @State private var descLoaded = false
     @State private var newPhoto: Data?
+    @State private var removePhoto = false
+    @State private var confirmRemovePhoto = false
     @State private var showPicker = false
     @State private var saving = false
     @State private var error: String?
@@ -1237,7 +1239,7 @@ struct EditGroupView: View {
     private static let descCounterAppearsAt = 20
     private var descRemaining: Int { max(0, Self.descChars - desc.count) }
     private var changed: Bool {
-        newPhoto != nil || trimmed != title
+        newPhoto != nil || removePhoto || trimmed != title
             || trimmedDesc != description.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -1251,6 +1253,26 @@ struct EditGroupView: View {
                     VStack(spacing: 12) {
                         Button { nameFocused = false; showPicker = true } label: { photo }
                             .buttonStyle(.plain)
+                            // A small X on the photo removes it (owner 2026-10-20), after a yes.
+                            .overlay(alignment: .topTrailing) {
+                                if hasPhoto {
+                                    Button { nameFocused = false; confirmRemovePhoto = true } label: {
+                                        Image(systemName: "xmark")
+                                            .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
+                                            .frame(width: 28, height: 28)
+                                            .background(Circle().fill(Color(white: 0.3)))
+                                            .overlay(Circle().stroke(Color(uiColor: .systemGroupedBackground), lineWidth: 2))
+                                            .frame(width: 44, height: 44).contentShape(Circle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .offset(x: 8, y: -4)
+                                    .accessibilityLabel("Remove Photo")
+                                }
+                            }
+                            .alert("Remove group photo?", isPresented: $confirmRemovePhoto) {
+                                Button("Remove", role: .destructive) { newPhoto = nil; removePhoto = true }
+                                Button("Cancel", role: .cancel) {}
+                            }
                         Button { nameFocused = false; showPicker = true } label: {
                             Text("Set New Photo").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                                 .padding(.horizontal, 20).frame(height: 36)
@@ -1345,6 +1367,8 @@ struct EditGroupView: View {
         ZStack {
             if let newPhoto, let ui = UIImage(data: newPhoto) {
                 Image(uiImage: ui).resizable().scaledToFill()
+            } else if removePhoto {
+                AvatarView(name: title, photoUrl: nil, size: 120)
             } else {
                 AvatarView(name: title, photoUrl: photoUrl, size: 120)   // Edit Profile's size (owner 2026-10-18)
             }
@@ -1362,9 +1386,11 @@ struct EditGroupView: View {
                 guard let jpeg = ui.jpegData(compressionQuality: 0.9) else { return nil }
                 return ChatService.downscaledJPEG(jpeg, maxDimension: 1024, quality: 0.8)
             }.value
-            if let data { newPhoto = data }
+            if let data { newPhoto = data; removePhoto = false }
         }
     }
+
+    private var hasPhoto: Bool { newPhoto != nil || (!removePhoto && !(photoUrl ?? "").isEmpty) }
 
     /// Name first, then the photo; either refused is said, and the sheet stays.
     /// What the last Save already wrote, so a retry after a failed later step does not rename the
@@ -1387,6 +1413,7 @@ struct EditGroupView: View {
                     await MainActor.run { savedDesc = newDesc }
                 }
                 if let photo { _ = try await ChatService.uploadGroupAvatar(cid: cid, data: photo) }
+                else if removePhoto, !(photoUrl ?? "").isEmpty { try await ChatService.removeGroupAvatar(cid: cid) }
                 await MainActor.run { saving = false; dismiss() }
             } catch {
                 let msg = error.localizedDescription

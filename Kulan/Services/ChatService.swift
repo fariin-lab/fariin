@@ -554,6 +554,16 @@ enum ChatService {
         return url
     }
 
+    /// Remove the group's photo (owner 2026-10-20): the field goes and so does the file.
+    static func removeGroupAvatar(cid: String) async throws {
+        try await db.collection("conversations").document(cid).updateData([
+            "avatarUrl": FieldValue.delete(),
+            "updatedAt": FieldValue.serverTimestamp(),
+        ])
+        try? await Storage.storage().reference().child("profiles/group_\(cid).jpg").delete()
+        try? await writeSystemMessage(cid: cid, text: "\(myName()) removed the group photo")
+    }
+
     /// GROUP WALLPAPER — owner 2026-10-18: "only the owner or an admin can change it; when an admin
     /// changes it, everyone sees that wallpaper when they enter the group". The picture goes up as
     /// `profiles/group_<cid>-wp<millis>.jpg` (storage.rules `groupWallpaperEditor`, the same people
