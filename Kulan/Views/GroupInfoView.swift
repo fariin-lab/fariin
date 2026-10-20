@@ -1760,15 +1760,19 @@ struct GroupMemberSheet: View {
         guard let h = profile?.handle, !h.isEmpty else { return " " }
         return "@\(h)"
     }
-    private var expanded: Bool { showEdit || showProfileHere || growing }
+    private var expanded: Bool { showProfileHere || growing }
 
     var body: some View {
         NavigationStack {
             shortCard
             .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(isPresented: $showEdit) { editPage }
+            // ⛔ ITS OWN PAGE, STRAIGHT AWAY (owner 2026-10-20: "the sheet opens full first, then
+            // the tag page"). It rises over the short card, which stays as it is behind it.
+            .sheet(isPresented: $showEdit) {
+                NavigationStack { editPage }
+                    .presentationDetents([.large])
+            }
             // Back to the short card once the pushed page goes (audit 2026-10-20: it stayed tall).
-            .onChange(of: showEdit) { _, on in if !on { growing = false } }
             .onChange(of: showProfileHere) { _, on in if !on { growing = false } }
             .navigationDestination(isPresented: $showProfileHere) {
                 ContactInfoView(cid: ChatService.convId(me, member.id), name: member.name,
@@ -1825,7 +1829,7 @@ struct GroupMemberSheet: View {
                 }
                 Button("Cancel", role: .cancel) {}
             }
-            .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
+            .alert("Could not do that", isPresented: Binding(get: { !showEdit && actionError != nil },
                                                               set: { if !$0 { actionError = nil } })) {
                 Button("OK", role: .cancel) {}
             } message: { Text(actionError ?? "") }
@@ -1880,22 +1884,90 @@ struct GroupMemberSheet: View {
     }
 
     /// Rights and tag, the owner's one-page editor, pushed from the card. Done writes it all.
+    // ⛔ THE EDIT PAGE, REDESIGNED (owner 2026-10-20: "looks basic"). The person on top with their
+    // badges as they will read, then the grouped cards the rest of the group pages use: Role, what
+    // an admin may do, and the tag with its count, an example and Remove Tag.
     private var editPage: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                if mayEditRights { roleSwitch.padding(.top, 12) }
-                if mayEditRights && adminSelected { rightsRows }
-                if canEditRole { tagRow }
+        Form {
+            Section {
+                VStack(spacing: 8) {
+                    AvatarView(name: member.name, photoUrl: gatedMemberPhoto, size: 80)
+                    HStack(spacing: 6) {
+                        Text(member.name).font(.title3.weight(.semibold)).lineLimit(1)
+                        VerifiedMark(uid: member.id, size: 15)
+                    }
+                    HStack(spacing: 6) { headerChip }
+                        .animation(.snappy(duration: 0.2), value: cleanedRole)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .listRowBackground(Color.clear)
             }
-            .padding(.bottom, 32)
-            .animation(.snappy(duration: 0.25), value: adminSelected)
+            if mayEditRights {
+                Section {
+                    Picker("Role", selection: adminBinding) {
+                        Text("Member").tag(false)
+                        Text("Admin").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(busy)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets())
+                } header: {
+                    Text("Role")
+                }
+            }
+            if mayEditRights && adminSelected {
+                Section {
+                    ForEach(shownRights, id: \.id) { r in
+                        Toggle(r.shortLabel, isOn: Binding(
+                            get: { rights.contains(r.rawValue) },
+                            set: { on in if on { rights.insert(r.rawValue) } else { rights.remove(r.rawValue) } }))
+                        .disabled(busy)
+                    }
+                } header: {
+                    Text("What this admin can do")
+                }
+            }
+            if canEditRole {
+                Section {
+                    HStack(spacing: 12) {
+                        Image(systemName: "tag").foregroundStyle(.secondary)
+                        if let e = role?.emoji { Text(e) }
+                        TextField("Add a tag", text: $roleText)
+                            .submitLabel(.done)
+                            .disabled(busy)
+                        Text("\(roleText.utf16.count)/\(GroupRole.maxText)")
+                            .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Tag")
+                } footer: {
+                    Text("A short word next to the name in this group, like Host or Teacher. Everyone in the group sees it.")
+                }
+                if !(role?.text ?? "").isEmpty || !roleText.isEmpty {
+                    Section {
+                        Button("Remove Tag", role: .destructive) { roleText = "" }
+                            .disabled(busy)
+                    }
+                }
+            }
         }
         .scrollDismissesKeyboard(.interactively)
-        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
-        .navigationTitle(firstName)
+        .navigationTitle(canEditRole && !mayEditRights ? (member.id == me ? "My Tag" : "Tag") : firstName)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)
-        .toolbar { ToolbarItem(placement: .topBarTrailing) { doneButton } }
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { showEdit = false } label: { Image(systemName: "xmark") }
+                    .accessibilityLabel("Close")
+            }
+            ToolbarItem(placement: .topBarTrailing) { doneButton }
+        }
+        // Said on this page: the card's own alert is under it while it is up.
+        .alert("Could not do that", isPresented: Binding(get: { showEdit && actionError != nil },
+                                                          set: { if !$0 { actionError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(actionError ?? "") }
     }
 
     /// Done: live only once something changed, a spinner while it writes.
@@ -2072,12 +2144,12 @@ struct GroupMemberSheet: View {
         }
         // No Member Tag or Mute rows on the card (owner 2026-10-19).
         if mayEditRights && member.isAdmin {
-            rows.append(AnyView(iconRow("slider.horizontal.3", "Edit Admin Rights") { growThenPush { showEdit = true } }))
+            rows.append(AnyView(iconRow("slider.horizontal.3", "Edit Admin Rights") { showEdit = true }))
         }
         // My own card: my own tag (owner 2026-10-20). The rules let the owner, and admins with
         // change info, tag themselves.
         if member.id == me && canEditRole {
-            rows.append(AnyView(iconRow("tag", role == nil ? "Add My Tag" : "Edit My Tag") { growThenPush { showEdit = true } }))
+            rows.append(AnyView(iconRow("tag", role == nil ? "Add My Tag" : "Edit My Tag") { showEdit = true }))
         }
         if canTransfer {
             rows.append(AnyView(iconRow("crown", "Transfer Ownership") { confirmTransfer = true }))
