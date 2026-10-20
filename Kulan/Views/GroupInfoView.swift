@@ -438,7 +438,8 @@ struct GroupInfoView: View {
                 // The description reads as text, the count as a label (owner 2026-10-20: the two
                 // looked the same): full ink and the body size, a little more room above it.
                 // Soft, not full white (owner 2026-10-20): above the count's grey, below the name.
-                Text(desc).font(.body).foregroundStyle(ink.opacity(0.68))
+                // 15pt, not the 17pt body (owner 2026-10-20: "looks big", "don't make too much small").
+                Text(desc).font(.subheadline).foregroundStyle(ink.opacity(0.68))
                     .lineLimit(3).multilineTextAlignment(.center)
                     .padding(.top, 6)
             } else if canEditInfo {
