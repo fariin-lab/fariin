@@ -206,6 +206,10 @@ enum ProfilePhotoIndex {
             store = Dictionary(uniqueKeysWithValues: store.prefix(300).map { ($0.key, $0.value) })
         }
         persist()
+        // The banners' copy of the chats' photos follows (owner 2026-10-20: a message banner showed
+        // the app icon). It was written only when the chat list changed, which at launch is before
+        // the profiles have loaded, so a 1:1 chat's photo was missing there until the list moved.
+        DispatchQueue.main.async { NotifShare.noteConversations(ConversationsRepository.shared.conversations) }
     }
 
     /// Forget everything. Sign-out only: the next account must not inherit the last one's answers.
