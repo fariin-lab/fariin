@@ -111,11 +111,13 @@ struct GroupSettingsView: View {
         // asks first: in a group it deletes for every member.
         // The question after the page is really down (its onDismiss), not on a guessed delay
         // (audit 2026-10-20: a slow close dropped the alert).
-        .sheet(isPresented: $showDisappear, onDismiss: {
-            if let s = chosenDisappear { chosenDisappear = nil; pendingDisappear = s }
-        }) {
+        // A full page from the right, not a sheet (owner 2026-10-20). The question once it is back.
+        .onChange(of: showDisappear) { _, open in
+            if !open, let s = chosenDisappear { chosenDisappear = nil; pendingDisappear = s }
+        }
+        .navigationDestination(isPresented: $showDisappear) {
             let current = conv?.disappearSeconds ?? 0
-            DisappearingMessagesView(cid: cid, current: current) { s in
+            DisappearingMessagesView(cid: cid, current: current, pushed: true) { s in
                 if s == 0 { if current != 0 { setTimer(0) } }
                 else if s != current {
                     chosenDisappear = s
@@ -164,7 +166,7 @@ struct GroupSettingsView: View {
                 NavigationLink {
                     ChatHistoryForNewMembersPage(cid: cid, hidden: (conv?.hideHistoryAt ?? 0) > 0)
                 } label: {
-                    valueRow("eye.slash", "Chat History for New Members",
+                    valueRow("eye.slash", "Chat History",
                              (conv?.hideHistoryAt ?? 0) > 0 ? "Hidden" : "Visible")
                 }
             }
@@ -386,7 +388,12 @@ struct GroupSettingsView: View {
                 }
                 Slider(value: Binding(
                     get: { Double(slowDraft ?? index) },
-                    set: { slowDraft = Int($0.rounded()) }),
+                    // A tick per step, as the link limits have (owner 2026-10-20).
+                    set: { v in
+                        let i = Int(v.rounded())
+                        if i != (slowDraft ?? index) { UISelectionFeedbackGenerator().selectionChanged() }
+                        slowDraft = i
+                    }),
                     in: 0...Double(Self.slowSteps.count - 1), step: 1) { editing in
                         guard !editing, let d = slowDraft else { return }
                         let secs = Self.slowSteps[d].0

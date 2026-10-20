@@ -5,6 +5,9 @@ import SwiftUI
 struct DisappearingMessagesView: View {
     let cid: String
     var onApply: (Int) -> Void
+    /// Pushed onto a navigation stack (Group Settings, owner 2026-10-20) rather than a sheet: no
+    /// stack of its own and no X, the back arrow instead.
+    var pushed = false
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
@@ -19,13 +22,18 @@ struct DisappearingMessagesView: View {
         ("8 hours", 28_800), ("1 hour", 3_600), ("5 minutes", 300), ("30 seconds", 30),
     ]
 
-    init(cid: String, current: Int, onApply: @escaping (Int) -> Void) {
+    init(cid: String, current: Int, pushed: Bool = false, onApply: @escaping (Int) -> Void) {
+        self.pushed = pushed
         self.cid = cid; self.onApply = onApply
         _selected = State(initialValue: current)
     }
 
     var body: some View {
-        NavigationStack {
+        if pushed { page } else { NavigationStack { page } }
+    }
+
+    private var page: some View {
+        Group {
             // Native inset-grouped List (not a custom card): standard rows, dividers, checkmark + chevron.
             List {
                 Section {
@@ -65,7 +73,8 @@ struct DisappearingMessagesView: View {
             .navigationTitle("Disappearing Messages")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if #available(iOS 26.0, *) {
+                if pushed {
+                } else if #available(iOS 26.0, *) {
                     ToolbarItem(placement: .cancellationAction) { CloseXButton { dismiss() } }
                         .sharedBackgroundVisibility(.hidden)
                 } else {

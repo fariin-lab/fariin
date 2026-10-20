@@ -81,6 +81,7 @@ struct GroupTypeView: View {
     // MARK: Private: the invite link and content protection here (owner 2026-10-20)
 
     @State private var shareCode: String?
+    @State private var protectOn: Bool?
     @State private var copied = false
 
     private var inviteURL: String? {
@@ -114,7 +115,8 @@ struct GroupTypeView: View {
                     ShareLink(item: u) {
                         Text("Share Link").fontWeight(.semibold).foregroundStyle(.white)
                             .frame(maxWidth: .infinity).frame(height: 48)
-                            .background(Capsule().fill(Color.accentColor))
+                            // The app's tint is `.primary` (white in dark mode, so the button was blank).
+                            .background(Capsule().fill(Color(hex: 0x2392FE)))
                     }
                     .buttonStyle(.plain)
                 }
@@ -144,9 +146,18 @@ struct GroupTypeView: View {
             Text("Make extra links that end after a time or a number of people.")
         }
         Section {
+            // Holds the tap at once (owner 2026-10-20: it was hard to switch off, because it read the
+            // group copy, which snapped it back until the save came round). Follows the group after.
             Toggle("Protect Content", isOn: Binding(
-                get: { conv?.isRestricted ?? false },
-                set: { v in Task { do { try await ChatService.setGroupRestricted(cid, on: v) } catch { saveError = error.localizedDescription } } }))
+                get: { protectOn ?? conv?.isRestricted ?? false },
+                set: { v in
+                    protectOn = v
+                    Task {
+                        do { try await ChatService.setGroupRestricted(cid, on: v) }
+                        catch { protectOn = nil; saveError = error.localizedDescription }
+                    }
+                }))
+                .onChange(of: conv?.isRestricted) { _, now in if now == protectOn { protectOn = nil } }
         } header: {
             Text("Forwarding from this group")
         } footer: {

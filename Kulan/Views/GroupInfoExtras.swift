@@ -330,10 +330,14 @@ struct GroupHistoryView: View {
         .listSectionSpacing(.compact)
         .animation(.snappy(duration: 0.25), value: shelf)
         .animation(.snappy(duration: 0.25), value: actor)
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search history")
+        // At the foot, as Members has it (owner 2026-10-20).
+        .searchable(text: $query, placement: .toolbar, prompt: "Search history")
         .navigationTitle("History")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .topBarTrailing) { actorMenu } }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) { actorMenu }
+            DefaultToolbarItem(kind: .search, placement: .bottomBar)
+        }
         .refreshable { await load() }
         .task { await load() }
     }

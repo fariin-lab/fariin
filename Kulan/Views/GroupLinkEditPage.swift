@@ -148,10 +148,17 @@ struct GroupLinkEditPage: View {
     }
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
+        // An X, and a blue Create (owner 2026-10-20).
+        if #available(iOS 26.0, *) {
+            ToolbarItem(placement: .topBarLeading) { CloseXButton { dismiss() } }
+                .sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItem(placement: .topBarLeading) { CloseXButton { dismiss() } }
+        }
         ToolbarItem(placement: .topBarTrailing) {
             if saving { ProgressView() } else {
                 Button(link == nil ? "Create" : "Save") { save() }.fontWeight(.semibold)
+                    .buttonStyle(.glassProminent).tint(Color(hex: 0x2392FE))
             }
         }
     }
