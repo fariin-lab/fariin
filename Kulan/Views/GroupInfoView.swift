@@ -581,7 +581,7 @@ struct GroupInfoView: View {
 
     @ViewBuilder private var menuChatItems: some View {
         Section {
-            Button { showSimilar = true } label: { Label("Create a Similar Group", systemImage: "person.3") }
+            // No Create a Similar Group (owner 2026-10-19): rarely used; New Group does the same.
             Button { confirmClear = true } label: { Label("Clear Chat", systemImage: "eraser") }
         }
     }
