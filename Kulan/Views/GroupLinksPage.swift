@@ -54,7 +54,10 @@ struct GroupLinksPage: View {
     @ViewBuilder private var content: some View {
         if let list {
             primarySection(list.primary)
-            if let p = list.primary { approvalSection(p) }
+            if let p = list.primary {
+                linkActionsSection
+                approvalSection(p)
+            }
             moreSection(list.links)
             if !list.revoked.isEmpty { revokedSection(list.revoked) }
         } else if let loadError {
@@ -76,7 +79,6 @@ struct GroupLinksPage: View {
         Section {
             PrimaryLinkCard(link: p, working: working,
                             onCopy: copy, onShareInApp: { shareText = $0.url }, onQR: { qrLink = $0 },
-                            onReset: { confirmReset = true }, onOff: { confirmOff = true },
                             onCreate: createPrimary)
                 .listRowInsets(EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16))
         } header: {
@@ -84,6 +86,31 @@ struct GroupLinksPage: View {
         } footer: {
             Text(p == nil ? "This group has no invite link. People can only be added by its members."
                           : "Anyone with Fariin who has this link can join the group.")
+        }
+    }
+
+    /// Reset and Turn Off as plain rows (owner 2026-10-19: they hid behind the ⋯), each asked first.
+    private var linkActionsSection: some View {
+        Section {
+            Button { confirmReset = true } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 17)).frame(width: 26)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Reset Link")
+                        Text("Makes a new link. The old one stops working.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                .foregroundStyle(.primary)
+            }
+            .disabled(working)
+            Button(role: .destructive) { confirmOff = true } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "xmark.circle").font(.system(size: 17)).frame(width: 26)
+                    Text("Turn Off Link")
+                }
+            }
+            .disabled(working)
         }
     }
 
@@ -266,12 +293,13 @@ private struct PrimaryLinkCard: View {
     let onCopy: (GroupLink) -> Void
     let onShareInApp: (GroupLink) -> Void
     let onQR: (GroupLink) -> Void
-    let onReset: () -> Void
-    let onOff: () -> Void
     let onCreate: () -> Void
 
+    // ⛔ NOTHING HIDDEN (owner 2026-10-19: the ⋯ and the Share menu kept the actions out of sight).
+    // Tap the link to copy it; four named glass circles under it; Reset and Turn Off are rows on
+    // the page below this card.
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
             pill
             buttons
             if let link { JoinedFacesRow(link: link) }
@@ -279,45 +307,38 @@ private struct PrimaryLinkCard: View {
     }
 
     private var pill: some View {
-        HStack(spacing: 8) {
-            Text(link?.shortURL ?? "No invite link")
-                .font(.system(size: 17))
-                .foregroundStyle(link == nil ? Color.secondary : Color.primary)
-                .lineLimit(1).truncationMode(.middle)
-                .frame(maxWidth: .infinity)
-            if let link {
-                Menu {
-                    Button { onCopy(link) } label: { Label("Copy", systemImage: "doc.on.doc") }
-                    Button { onQR(link) } label: { Label("QR Code", systemImage: "qrcode") }
-                    Button { onReset() } label: { Label("Reset Link", systemImage: "arrow.clockwise") }
-                    Button(role: .destructive) { onOff() } label: { Label("Turn Off Link", systemImage: "xmark.circle") }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 36, height: 36)
-                        .contentShape(Rectangle())
+        Button { if let link { onCopy(link) } } label: {
+            HStack(spacing: 8) {
+                Text(link?.shortURL ?? "No invite link")
+                    .font(.system(size: 17))
+                    .foregroundStyle(link == nil ? Color.secondary : Color.primary)
+                    .lineLimit(1).truncationMode(.middle)
+                if link != nil {
+                    Text("Tap to copy").font(.caption).foregroundStyle(.secondary).fixedSize()
                 }
-                .disabled(working)
-                .accessibilityLabel("More")
             }
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity)
+            .frame(height: 52)
+            .background(Capsule().fill(Color(uiColor: .tertiarySystemFill)))
+            .contentShape(Capsule())
         }
-        .padding(.leading, 16).padding(.trailing, 8)
-        .frame(height: 52)
-        .background(Capsule().fill(Color(uiColor: .tertiarySystemFill)))
+        .buttonStyle(.plain)
+        .disabled(link == nil)
+        .accessibilityLabel(link.map { "\($0.shortURL), copy" } ?? "No invite link")
     }
 
     @ViewBuilder private var buttons: some View {
         if let link {
-            HStack(spacing: 8) {
-                Button { onCopy(link) } label: { LinkCapsuleLabel(title: "Copy", icon: "doc.on.doc") }
-                    .buttonStyle(.plain)
-                Menu {
-                    Button { onShareInApp(link) } label: { Label("Send in Fariin", systemImage: "paperplane") }
-                    ShareLink(item: URL(string: link.url) ?? URL(string: "https://fariin.com")!) {
-                        Label("Other Apps", systemImage: "square.and.arrow.up")
-                    }
-                } label: { LinkCapsuleLabel(title: "Share", icon: "square.and.arrow.up") }
+            HStack(spacing: 0) {
+                circle("doc.on.doc", "Copy") { onCopy(link) }
+                circle("paperplane.fill", "Send") { onShareInApp(link) }
+                ShareLink(item: URL(string: link.url) ?? URL(string: "https://fariin.com")!) {
+                    PosterActionIcon(icon: "square.and.arrow.up", diameter: 54, onPhoto: false, label: "Share")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Share to other apps")
+                circle("qrcode", "QR Code") { onQR(link) }
             }
         } else {
             Button(action: onCreate) { LinkCapsuleLabel(title: working ? "Creating…" : "Create Link", icon: "link") }
@@ -325,9 +346,18 @@ private struct PrimaryLinkCard: View {
                 .disabled(working)
         }
     }
+
+    private func circle(_ icon: String, _ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            PosterActionIcon(icon: icon, diameter: 54, onPhoto: false, label: title)
+        }
+        // Plain, or a List row fires every button in it on one tap.
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
 }
 
-/// A 52pt round blue button face (the card's Copy and Share).
+/// A 52pt round blue button face (the card's Create Link when there is none).
 private struct LinkCapsuleLabel: View {
     let title: String
     let icon: String
