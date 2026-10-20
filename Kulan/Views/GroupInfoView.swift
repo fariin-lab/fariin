@@ -1811,7 +1811,8 @@ struct GroupMemberSheet: View {
                 Text("They will be able to manage the group with the usual admin rights. You can change or remove them any time.")
             }
             .alert("Dismiss \(member.name) as admin?",
-                                isPresented: $confirmDismissAdmin) {
+                                isPresented: Binding(get: { !showEdit && confirmDismissAdmin },
+                                                     set: { confirmDismissAdmin = $0 })) {
                 // Same write as Done with Member picked: demote, then the tag if it changed.
                 Button("Dismiss Admin", role: .destructive) { commit(demote: true) }
                 Button("Cancel", role: .cancel) {}
@@ -1969,6 +1970,14 @@ struct GroupMemberSheet: View {
                     .accessibilityLabel("Close")
             }
             ToolbarItem(placement: .topBarTrailing) { doneButton }
+        }
+        // Asked on this page when Member is picked here (audit 2026-10-20: the card's own confirm
+        // is under this sheet and never showed, so Done did nothing).
+        .alert("Dismiss \(member.name) as admin?",
+               isPresented: Binding(get: { showEdit && confirmDismissAdmin },
+                                    set: { confirmDismissAdmin = $0 })) {
+            Button("Dismiss Admin", role: .destructive) { commit(demote: true) }
+            Button("Cancel", role: .cancel) {}
         }
         // Said on this page: the card's own alert is under it while it is up.
         .alert("Could not do that", isPresented: Binding(get: { showEdit && actionError != nil },
