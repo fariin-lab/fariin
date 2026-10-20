@@ -700,9 +700,8 @@ struct GroupMembersListView: View {
                 }
             }
         }
-        .confirmationDialog("Remove \(conv?.names[pendingRemove ?? ""] ?? "this member") from the group?",
-                            isPresented: Binding(get: { pendingRemove != nil }, set: { if !$0 { pendingRemove = nil } }),
-                            titleVisibility: .visible) {
+        .alert("Remove \(conv?.names[pendingRemove ?? ""] ?? "this member") from the group?",
+                            isPresented: Binding(get: { pendingRemove != nil }, set: { if !$0 { pendingRemove = nil } })) {
             Button("Remove", role: .destructive) {
                 guard let uid = pendingRemove else { return }
                 let name = conv?.names[uid] ?? "User"

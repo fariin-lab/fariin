@@ -1737,14 +1737,14 @@ struct GroupMemberSheet: View {
                 // Typing or pasting past the limit keeps the first 24, as RoleEditorView does.
                 if new.utf16.count > GroupRole.maxText { roleText = GroupRole.fit(new, max: GroupRole.maxText) }
             }
-            .confirmationDialog("Dismiss \(member.name) as admin?",
-                                isPresented: $confirmDismissAdmin, titleVisibility: .visible) {
+            .alert("Dismiss \(member.name) as admin?",
+                                isPresented: $confirmDismissAdmin) {
                 // Same write as Done with Member picked: demote, then the tag if it changed.
                 Button("Dismiss Admin", role: .destructive) { commit(demote: true) }
                 Button("Cancel", role: .cancel) {}
             }
-            .confirmationDialog("Make \(member.name) the owner?",
-                                isPresented: $confirmTransfer, titleVisibility: .visible) {
+            .alert("Make \(member.name) the owner?",
+                                isPresented: $confirmTransfer) {
                 Button("Transfer Ownership", role: .destructive) {
                     run { try await ChatService.transferGroupOwnership(cid: cid, to: member.id, name: member.name) }
                 }
@@ -1752,8 +1752,8 @@ struct GroupMemberSheet: View {
             } message: {
                 Text("\(member.name) will have full control of this group, including over you. You will stay an admin.")
             }
-            .confirmationDialog("Remove \(member.name) from the group?",
-                                isPresented: $confirmRemove, titleVisibility: .visible) {
+            .alert("Remove \(member.name) from the group?",
+                                isPresented: $confirmRemove) {
                 Button("Remove", role: .destructive) {
                     let name = member.name, done = onRemoved
                     run {

@@ -238,21 +238,20 @@ private struct GroupLinksDialogs: ViewModifier {
                    isPresented: Binding(get: { linkError != nil }, set: { if !$0 { linkError = nil } })) {
                 Button("OK", role: .cancel) {}
             } message: { Text(linkError ?? "") }
-            .confirmationDialog("Reset Link", isPresented: $confirmReset, titleVisibility: .visible) {
+            .alert("Reset Link", isPresented: $confirmReset) {
                 Button("Reset Link", role: .destructive) { onReset() }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("A new link replaces this one, and the current link stops working for everyone who has it.") }
-            .confirmationDialog("Turn Off Link", isPresented: $confirmOff, titleVisibility: .visible) {
+            .alert("Turn Off Link", isPresented: $confirmOff) {
                 Button("Turn Off Link", role: .destructive) { onOff() }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("Nobody will be able to join with this link. You can make a new one later.") }
-            .confirmationDialog("Delete All Revoked", isPresented: $confirmDeleteAll, titleVisibility: .visible) {
+            .alert("Delete All Revoked", isPresented: $confirmDeleteAll) {
                 Button("Delete All", role: .destructive) { onDeleteAll() }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("Revoked links are removed from this list for good.") }
-            .confirmationDialog("Revoke Link",
-                                isPresented: Binding(get: { revokeTarget != nil }, set: { if !$0 { revokeTarget = nil } }),
-                                titleVisibility: .visible, presenting: revokeTarget) { l in
+            .alert("Revoke Link",
+                                isPresented: Binding(get: { revokeTarget != nil }, set: { if !$0 { revokeTarget = nil } }), presenting: revokeTarget) { l in
                 Button("Revoke", role: .destructive) { onRevoke(l) }
                 Button("Cancel", role: .cancel) {}
             } message: { _ in Text("The link stops working at once. It moves to Revoked Links.") }
