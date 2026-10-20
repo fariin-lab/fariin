@@ -9512,20 +9512,14 @@ private struct CallBarOrPin<Pin: View>: View {
         if callShown { bar.transition(.move(edge: .top).combined(with: .opacity)) } else { pin() }
     }
 
-    private static func list(_ n: [String]) -> String {
-        switch n.count {
-        case 0: return ""
-        case 1: return n[0]
-        case 2: return "\(n[0]) and \(n[1])"
-        default: return "\(n[0]), \(n[1]) and \(n.count - 2) more"
-        }
-    }
-
+    /// "Video Chat" / "Voice Chat" over "4 participants" (owner 2026-10-20, with his picture).
+    private var heading: String { video ? "Video Chat" : "Voice Chat" }
     private var subtitle: String {
-        let talking = people.filter(\.mic).map(\.name)
-        if !talking.isEmpty { return Self.list(talking) + (talking.count == 1 ? " has the mic on" : " have the mic on") }
-        if !people.isEmpty { return Self.list(people.map(\.name)) + " in the call" }
-        return video ? "Video call" : "Voice call"
+        switch people.count {
+        case 0: return "Live now"
+        case 1: return "1 participant"
+        default: return "\(people.count) participants"
+        }
     }
 
     private var bar: some View {
@@ -9533,13 +9527,8 @@ private struct CallBarOrPin<Pin: View>: View {
             HStack(spacing: 10) {
                 faces
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
-                    HStack(spacing: 4) {
-                        if people.contains(where: \.mic) {
-                            Image(systemName: "waveform").font(.caption2.weight(.semibold)).foregroundStyle(.green)
-                        }
-                        Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    }
+                    Text(heading).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 Text("JOIN")
@@ -9555,7 +9544,7 @@ private struct CallBarOrPin<Pin: View>: View {
         .buttonStyle(.plain)
         .padding(.horizontal, 20)
         .padding(.top, 6).padding(.bottom, 2)
-        .accessibilityLabel("\(title), \(subtitle). Join")
+        .accessibilityLabel("\(heading) in \(title), \(subtitle). Join")
     }
 
     /// Up to three photos, overlapping, a green dot on whoever has the mic on; the call icon while

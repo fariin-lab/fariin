@@ -1,5 +1,6 @@
 import SwiftUI
 import FirebaseFirestore
+import FirebaseFunctions
 
 // ⛔ LIVE GROUP CALLS ON THE CALLS TAB (owner 2026-10-20: "a group I'm in has a call going; show it
 // on the Calls page with Join, minimal, our own design"). One quiet row per live call: the group's
@@ -75,9 +76,13 @@ struct LiveGroupCallRow: View {
     let conv: Conversation?
     let onJoin: () -> Void
 
-    private var title: String { conv?.title ?? "Group" }
-    private var me: String { AuthService.shared.uid ?? "" }
+    /// Who is in it, from the media server (groupCallPeek), asked while the row is on screen.
+    @State private var people: [String] = []
 
+    private var title: String { conv?.title ?? "Group" }
+
+    // ⛔ THE CHAT'S CALL BAR, AS A ROW (owner 2026-10-20: "exactly like this, in the chat and in the
+    // call list"): the group, "Video Chat · 4 participants", the faces of who is in it, green JOIN.
     var body: some View {
         HStack(spacing: 12) {
             AvatarView(name: title, photoUrl: conv?.avatarUrl, size: 44)
@@ -90,23 +95,53 @@ struct LiveGroupCallRow: View {
                 Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
+            faces
             Button(action: onJoin) {
-                Label("Join", systemImage: live.video ? "video.fill" : "phone.fill")
-                    .labelStyle(.titleAndIcon)
-                    .font(.subheadline.weight(.semibold))
+                Text("JOIN")
+                    .font(.subheadline.weight(.bold))
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 14).frame(height: 32)
+                    .padding(.horizontal, 16).frame(height: 32)
                     .background(Capsule().fill(Color.green))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Join call in \(title)")
+            .accessibilityLabel("Join the call in \(title)")
         }
         .padding(.vertical, 4)
+        .task(id: live.id) { await follow() }
     }
 
     private var subtitle: String {
-        // No count: a group call's doc does not record who is in it (only call rooms do), so a
-        // number here would be wrong (audit 2026-10-20).
-        "\(live.video ? "Video call" : "Voice call") · Live"
+        let kind = live.video ? "Video Chat" : "Voice Chat"
+        switch people.count {
+        case 0: return kind
+        case 1: return "\(kind) · 1 participant"
+        default: return "\(kind) · \(people.count) participants"
+        }
+    }
+
+    @ViewBuilder private var faces: some View {
+        if !people.isEmpty {
+            HStack(spacing: -8) {
+                ForEach(Array(people.prefix(3).enumerated()), id: \.element) { i, uid in
+                    AvatarView(name: conv?.names[uid] ?? "", photoUrl: conv?.photos[uid], size: 26)
+                        .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2))
+                        .zIndex(Double(3 - i))
+                }
+            }
+            .accessibilityHidden(true)
+        }
+    }
+
+    private func follow() async {
+        let fn = Functions.functions(region: "me-central1").httpsCallable("groupCallPeek")
+        while !Task.isCancelled {
+            if let r = try? await fn.call(["cid": live.id]), let d = r.data as? [String: Any],
+               let list = d["people"] as? [[String: Any]] {
+                let uids = list.compactMap { $0["uid"] as? String }
+                if uids != people { people = uids }
+            }
+            try? await Task.sleep(nanoseconds: 15_000_000_000)
+        }
     }
 }
+
