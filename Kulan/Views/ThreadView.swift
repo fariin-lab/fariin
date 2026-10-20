@@ -5114,7 +5114,8 @@ struct ThreadView: View {
         if isGroup && CallFeatures.groupCalls && !notAMember && (conversation?.canStartCall(me) ?? true) {
             return .conversation(audio: { startGroupCall(video: false) },
                                  video: { startGroupCall(video: true) },
-                                 callsEnabled: callsEnabled)
+                                 callsEnabled: callsEnabled,
+                                 oneButton: true)   // one button, Voice / Video menu (owner 2026-10-20)
         }
         return .conversation(audio: nil, video: nil, callsEnabled: true)
     }

@@ -38,7 +38,8 @@ struct ChatNavigationItem: UIViewRepresentable {
     /// What sits either side of the header. Mirrors their `uiMode` switch.
     enum Bar {
         /// Normal: audio and video on the right, nothing on the left, system back button.
-        case conversation(audio: (() -> Void)?, video: (() -> Void)?, callsEnabled: Bool)
+        /// `oneButton` (owner 2026-10-20, groups): a single video button whose menu picks voice or video.
+        case conversation(audio: (() -> Void)?, video: (() -> Void)?, callsEnabled: Bool, oneButton: Bool = false)
         /// Their selection mode: "Delete All" on the left, system Cancel on the right, no back button.
         case selection(deleteAll: () -> Void, deleteEnabled: Bool, cancel: () -> Void)
         /// A screen with its own single right item (the official channel's bell).
@@ -48,8 +49,8 @@ struct ChatNavigationItem: UIViewRepresentable {
         /// re-evaluation that only produced new closure instances rebuilds nothing.
         var signature: String {
             switch self {
-            case let .conversation(audio, video, enabled):
-                return "conv:\(audio != nil):\(video != nil):\(enabled)"
+            case let .conversation(audio, video, enabled, one):
+                return "conv:\(audio != nil):\(video != nil):\(enabled):\(one)"
             case let .selection(_, enabled, _):
                 return "sel:\(enabled)"
             case let .custom(buttons):
@@ -134,9 +135,19 @@ struct ChatNavigationItem: UIViewRepresentable {
         /// in `assertAll`, which is the one place that writes to the navigationItem.
         private func rebuildItems() {
             switch bar {
-            case let .conversation(audio, video, enabled):
+            case let .conversation(audio, video, enabled, one):
                 var items: [UIBarButtonItem] = []
-                if audio != nil {
+                if one, audio != nil, video != nil {
+                    // One video button; a tap shows the menu (owner 2026-10-20, groups).
+                    let menu = UIMenu(children: [
+                        UIAction(title: "Voice Call", image: UIImage(systemName: "phone")) { [weak self] _ in self?.tapAudio() },
+                        UIAction(title: "Video Call", image: UIImage(systemName: "video")) { [weak self] _ in self?.tapVideo() },
+                    ])
+                    let item = UIBarButtonItem(image: MenuIcon.barImage("ic_call_video"), menu: menu)
+                    item.isEnabled = enabled
+                    item.accessibilityLabel = "Call"
+                    items.append(item)
+                } else if audio != nil {
                     // Correct today only because this SVG happens to be 24pt; through the
                     // renderer it stays correct if the drawing is ever replaced.
                     let item = UIBarButtonItem(image: MenuIcon.barImage("ic_call_voice"),
@@ -145,7 +156,7 @@ struct ChatNavigationItem: UIViewRepresentable {
                     item.accessibilityLabel = "Voice call"
                     items.append(item)
                 }
-                if video != nil {
+                if video != nil, !(one && audio != nil) {
                     let item = UIBarButtonItem(image: MenuIcon.barImage("ic_call_video"),
                                                primaryAction: UIAction { [weak self] _ in self?.tapVideo() })
                     item.isEnabled = enabled

@@ -191,7 +191,7 @@ struct PollComposerSheet: View {
                     Picker(selection: $ends) {
                         ForEach(EndChoice.allCases, id: \.self) { Text($0.label).tag($0) }
                     } label: {
-                        Label("Ends", systemImage: "timer")
+                        row("timer", "Ends")
                     }
                 } footer: {
                     Text(footer)
@@ -201,7 +201,9 @@ struct PollComposerSheet: View {
             .navigationTitle("New Poll").navigationBarTitleDisplayMode(.inline)
             .onChange(of: multiple) { _, many in if !many, correct.count > 1 { correct = [correct.min()!] } }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Send") { send() }.fontWeight(.semibold).disabled(!canSend)
                 }
@@ -218,7 +220,15 @@ struct PollComposerSheet: View {
     }
 
     private func setting(_ icon: String, _ title: String, _ on: Binding<Bool>) -> some View {
-        Toggle(isOn: on) { Label(title, systemImage: icon) }
+        Toggle(isOn: on) { row(icon, title) }
+    }
+
+    /// A small glyph (owner 2026-10-20: the icons read too big) in a fixed slot, then the title.
+    private func row(_ icon: String, _ title: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon).font(.system(size: 15)).foregroundStyle(.secondary).frame(width: 22)
+            Text(title)
+        }
     }
 
     private func optionRow(_ i: Int) -> some View {
