@@ -214,7 +214,7 @@ private struct GroupQRCardFace: View {
             if let img = qrImage(from: link, clearCentre: 0.22, ink: ink) {
                 ZStack {
                     Image(uiImage: img).interpolation(.none).resizable().scaledToFit()
-                    QRCentreMark(size: 46)
+                    QRCentreMark(size: 46, tint: Color(uiColor: ink))
                 }
                 .frame(maxWidth: 250)
                 .padding(.top, 14)

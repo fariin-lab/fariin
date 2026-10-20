@@ -987,9 +987,17 @@ private struct SavedCodeCard: View {
 /// ever missing.
 struct QRCentreMark: View {
     let size: CGFloat
+    /// The code's own colour (owner 2026-10-20: the mark stayed black on a blue, green or purple
+    /// code). The mark's black becomes this colour; its white bubble stays white.
+    var tint: Color? = nil
     var body: some View {
         if let ui = UIImage(named: "icon-black") {
-            Image(uiImage: ui).resizable().scaledToFill()
+            ZStack {
+                if let tint { Circle().fill(tint) }
+                Image(uiImage: ui).resizable().scaledToFill()
+                    .blendMode(tint == nil ? .normal : .screen)
+            }
+            .compositingGroup()
                 .frame(width: size, height: size)
                 .clipShape(Circle())
         } else {
