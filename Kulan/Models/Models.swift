@@ -1067,6 +1067,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// stickers, gifs, links, polls, location}; a missing key = allowed. firestore.rules
     /// `memberSendOk` enforces it.
     var memberSend: [String: Bool] = [:]
+    /// group: seconds a member waits between messages (2026-10-20), 0 = off. Admins never wait.
+    var slowModeSeconds: Int = 0
     var membersCanShareLink = false    // group: non-admins see Share and the QR of the invite link (owner 2026-10-19)
     /// 2026-10-19 groups v2 (owner): the group's document says `e2ee == false`, so its new messages
     /// are NOT end-to-end encrypted (ChatService.groupIsPlain). Server-written; false for every 1:1.
@@ -1223,6 +1225,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.membersCanEditInfo = data["membersCanEditInfo"] as? Bool ?? false
         self.onlyAdminsCall = data["onlyAdminsCall"] as? Bool ?? false
         self.memberSend = data["memberSend"] as? [String: Bool] ?? [:]
+        self.slowModeSeconds = (data["slowMode"] as? NSNumber)?.intValue ?? 0
         self.membersCanShareLink = false
         self.e2eeOff = (data["type"] as? String) == "group" && (data["e2ee"] as? Bool) == false
         self.lastPlainTag = data["lastPlainTag"] as? String

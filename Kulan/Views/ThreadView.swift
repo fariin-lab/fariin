@@ -5150,6 +5150,21 @@ struct ThreadView: View {
         return nil
     }
 
+    /// Slow mode (owner 2026-10-20): a member waits `slowModeSeconds` after their own last message.
+    /// Admins are never slowed. ⚠️ App-side only for now: the server does not count yet.
+    private func slowModeHeldBack() -> Bool {
+        guard isGroup, let conv = conversation, conv.slowModeSeconds > 0,
+              !conv.isAdmin(me), !conv.isOwner(me),
+              let last = repo.items.last(where: { $0.authorId == me && !$0.isSystem }) else { return false }
+        let left = Double(conv.slowModeSeconds) - Date().timeIntervalSince(last.createdAt)
+        guard left > 0 else { return false }
+        let n = Int(left.rounded(.up))
+        let wait = n >= 60 ? "\(Int((Double(n) / 60).rounded(.up))) min" : "\(n) sec"
+        restrictedNoticeText = "Slow mode is on. You can send again in \(wait)."
+        voiceRestricted = true
+        return true
+    }
+
     private func sendHeldBack(_ r: Conversation.Restrict?, _ kind: Conversation.SendKind) -> Bool {
         guard let text = heldBackText(r, kind) else { return false }
         restrictedNoticeText = text
@@ -6027,6 +6042,7 @@ struct ThreadView: View {
         // the whole message, so it stays in the field and the notice says why (2026-10-19).
         if LinkPreviewService.firstURL(in: text) != nil || text.range(of: "www.", options: .caseInsensitive) != nil,
            sendHeldBack(.sendLinks, .links) { return }
+        if slowModeHeldBack() { return }
         impact(.light)   // tactile send (parity with voice release)
         // ⛔ BEFORE THE COMPOSER IS TOUCHED. Everything below shrinks the bar — the input clears,
         // the reply banner animates away — and the list is pinned to the bottom, so it follows the

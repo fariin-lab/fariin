@@ -62,6 +62,9 @@ struct GroupSettingsView: View {
     /// The primary link's code from the server (getShareLink), as the requests page reads it; nil
     /// until it answers or when it fails, then the group doc's old `inviteCode`.
     @State private var shareCode: String?
+    /// Permissions page: Send media's kinds shown, and the slow-mode step while dragging.
+    @State private var mediaExpanded = false
+    @State private var slowDraft: Int?
 
     private var isPublicNow: Bool { conv?.isPublic ?? false }
 
@@ -73,6 +76,7 @@ struct GroupSettingsView: View {
             joiningSection
             peopleSection
             permissionsSection
+            chatSection
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Group Settings")
@@ -102,6 +106,59 @@ struct GroupSettingsView: View {
                                                           set: { if !$0 { actionError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(actionError ?? "") }
+        // Disappearing Messages, moved here from the group page (owner 2026-10-20). Turning it on
+        // asks first: in a group it deletes for every member.
+        .sheet(isPresented: $showDisappear) {
+            let current = conv?.disappearSeconds ?? 0
+            DisappearingMessagesView(cid: cid, current: current) { s in
+                if s == 0 { if current != 0 { setTimer(0) } }
+                else if s != current {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { pendingDisappear = s }
+                }
+            }
+        }
+        .alert("Turn on disappearing messages?", isPresented: Binding(
+            get: { pendingDisappear != nil }, set: { if !$0 { pendingDisappear = nil } })) {
+            Button("Cancel", role: .cancel) { pendingDisappear = nil }
+            Button("Turn On") {
+                if let s = pendingDisappear { setTimer(s) }
+                pendingDisappear = nil
+            }
+        } message: {
+            Text("New messages in this group will be deleted for all members after \(ChatService.disappearLabel(pendingDisappear ?? 86_400)). Everyone will see that you turned this on.")
+        }
+    }
+
+    @State private var showDisappear = false
+    @State private var pendingDisappear: Int?
+
+    private func setTimer(_ seconds: Int) {
+        Task {
+            if !(await ChatService.setDisappear(cid, seconds: seconds)) {
+                actionError = "The disappearing message timer was not changed. Check your connection and try again."
+            }
+        }
+    }
+
+    /// Disappearing Messages and, for admins, Member Changes (owner 2026-10-20: out of the group page).
+    private var chatSection: some View {
+        Section {
+            Button {
+                if canEdit { showDisappear = true } else { actionError = "Only admins can change this." }
+            } label: {
+                HStack {
+                    valueRow("timer", "Disappearing Messages",
+                             (conv?.disappearSeconds ?? 0) == 0 ? "Off" : ChatService.disappearLabel(conv?.disappearSeconds ?? 0))
+                    Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                }
+                .foregroundStyle(.primary)
+            }
+            if conv?.isAdmin(me) ?? false {
+                NavigationLink { GroupMemberChangesView(cid: cid) } label: {
+                    valueRow("clock.arrow.circlepath", "Member Changes", "")
+                }
+            }
+        }
     }
 
     // MARK: Joining
@@ -183,12 +240,41 @@ struct GroupSettingsView: View {
     }
 
     /// The member switches and Protect Content, on their own page.
+    /// ⛔ OWNER 2026-10-20, the reference's layout (our words): one card. Send messages, then Send
+    /// media with its count and a chevron that opens the kinds as tick rows in the same card, then
+    /// the other member rights; Slow mode under it; Protect content last.
     private var permissionsPage: some View {
         List {
-            membersCanSection
-            if !(conv?.onlyAdminsSend ?? false) { mediaRowSection }
+            Section {
+                switchRow("Send messages", get: { !$0.onlyAdminsSend }) { v in
+                    try await ChatService.setOnlyAdminsSend(cid: cid, !v)
+                }
+                if !(conv?.onlyAdminsSend ?? false) {
+                    mediaHeaderRow
+                    if mediaExpanded {
+                        ForEach(Conversation.SendKind.allCases, id: \.self) { k in mediaTickRow(k) }
+                    }
+                }
+                switchRow("Add members", get: { $0.membersCanAdd }) { v in
+                    try await ChatService.setGroupPermission(cid: cid, key: "membersCanAdd", v)
+                }
+                switchRow("Change group info", get: { $0.membersCanEditInfo }) { v in
+                    try await ChatService.setGroupPermission(cid: cid, key: "membersCanEditInfo", v)
+                }
+                if CallFeatures.groupCalls {
+                    switchRow("Start calls", get: { !$0.onlyAdminsCall }) { v in
+                        try await ChatService.setGroupPermission(cid: cid, key: "onlyAdminsCall", !v)
+                    }
+                }
+            } header: {
+                Text("What can members do?")
+            } footer: {
+                Text("Turned off, only admins can do it.")
+            }
+            slowModeSection
             privacySection
         }
+        .animation(.snappy(duration: 0.25), value: mediaExpanded)
         .listStyle(.insetGrouped)
         .navigationTitle("Permissions")
         .navigationBarTitleDisplayMode(.inline)
@@ -220,6 +306,87 @@ struct GroupSettingsView: View {
             Text("Members can")
         } footer: {
             Text("Turned off, only admins can do it. Admins can always do these.")
+        }
+    }
+
+    // MARK: Send media row, its tick rows, and Slow mode (owner 2026-10-20)
+
+    /// "Send media  7/9 ⌄" with the all-or-nothing switch; tapping the words opens the kinds.
+    private var mediaHeaderRow: some View {
+        HStack(spacing: 6) {
+            Button { mediaExpanded.toggle() } label: {
+                HStack(spacing: 6) {
+                    Text("Send media").foregroundStyle(.primary)
+                    Text("\(mediaOnCount)/\(Conversation.SendKind.allCases.count)")
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    Image(systemName: mediaExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.bold)).foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Spacer(minLength: 8)
+            Toggle("", isOn: Binding(get: { mediaOnCount > 0 }, set: { setAllMedia($0) }))
+                .labelsHidden()
+                .disabled(!canEdit)
+        }
+    }
+
+    /// One kind: a tick (allowed) or an empty circle (admins only); tap flips it.
+    private func mediaTickRow(_ k: Conversation.SendKind) -> some View {
+        let on = conv?.memberSend[k.rawValue] != false
+        return Button {
+            guard canEdit else { return }
+            var next = conv?.memberSend ?? [:]
+            next[k.rawValue] = !on
+            run { try await ChatService.setMemberSend(cid: cid, next) }
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(on ? Color.accentColor : Color.secondary)
+                Text(k.label).foregroundStyle(.primary)
+                Spacer()
+            }
+            .padding(.leading, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Slow mode: how long a member waits between messages. Admins are never slowed.
+    private static let slowSteps: [(Int, String)] =
+        [(0, "Off"), (5, "5s"), (10, "10s"), (30, "30s"), (60, "1m"), (300, "5m"), (900, "15m"), (3600, "1h")]
+
+    private var slowModeSection: some View {
+        let current = conv?.slowModeSeconds ?? 0
+        let index = Self.slowSteps.firstIndex { $0.0 == current } ?? 0
+        return Section {
+            VStack(spacing: 6) {
+                HStack {
+                    ForEach(Self.slowSteps.indices, id: \.self) { i in
+                        Text(Self.slowSteps[i].1).font(.caption)
+                            .foregroundStyle(i == index ? Color.primary : Color.secondary)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                Slider(value: Binding(
+                    get: { Double(slowDraft ?? index) },
+                    set: { slowDraft = Int($0.rounded()) }),
+                    in: 0...Double(Self.slowSteps.count - 1), step: 1) { editing in
+                        guard !editing, let d = slowDraft else { return }
+                        let secs = Self.slowSteps[d].0
+                        slowDraft = nil
+                        guard secs != current else { return }
+                        run { try await ChatService.setGroupSlowMode(cid: cid, seconds: secs) }
+                    }
+                .disabled(!canEdit)
+            }
+            .padding(.vertical, 4)
+        } header: {
+            Text("Slow mode")
+        } footer: {
+            Text("How long each member must wait before sending their next message.")
         }
     }
 

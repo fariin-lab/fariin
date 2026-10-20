@@ -389,7 +389,8 @@ struct GroupInfoView: View {
         VStack(spacing: 4) {
             Text(title).font(.title.weight(.bold)).foregroundStyle(ink)
                 .lineLimit(2).multilineTextAlignment(.center)
-            // No member count here (owner 2026-10-20): the "N Members ›" heading lower down has it.
+            // The count stays under the name (owner 2026-10-20, reversing the same day's removal).
+            Text(memberCountText).font(.body).foregroundStyle(ink.opacity(0.7))
             if !desc.isEmpty {
                 Text(desc).font(.subheadline).foregroundStyle(ink.opacity(0.7))
                     .lineLimit(3).multilineTextAlignment(.center)
@@ -408,6 +409,11 @@ struct GroupInfoView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 8)
+    }
+
+    private var memberCountText: String {
+        let n = conv?.users.count ?? 0
+        return "\(Self.compactCount(n)) Member\(n == 1 ? "" : "s")"
     }
 
     /// 950, 1.2k, 168k, 1.5M.
@@ -522,10 +528,10 @@ struct GroupInfoView: View {
     /// media and data, then Clear and the red exits last. Each piece is its own small builder so
     /// the menu never becomes one long expression for the type checker.
     @ViewBuilder private var moreMenuItems: some View {
+        // Member Changes (admins, Group Settings), Storage (a page row) and Clear Chat are not in
+        // this menu (owner 2026-10-20).
         menuGroupItems
-        menuMemberItems
         menuMediaItems
-        menuChatItems
     }
 
     @ViewBuilder private var menuGroupItems: some View {
@@ -564,11 +570,6 @@ struct GroupInfoView: View {
 
     @ViewBuilder private var menuMediaItems: some View {
         Section {
-            // The chat's storage item by item (owner 2026-10-19), not one clear-all.
-            Button { showStorage = true } label: {
-                Label(storage.map { "Storage Used (\(Self.bytes($0.total)))" } ?? "Storage Used",
-                      systemImage: "internaldrive")
-            }
             // This phone only (2026-10-18): follows Settings > Chats, or overrides it for this chat.
             Menu {
                 Picker("Save to Photos", selection: Binding(get: { saveChoice }, set: { pickSaveChoice($0) })) {
@@ -701,12 +702,13 @@ struct GroupInfoView: View {
     /// change says so instead of doing nothing (owner 2026-10-19).
     private var settingsCard: some View {
         VStack(spacing: 0) {
-            ProfileInfoRow(title: "Disappearing Messages", icon: "ic_disappearing", value: disappearLabel) {
-                if can(.changeInfo) { showDisappear = true } else { flashNotice("Only admins can change this") }
-            }
-            rowDivider
+            // Disappearing Messages lives in Group Settings now (owner 2026-10-20).
             ProfileInfoRow(title: "Sounds & Notifications", icon: "ic_notifications",
                            value: muted ? "Off" : "On") { showSounds = true }
+            // Storage on the page, under Sounds (owner 2026-10-20), out of the ⋯ menu.
+            rowDivider
+            ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
+                           value: storage.map { Self.bytes($0.total) } ?? "") { showStorage = true }
             // A private group's link is the admins' (owner 2026-10-19): a member sees no row at all.
             // A public group's link row comes with its username (groups step 2).
             if can(.inviteUsers) {

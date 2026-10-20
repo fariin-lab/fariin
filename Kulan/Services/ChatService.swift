@@ -812,6 +812,19 @@ enum ChatService {
         if let notice { try await writeSystemMessage(cid: cid, text: "\(myName()) \(notice)") }
     }
 
+    /// Slow mode (2026-10-20): seconds between a member's messages, 0 = off, with a line in the group.
+    static func setGroupSlowMode(cid: String, seconds: Int) async throws {
+        try await db.collection("conversations").document(cid).updateData([
+            "slowMode": seconds,
+            "updatedAt": FieldValue.serverTimestamp(),
+        ])
+        let what = seconds == 0 ? "turned off slow mode"
+            : seconds < 60 ? "set slow mode to \(seconds) seconds"
+            : seconds < 3600 ? "set slow mode to \(seconds / 60) minute\(seconds == 60 ? "" : "s")"
+            : "set slow mode to 1 hour"
+        try await writeSystemMessage(cid: cid, text: "\(myName()) \(what)")
+    }
+
     /// Toggle a member permission (admin): "membersCanAdd" or "membersCanEditInfo".
     static func setGroupPermission(cid: String, key: String, _ value: Bool) async throws {
         try await db.collection("conversations").document(cid).updateData([
