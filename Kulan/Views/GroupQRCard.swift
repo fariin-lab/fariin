@@ -203,6 +203,9 @@ private struct GroupQRCardFace: View {
         .padding(.top, 58).padding(.bottom, 22).padding(.horizontal, 22)
         .frame(maxWidth: .infinity)
         .background(.white, in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        // One layer first, so only the card casts the shadow (owner 2026-10-20: the code inside
+        // had its own grey frame).
+        .compositingGroup()
         .shadow(color: .black.opacity(0.22), radius: 20, y: 12)
         .overlay(alignment: .top) {
             avatar
