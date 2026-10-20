@@ -230,7 +230,7 @@ struct GroupSettingsView: View {
             // REMOVED USERS, the people taken out of the group (`bannedUids`).
             if can(.banUsers) || can(.inviteUsers) {
                 NavigationLink { GroupRemovedUsersView(cid: cid) } label: {
-                    valueRow("person.crop.circle.badge.minus", "Removed Members", "\(conv?.bannedUids.count ?? 0)")
+                    valueRow("person.crop.circle.badge.minus", "Banned Users", "\(conv?.bannedUids.count ?? 0)")
                 }
             }
         }
@@ -789,7 +789,7 @@ struct GroupRemovedUsersView: View {
             Section {
                 // The empty state sits in the card itself (owner 2026-10-19), not under it.
                 if conv?.bannedUids.isEmpty ?? true {
-                    Text("Nobody has been removed from this group.").foregroundStyle(.secondary)
+                    Text("Nobody is banned from this group.").foregroundStyle(.secondary)
                 }
                 ForEach(conv?.bannedUids ?? [], id: \.self) { uid in
                     HStack(spacing: 12) {
@@ -799,7 +799,7 @@ struct GroupRemovedUsersView: View {
                         if busy == uid {
                             ProgressView()
                         } else {
-                            Button("Let Back In") { unban(uid) }
+                            Button("Unban") { unban(uid) }
                                 .buttonStyle(.borderless)
                                 .disabled(busy != nil)
                         }
@@ -808,7 +808,7 @@ struct GroupRemovedUsersView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("Removed Users")
+        .navigationTitle("Banned Users")
         .navigationBarTitleDisplayMode(.inline)
         .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
                                                           set: { if !$0 { actionError = nil } })) {

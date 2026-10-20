@@ -1905,9 +1905,11 @@ struct GroupMemberSheet: View {
             } message: {
                 Text("\(member.name) will have full control of this group, including over you. You will stay an admin.")
             }
-            .alert("Remove \(member.name) from the group?",
+            // ⛔ A REMOVAL IS A BAN (owner 2026-10-20, as the reference app): out of the group, and
+            // until an admin unbans them they cannot rejoin, find it in search or open its page.
+            .alert("Ban \(member.name)?",
                                 isPresented: $confirmRemove) {
-                Button("Remove", role: .destructive) {
+                Button("Ban", role: .destructive) {
                     let name = member.name, done = onRemoved
                     run {
                         try await ChatService.removeGroupMember(cid: cid, uid: member.id, name: name)
@@ -1915,6 +1917,8 @@ struct GroupMemberSheet: View {
                     }
                 }
                 Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("They leave the group and can't rejoin, find it in search or open it until an admin unbans them.")
             }
             .alert("Could not do that", isPresented: Binding(get: { !showEdit && actionError != nil },
                                                               set: { if !$0 { actionError = nil } })) {
@@ -2237,7 +2241,7 @@ struct GroupMemberSheet: View {
             rows.append(AnyView(iconRow("person.badge.minus", "Dismiss Admin", tint: .red) { confirmDismissAdmin = true }))
         }
         if canRemove {
-            rows.append(AnyView(iconRow("minus.circle", "Remove from Group", tint: .red) { confirmRemove = true }))
+            rows.append(AnyView(iconRow("nosign", "Ban from Group", tint: .red) { confirmRemove = true }))
         }
         return rows
     }
