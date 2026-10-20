@@ -63,6 +63,11 @@ struct GroupInfoView: View {
     @State private var showAllMembers = false   // the members header's search, and See All under the first five
     @State private var showSounds = false
     @State private var showSettings = false
+    /// People asking to join, for the admins' Join Requests row (owner 2026-10-20). A class box in
+    /// @State, so the listener lives as long as the page.
+    @State private var joinReqs: [JoinRequest] = []
+    @State private var joinReqBox = ListenerBox()
+    @State private var showJoinRequests = false
     @State private var showEdit = false
     @State private var showGroupPhoto = false    // tap the photo → the same morph a person's photo uses
     @State private var photoCloseTick = 0        // toolbar X → viewer close (see ProfilePhotoViewer.closeSignal)
@@ -261,6 +266,7 @@ struct GroupInfoView: View {
             }
             .navigationDestination(isPresented: $showSounds) { SoundsNotificationsView(cid: cid) }
             .navigationDestination(isPresented: $showSettings) { GroupSettingsView(cid: cid) }
+            .navigationDestination(isPresented: $showJoinRequests) { GroupRequestsView(cid: cid) }
             .fullScreenCover(isPresented: $showCall) { GroupCallView() }
             // Local first (offline + instant), then the server; a failed load leaves what we have.
             .task {
@@ -723,13 +729,8 @@ struct GroupInfoView: View {
             rowDivider
             ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
                            value: storage.map { Self.bytes($0.total) } ?? "") { showStorage = true }
-            // A private group's link is the admins' (owner 2026-10-19): a member sees no row at all.
-            // A public group's link row comes with its username (groups step 2).
-            if can(.inviteUsers) {
-                rowDivider
-                ProfileInfoRow(title: "Group invite link", icon: "link",
-                               value: (shareCode ?? conv?.inviteCode ?? "").isEmpty ? "Off" : "On") { inviteRowTapped() }
-            }
+            // No invite link row here (owner 2026-10-20: it is in Group Settings, shown twice). The
+            // link lives on the Group Settings page, for the admins who manage it.
         }
         .profileSurface(plain: cardColor)
     }
@@ -743,9 +744,56 @@ struct GroupInfoView: View {
         else { flashNotice("This group is private. Only admins can share its link.") }
     }
 
+    // ⛔ JOIN REQUESTS UNDER GROUP SETTINGS, IN ONE CARD (owner 2026-10-20): only while someone is
+    // waiting, and only to an admin who may let people in (the owner, or `inviteUsers`). The faces
+    // of the first three people asking; the row opens the requests page.
     private var groupSettingsCard: some View {
-        ProfileInfoRow(title: "Group Settings", icon: "gearshape") { showSettings = true }
-            .profileSurface(plain: cardColor)
+        VStack(spacing: 0) {
+            ProfileInfoRow(title: "Group Settings", icon: "gearshape") { showSettings = true }
+            if can(.inviteUsers) && !joinReqs.isEmpty {
+                rowDivider
+                joinRequestsRow
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: joinReqs.isEmpty)
+        .profileSurface(plain: cardColor)
+        .onAppear { followJoinRequests() }
+    }
+
+    private var joinRequestsRow: some View {
+        Button { showJoinRequests = true } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "person.badge.clock").font(.system(size: 17))
+                    .frame(width: 26)
+                Text("Join Requests")
+                Spacer()
+                HStack(spacing: -8) {
+                    ForEach(Array(joinReqs.prefix(3).enumerated()), id: \.element.uid) { i, r in
+                        AvatarView(name: r.name, photoUrl: r.photo, size: 28)
+                            .overlay(Circle().stroke(cardColor, lineWidth: 2))
+                            .zIndex(Double(3 - i))
+                    }
+                }
+                if joinReqs.count > 3 {
+                    Text("+\(joinReqs.count - 3)").font(.subheadline).foregroundStyle(.secondary)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 16)
+            .frame(minHeight: 52)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Join Requests, \(joinReqs.count) waiting")
+    }
+
+    /// The requests listener, for admins who may answer them; started once per page.
+    private func followJoinRequests() {
+        guard joinReqBox.reg == nil, can(.inviteUsers) else { return }
+        joinReqBox.reg = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
     }
 
     /// The person profile's flat card colour and separator (ContactInfoView `cardColor`,
