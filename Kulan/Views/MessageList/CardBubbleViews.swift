@@ -546,21 +546,40 @@ final class PollBubbleView: UIView {
         paintVotes()
     }
 
+    /// 2026-10-19: votes are taken until the creator stops the poll or its end time passes (the
+    /// rules refuse a late vote too).
+    var isOpen: Bool {
+        guard let body, !body.closed else { return false }
+        if let ends = body.endsAt { return Date().timeIntervalSince1970 * 1000 < ends }
+        return true
+    }
+
     /// Vote counts → the bar fills and the percentages. Geometry is untouched.
     private func paintVotes() {
         guard let plan, let body else { return }
         let voters = votes.count
         let mine = Set(votes[AuthService.shared.uid ?? ""] ?? [])
+        // The footer is the door to the results page (who voted, Stop Poll).
+        let count = "\(voters) vote\(voters == 1 ? "" : "s")"
         total.attributedText = NSAttributedString(
-            string: "\(voters) vote\(voters == 1 ? "" : "s")",
-            attributes: [.font: UIFont.systemFont(ofSize: 11),
-                         .foregroundColor: tint.withAlphaComponent(0.7)])
+            string: isOpen ? "\(count) · Results ›" : "Poll ended · \(count) ›",
+            attributes: [.font: UIFont.systemFont(ofSize: 11, weight: .medium),
+                         .foregroundColor: tint.withAlphaComponent(0.75)])
+        // A quiz shows right and wrong once I have answered, or once the poll is over.
+        let reveal = !body.correct.isEmpty && (!mine.isEmpty || !isOpen)
         for (i, r) in rows.enumerated() where i < plan.options.count {
             let count = votes.values.reduce(0) { $0 + ($1.contains(i) ? 1 : 0) }
             let fraction = voters > 0 ? Double(count) / Double(voters) : 0
+            let mark: PollOptionRow.QuizMark = !reveal ? .none
+                : body.correct.contains(i) ? .right : (mine.contains(i) ? .wrong : .none)
             r.paint(fraction: fraction, chosen: mine.contains(i),
-                    multiple: body.multiple, tint: tint)
+                    multiple: body.multiple, tint: tint, quiz: mark)
         }
+    }
+
+    /// The footer ("N votes · Results ›"), for the tap that opens the results page.
+    func hitsResults(_ point: CGPoint) -> Bool {
+        total.frame.insetBy(dx: -8, dy: -8).contains(point)
     }
 
     /// Cast a vote on this option.
@@ -569,7 +588,9 @@ final class PollBubbleView: UIView {
     /// voter can currently see — and the live selection only exists in this view's listener. Routing
     /// the tap upwards would have meant a second copy of the votes, one update behind.
     func castVote(option i: Int) {
-        guard let body else { return }
+        guard let body, isOpen else { return }
+        // A quiz takes one answer and keeps it: changing it after seeing right/wrong is cheating.
+        if !body.correct.isEmpty, !(votes[AuthService.shared.uid ?? ""] ?? []).isEmpty { return }
         let me = AuthService.shared.uid ?? ""
         var mine = Set(votes[me] ?? [])
         if body.multiple {
@@ -635,14 +656,22 @@ final class PollOptionRow: UIView {
         fill.layer.cornerRadius = o.track.height / 2
     }
 
-    func paint(fraction: Double, chosen: Bool, multiple: Bool, tint: UIColor) {
+    enum QuizMark { case none, right, wrong }
+
+    func paint(fraction: Double, chosen: Bool, multiple: Bool, tint: UIColor, quiz: QuizMark = .none) {
         guard let o = option else { return }
-        let symbol = multiple
+        var symbol = multiple
             ? (chosen ? "checkmark.square.fill" : "square")
             : (chosen ? "largecircle.fill.circle" : "circle")
+        var color = tint
+        switch quiz {
+        case .right: symbol = "checkmark.circle.fill"; color = .systemGreen
+        case .wrong: symbol = "xmark.circle.fill"; color = .systemRed
+        case .none: break
+        }
         glyph.image = UIImage(systemName: symbol,
                               withConfiguration: UIImage.SymbolConfiguration(pointSize: 16))
-        glyph.tintColor = tint
+        glyph.tintColor = color
         percent.attributedText = NSAttributedString(
             string: "\(Int((fraction * 100).rounded()))%",
             attributes: [.font: UIFont.systemFont(ofSize: 13, weight: .semibold),

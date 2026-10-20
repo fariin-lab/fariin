@@ -221,7 +221,8 @@ enum MessageRowModelBuilder {
         } else if let poll = msg.poll {
             body = .poll(BubbleBody.PollBody(
                 pollId: poll.id, messageId: msg.id, question: poll.question,
-                options: poll.options, multiple: poll.multiple))
+                options: poll.options, multiple: poll.multiple,
+                correct: poll.correct, endsAt: poll.endsAt, closed: msg.pollClosed))
         } else if let card = msg.contactCard {
             body = .contact(BubbleBody.ContactBody(
                 uid: card.uid, name: card.name, photo: card.photo,

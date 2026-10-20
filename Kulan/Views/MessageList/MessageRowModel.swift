@@ -165,6 +165,10 @@ enum BubbleBody: Equatable {
         var question: String
         var options: [String]
         var multiple: Bool
+        // 2026-10-19 polls: quiz answers, an end time and Stop Poll. No geometry depends on these.
+        var correct: [Int] = []
+        var endsAt: Double? = nil
+        var closed: Bool = false
     }
 
     struct LocationBody: Equatable {

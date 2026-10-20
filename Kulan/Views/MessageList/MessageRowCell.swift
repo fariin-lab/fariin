@@ -25,6 +25,7 @@ protocol MessageRowCellDelegate: AnyObject {
     func rowCellDidTapLinkProfile(_ cell: MessageRowCell)
     func rowCellDidTapCallJoin(_ cell: MessageRowCell)
     func rowCellDidTapLocation(_ cell: MessageRowCell)
+    func rowCellDidTapPollResults(_ cell: MessageRowCell)
     func rowCellDidTapContactCard(_ cell: MessageRowCell)
     func rowCellDidTapContactMessage(_ cell: MessageRowCell)
     func rowCellDidTapReactions(_ cell: MessageRowCell)
@@ -539,6 +540,10 @@ final class MessageRowCell: UICollectionViewCell {
             }
             if rowView.hitsLinkCard(p) {
                 delegate?.rowCellDidTapLinkCard(self)
+                return
+            }
+            if rowView.hitsPollResults(p) {   // 2026-10-19 the footer opens the results page
+                delegate?.rowCellDidTapPollResults(self)
                 return
             }
             if let option = rowView.pollOptionIndex(at: p) {

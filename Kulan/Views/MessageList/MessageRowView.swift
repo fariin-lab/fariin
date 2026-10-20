@@ -1128,6 +1128,12 @@ final class MessageRowView: UIView {
 
     func castPollVote(option i: Int) { pollView?.castVote(option: i) }
 
+    /// The poll's footer, which opens the results page (2026-10-19).
+    func hitsPollResults(_ point: CGPoint) -> Bool {
+        guard let p = plan, case .bubble(let b) = p.body, b.pollPlan != nil, let v = pollView else { return false }
+        return v.hitsResults(CGPoint(x: point.x - b.bubble.minX, y: point.y - b.bubble.minY))
+    }
+
     /// Set by the cell, so the disc's tap can reach ThreadView — `VoiceNotePlayer.toggle` needs a
     /// whole `Message` and only ThreadView has one.
     var onVoicePlayToggle: (() -> Void)? {

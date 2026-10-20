@@ -365,6 +365,7 @@ struct Message: Identifiable, Equatable, Codable {
     /// message, so its author is not told "You deleted this message". Nil = the author did it.
     var deletedBy: String? = nil
     var forwarded: Bool = false             // passed along from another chat (bubble shows the tag)
+    var pollClosed: Bool = false            // 2026-10-19: the poll's creator tapped Stop Poll
     /// THE MESSAGE EXISTS, THE PICTURE DOES NOT YET.
     ///
     /// A photo message is written the instant Send is tapped, carrying its blurhash and its size but
@@ -793,6 +794,7 @@ struct Message: Identifiable, Equatable, Codable {
         self.deleted = data["deleted"] as? Bool ?? false
         self.deletedBy = data["deletedBy"] as? String   // 2026-09-24 feature-audit
         self.forwarded = data["forwarded"] as? Bool ?? false
+        self.pollClosed = data["pollClosed"] as? Bool ?? false
         self.uploading = data["uploading"] as? Bool ?? false
         self.albumSizes = (data["albumSizes"] as? [[Double]]) ?? []
         self.clientId = data["clientId"] as? String
@@ -1888,6 +1890,14 @@ struct PollCard: Equatable {
     let question: String
     let options: [String]
     let multiple: Bool
+    /// 2026-10-19: names stay off the results. Display only: each vote is still the voter's own
+    /// document, which the group's members can read, so this is not a secret ballot.
+    var hideVoters: Bool = false
+    /// Quiz: the right option(s); empty = an ordinary poll. Sealed with the poll, like the options.
+    var correct: [Int] = []
+    /// When voting ends (ms), nil = never. Also written in the clear (`pollEndsAt`) for the rules.
+    var endsAt: Double? = nil
+    var isQuiz: Bool { !correct.isEmpty }
 }
 
 extension Message {
@@ -1900,10 +1910,19 @@ extension Message {
               let id = obj["id"] as? String,
               let q = obj["q"] as? String,
               let opts = obj["opts"] as? [String], opts.count >= 2 else { return nil }
-        return PollCard(id: id, question: q, options: opts, multiple: obj["multi"] as? Bool ?? false)
+        let correct = ((obj["quiz"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.intValue }
+            .filter { $0 >= 0 && $0 < opts.count }
+        let ends = (obj["ends"] as? NSNumber)?.doubleValue
+        return PollCard(id: id, question: q, options: opts, multiple: obj["multi"] as? Bool ?? false,
+                        hideVoters: obj["anon"] as? Bool ?? false, correct: correct,
+                        endsAt: (ends ?? 0) > 0 ? ends : nil)
     }
-    static func pollMarkerText(id: String, question: String, options: [String], multiple: Bool) -> String {
-        let obj: [String: Any] = ["id": id, "q": question, "opts": options, "multi": multiple]
+    static func pollMarkerText(id: String, question: String, options: [String], multiple: Bool,
+                               hideVoters: Bool = false, correct: [Int] = [], endsAt: Double? = nil) -> String {
+        var obj: [String: Any] = ["id": id, "q": question, "opts": options, "multi": multiple]
+        if hideVoters { obj["anon"] = true }
+        if !correct.isEmpty { obj["quiz"] = correct }
+        if let endsAt { obj["ends"] = Int64(endsAt) }
         let data = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data()
         return pollMarker + data.base64EncodedString()
     }

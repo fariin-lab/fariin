@@ -1263,6 +1263,8 @@ enum ChatService {
            let data = Data(base64Encoded: String(t.dropFirst(Message.pollMarker.count))),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             msg["pollMulti"] = (obj["multi"] as? Bool) ?? false
+            // 2026-10-19: the end time in the clear too, so the rules stop late votes.
+            if let ends = (obj["ends"] as? NSNumber)?.int64Value, ends > 0 { msg["pollEndsAt"] = ends }
         }
         // 2026-09-24 feature-audit: a member an admin has kept from sending media sends the link as
         // plain text. The rules count a link card as media (`sendMedia`), so it was refused on every

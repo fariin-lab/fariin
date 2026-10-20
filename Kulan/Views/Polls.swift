@@ -24,6 +24,12 @@ enum PollService {
         }
     }
 
+    /// Stop Poll (2026-10-19): the creator closes it for good. The rules refuse new votes after.
+    static func stop(cid: String, messageId: String) async throws {
+        try await db.collection("conversations").document(cid)
+            .collection("messages").document(messageId).updateData(["pollClosed": true])
+    }
+
     /// Live map of uid → chosen option indices.
     static func listen(cid: String, messageId: String, _ cb: @escaping ([String: [Int]]) -> Void) -> ListenerRegistration {
         votesRef(cid, messageId).addSnapshotListener { snap, _ in
@@ -126,20 +132,40 @@ struct PollBubbleContent: View {
     }
 }
 
-// Compose a new poll (question + 2–10 options + optional multiple-answers).
+// Compose a new poll (owner 2026-10-19, our own layout): question, 2–10 options, then Multiple
+// answers, Hide who voted, Quiz (tap an option's circle to mark it right) and an end time.
 struct PollComposerSheet: View {
     let onSend: (_ marker: String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var question = ""
     @State private var options: [String] = ["", ""]
     @State private var multiple = false
+    @State private var hideVoters = false
+    @State private var quiz = false
+    @State private var correct: Set<Int> = []      // indices into `options` as typed
+    @State private var ends: EndChoice = .never
     @State private var sent = false
 
-    private var trimmedOptions: [String] {
-        options.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    enum EndChoice: Hashable, CaseIterable {
+        case never, hour, day, week
+        var label: String {
+            switch self { case .never: "Never"; case .hour: "In 1 hour"; case .day: "In 1 day"; case .week: "In 1 week" }
+        }
+        var seconds: Double? {
+            switch self { case .never: nil; case .hour: 3600; case .day: 86_400; case .week: 604_800 }
+        }
+    }
+
+    /// The options kept (non-empty), each with whether it was marked right.
+    private var kept: [(text: String, right: Bool)] {
+        options.indices.compactMap { i in
+            let t = options[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : (t, correct.contains(i))
+        }
     }
     private var canSend: Bool {
-        !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && trimmedOptions.count >= 2
+        !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && kept.count >= 2
+            && (!quiz || kept.contains { $0.right })
     }
 
     var body: some View {
@@ -148,42 +174,222 @@ struct PollComposerSheet: View {
                 Section("Question") {
                     TextField("Ask a question", text: $question, axis: .vertical).lineLimit(1...3)
                 }
-                Section("Options") {
-                    ForEach(options.indices, id: \.self) { i in
-                        HStack {
-                            TextField("Option \(i + 1)", text: $options[i])
-                            if options.count > 2 {
-                                Button { options.remove(at: i) } label: {
-                                    Image(systemName: "minus.circle.fill").foregroundStyle(.red)
-                                }.buttonStyle(.plain)
-                            }
-                        }
-                    }
+                Section {
+                    ForEach(options.indices, id: \.self) { i in optionRow(i) }
                     if options.count < 10 {
-                        Button { options.append("") } label: { Label("Add option", systemImage: "plus.circle") }
+                        Button { options.append("") } label: { Label("Add option", systemImage: "plus") }
                     }
+                } header: {
+                    Text("Options")
+                } footer: {
+                    if quiz { Text("Tap the circle next to the right answer.") }
                 }
                 Section {
-                    Toggle("Multiple answers", isOn: $multiple)
+                    setting("checklist", "Multiple answers", $multiple)
+                    setting("eye.slash", "Hide who voted", $hideVoters)
+                    setting("graduationcap", "Quiz", $quiz)
+                    Picker(selection: $ends) {
+                        ForEach(EndChoice.allCases, id: \.self) { Text($0.label).tag($0) }
+                    } label: {
+                        Label("Ends", systemImage: "timer")
+                    }
+                } footer: {
+                    Text(footer)
                 }
             }
+            .listStyle(.insetGrouped)
             .navigationTitle("New Poll").navigationBarTitleDisplayMode(.inline)
+            .onChange(of: multiple) { _, many in if !many, correct.count > 1 { correct = [correct.min()!] } }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Send") {
-                        // A second tap during the dismiss animation sent the poll twice (audit,
-                        // 2026-09-24). One send per sheet.
-                        guard !sent else { return }
-                        sent = true
-                        let id = UUID().uuidString.prefix(12).lowercased()
-                        let marker = Message.pollMarkerText(id: String(id),
-                                                            question: question.trimmingCharacters(in: .whitespacesAndNewlines),
-                                                            options: trimmedOptions, multiple: multiple)
-                        onSend(marker)
-                        dismiss()
-                    }.disabled(!canSend)
+                    Button("Send") { send() }.fontWeight(.semibold).disabled(!canSend)
                 }
+            }
+        }
+    }
+
+    private var footer: String {
+        var parts: [String] = []
+        if hideVoters { parts.append("Results show only the numbers, not names.") }
+        if quiz { parts.append("Voters see if they were right after they answer, and cannot change it.") }
+        if ends != .never { parts.append("Voting stops automatically.") }
+        return parts.isEmpty ? "Anyone in the chat can vote and see who voted." : parts.joined(separator: " ")
+    }
+
+    private func setting(_ icon: String, _ title: String, _ on: Binding<Bool>) -> some View {
+        Toggle(isOn: on) { Label(title, systemImage: icon) }
+    }
+
+    private func optionRow(_ i: Int) -> some View {
+        HStack(spacing: 10) {
+            if quiz {
+                Button {
+                    if correct.contains(i) { correct.remove(i) }
+                    else if multiple { correct.insert(i) } else { correct = [i] }
+                } label: {
+                    Image(systemName: correct.contains(i) ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(correct.contains(i) ? Color.green : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(correct.contains(i) ? "Right answer" : "Mark as right answer")
+            }
+            TextField("Option \(i + 1)", text: $options[i])
+            if options.count > 2 {
+                Button { remove(i) } label: {
+                    Image(systemName: "minus.circle.fill").foregroundStyle(.red)
+                }.buttonStyle(.plain)
+            }
+        }
+    }
+
+    /// Removing an option moves the marks after it up one.
+    private func remove(_ i: Int) {
+        options.remove(at: i)
+        correct = Set(correct.compactMap { $0 == i ? nil : ($0 > i ? $0 - 1 : $0) })
+    }
+
+    private func send() {
+        // A second tap during the dismiss animation sent the poll twice (audit, 2026-09-24).
+        guard !sent, canSend else { return }
+        sent = true
+        let id = UUID().uuidString.prefix(12).lowercased()
+        let list = kept
+        let marker = Message.pollMarkerText(
+            id: String(id), question: question.trimmingCharacters(in: .whitespacesAndNewlines),
+            options: list.map(\.text), multiple: multiple, hideVoters: hideVoters,
+            correct: quiz ? list.indices.filter { list[$0].right } : [],
+            endsAt: ends.seconds.map { (Date().timeIntervalSince1970 + $0) * 1000 })
+        onSend(marker)
+        dismiss()
+    }
+}
+
+// The results page (owner 2026-10-19): each option with its count and, unless the poll hides
+// them, who chose it; the end time or "Poll ended"; Stop Poll for its creator.
+struct PollResultsSheet: View {
+    let poll: PollCard
+    let cid: String
+    let messageId: String
+    let closed: Bool
+    let isCreator: Bool
+    let names: [String: String]
+    let meName: String
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var votes: [String: [Int]] = [:]
+    @State private var listener: ListenerRegistration?
+    @State private var confirmStop = false
+    @State private var stopped = false
+    @State private var stopError: String?
+    private var me: String { AuthService.shared.uid ?? "" }
+
+    private var isOpen: Bool {
+        if closed || stopped { return false }
+        if let e = poll.endsAt { return Date().timeIntervalSince1970 * 1000 < e }
+        return true
+    }
+    private func voters(_ i: Int) -> [String] {
+        votes.filter { $0.value.contains(i) }.map(\.key)
+            .sorted { name($0).localizedCaseInsensitiveCompare(name($1)) == .orderedAscending }
+    }
+    private func name(_ uid: String) -> String { uid == me ? meName : (names[uid] ?? "Member") }
+
+    private var status: String {
+        let n = votes.count
+        let count = "\(n) vote\(n == 1 ? "" : "s")"
+        if !isOpen { return "Poll ended · \(count)" }
+        if let e = poll.endsAt {
+            let left = Date(timeIntervalSince1970: e / 1000)
+            return "\(count) · ends \(left.formatted(.relative(presentation: .named)))"
+        }
+        return count
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if poll.isQuiz {
+                            Label("Quiz", systemImage: "graduationcap").font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(poll.question).font(.title3.weight(.semibold))
+                        Text(status).font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+                ForEach(poll.options.indices, id: \.self) { i in
+                    let who = voters(i)
+                    Section {
+                        if poll.hideVoters {
+                            Text(who.isEmpty ? "No votes" : "\(who.count) vote\(who.count == 1 ? "" : "s")")
+                                .foregroundStyle(.secondary)
+                        } else if who.isEmpty {
+                            Text("No votes").foregroundStyle(.secondary)
+                        } else {
+                            ForEach(who, id: \.self) { uid in
+                                HStack(spacing: 12) {
+                                    AvatarView(name: name(uid), photoUrl: nil, size: 30)
+                                    Text(name(uid)).lineLimit(1)
+                                }
+                            }
+                        }
+                    } header: {
+                        HStack(spacing: 6) {
+                            if poll.correct.contains(i) {
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                            }
+                            Text(poll.options[i]).textCase(nil)
+                            Spacer()
+                            Text(percent(who.count)).textCase(nil)
+                        }
+                    }
+                }
+                if poll.hideVoters {
+                    Section { } footer: { Text("Names are hidden for this poll.") }
+                }
+                if isCreator && isOpen {
+                    Section {
+                        Button(role: .destructive) { confirmStop = true } label: {
+                            Label("Stop Poll", systemImage: "stop.circle")
+                        }
+                    } footer: {
+                        Text("No one can vote after this. The results stay.")
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Poll Results").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .onAppear {
+                guard listener == nil else { return }
+                listener = PollService.listen(cid: cid, messageId: messageId) { votes = $0 }
+            }
+            .onDisappear { listener?.remove(); listener = nil }
+            .alert("Stop this poll?", isPresented: $confirmStop) {
+                Button("Cancel", role: .cancel) {}
+                Button("Stop Poll", role: .destructive) { stop() }
+            } message: { Text("No one will be able to vote anymore.") }
+            .alert("Could not stop the poll", isPresented: Binding(get: { stopError != nil },
+                                                                 set: { if !$0 { stopError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(stopError ?? "") }
+        }
+    }
+
+    private func percent(_ n: Int) -> String {
+        votes.isEmpty ? "0%" : "\(Int((Double(n) / Double(votes.count) * 100).rounded()))%"
+    }
+
+    private func stop() {
+        stopped = true
+        Task {
+            do { try await PollService.stop(cid: cid, messageId: messageId) } catch {
+                let msg = error.localizedDescription
+                await MainActor.run { stopped = false; stopError = msg }
             }
         }
     }

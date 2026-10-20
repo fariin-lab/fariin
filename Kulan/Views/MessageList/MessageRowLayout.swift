@@ -2156,7 +2156,8 @@ enum MessageRowLayout {
         innerY = question.maxY + 2
 
         let subtitleAttr = NSAttributedString(
-            string: p.multiple ? "Select one or more" : "Select one",
+            // 2026-10-19: a quiz says so, so nobody votes thinking it is only an opinion.
+            string: (p.correct.isEmpty ? "" : "Quiz · ") + (p.multiple ? "Select one or more" : "Select one"),
             attributes: [.font: UIFont.systemFont(ofSize: 11),
                          .foregroundColor: textColor.withAlphaComponent(0.7)])
         let sSize = lineSizeOf(subtitleAttr, cap: contentW)

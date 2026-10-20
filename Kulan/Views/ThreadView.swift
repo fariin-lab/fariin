@@ -94,6 +94,8 @@ struct ThreadView: View {
     @State private var groupCallVideo = false
     @State private var groupCallListener: ListenerRegistration?
     @State private var tappedMember: GroupInfoView.MemberAction?
+    /// The poll whose results page is open (2026-10-19: the footer of a poll bubble).
+    @State private var pollResultsFor: Message?
     @State private var replyingTo: Message?
     @State private var photoItem: PhotosPickerItem?
     @State private var photoItems: [PhotosPickerItem] = []
@@ -2067,6 +2069,13 @@ struct ThreadView: View {
             // or gone) said nothing at all, with the gallery already popped. Same toast as the other
             // jumps. #10: superseded by a newer jump or the down arrow.
             goToMessageJump(p.messageId)
+        }
+        .sheet(item: $pollResultsFor) { m in
+            if let poll = m.poll {
+                PollResultsSheet(poll: poll, cid: cid, messageId: m.id, closed: m.pollClosed,
+                                 isCreator: m.authorId == me,
+                                 names: conversation?.names ?? [:], meName: "You")
+            }
         }
         .sheet(item: $tappedMember) { m in
             GroupMemberSheet(cid: cid, member: m,
@@ -4182,6 +4191,10 @@ struct ThreadView: View {
                 if let u = URL(string: "http://maps.apple.com/?ll=\(loc.lat),\(loc.lon)&q=\(q)") {
                     WebLink.open(u)
                 }
+            },
+            onTapPollResults: { id in
+                guard let m = repo.items.first(where: { $0.rowId == id }), m.poll != nil else { return }
+                pollResultsFor = m
             },
             onTapContactCard: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }), let card = m.contactCard else { return }

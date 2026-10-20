@@ -2734,6 +2734,11 @@ service cloud.firestore {
                 && editHistoryOk())  // 2026-09-24 feature-audit: append-only history
             || (request.auth.uid == resource.data.authorId
                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['album']))
+            // 2026-10-19 polls: the poll's creator stops it (`pollClosed`, once, never reopened).
+            || (request.auth.uid == resource.data.authorId
+                && 'pollMulti' in resource.data
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pollClosed'])
+                && request.resource.data.pollClosed == true)
             // FINISHING AN UPLOAD. A photo message is now written the moment Send is tapped,
             // carrying its blurhash and size but no media yet, so the recipient sees a real bubble
             // immediately instead of nothing until the whole upload lands. This branch is how the
@@ -2816,7 +2821,17 @@ service cloud.firestore {
             && request.resource.data.options.size() <= 10
             && (get(/databases/$(database)/documents/conversations/$(cid)/messages/$(mid)).data
                   .get('pollMulti', true) != false
-                || request.resource.data.options.size() == 1);
+                || request.resource.data.options.size() == 1)
+            // 2026-10-19 polls: no vote once the creator stopped the poll or its end time passed
+            // (`pollEndsAt`, ms, written in the clear at send). Taking a vote back stays open.
+            && get(/databases/$(database)/documents/conversations/$(cid)/messages/$(mid)).data
+                  .get('pollClosed', false) != true
+            && (!(get(/databases/$(database)/documents/conversations/$(cid)/messages/$(mid)).data
+                    .get('pollEndsAt', 0) is int)
+                || get(/databases/$(database)/documents/conversations/$(cid)/messages/$(mid)).data
+                    .get('pollEndsAt', 0) == 0
+                || request.time.toMillis() < get(/databases/$(database)/documents/conversations/$(cid)/messages/$(mid)).data
+                    .get('pollEndsAt', 0));
         }
       }
 
