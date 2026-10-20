@@ -182,7 +182,9 @@ struct GroupInfoView: View {
             .sheet(isPresented: $showAllMembers) { GroupMembersSheet(cid: cid) }
             .sheet(isPresented: $showEncryption) { ChatEncryptionSheet() }
             .sheet(isPresented: $showQR) {
-                if let link = inviteLink { GroupLinkQRSheet(title: title, link: link) }
+                if let link = inviteLink {
+                    GroupLinkQRSheet(title: title, link: link, photo: conv?.avatarUrl, memberCount: conv?.users.count)
+                }
             }
             .sheet(isPresented: $showSimilar) {
                 NewGroupView(initial: similarPeople) { t in openCreatedGroup(t) }

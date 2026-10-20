@@ -315,45 +315,7 @@ extension AutoSaveToPhotos.ChatChoice {
     }
 }
 
-// MARK: - Invite link QR
-
-/// The invite link as a code, white behind it so any camera reads it in either theme (the invite
-/// link page's QR sheet, reached here from the top bar).
-struct GroupLinkQRSheet: View {
-    let title: String
-    let link: String
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(spacing: 16) {
-            HStack {
-                Spacer()
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark").font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 36, height: 36)
-                        .glassEffect(.regular.interactive(), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close")
-            }
-            Text(title).font(.headline).lineLimit(2).multilineTextAlignment(.center)
-            if let img = qrImage(from: link) {
-                Image(uiImage: img)
-                    .interpolation(.none).resizable().scaledToFit()
-                    .padding(16)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    .frame(maxWidth: 292)
-            }
-            Text(link).font(.footnote.monospaced()).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .textSelection(.enabled)
-            Spacer(minLength: 0)
-        }
-        .padding(20)
-        .presentationDetents([.medium, .large])
-    }
-}
+// The invite link's QR sheet (`GroupLinkQRSheet`) lives in GroupQRCard.swift (2026-10-19).
 
 // MARK: - Encryption
 

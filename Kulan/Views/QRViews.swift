@@ -20,7 +20,7 @@ private func fariinLink(_ handle: String) -> String { KulanApp.userLink(handle: 
 /// are testing it. H tolerates 30%, which is the room the mark actually takes.
 /// 2026-09-24 fix-all #126: internal (was private) so the group invite sheet draws its link with
 /// this same generator rather than a second one.
-func qrImage(from string: String, clearCentre: CGFloat = 0) -> UIImage? {
+func qrImage(from string: String, clearCentre: CGFloat = 0, ink: UIColor = .black) -> UIImage? {
     // ⛔ ROUND DOTS AND ROUNDED CORNER EYES — owner 2026-10-16, with a picture: "redesign my QR
     // code, make it like this". Every data module is a dot; the three finder patterns are a rounded
     // ring with a rounded centre. Error correction stays "H", so the softer shapes and the logo hole
@@ -60,7 +60,8 @@ func qrImage(from string: String, clearCentre: CGFloat = 0) -> UIImage? {
     let fmt = UIGraphicsImageRendererFormat(); fmt.scale = 1; fmt.opaque = true
     return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: fmt).image { r in
         UIColor.white.setFill(); r.fill(CGRect(x: 0, y: 0, width: side, height: side))
-        UIColor.black.setFill()
+        // `ink`: a dark colour on white still scans (the group QR card, owner 2026-10-19).
+        ink.setFill()
         // Data modules: dots, 86% of a module, so neighbours stay apart and read as dots.
         let d = scale * 0.86, inset = (scale - d) / 2
         for y in 0..<n { for x in 0..<n where dark(x, y) && !inEye(x, y) {
