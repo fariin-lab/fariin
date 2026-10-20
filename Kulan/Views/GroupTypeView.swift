@@ -12,6 +12,7 @@ struct GroupTypeView: View {
     private var repo = ConversationsRepository.shared
     private var me: String { AuthService.shared.uid ?? "" }
     init(cid: String) { self.cid = cid }
+    @Environment(\.dismiss) private var dismiss
 
     @State private var wantsPublic: Bool?
     @State private var name = ""
@@ -256,6 +257,10 @@ struct GroupTypeView: View {
                 wantsPublic = !value.isEmpty
                 if value.isEmpty { name = "" }
                 check = .idle
+                // Saved: back to Group Settings (owner 2026-10-20: the page stayed after Save).
+                saving = false
+                dismiss()
+                return
             } catch {
                 saveError = error.localizedDescription
                 // Taken at Save (someone was quicker): the line under the field says so too, not
