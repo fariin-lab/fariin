@@ -73,12 +73,13 @@ struct DisappearingMessagesView: View {
             .navigationTitle("Disappearing Messages")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if pushed {
-                } else if #available(iOS 26.0, *) {
-                    ToolbarItem(placement: .cancellationAction) { CloseXButton { dismiss() } }
-                        .sharedBackgroundVisibility(.hidden)
-                } else {
-                    ToolbarItem(placement: .cancellationAction) { CloseXButton { dismiss() } }
+                if !pushed {
+                    if #available(iOS 26.0, *) {
+                        ToolbarItem(placement: .cancellationAction) { CloseXButton { dismiss() } }
+                            .sharedBackgroundVisibility(.hidden)
+                    } else {
+                        ToolbarItem(placement: .cancellationAction) { CloseXButton { dismiss() } }
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { onApply(selected); dismiss() } label: {
