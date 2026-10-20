@@ -1359,7 +1359,8 @@ final class GroupCallService: ObservableObject {
     /// so nothing is queued; and for a group conversation it ends the doc only while its
     /// `recordId` is still the one of my call (when I know it).
     /// Audit M-088, 2026-10-07: a call nobody else ever joined is closed "missed", with no length.
-    private static func closeCall(cid: String, adhoc: Bool, recordId: String?, answered: Bool) async {
+    private static func closeCall(cid: String, adhoc: Bool, recordId: String?, answered: Bool,
+                                  retried: Bool = false) async {
         let db = Firestore.firestore()
         let ref = db.collection("groupCalls").document(cid)
         let ended: [String: Any]? = await withCheckedContinuation { (cont: CheckedContinuation<[String: Any]?, Never>) in
@@ -1383,7 +1384,8 @@ final class GroupCallService: ObservableObject {
                 // No answer from the server (offline, a dead link at the end): tried again once the
                 // phone is back, for up to 10 minutes (audit 2026-10-20: the doc stayed "live" and the
                 // Join bars with it). The transaction's own checks keep a later call safe.
-                if error != nil {
+                // Once: a retry that fails too (refused, signed out) is not tried again.
+                if error != nil, !retried {
                     Task { @MainActor in retryClose(cid: cid, adhoc: adhoc, recordId: recordId, answered: answered) }
                 }
                 cont.resume(returning: error == nil ? result as? [String: Any] : nil)
@@ -1429,7 +1431,7 @@ final class GroupCallService: ObservableObject {
                 guard !Task.isCancelled else { return }
                 guard NetworkState.shared.isOnline else { continue }
                 retryingClose = nil
-                await closeCall(cid: cid, adhoc: adhoc, recordId: recordId, answered: answered)
+                await closeCall(cid: cid, adhoc: adhoc, recordId: recordId, answered: answered, retried: true)
                 return
             }
         }
