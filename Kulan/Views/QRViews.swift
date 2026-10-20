@@ -126,94 +126,16 @@ struct MyQRView: View {
     /// handle when the display name is empty — a name is optional in this app, a handle is not.
     private var shareLine: String { "Chat with \(name.isEmpty ? handle : name) on Fariin" }
 
+    // ⛔ THE GROUP CODE'S DESIGN, FOR MY OWN CODE TOO (owner 2026-10-20: "use exactly my group
+    // share QR design"): the colour ground with five colours, the white card with the photo on its
+    // edge, name and @handle, the round-dot code, and Share / Save / Copy link / Scan as circles.
     var body: some View {
-        NavigationStack {
-            ZStack {
-                // ⛔ THE GROUND, AND IT IS THE WHOLE REASON THIS SCREEN LOOKED SCATTERED.
-                //
-                // The card has always been painted `secondarySystemGroupedBackground` — which is pure
-                // WHITE in light mode. Behind it was the default `systemBackground`, also pure white.
-                // A white card on a white page has no edge, so the photo, the name and the code read
-                // as three loose things floating on a blank page rather than as one card. It only
-                // showed up in daylight: at night the two colours differ, so the card was visible and
-                // the bug looked like it did not exist. (Owner, 2026-08-23: "now looks unorganized".)
-                Color(.systemGroupedBackground).ignoresSafeArea()
-
-                VStack(spacing: 0) {
-                    Spacer(minLength: 8)
-                    card
-                    Text("Scan this code in Fariin to start a chat.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.top, 18)
-                    Spacer(minLength: 8)
-                    // ONE ACTION, AND IT IS SCAN (owner, 2026-08-23). Sharing moved to an icon in the
-                    // toolbar: you share your own code now and then, but the reason you open this
-                    // screen with somebody in front of you is to point a camera at theirs.
-                    Button {
-                        if let onScan { onScan() } else { showScanner = true }
-                    } label: {
-                        // The app tints itself `.primary` (KulanApp), so `Color.accentColor` here is
-                        // WHITE in dark mode and black in light. A hardcoded white label was therefore
-                        // invisible on its own capsule every night, and correct every day, which is why
-                        // it survived so long. `Theme.onAccent` is the inverse of that same colour.
-                        Text("Scan a code")
-                            .font(.system(size: 17, weight: .semibold))
-                            .frame(maxWidth: .infinity).frame(height: 54)
-                            .background(Color.accentColor, in: Capsule())
-                            .foregroundStyle(Theme.onAccent(dark))
-                    }
-                    // Owner, 2026-09-25: save the code as a picture to post or print, laid out the
-                    // way the reference app's saved code is (brand ground, the card, a line saying
-                    // how to use it), not a bare square of code.
-                    Button { saveCodeCard() } label: {
-                        Group {
-                            if savingCard { ProgressView() } else { Text("Download") }
-                        }
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .frame(maxWidth: .infinity).frame(height: 48)
-                    }
-                    .disabled(savingCard || handle.isEmpty)
-                }
-                .overlay(alignment: .top) {
-                    if let cardToast {
-                        Text(cardToast)
-                            .font(.subheadline.weight(.semibold))
-                            .padding(.horizontal, 16).padding(.vertical, 10)
-                            .background(.regularMaterial, in: Capsule())
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                    }
-                }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 10)
-            }
-            .navigationTitle("My QR Code")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    // A SENTENCE, AND A REAL URL. It shared a bare string before: whoever got it saw
-                    // a naked address with nothing saying what it was or whose it was, and because
-                    // the item was a String rather than a URL, Messages and the rest had no link to
-                    // build a preview card from.
-                    //
-                    // GATED ON THE HANDLE. It is empty until the profile loads, and the old version
-                    // would happily share "https://fariin.com/u/" — a dead link, sent in good faith,
-                    // with no way for either person to tell why it does nothing.
-                    if !handle.isEmpty, let url = URL(string: fariinLink(handle)) {
-                        ShareLink(item: url,
-                                  subject: Text(shareLine),
-                                  message: Text(shareLine)) {
-                            Image(systemName: "square.and.arrow.up")
-                        }
-                        .accessibilityLabel("Share my link")
-                    } else {
-                        Image(systemName: "square.and.arrow.up").foregroundStyle(.tertiary)
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
-            }
+        GroupLinkQRSheet(title: name.isEmpty ? handle : name,
+                         link: handle.isEmpty ? "https://fariin.com" : fariinLink(handle),
+                         photo: me?.photoUrl,
+                         subtitle: handle.isEmpty ? " " : "@\(handle)",
+                         hint: "Scan with the camera to chat",
+                         onScan: { if let onScan { onScan() } else { showScanner = true } })
             .fullScreenCover(isPresented: $showScanner) {
                 // `onMyCode: dismiss` on the scanner we open ourselves: its "My code" button comes
                 // back HERE instead of presenting a second copy of this screen on top of this one.
@@ -241,7 +163,6 @@ struct MyQRView: View {
                     dismiss()
                 }
             }
-        }
     }
 
     /// The photo sits ON the card's edge rather than inside it, which is what stops the card reading

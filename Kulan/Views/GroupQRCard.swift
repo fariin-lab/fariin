@@ -27,6 +27,12 @@ struct GroupLinkQRSheet: View {
     let link: String
     var photo: String? = nil
     var memberCount: Int? = nil
+    /// The line under the name, in place of "Group · N members" (the profile's code: "@handle").
+    var subtitle: String? = nil
+    /// The line under the code.
+    var hint: String = "Scan with the camera to join"
+    /// A Scan circle beside the others (the profile's code, owner 2026-10-20).
+    var onScan: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @AppStorage("groupQR.theme") private var themeIndex = 0
@@ -94,7 +100,8 @@ struct GroupLinkQRSheet: View {
     // MARK: Card
 
     private var card: some View {
-        GroupQRCardFace(title: title, photo: photo, memberCount: memberCount, link: link, ink: theme.ink)
+        GroupQRCardFace(title: title, photo: photo, memberCount: memberCount, link: link, ink: theme.ink,
+                        subtitleText: subtitle, hint: hint)
             .padding(.horizontal, 28)
     }
 
@@ -140,6 +147,12 @@ struct GroupLinkQRSheet: View {
                 PosterActionIcon(icon: "link", diameter: 58, label: "Copy link")
             }
             .buttonStyle(.plain)
+            if let onScan {
+                Button(action: onScan) {
+                    PosterActionIcon(icon: "qrcode.viewfinder", diameter: 58, label: "Scan")
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.horizontal, 24)
     }
@@ -150,7 +163,8 @@ struct GroupLinkQRSheet: View {
         let art = ZStack {
             LinearGradient(colors: [theme.top, theme.bottom], startPoint: .top, endPoint: .bottom)
             GroupQRCardFace(title: title, photo: photo, memberCount: memberCount, link: link, ink: theme.ink,
-                            photoImage: photoFull ?? photo.flatMap { DiskImageCache.shared.smallImageSync($0) })
+                            photoImage: photoFull ?? photo.flatMap { DiskImageCache.shared.smallImageSync($0) },
+                            subtitleText: subtitle, hint: hint)
                 .padding(.horizontal, 32)
                 .padding(.top, 40)
         }
@@ -200,8 +214,11 @@ private struct GroupQRCardFace: View {
     let link: String
     let ink: UIColor
     var photoImage: UIImage? = nil
+    var subtitleText: String? = nil
+    var hint: String = "Scan with the camera to join"
 
     private var subtitle: String {
+        if let subtitleText { return subtitleText }
         guard let n = memberCount else { return "Group" }
         return "Group · \(n) member\(n == 1 ? "" : "s")"
     }
@@ -219,7 +236,7 @@ private struct GroupQRCardFace: View {
                 .frame(maxWidth: 250)
                 .padding(.top, 14)
             }
-            Text("Scan with the camera to join")
+            Text(hint)
                 .font(.footnote).foregroundStyle(Color.black.opacity(0.5))
                 .padding(.top, 10)
         }
