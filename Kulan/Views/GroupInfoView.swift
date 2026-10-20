@@ -1338,11 +1338,13 @@ private struct GroupInfoExits: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .confirmationDialog("Clear this chat?", isPresented: $confirmClear, titleVisibility: .visible) {
-                // Local clear (hides history for ME only) — NOT a global delete of my messages.
-                Button("Clear Chat", role: .destructive) { Task { await ChatService.deleteForMe(cid) } }
+            // Apple's centred alert, as Leave and Report (owner 2026-10-19: the dialog came up as a
+            // bubble pointing at a random spot). Hides history for ME only, on all my devices
+            // (clearedAt on the group doc); nobody else loses anything.
+            .alert("Clear this chat?", isPresented: $confirmClear) {
                 Button("Cancel", role: .cancel) {}
-            } message: { Text("This clears the chat from your device only.") }
+                Button("Clear Chat", role: .destructive) { Task { await ChatService.deleteForMe(cid) } }
+            } message: { Text("Messages are cleared for you on all your devices. Others in the group still have them.") }
             // owner 2026-10-18: Leave, Report and Delete ask in Apple's centred alert, not a sheet.
             .alert("Leave Group?", isPresented: $confirmLeave) {
                 Button("Cancel", role: .cancel) {}
