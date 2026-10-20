@@ -165,18 +165,31 @@ struct GroupCallParticipantsSheet: View {
     @ViewBuilder private var shareSection: some View {
         if service.isAdhoc || link != nil {
             Section {
-                VStack(spacing: 14) {
+                // ⛔ THE APP'S OWN LINK LOOK (owner 2026-10-20: "follow my app, minimalist"): the link
+                // in one pill that copies on a tap, then the glass circles the Invite Links page uses.
+                VStack(spacing: 16) {
                     if !service.linkRevoked, let url = linkURL {
-                        Text(url.absoluteString.replacingOccurrences(of: "https://", with: ""))
-                            .font(.footnote)
-                            .foregroundStyle(Theme.defaultBubble(true))
-                            .lineLimit(2)
-                            .multilineTextAlignment(.center)
+                        Button { copy(url) } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: copied ? "checkmark" : "link")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(copied ? Color.green : Color.secondary)
+                                Text(url.absoluteString.replacingOccurrences(of: "https://", with: ""))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            .padding(.horizontal, 16).frame(height: 44)
                             .frame(maxWidth: .infinity)
-                            .textSelection(.enabled)
-                            .animation(.easeInOut(duration: 0.2), value: url)
+                            .background(Capsule().fill(Color(.secondarySystemGroupedBackground)))
+                            .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Call link. Copy")
+                        .animation(.easeInOut(duration: 0.2), value: copied)
                     }
-                    HStack(spacing: 10) {
+                    HStack(spacing: 0) {
                         // Owner, 2026-10-06: Add people on a link call too. It opens my chats and
                         // sends each person the link (a link call has no member list to add to).
                         if service.isAdhoc || (!service.linkRevoked && linkURL != nil) {
@@ -204,15 +217,9 @@ struct GroupCallParticipantsSheet: View {
     }
 
     private func roundLabel(_ icon: String, _ title: String) -> some View {
-        VStack(spacing: 6) {
-            Image(systemName: icon).font(.system(size: 18, weight: .medium))
-            Text(title).font(.footnote.weight(.medium))
-        }
-        .foregroundStyle(.primary)
-        .frame(maxWidth: .infinity, minHeight: 64)
-        .background(Color(.secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        PosterActionIcon(icon: icon, diameter: 54, onPhoto: false, label: title)
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
     }
 
     /// ⛔ ONE BUTTON: REVOKE = A NEW LINK AT ONCE (owner, 2026-10-07: "when I click revoke, revoke
@@ -225,14 +232,15 @@ struct GroupCallParticipantsSheet: View {
                 approvalRow(link)
                 Button(role: .destructive) { confirmRevoke = true } label: {
                     HStack {
-                        Label("Revoke link", systemImage: "arrow.triangle.2.circlepath")
+                        Label("Revoke Link", systemImage: "arrow.triangle.2.circlepath")
+                            .foregroundStyle(.red)
                         if makingLink { Spacer(); ProgressView() }
                     }
                 }
                 .disabled(makingLink)
                 .accessibilityHint("The old link stops working and a new one is made for this call.")
             } footer: {
-                Text("Revoking stops the old link and makes a new one for this call at once.")
+                Text("Revoke stops the old link and makes a new one at once.")
             }
         }
     }
@@ -242,13 +250,13 @@ struct GroupCallParticipantsSheet: View {
     /// a spinner while it loads, "Couldn't load" with a retry when the read failed.
     @ViewBuilder private func approvalRow(_ link: ActiveCallLink) -> some View {
         if let value = approval {
-            Toggle("Require approval to join",
+            Toggle("Approve New People",
                    isOn: Binding(get: { approval ?? value }, set: { setApproval($0, link) }))
                 .disabled(service.linkRevoked)
                 .tint(.green)   // green always (owner, 2026-10-06: white-on-white in dark mode)
         } else {
             HStack {
-                Text("Require approval to join")
+                Text("Approve New People")
                 Spacer(minLength: 8)
                 if approvalLoadFailed {
                     Button("Couldn't load. Retry") { Task { await loadApproval(link) } }
@@ -313,7 +321,8 @@ struct GroupCallParticipantsSheet: View {
         if service.myRole == .owner && service.isActive {
             Section {
                 Button(role: .destructive) { confirmEnd = true } label: {
-                    Text("End call for everyone")
+                    Text("End Call for Everyone")
+                        .frame(maxWidth: .infinity)
                 }
             }
         }
