@@ -1711,6 +1711,7 @@ struct GroupMemberSheet: View {
     /// The Member | Admin switch: nil until touched, so it opens on what they are now.
     @State private var adminChoice: Bool? = nil
     @State private var roleText = ""
+    @FocusState private var tagFocused: Bool
     @State private var confirmDismissAdmin = false
     var onInfo: ((String) -> Void)? = nil   // push their profile on the opener's stack
     /// Said by the opener after a removal (owner 2026-10-19: it was silent), with their name.
@@ -2016,6 +2017,7 @@ struct GroupMemberSheet: View {
                         if let e = role?.emoji { Text(e) }
                         TextField("Add a tag", text: $roleText)
                             .submitLabel(.done)
+                            .focused($tagFocused)
                             .disabled(busy)
                         Text("\(roleText.utf16.count)/\(GroupRole.maxText)")
                             .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
@@ -2034,6 +2036,13 @@ struct GroupMemberSheet: View {
             }
         }
         .scrollDismissesKeyboard(.interactively)
+        // A page that is only the tag opens with the keyboard up (owner 2026-10-20), once the sheet
+        // has risen. Not when it also edits admin rights: there the switches come first.
+        .task {
+            guard canEditRole, !mayEditRights else { return }
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            tagFocused = true
+        }
         .navigationTitle(canEditRole && !mayEditRights ? (member.id == me ? "My Tag" : "Tag") : firstName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
