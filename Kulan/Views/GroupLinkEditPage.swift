@@ -70,16 +70,14 @@ struct GroupLinkEditPage: View {
         }
     }
 
+    // ⛔ SLIDING CARDS (owner 2026-10-20): each limit is a row of cards that scrolls sideways,
+    // the picked one filled, instead of a tall list of tick rows.
     private var timeSection: some View {
-        Section {
-            Picker("Time Limit", selection: $time) {
-                if let at = keptExpiry { Text("Keep: until \(Self.dateText(at))").tag(TimeChoice.keep) }
-                Text("1 hour").tag(TimeChoice.hour)
-                Text("1 day").tag(TimeChoice.day)
-                Text("1 week").tag(TimeChoice.week)
-                Text("No limit").tag(TimeChoice.none)
-            }
-            .pickerStyle(.inline).labelsHidden()
+        var opts: [(TimeChoice, String)] = []
+        if let at = keptExpiry { opts.append((.keep, "Until \(Self.dateText(at))")) }
+        opts += [(.none, "No limit"), (.hour, "1 hour"), (.day, "1 day"), (.week, "1 week")]
+        return Section {
+            chipRow(opts, selected: time) { time = $0 }
         } header: {
             Text("Time Limit")
         } footer: {
@@ -88,20 +86,37 @@ struct GroupLinkEditPage: View {
     }
 
     private var usesSection: some View {
-        Section {
-            Picker("Usage Limit", selection: $uses) {
-                if let n = keptUses { Text("Keep: \(n) \(n == 1 ? "person" : "people")").tag(UsesChoice.keep) }
-                Text("1 person").tag(UsesChoice.one)
-                Text("10 people").tag(UsesChoice.ten)
-                Text("100 people").tag(UsesChoice.hundred)
-                Text("No limit").tag(UsesChoice.none)
-            }
-            .pickerStyle(.inline).labelsHidden()
+        var opts: [(UsesChoice, String)] = []
+        if let n = keptUses { opts.append((.keep, "\(n) \(n == 1 ? "person" : "people")")) }
+        opts += [(.none, "No limit"), (.one, "1 person"), (.ten, "10 people"), (.hundred, "100 people")]
+        return Section {
+            chipRow(opts, selected: uses) { uses = $0 }
         } header: {
             Text("Usage Limit")
         } footer: {
             Text("The link stops working once this many people have joined with it.")
         }
+    }
+
+    private func chipRow<T: Hashable>(_ opts: [(T, String)], selected: T,
+                                      pick: @escaping (T) -> Void) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(opts, id: \.0) { o in
+                    let on = o.0 == selected
+                    Button { pick(o.0) } label: {
+                        Text(o.1).font(.subheadline.weight(.semibold))
+                            .foregroundStyle(on ? Color.white : Color.primary)
+                            .padding(.horizontal, 18).frame(height: 44)
+                            .background(Capsule().fill(on ? Color.blue : Color(uiColor: .tertiarySystemFill)))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 6)
+        }
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(Color.clear)
     }
 
     private var revokeSection: some View {
