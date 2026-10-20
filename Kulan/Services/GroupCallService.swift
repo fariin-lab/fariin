@@ -1361,6 +1361,16 @@ final class GroupCallService: ObservableObject {
     /// Audit M-088, 2026-10-07: a call nobody else ever joined is closed "missed", with no length.
     private static func closeCall(cid: String, adhoc: Bool, recordId: String?, answered: Bool,
                                   retried: Bool = false) async {
+        // A group's call: the server closes it, and only when the room is really empty (audit
+        // 2026-10-20: the rules no longer let any member switch a call off). Unreachable: the old
+        // way below, which the rules still allow for the starter and admins.
+        if !adhoc {
+            var body: [String: Any] = ["cid": cid, "answered": answered]
+            if let recordId { body["recordId"] = recordId }
+            if (try? await Functions.functions(region: "me-central1").httpsCallable("groupCallClose").call(body)) != nil {
+                return
+            }
+        }
         let db = Firestore.firestore()
         let ref = db.collection("groupCalls").document(cid)
         let ended: [String: Any]? = await withCheckedContinuation { (cont: CheckedContinuation<[String: Any]?, Never>) in

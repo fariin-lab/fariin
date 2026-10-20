@@ -2215,13 +2215,7 @@ service cloud.firestore {
             // three above, rather than by adding `lastPlayedVoice` to `privateMapsUntouched()` — this
             // branch does not call that function at all.
             //
-            // ⚠️ WHICH IS A GAP THAT PREDATES THIS FIELD AND IS NOT BEING WIDENED HERE: in a GROUP,
-            // `lastRead`, `pinnedBy`, `mutedBy`, `clearedAt` and `archivedBy` are on the allowed list
-            // with no per-uid pin, so one member can write another member's copy of them. The 1:1
-            // branch has been pinned since the block comment above it was written; this branch never
-            // was. Worth its own pass, with every group call site checked first.
-            //
-            // 2026-09-24 audit: THAT PASS, DONE. Before this line a plain group member could write
+            // 2026-09-24 audit, the group copies of the private maps: Before this line a plain group member could write
             // another member's `lastRead`, `mutedBy`, `pinnedBy`, `archivedBy`, `clearedAt`,
             // `pinOrder` or `blockedBy`/`blockedAt` (forge their read receipt, mute them, wipe their
             // copy). Every client write to those maps was checked (ChatService markRead, setPinned,
@@ -2993,7 +2987,10 @@ service cloud.firestore {
                      && resource.data.startedAt < request.time - duration.value(4, 'h'))))
         || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active'])
             && request.resource.data.active == false
-            && !(request.auth.uid in resource.data.get('removedUids', [])))
+            && !(request.auth.uid in resource.data.get('removedUids', []))
+            // 2026-10-20: starter or admin; others via groupCallClose
+            && (resource.data.get('startedBy', '') == request.auth.uid
+                || request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.get('admins', [])))
       );
 
       // Keyed on the doc's own `members`, NOT on isAdhoc(): the Calls tab and the invite listener

@@ -30,17 +30,72 @@ enum PollService {
             .collection("messages").document(messageId).updateData(["pollClosed": true])
     }
 
-    /// Live map of uid → chosen option indices.
+    /// Live map of uid → chosen option indices. Shared per poll (PollVotesHub); call on the main thread.
     static func listen(cid: String, messageId: String, _ cb: @escaping ([String: [Int]]) -> Void) -> ListenerRegistration {
-        votesRef(cid, messageId).addSnapshotListener { snap, _ in
-            var out: [String: [Int]] = [:]
-            for d in snap?.documents ?? [] {
-                if let opts = d.data()["options"] as? [Int], !opts.isEmpty { out[d.documentID] = opts }
-                else if let opts = d.data()["options"] as? [NSNumber], !opts.isEmpty { out[d.documentID] = opts.map { $0.intValue } }
+        PollVotesHub.shared.subscribe(key: "\(cid)|\(messageId)", cb) {
+            votesRef(cid, messageId).addSnapshotListener { snap, _ in
+                var out: [String: [Int]] = [:]
+                for d in snap?.documents ?? [] {
+                    if let opts = d.data()["options"] as? [Int], !opts.isEmpty { out[d.documentID] = opts }
+                    else if let opts = d.data()["options"] as? [NSNumber], !opts.isEmpty { out[d.documentID] = opts.map { $0.intValue } }
+                }
+                PollVotesHub.shared.deliver(key: "\(cid)|\(messageId)", out)
             }
-            cb(out)
         }
     }
+}
+
+/// One votes listener per poll, shared by every view showing it, and kept for a minute after the
+/// last one goes (audit 2026-10-20: a poll scrolled out and back in started a new listener each
+/// time, and a big poll was read again from the server). Main thread only.
+private final class PollVotesHub {
+    static let shared = PollVotesHub()
+    private struct Entry {
+        var reg: ListenerRegistration?
+        var votes: [String: [Int]]?
+        var subs: [UUID: ([String: [Int]]) -> Void] = [:]
+        var idleSince = 0   // bumped on each release, so an older teardown timer does nothing
+    }
+    private var entries: [String: Entry] = [:]
+
+    func subscribe(key: String, _ cb: @escaping ([String: [Int]]) -> Void,
+                   start: () -> ListenerRegistration) -> ListenerRegistration {
+        let id = UUID()
+        var e = entries[key] ?? Entry()
+        e.subs[id] = cb
+        e.idleSince += 1
+        if e.reg == nil { e.reg = start() }
+        entries[key] = e
+        if let v = e.votes { cb(v) }   // the last answer at once, no wait for the server
+        return PollVotesHandle { [weak self] in self?.release(key: key, id: id) }
+    }
+
+    func deliver(key: String, _ votes: [String: [Int]]) {
+        guard var e = entries[key] else { return }
+        e.votes = votes
+        entries[key] = e
+        for cb in e.subs.values { cb(votes) }
+    }
+
+    private func release(key: String, id: UUID) {
+        guard var e = entries[key] else { return }
+        e.subs[id] = nil
+        guard e.subs.isEmpty else { entries[key] = e; return }
+        e.idleSince += 1
+        let mark = e.idleSince
+        entries[key] = e
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in
+            guard let self, let e = self.entries[key], e.subs.isEmpty, e.idleSince == mark else { return }
+            e.reg?.remove()
+            self.entries[key] = nil
+        }
+    }
+}
+
+private final class PollVotesHandle: NSObject, ListenerRegistration {
+    private var onRemove: (() -> Void)?
+    init(_ onRemove: @escaping () -> Void) { self.onRemove = onRemove }
+    func remove() { onRemove?(); onRemove = nil }
 }
 
 // The poll body rendered inside a message bubble (background/meta come from the parent MessageBubble).
