@@ -34,7 +34,6 @@ struct GroupInfoView: View {
     @State private var descText = ""
     @State private var showDisappear = false
     @State private var pendingDisappear: Int?   // chosen timer awaiting the "for all members" confirm
-    @State private var chosenDisappear: Int?
     @State private var showAdd = false
     @State private var memberAction: MemberAction?
     @State private var notice = ""
@@ -1292,6 +1291,8 @@ private struct GroupInfoDialogs: ViewModifier {
     @Binding var descText: String
     @Binding var showDisappear: Bool
     @Binding var pendingDisappear: Int?
+    /// The timer picked on the page, asked about once the page is down (its onDismiss).
+    @State private var chosenDisappear: Int?
     /// The page's "Could not do that" alert (`GroupInfoExits`), for a timer the server refused.
     @Binding var actionError: String?
 

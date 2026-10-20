@@ -30,6 +30,8 @@ struct GroupCallSpeakerTracker {
 
     /// When each currently-speaking person started their unbroken run of speech.
     private var speakingSince: [String: Date] = [:]
+    /// How long the holder must be quiet before someone else may take the highlight.
+    static let takeoverSilence: TimeInterval = 0.6
     /// The last time the active speaker was seen in the speaking set (start of the hold window).
     private var activeLastHeard: Date?
 
@@ -45,6 +47,13 @@ struct GroupCallSpeakerTracker {
         if let current = activeSpeakerId, speaking.contains(current) {
             // Rule 3: still talking, keeps the highlight.
             activeLastHeard = now
+            return false
+        }
+        // Rule 3, between words: one quiet tick is a breath, not the end of their turn. The holder
+        // keeps it until silent for `takeoverSilence` (audit 2026-10-20: a single dropped tick
+        // handed the highlight to whoever talked over them, and the tiles swapped mid-sentence).
+        if activeSpeakerId != nil, let heard = activeLastHeard,
+           now.timeIntervalSince(heard) < Self.takeoverSilence {
             return false
         }
 

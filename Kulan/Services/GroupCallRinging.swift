@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import AVFoundation
 import CallKit
 import Combine
@@ -480,7 +481,14 @@ final class GroupCallRinging {
         guard Auth.auth().currentUser != nil else { return }
         var payload: [String: Any] = ["roomKind": roomKind, "roomId": roomId, "answer": answer]
         if let startedAtMs { payload["startedAt"] = startedAtMs.rounded() }   // a plain JSON number
+        // With background time (audit 2026-10-20): a Decline on the lock screen was lost when iOS
+        // suspended the app a moment later, so the others still saw me ringing.
+        var bg = UIBackgroundTaskIdentifier.invalid
+        bg = UIApplication.shared.beginBackgroundTask(withName: "group-ring-answer") {
+            UIApplication.shared.endBackgroundTask(bg); bg = .invalid
+        }
         Task { @MainActor in
+            defer { if bg != .invalid { UIApplication.shared.endBackgroundTask(bg); bg = .invalid } }
             for attempt in 0..<max(1, tries) {
                 do {
                     _ = try await Functions.functions(region: "me-central1").httpsCallable("groupRingAnswer")
@@ -505,7 +513,9 @@ final class GroupCallRinging {
     /// `at`: round 2, when the ring finished if not now (a cancel push's server send time).
     private func remember(_ roomId: String, at: TimeInterval? = nil) {
         var all = finishedRings()
-        all[roomId] = at ?? Date().timeIntervalSince1970
+        // The server's clock: what it is compared with is the push's server `sentAt` (audit
+        // 2026-10-20: a phone running ahead dropped the next real ring in the same chat).
+        all[roomId] = at ?? ServerClock.now.timeIntervalSince1970
         UserDefaults.standard.set(all, forKey: Self.memoryKey)
     }
 

@@ -101,7 +101,11 @@ struct GroupFloatingCallWindow: View {
                 let (maxLeft, maxDown) = limits(size)
                 // Where the throw was heading, not where the finger stopped.
                 let thrownX = base.width + v.predictedEndTranslation.width
-                let y = min(maxDown, max(0, base.height + v.predictedEndTranslation.height))
+                // The side follows the throw; the height follows the hand, with a quarter of the
+                // throw (audit 2026-10-20: a sideways flick with a little drop landed at the bottom).
+                let dropped = v.translation.height
+                    + 0.25 * (v.predictedEndTranslation.height - v.translation.height)
+                let y = min(maxDown, max(0, base.height + dropped))
                 // Moved by hand: this is its place now, the keyboard has nothing to put back.
                 beforeKeyboard = nil
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {

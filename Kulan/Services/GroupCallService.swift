@@ -458,6 +458,12 @@ final class GroupCallService: ObservableObject {
                     return
                 }
             }
+            // The link may have dropped during the read above, while `isActive` was still false, so
+            // `roomDropped` let it pass (audit 2026-10-20): a dead room is not a call.
+            guard room.connectionState == .connected else {
+                await failJoin(Notice(title: "Call failed", message: nil))
+                return
+            }
             // In the room = in the call; mic and camera follow (see startLocalMedia).
             activeCid = cid; activeRoom = .group(cid: cid); connecting = false
             // Audit M-083: a ring answered on the system call screen and muted there before the
@@ -900,6 +906,13 @@ final class GroupCallService: ObservableObject {
         // or camera-off tapped while these first publishes run is applied after them, never lost.
         syncMic()
         pendingCameraReady = cameraReady
+        // Joined while the app is not in front (answered on the lock screen, a join that finished
+        // after a swipe home): the camera waits for the app, as a camera that went to the
+        // background does (audit 2026-10-20: capture failed, "Couldn't turn the camera on", and
+        // the video was lost for the whole call).
+        if cameraOn, !screenSharing, UIApplication.shared.applicationState != .active {
+            cameraPausedByBackground = true
+        }
         syncCamera()
         // Voice: the camera chain has nothing to do and has already settled. Run the hand-over a
         // beat later, as before, so it lands after `didJoinRoom`.
@@ -1290,7 +1303,8 @@ final class GroupCallService: ObservableObject {
         // Audit M-033, 2026-10-07: read as late as possible, right before the room closes.
         let state = room.connectionState
         let wasLast = (state == .connected && room.remoteParticipants.isEmpty)
-            || (state == .disconnected && (aloneSince.map { Date().timeIntervalSince($0) > 3 } ?? false))
+            || ((state == .disconnected || state == .reconnecting)   // audit 2026-10-20: a flap at the end
+                && (aloneSince.map { Date().timeIntervalSince($0) > 3 } ?? false))
         let answered = someoneJoined   // audit M-088
         let recordId = groupRecordId
         await room.disconnect()
@@ -1366,6 +1380,12 @@ final class GroupCallService: ObservableObject {
                 }
                 return d
             }, completion: { result, error in
+                // No answer from the server (offline, a dead link at the end): tried again once the
+                // phone is back, for up to 10 minutes (audit 2026-10-20: the doc stayed "live" and the
+                // Join bars with it). The transaction's own checks keep a later call safe.
+                if error != nil {
+                    Task { @MainActor in retryClose(cid: cid, adhoc: adhoc, recordId: recordId, answered: answered) }
+                }
                 cont.resume(returning: error == nil ? result as? [String: Any] : nil)
             })
         }
@@ -1373,7 +1393,9 @@ final class GroupCallService: ObservableObject {
         guard !adhoc, let d = ended, let rid = d["recordId"] as? String else { return }
         let record = db.collection("conversations").document(cid).collection("messages").document(rid)
         if answered, let started = (d["startedAt"] as? Timestamp)?.dateValue() {
-            let secs = max(0, Int(Date().timeIntervalSince(started)))
+            // The server's clock against the server's start (audit 2026-10-20: a phone set wrong
+            // wrote a length hours off).
+            let secs = max(0, Int(ServerClock.now.timeIntervalSince(started)))
             try? await record.updateData(["callOutcome": "answered", "callDuration": secs])
         } else if !answered {
             try? await record.updateData(["callOutcome": "missed"])
@@ -1397,6 +1419,22 @@ final class GroupCallService: ObservableObject {
 
     /// Audit M-099, 2026-10-07: end-of-call writes get the short background time iOS grants, given
     /// back when they finish or after 10 s, whichever comes first.
+    /// One close waiting for the network at a time; a newer one replaces it.
+    private static var retryingClose: Task<Void, Never>?
+    @MainActor private static func retryClose(cid: String, adhoc: Bool, recordId: String?, answered: Bool) {
+        retryingClose?.cancel()
+        retryingClose = Task { @MainActor in
+            for _ in 0..<20 {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard !Task.isCancelled else { return }
+                guard NetworkState.shared.isOnline else { continue }
+                retryingClose = nil
+                await closeCall(cid: cid, adhoc: adhoc, recordId: recordId, answered: answered)
+                return
+            }
+        }
+    }
+
     private static func withBackgroundTime(_ name: String, _ work: @escaping @MainActor () async -> Void) {
         let hold = BackgroundTimeHold()
         hold.id = UIApplication.shared.beginBackgroundTask(withName: name) {
@@ -1667,8 +1705,10 @@ final class GroupCallService: ObservableObject {
             if ns.domain == FunctionsErrorDomain,
                ns.code == FunctionsErrorCode.notFound.rawValue
                 || ns.code == FunctionsErrorCode.failedPrecondition.rawValue { return }
-            // Still waiting on the server, so it goes back in the list.
+            // Still waiting on the server, so it goes back in the list, and says why (audit
+            // 2026-10-20: the card went and came back without a word; the bulk answer already said).
             if !pendingRequests.contains(who) { pendingRequests.append(who) }
+            showToast("Couldn't answer. Try again.")
         }
     }
 

@@ -666,14 +666,16 @@ struct GroupCallView: View {
     // Owner, 2026-10-06: five buttons now, so the spacing is 12 (20 would overflow a 393pt screen:
     // 5 x 54 + 4 x 20 + 36 = 386 inside 365). Nothing else about the capsule changed.
     private var controls: some View {
-        HStack(spacing: 12) {
+        // Fits a 375 pt phone inside its 14 pt gutters: 5 x 54 + 4 x 10 + 2 x 14 = 338 (audit
+        // 2026-10-20: 12 and 18 made 354, past the gutters).
+        HStack(spacing: 10) {
             cameraButton
             micButton
             speakerButton
             moreButton
             endButton
         }
-        .padding(.horizontal, 18).padding(.vertical, 12)
+        .padding(.horizontal, 14).padding(.vertical, 12)
         .background(.ultraThinMaterial, in: Capsule())
     }
 
