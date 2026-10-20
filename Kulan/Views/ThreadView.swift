@@ -556,6 +556,28 @@ struct ThreadView: View {
 
     private var threadScroll: some View {
         ScrollViewReader { proxy in scrollStack(proxy) }
+            // ⛔ A GROUP FARIIN SUSPENDED OR CLOSED SHOWS NOTHING BUT WHY (owner 2026-10-20, after the
+            // reference app): the messages are hidden, the reason sits in a pill in the middle, and
+            // there is no message bar. A group its owner ENDED keeps its messages (groupModHidesChat).
+            .opacity(groupModHidesChat ? 0 : 1)
+            .allowsHitTesting(!groupModHidesChat)
+            .overlay {
+                if groupModHidesChat {
+                    Text(conversation?.groupMod.noticeText ?? "")
+                        .multilineTextAlignment(.center)
+                        .modifier(ChatNoticePill(dark: dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur))
+                        .font(.subheadline)
+                        .padding(.horizontal, 48)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity)
+                }
+            }
+    }
+
+    /// Suspended or disabled by Fariin (not ended by its owner): the chat is closed to view.
+    private var groupModHidesChat: Bool {
+        guard let conv = conversation, conv.isGroup, conv.groupMod.state != "ended" else { return false }
+        return conv.groupMod.blocksSending()
     }
 
     // Extracted so the type-checker isn't overloaded (the inline `if` in the big chain broke the build).
@@ -621,7 +643,7 @@ struct ThreadView: View {
     @ViewBuilder private var topPinArea: some View {
         // ⛔ NOT IN THE LONG-PRESS PREVIEW — owner, 2026-09-27, with the pinned bar ringed across the
         // top of the chat list's preview: "don't show pin bar". A preview is the messages only.
-        if !searchActive && !preview {   // search owns the top area — the pin bar hides while searching
+        if !searchActive && !preview && !groupModHidesChat {   // search owns the top area — the pin bar hides while searching
             keyChangeNotice
             // ⛔ A LIVE CALL TAKES THE PIN BAR'S PLACE (owner 2026-10-20): the people in it, the
             // group's name, who has their mic on, and Join. The pins come back when it ends.
@@ -1225,6 +1247,8 @@ struct ThreadView: View {
                 searchNavBar.transition(.opacity)
             } else if notAMember {
                 removedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else if groupModHidesChat {
+                EmptyView()   // nothing to write into: the reason is in the middle of the chat
             } else if groupModBlocked {
                 groupModBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if cannotSendAnnouncement {
