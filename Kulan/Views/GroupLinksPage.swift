@@ -132,13 +132,8 @@ struct GroupLinksPage: View {
                 .foregroundStyle(.primary)
             }
             .disabled(working)
-            Button(role: .destructive) { confirmOff = true } label: {
-                HStack(spacing: 14) {
-                    Image(systemName: "xmark.circle").font(.system(size: 17)).frame(width: 26)
-                    Text("Turn Off Link")
-                }
-            }
-            .disabled(working)
+            // ⛔ NO TURN OFF (owner 2026-10-20): a group always has its link. Reset makes a new one and
+            // stops the old; there is no way to have none.
         }
     }
 
@@ -211,6 +206,8 @@ struct GroupLinksPage: View {
             list = fresh
             GroupLinksCache.lists[cid] = fresh
             loadError = nil
+            // A group with no link (turned off before Turn Off went away): one is made at once.
+            if fresh.primary == nil, !working { createPrimary() }
         } catch {
             if list == nil {
                 loadError = GroupInviteService.errorText(error, "The links could not be loaded. Try again.")
