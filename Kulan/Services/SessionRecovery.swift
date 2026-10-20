@@ -85,6 +85,8 @@ enum SessionRecovery {
     @MainActor private static var stallRunning = false
     @MainActor private static var stallStep = 0
     @MainActor private static var nextStallAt = Date.distantPast
+    /// Last time a slow key fetch was looked at (`noteStall("key")`), at most once a minute.
+    @MainActor private static var lastKeyLook = Date.distantPast
     /// This stall episode already posted `recovered`; later resets in it stay quiet.
     @MainActor private static var stallEpisodeRecovered = false
     /// 1:1 audit #10: a stall was seen during a call; the reset waits for the call to end.
@@ -197,6 +199,20 @@ enum SessionRecovery {
         guard Auth.auth().currentUser != nil, isActive, !stallRunning else { return }
         // No route off the phone: an outage, not a stuck stream. Nothing to reset until it is back.
         guard ConnectionStatus.shared.routeUp else { return }
+        // ⛔ A SLOW KEY FETCH IS NOT A STUCK CONNECTION (owner, 2026-10-20, 9th "dead until refresh"
+        // report). Crypto's 10s key read is one server read; slow App Check or a slow line pushes it
+        // past 10s on a healthy client. His log at 11:05: STALL key, cache read 4ms, pending writes
+        // confirmed 5ms, then OUR network switch never answered and the client was stuck for good.
+        // So "key" only looks (the snapshot's cache probe still catches a really stuck client) and
+        // never switches the network. Real stalls (watchdog, heartbeat, Firestore 14/4) still reset.
+        if from == "key" {
+            let now = Date()
+            guard now.timeIntervalSince(lastKeyLook) >= 60 else { return }
+            lastKeyLook = now
+            DiagLog.snapshot(from)
+            DiagLog.add("  slow key fetch: checked only, connection left alone")
+            return
+        }
         answeringSince = nil   // a fresh stall restarts the "kept answering for 60s" clock
         // 1:1 audit #10 (owner, 2026-10-08): IN A CALL, decide here, before the back-off moves. The
         // reset was skipped inside `recoverStall`, but the step and the next-allowed time had already
