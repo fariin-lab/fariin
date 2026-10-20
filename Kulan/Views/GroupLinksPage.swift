@@ -566,7 +566,8 @@ struct GroupLinkSheet: View {
                     .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                 }
                 peopleSection
-                Section {
+                // The main link has its own Reset and Turn Off on the page; its sheet only shows it.
+                if !link.isPrimary { Section {
                     if live {
                         Button(role: .destructive) { onRevoke(); dismiss() } label: {
                             Text("Revoke Link").frame(maxWidth: .infinity)
@@ -576,7 +577,7 @@ struct GroupLinkSheet: View {
                             Text("Delete Link").frame(maxWidth: .infinity)
                         }
                     }
-                }
+                } }
             }
             .listStyle(.insetGrouped)
             .navigationTitle(link.name.isEmpty ? "Invite Link" : link.name)
@@ -585,7 +586,7 @@ struct GroupLinkSheet: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
                 }
-                if live {
+                if live && !link.isPrimary {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Edit") { onEdit(); dismiss() }
                     }
