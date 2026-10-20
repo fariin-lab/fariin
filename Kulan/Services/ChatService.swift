@@ -848,6 +848,21 @@ enum ChatService {
         try await writeSystemMessage(cid: cid, text: "\(myName()) \(what)")
     }
 
+    /// End Group (owner 2026-10-20): the owner closes the group for everyone, for good. Server-side
+    /// (functions-groups endGroup), which checks the owner and writes the notice line.
+    static func endGroup(cid: String) async throws {
+        _ = try await Functions.functions(region: "me-central1").httpsCallable("endGroup").call(["cid": cid])
+    }
+
+    /// Block Group (owner 2026-10-20): nobody in it can add me back (the server reads this list when
+    /// someone adds me), then I leave. Joining again by a link stays my own choice.
+    static func blockGroup(cid: String) async throws {
+        guard let me = Auth.auth().currentUser?.uid else { return }
+        try await db.collection("users").document(me).collection("blockedGroups").document(cid)
+            .setData(["at": FieldValue.serverTimestamp()])
+        try await leaveGroup(cid: cid)
+    }
+
     /// Chat history for new members (owner 2026-10-20): Hidden stamps the moment (server time);
     /// Visible removes it. The group is told in one line, as other settings do.
     static func setHideHistory(cid: String, hidden: Bool) async throws {

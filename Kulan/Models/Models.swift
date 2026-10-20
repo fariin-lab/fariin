@@ -960,9 +960,9 @@ struct GroupMod: Equatable, Hashable {
         notice = String((d["notice"] as? String ?? "").prefix(200))
     }
 
-    /// Nobody may send here right now (suspended and not yet over, or disabled).
+    /// Nobody may send here right now (suspended and not yet over, disabled, or ended by its owner).
     func blocksSending(now: Date = Date()) -> Bool {
-        if state == "disabled" { return true }
+        if state == "disabled" || state == "ended" { return true }
         guard state == "suspended" else { return false }
         return untilMillis <= 0 || untilMillis > now.timeIntervalSince1970 * 1000
     }
@@ -970,6 +970,7 @@ struct GroupMod: Equatable, Hashable {
     /// The sentence in place of the message bar. The server's own notice when it wrote one, else
     /// a plain line from the reason, with the end date of a timed suspension.
     var noticeText: String {
+        if state == "ended" { return "This group has ended." }
         var text = notice
         if text.isEmpty {
             let why: String
@@ -1271,6 +1272,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.deletedUsers = data["deletedUsers"] as? [String] ?? []
         self.bannedUids = data["bannedUids"] as? [String] ?? []
         self.groupMod = GroupMod(data: data["mod"] as? [String: Any])
+        // ⛔ ENDED BY ITS OWNER (owner 2026-10-20, endGroup): closed for good, messages kept. Read as a
+        // moderation state, so every place that already stops sending, calls and changes stops here too.
+        if data["endedAt"] != nil, data["type"] as? String == "group" { self.groupMod.state = "ended" }
         self.groupVerified = data["verified"] as? Bool ?? false
         self.restrictedFlags = stringArrayMap(data["restrictedFlags"])
         self.restrictedUntil = doubleMap(data["restrictedUntil"])

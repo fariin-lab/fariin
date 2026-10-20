@@ -828,6 +828,14 @@ service cloud.firestore {
           && request.resource.data.expiresAt is timestamp;
       }
 
+      // 2026-10-20 (owner): groups I blocked (Block Group). Read by the server only, when someone
+      // adds me back (onGroupMembersAdded); mine to write and remove.
+      match /blockedGroups/{gid} {
+        allow read, delete: if signedIn() && request.auth.uid == uid;
+        allow create, update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['at'])
+          && request.resource.data.at == request.time;
+      }
       match /blocked/{other} {
         allow read, delete: if signedIn() && request.auth.uid == uid;
         // 2026-09-26: `at` may be EARLIER than now, never later. Moving a block that was recorded
@@ -1410,8 +1418,11 @@ service cloud.firestore {
     // the conversation's data, which every caller already has.
     function groupModBlocked(d) {
       let m = d.get('mod', {});
+      // 2026-10-20 (owner): a group its owner ENDED (`endedAt`, endGroup) is closed the same way:
+      // no sending, no calls, no changes; leaving still works.
       return d.get('type', '') == 'group'
-        && (m.get('state', 'ok') == 'disabled'
+        && (d.get('endedAt', null) != null
+            || m.get('state', 'ok') == 'disabled'
             || (m.get('state', 'ok') == 'suspended'
                 && (m.get('until', null) == null || m.get('until', null) > request.time)));
     }
@@ -2048,7 +2059,7 @@ service cloud.firestore {
         // `e2eeOffAt`) is the server's to change (the groupsE2eeOff migration). In the same list, not
         // a line of its own: a second diff here pushed a busy admin write past the rules engine's
         // 1,000-expression ceiling (rules-tests/role-1018).
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt', 'memberSince'])
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt', 'memberSince', 'endedAt'])
         && groupModWriteOK()
         // owner 2026-10-18: the group wallpaper, groups only and a known shape (groupWallpaperOK).
         && (!('wallpaper' in request.resource.data.diff(resource.data).affectedKeys()) || groupWallpaperOK())

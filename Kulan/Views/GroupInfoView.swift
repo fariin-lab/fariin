@@ -40,6 +40,8 @@ struct GroupInfoView: View {
     @State private var noticeShown = false
     @State private var profileOf: MemberAction?   // Info on a member's sheet (owner 2026-10-19)
     @State private var confirmLeave = false
+    @State private var confirmBlock = false
+    @State private var confirmEnd = false
     @State private var confirmClear = false
     @State private var confirmReport = false
     @State private var confirmDelete = false
@@ -231,7 +233,8 @@ struct GroupInfoView: View {
                                        showDisappear: $showDisappear, pendingDisappear: $pendingDisappear,
                                        actionError: $actionError))
             .modifier(GroupInfoExits(cid: cid, conv: conv, me: me,
-                                     confirmLeave: $confirmLeave, confirmClear: $confirmClear,
+                                     confirmLeave: $confirmLeave, confirmBlock: $confirmBlock, confirmEnd: $confirmEnd,
+                                     confirmClear: $confirmClear,
                                      confirmReport: $confirmReport, confirmDelete: $confirmDelete,
                                      actionError: $actionError, onGone: { dismiss() },
                                      onReported: { flashNotice("Thanks for reporting. We'll take a look.") }))
@@ -613,22 +616,32 @@ struct GroupInfoView: View {
         }
     }
 
-    /// Report, Leave and Delete as red rows at the foot of the page, out of the ••• menu (owner
-    /// 2026-10-19).
+    /// ⛔ THE FOOT OF THE PAGE, TWO CARDS (owner 2026-10-20, with the reference app's page): Leave
+    /// Group, Block Group and Report Spam in one, End Group (and Delete Group) in the other, for the
+    /// owner. Red words and red icons, the rows the rest of the page uses.
     private var exitCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(spacing: 0) {
-                ProfileInfoRow(title: "Report Group", icon: "ic_report", tint: Self.exitRed, chevron: false) { confirmReport = true }
-                rowDivider
                 ProfileInfoRow(title: "Leave Group", icon: "rectangle.portrait.and.arrow.right",
                                tint: Self.exitRed, chevron: false) { confirmLeave = true }
-                // Only the owner can permanently delete the whole group (for everyone).
-                if iAmOwner {
-                    rowDivider
-                    ProfileInfoRow(title: "Delete Group", icon: "trash", tint: Self.exitRed, chevron: false) { confirmDelete = true }
-                }
+                rowDivider
+                ProfileInfoRow(title: "Block Group", icon: "nosign", tint: Self.exitRed, chevron: false) { confirmBlock = true }
+                rowDivider
+                ProfileInfoRow(title: "Report Spam", icon: "exclamationmark.octagon", tint: Self.exitRed, chevron: false) { confirmReport = true }
             }
             .profileSurface(plain: cardColor)
+            if iAmOwner {
+                VStack(spacing: 0) {
+                    if !(conv?.groupMod.state == "ended") {
+                        ProfileInfoRow(title: "End Group", icon: "xmark.circle", tint: Self.exitRed, chevron: false) { confirmEnd = true }
+                        rowDivider
+                    }
+                    // Only the owner can permanently delete the whole group (for everyone).
+                    ProfileInfoRow(title: "Delete Group", icon: "trash", tint: Self.exitRed, chevron: false) { confirmDelete = true }
+                }
+                .profileSurface(plain: cardColor)
+                .padding(.top, 10)
+            }
             if let line = createdLine {
                 Text(line).font(.footnote).foregroundStyle(.secondary)
                     .padding(.horizontal, 20)
@@ -749,7 +762,7 @@ struct GroupInfoView: View {
     // of the first three people asking; the row opens the requests page.
     private var groupSettingsCard: some View {
         VStack(spacing: 0) {
-            ProfileInfoRow(title: "Group Settings", icon: "gearshape") { showSettings = true }
+            ProfileInfoRow(title: "Group Settings", icon: "ic_group_settings") { showSettings = true }
             if can(.inviteUsers) && !joinReqs.isEmpty {
                 rowDivider
                 joinRequestsRow
@@ -1393,6 +1406,8 @@ private struct GroupInfoExits: ViewModifier {
     let conv: Conversation?
     let me: String
     @Binding var confirmLeave: Bool
+    @Binding var confirmBlock: Bool
+    @Binding var confirmEnd: Bool
     @Binding var confirmClear: Bool
     @Binding var confirmReport: Bool
     @Binding var confirmDelete: Bool
@@ -1429,7 +1444,20 @@ private struct GroupInfoExits: ViewModifier {
                 Button("Cancel", role: .cancel) {}
                 Button("Leave", role: .destructive) { run { try await ChatService.leaveGroup(cid: cid) } }
             } message: { Text("You won't get messages from this group any more.") }
-            .alert("Report Group?", isPresented: $confirmReport) {
+            .alert("Block This Group?", isPresented: $confirmBlock) {
+                Button("Cancel", role: .cancel) {}
+                Button("Block", role: .destructive) { run { try await ChatService.blockGroup(cid: cid) } }
+            } message: { Text("You'll leave the group, and nobody in it can add you back. You can still join again with a link.") }
+            .alert("End This Group?", isPresented: $confirmEnd) {
+                Button("Cancel", role: .cancel) {}
+                Button("End Group", role: .destructive) {
+                    Task {
+                        do { try await ChatService.endGroup(cid: cid) }
+                        catch { await MainActor.run { actionError = error.localizedDescription } }
+                    }
+                }
+            } message: { Text("Nobody will be able to send messages or start calls, and invite links stop working. Messages stay. This can't be undone.") }
+            .alert("Report Spam?", isPresented: $confirmReport) {
                 Button("Report", role: .destructive) {
                     // admins.first can be ME (self-report) — pick another admin, else the creator, else any other member.
                     let creator = conv?.createdBy
