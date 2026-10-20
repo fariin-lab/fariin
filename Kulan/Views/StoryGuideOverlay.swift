@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import FirebaseAuth
 
 /// The first-time story guide (owner, 2026-10-20: "copy the reference app's story onboarding",
 /// his screenshot of it as the model).
@@ -21,13 +22,25 @@ enum StoryGuide {
 
     static var isSeen: Bool { UserDefaults.standard.bool(forKey: key) }
     static func markSeen() { UserDefaults.standard.set(true, forKey: key) }
+
+    /// Accounts made from the day the guide arrived count as new (owner 2026-10-20: "only new users
+    /// and admins"). People who already used stories before it existed never see it.
+    private static let newSince = Date(timeIntervalSince1970: 1_792_454_400)   // 2026-10-20 00:00 UTC
+
+    /// Owed on this phone: not dismissed with Got it yet, and the account is new or an admin's.
+    static var isOwed: Bool {
+        guard !isSeen else { return false }
+        if AdminStore.shared.isAdmin { return true }
+        guard let made = Auth.auth().currentUser?.metadata.creationDate else { return false }
+        return made >= newSince
+    }
 }
 
 /// Sits as the top layer of the story viewer. Draws nothing once the guide has been seen.
 struct StoryGuideHost: View {
     /// Closes the whole story viewer (the guide's X).
     let onExit: () -> Void
-    @State private var shown = !StoryGuide.isSeen
+    @State private var shown = StoryGuide.isOwed
 
     var body: some View {
         if shown {
