@@ -11,9 +11,19 @@ import SwiftUI
 // failure is shown in the alert; nothing is swallowed and nothing is shown as done before the server
 // says so.
 
+/// The last list seen per group (owner 2026-10-20: a spinner every time the page opened). The page
+/// paints from it at once and refreshes behind, as the chat lists do.
+@MainActor enum GroupLinksCache { static var lists: [String: GroupLinkList] = [:] }
+
 struct GroupLinksPage: View {
     let cid: String
     let groupTitle: String
+
+    init(cid: String, groupTitle: String) {
+        self.cid = cid
+        self.groupTitle = groupTitle
+        _list = State(initialValue: GroupLinksCache.lists[cid])
+    }
 
     @State private var list: GroupLinkList?
     @State private var loadError: String?
@@ -179,7 +189,9 @@ struct GroupLinksPage: View {
 
     private func reload() async {
         do {
-            list = try await GroupInviteService.listLinks(cid: cid)
+            let fresh = try await GroupInviteService.listLinks(cid: cid)
+            list = fresh
+            GroupLinksCache.lists[cid] = fresh
             loadError = nil
         } catch {
             if list == nil {
