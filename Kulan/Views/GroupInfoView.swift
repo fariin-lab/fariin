@@ -1719,7 +1719,8 @@ struct GroupMemberSheet: View {
     // that page (or the profile) takes the sheet to full height.
     @State private var showEdit = false
     @State private var cardHeight: CGFloat = 420
-    private var expanded: Bool { showEdit || showProfileHere }
+    @State private var growing = false
+    private var expanded: Bool { showEdit || showProfileHere || growing }
 
     var body: some View {
         NavigationStack {
@@ -2087,7 +2088,10 @@ struct GroupMemberSheet: View {
             dismiss()
             onInfo(uid)
         } else {
-            showProfileHere = true
+            // Grow to full height FIRST, then push (owner 2026-10-20: the profile slid in while
+            // the card was still short, and the card's empty bottom showed as a white band).
+            growing = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { showProfileHere = true }
         }
     }
 

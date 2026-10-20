@@ -354,6 +354,8 @@ struct GroupAdminsView: View {
     init(cid: String) { self.cid = cid }
 
     @State private var opened: String?
+    /// The member whose profile Info opened, pushed on this page's stack.
+    @State private var profileUid: String?
     @State private var showPick = false
     @State private var actionError: String?
     /// The member picked in Add Admin; their Add Admin page is pushed in the sheet.
@@ -400,7 +402,13 @@ struct GroupAdminsView: View {
         .navigationTitle("Administrators")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: Binding(get: { opened.map { Opened(id: $0) } }, set: { opened = $0?.id })) { o in
-            GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: o.id)
+            // Info closes the card and pushes their profile here, as a full page (2026-10-20).
+            GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: o.id,
+                                  onInfo: { profileUid = $0 })
+        }
+        .navigationDestination(item: $profileUid) { uid in
+            ContactInfoView(cid: ChatService.convId(me, uid), name: conv?.names[uid] ?? "User",
+                            photoUrl: conv?.photos[uid], source: .calls)
         }
         .sheet(isPresented: $showPick, onDismiss: { pickedAdmin = nil }) {
             // Pick a member, then their Add Admin page (rights, tag, the button), in the sheet.
@@ -711,6 +719,8 @@ struct GroupMembersListView: View {
 
     @State private var query = ""
     @State private var opened: String?
+    /// The member whose profile Info opened, pushed on this page's stack.
+    @State private var profileUid: String?
     @State private var showAdd = false
     @State private var pendingRemove: String?
     @State private var removeError: String?
@@ -793,7 +803,13 @@ struct GroupMembersListView: View {
         .navigationTitle("Members")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: Binding(get: { opened.map { Opened(id: $0) } }, set: { opened = $0?.id })) { o in
-            GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: o.id)
+            // Info closes the card and pushes their profile here, as a full page (2026-10-20).
+            GroupMemberSheet.make(cid: cid, conv: conv, me: me, uid: o.id,
+                                  onInfo: { profileUid = $0 })
+        }
+        .navigationDestination(item: $profileUid) { uid in
+            ContactInfoView(cid: ChatService.convId(me, uid), name: conv?.names[uid] ?? "User",
+                            photoUrl: conv?.photos[uid], source: .calls)
         }
         .sheet(isPresented: $showAdd) { AddMembersSheet(cid: cid, existing: Set(conv?.users ?? [])) }
     }
