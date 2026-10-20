@@ -38,7 +38,7 @@ struct GroupTypeView: View {
     var body: some View {
         List {
             typeSection
-            if showPublic { linkSection } else { privateSections }
+            if showPublic { linkSection; linkAndContentSections } else { privateSections }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Group Type")
@@ -124,6 +124,12 @@ struct GroupTypeView: View {
             Text("People can join your group with this link. You can reset it any time.")
         }
         .listRowSeparator(.hidden)
+        linkAndContentSections
+    }
+
+    /// Manage Invite Links and Protect Content, under either type (owner 2026-10-20: a public group
+    /// shows them under its public link too).
+    @ViewBuilder private var linkAndContentSections: some View {
         Section {
             NavigationLink {
                 InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
