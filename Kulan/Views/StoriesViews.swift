@@ -1984,6 +1984,8 @@ struct StoryViewer: View {
             // INSIDE the sheet. Both layers share `viewersProgress`, so the drag and the release
             // spring stay perfectly in sync.
             if showViewers { viewersSheetLayer }
+            // The first-time guide (owner 2026-10-20). Draws nothing after the first story open.
+            StoryGuideHost()
         }
     }
 
