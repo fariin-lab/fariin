@@ -65,6 +65,8 @@ const cases = [
   ["OK      gif with only stickers off", "ALLOW", "ALLOW", MEMBER, msgPath, "create", msg("", { type: "gif", gifUrl: "https://x.test/g" }), null, convMocks(with_(PLAIN, { memberSend: { stickers: false } }))],
   ["FIX     poll with polls off", "ALLOW", "DENY", MEMBER, msgPath, "create", msg("fariin-poll:abc", { pollMulti: false }), null, convMocks(with_(PLAIN, { memberSend: { polls: false } }))],
   ["FIX     location with location off", "ALLOW", "DENY", MEMBER, msgPath, "create", msg("fariin-location:1|2|x"), null, convMocks(with_(PLAIN, { memberSend: { location: false } }))],
+  ["FIX     photo with the old media key off", "ALLOW", "DENY", MEMBER, msgPath, "create", msg("", { type: "image", imageUrl: "https://x.test/a", enc: { v: 0, n: "", k: "", kn: "" } }), null, convMocks(with_(PLAIN, { memberSend: { media: false } }))],
+  ["OK      photo, old media off but photos on", "ALLOW", "ALLOW", MEMBER, msgPath, "create", msg("", { type: "image", imageUrl: "https://x.test/a", enc: { v: 0, n: "", k: "", kn: "" } }), null, convMocks(with_(PLAIN, { memberSend: { media: false, photos: true } }))],
 ];
 
 async function run(t, source, [, , , uid, p, method, after, before, mocks], expectation) {

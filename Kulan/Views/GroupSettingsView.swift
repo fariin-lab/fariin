@@ -1414,9 +1414,21 @@ final class LiveGroupDoc {
         started = cid
         reg?.remove()
         reg = Firestore.firestore().collection("conversations").document(cid)
-            .addSnapshotListener { [weak self] snap, _ in
-                guard let snap, snap.exists, let data = snap.data() else { return }
-                self?.conv = Conversation(id: snap.documentID, data: data)
+            .addSnapshotListener { [weak self] snap, error in
+                guard let self else { return }
+                // Removed, or the group deleted, while a page is open (audit 2026-10-20): the read
+                // is refused or the doc is gone. Take me out of the copy, so every admin control
+                // the page shows turns off at once instead of failing on tap.
+                if error != nil || snap?.exists == false {
+                    if var c = self.conv, let me = AuthService.shared.uid {
+                        c.users.removeAll { $0 == me }
+                        c.admins.removeAll { $0 == me }
+                        self.conv = c
+                    }
+                    return
+                }
+                guard let snap, let data = snap.data() else { return }
+                self.conv = Conversation(id: snap.documentID, data: data)
             }
     }
 

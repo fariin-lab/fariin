@@ -2192,6 +2192,7 @@ struct ThreadView: View {
         .onAppear {
             cachedConv = ConversationsRepository.shared.conversations.first { $0.id == cid }
                 ?? FormerGroups.removed[cid]   // a group I was removed from earlier this session
+            startOwnGroupDoc()
             // A preview owns its repository; a real chat shares the live one (`forChat`), so it
             // counts itself in and out rather than stopping a run another screen may be using.
             if preview { repo.start() } else { repo.open() }
@@ -2404,6 +2405,28 @@ struct ThreadView: View {
         // `iAmMuted` reads. A new value (lifted early, extended) restarts the wait.
         // Named, not inline: this body sits at the type checker's limit (compile 39280078061).
         .task(id: muteLiftKey) { await waitForMuteLift() }
+    }
+
+    /// ⛔ THE GROUP'S OWN DOC, FOR ITS RULES (audit 2026-10-20). The chat list's feed is windowed:
+    /// a group below the window kept its old copy here, so a new send switch, slow mode or
+    /// admins-only went unseen and sends were refused with no notice. Only a change to what the
+    /// composer obeys is taken, so ordinary messages (which touch the doc) do not redraw the chat.
+    /// A class box in @State: a pointer on the stack (the build 990 stack note).
+    @State private var ownGroupDoc = ListenerBox()
+    private func startOwnGroupDoc() {
+        guard ownGroupDoc.reg == nil, cachedConv?.isGroup ?? false else { return }
+        ownGroupDoc.reg = Firestore.firestore().collection("conversations").document(cid)
+            .addSnapshotListener { snap, _ in
+                guard let snap, snap.exists, let data = snap.data() else { return }
+                let fresh = Conversation(id: snap.documentID, data: data)
+                guard let old = cachedConv, fresh.isGroup else { return }
+                let changed = fresh.memberSend != old.memberSend || fresh.slowModeSeconds != old.slowModeSeconds
+                    || fresh.onlyAdminsSend != old.onlyAdminsSend || fresh.admins != old.admins
+                    || fresh.users != old.users || fresh.restrictedFlags != old.restrictedFlags
+                    || fresh.restrictedUntil != old.restrictedUntil
+                    || fresh.groupMod.blocksSending() != old.groupMod.blocksSending()
+                if changed { cachedConv = fresh }
+            }
     }
 
     private func conversationsChanged(_ list: [Conversation]) {

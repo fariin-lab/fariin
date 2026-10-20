@@ -677,9 +677,16 @@ enum ChatService {
         // a refused notice cannot take the removal down with it. The removed member's badge key goes
         // only with the notice: the rules let a group write touch another member's `unreadCount`
         // key only inside a send by me (`lastSender` = me).
-        let conv = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })
-        let canNotice = (conv?.canSend(uid, now: Date().timeIntervalSince1970 * 1000) ?? true)
-            && !(conv?.groupMod.blocksSending() ?? false)
+        // The group's own doc when the list has no copy (audit 2026-10-20: a group below the
+        // list's window read as "may notice", and in a suspended group the refused notice took
+        // the whole removal down). No answer at all: no notice, so the removal still goes through.
+        var conv = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })
+        if conv == nil, let snap = try? await convRef.getDocument(), let data = snap.data() {
+            conv = Conversation(id: cid, data: data)
+        }
+        let canNotice = conv.map {
+            $0.canSend(uid, now: Date().timeIntervalSince1970 * 1000) && !$0.groupMod.blocksSending()
+        } ?? false
         var update: [String: Any] = [
             "users": FieldValue.arrayRemove([removed]),
             "admins": FieldValue.arrayRemove([removed]),

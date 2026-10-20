@@ -44,6 +44,7 @@ struct ForwardPicker: View {
     @State private var query = ""
     @State private var selected = Set<String>()
     @State private var comment = ""
+    @State private var refusedNote: String?
 
     private var me: String { AuthService.shared.uid ?? "" }
 
@@ -197,6 +198,10 @@ struct ForwardPicker: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button { dismiss() } label: { Image(systemName: "xmark") }.tint(.primary) }
             }
+            .alert("Can't send here", isPresented: Binding(get: { refusedNote != nil },
+                                                          set: { if !$0 { refusedNote = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(refusedNote ?? "") }
         }
     }
 
@@ -250,7 +255,43 @@ struct ForwardPicker: View {
     }
 
     private func toggle(_ id: String) {
-        if selected.contains(id) { selected.remove(id) } else { selected.insert(id) }
+        if selected.contains(id) { selected.remove(id); return }
+        // A group that would refuse what is being sent says so here, instead of a bubble that
+        // fails after the sheet is gone (audit 2026-10-20).
+        if let c = repo.conversations.first(where: { $0.id == id }), let why = refusal(in: c) {
+            refusedNote = why
+            return
+        }
+        selected.insert(id)
+    }
+
+    /// Why this group would not take these messages from me, or nil when it would.
+    private func refusal(in c: Conversation) -> String? {
+        guard c.isGroup else { return nil }
+        let now = Date().timeIntervalSince1970 * 1000
+        if !c.canSend(me, now: now) || c.groupMod.blocksSending() {
+            return "You can't send messages in \(c.displayName(me))."
+        }
+        guard !isShare else { return nil }
+        for m in messages {
+            guard let kind = Self.sendKind(of: m), !c.maySend(kind, me) else { continue }
+            let verb = kind == .location ? "is" : "are"
+            return "\(kind.label) \(verb) off in \(c.displayName(me))."
+        }
+        return nil
+    }
+
+    private static func sendKind(of m: Message) -> Conversation.SendKind? {
+        if m.isSticker { return .stickers }
+        if m.isGif { return .gifs }
+        if m.isVideo { return .videos }
+        if m.isImage { return .photos }
+        if m.isAudio { return .voice }
+        if m.isFile { return .files }
+        if m.poll != nil { return .polls }
+        if m.locationCard != nil { return .location }
+        if LinkPreviewService.firstURL(in: m.text) != nil { return .links }
+        return nil
     }
 
     /// Fire-and-forget: the service caches the card, so Send finds it ready. Once per URL there.
