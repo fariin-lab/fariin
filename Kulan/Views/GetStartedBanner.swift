@@ -2,6 +2,10 @@ import SwiftUI
 import UIKit
 import Observation
 
+// ⛔ 2026-10-19: THE PANEL'S LOOK BELOW IS HISTORY. The owner asked for our own design: one glass
+// card "Things you can do" with glass circles (GetStartedBanner). The pastel card numbers and tints
+// further down describe the old reference-style cards; the store and the logic still apply.
+//
 // ⛔ GET STARTED + THE FIRST-CHAT TIP — owner 2026-10-18, with screenshots of the reference app on a
 // brand-new account: a "Get Started" row of pastel cards at the bottom of the empty chat list, and a
 // blue tip under the compose button. "Build completely": same card size, colours, spacing, corner
@@ -32,20 +36,20 @@ enum GetStartedCard: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .newGroup: "New Group"
-        case .inviteFriends: "Invite Friends"
-        case .addPhoto: "Add Photo"
-        case .chatColor: "Chat Color"
+        case .newGroup: "New group"
+        case .inviteFriends: "Invite friends"
+        case .addPhoto: "Add photo"
+        case .chatColor: "Chat color"
         }
     }
 
-    /// Outline glyphs, as the reference cards draw theirs.
+    /// Filled glyphs in the glass circles, as the group page's circles use.
     var symbol: String {
         switch self {
-        case .newGroup: "person.2"
-        case .inviteFriends: "envelope"
-        case .addPhoto: "person.crop.circle"
-        case .chatColor: "paintpalette"
+        case .newGroup: "person.2.fill"
+        case .inviteFriends: "envelope.fill"
+        case .addPhoto: "person.crop.circle.fill"
+        case .chatColor: "paintpalette.fill"
         }
     }
 
@@ -92,6 +96,13 @@ final class GetStartedStore {
         version += 1
     }
 
+    /// Undo of the card's X (owner 2026-10-19: one stray tap must not lose it for good).
+    func reopen(_ uid: String) {
+        guard !uid.isEmpty, defaults.bool(forKey: key(uid, "finished")) else { return }
+        defaults.set(false, forKey: key(uid, "finished"))
+        version += 1
+    }
+
     /// The first-chat tip, put away once the pen was tapped (owner 2026-10-18: "when I tap the pen,
     /// hide that badge"). Its own flag: the cards stay until the first real chat.
     func isTipDismissed(_ uid: String) -> Bool {
@@ -131,41 +142,60 @@ final class GetStartedStore {
     }
 }
 
-/// The panel: title, then the cards scrolling sideways.
+/// ⛔ OUR OWN LOOK (owner 2026-10-19: the pastel cards were the reference's exactly; a checklist read
+/// as homework). One glass card, "Things you can do", four glass circles with their names, the
+/// group page's own circle. The X hides the whole card (the shell offers Undo); press and hold a
+/// circle to hide just that one.
 struct GetStartedBanner: View {
     let cards: [GetStartedCard]
     let onTap: (GetStartedCard) -> Void
     let onRemove: (GetStartedCard) -> Void
+    let onHideAll: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Get Started")
-                .font(.headline)
-                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 16)
-                .accessibilityAddTraits(.isHeader)
-            ScrollView(.horizontal, showsIndicators: false) {
-                GlassEffectContainer(spacing: 12) {
-                    HStack(spacing: 12) {
-                        ForEach(cards) { card in
-                            GetStartedCardView(card: card, onTap: { onTap(card) },
-                                               onRemove: { onRemove(card) })
-                                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+        VStack(spacing: 14) {
+            HStack {
+                Text("Things you can do")
+                    .font(.headline)
+                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                    .foregroundStyle(.primary)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 8)
+                Button(action: onHideAll) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(Color(.tertiarySystemFill)))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Hide")
+            }
+            .padding(.horizontal, 6)
+            HStack(spacing: 0) {
+                ForEach(cards) { card in
+                    Button { onTap(card) } label: {
+                        PosterActionIcon(icon: card.symbol, diameter: 54, onPhoto: false, label: card.title)
+                    }
+                    .tint(.primary)
+                    .contextMenu {
+                        Button(role: .destructive) { onRemove(card) } label: {
+                            Label("Hide", systemImage: "eye.slash")
                         }
                     }
+                    .accessibilityLabel(card.title)
+                    .accessibilityAction(named: "Hide") { onRemove(card) }
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
             }
-            // The cards run to the screen edge while scrolling, as the reference's do (its row is
-            // inset by the margins with clipping off).
-            .contentMargins(.horizontal, 16, for: .scrollContent)
-            .scrollClipDisabled()
-            .scrollBounceBehavior(.always, axes: .horizontal)
-            .frame(height: 98)
         }
+        .padding(.horizontal, 12).padding(.vertical, 16)
+        .liquidGlass(RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .padding(.horizontal, 14)
         .padding(.top, 40 + 12)
         .padding(.bottom, 20)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
         // Rows (the Fariin channel) can sit under the panel: a 40-high fade into the page colour,
         // then solid down behind the tab bar, as theirs. Not hit-testable, so the faded strip does
         // not swallow taps on the row behind it.
@@ -179,48 +209,6 @@ struct GetStartedBanner: View {
             .ignoresSafeArea(edges: .bottom)
             .allowsHitTesting(false)
         }
-    }
-}
-
-private struct GetStartedCardView: View {
-    let card: GetStartedCard
-    let onTap: () -> Void
-    let onRemove: () -> Void
-
-    var body: some View {
-        ZStack(alignment: .topTrailing) {
-            Button(action: onTap) {
-                VStack(spacing: 4) {
-                    Image(systemName: card.symbol)
-                        .font(.system(size: 22, weight: .regular))
-                        .frame(width: 28, height: 28)
-                    Text(card.title)
-                        .font(.footnote.weight(.semibold))
-                        .multilineTextAlignment(.center)
-                        .lineLimit(3)
-                }
-                .foregroundStyle(.primary)
-                .padding(8)
-                .frame(width: 156, height: 98)
-                .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(card.title)
-            .accessibilityAction(named: "Remove") { onRemove() }
-
-            Button(action: onRemove) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 20, height: 20)
-                    .padding(12)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityHidden(true)   // the card's own "Remove" action does this for VoiceOver
-        }
-        .frame(width: 156, height: 98)
-        .glassEffect(.regular.tint(card.tint), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
     }
 }
 

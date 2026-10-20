@@ -1544,6 +1544,9 @@ struct ChatsView: View {
     /// The compose button's centre in window points, so the first-chat tip points at it.
     @State private var composeMidX: CGFloat?
     private var getStarted = GetStartedStore.shared
+    /// The "Card hidden · Undo" capsule after the Get Started card's X, and its 5 s timer.
+    @State private var getStartedUndo = false
+    @State private var getStartedUndoTask: Task<Void, Never>?
     /// Somebody's unanswered requests to me, by the Message Requests page's own definition (not
     /// cleared, not blocked, stance `.incoming`), so the number on the menu entry and the rows on
     /// the page cannot disagree.
@@ -2766,6 +2769,17 @@ struct ChatsView: View {
         return Date().timeIntervalSince(joined) < 7 * 86_400
     }
 
+    /// The card's X: hidden at once, with five seconds to take it back.
+    private func hideGetStarted() {
+        withAnimation(.smooth(duration: 0.3)) { getStarted.finish(me); getStartedUndo = true }
+        getStartedUndoTask?.cancel()
+        getStartedUndoTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.smooth(duration: 0.3)) { getStartedUndo = false }
+        }
+    }
+
     private var getStartedCards: [GetStartedCard] {
         guard getStartedContext, profile.me != nil else { return [] }
         return getStarted.cards(me, hasPhoto: profile.me?.photoUrl?.isEmpty == false,
@@ -2774,13 +2788,30 @@ struct ChatsView: View {
 
     @ViewBuilder private var getStartedLayer: some View {
         let cards = getStartedCards
-        ZStack {
+        ZStack(alignment: .bottom) {
             if !cards.isEmpty {
-                GetStartedBanner(cards: cards, onTap: openGetStarted) { card in
+                GetStartedBanner(cards: cards, onTap: openGetStarted, onRemove: { card in
                     withAnimation(.smooth(duration: 0.3)) { getStarted.remove(card, me) }
-                }
-                // The last X fades the panel away over half a second, as theirs.
+                }, onHideAll: hideGetStarted)
                 .transition(.opacity.animation(.easeInOut(duration: 0.5)))
+            }
+            // A stray tap on the X must not lose the card for good (owner 2026-10-19).
+            if getStartedUndo {
+                Button {
+                    getStartedUndoTask?.cancel()
+                    withAnimation(.smooth(duration: 0.3)) { getStartedUndo = false; getStarted.reopen(me) }
+                } label: {
+                    HStack(spacing: 10) {
+                        Text("Card hidden").foregroundStyle(.secondary)
+                        Text("Undo").fontWeight(.semibold).foregroundStyle(Color.accentColor)
+                    }
+                    .font(.subheadline)
+                    .padding(.horizontal, 18).padding(.vertical, 12)
+                    .liquidGlass(Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 24)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
         // Add Photo goes for good once there is a photo, so it does not come back if it is removed.
