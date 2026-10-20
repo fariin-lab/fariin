@@ -2130,8 +2130,11 @@ struct GroupMemberSheet: View {
         if busy {
             ProgressView()
         } else if showsSave {
+            // Blue, the app's prominent glass (owner 2026-10-20), as the story audience page's Done.
             Button("Done") { saveChanges() }
                 .fontWeight(.semibold)
+                .buttonStyle(.glassProminent)
+                .tint(Color(hex: 0x2392FE))
                 .disabled(!hasChanges)
         }
     }
