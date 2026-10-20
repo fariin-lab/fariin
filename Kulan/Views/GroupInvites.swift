@@ -157,6 +157,29 @@ enum GroupInviteService {
         try link(from: try await call("revokeGroupLink", ["cid": cid, "code": code]))
     }
 
+    /// One person who came in by a link, for the link's sheet. `at` is nil for a join from before
+    /// the full list was kept.
+    struct LinkJoiner: Identifiable {
+        let uid: String
+        let name: String
+        let photoUrl: String?
+        let at: Date?
+        let member: Bool
+        var id: String { uid }
+    }
+
+    /// Who joined by this link, newest first (groupLinkJoiners; link managers only).
+    static func linkJoiners(cid: String, code: String) async throws -> [LinkJoiner] {
+        let d = try await call("groupLinkJoiners", ["cid": cid, "code": code])
+        return (d["people"] as? [[String: Any]] ?? []).compactMap { p in
+            guard let uid = p["uid"] as? String else { return nil }
+            let at = (p["at"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
+            return LinkJoiner(uid: uid, name: p["name"] as? String ?? "Member",
+                              photoUrl: p["photoUrl"] as? String, at: at,
+                              member: p["member"] as? Bool ?? true)
+        }
+    }
+
     static func deleteLink(cid: String, code: String) async throws {
         _ = try await call("deleteGroupLink", ["cid": cid, "code": code])
     }

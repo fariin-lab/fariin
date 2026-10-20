@@ -37,6 +37,10 @@ struct GroupLinksPage: View {
     @State private var revokeTarget: GroupLink?
     @State private var editTarget: LinkEditTarget?
     @State private var qrLink: GroupLink?
+    /// The link whose own sheet is up (owner 2026-10-20: a tap opens a sheet, not a menu).
+    @State private var detailLink: GroupLink?
+    /// What the sheet asked for once it is down (a page sheet cannot open over it).
+    @State private var afterDetail: (() -> Void)?
     @State private var shareText: String?
     @State private var copied = false
     @State private var copiedTask: Task<Void, Never>?
@@ -53,6 +57,18 @@ struct GroupLinksPage: View {
                 linkError: $linkError, confirmReset: $confirmReset, confirmOff: $confirmOff,
                 confirmDeleteAll: $confirmDeleteAll, revokeTarget: $revokeTarget,
                 onReset: reset, onOff: turnOff, onDeleteAll: deleteAllRevoked, onRevoke: revoke))
+            .sheet(item: $detailLink, onDismiss: {
+                let next = afterDetail; afterDetail = nil
+                next?()
+            }) { l in
+                GroupLinkSheet(cid: cid, link: l,
+                               onCopy: { copy(l) },
+                               onSend: { afterDetail = { shareText = l.url } },
+                               onQR: { afterDetail = { qrLink = l } },
+                               onEdit: { afterDetail = { editTarget = LinkEditTarget(link: l) } },
+                               onRevoke: { afterDetail = { revokeTarget = l } },
+                               onDelete: { afterDetail = { delete(l) } })
+            }
             .sheet(item: $qrLink) { l in GroupLinkQRSheet(title: groupTitle, link: l.url, photo: groupConv?.avatarUrl, memberCount: groupConv?.users.count) }
             .sheet(item: Binding(get: { shareText.map { LinkShareText(id: $0) } },
                                  set: { shareText = $0?.id })) { t in
@@ -145,7 +161,8 @@ struct GroupLinksPage: View {
                 Label("Create a New Link", systemImage: "plus").foregroundStyle(Color.accentColor)
             }
             ForEach(links) { l in
-                Menu { linkMenu(l) } label: { GroupLinkRow(link: l) }
+                Button { detailLink = l } label: { GroupLinkRow(link: l) }
+                    .buttonStyle(.plain)
             }
         }
     }
@@ -157,9 +174,8 @@ struct GroupLinksPage: View {
             }
             .disabled(working)
             ForEach(links) { l in
-                Menu {
-                    Button(role: .destructive) { delete(l) } label: { Label("Delete Link", systemImage: "trash") }
-                } label: { GroupLinkRow(link: l) }
+                Button { detailLink = l } label: { GroupLinkRow(link: l) }
+                    .buttonStyle(.plain)
             }
         }
     }
@@ -496,4 +512,162 @@ private struct LinkShareText: Identifiable { let id: String }
 struct LinkEditTarget: Identifiable {
     let link: GroupLink?
     let id = UUID()
+}
+
+/// ⛔ ONE LINK'S OWN SHEET (owner 2026-10-20: "a tap opens a sheet, and I can see who joined with
+/// this link"). Our own layout: the link in the pill that copies, a line saying where it stands,
+/// the glass circles to hand it on, then People Joined (newest first, with when), and at the bottom
+/// Revoke for a live link or Delete for one that is over. Edit sits top right while it is live.
+struct GroupLinkSheet: View {
+    let cid: String
+    let link: GroupLink
+    let onCopy: () -> Void
+    let onSend: () -> Void
+    let onQR: () -> Void
+    let onEdit: () -> Void
+    let onRevoke: () -> Void
+    let onDelete: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var people: [GroupInviteService.LinkJoiner]?
+    @State private var failed = false
+    @State private var copied = false
+
+    private var live: Bool { link.state(now: Date().timeIntervalSince1970 * 1000) == .active }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    VStack(spacing: 16) {
+                        pill
+                        Text(GroupLinkLook.statusLine(link))
+                            .font(.footnote).foregroundStyle(.secondary)
+                        if live { actions }
+                    }
+                    .padding(.vertical, 4)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                }
+                peopleSection
+                Section {
+                    if live {
+                        Button(role: .destructive) { onRevoke(); dismiss() } label: {
+                            Text("Revoke Link").frame(maxWidth: .infinity)
+                        }
+                    } else {
+                        Button(role: .destructive) { onDelete(); dismiss() } label: {
+                            Text("Delete Link").frame(maxWidth: .infinity)
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle(link.name.isEmpty ? "Invite Link" : link.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
+                }
+                if live {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Edit") { onEdit(); dismiss() }
+                    }
+                }
+            }
+            .task { await load() }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private var pill: some View {
+        Button {
+            onCopy()
+            withAnimation(.easeInOut(duration: 0.2)) { copied = true }
+            Task { try? await Task.sleep(nanoseconds: 1_500_000_000); withAnimation { copied = false } }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: copied ? "checkmark" : "link")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(copied ? Color.green : Color.secondary)
+                Text(link.shortURL).font(.subheadline).foregroundStyle(live ? .primary : .secondary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            .padding(.horizontal, 16).frame(height: 44).frame(maxWidth: .infinity)
+            .background(Capsule().fill(Color(.secondarySystemGroupedBackground)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(!live)
+        .padding(.horizontal, 20)
+        .accessibilityLabel("Invite link. Copy")
+    }
+
+    private var actions: some View {
+        HStack(spacing: 0) {
+            circle("paperplane", "Send") { onSend(); dismiss() }
+            if let url = URL(string: link.url) {
+                ShareLink(item: url) {
+                    PosterActionIcon(icon: "square.and.arrow.up", diameter: 54, onPhoto: false, label: "Share")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+            }
+            circle("qrcode", "QR Code") { onQR(); dismiss() }
+        }
+        .padding(.horizontal, 20)
+    }
+
+    private func circle(_ icon: String, _ title: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            PosterActionIcon(icon: icon, diameter: 54, onPhoto: false, label: title)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder private var peopleSection: some View {
+        Section {
+            if let people {
+                if people.isEmpty {
+                    Text("No one has joined with this link yet.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                } else {
+                    ForEach(people) { p in
+                        HStack(spacing: 12) {
+                            AvatarView(name: p.name, photoUrl: p.photoUrl, size: 38)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(p.name).lineLimit(1)
+                                Text(Self.when(p)).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                        .opacity(p.member ? 1 : 0.55)
+                    }
+                }
+            } else if failed {
+                Button("Couldn't load. Try again") { Task { await load() } }
+            } else {
+                HStack { Spacer(); ProgressView(); Spacer() }
+            }
+        } header: {
+            Text(people.map { $0.isEmpty ? "People Joined" : "\($0.count) Joined" } ?? "People Joined")
+        }
+    }
+
+    private static func when(_ p: GroupInviteService.LinkJoiner) -> String {
+        let left = p.member ? "" : " · Left the group"
+        guard let at = p.at else { return "Joined" + left }
+        let cal = Calendar.current
+        let time = at.formatted(date: .omitted, time: .shortened)
+        if cal.isDateInToday(at) { return "Joined today at \(time)" + left }
+        if cal.isDateInYesterday(at) { return "Joined yesterday at \(time)" + left }
+        return "Joined \(at.formatted(.dateTime.day().month(.abbreviated))) at \(time)" + left
+    }
+
+    private func load() async {
+        failed = false
+        do { people = try await GroupInviteService.linkJoiners(cid: cid, code: link.code) }
+        catch { if people == nil { failed = true } }
+    }
 }
