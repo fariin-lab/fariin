@@ -551,10 +551,9 @@ struct GroupInfoView: View {
     }
 
     @ViewBuilder private var menuMemberItems: some View {
-        // No Add Members or Media here: the page has both (owner 2026-10-19).
+        // No Add Members, Media or Members here: the page has all three; the "N Members" heading
+        // opens the full list (owner 2026-10-19).
         Section {
-            // Member Labels show on the rows of this list (`GroupMemberRow`).
-            Button { showAllMembers = true } label: { Label("Members", systemImage: "person.2") }
             // Who joined, left, was removed or changed admin, newest first (owner 2026-10-18).
             Button { showMemberChanges = true } label: {
                 Label("View Member Changes", systemImage: "clock.arrow.circlepath")
@@ -762,14 +761,21 @@ struct GroupInfoView: View {
 
     /// The reference's section header: headline, secondary grey, 16pt in, the search glyph in the
     /// same grey at the trailing edge.
+    /// Tapping "N Members" opens the whole list (owner 2026-10-19: it replaces Members in the ⋯ menu).
     private var membersHeader: some View {
-        HStack(spacing: 0) {
-            Text(membersTitle).font(.headline).foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            // No search glyph here (owner 2026-10-19); See All opens the searchable list.
+        Button { showAllMembers = true } label: {
+            HStack(spacing: 4) {
+                Text(membersTitle).font(.headline)
+                Image(systemName: "chevron.right").font(.subheadline.weight(.semibold))
+                Spacer(minLength: 8)
+            }
+            .foregroundStyle(.secondary)
+            .frame(minHeight: 44)
+            .padding(.leading, 16)
+            .contentShape(Rectangle())
         }
-        .frame(minHeight: 44)
-        .padding(.leading, 16)
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(membersTitle), See All")
     }
 
     private var membersTitle: String {
