@@ -589,6 +589,15 @@ struct CallsView: View {
     @State private var linkService = CallLinkService.shared
     @State private var linkToDelete: SavedCallLink?   // long-press Delete on a link row → confirm
     @State private var linkDeleteFailed = false
+    @State private var liveCalls = LiveGroupCalls.shared
+    @State private var showLiveCall = false
+
+    /// Join a live group call from the Calls tab: the same start the chat's Join bar makes.
+    private func joinLive(_ live: LiveGroupCalls.Live) {
+        let title = ConversationsRepository.shared.conversations.first { $0.id == live.id }?.title ?? "Group"
+        InstantCover.run { showLiveCall = true }
+        Task { await GroupCallService.shared.start(cid: live.id, title: title, video: live.video, requireLive: true) }
+    }
 
     private var shown: [CallEntry] {
         var list = filter == 1 ? repo.calls.filter { $0.missedIncoming } : repo.calls
@@ -1008,6 +1017,14 @@ struct CallsView: View {
                         // Call links sit on top of the history, the create row first. The create row
                         // steps aside while rows are being picked; the links stay, and can be picked
                         // and deleted with the calls (owner, 2026-10-05).
+                        // Live calls in my groups, first (owner 2026-10-20).
+                        if !selecting && CallFeatures.groupCalls {
+                            ForEach(liveCalls.calls) { live in
+                                LiveGroupCallRow(live: live,
+                                                 conv: ConversationsRepository.shared.conversations.first { $0.id == live.id },
+                                                 onJoin: { joinLive(live) })
+                            }
+                        }
                         if !selecting && CallFeatures.callLinks { createLinkRow }
                         // Links and calls in ONE time-ordered list; see `mergedRows` for why.
                         ForEach(mergedRows) { row in
@@ -1069,6 +1086,12 @@ struct CallsView: View {
             }
             .voiceNoteBarSlot()   // under the search field (owner, 2026-09-29)
             .navigationTitle("Calls")
+            // Live group calls (2026-10-20): follow my groups while the tab is up.
+            .onAppear { liveCalls.sync(groups: ConversationsRepository.shared.conversations) }
+            .onChange(of: ConversationsRepository.shared.conversations.filter(\.isGroup).map(\.id)) { _, _ in
+                liveCalls.sync(groups: ConversationsRepository.shared.conversations)
+            }
+            .fullScreenCover(isPresented: $showLiveCall) { GroupCallView() }
             .searchable(text: $searchText, prompt: "Search calls")
             .searchFieldOwnsFill()   // the grey survives the back swipe — see `SearchFieldFill`
             .toolbar {

@@ -14,8 +14,9 @@ enum CallFeatures {
     /// still switch it OFF live (RemoteFeatures.offOnly), no app release needed.
     static var groupCalls: Bool { RemoteFeatures.offOnly("groupCalls", default: true) }
     /// Call links: the "Create a Call Link" row and saved links on the Calls tab, and opening a
-    /// link's pre-join screen from a chat, a web link or the list. Unfinished: OFF-only remotely.
-    static var callLinks: Bool { RemoteFeatures.offOnly("callLinks", default: false) }
+    /// link's pre-join screen from a chat, a web link or the list. ON (owner 2026-10-20: "turn on
+    /// Create link"); the admin panel can still switch it OFF live.
+    static var callLinks: Bool { RemoteFeatures.offOnly("callLinks", default: true) }
 }
 
 /// App features that are built but hidden — owner, 2026-10-10: "completely disable and hide the
