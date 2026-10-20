@@ -438,7 +438,7 @@ struct GroupInfoView: View {
                 // The description reads as text, the count as a label (owner 2026-10-20: the two
                 // looked the same): full ink and the body size, a little more room above it.
                 // Soft, not full white (owner 2026-10-20): above the count's grey, below the name.
-                Text(desc).font(.body).foregroundStyle(ink.opacity(0.82))
+                Text(desc).font(.body).foregroundStyle(ink.opacity(0.68))
                     .lineLimit(3).multilineTextAlignment(.center)
                     .padding(.top, 6)
             } else if canEditInfo {
@@ -607,7 +607,7 @@ struct GroupInfoView: View {
             if let link = inviteLink {
                 Button {
                     if can(.inviteUsers) { shareGroupText = link } else { showMemberLink = true }
-                } label: { Label("Share Group", systemImage: "square.and.arrow.up") }
+                } label: { Label { Text("Share Group") } icon: { MenuIcon(system: "square.and.arrow.up", size: 24) } }
                 Button { showQR = true } label: {
                     Label { Text("QR Code") } icon: { MenuIcon("ic_qr") }
                 }
@@ -639,7 +639,8 @@ struct GroupInfoView: View {
                     Text("Off").tag(false)
                 }
             } label: {
-                Label("Save to Photos: \(saveOn ? "On" : "Off")", systemImage: "square.and.arrow.down")
+                // Drawn at the size of the menu's own icons (owner 2026-10-20: these two looked small).
+                Label { Text("Save to Photos: \(saveOn ? "On" : "Off")") } icon: { MenuIcon(system: "square.and.arrow.down", size: 24) }
             }
         }
     }

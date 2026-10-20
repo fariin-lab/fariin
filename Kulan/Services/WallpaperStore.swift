@@ -565,7 +565,11 @@ enum ChatWallpapers {
                 let link = String(prev.dropFirst(2))
                 if (groupUrlIds[link] ?? Self.sharedPhotoId(link)) == id { return }
             }
-            guard let img = libraryImage(id) else { return }
+            guard let img = libraryImage(id) else {
+                DiagLog.add("GROUPWP# photo missing id=\(id)")
+                Task { @MainActor in ToastNotice.show("Could not set the wallpaper. Try choosing the photo again.") }
+                return
+            }
             image = img
         } else if previous == w.stored {
             return
@@ -589,7 +593,12 @@ enum ChatWallpapers {
                 self.groupShared[cid] = stored
                 UserDefaults.standard.set(self.groupShared, forKey: Self.groupSharedKey)
             } catch {
-                DiagLog.add("GROUPWP# publish failed cid=\(cid): \(error.localizedDescription)")
+                // Said, not silent (owner 2026-10-20: the wallpaper just vanished), and the log goes
+                // up so the reason can be read.
+                let ns = error as NSError
+                DiagLog.add("GROUPWP# publish failed cid=\(cid): \(ns.domain) \(ns.code) \(error.localizedDescription)")
+                DiagLog.flagForUpload()
+                ToastNotice.show("Could not set the wallpaper: \(error.localizedDescription)")
             }
             self.groupPending[cid] = nil
             self.version &+= 1
