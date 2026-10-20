@@ -204,8 +204,13 @@ struct KulanApp: App {
     /// ⛔ GROUP INVITE LINKS LIVE ON THEIR OWN HOST (owner 2026-10-20): https://group.fariin.com/<code>.
     /// fariin.com/g/<code> is still read, for links already sent.
     static let groupHost = "group.fariin.com"
+    /// ⚠️ STILL HANDED OUT ON fariin.com/g/ until group.fariin.com is live (the owner adds it as a
+    /// custom domain and the site change is pushed); then set this to true. The app already opens
+    /// both forms.
+    static let groupHostLive = false
     static func groupLink(code: String) -> String {
-        "https://\(groupHost)/\(code.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? code)"
+        let c = code.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? code
+        return groupHostLive ? "https://\(groupHost)/\(c)" : "\(linkHost)/g/\(c)"
     }
 
     /// ⛔ A STORY'S OWN ADDRESS — owner, 2026-09-11, with what Share was actually putting on his
