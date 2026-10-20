@@ -93,6 +93,7 @@ struct ThreadView: View {
     @State private var caretAfterMention: (text: String, at: Int)?
     @State private var showGroupAdd = false
     @State private var showGroupCall = false
+    @State private var showSoloCall = false
     @State private var groupCallActive = false
     @State private var groupCallVideo = false
     /// Who is in the group's call (the media server's list, `groupCallPeek`), for the join bar.
@@ -2152,6 +2153,10 @@ struct ThreadView: View {
                              photoHint: conversation?.photos[m.id])
         }
         .fullScreenCover(isPresented: $showGroupCall) { GroupCallView() }
+        // Nobody to call (owner 2026-10-20): said in a centred alert.
+        .alert("Call failed", isPresented: $showSoloCall) {
+            Button("OK", role: .cancel) {}
+        } message: { Text("You are the only person in this group.") }
         .task(id: groupCallActive) { await followGroupCallPeople() }
         .modifier(MessageActionDialogs(cid: cid, title: title, me: me,
                                        pendingDelete: $pendingDelete,
@@ -5283,7 +5288,7 @@ struct ThreadView: View {
 
     private func startGroupCall(video: Bool) {
         // Nobody to ring (owner 2026-10-19), as on the group info page.
-        if (conversation?.users.count ?? 0) <= 1 { showJumpToast("You're the only one in this group"); return }
+        if (conversation?.users.count ?? 0) <= 1 { showSoloCall = true; return }
         // ⛔ A CALL STARTED IN A GROUP IS THE GROUP'S CALL, with any number of members (owner
         // 2026-10-20: the two-member shortcut placed a personal call, so the chat list and Calls said
         // "you called Zaki" for a call made in the group). The other member is rung by the group ring.

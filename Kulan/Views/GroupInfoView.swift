@@ -58,6 +58,7 @@ struct GroupInfoView: View {
     @State private var viewerImage: Message?
     @State private var viewerVideo: Message?
     @State private var showCall = false
+    @State private var showSoloCall = false
     @State private var showInvite = false
     /// The invite link being shared through the app's Send To sheet (Share Group).
     @State private var shareGroupText: String?
@@ -271,6 +272,10 @@ struct GroupInfoView: View {
             .navigationDestination(isPresented: $showSettings) { GroupSettingsView(cid: cid) }
             .navigationDestination(isPresented: $showJoinRequests) { GroupRequestsView(cid: cid) }
             .fullScreenCover(isPresented: $showCall) { GroupCallView() }
+            // Nobody to call (owner 2026-10-20): said in a centred alert.
+            .alert("Call failed", isPresented: $showSoloCall) {
+                Button("OK", role: .cancel) {}
+            } message: { Text("You are the only person in this group.") }
             // Local first (offline + instant), then the server; a failed load leaves what we have.
             .task {
                 live.start(cid)   // roles and rights change in front of you (2026-10-20)
@@ -704,7 +709,7 @@ struct GroupInfoView: View {
     private func startCall(video: Bool) {
         // Always the group's call, however few are in it (owner 2026-10-20; see ThreadView
         // startGroupCall). Nobody else in it: said, as in the chat.
-        if (conv?.users.count ?? 0) <= 1 { return }
+        if (conv?.users.count ?? 0) <= 1 { showSoloCall = true; return }
         Task { await GroupCallService.shared.start(cid: cid, title: title, video: video) }
         InstantCover.run { showCall = true }   // a cut, not a slide (owner, 2026-10-06)
     }
