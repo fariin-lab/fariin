@@ -19,7 +19,7 @@ enum DataExport {
         case signedOut, unreadable
         var errorDescription: String? {
             switch self {
-            case .signedOut: return "You are signed out."
+            case .signedOut: return "You are logged out."
             case .unreadable: return "Could not load everything. Check your connection and try again."
             }
         }

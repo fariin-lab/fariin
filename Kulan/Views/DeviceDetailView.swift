@@ -59,7 +59,7 @@ struct DeviceDetailView: View {
             if !session.isThisDevice {
                 Button { confirm = true } label: {
                     ZStack {
-                        Text("Sign Out This Device").opacity(working ? 0 : 1)
+                        Text("Log Out This Device").opacity(working ? 0 : 1)
                         if working { ProgressView().tint(.white) }
                     }
                     .font(.headline)
@@ -91,8 +91,8 @@ struct DeviceDetailView: View {
         // grouped background is the page colour the facts card is designed to sit on.
         .scrollContentBackground(.hidden)
         .presentationBackground(Color(.systemGroupedBackground))
-        .alert("Sign out \(session.displayName)?", isPresented: $confirm) {
-            Button("Sign Out", role: .destructive) { signOut() }
+        .alert("Log out \(session.displayName)?", isPresented: $confirm) {
+            Button("Log Out", role: .destructive) { signOut() }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("It will stop receiving messages and calls.")

@@ -88,7 +88,7 @@ struct DeleteAccountView: View {
             Button("Cancel", role: .cancel) {}
             Button("Delete Account", role: .destructive) { scheduleNow() }
         } message: {
-            Text("You will be signed out and your account hidden. It is deleted for good on \(dueText) unless you sign in before then.")
+            Text("You will be logged out and your account hidden. It is deleted for good on \(dueText) unless you log in before then.")
         }
         .sheet(item: $exportFile, onDismiss: { DataExport.cleanup() }) { f in ActivityView(items: [f.url]) }
     }
@@ -203,7 +203,7 @@ struct DeleteAccountView: View {
         // kpurgeOne (functions-loginalert) and with the restore screen.
         Section("What happens") {
             factRow("eye.slash", "Hidden right away",
-                    "You are signed out. Nobody can find you, see your profile or your stories.")
+                    "You are logged out. Nobody can find you, see your profile or your stories.")
             factRow("calendar", "Deleted for good on \(dueText)",
                     "Your profile, photo, username, stories and group memberships are removed. Your username becomes free for others after a while.")
             factRow("arrow.uturn.backward", "You can change your mind",

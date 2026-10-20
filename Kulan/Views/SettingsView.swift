@@ -772,9 +772,10 @@ struct AccountSettingsView: View {
         } message: {
             Text(exportError ?? "")
         }
-        .alert("Sign out?", isPresented: $showSignOut) {
+        // "Log out", not "Sign out" (owner 2026-10-19: the word Somali users know), as on the row.
+        .alert("Log out?", isPresented: $showSignOut) {
             Button("Cancel", role: .cancel) {}
-            Button("Sign Out", role: .destructive) {
+            Button("Log Out", role: .destructive) {
                 // Set BEFORE the Task, so the page locks on this run loop rather than after the
                 // first await. The two cleanups below are network writes: on a weak signal they
                 // took seconds, and this page sat there fully live the whole time. The tap read as
@@ -805,7 +806,7 @@ struct AccountSettingsView: View {
                 }
             }
         } message: {
-            Text("You'll need to sign back in to use Fariin on this device.")
+            Text("You'll need to log in again to use Fariin on this device.")
         }
         // Deletion is a PAGE, not a one-tap alert: it names the account, spells out what's lost,
         // and re-verifies you first (an alert can't do the provider re-auth, and skipping it is

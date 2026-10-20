@@ -39,7 +39,7 @@ enum VerificationAdmin {
             switch self {
             case .notAllowed:  return "You do not have permission to verify accounts."
             case .noSuchPeer:  return "That account no longer exists."
-            case .notSignedIn: return "You are signed out."
+            case .notSignedIn: return "You are logged out."
             case .changedElsewhere: return "Another admin changed this account's verification. The screen now shows where it stands."
             }
         }

@@ -1088,7 +1088,7 @@ enum AuthFlowError: LocalizedError {
         case .notSignedIn: return "You're not signed in."
         case .alreadyConnected: return "That's already connected to this account."
         case .alreadyLinkedElsewhere:
-            return "That login already belongs to a different Fariin account. Sign out and log in with it instead."
+            return "That login already belongs to a different Fariin account. Log out and log in with it instead."
         case .noAccount:
             return "You haven't signed up with this account before. Go back and choose Sign Up to continue."
         case .accountExists:

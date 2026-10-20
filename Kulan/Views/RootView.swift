@@ -149,7 +149,7 @@ struct RootView: View {
                         // in is available.
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
-                                Button("Sign Out") {
+                                Button("Log Out") {
                                     Task {
                                         // The light teardown on purpose, not Settings' full one.
                                         // Nobody reaching this screen ever got past it, so push was
@@ -178,7 +178,7 @@ struct RootView: View {
                                        onDeletedNow: { Task { await route() } })
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
-                                Button("Sign Out") {
+                                Button("Log Out") {
                                     Task {
                                         await Push.unregister()
                                         await DeviceRegistry.shared.removeThisDevice()
@@ -202,7 +202,7 @@ struct RootView: View {
                     TwoStepSignInView(onPassed: { Task { await route() } })
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
-                                Button("Sign Out") {
+                                Button("Log Out") {
                                     Task {
                                         await AuthService.shared.abandonSession()
                                         await route()
@@ -319,14 +319,14 @@ struct RootView: View {
             }
         }
         .alert(endedBySuspension ? "Account suspended"
-               : endedByDeviceLimit ? "Too many devices" : "Signed out", isPresented: $showRevokedNotice) {
+               : endedByDeviceLimit ? "Too many devices" : "Logged out", isPresented: $showRevokedNotice) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(endedBySuspension
                  ? "This account can't be used right now. If you think this is a mistake, contact us at fariin.com/help."
                  : endedByDeviceLimit
-                 ? "Your account is already signed in on \(DeviceRegistry.maxDevices) devices. On one of them, open Settings > Devices and sign out a device you no longer use, then sign in here again."
-                 : "This device was signed out from another device.")
+                 ? "Your account is already logged in on \(DeviceRegistry.maxDevices) devices. On one of them, open Settings > Devices and log out a device you no longer use, then log in here again."
+                 : "This device was logged out from another device.")
         }
         // 2026-09-24 fix-all #167: see `openPendingUserLink`.
         .alert(userLinkAlert ?? "", isPresented: Binding(get: { userLinkAlert != nil },

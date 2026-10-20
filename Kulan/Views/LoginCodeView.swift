@@ -156,7 +156,7 @@ struct LoginCodeView: View {
                         .padding(.top, 4)
 
                     // Our own line for the person who came here because they were worried.
-                    Text("Think someone else got in? Once you are in, open Settings › Devices and sign out any phone you do not know.")
+                    Text("Think someone else got in? Once you are in, open Settings › Devices and log out any phone you do not know.")
                         .font(.footnote).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.top, 8).padding(.horizontal, 8)

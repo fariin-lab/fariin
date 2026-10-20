@@ -1214,7 +1214,7 @@ final class StoriesService {
             case .glowAudienceUnknown:
                 "Couldn't load your Glows, so this story would reach nobody. Check your connection and try again."
             case .signedOut:
-                "You're signed out, so this story wasn't posted. Sign in and try again."
+                "You're logged out, so this story wasn't posted. Log in and try again."
             }
         }
     }

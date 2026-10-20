@@ -531,7 +531,7 @@ enum DeviceSignOutError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .tooNew(let left):
-            let base = "For your security, a device signed in less than 24 hours ago can't sign out other devices. Use a device you have been signed in on longer"
+            let base = "For your security, a device logged in less than 24 hours ago can't log out other devices. Use a device you have been logged in on longer"
             guard let left, left > 0 else { return base + ", or try again later." }
             let hours = Int((left / 3600).rounded(.up))
             return base + ", or try again in \(hours == 1 ? "1 hour" : "\(hours) hours")."

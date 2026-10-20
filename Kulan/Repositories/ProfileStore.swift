@@ -571,7 +571,7 @@ final class ProfileStore {
         } catch let e as NSError where e.domain == FunctionsErrorDomain {
             // Same words the other account screens use; `reauth` = the sign-in is too old.
             if let details = e.userInfo["details"] as? [String: Any], details["reauth"] as? Bool == true {
-                throw AccountCall.Failure.message("For your security, sign out and sign in again, then choose Delete it now.")
+                throw AccountCall.Failure.message("For your security, log out and log in again, then choose Delete it now.")
             }
             throw AccountCall.Failure.message(e.localizedDescription)
         }
