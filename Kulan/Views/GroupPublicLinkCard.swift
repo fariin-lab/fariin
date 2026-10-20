@@ -17,16 +17,16 @@ struct GroupPublicLinkCard: View {
     private var shownLink: String { "fariin.com/\(name)" }
 
     var body: some View {
-        Menu {
-            Button { copy() } label: { Label("Copy Link", systemImage: "doc.on.doc") }
-            Button { showShare = true } label: { Label("Share Link", systemImage: "square.and.arrow.up") }
-            Button { showQR = true } label: { Label("QR Code", systemImage: "qrcode") }
-        } label: {
-            row
-        }
-        .profileSurface(plain: cardColor)
-        .sheet(isPresented: $showQR) { GroupLinkQRSheet(title: title, link: link) }
-        .sheet(isPresented: $showShare) { ActivityView(items: shareItems) }
+        // A tap opens the share sheet straight away, the one Share Group uses (owner 2026-10-20);
+        // the QR glyph opens the code; press and hold to copy.
+        Button { showShare = true } label: { row }
+            .buttonStyle(.plain)
+            .contextMenu {
+                Button { copy() } label: { Label("Copy Link", systemImage: "doc.on.doc") }
+            }
+            .profileSurface(plain: cardColor)
+            .sheet(isPresented: $showQR) { GroupLinkQRSheet(title: title, link: link) }
+            .sheet(isPresented: $showShare) { ForwardPicker(shareText: link) }
     }
 
     private var row: some View {
@@ -39,7 +39,12 @@ struct GroupPublicLinkCard: View {
                 Text(copied ? "Copied" : "Link").font(.system(size: 13)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
-            Image(systemName: "qrcode").font(.system(size: 17)).foregroundStyle(.secondary)
+            Button { showQR = true } label: {
+                Image(systemName: "qrcode").font(.system(size: 17)).foregroundStyle(.secondary)
+                    .frame(width: 36, height: 36).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("QR Code")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
