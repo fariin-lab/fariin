@@ -132,31 +132,23 @@ enum TGSSticker {
         return dir.appendingPathComponent("\(pack)_\(name)_\(Int(side)).png")
     }
 
-    /// The main-thread engine draws into ordinary layers, which `render(in:)` can copy; the Core
-    /// Animation engine's frames live in the render server and would come out blank.
+    /// Drawn on the one .tgs render queue (`TGSFramePlayer.renderQueue`), never here: a still drawn
+    /// on the main thread while players drew the same animation crashed build 1006. The main-thread
+    /// engine draws into ordinary layers, which `render(in:)` can copy; the Core Animation engine's
+    /// frames live in the render server and would come out blank.
     @MainActor static func still(_ anim: LottieAnimation, side: CGFloat) -> UIImage? {
         guard side > 0 else { return nil }
-        let v = LottieAnimationView(animation: anim,
-                                    configuration: LottieConfiguration(renderingEngine: .mainThread))
-        v.frame = CGRect(x: 0, y: 0, width: side, height: side)
-        v.contentMode = .scaleAspectFit
-        v.backgroundColor = .clear
-        let format = UIGraphicsImageRendererFormat.preferred()
-        format.opaque = false
-        func draw(at progress: CGFloat) -> UIImage {
-            v.currentProgress = progress
-            v.setNeedsLayout()
-            v.layoutIfNeeded()
-            v.forceDisplayUpdate()
-            return UIGraphicsImageRenderer(size: v.bounds.size, format: format).image { ctx in
-                v.layer.render(in: ctx.cgContext)
-            }
+        let scale = UIScreen.main.scale
+        let px = Int(side * scale)
+        func draw(at progress: CGFloat) -> UIImage? {
+            TGSFramePlayer.stillFrame(anim, progress: progress, pixel: px)
+                .map { UIImage(cgImage: $0, scale: scale, orientation: .up) }
         }
         // ⛔ A STICKER THAT POPS IN STARTS EMPTY — owner 2026-10-21 (Mice Hugs tabs and tiles blank):
         // all 24 of that pack's animations begin on a transparent frame. Frame 0 stays the picture when
         // it shows something; otherwise the middle of the animation is used.
-        let first = draw(at: 0)
-        return Self.mostlyEmpty(first) ? draw(at: 0.5) : first
+        guard let first = draw(at: 0) else { return nil }
+        return Self.mostlyEmpty(first) ? (draw(at: 0.5) ?? first) : first
     }
 
     /// Under 3% of a 16x16 sample has any ink.

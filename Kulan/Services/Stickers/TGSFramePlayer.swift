@@ -10,13 +10,19 @@ import Lottie
 // The reference app never puts a vector tree on screen. A background thread draws each frame into a
 // bitmap at the size the sticker shows, the bitmaps are kept, and the screen only swaps one finished
 // picture for the next. This does the same:
-//   • one LottieAnimationLayer per player, main-thread engine, used ONLY on that player's serial
-//     queue and never in a window. Its per-frame update (`forceDisplayUpdate`) has no main-thread
+//   • one LottieAnimationLayer per player, main-thread engine, used ONLY on the render queue and
+//     never in a window. Its per-frame update (`forceDisplayUpdate`) has no main-thread
 //     check, so it draws anywhere; `render(in:)` copies it into a bitmap sized to the tile in pixels.
 //   • finished frames go into one shared cache (by file, pixel size, frame rate and index), so a
 //     second loop, or the same sticker in the chat and in the panel, is not drawn again.
 //   • one display link for every player; on each tick a player puts up its next frame only if it is
 //     already drawn, then asks for the one after. A late frame is skipped, never waited for.
+//
+// ⛔ ONE RENDER QUEUE, NEVER A POOL — build 1006 crashed twice (2026-10-21, SIGTRAP in CFEqual under
+// -[CAShapeLayer setFillColor:] on a "TGSFrames.player" thread): players drew on a concurrent pool,
+// eight at once, while stills drew the same decoded animations on the main thread. The engine is not
+// made for that. Every .tgs drawing, frames and stills, now goes through `renderQueue`, one at a
+// time; the threads were all waiting on Core Animation's one lock anyway, so nothing was gained.
 // The .tgs file itself is never converted (owner: stickers stay .tgs); only what is shown is pixels.
 final class TGSFramePlayer {
     let key: String
@@ -35,11 +41,11 @@ final class TGSFramePlayer {
     private var due: CFTimeInterval = 0
     private var primeOnly = false
 
-    // The player's queue only.
-    private let queue: DispatchQueue
+    // `renderQueue` only.
     private var drawer: LottieAnimationLayer?
 
-    private static let pool = DispatchQueue(label: "TGSFrames.pool", qos: .userInitiated, attributes: .concurrent)
+    /// Every .tgs drawing in the app runs here, one at a time (see the note above).
+    static let renderQueue = DispatchQueue(label: "TGSFrames.render", qos: .userInitiated)
     private static let frames: NSCache<NSString, CGImage> = {
         let c = NSCache<NSString, CGImage>()
         c.totalCostLimit = 80 * 1024 * 1024
@@ -57,7 +63,6 @@ final class TGSFramePlayer {
         let seconds = Double(anim.endFrame - anim.startFrame) / max(1, anim.framerate)
         self.count = max(1, Int((seconds * rate).rounded()))
         self.target = target
-        queue = DispatchQueue(label: "TGSFrames.player", target: Self.pool)
     }
 
     /// Where it is in the loop, 0...1 (a live copy starts from here).
@@ -118,7 +123,7 @@ final class TGSFramePlayer {
         if let hit = Self.frames.object(forKey: cacheKey(i)) { arrived(i, hit); return }
         guard !inFlight else { return }
         inFlight = true
-        queue.async { [self] in
+        Self.renderQueue.async { [self] in
             let img = draw(i)
             DispatchQueue.main.async { [self] in
                 inFlight = false
@@ -141,8 +146,25 @@ final class TGSFramePlayer {
         ready = (i, img)
     }
 
-    /// On `queue`. Frame `i` at this player's rate, as a bitmap `pixel` wide on its longest side.
+    /// On `renderQueue`. Frame `i` at this player's rate, as a bitmap `pixel` wide on its longest side.
     private func draw(_ i: Int) -> CGImage? {
+        let frame = anim.startFrame + CGFloat(Double(i) * anim.framerate / fps)
+        return Self.render(anim, frame: frame, pixel: pixel, drawer: &drawer)
+    }
+
+    /// One frame (0...1 through the loop) as a bitmap, for a still. Drawn on `renderQueue`; the
+    /// caller waits for it.
+    static func stillFrame(_ anim: LottieAnimation, progress: CGFloat, pixel: Int) -> CGImage? {
+        renderQueue.sync {
+            var drawer: LottieAnimationLayer?
+            let frame = anim.startFrame + (anim.endFrame - anim.startFrame) * min(1, max(0, progress))
+            return render(anim, frame: frame, pixel: max(16, pixel), drawer: &drawer)
+        }
+    }
+
+    /// On `renderQueue`. `drawer` is made on first use and kept by the caller.
+    private static func render(_ anim: LottieAnimation, frame: CGFloat, pixel: Int,
+                               drawer: inout LottieAnimationLayer?) -> CGImage? {
         let b = anim.bounds
         guard b.width > 0, b.height > 0 else { return nil }
         // An explicit transaction: this thread has no run loop to flush implicit ones, and Lottie's
@@ -159,7 +181,6 @@ final class TGSFramePlayer {
             layer.frame = b
             drawer = layer
         }
-        let frame = anim.startFrame + CGFloat(Double(i) * anim.framerate / fps)
         layer.currentFrame = min(frame, anim.endFrame)
         layer.forceDisplayUpdate()
         let scale = CGFloat(pixel) / max(b.width, b.height)
