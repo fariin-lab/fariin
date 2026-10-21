@@ -55,6 +55,7 @@ final class MessageRowCell: UICollectionViewCell {
     /// translates for the reply swipe. A notice or a call row hands over its own box, not a hidden
     /// bubble still carrying the frame of the last row this cell drew.
     var previewBubble: UIView { rowView.liftTarget }
+    var stickerView: RowStickerView? { rowView.stickerView }
 
     /// Is this point (in `view`'s coordinates) on a media bubble's caption? See
     /// `MessageRowView.hitsMediaCaption`.

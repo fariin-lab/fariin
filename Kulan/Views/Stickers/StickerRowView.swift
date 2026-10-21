@@ -196,6 +196,37 @@ final class RowStickerView: UIView {
     /// The decrypted bytes behind this row, if it has them (Save to Favorites of a received one).
     var loadedBytes: Data? { bytes }
 
+    /// ⛔ THE LONG-PRESS MENU KEEPS IT MOVING — owner 2026-10-21 ("long-press an animated sticker, it
+    /// stops"). The menu lifts a SNAPSHOT of the bubble, which is a still. For an animated sticker
+    /// this hands back a second, live player of the same art, started where this one is, to lay over
+    /// the snapshot. Nil for a still sticker.
+    func liveCopy() -> UIView? {
+        if let anim = tgs {
+            let v = TGSSticker.makeView(anim)
+            v.frame = bounds
+            v.currentProgress = lottie?.realtimeAnimationProgress ?? 0
+            v.play()
+            return v
+        }
+        guard animated, let data = bytes else { return nil }
+        let v = UIView(frame: bounds)
+        v.isUserInteractionEnabled = false
+        let layer = CALayer()
+        layer.frame = v.bounds
+        layer.contentsGravity = .resizeAspect
+        layer.contentsScale = art.contentsScale
+        layer.contents = art.contents
+        v.layer.addSublayer(layer)
+        // Runs while the copy exists; once the menu closes and lets it go, it stops itself.
+        CGAnimateImageDataWithBlock(data as CFData, nil) { [weak v, weak layer] _, image, stop in
+            guard v != nil, let layer else { stop.pointee = true; return }
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            layer.contents = image
+            CATransaction.commit()
+        }
+        return v
+    }
+
     private func updatePlayback() {
         if let v = lottie, tgs != nil {
             let want = onScreen && window != nil && !isHidden

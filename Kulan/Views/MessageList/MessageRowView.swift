@@ -631,6 +631,8 @@ final class MessageRowView: UIView {
     private let metaLabel = UILabel()
 
     private var mediaView: MediaBubbleView?
+    /// The animated sticker this row shows, for the long-press lift (owner 2026-10-21).
+    var stickerView: RowStickerView? { (mediaView?.isHidden ?? true) ? nil : mediaView?.stickerView }
     private var albumView: AlbumBubbleView?
     private var fileView: FileBubbleView?
     private var locationView: LocationBubbleView?

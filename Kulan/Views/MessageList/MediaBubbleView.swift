@@ -115,6 +115,8 @@ final class MediaBubbleView: UIView {
     private let picture = RowImageView(frame: .zero)
     private var gif: RowGifView?
     private var sticker: RowStickerView?   // 2026-10-17 chat stickers
+    /// The sticker on show, if this bubble is one and it is visible (the long-press lift, 2026-10-21).
+    var stickerView: RowStickerView? { (sticker?.isHidden ?? true) ? nil : sticker }
     private let playBadge = UIImageView()
     private let durationPill = UIView()
     private let durationLabel = UILabel()

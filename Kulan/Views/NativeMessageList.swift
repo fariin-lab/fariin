@@ -5555,6 +5555,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // `bottomOverhang: 13` on its published rect.
             let frame = liftCap(native.liftFrameInWindow, id: id)
             let inBubble = native.previewBubble.convert(frame, from: nil)
+            // An animated sticker keeps moving in the menu (owner 2026-10-21): the snapshot is taken
+            // without it and a live copy is laid in its place. A still sticker returns no copy and
+            // takes the ordinary snapshot.
+            if let sticker = native.stickerView, let live = sticker.liveCopy() {
+                let stickerFrame = sticker.convert(sticker.bounds, to: nil)
+                sticker.isHidden = true
+                let snap = native.previewBubble.resizableSnapshotView(from: inBubble,
+                                                                      afterScreenUpdates: true,
+                                                                      withCapInsets: .zero)
+                sticker.isHidden = false
+                guard let snap else { return nil }
+                live.frame = stickerFrame.offsetBy(dx: -frame.minX, dy: -frame.minY)
+                snap.addSubview(live)
+                return (native.previewBubble, snap, frame)
+            }
             guard let snap = native.previewBubble.resizableSnapshotView(from: inBubble,
                                                                        afterScreenUpdates: false,
                                                                        withCapInsets: .zero) else { return nil }
