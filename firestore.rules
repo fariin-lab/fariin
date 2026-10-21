@@ -1565,6 +1565,26 @@ service cloud.firestore {
               || g.get('chatKeyVisible', true) == false
               || o.get('chatKeyRequired', g.get('chatKeyRequired', true)) == false);
       }
+      // owner 2026-10-21: A CHAT STARTED WHILE REQUESTS WERE OFF STAYS OPEN. `reqOff: true` is
+      // written with a 1:1's first message when Message Requests were off for the person written
+      // to (`reqOffStampOk` on update, the create rule on create), and from then on that chat's
+      // messages pass as they would with the switch off, from either side, whatever the switch
+      // says later. Their privacy / Chat Key setting still holds (`strangersMayWrite`), as it does
+      // in `reqOffMayWrite`. `accepted` is untouched: friendship still begins at Accept or a reply.
+      function reqOffChatMayWrite(u) {
+        return convData().get('reqOff', false) == true && strangersMayWrite(u);
+      }
+      // `reqOff` changes on an existing 1:1 only from absent to true, only before anybody has
+      // written (an unspent pending chat), and only while requests really are off for the other
+      // member. So it can never be put on a request already sent, or taken off again.
+      function reqOffStampOk() {
+        return !('reqOff' in request.resource.data.diff(resource.data).affectedKeys())
+          || (!('reqOff' in resource.data)
+              && request.resource.data.get('reqOff', false) == true
+              && isRequestPending()
+              && resource.data.get('lastSender', '') == ''
+              && !requestsOnFor(otherExistingMember()));
+      }
       // Does a stranger's first message to `u` arrive as a request (one short text, then wait)?
       function requestsOnFor(u) {
         return msgPolicyOverride(u).get('requests', msgPolicyGlobal().get('requests', true)) != false;
@@ -1756,6 +1776,13 @@ service cloud.firestore {
             || (request.resource.data.get('type', '') == 'group' && request.resource.data.e2ee == false))
         && !('e2eeOffAt' in request.resource.data)
         && !('wallpaper' in request.resource.data)      // owner 2026-10-18: set later, by update only
+        // owner 2026-10-21: `reqOff` (see reqOffChatMayWrite) is born only true, only on a 1:1, and
+        // only while Message Requests are really off for the other member.
+        && (!('reqOff' in request.resource.data)
+            || (request.resource.data.reqOff == true
+                && request.resource.data.get('type', '') != 'group'
+                && request.resource.data.users.size() == 2
+                && !requestsOnFor(otherMember())))
         && (
           // THE GROUP BRANCH GOES FIRST, on purpose. A two-member group also satisfies `size() == 2`,
           // and evaluating the 1:1 branch would send it through a privacy lookup it has no business
@@ -2157,7 +2184,11 @@ service cloud.firestore {
               // `accepted` and `startedBy` stay theirs to never write: the G1 clause below and the
               // `startedBy` pin hold whatever this says.
               || !requestsOnFor(otherExistingMember())
+              // owner 2026-10-21: a chat started while requests were off keeps that freedom.
+              || resource.data.get('reqOff', false) == true
             )
+            // owner 2026-10-21: `reqOff` only as `reqOffStampOk` allows.
+            && reqOffStampOk()
             // 1:1 audit r2 G1, 2026-10-08: the clause above lets the starter through while
             // `lastSender` is still empty (a fresh request), so a stranger could accept their own
             // request before sending anything and pass every call gate as a friend. Whatever
@@ -2691,6 +2722,8 @@ service cloud.firestore {
                // owner 2026-10-18: MESSAGE REQUESTS OFF for the other person: no one-message wait.
                // Their Chat Key setting still holds, for a chat that is not open yet.
                || reqOffMayWrite(otherHalf())
+               // owner 2026-10-21: or the chat was started while they were off (`reqOff`).
+               || reqOffChatMayWrite(otherHalf())
              )
           // A REQUEST IS ONE SHORT TEXT — owner's spec, 2026-09-11 §9, and the database says so.
           //
@@ -2713,6 +2746,7 @@ service cloud.firestore {
                     // owner 2026-10-18: the short-text shape is a REQUEST's; with Message Requests
                     // off for the other person the first message may be anything a chat carries.
                     (reqOffMayWrite(otherHalf())
+                    || reqOffChatMayWrite(otherHalf())   // owner 2026-10-21
                     || (
                       request.resource.data.text is string
                       && request.resource.data.text.size() <= 880
