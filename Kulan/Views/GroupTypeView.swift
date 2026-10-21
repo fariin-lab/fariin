@@ -104,22 +104,27 @@ struct GroupTypeView: View {
         shareCode = try? await GroupInviteService.shareCode(cid: cid)
     }
 
+    // Owner's mockup 2026-10-21: group photo, name and the full link in one card, Share Link under it.
     @ViewBuilder private var privateSections: some View {
         Section {
             if let url = inviteURL {
+                // The card copies the link on a tap, as the old pill did.
                 Button {
                     UIPasteboard.general.string = url
                     Haptics.notify(.success)
                     withAnimation { copied = true }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { withAnimation { copied = false } }
                 } label: {
-                    HStack(spacing: 8) {
-                        Text(url.replacingOccurrences(of: "https://", with: ""))
-                            .lineLimit(1).truncationMode(.middle).foregroundStyle(.primary)
-                        Text("Tap to copy").font(.caption).foregroundStyle(.secondary).fixedSize()
+                    HStack(spacing: 16) {
+                        AvatarView(name: conv?.title ?? "Group", photoUrl: conv?.avatarUrl, size: 76)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(conv?.title ?? "Group").font(.headline).foregroundStyle(.primary).lineLimit(1)
+                            Text(url).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle)
+                        }
+                        Spacer(minLength: 0)
                     }
-                    .frame(maxWidth: .infinity).frame(height: 48)
-                    .background(Capsule().fill(Color(uiColor: .tertiarySystemFill)))
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 // The app's own Share With sheet, as the links page sends (owner 2026-10-20).
@@ -143,19 +148,26 @@ struct GroupTypeView: View {
         linkAndContentSections
     }
 
-    /// Manage Invite Links and Protect Content, under either type (owner 2026-10-20: a public group
-    /// shows them under its public link too).
+    /// Invite Links, under either type (owner 2026-10-20: a public group shows it under its public
+    /// link too). Protect Content left this page on the 10-21 mockup; it stays on Permissions.
     @ViewBuilder private var linkAndContentSections: some View {
         Section {
             NavigationLink {
                 InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
                                 initialCode: shareCode ?? conv?.inviteCode ?? "", embedded: true)
             } label: {
-                Label("Manage Invite Links", systemImage: "link")
+                HStack(spacing: 14) {
+                    Image(systemName: "link").font(.system(size: 17)).frame(width: 26)
+                    Text("Invite Links")
+                }
             }
         } footer: {
             Text("Make extra links that end after a time or a number of people.")
         }
+    }
+
+    /// Kept for a later home; not shown (owner mockup 2026-10-21 has no Protect Content here).
+    @ViewBuilder private var protectContentSection: some View {
         Section {
             // Holds the tap at once (owner 2026-10-20: it was hard to switch off, because it read the
             // group copy, which snapped it back until the save came round). Follows the group after.
@@ -180,8 +192,9 @@ struct GroupTypeView: View {
 
     private var typeSection: some View {
         Section {
-            typeRow("Private Group", selected: !showPublic) { pick(publicType: false) }
+            // Public first (owner 2026-10-21).
             typeRow("Public Group", selected: showPublic) { pick(publicType: true) }
+            typeRow("Private Group", selected: !showPublic) { pick(publicType: false) }
         } header: {
             Text("Group Type")
         } footer: {
@@ -198,7 +211,7 @@ struct GroupTypeView: View {
                 Spacer()
                 if selected {
                     Image(systemName: "checkmark").font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(.primary)
                 }
             }
             .contentShape(Rectangle())

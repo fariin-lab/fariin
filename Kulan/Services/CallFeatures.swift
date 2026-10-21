@@ -45,6 +45,9 @@ enum AppFeatures {
     /// the keyboard's own backdrop stays drawn over it, so a lift left the panel looking doubled. Off
     /// until the panel is our own view in the chat (no keyboard window above it); code kept.
     static let stickerPanelGrow = false
+    /// Slow mode for groups (owner 2026-10-21: "hide completely now", he will use it later). Off =
+    /// no Slow mode section on the Permissions page and no hold on sending. Code kept.
+    static let slowMode = false
     /// The My Profile card under the header in Settings (owner 2026-10-11: hidden). The page it
     /// opens is kept; this is only its door in Settings.
     static var myProfileCard: Bool { RemoteFeatures.value("myProfileCard", default: false) }

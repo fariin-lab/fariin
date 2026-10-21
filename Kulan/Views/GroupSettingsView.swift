@@ -167,7 +167,7 @@ struct GroupSettingsView: View {
                 NavigationLink {
                     ChatHistoryForNewMembersPage(cid: cid, hidden: (conv?.hideHistoryAt ?? 0) > 0)
                 } label: {
-                    valueRow("eye.slash", "Chat History",
+                    valueRow("ic_gs_chat_history", "Chat History",
                              (conv?.hideHistoryAt ?? 0) > 0 ? "Hidden" : "Visible")
                 }
             }
@@ -188,7 +188,7 @@ struct GroupSettingsView: View {
                 // Private / Public and the public link name live on the Group Type page.
                 if canEdit {
                     NavigationLink { GroupTypeView(cid: cid) } label: {
-                        valueRow("person.2", "Group Type", isPublicNow ? "Public" : "Private")
+                        valueRow("ic_gs_group_type", "Group Type", isPublicNow ? "Public" : "Private")
                     }
                 }
                 if can(.inviteUsers) {   // public groups have invite links too (owner 2026-10-20)
@@ -201,7 +201,7 @@ struct GroupSettingsView: View {
                 }
                 if can(.inviteUsers) {
                     NavigationLink { GroupRequestsView(cid: cid) } label: {
-                        valueRow("person.badge.clock", "Join Requests",
+                        valueRow("ic_gs_join_requests", "Join Requests",
                                  joinReqs.isEmpty ? "None" : "\(joinReqs.count)")
                     }
                 }
@@ -238,15 +238,15 @@ struct GroupSettingsView: View {
     private var peopleSection: some View {
         Section {
             NavigationLink { GroupMembersListView(cid: cid) } label: {
-                valueRow("person.3", "Members", "\(conv?.users.count ?? 0)")
+                valueRow("ic_gs_members", "Members", "\(conv?.users.count ?? 0)")
             }
             NavigationLink { GroupAdminsView(cid: cid) } label: {
-                valueRow("checkmark.shield", "Administrators", "\(conv?.admins.count ?? 0)")
+                valueRow("ic_gs_admins", "Administrators", "\(conv?.admins.count ?? 0)")
             }
             // REMOVED USERS, the people taken out of the group (`bannedUids`).
             if can(.banUsers) || can(.inviteUsers) {
                 NavigationLink { GroupRemovedUsersView(cid: cid) } label: {
-                    valueRow("person.crop.circle.badge.minus", "Banned Users", "\(conv?.bannedUids.count ?? 0)")
+                    valueRow("ic_gs_banned", "Banned Users", "\(conv?.bannedUids.count ?? 0)")
                 }
             }
         }
@@ -265,7 +265,7 @@ struct GroupSettingsView: View {
     private var permissionsSection: some View {
         Section {
             NavigationLink { permissionsPage } label: {
-                valueRow("key", "Permissions", "\(permissionCount.on)/\(permissionCount.of)")
+                valueRow("ic_gs_permissions", "Permissions", "\(permissionCount.on)/\(permissionCount.of)")
             }
         }
     }
@@ -302,7 +302,7 @@ struct GroupSettingsView: View {
             } footer: {
                 Text("Turned off, only admins can do it.")
             }
-            slowModeSection
+            if AppFeatures.slowMode { slowModeSection }
             privacySection
         }
         .animation(.snappy(duration: 0.25), value: mediaExpanded)
@@ -519,7 +519,12 @@ struct GroupSettingsView: View {
     /// A row in the cards: the outline glyph the group page uses, the title, the value in grey.
     private func valueRow(_ icon: String, _ title: String, _ value: String) -> some View {
         HStack(spacing: 14) {
-            Image(systemName: icon).font(.system(size: 17)).frame(width: 26)
+            // "ic_" = the owner's own outline icons (2026-10-21), else an SF Symbol.
+            if icon.hasPrefix("ic_") {
+                Image(icon).resizable().scaledToFit().frame(width: 24, height: 24).frame(width: 26)
+            } else {
+                Image(systemName: icon).font(.system(size: 17)).frame(width: 26)
+            }
             Text(title)
             Spacer(minLength: 12)
             Text(value).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)

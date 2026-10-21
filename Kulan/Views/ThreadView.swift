@@ -5272,7 +5272,7 @@ struct ThreadView: View {
     /// Slow mode (owner 2026-10-20): a member waits `slowModeSeconds` after their own last message.
     /// Admins are never slowed. ⚠️ App-side only for now: the server does not count yet.
     private func slowModeHeldBack() -> Bool {
-        guard isGroup, let conv = conversation, conv.slowModeSeconds > 0,
+        guard AppFeatures.slowMode, isGroup, let conv = conversation, conv.slowModeSeconds > 0,
               !conv.isAdmin(me), !conv.isOwner(me),
               let last = repo.items.last(where: { $0.authorId == me && !$0.isSystem }) else { return false }
         let left = Double(conv.slowModeSeconds) - Date().timeIntervalSince(last.createdAt)
