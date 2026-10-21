@@ -430,6 +430,16 @@ struct GroupInfoView: View {
     /// The person profile's no-photo slot (ContactInfoView, 132pt).
     private static let photoSide: CGFloat = 132
 
+    /// The description with its links and @usernames in blue (the text's own grey would win over
+    /// the tint otherwise).
+    static func blueLinks(_ text: String) -> AttributedString {
+        var out = ProfileAboutContent.linkedText(text)
+        for run in out.runs where run.link != nil {
+            out[run.range].foregroundColor = Color(hex: 0x0A84FF)
+        }
+        return out
+    }
+
     /// Name, "N Members" and the description line, centred.
     private func headerCaption(_ ink: Color) -> some View {
         VStack(spacing: 4) {
@@ -456,9 +466,20 @@ struct GroupInfoView: View {
                 // looked the same): full ink and the body size, a little more room above it.
                 // Soft, not full white (owner 2026-10-20): above the count's grey, below the name.
                 // 15pt, not the 17pt body (owner 2026-10-20: "looks big", "don't make too much small").
-                Text(desc).font(.subheadline).foregroundStyle(ink.opacity(0.68))
+                // Links and @usernames blue and tappable (owner 2026-10-21): the About card's own
+                // linker and doors (web link in the in-app browser, @name on that profile).
+                Text(Self.blueLinks(desc)).font(.subheadline).foregroundStyle(ink.opacity(0.68))
+                    .tint(Color(hex: 0x0A84FF))
                     .lineLimit(3).multilineTextAlignment(.center)
                     .padding(.top, 6)
+                    .environment(\.openURL, OpenURLAction { url in
+                        switch url.scheme?.lowercased() {
+                        case "http", "https": WebLink.open(url)
+                        case "kulan": UIApplication.shared.open(url)
+                        default: return .discarded
+                        }
+                        return .handled
+                    })
             } else if canEditInfo {
                 // No description yet: whoever may edit is offered one, the reference app's line
                 // (owner 2026-10-19). It opens Edit Group, as the Edit button does.
@@ -1938,7 +1959,8 @@ struct GroupMemberSheet: View {
             }
             .alert("Make \(member.name) an admin?", isPresented: $confirmPromote) {
                 Button("Cancel", role: .cancel) {}
-                Button("Make Admin") {
+                // Blue (owner 2026-10-21): the system's confirm role, tinted.
+                Button("Make Admin", role: .confirm) {
                     let cid = cid, uid = member.id, name = member.name, list = rightsList
                     run { try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: list) }
                 }
@@ -2050,20 +2072,8 @@ struct GroupMemberSheet: View {
                 .padding(.vertical, 4)
                 .listRowBackground(Color.clear)
             }
-            if mayEditRights {
-                Section {
-                    Picker("Role", selection: adminBinding) {
-                        Text("Member").tag(false)
-                        Text("Admin").tag(true)
-                    }
-                    .pickerStyle(.segmented)
-                    .disabled(busy)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
-                } header: {
-                    Text("Role")
-                }
-            }
+            // No Member | Admin tabs here (owner 2026-10-21: "remove that bar"). Making someone an
+            // admin or dismissing them is on the member card (Make Group Admin, Dismiss Admin).
             if mayEditRights && adminSelected {
                 Section {
                     ForEach(shownRights, id: \.id) { r in
