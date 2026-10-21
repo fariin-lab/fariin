@@ -1173,6 +1173,14 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var acceptedBy: String
     /// 2026-10-10: when the request was accepted (server stamp, onRequestAccepted). 0 = unknown.
     var acceptedAtMillis: Double
+    /// owner 2026-10-21: this 1:1's first message went while Message Requests were OFF for the
+    /// person written to (set once, with that message, and only then; the rules check it). Such a
+    /// chat stays an ordinary chat if the switch comes back on (`MessageRequests.stance`), though
+    /// friendship still begins at Accept or a reply (`rawStance` ignores it).
+    var reqOff: Bool = false
+    /// owner 2026-10-21: who last used Remove Friend on this chat (`MessageRequests.unfriend`). Tells
+    /// "I removed them and wait for their knock" apart from "they opened this and never wrote".
+    var unfriendedBy: String = ""
     /// owner 2026-10-18: members whose account was deleted for good. Written only by the server's
     /// purge (kpurgeOne, functions-loginalert), which also renames them to "Deleted Account" in
     /// `names`. Empty during the 30-day grace period: only a finished deletion lands here.
@@ -1282,6 +1290,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.acceptedVia = data["acceptedVia"] as? String ?? ""
         self.acceptedBy = data["acceptedBy"] as? String ?? ""
         self.acceptedAtMillis = ((data["acceptedAt"] as? Timestamp)?.dateValue().timeIntervalSince1970 ?? 0) * 1000
+        self.reqOff = data["reqOff"] as? Bool ?? false
+        self.unfriendedBy = data["unfriendedBy"] as? String ?? ""
         self.deletedUsers = data["deletedUsers"] as? [String] ?? []
         self.bannedUids = data["bannedUids"] as? [String] ?? []
         self.groupMod = GroupMod(data: data["mod"] as? [String: Any])

@@ -90,6 +90,10 @@ enum SendQueue {
         entry.refusedCount = (entry.refusedCount ?? 0) + 1
         map[clientId] = entry
         save(map)
+        // owner 2026-10-21: the rules said no, perhaps on a Message Requests switch this phone had
+        // stale. Read it (and the recipient) once more so the next attempt and the bars use the truth.
+        let cid = entry.cid
+        Task { await MsgPolicy.shared.refreshAfterRefusal(cid: cid) }
     }
 
     /// Owner, 2026-10-08: a send refused while the session was bad (not a real rule) was never

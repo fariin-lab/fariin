@@ -115,6 +115,9 @@ enum ChatService {
             // ONLY WHEN THE READ ACTUALLY ANSWERED. If it did not, we do not know this is new, and
             // guessing wrong turns somebody's real chat into a pending request. Creating a genuinely
             // new chat while offline is then refused by the rules, which is the safe way to be wrong.
+            // owner 2026-10-21: kept on mere open, on purpose. The create rule refuses a new 1:1
+            // without it, so it says "who tapped first", not "who spoke"; `MessageRequests.rawStance`
+            // reads a chat with no message yet as nobody's request (either side may knock).
             if answered {
                 seed["startedBy"] = uid
                 seed["accepted"] = false
@@ -1198,6 +1201,19 @@ enum ChatService {
             isNewConv = false   // the check itself failed — never seed on a guess
         }
 
+        // ⛔ THE LIVE SWITCH BEFORE A FIRST MESSAGE — owner 2026-10-21. The listener (and the copy
+        // saved on the phone) can be behind a flip in the panel, and the rules read the live one,
+        // so a first message asks the server once (2s at most, then the cache) for the switch and,
+        // if never seen, the recipient's own override. Everything below that depends on "are
+        // requests on for them" (the link card, the `reqOff` stamp) then reads the truth.
+        let firstMessage = knocking == true || isNewConv
+        if firstMessage { await MsgPolicy.shared.confirm(for: other) }
+        // owner 2026-10-21 (his decision): a chat whose first message goes while Message Requests
+        // are OFF for the recipient stays an ordinary chat if they come back on. Marked `reqOff`,
+        // in the same write as the rest of the seed; the rules allow it only while the switch is
+        // really off for them and nobody has written yet (see `firestore.rules`, reqOffStampOk).
+        let stampReqOff = firstMessage && !MsgPolicy.shared.requestsOn(for: other) && localConv?.reqOff != true
+
         // Ensure the conversation exists BEFORE the message. The rules require
         // convData().users to authorize a message create; on a brand-new chat the
         // create otherwise loses the race and is rolled back server-side (message
@@ -1217,8 +1233,17 @@ enum ChatService {
             convSeed["startedBy"] = uid
             convSeed["accepted"] = false
         }
+        if stampReqOff { convSeed["reqOff"] = true }
         do {
-            try await convRef.setData(convSeed, merge: true)
+            do {
+                try await convRef.setData(convSeed, merge: true)
+            } catch let e where stampReqOff && SendQueue.isPermanentRefusal(e) {
+                // owner 2026-10-21: the stamp alone was refused (the switch came back on, or the
+                // other person wrote first): the message still goes, as an ordinary first message.
+                convSeed.removeValue(forKey: "reqOff")
+                DiagLog.add("REQ# reqOff stamp refused cid=\(cid)")
+                try await convRef.setData(convSeed, merge: true)
+            }
         } catch {
             // Owner, 2026-10-08: a refused seed write is a refused send; wake the recovery net.
             await MainActor.run { SessionRecovery.noteRefusal(error, "send") }

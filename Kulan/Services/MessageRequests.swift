@@ -62,6 +62,11 @@ enum MessageRequests {
     /// unanswered chat back into Message Requests. `rawStance` is today's reading, for the knock
     /// counter and anything that must not move with the switch.
     static func stance(_ c: Conversation, myUid: String = ChatService.uid) -> Stance {
+        // owner 2026-10-21: a chat whose first message went while requests were OFF stays open when
+        // they come back on (`reqOff`, set with that message; the rules treat it the same way).
+        // `rawStance` does not look at it: friendship still begins at Accept or a reply, and the
+        // Accept/Delete bar for a new person (ThreadView `newPersonUnanswered`) keys off it.
+        if c.reqOff && c.convType != "group" { return .open }
         let s = rawStance(c, myUid: myUid)
         switch s {
         case .open:
@@ -84,10 +89,20 @@ enum MessageRequests {
         // somebody's name, said nothing, and they were shown "wants to send you a message" with no
         // message under it. `lastSender` answers both directions, so `startedBy` is left doing the
         // one job it is reliable for: marking this as a conversation from the request era at all.
-        // An empty `lastSender` is also what a fresh unfriend leaves behind (see `unfriend`), and
-        // only the person who must knock again is in `.firstMessage`: the one who removed the
-        // friend is waiting on them, the same as after sending their one message.
-        guard !c.lastSender.isEmpty else { return c.startedBy == myUid ? .firstMessage : .awaitingReply }
+        //
+        // ⛔ NO MESSAGE YET — owner 2026-10-21. `startedBy` is stamped when the chat is OPENED (the
+        // create rule demands it), so it says who tapped first, not who spoke. With no message,
+        // nobody is waiting on anybody: EITHER person's first message is the knock (the rules'
+        // `isPendingFirstMessage` holds whoever writes first to the short-text shape and the day's
+        // budget), so both read `.firstMessage`, which `stance` turns into `.open` when requests
+        // are off for the other person. This used to give the one who had NOT opened it
+        // `.awaitingReply`: they could not write at all into a chat the other side merely opened.
+        // The one exception is a fresh unfriend (see `unfriend`): the one who removed the friend
+        // waits for the other to knock again, the same as after sending their one message.
+        guard !c.lastSender.isEmpty else {
+            if c.startedBy != myUid, c.unfriendedBy == myUid { return .awaitingReply }
+            return .firstMessage
+        }
         return c.lastSender == myUid ? .awaitingReply : .incoming
     }
 

@@ -132,6 +132,83 @@ final class MsgPolicy: @unchecked Sendable {
         if changed { bump() }
     }
 
+    // MARK: - Asking the server now (owner 2026-10-21)
+
+    /// Has `uid`'s user document (and with it their override, or the lack of one) been seen yet?
+    func hasRecord(_ uid: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return overrides[uid] != nil
+    }
+
+    /// ⛔ THE LIVE ANSWER BEFORE A FIRST MESSAGE — owner 2026-10-21. The listener and the saved copy
+    /// can both be minutes behind a flip in the panel (a phone that was asleep, a listener on the
+    /// old client), and a first message sent on a stale switch is refused by the rules, which read
+    /// the live one. So the send path asks once: `config/msgPolicy` from the server, and the
+    /// recipient's user document when it has never been seen (or always, with `forceUser`, after a
+    /// refusal). Each read waits at most `timeout` seconds and then takes the cache; nothing here
+    /// throws, and an unanswered read keeps the last answer.
+    func confirm(for other: String?, forceUser: Bool = false, timeout: TimeInterval = 2) async {
+        let db = FirestoreHub.db
+        async let g = Self.readNow(db.collection("config").document("msgPolicy"), timeout: timeout)
+        var userSnap: DocumentSnapshot?
+        if let other, !other.isEmpty, forceUser || !hasRecord(other) {
+            userSnap = await Self.readNow(db.collection("users").document(other), timeout: timeout)
+        }
+        if let snap = await g {
+            let d = snap.data() ?? [:]
+            setGlobal(Global(requests: d["requests"] as? Bool ?? true,
+                             chatKeyRequired: d["chatKeyRequired"] as? Bool ?? true,
+                             chatKeyVisible: d["chatKeyVisible"] as? Bool ?? true))
+        }
+        // A user document the cache has never held says nothing; only a real answer is recorded.
+        if let other, let userSnap, userSnap.exists || !userSnap.metadata.isFromCache {
+            record(uid: other, data: userSnap.data())
+        }
+    }
+
+    /// After a send the rules refused: read the switch and the recipient once more, so the next
+    /// attempt, the composer and the bars all use what the database used. Once per chat per few
+    /// seconds; a second caller for the same chat waits on the same reads (the send path and the
+    /// chat screen both report a refusal).
+    func refreshAfterRefusal(cid: String) async {
+        let parts = cid.split(separator: "_").map(String.init)
+        let other = parts.count == 2 ? parts.first(where: { $0 != ChatService.uid }) : nil
+        await refusalRead(cid: cid, other: other).value
+    }
+    private func refusalRead(cid: String, other: String?) -> Task<Void, Never> {
+        lock.lock(); defer { lock.unlock() }
+        if let last = refusalReads[cid], Date().timeIntervalSince(last.at) < 5 { return last.task }
+        let task = Task { await self.confirm(for: other, forceUser: true) }
+        refusalReads[cid] = (task, Date())
+        return task
+    }
+    @ObservationIgnored private var refusalReads: [String: (task: Task<Void, Never>, at: Date)] = [:]
+
+    /// One read that prefers the server but never waits longer than `timeout`, then the cache.
+    private static func readNow(_ ref: DocumentReference, timeout: TimeInterval) async -> DocumentSnapshot? {
+        let once = ReadOnce()
+        let server: DocumentSnapshot? = await withCheckedContinuation { cont in
+            ref.getDocument(source: .server) { snap, _ in
+                if once.claim() { cont.resume(returning: snap) }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                if once.claim() { cont.resume(returning: nil) }
+            }
+        }
+        if let server { return server }
+        return try? await ref.getDocument(source: .cache)
+    }
+    private final class ReadOnce: @unchecked Sendable {
+        private let lock = NSLock()
+        private var done = false
+        func claim() -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            if done { return false }
+            done = true
+            return true
+        }
+    }
+
     private func setGlobal(_ g: Global) {
         lock.lock()
         let changed = global != g

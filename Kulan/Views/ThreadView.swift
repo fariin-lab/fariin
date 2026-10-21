@@ -1891,7 +1891,7 @@ struct ThreadView: View {
             // 2026-09-24 feature-audit: a send the server refused says why, ahead of the network
             // line (it was silent while online). The reason is read from what this screen knows now.
             if SendQueue.isRefused(clientId: m.clientId ?? "") {
-                Text(refusedReason)
+                Text(refusedReason(for: m))
             } else if !NetworkState.shared.isOnline {
                 Text("No internet connection. Check your connection and try again.")
             }
@@ -4456,7 +4456,7 @@ struct ThreadView: View {
             // `onTapRetry` above stays as the fallback. The message line is the dialog's own.
             failedActions: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }) else { return nil }
-                let why: String? = SendQueue.isRefused(clientId: m.clientId ?? "") ? refusedReason
+                let why: String? = SendQueue.isRefused(clientId: m.clientId ?? "") ? refusedReason(for: m)
                     : (!NetworkState.shared.isOnline ? "No internet connection. Check your connection and try again." : nil)
                 return FailedMessageActions(message: why, resend: { resend(m) }, delete: { deleteForMe(m) })
             },
@@ -7189,7 +7189,10 @@ struct ThreadView: View {
             // 2026-09-24 decision D-composer-2: unless the server refused it (a rule said no). That
             // one is flagged so nothing retries it by itself; it stays a failed bubble with Resend /
             // Delete, and its "Message not sent" sheet says why (`refusedReason`, 2026-09-24 feature-audit).
-            if SendQueue.isPermanentRefusal(error) { SendQueue.markRefused(clientId: clientId) }
+            if SendQueue.isPermanentRefusal(error) {
+                SendQueue.markRefused(clientId: clientId)
+                noteRefused(clientId: clientId)   // owner 2026-10-21
+            }
             await MainActor.run {
                 repo.markFailed(clientId: clientId)
                 if error is MissingRecipientKeyError {
@@ -8413,22 +8416,63 @@ struct ThreadView: View {
     }
 
     /// 2026-09-24 feature-audit: why the server refused a send, for the "Message not sent" sheet.
-    /// The bars' own wording where one applies; a first message with none of those is the day's
-    /// request limit, the one refusal left on that path.
-    private var refusedReason: String {
-        if notAMember { return "You're no longer a member of this group" }
-        if groupModBlocked, let conv = conversation { return conv.groupMod.noticeText }
-        if cannotSendAnnouncement { return "Only admins can send messages" }
-        if iAmMuted { return "You're muted in this group" }
+    /// The bars' own wording where one applies.
+    private func refusedReason(for m: Message?) -> String { refusal(for: m).text }
+
+    /// ⛔ HONEST REFUSAL TEXT — owner 2026-10-21. A 1:1 refusal is one of four things, told apart
+    /// with the switch as the database read it (`MsgPolicy.refreshAfterRefusal` re-reads it after
+    /// every refusal, so this is the live answer, not the one the composer was drawn with):
+    ///   policy  requests are on for them: a first message that was not a short text, or a second
+    ///           message before they accept;
+    ///   limit   a first message of the right shape: the day's knocks are spent;
+    ///   chatKey their "People Who Know My Chat Key" setting;
+    ///   generic anything else.
+    /// `code` goes into the DiagLog line (`noteRefused`); `text` is what the sheet says.
+    private func refusal(for m: Message?) -> (code: String, text: String) {
+        if notAMember { return ("group", "You're no longer a member of this group") }
+        if groupModBlocked, let conv = conversation { return ("group", conv.groupMod.noticeText) }
+        if cannotSendAnnouncement { return ("group", "Only admins can send messages") }
+        if iAmMuted { return ("group", "You're muted in this group") }
         // owner 2026-10-18: a partial restriction (AdminDeleteSheet's switches) says which kinds.
         if isGroup, let conv = conversation {
             let off = conv.blockedSendWords(me, now: Date().timeIntervalSince1970 * 1000)
-            if !off.isEmpty { return "An admin has turned off \(ListFormatter.localizedString(byJoining: off))." }
+            if !off.isEmpty { return ("group", "An admin has turned off \(ListFormatter.localizedString(byJoining: off)).") }
         }
-        if cannotMessageThem { return "You can't message \(title)" }
-        if requestStance == .awaitingReply { return "You can send another message once \(title) replies." }
-        if requestStance == .firstMessage { return "That's today's limit for message requests. Try again tomorrow." }
-        return "This message can't be sent here."
+        if cannotMessageThem {
+            return ("chatKey", otherHasKey
+                    ? "\(title) only accepts messages from people who know their Chat Key."
+                    : "You can't message \(title)")
+        }
+        if !isGroup, let c = conversation, !c.reqOff, MsgPolicy.shared.requestsOn(for: otherUid) {
+            switch MessageRequests.rawStance(c, myUid: me) {
+            case .awaitingReply:
+                return ("policy", "You can send more once \(title) accepts.")
+            case .firstMessage:
+                let shortText = m.map {
+                    ($0.type ?? "").isEmpty && !$0.isImage && !$0.isAudio && !$0.isVideo && !$0.isFile
+                        && $0.text.count <= MessageRequests.firstMessageLimit
+                } ?? true
+                return shortText
+                    ? ("limit", "That's today's limit for message requests. Try again tomorrow.")
+                    : ("policy", "\(title) only accepts message requests. Your first message must be a short text.")
+            default:
+                break
+            }
+        }
+        return ("generic", "This message can't be sent here.")
+    }
+
+    /// owner 2026-10-21: after a refusal, read the switch and the recipient again, then record which
+    /// of the four cases it was ("REQ# refused reason=..."), so a device report says why.
+    private func noteRefused(clientId: String) {
+        let chat = cid
+        Task {
+            await MsgPolicy.shared.refreshAfterRefusal(cid: chat)
+            await MainActor.run {
+                let m = repo.items.first { $0.clientId == clientId }
+                DiagLog.add("REQ# refused reason=\(refusal(for: m).code) cid=\(chat)")
+            }
+        }
     }
 
     /// 2026-09-24 feature-audit: whether a message sent now may carry a link card. The rules refuse
@@ -9653,7 +9697,10 @@ struct ThreadView: View {
             SendQueue.addAudio(clientId: clientId, cid: cid, duration: dur, waveform: viewOnce ? [] : wf,
                                reply: reply, ts: Date().timeIntervalSince1970, viewOnce: viewOnce)
             // 2026-09-24 decision D-composer-2: a rule refusal is not re-driven at every launch.
-            if SendQueue.isPermanentRefusal(error) { SendQueue.markRefused(clientId: clientId) }
+            if SendQueue.isPermanentRefusal(error) {
+                SendQueue.markRefused(clientId: clientId)
+                noteRefused(clientId: clientId)   // owner 2026-10-21
+            }
             // 2026-09-24 feature-audit: the same alert the other attachments show (the album's
             // wording); a voice note used to fail with only the red mark.
             await MainActor.run {
