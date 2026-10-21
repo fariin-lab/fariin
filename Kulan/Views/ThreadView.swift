@@ -222,6 +222,9 @@ struct ThreadView: View {
     /// re-opens the attach sheet on the photos; a send closes everything.
     @State private var attachReopen = false
     @State private var showPollComposer = false      // Poll tile (groups) → new-poll composer
+    /// A poll waiting for its sheet to finish closing before it is sent (owner 2026-10-21, the gap
+    /// under a new poll). See the `.sheet(isPresented: $showPollComposer)` below.
+    @State private var pollAwaitingDismiss: String?
     @State private var showFileImporter = false
     @State private var showGifPicker = false
     @State private var filePreview: PreviewFile?
@@ -1760,10 +1763,21 @@ struct ThreadView: View {
         // cards already SENT still render — Message.contactMarkerText and the card bubble are
         // untouched, so nobody's history changes.
         // New-poll composer (groups): sends the poll as an encrypted "fariin-poll:" marker message.
-        .sheet(isPresented: $showPollComposer) {
+        // ⛔ SENT ONCE THE SHEET IS GONE — owner 2026-10-21: "after sending a poll an empty gap shows
+        // under it for a few seconds, then it snaps". The list hears EVERY keyboard in the app, the
+        // sheet's included (NativeMessageList `rideKeyboard`), so while the poll form was typed into,
+        // the chat behind it sat raised by the keyboard's height. Sending from inside the sheet landed
+        // the poll and started the glide to the newest row against that raised bottom; the keys then
+        // went down with the sheet mid-glide, and the list only caught up at a later settle. Sending
+        // in `onDismiss` lands the row after the keys are down, at the real bottom.
+        .sheet(isPresented: $showPollComposer, onDismiss: {
+            guard let marker = pollAwaitingDismiss else { return }
+            pollAwaitingDismiss = nil
+            sendMarker(marker)   // 2026-09-24 decision D-composer-1: same pipeline as text
+        }) {
             PollComposerSheet { marker in
                 showAttachPanel = false
-                sendMarker(marker)   // 2026-09-24 decision D-composer-1: same pipeline as text
+                pollAwaitingDismiss = marker
             }
         }
         // One picker, one presentation: its own full page, which is what it was before tonight and
