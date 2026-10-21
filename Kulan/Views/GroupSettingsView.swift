@@ -1266,7 +1266,8 @@ struct EditGroupView: View {
     private var trimmed: String { name.trimmingCharacters(in: .whitespaces) }
     private var trimmedDesc: String { desc.trimmingCharacters(in: .whitespacesAndNewlines) }
     /// A group description's ceiling, the size the large messengers give one.
-    private static let descChars = 255
+    /// From the admin panel (`group_desc_max`, fallback 255; owner 2026-10-21).
+    private static var descChars: Int { AppLimits.shared.groupDescMax }
     private static let descCounterAppearsAt = 20
     private var descRemaining: Int { max(0, Self.descChars - desc.count) }
     private var changed: Bool {
@@ -1331,14 +1332,13 @@ struct EditGroupView: View {
                                   axis: .vertical)
                             .lineLimit(1...5)
                             .focused($descFocused)
-                        if descRemaining <= Self.descCounterAppearsAt {
-                            Text("\(descRemaining)")
-                                .font(.footnote)
-                                .monospacedDigit()
-                                .foregroundStyle(descRemaining == 0 ? .red : .secondary)
-                                .transition(.opacity)
-                                .accessibilityLabel("\(descRemaining) characters left")
-                        }
+                        // Always "used/limit", as the tag field (owner 2026-10-21: say how many
+                        // characters they can write); red at the limit.
+                        Text("\(desc.count)/\(Self.descChars)")
+                            .font(.footnote)
+                            .monospacedDigit()
+                            .foregroundStyle(descRemaining == 0 ? .red : .secondary)
+                            .accessibilityLabel("\(descRemaining) characters left")
                     }
                     .id("descEnd")
                 } footer: {

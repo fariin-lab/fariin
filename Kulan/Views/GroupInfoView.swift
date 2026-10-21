@@ -434,6 +434,19 @@ struct GroupInfoView: View {
     /// the tint otherwise).
     static func blueLinks(_ text: String) -> AttributedString {
         var out = ProfileAboutContent.linkedText(text)
+        // A long web link reads short (owner 2026-10-21): no https://, cut to 28 characters with
+        // "…". The tap still opens the whole address (the run keeps its link).
+        let webRuns = out.runs.filter { ["http", "https"].contains($0.link?.scheme?.lowercased() ?? "") }
+            .map(\.range)
+        for range in webRuns.reversed() {
+            let shown = String(out[range].characters)
+            var short = shown.replacingOccurrences(of: #"^https?://(www\.)?"#, with: "", options: .regularExpression)
+            if short.count > 28 { short = String(short.prefix(27)) + "…" }
+            guard short != shown else { continue }
+            var piece = AttributedString(short)
+            piece.link = out[range].runs.first?.link
+            out.replaceSubrange(range, with: piece)
+        }
         for run in out.runs where run.link != nil {
             out[run.range].foregroundColor = Color(hex: 0x0A84FF)
         }

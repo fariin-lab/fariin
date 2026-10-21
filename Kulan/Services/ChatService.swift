@@ -896,7 +896,7 @@ enum ChatService {
 
     /// Set the group description / "about" (admin). No system message (low-signal change).
     static func setGroupDescription(cid: String, text: String) async throws {
-        let desc = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(500))
+        let desc = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(AppLimits.shared.groupDescMax))
         try await db.collection("conversations").document(cid).updateData([
             "desc": desc,
             "updatedAt": FieldValue.serverTimestamp(),
