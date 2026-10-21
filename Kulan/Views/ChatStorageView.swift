@@ -95,10 +95,10 @@ struct ChatStorageView: View {
             Text("They're removed from this chat on this phone only and can't be brought back here. Everyone else in the chat keeps theirs.")
         }
         .fullScreenCover(item: $viewerImage) { msg in
-            ImageViewerView(message: msg, cid: cid, rectScope: .profile)
+            ImageViewerView(message: msg, cid: cid, rectScope: .gallery)
         }
         .fullScreenCover(item: $viewerVideo) { msg in
-            VideoPlayerScreen(message: msg, cid: cid, clipProvider: { nil }, rectScope: .profile)
+            VideoPlayerScreen(message: msg, cid: cid, clipProvider: { nil }, rectScope: .gallery)
         }
     }
 
@@ -180,6 +180,9 @@ struct ChatStorageView: View {
                     .transition(.scale.combined(with: .opacity))
                 }
             }
+            // Where the tile is, for the fly out and the fly home (owner 2026-10-21: "open like All
+            // Media", not up from the bottom).
+            .modifier(MediaRectReporter(id: item.message.id, scope: .gallery, cornerRadius: 0))
             .contentShape(Rectangle())
             .onTapGesture { tap(item) }
             .onLongPressGesture(minimumDuration: 0.35) {
@@ -293,12 +296,18 @@ struct ChatStorageView: View {
             return
         }
         switch item.kind {
-        case .photo, .gif: viewerImage = item.message
-        case .video: viewerVideo = item.message
+        // Flies out of its tile and back into it, the All Media page's open (owner 2026-10-21).
+        case .photo, .gif: flyOpen(item.message, poster: item.message.imageUrl) { viewerImage = item.message }
+        case .video: flyOpen(item.message, poster: item.message.thumbUrl) { viewerVideo = item.message }
         case .album, .voice, .file:
             // Nothing of its own to open here; a tap starts choosing, with this one ticked.
             withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selected.insert(item.id) }
         }
+    }
+
+    private func flyOpen(_ m: Message, poster: String?, present rawPresent: @escaping () -> Void) {
+        let present = { MediaPresentGate.present(rawPresent) }
+        MediaOpen.flyOrPresent(imageUrl: poster, rectKey: MediaOpenRects.key(.gallery, m.id), present: present)
     }
 
     private func measure() async {
