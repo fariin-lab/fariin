@@ -113,7 +113,8 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         var editable: Bool { self == .recents || self == .favorites }
         var key: String { self == .recents ? "r" : "f" }
     }
-    private struct Section { let shelf: Shelf; let stickers: [Sticker] }
+    /// `preview`: a pack not added to this account (owner 2026-10-21) shows two rows and a "+N" tile.
+    private struct Section { let shelf: Shelf; let stickers: [Sticker]; var preview = false }
 
     private let height: CGFloat
     private var sections: [Section] = []
@@ -371,7 +372,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             let barH = 44 + sb
             deleteBar.frame = CGRect(x: 0, y: h - barH, width: w, height: barH)
             deleteButton.frame = CGRect(x: 0, y: 0, width: w, height: 44)
-            if lastGridWidth != w { lastGridWidth = w; grid.collectionViewLayout.invalidateLayout() }
+            if lastGridWidth != w { lastGridWidth = w; gridWidthChanged() }
             return
         }
         let gridTop = headerHidden ? 0 : strip.frame.maxY
@@ -384,9 +385,23 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         let barH = 44 + sb
         deleteBar.frame = CGRect(x: 0, y: h - barH, width: w, height: barH)
         deleteButton.frame = CGRect(x: 0, y: 0, width: w, height: 44)
-        if lastGridWidth != w { lastGridWidth = w; grid.collectionViewLayout.invalidateLayout() }
+        if lastGridWidth != w { lastGridWidth = w; gridWidthChanged() }
     }
     private var lastGridWidth: CGFloat = 0
+
+    /// A new width can change how many stickers a row holds, and so how many a pack's two-row
+    /// preview shows (owner 2026-10-21): then the item counts change too, not only the layout.
+    private func gridWidthChanged() {
+        let cols = columns
+        if cols != lastColumns, sections.contains(where: { $0.preview }) {
+            lastColumns = cols
+            grid.reloadData()
+        } else {
+            lastColumns = cols
+            grid.collectionViewLayout.invalidateLayout()
+        }
+    }
+    private var lastColumns = 0
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -841,7 +856,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         let recents = store.recentsShown, favorites = store.favoritesShown
         var s: [Section] = [Section(shelf: .recents, stickers: recents)]
         if !favorites.isEmpty { s.append(Section(shelf: .favorites, stickers: favorites)) }
-        for p in store.packs { s.append(Section(shelf: .pack(p), stickers: p.stickers)) }
+        for p in store.packs { s.append(Section(shelf: .pack(p), stickers: p.stickers, preview: !store.isAdded(p.id))) }
         sections = s
         let anyMine = !recents.isEmpty || !favorites.isEmpty
         editButton.isHidden = !anyMine || tabs.selectedSegmentIndex == 0 || !AppFeatures.stickerEdit
@@ -856,7 +871,58 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     private func sticker(at ip: IndexPath) -> Sticker? {
         let sec = sections[ip.section]
         let i = sec.shelf == .recents ? ip.item - 1 : ip.item
+        guard i >= 0, i < shownCount(ip.section) else { return nil }
         return sec.stickers.indices.contains(i) ? sec.stickers[i] : nil
+    }
+
+    // MARK: Pack preview (owner 2026-10-21)
+
+    /// Stickers in one grid row, the way the flow layout fills it: tiles of `itemSide` with at least
+    /// `M.spacing` between them, inside the side margins.
+    private var columns: Int {
+        let w = grid.bounds.width > 0 ? grid.bounds.width : bounds.width
+        return max(1, Int((w - 2 * M.side + M.spacing) / (itemSide + M.spacing)))
+    }
+
+    /// How many stickers a section draws. A pack not added draws at most two rows; when it has more,
+    /// the second row's last place goes to the "+N" tile.
+    private func shownCount(_ s: Int) -> Int {
+        let sec = sections[s]
+        guard sec.preview else { return sec.stickers.count }
+        let room = 2 * columns
+        return sec.stickers.count <= room ? sec.stickers.count : room - 1
+    }
+
+    /// The N on the "+N" tile: the pack's stickers not shown (0 = no tile).
+    private func moreCount(_ s: Int) -> Int { sections[s].stickers.count - shownCount(s) }
+
+    private func isMore(_ ip: IndexPath) -> Bool {
+        moreCount(ip.section) > 0 && ip.item == shownCount(ip.section)
+    }
+
+    private func openPack(_ p: StickerPack) {
+        StickerPackSheetDoor.present(p, onSend: { [weak self] s in self?.send(s) },
+                                     onAdded: { [weak self] id in
+            // The panel comes back with the keys once the sheet is gone; scroll after it has landed.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self?.scrollToPack(id) }
+        })
+    }
+
+    /// The pack just added, now in full, at the top of the grid.
+    private func scrollToPack(_ id: String) {
+        reload()
+        grid.layoutIfNeeded()
+        guard let sec = sections.firstIndex(where: { if case .pack(let p) = $0.shelf { return p.id == id }; return false })
+        else { return }
+        scrollToSection(sec)
+    }
+
+    /// The panel's one send path: Recently Used, the chat, and a grown panel shrinks back.
+    private func send(_ s: Sticker) {
+        // Recents move on the next showing, not under the finger.
+        StickerStore.shared.noteUsed(s)
+        onSend(s)
+        collapseExpansion()   // a send from the grown panel shrinks it back (theirs: `collapseInput`)
     }
 
     // MARK: Pack strip
@@ -884,6 +950,11 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
                 player.setSticker(url: p.stickers.first.flatMap { StickerStore.shared.fileURL(for: $0) }, pixelSize: px)
                 b.addSubview(player)   // still: the strip never animates
                 b.accessibilityLabel = p.title
+                // A pack not added yet carries a small "+" at its foot (owner 2026-10-21).
+                if !StickerStore.shared.isAdded(p.id) {
+                    b.addSubview(Self.addBadge(in: M.stripCell))
+                    b.accessibilityLabel = "\(p.title), not added"
+                }
             }
             b.layer.cornerRadius = 10
             b.addTarget(self, action: #selector(stripTapped(_:)), for: .touchUpInside)
@@ -893,6 +964,24 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         layoutStrip()
         markedStrip = -1
         markStrip(0)
+    }
+
+    /// The 16 pt grey circle with a white ring and a white plus, at a strip icon's bottom right.
+    private static func addBadge(in cell: CGFloat) -> UIView {
+        let d: CGFloat = 16
+        let v = UIView(frame: CGRect(x: cell - d - 1, y: cell - d - 1, width: d, height: d))
+        v.backgroundColor = .systemGray
+        v.layer.cornerRadius = d / 2
+        v.layer.borderWidth = 1.5
+        v.layer.borderColor = UIColor.white.cgColor
+        v.isUserInteractionEnabled = false
+        let plus = UIImageView(image: UIImage(systemName: "plus",
+                                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 8, weight: .heavy)))
+        plus.tintColor = .white
+        plus.contentMode = .center
+        plus.frame = v.bounds
+        v.addSubview(plus)
+        return v
     }
 
     private func layoutStrip() {
@@ -934,7 +1023,10 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     }
 
     @objc private func stripTapped(_ b: UIButton) {
-        let sec = b.tag
+        scrollToSection(b.tag)
+    }
+
+    private func scrollToSection(_ sec: Int) {
         guard sections.indices.contains(sec) else { return }
         let ip = IndexPath(item: 0, section: sec)
         if let a = grid.layoutAttributesForSupplementaryElement(ofKind: UICollectionView.elementKindSectionHeader, at: ip),
@@ -1118,7 +1210,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     func numberOfSections(in cv: UICollectionView) -> Int { sections.count }
 
     func collectionView(_ cv: UICollectionView, numberOfItemsInSection s: Int) -> Int {
-        sections[s].stickers.count + (sections[s].shelf == .recents ? 1 : 0)
+        shownCount(s) + (sections[s].shelf == .recents ? 1 : 0) + (moreCount(s) > 0 ? 1 : 0)
     }
 
     private var itemSide: CGFloat {
@@ -1164,6 +1256,10 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         let c = cv.dequeueReusableCell(withReuseIdentifier: StickerCell.id, for: ip) as! StickerCell
         if isCreate(ip) {
             c.showCreate()
+            return c
+        }
+        if isMore(ip) {
+            c.showMore(moreCount(ip.section))
             return c
         }
         guard let s = sticker(at: ip) else { return c }
@@ -1217,6 +1313,10 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             if !editing { onCreate() }
             return
         }
+        if isMore(ip) {
+            if !editing, case .pack(let p) = sections[ip.section].shelf { openPack(p) }
+            return
+        }
         guard let s = sticker(at: ip) else { return }
         if editing {
             let shelf = sections[ip.section].shelf
@@ -1227,10 +1327,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             updateDeleteButton()
             return
         }
-        // Recents move on the next showing, not under the finger.
-        StickerStore.shared.noteUsed(s)
-        onSend(s)
-        collapseExpansion()   // a send from the grown panel shrinks it back (theirs: `collapseInput`)
+        send(s)
     }
 }
 
@@ -1246,10 +1343,21 @@ private final class StickerCell: UICollectionViewCell {
     private let plusGlyph = UIImageView(image: UIImage(systemName: "plus",
                                                        withConfiguration: UIImage.SymbolConfiguration(pointSize: 22, weight: .medium)))
     private let createLabel = UILabel()
+    /// The "+N" tile closing a pack's two-row preview (owner 2026-10-21).
+    private let moreLabel = UILabel()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         contentView.addSubview(player)
+        moreLabel.font = .systemFont(ofSize: 22, weight: .bold)
+        moreLabel.textColor = .secondaryLabel
+        moreLabel.textAlignment = .center
+        moreLabel.adjustsFontSizeToFitWidth = true
+        moreLabel.minimumScaleFactor = 0.6
+        moreLabel.backgroundColor = .systemGray5
+        moreLabel.clipsToBounds = true
+        moreLabel.isHidden = true
+        contentView.addSubview(moreLabel)
         plus.tintColor = .secondaryLabel
         plus.contentMode = .center
         // The tile is `plus`'s own background; the glyph and the word sit on it.
@@ -1277,11 +1385,25 @@ private final class StickerCell: UICollectionViewCell {
         plusGlyph.frame = CGRect(x: 0, y: pb.midY - 22, width: pb.width, height: 26)
         createLabel.frame = CGRect(x: 2, y: pb.midY + 6, width: pb.width - 4, height: 16)
         check.frame = CGRect(x: contentView.bounds.width - 22, y: contentView.bounds.height - 22, width: 20, height: 20)
+        moreLabel.frame = contentView.bounds.insetBy(dx: 4, dy: 4)
+        moreLabel.layer.cornerRadius = moreLabel.bounds.width / 2
+    }
+
+    func showMore(_ n: Int) {
+        player.setSticker(url: nil, pixelSize: 0)
+        player.isHidden = true
+        plus.isHidden = true
+        check.isHidden = true
+        moreLabel.isHidden = false
+        moreLabel.text = "+\(n)"
+        accessibilityLabel = "\(n) more stickers"
+        isAccessibilityElement = true
     }
 
     func showCreate() {
         player.setSticker(url: nil, pixelSize: 0)
         player.isHidden = true
+        moreLabel.isHidden = true
         plus.isHidden = false
         plus.backgroundColor = UIColor.label.withAlphaComponent(0.06)
         plus.layer.cornerRadius = 14
@@ -1295,6 +1417,7 @@ private final class StickerCell: UICollectionViewCell {
     func show(url: URL?, pixelSize: Int) {
         player.isHidden = false
         plus.isHidden = true
+        moreLabel.isHidden = true
         player.setSticker(url: url, pixelSize: pixelSize)
         isAccessibilityElement = true
     }

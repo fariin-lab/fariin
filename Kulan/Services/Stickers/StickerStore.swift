@@ -34,9 +34,14 @@ final class StickerStore {
         remote = Self.loadCatalog()
         rebuildPacks()
         load()
+        loadAdded(uid: Auth.auth().currentUser?.uid)
         // The admin panel's catalog, live once someone is signed in (rules: signed-in read).
         authHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
-            MainActor.assumeIsolated { self?.watchCatalog(signedIn: user != nil) }
+            let uid = user?.uid
+            MainActor.assumeIsolated {
+                self?.watchCatalog(signedIn: uid != nil)
+                self?.loadAdded(uid: uid)   // the added packs are the account's (owner 2026-10-21)
+            }
         }
         // 2026-10-20 (owner): after `FirestoreHub.swap` the catalog listener belongs to the stuck
         // client. Let go of it off-main and watch again on the fresh one. The catalog stays.
@@ -49,6 +54,37 @@ final class StickerStore {
                 self.watchCatalog(signedIn: Auth.auth().currentUser != nil)
             }
         }
+    }
+
+    // MARK: Added packs (owner 2026-10-21)
+
+    // ⛔ A PACK IS ADDED OR NOT, PER ACCOUNT — owner 2026-10-21, with two screenshots of the reference
+    // app. Every pack starts NOT added: the panel shows its first two rows with a "+N" tile, and its
+    // strip icon carries a small "+". "Add to my stickers" on the pack sheet shows it in full.
+    // Recently Used, Favorites and stickers I made do not depend on this. Kept on this phone in
+    // UserDefaults under the account's uid; a change posts `packsChanged` so the panel redraws.
+    private(set) var addedPacks: Set<String> = []
+    @ObservationIgnored private var addedUid: String?
+
+    private static func addedKey(_ uid: String) -> String { "stickers.addedPacks.v1.\(uid)" }
+
+    private func loadAdded(uid: String?) {
+        let next = uid.map { Set(UserDefaults.standard.stringArray(forKey: Self.addedKey($0)) ?? []) } ?? []
+        addedUid = uid
+        guard next != addedPacks else { return }
+        addedPacks = next
+        NotificationCenter.default.post(name: Self.packsChanged, object: nil)
+    }
+
+    func isAdded(_ packId: String) -> Bool { addedPacks.contains(packId) }
+
+    func setAdded(_ packId: String, _ on: Bool) {
+        guard on != addedPacks.contains(packId) else { return }
+        if on { addedPacks.insert(packId) } else { addedPacks.remove(packId) }
+        if let uid = addedUid ?? Auth.auth().currentUser?.uid {
+            UserDefaults.standard.set(addedPacks.sorted(), forKey: Self.addedKey(uid))
+        }
+        NotificationCenter.default.post(name: Self.packsChanged, object: nil)
     }
 
     // MARK: Packs from the admin panel (2026-10-18)
@@ -356,6 +392,8 @@ final class StickerStore {
     func wipe() {
         favorites = []
         recents = []
+        addedPacks = []   // only in memory: the next account reads its own list (owner 2026-10-21)
+        addedUid = nil
         try? FileManager.default.removeItem(at: Self.rootDir)
     }
 
