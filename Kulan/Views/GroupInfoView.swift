@@ -572,7 +572,8 @@ struct GroupInfoView: View {
                 .tint(.primary)
                 .opacity(callReady ? 1 : 0.45)
                 .accessibilityLabel("Video Call")
-            Menu { muteMenuItems } label: { actionIcon(muted ? "bell.fill" : "bell.slash.fill", muted ? "Unmute" : "Mute") }
+            // The person profile's own bells (owner 2026-10-21: "use exactly the icons of the chat profile").
+            Menu { muteMenuItems } label: { actionIcon(muted ? "ic_bell" : "ic_bell_off", muted ? "Unmute" : "Mute") }
                 .tint(.primary)
                 .accessibilityLabel(muted ? "Unmute" : "Mute")
             Button { onSearch?() } label: { actionIcon("magnifyingglass", "Search") }
