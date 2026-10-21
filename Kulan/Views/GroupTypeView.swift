@@ -119,7 +119,11 @@ struct GroupTypeView: View {
                         AvatarView(name: conv?.title ?? "Group", photoUrl: conv?.avatarUrl, size: 76)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(conv?.title ?? "Group").font(.headline).foregroundStyle(.primary).lineLimit(1)
-                            Text(url).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle)
+                            // One line, no https:// (owner 2026-10-21: it broke at the "/" and left
+                            // the right half empty). Copy and Share still use the whole address.
+                            Text(url.replacingOccurrences(of: "https://", with: ""))
+                                .foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                                .truncationMode(.middle)
                         }
                         Spacer(minLength: 0)
                     }
