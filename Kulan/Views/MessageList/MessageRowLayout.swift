@@ -1420,7 +1420,9 @@ enum MessageRowLayout {
             // bottom, so the time and the reaction sat on the face. They go on a line under it; the
             // reaction follows the time (see the sticker branch in `decorations`). Pack art has its
             // own clear margin and keeps the footer where it was.
-            if m.kind == .sticker, m.sticker?.source == .mine, b.quote == nil {
+            // 2026-10-21 (owner, the new .tgs packs: "reaction badge and time overlapping"): those
+            // fill their whole square to the bottom too, so EVERY sticker's footer goes under it.
+            if m.kind == .sticker, b.quote == nil {
                 let dy = mediaRect.maxY + 4 - r.capsule.minY
                 plan.metaCapsule = r.capsule.offsetBy(dx: 0, dy: dy)
                 metaRect = r.text.offsetBy(dx: 0, dy: dy)
