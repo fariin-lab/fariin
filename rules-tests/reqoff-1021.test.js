@@ -82,6 +82,9 @@ const HIDDEN = { requests: true, chatKeyRequired: true, chatKeyVisible: false };
 
 const off = { ...fresh, reqOff: true };            // started while off, A not written yet
 const offSpent = { ...spent, reqOff: true };       // started while off, A wrote once
+const friends = { ...base, startedBy: A, accepted: true, lastSender: A, reqOff: true };
+const knockedIn = { ...base, startedBy: B, accepted: false, lastSender: A };   // B opened, A spoke first
+const bothMocks = [...userDoc(A), ...userDoc(B), ...global(ON), ...notAdmin(A), ...notAdmin(B)];
 
 // [name, expect BEFORE, expect AFTER, uid, path, method, after-data, before-data, mocks]
 const cases = [
@@ -121,6 +124,29 @@ const cases = [
     sendMocks(off, ON, 'contacts')],
   ['HOLD    reqOff chat: A accepts their own request', 'DENY', 'DENY', A, convPath, 'update',
     { ...offSpent, accepted: true }, offSpent, updMocks(ON)],
+  // ── Remove Friend clears reqOff (owner 2026-10-21, "fix everything") ──
+  ['UNFR    B removes A in an accepted reqOff chat, clearing reqOff', 'DENY', 'ALLOW', B, convPath, 'update',
+    { ...friends, startedBy: A, accepted: false, lastSender: '', unfriendedBy: B, unfriendedAt: REQ_TIME, reqOff: undefined },
+    friends, bothMocks],
+  ['UNFR    ...but leaving reqOff on', 'ALLOW', 'DENY', B, convPath, 'update',
+    { ...friends, startedBy: A, accepted: false, lastSender: '', unfriendedBy: B, unfriendedAt: REQ_TIME },
+    friends, bothMocks],
+  ['UNFR    A (the starter) removes B, clearing reqOff', 'DENY', 'ALLOW', A, convPath, 'update',
+    { ...friends, startedBy: B, accepted: false, lastSender: '', unfriendedBy: A, unfriendedAt: REQ_TIME, reqOff: undefined },
+    friends, bothMocks],
+  ['UNFR    cleared chat: A knocks with a photo', 'DENY', 'DENY', A, msgPath, 'create', photo, null, sendMocks(fresh, ON)],
+  ['UNFR    clearing reqOff outside an unfriend', 'ALLOW', 'DENY', A, convPath, 'update',
+    { ...friends, reqOff: undefined }, friends, bothMocks],
+
+  // ── the opener answers someone who knocked into the chat they opened ──
+  ['ANSWER  B opened, A knocked: B replies and accepts', 'DENY', 'ALLOW', B, convPath, 'update',
+    { ...knockedIn, lastSender: B, lastMessage: 'enc1:bb', accepted: true, updatedAt: REQ_TIME }, knockedIn, bothMocks],
+  ['ANSWER  B opened, A knocked: B taps Accept', 'DENY', 'ALLOW', B, convPath, 'update',
+    { ...knockedIn, accepted: true }, knockedIn, bothMocks],
+  ['G1      starter accepts a fresh request (nobody wrote)', 'DENY', 'DENY', A, convPath, 'update',
+    { ...fresh, accepted: true }, fresh, bothMocks],
+  ['G1      starter accepts after their own message', 'DENY', 'DENY', A, convPath, 'update',
+    { ...spent, accepted: true }, spent, bothMocks],
   ['HOLD    reqOff chat: the 21st knock of the day', 'DENY', 'DENY', A, msgPath, 'create', text, null,
     sendMocks(off, ON, 'everyone', null, 20)],
 ];

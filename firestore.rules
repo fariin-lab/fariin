@@ -1565,20 +1565,15 @@ service cloud.firestore {
               || g.get('chatKeyVisible', true) == false
               || o.get('chatKeyRequired', g.get('chatKeyRequired', true)) == false);
       }
-      // owner 2026-10-21: A CHAT STARTED WHILE REQUESTS WERE OFF STAYS OPEN. `reqOff: true` is
-      // written with a 1:1's first message when Message Requests were off for the person written
-      // to (`reqOffStampOk` on update, the create rule on create), and from then on that chat's
-      // messages pass as they would with the switch off, from either side, whatever the switch
-      // says later. Their privacy / Chat Key setting still holds (`strangersMayWrite`), as it does
-      // in `reqOffMayWrite`. `accepted` is untouched: friendship still begins at Accept or a reply.
+      // owner 2026-10-21: a 1:1 started while requests were off for the other (`reqOff`) stays
+      // open, still under their Chat Key. `accepted` is untouched.
       function reqOffChatMayWrite(u) {
         return convData().get('reqOff', false) == true && strangersMayWrite(u);
       }
-      // `reqOff` changes on an existing 1:1 only from absent to true, only before anybody has
-      // written (an unspent pending chat), and only while requests really are off for the other
-      // member. So it can never be put on a request already sent, or taken off again.
+      // `reqOff`: absent -> true before anyone wrote, while off for the other; cleared by unfriend.
       function reqOffStampOk() {
         return !('reqOff' in request.resource.data.diff(resource.data).affectedKeys())
+          || isUnfriend()
           || (!('reqOff' in resource.data)
               && request.resource.data.get('reqOff', false) == true
               && isRequestPending()
@@ -1722,8 +1717,10 @@ service cloud.firestore {
           && request.resource.data.get('accepted', true) == false
           && request.resource.data.get('startedBy', '') == otherExistingMember()
           && request.resource.data.get('lastSender', '') == ''
+          // owner 2026-10-21: and clears `reqOff`.
+          && request.resource.data.get('reqOff', false) == false
           && request.resource.data.diff(resource.data).affectedKeys()
-               .hasOnly(['accepted', 'startedBy', 'lastSender', 'unfriendedBy', 'unfriendedAt']);
+               .hasOnly(['accepted', 'startedBy', 'lastSender', 'unfriendedBy', 'unfriendedAt', 'reqOff']);
       }
       // ⚠️ A CHAT THAT DOES NOT EXIST YET MUST READ AS EMPTY, OR NO NEW CHAT CAN EVER BE STARTED.
       //
@@ -1776,8 +1773,7 @@ service cloud.firestore {
             || (request.resource.data.get('type', '') == 'group' && request.resource.data.e2ee == false))
         && !('e2eeOffAt' in request.resource.data)
         && !('wallpaper' in request.resource.data)      // owner 2026-10-18: set later, by update only
-        // owner 2026-10-21: `reqOff` (see reqOffChatMayWrite) is born only true, only on a 1:1, and
-        // only while Message Requests are really off for the other member.
+        // owner 2026-10-21: `reqOff` only true, 1:1, while requests are off for the other.
         && (!('reqOff' in request.resource.data)
             || (request.resource.data.reqOff == true
                 && request.resource.data.get('type', '') != 'group'
@@ -2184,11 +2180,9 @@ service cloud.firestore {
               // `accepted` and `startedBy` stay theirs to never write: the G1 clause below and the
               // `startedBy` pin hold whatever this says.
               || !requestsOnFor(otherExistingMember())
-              // owner 2026-10-21: a chat started while requests were off keeps that freedom.
-              || resource.data.get('reqOff', false) == true
+              || resource.data.get('reqOff', false) == true   // owner 2026-10-21
             )
-            // owner 2026-10-21: `reqOff` only as `reqOffStampOk` allows.
-            && reqOffStampOk()
+            && reqOffStampOk()   // owner 2026-10-21
             // 1:1 audit r2 G1, 2026-10-08: the clause above lets the starter through while
             // `lastSender` is still empty (a fresh request), so a stranger could accept their own
             // request before sending anything and pass every call gate as a friend. Whatever
@@ -2197,6 +2191,8 @@ service cloud.firestore {
               !isRequestPending()
               || request.auth.uid != resource.data.get('startedBy', '')
               || request.resource.data.get('accepted', false) == false
+              // owner 2026-10-21: unless the other member spoke first (the starter was asked).
+              || resource.data.get('lastSender', '') == otherExistingMember()
             )
             // ACCEPTED IS A ONE-WAY DOOR, and `startedBy` never changes once written.
             //
@@ -2722,8 +2718,7 @@ service cloud.firestore {
                // owner 2026-10-18: MESSAGE REQUESTS OFF for the other person: no one-message wait.
                // Their Chat Key setting still holds, for a chat that is not open yet.
                || reqOffMayWrite(otherHalf())
-               // owner 2026-10-21: or the chat was started while they were off (`reqOff`).
-               || reqOffChatMayWrite(otherHalf())
+               || reqOffChatMayWrite(otherHalf())   // owner 2026-10-21
              )
           // A REQUEST IS ONE SHORT TEXT — owner's spec, 2026-09-11 §9, and the database says so.
           //

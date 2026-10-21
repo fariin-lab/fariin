@@ -187,6 +187,9 @@ enum MessageRequests {
             "lastSender": "",
             "unfriendedBy": me,
             "unfriendedAt": FieldValue.serverTimestamp(),
+            // owner 2026-10-21: a chat started while requests were off becomes an ordinary request
+            // again, or removing the friend would leave them free to write (the rules insist).
+            "reqOff": FieldValue.delete(),
         ], merge: true)
     }
 
