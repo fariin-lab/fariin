@@ -217,6 +217,11 @@ struct PollComposerSheet: View {
     /// binding) and its own right-answer mark.
     struct Opt: Identifiable { let id = UUID(); var text = ""; var right = false }
     @State private var options: [Opt] = [Opt(), Opt()]
+    /// ⛔ THE NEXT OPTION APPEARS BY ITSELF — owner 2026-10-21 (the reference app's composer): typing
+    /// into the last option adds an empty one under it, up to 10; Return moves to the next. No "Add
+    /// option" button.
+    @FocusState private var focusedOpt: UUID?
+    private static let maxOptions = 10
     @State private var multiple = false
     @State private var hideVoters = false
     @State private var quiz = false
@@ -253,9 +258,6 @@ struct PollComposerSheet: View {
                 }
                 Section {
                     ForEach(Array(options.enumerated()), id: \.element.id) { i, o in optionRow(i, o.id) }
-                    if options.count < 10 {
-                        Button { options.append(Opt()) } label: { Label("Add option", systemImage: "plus") }
-                    }
                 } header: {
                     Text("Options")
                 } footer: {
@@ -325,13 +327,39 @@ struct PollComposerSheet: View {
             }
             TextField("Option \(i + 1)", text: Binding(
                 get: { options.first { $0.id == id }?.text ?? "" },
-                set: { v in if let k = options.firstIndex(where: { $0.id == id }) { options[k].text = v } }))
-            if options.count > 2 {
+                set: { v in
+                    if let k = options.firstIndex(where: { $0.id == id }) { options[k].text = v }
+                    tidyOptions()
+                }))
+                .focused($focusedOpt, equals: id)
+                .submitLabel(.next)
+                .onSubmit { focusNext(after: id) }
+            // Remove only on an option that has words, and never below two rows.
+            if options.count > 2, !(options.first { $0.id == id }?.text.isEmpty ?? true) {
                 Button { options.removeAll { $0.id == id } } label: {
                     Image(systemName: "minus.circle.fill").foregroundStyle(.red)
                 }.buttonStyle(.plain)
             }
         }
+    }
+
+    /// Always one empty option at the end while there is room: typed into, it grows a new one. Extra
+    /// empty rows at the end (the words cleared) fold back to one; never below two rows.
+    private func tidyOptions() {
+        if let last = options.last, !last.text.isEmpty, options.count < Self.maxOptions {
+            options.append(Opt())
+        }
+        // Two empty rows at the end: drop the last, never a row the cursor is in.
+        while options.count > 2,
+              options[options.count - 1].text.isEmpty, options[options.count - 2].text.isEmpty,
+              focusedOpt != options[options.count - 1].id {
+            options.removeLast()
+        }
+    }
+
+    private func focusNext(after id: UUID) {
+        guard let k = options.firstIndex(where: { $0.id == id }) else { return }
+        if k + 1 < options.count { focusedOpt = options[k + 1].id } else { focusedOpt = nil }
     }
 
     /// A quiz has one right answer (multiple is off while Quiz is on).
