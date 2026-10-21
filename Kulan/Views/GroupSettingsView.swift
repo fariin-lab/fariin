@@ -1161,7 +1161,8 @@ struct GroupRequestsView: View {
                         Button { answer(r.uid) { try await GroupInviteService.approveJoin(cid: cid, uid: r.uid) } } label: {
                             Text("Approve").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                                 .padding(.horizontal, 12).padding(.vertical, 7)
-                                .background(Capsule().fill(Color.accentColor))
+                                // Blue, not the accent (owner 2026-10-21: white on white in dark mode).
+                                .background(Capsule().fill(Color(hex: 0x0A84FF)))
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Approve \(r.name)")
