@@ -511,6 +511,9 @@ struct AttachRecentsStrip: View {
         }
         // The region a tile may be drawn in while the editor flies out of it or back into it.
         .background { MediaViewAnchor(key: MediaOpenRects.attachGridKey) }
+        // Scrolling the photos puts the caption keyboard away (owner 2026-10-21, as the reference
+        // app's attach sheet does); the caption keeps its words.
+        .scrollDismissesKeyboard(.immediately)
         // ⛔ NO TOP MARGIN — owner, 2026-09-02. It existed to hold the first row clear of an opaque
         // header, and there is no header. The photos begin at the sheet's own top edge, which is the
         // whole of what "no header" looks like; the system drag indicator floats over them, exactly
@@ -520,6 +523,7 @@ struct AttachRecentsStrip: View {
     // Native-style album list (Recents, Favorites, Videos, Selfies, Live Photos, Panoramas, user albums).
     private var albumsList: some View {
         albumsScroll
+            .scrollDismissesKeyboard(.immediately)
             // Owner 2026-10-14: the close button shows here too once the list has scrolled a row,
             // exactly as on the grid. One row of this list is about 66pt (52 thumbnail + 7 + 7).
             .onScrollGeometryChange(for: Bool.self) { g in
