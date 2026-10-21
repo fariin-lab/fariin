@@ -117,7 +117,8 @@ struct GroupLinksPage: View {
             .sheet(item: $qrLink) { l in GroupLinkQRSheet(title: groupTitle, link: l.url, photo: groupConv?.avatarUrl, memberCount: groupConv?.users.count) }
             .sheet(item: Binding(get: { shareText.map { LinkShareText(id: $0) } },
                                  set: { shareText = $0?.id })) { t in
-                ForwardPicker(shareText: t.id)
+                // The app's own Share with sheet (owner 2026-10-21), as Share Group and profiles use.
+                SendContactSheet(contactText: t.id)
             }
             .sheet(item: $editTarget) { t in
                 GroupLinkEditPage(cid: cid, link: t.link) { Task { await reload() } }
