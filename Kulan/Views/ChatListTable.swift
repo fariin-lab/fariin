@@ -1261,6 +1261,17 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // without the refresh is how the list would freeze; that defect is on the record.
         guard !changes.isEmpty || headerChanged else { refreshVisibleContent(); return }
 
+        // ⛔ NO ROW TRANSACTION ON A TABLE THAT IS NOT ON SCREEN — build 1007 crashed in this function
+        // while the app was launching (uncaught UIKit exception out of the row transaction). Off the
+        // window the table may not yet have read the counts from the reload above, so `endUpdates`
+        // compares against counts that already include the change. Nothing is visible to animate,
+        // so the whole state is loaded plainly, as the first apply does.
+        if tableView.window == nil {
+            tableView.reloadData()
+            syncHeaderTitles()
+            return
+        }
+
         // ⛔ `.automatic` WHEN ANIMATING, `.none` WHEN NOT — `defaultRowAnimation` in their source is
         // literally `animated ? .automatic : .none`. The old code passed `.automatic` unconditionally
         // and simply never reached here on a non-animated apply, so the constant was never wrong;
@@ -1335,7 +1346,11 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             // stood before it opened, and rows that MOVED are excluded: a same-section move is
             // already a delete plus an insert, which rebuilds the row, and the cross-section pin
             // move is the one row their comment says must NOT be reloaded.
-            let stale = self.contentChangedOldPaths(old: old, new: new)
+            // ⚠️ A row the re-sort deletes and re-inserts at the SAME index (it is outside the longest
+            // run that stays) is also `from == to` there. Deleting and reloading one index path in a
+            // single transaction is an exception, and the re-insert rebuilds that row anyway.
+            let deleted = Set(changes.deletes)
+            let stale = self.contentChangedOldPaths(old: old, new: new).filter { !deleted.contains($0) }
             if !stale.isEmpty { self.tableView.reloadRows(at: stale, with: .none) }
             self.tableView.endUpdates()
         }
