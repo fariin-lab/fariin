@@ -3813,6 +3813,10 @@ enum ChatService {
         }
     }
 
+    /// Chats unpinned on this phone this session, so the limit sees the unpin before the server
+    /// echo does (`setPinned`). A later pin of the same chat takes it out again.
+    @MainActor static var justUnpinned = Set<String>()
+
     @discardableResult
     static func setPinned(_ cid: String, _ value: Bool) async -> Bool {
         // ⛔ AT MOST `pinned_chats_max` PINNED CHATS (owner 2026-10-19: 3, set from the admin panel).
@@ -3821,9 +3825,23 @@ enum ChatService {
             let full: Bool = await MainActor.run {
                 let me = uid
                 let max = AppLimits.shared.pinnedChatsMax
-                let pinned = ConversationsRepository.shared.conversations
-                    .filter { !OfficialChannel.isOfficial($0.id) && $0.id != cid && $0.isPinned(me) }.count
-                    + (OfficialChannelStore.shared.state.pinned && !OfficialChannel.isOfficial(cid) ? 1 : 0)
+                // ⛔ ONLY THE PINS HE CAN SEE, AND AN UNPIN COUNTS AT ONCE — owner 2026-10-21: "I
+                // unpinned one, it still says up to 3". Archived, cleared and request chats keep their
+                // pin flag but are not in the Pinned section, and an unpin only reached this list when
+                // the server echoed it; both were counted against him.
+                let all = ConversationsRepository.shared.conversations
+                // An unpin the server has now echoed no longer needs remembering.
+                Self.justUnpinned = Self.justUnpinned.filter { id in all.first { $0.id == id }?.isPinned(me) == true }
+                let pinned = all
+                    .filter { c in
+                        !OfficialChannel.isOfficial(c.id) && c.id != cid && c.isPinned(me)
+                            && !c.isArchived(me) && !c.isCleared(me)
+                            && !Self.justUnpinned.contains(c.id)
+                            && MessageRequests.stance(c, myUid: me) != .incoming
+                    }.count
+                    // The Fariin channel only when it is actually in the list.
+                    + (OfficialChannelStore.shared.state.pinned && OfficialChannelStore.shared.listEntry != nil
+                       && !OfficialChannel.isOfficial(cid) ? 1 : 0)
                 guard pinned >= max else { return false }
                 let alert = UIAlertController(title: nil,
                                               message: "You can pin up to \(max) chats. Unpin one to pin this chat.",
@@ -3835,6 +3853,9 @@ enum ChatService {
             if full { return false }
         }
         if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.setPinned(value); return true }
+        await MainActor.run {
+            if value { Self.justUnpinned.remove(cid) } else { Self.justUnpinned.insert(cid) }
+        }
         guard value else { return await settingWrite("pin", cid, ["pinnedBy": [uid: value]]) }
         // ⛔ A NEW PIN GOES TO THE TOP (owner 2026-10-19: it landed 4th). Without a `pinOrder` the
         // rank was the chat's last-message time, so an older chat sank below the pins already there.
