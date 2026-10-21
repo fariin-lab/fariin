@@ -773,8 +773,9 @@ struct BlockedUsersView: View {
         .listStyle(.insetGrouped)
         // Owner 2026-09-25: a deep empty well sat between the search field and Block User. Same
         // numbers as New Message, which had the same well.
+        // 2026-10-21 (owner): the search is at the foot now, and the 6pt top margin sat Block User
+        // tight under the header; the system's own top gap again.
         .listSectionSpacing(14)
-        .contentMargins(.top, 6, for: .scrollContent)
         .environment(\.defaultMinListRowHeight, 44)
         .toolbar(.hidden, for: .tabBar)
         .searchable(text: $search, prompt: "Search")

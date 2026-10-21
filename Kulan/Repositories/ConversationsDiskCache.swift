@@ -83,6 +83,16 @@ final class ConversationsDiskCache {
         }
     }
 
+    /// True when the server's last word, saved on this phone, was "no chats". No file at all is
+    /// "don't know" (first launch, signed out), never "empty".
+    func savedEmpty(uid: String) -> Bool {
+        guard let url = fileURL(uid: uid),
+              let data = try? Data(contentsOf: url),
+              let raw = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [Any]
+        else { return false }
+        return raw.isEmpty
+    }
+
     /// 1:1 audit r3 A5, 2026-10-08: one saved chat by id, building only that one (a pushed ring
     /// needs one name before it reports to CallKit, not the whole list).
     func load(uid: String, id: String) -> Conversation? {
@@ -108,10 +118,8 @@ final class ConversationsDiskCache {
         // dropped the one empty snapshot that lies — an offline cold start's empty cached read — so
         // reaching here with nothing means the server says there is nothing. Keeping the old file
         // would show chats the user has just cleared, for a frame, on every launch afterwards.
-        guard !docs.isEmpty else {
-            io.async { try? FileManager.default.removeItem(at: url) }
-            return
-        }
+        // 2026-10-21 (owner: "No chats yet" came late): it is written as an empty list, not a
+        // removed file, so the next launch knows the answer at once (`savedEmpty`).
         // Newest first, then capped: if we can only keep some, keep the ones a first frame shows.
         let trimmed = docs
             .sorted { millis($0.data) > millis($1.data) }

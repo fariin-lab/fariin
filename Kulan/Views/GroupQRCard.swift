@@ -61,6 +61,7 @@ struct GroupLinkQRSheet: View {
                             .liquidGlass(Circle(), interactive: true)
                     }
                     .buttonStyle(.plain)
+                    .environment(\.colorScheme, .dark)   // dark glass in light mode too (owner 2026-10-21)
                     .accessibilityLabel("Close")
                     Spacer()
                 }
@@ -69,7 +70,8 @@ struct GroupLinkQRSheet: View {
                 card
                 Spacer(minLength: 24)
                 swatches
-                actions.padding(.top, 24).padding(.bottom, 24)
+                // Always dark glass, smaller row (owner 2026-10-21).
+                actions.environment(\.colorScheme, .dark).padding(.top, 20).padding(.bottom, 16)
             }
             .frame(minHeight: geo.size.height)
             }
@@ -128,14 +130,14 @@ struct GroupLinkQRSheet: View {
             if let img = cardImage {
                 ShareLink(item: Image(uiImage: img),
                           preview: SharePreview(title, image: Image(uiImage: img))) {
-                    PosterActionIcon(icon: "square.and.arrow.up", diameter: 58, label: "Share")
+                    PosterActionIcon(icon: "square.and.arrow.up", diameter: 50, label: "Share")
                 }
                 .buttonStyle(.plain)
             } else {
-                PosterActionIcon(icon: "square.and.arrow.up", diameter: 58, label: "Share").opacity(0.5)
+                PosterActionIcon(icon: "square.and.arrow.up", diameter: 50, label: "Share").opacity(0.5)
             }
             Button { save() } label: {
-                PosterActionIcon(icon: "arrow.down.to.line", diameter: 58, label: saving ? "Saving…" : "Save")
+                PosterActionIcon(icon: "arrow.down.to.line", diameter: 50, label: saving ? "Saving…" : "Save")
             }
             .buttonStyle(.plain)
             .disabled(saving)
@@ -144,12 +146,12 @@ struct GroupLinkQRSheet: View {
                 Haptics.notify(.success)
                 flash("Link copied")
             } label: {
-                PosterActionIcon(icon: "link", diameter: 58, label: "Copy link")
+                PosterActionIcon(icon: "link", diameter: 50, label: "Copy link")
             }
             .buttonStyle(.plain)
             if let onScan {
                 Button(action: onScan) {
-                    PosterActionIcon(icon: "qrcode.viewfinder", diameter: 58, label: "Scan")
+                    PosterActionIcon(icon: "qrcode.viewfinder", diameter: 50, label: "Scan")
                 }
                 .buttonStyle(.plain)
             }

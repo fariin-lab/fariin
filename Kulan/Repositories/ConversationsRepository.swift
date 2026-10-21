@@ -227,6 +227,11 @@ final class ConversationsRepository {
             if !cached.isEmpty {
                 conversations = cached
                 hasLoaded = true
+            } else if ConversationsDiskCache.shared.savedEmpty(uid: uid) {
+                // The server said "no chats" last time: show No chats yet now, not after the first
+                // server answer or the 3s net (owner 2026-10-21: it came late). A chat that arrived
+                // since lands with the snapshot a beat later.
+                hasLoaded = true
             }
         }
         // 2026-09-24 fix-all #6: a new account (or the first attach) starts from one page again.

@@ -5680,11 +5680,11 @@ struct ThreadView: View {
                     attachTile("ic_gif_tile", "GIF") {
                         if !sendHeldBack(.sendStickers, .gifs) { attachGif = true }
                     }
-                    attachTile("ic_file", "Files") {
+                    attachTile("ic_file_tile", "Files") {
                         if !sendHeldBack(.sendFiles, .files) { attachFiles = true }
                     }
                     attachTile("ic_location", "Location") { if !sendHeldBack(nil, .location) { attachLocation = true } }
-                    if isGroup { attachTile("chart.bar", "Poll") { if !sendHeldBack(.sendPolls, .polls) { showPollComposer = true } } }
+                    if isGroup { attachTile("ic_poll_tile", "Poll") { if !sendHeldBack(.sendPolls, .polls) { showPollComposer = true } } }
                 }
                 .padding(.horizontal, 6)
                 .frame(height: Self.attachBarHeight)
