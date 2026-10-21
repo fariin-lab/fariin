@@ -138,13 +138,14 @@ struct GroupLinksPage: View {
                 }
                 .buttonStyle(.plain)
                 HStack(spacing: 0) {
-                    publicCircle("doc.on.doc", "Copy") { copyText(url) }
-                    publicCircle("paperplane.fill", "Send") { shareText = url }
+                    // The owner's own icons (2026-10-21).
+                    publicCircle("ic_link_copy", "Copy") { copyText(url) }
+                    publicCircle("ic_link_send", "Send") { shareText = url }
                     ShareLink(item: URL(string: url) ?? URL(string: "https://fariin.com")!) {
                         PosterActionIcon(icon: "square.and.arrow.up", diameter: 54, onPhoto: false, label: "Share")
                     }
                     .buttonStyle(.plain)
-                    publicCircle("qrcode", "QR Code") { publicQR = true }
+                    publicCircle("ic_qr", "QR Code") { publicQR = true }
                 }
             }
             .listRowInsets(EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16))
@@ -440,14 +441,15 @@ private struct PrimaryLinkCard: View {
     @ViewBuilder private var buttons: some View {
         if let link {
             HStack(spacing: 0) {
-                circle("doc.on.doc", "Copy") { onCopy(link) }
-                circle("paperplane.fill", "Send") { onShareInApp(link) }
+                // The owner's own icons (2026-10-21).
+                circle("ic_link_copy", "Copy") { onCopy(link) }
+                circle("ic_link_send", "Send") { onShareInApp(link) }
                 ShareLink(item: URL(string: link.url) ?? URL(string: "https://fariin.com")!) {
                     PosterActionIcon(icon: "square.and.arrow.up", diameter: 54, onPhoto: false, label: "Share")
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Share to other apps")
-                circle("qrcode", "QR Code") { onQR(link) }
+                circle("ic_qr", "QR Code") { onQR(link) }
             }
         } else {
             Button(action: onCreate) { LinkCapsuleLabel(title: working ? "Creating…" : "Create Link", icon: "link") }

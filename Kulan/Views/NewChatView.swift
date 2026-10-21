@@ -145,7 +145,8 @@ struct NewChatView: View {
                 // a screen and each letter read as an isolated box rather than a list. Both
                 // references sit at roughly a third of that.
                 .listSectionSpacing(14)
-                .contentMargins(.top, 6, for: .scrollContent)
+                // Top gap: the system's own (owner 2026-10-21, "apple native space"; a 6pt margin
+                // here sat the first card tight under the header).
                 // A–Z side index (SwiftUI has no native one) — tap a letter to jump.
                 .overlay(alignment: .trailing) {
                     if query.isEmpty && indexLetters.count > 1 {

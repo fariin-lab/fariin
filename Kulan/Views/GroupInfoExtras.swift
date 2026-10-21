@@ -299,11 +299,6 @@ struct GroupHistoryView: View {
 
     var body: some View {
         List {
-            Section {
-                shelves
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
-            }
             if events.isEmpty {
                 Section { emptyState.listRowBackground(Color.clear) }
             } else if shown.isEmpty {
@@ -328,6 +323,9 @@ struct GroupHistoryView: View {
         }
         .listStyle(.insetGrouped)
         .listSectionSpacing(.compact)
+        // Tabs float in glass right under the header (owner 2026-10-21: the list row put a big gap
+        // above them); the list scrolls under them.
+        .safeAreaInset(edge: .top, spacing: 0) { shelves }
         .animation(.snappy(duration: 0.25), value: shelf)
         .animation(.snappy(duration: 0.25), value: actor)
         // At the foot, as Members has it (owner 2026-10-20).
@@ -353,17 +351,18 @@ struct GroupHistoryView: View {
                     chip(c.title, on: shelf == c) { shelf = (shelf == c ? nil : c) }
                 }
             }
-            .padding(.horizontal, 16).padding(.vertical, 4)
+            .padding(.horizontal, 16).padding(.vertical, 6)
         }
     }
 
+    /// A liquid glass capsule; the picked one is glass tinted in the text colour (owner 2026-10-21).
     private func chip(_ title: String, on: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title).font(.subheadline.weight(.semibold))
                 .foregroundStyle(on ? Color(uiColor: .systemBackground) : Color.primary)
-                .padding(.horizontal, 14).frame(minHeight: 34)
-                .background(Capsule().fill(on ? Color.primary : Color(uiColor: .secondarySystemGroupedBackground)))
-                .padding(.vertical, 5)
+                .padding(.horizontal, 16).frame(minHeight: 36)
+                .liquidGlass(Capsule(), interactive: true, tint: on ? .primary : nil)
+                .padding(.vertical, 2)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -383,7 +382,9 @@ struct GroupHistoryView: View {
                 }
             }
         } label: {
-            Image(systemName: actor == nil ? "person.2" : "person.2.fill")
+            // The owner's filter icon (2026-10-21); blue while one person is picked.
+            Image("ic_history_filter").renderingMode(.template)
+                .foregroundStyle(actor == nil ? Color.primary : Color(hex: 0x2392FE))
         }
         .accessibilityLabel(actor == nil ? "Show changes by" : "Showing changes by \(name(actor ?? ""))")
     }
