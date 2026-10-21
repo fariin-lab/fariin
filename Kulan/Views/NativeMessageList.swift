@@ -1267,7 +1267,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                                name: UIResponder.keyboardWillHideNotification, object: nil)
         // 2026-09-27, the composer left high after a screenshot — see `keyboardDidHideNote`.
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHideNote(_:)),
-                                               name: UIResponder.keyboardDidHideNotification, object: nil)        // Returning with the keys up — see `appWillEnterForeground`. Both, deliberately: the first is
+                                               name: UIResponder.keyboardDidHideNotification, object: nil)
+        // 2026-10-21, the composer left HIGH with a gap over the keys — see `keyboardDidShowNote`.
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidShowNote(_:)),
+                                               name: UIResponder.keyboardDidShowNotification, object: nil)        // Returning with the keys up — see `appWillEnterForeground`. Both, deliberately: the first is
         // before the snapshot is replaced, the second catches a restore that lands after it.
         NotificationCenter.default.addObserver(self, selector: #selector(appWillEnterForeground),
                                                name: UIApplication.willEnterForegroundNotification, object: nil)
@@ -4175,6 +4178,35 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard UIApplication.shared.applicationState == .active else { return }
         guard (composerBar as? ChatComposerView)?.holdsKeyboardForGifSearch != true else { return }   // GIF search, see above
         settleKeyboardAtRest()
+    }
+
+    /// ⛔ THE SHOW'S TWIN OF `keyboardDidHideNote` — owner 2026-10-21 (screenshot: the composer ~200pt
+    /// above the keys, chat showing in the gap; intermittent, steps unknown). Once the keys have
+    /// SETTLED, the keyboard's own end frame is measured again against this view at rest. If the
+    /// guide is off by more than 16pt (a height written while the view was mid-flight, e.g. a sheet
+    /// handing the keys back), it takes the true height. Never while GIF search holds the keys, never
+    /// while the view is shifted, and logged as KB# so the source of the wrong value can be read.
+    @objc private func keyboardDidShowNote(_ note: Notification) {
+        guard isViewLoaded, let win = view.window, !isDisappearing,
+              UIApplication.shared.applicationState == .active,
+              let end = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+        else { return }
+        if let bar = composerBar as? ChatComposerView, bar.gifSearchOpen || bar.holdsKeyboardForGifSearch { return }
+        // Only with this view at rest in the window (the same test `adoptSystemKeyboardGuide` uses).
+        guard view.convert(view.bounds, to: nil).maxY <= win.bounds.maxY + 1 else { return }
+        let local = view.convert(end, from: nil)
+        let truth = max(0, view.bounds.maxY - local.minY)
+        guard truth > restSafeBottom + 0.5 else { return }
+        let was = keyboardOverlap
+        guard abs(was - truth) > 16 else { return }
+        DiagLog.add("KB# corrected guide=\(Int(was)) truth=\(Int(truth)) docked=\(Int(dockedBand))")
+        DiagLog.flagForUpload()   // read the same day: what wrote the wrong height
+        dockedBand = truth
+        if setKeyboardGuideHeight(truth) {
+            positionBottomBar()
+            view.layoutIfNeeded()
+            updateInsets()
+        }
     }
 
     // ⚠️ NOT ALSO A SCREENSHOT CHECK AGAINST `view.keyboardLayoutGuide`. That guide does not track
