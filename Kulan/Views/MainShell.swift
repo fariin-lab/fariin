@@ -2057,7 +2057,8 @@ struct ChatsView: View {
                 Label { Text("All") } icon: { MenuIcon("ic_menu_read") }.tag(0)
                 Label { Text("Unread") } icon: { MenuIcon("ic_menu_unread") }.tag(1)
                 if Flags.groupsEnabled {
-                    Label { Text("Groups") } icon: { MenuIcon(system: "person.2.fill") }.tag(2)
+                    // The owner's group icon, as on the New group / Group Type rows (2026-10-21).
+                    Label { Text("Groups") } icon: { MenuIcon("ic_gs_group_type") }.tag(2)
                 }
             }
             .pickerStyle(.inline)
@@ -2747,10 +2748,24 @@ struct ChatsView: View {
                                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 } else {
                                     // Per-filter copy — the Groups filter was showing the Unread text.
-                                    ContentUnavailableView(
-                                        chatFilter == 2 ? "No groups yet" : "No unread chats",
-                                        systemImage: chatFilter == 2 ? "person.3" : "checkmark.circle",
-                                        description: Text(chatFilter == 2 ? "Groups you join will appear here." : "You're all caught up."))
+                                    Group {
+                                        if chatFilter == 2 {
+                                            // The owner's group icon (2026-10-21), as the Groups filter.
+                                            ContentUnavailableView {
+                                                Label {
+                                                    Text("No groups yet")
+                                                } icon: {
+                                                    Image("ic_gs_group_type").renderingMode(.template)
+                                                        .resizable().scaledToFit().frame(width: 52, height: 52)
+                                                }
+                                            } description: {
+                                                Text("Groups you join will appear here.")
+                                            }
+                                        } else {
+                                            ContentUnavailableView("No unread chats", systemImage: "checkmark.circle",
+                                                                   description: Text("You're all caught up."))
+                                        }
+                                    }
                                         .padding(.top, 24)
                                         // No archive row under a filter (see showsArchivedRow), so
                                         // this branch needs no clearance for it.
