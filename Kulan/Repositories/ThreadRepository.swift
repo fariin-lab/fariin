@@ -206,6 +206,10 @@ final class ThreadRepository {
     var skeletonArmed = false
 
     private(set) var convLoaded = false   // first conversation-doc snapshot landed (block state is real)
+    /// ⛔ READ-ONLY, FOR A PUBLIC GROUP SEEN FROM OUTSIDE (owner 2026-10-21, ThreadView `guest`). Only
+    /// the messages are listened to: the rules let a non-member read those of a public group sent
+    /// in the clear, never the group document. Set before `start()`.
+    @ObservationIgnored var previewOnly = false
     var otherTyping = false
     var otherRecording = false       // someone is recording a voice note (string "audio…" in the typing map)
     var typingNames: [String] = []   // group: who is currently typing
@@ -740,6 +744,11 @@ final class ThreadRepository {
         // (`stop()` moved to the top of this function; see the note there.)
         // Conversation doc: the other person's typing flag + their read timestamp.
         convListener?.remove()   // same re-entry rule as the message listener above
+        convListener = nil
+        // ⛔ A PUBLIC GROUP SEEN FROM OUTSIDE (`previewOnly`, owner 2026-10-21) MAY NOT READ THE GROUP
+        // DOCUMENT: no listener, so no refusal reaches SessionRecovery. Nothing on it is the guest's.
+        // (The block below is not re-indented, to keep the change readable.)
+        if previewOnly { convLoaded = true } else {
         convListener = db.collection("conversations").document(cid)
             .addSnapshotListener { [weak self] snap, error in
                 guard let self else { return }
@@ -839,6 +848,7 @@ final class ThreadRepository {
                 if pinsChanged { self.syncPinnedPreviews() }
                 if needsRebuild { self.rebuild() }
             }
+        }   // !previewOnly
         // The other user's presence (online / last active) — 1:1 only (no single "other" in a group).
         //
         // TWO listeners now, because presence moved off the user document into
@@ -928,7 +938,11 @@ final class ThreadRepository {
                     // 2026-09-28: and if it was the SERVER refusing, the backoff retries below
                     // will be refused too. `SessionRecovery` gets back in and posts `recovered`,
                     // which re-attaches this chat at once instead of waiting out the backoff.
-                    Task { @MainActor in SessionRecovery.noteRefusal(error, "chat") }
+                    // A guest refused (the group went private, or banned them) is not a session
+                    // problem (owner 2026-10-21): it is never reported, only retried.
+                    if !self.previewOnly {
+                        Task { @MainActor in SessionRecovery.noteRefusal(error, "chat") }
+                    }
                     self.retryStartSoon()
                     return
                 }
@@ -1117,7 +1131,7 @@ final class ThreadRepository {
         guard !cid.isEmpty, !DemoMode.isDemoConversation(cid), listener != nil || listenerFailed else { return }
         let oneToOne = !otherUid.isEmpty
         if includePresence { presenceRetriedThisRecovery = false }
-        let dead = listenerFailed || listener == nil || convListener == nil
+        let dead = listenerFailed || listener == nil || (convListener == nil && !previewOnly)
             || (oneToOne && (userListener == nil || (includePresence && presenceListener == nil && !presenceRefused)))
         guard dead else {
             // Presence alone, once per recovery, never the whole chat.

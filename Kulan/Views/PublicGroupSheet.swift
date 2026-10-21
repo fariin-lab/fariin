@@ -1,12 +1,27 @@
 import SwiftUI
+import Observation
 
 // ⛔ THE JOIN PAGE OF A PUBLIC GROUP — 2026-10-19 groups v2. Opened from a global search row or a
 // fariin.com/<name> link (GroupDirectory.open), presented by the Chats tab. Photo, name, @name,
 // member count, description, and Join (or Request to Join when the group approves each person).
 // A member never sees it: the chat opens instead. Laid out like the invite link's join sheet.
 //
-// TODO(groups v2): "messages before joining" belongs under the description here. Not built: it
-// needs groups sent without end-to-end encryption and a server read path for outsiders.
+// ⛔ MESSAGES BEFORE JOINING — owner 2026-10-21, with a screenshot: a public group I am not in opens
+// as the REAL chat (ThreadView, `guest`): its messages, photo, name and "N members", with a blue Join
+// Group bar where the composer goes (`PublicJoinBar`). Joining turns this same screen into the
+// normal chat, no navigation away. The rules decide who gets that: a public group sent in the
+// clear (`e2ee == false`), history not hidden from newcomers, not ended, me not banned. So the page
+// first asks for one message (`GroupDirectory.canPeek`); refused (an old encrypted group, hidden
+// history, rules not yet deployed), it stays this page with photo, name, description and Join.
+
+/// A public group opened by someone not in it, handed to ThreadView by reference (ThreadView sits at
+/// the stack limit, so it holds one pointer, never the preview struct). `joined` flips once the join
+/// is through and the group is in my chat list; the page then shows the member's chat.
+@Observable final class PublicGroupGuest {
+    let preview: PublicGroupPreview
+    var joined = false
+    init(_ preview: PublicGroupPreview) { self.preview = preview }
+}
 
 struct PublicGroupSheet: View {
     let target: PublicGroupTarget
@@ -21,13 +36,32 @@ struct PublicGroupSheet: View {
     @State private var requestSent = false
     @State private var joinError: String?
     @State private var contentHeight: CGFloat = 380
+    /// Set when the rules let me read the group's messages: the real chat is shown instead.
+    @State private var guest: PublicGroupGuest?
 
-    private static let blue = Color(hex: 0x2392FE)
+    fileprivate static let blue = Color(hex: 0x2392FE)
+
+    // owner 2026-10-21: the chat itself when the group can be read from outside (see the top note),
+    // and once joined the member's chat in the same place. One ZStack so `load` runs once.
+    var body: some View {
+        ZStack {
+            if let g = guest, g.joined {
+                ThreadView(cid: g.preview.cid, title: g.preview.title, photoUrl: g.preview.photoUrl)
+                    .id("member")
+            } else if let g = guest {
+                ThreadView(cid: g.preview.cid, title: g.preview.title, photoUrl: g.preview.photoUrl, guest: g)
+                    .id("guest")
+            } else {
+                joinPage
+            }
+        }
+        .task { await load() }
+    }
 
     // ⛔ A FULL PAGE, NOT A SHEET (owner 2026-10-20: "open the group page directly, Join at the
     // bottom; once joined, the composer"). The group up top, Join pinned where the composer will
-    // be; joining opens the chat itself. Messages before joining are still not shown (TODO above).
-    var body: some View {
+    // be; joining opens the chat itself. Kept for a group the rules do not open to outsiders.
+    private var joinPage: some View {
         VStack(spacing: 0) {
             if !pushed { closeBar }
             ScrollView { content.padding(.top, pushed ? 8 : 24) }
@@ -35,7 +69,6 @@ struct PublicGroupSheet: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
         .safeAreaInset(edge: .bottom) { joinBar }
-        .task { await load() }
     }
 
     /// The Join button where the composer sits once you are in.
@@ -173,6 +206,10 @@ struct PublicGroupSheet: View {
         switch answer {
         case .found(let p):
             if p.isMember { openChat(p); return }
+            // owner 2026-10-21: the real chat when the rules let me read it from outside.
+            let readable = await GroupDirectory.canPeek(cid: p.cid)
+            guard !Task.isCancelled else { return }
+            if readable { guest = PublicGroupGuest(p) }
             preview = p
         case .refused(let why):
             if preview == nil { refusedText = why }
@@ -197,6 +234,86 @@ struct PublicGroupSheet: View {
                 switch try await GroupDirectory.join(cid: p.cid) {
                 case .joined, .already: openChat(p)
                 case .requested: requestSent = true
+                }
+            } catch {
+                joinError = error.localizedDescription
+            }
+            joining = false
+        }
+    }
+}
+
+/// ⛔ THE JOIN BAR OF A PUBLIC GROUP SEEN FROM OUTSIDE — owner 2026-10-21. ThreadView puts it where
+/// the composer goes (`bottomBarContent`, `guest`). Full-width blue Join Group (Request to Join when
+/// admins approve each person), the same join call as the page above. Joined: wait for the group to
+/// reach my chat list (a few seconds at most), then `joined` turns the screen into the member's chat.
+/// Its own state lives here, not on ThreadView (stack budget).
+struct PublicJoinBar: View {
+    let guest: PublicGroupGuest
+    @State private var joining = false
+    @State private var requestSent = false
+    @State private var joinError: String?
+
+    private var p: PublicGroupPreview { guest.preview }
+    private var waiting: Bool { requestSent || p.requested }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            if let joinError {
+                Text(joinError)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            } else if waiting {
+                Text("Your request is waiting for an admin.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+            }
+            Button(action: join) {
+                Text(title)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(enabled ? Color.white : Color.secondary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .background(Capsule().fill(enabled ? PublicGroupSheet.blue : Color(.tertiarySystemFill)))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(!enabled)
+        }
+        .frame(maxWidth: .infinity)
+        .systemBarChrome()
+    }
+
+    private var enabled: Bool { !joining && !waiting }
+
+    private var title: String {
+        if waiting { return "Request Sent" }
+        if joining { return p.needsApproval ? "Sending…" : "Joining…" }
+        return p.needsApproval ? "Request to Join" : "Join Group"
+    }
+
+    private func join() {
+        guard !joining, !waiting else { return }
+        guard NetworkState.shared.isOnline else { joinError = "No internet connection. Try again."; return }
+        joining = true
+        joinError = nil
+        Task {
+            do {
+                switch try await GroupDirectory.join(cid: p.cid) {
+                case .joined, .already:
+                    // The chat list's listener brings the group in a moment after the server adds
+                    // me; the member's chat opens with it there (header, members, composer rules).
+                    let me = AuthService.shared.uid ?? ""
+                    for _ in 0..<20 {
+                        if ConversationsRepository.shared.conversations
+                            .contains(where: { $0.id == p.cid && $0.users.contains(me) }) { break }
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                    }
+                    withAnimation(.easeInOut(duration: 0.25)) { guest.joined = true }
+                    return
+                case .requested:
+                    requestSent = true
                 }
             } catch {
                 joinError = error.localizedDescription

@@ -2564,7 +2564,29 @@ service cloud.firestore {
             || convAfter().get('users', []).size() > c.users.size()
             || !(request.auth.uid in convAfter().get('users', []));
         }
-        allow read: if signedIn() && request.auth.uid in convData().users;
+        // ⛔ A PUBLIC GROUP'S MESSAGES, READ FROM OUTSIDE — owner 2026-10-21 (messages before
+        // joining): tapping a public group I am not in opens its real chat with Join at the bottom.
+        // Only when every one of these holds: a group, public (`isPublic`, server-written), sent in
+        // the clear (`e2ee == false`; an old end-to-end group's text means nothing to an outsider
+        // anyway), history not hidden from newcomers (`hideHistoryAt` absent or 0: hidden history
+        // means no preview), not ended by its owner (`endedAt` absent or 0), not suspended or
+        // disabled by Fariin, and the reader not banned from it. READ ONLY, and only the messages:
+        // the conversation document stays members-only (invite codes, unread maps, names), so the
+        // app takes the header from `publicGroupPreview`. Votes under a message stay members-only.
+        function publicPreviewRead() {
+          let c = convData();
+          let gm = c.get('mod', {});
+          return c.get('type', '') == 'group'
+            && c.get('isPublic', false) == true
+            && c.get('e2ee', true) == false
+            && !(request.auth.uid in c.get('bannedUids', []))
+            && (c.get('hideHistoryAt', 0) == 0 || c.get('hideHistoryAt', 0) == null)
+            && (c.get('endedAt', 0) == 0 || c.get('endedAt', 0) == null)
+            && gm.get('state', 'ok') != 'disabled'
+            && !(gm.get('state', 'ok') == 'suspended'
+                 && (gm.get('until', null) == null || gm.get('until', null) > request.time));
+        }
+        allow read: if signedIn() && (request.auth.uid in convData().users || publicPreviewRead());
         allow create: if signedIn()
           && (request.auth.uid == request.resource.data.authorId || isCallRecordForMember())
           && request.auth.uid in convData().users

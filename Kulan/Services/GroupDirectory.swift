@@ -1,4 +1,5 @@
 import Foundation
+import FirebaseFirestore
 import FirebaseFunctions
 
 // ⛔ PUBLIC GROUPS — 2026-10-19 groups v2 (owner: "go do like" the reference app). A group an admin
@@ -12,9 +13,10 @@ import FirebaseFunctions
 //   resolveUsername { groups: true }        a bare fariin.com/<name> link: a person or a group
 //   publicGroupPreview / joinPublicGroup    functions-groups, the join page
 //
-// TODO(groups v2): "messages before joining" (an outsider reading a public group's recent
-// messages on the join page) is NOT built. It needs groups sent without end-to-end encryption
-// first, and a server read path that hands an outsider a bounded page of messages.
+// MESSAGES BEFORE JOINING (owner 2026-10-21): an outsider reads a public group's messages in the
+// real chat screen when firestore.rules allow it (public, `e2ee == false`, history not hidden, not
+// ended, not banned). `canPeek` asks; the group document itself stays members-only, so the header
+// comes from `publicGroupPreview`. See PublicGroupSheet.
 
 /// One public group from global search. Only what the join page shows anybody.
 struct PublicGroupHit: Identifiable, Equatable {
@@ -228,6 +230,22 @@ enum GroupNameCheck: Equatable {
                 return .refused(ns.localizedDescription)
             }
             return .failed(NetworkState.shared.isOnline ? "Couldn't connect" : "No internet connection. Try again.")
+        }
+    }
+
+    /// May this phone read the group's messages from outside? One message asked of the server; any
+    /// refusal or failure means no (an old encrypted group, history hidden from newcomers, ended,
+    /// banned, rules not deployed yet, offline), and the join page shows as before. Never routed to
+    /// SessionRecovery: a refusal here is an answer, not a broken session. owner 2026-10-21.
+    static func canPeek(cid: String) async -> Bool {
+        guard KulanApp.safeSegment(cid) else { return false }
+        do {
+            _ = try await FirestoreHub.db.collection("conversations").document(cid).collection("messages")
+                .order(by: "createdAt", descending: true).limit(to: 1)
+                .getDocuments(source: .server)
+            return true
+        } catch {
+            return false
         }
     }
 

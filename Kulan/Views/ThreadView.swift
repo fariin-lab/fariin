@@ -79,6 +79,14 @@ struct ThreadView: View {
     /// a preview is a glance, not an open. True here means exactly that: the whole chat as it is,
     /// and no side effect on the server or on the rest of the app.
     var preview = false
+    /// ⛔ A PUBLIC GROUP SEEN FROM OUTSIDE — owner 2026-10-21, with a screenshot: tapping a public
+    /// group I am not in opens the real chat (its messages, photo, name, "N members") with a blue
+    /// Join Group bar where the composer goes, as the reference app does. Set only by
+    /// `PublicGroupSheet`, and only after the rules let this phone read the group's messages. Like
+    /// `preview`, nothing here may write as a member: no receipts, unread resets, typing, drafts
+    /// sent, call or group-document listeners. A class, not the preview struct itself: this view
+    /// sits at the stack limit (build 990), so it holds one pointer.
+    var guest: PublicGroupGuest?
 
     @State private var repo: ThreadRepository
     @State private var input = ""
@@ -536,13 +544,17 @@ struct ThreadView: View {
     /// (this flag, the environment in `body`, `forceDark` on the list) are all lifted together.
     private var dark: Bool { scheme == .dark }
 
-    init(cid: String, title: String, photoUrl: String?, preview: Bool = false) {
+    init(cid: String, title: String, photoUrl: String?, preview: Bool = false, guest: PublicGroupGuest? = nil) {
         self.cid = cid
         self.title = title
         self.photoUrl = photoUrl
         self.preview = preview
+        self.guest = guest
         // One repository per open chat, not one per init — see `ThreadRepository.forChat`.
-        let r = preview ? ThreadRepository(cid: cid) : ThreadRepository.forChat(cid)
+        // A guest gets its own too, read-only (`previewOnly`), so the member's chat opened after
+        // Join starts clean from the shared one.
+        let r = (preview || guest != nil) ? ThreadRepository(cid: cid) : ThreadRepository.forChat(cid)
+        if guest != nil { r.previewOnly = true }
         _repo = State(initialValue: r)
         // ALWAYS start hidden — even a warm cache hit. Video showed the bug: when revealed started true
         // (cache hit), the chat was visible DURING the push transition at a not-yet-bottom position, then
@@ -659,7 +671,7 @@ struct ThreadView: View {
     @ViewBuilder private var topPinArea: some View {
         // ⛔ NOT IN THE LONG-PRESS PREVIEW — owner, 2026-09-27, with the pinned bar ringed across the
         // top of the chat list's preview: "don't show pin bar". A preview is the messages only.
-        if !searchActive && !preview && !groupModHidesChat {   // search owns the top area — the pin bar hides while searching
+        if !searchActive && !quiet && !groupModHidesChat {   // search owns the top area — the pin bar hides while searching
             keyChangeNotice
             // ⛔ A LIVE CALL TAKES THE PIN BAR'S PLACE (owner 2026-10-20): the people in it, the
             // group's name, who has their mic on, and Join. The pins come back when it ends.
@@ -919,7 +931,7 @@ struct ThreadView: View {
                 // ACTIVE only (2026-09-24 audit): the listener keeps delivering while the app is in
                 // the background (a voice note or a call keeps it awake), and those arrivals were
                 // marked read with nobody looking. `didBecomeActive` below sends the receipt instead.
-                if !incoming.isEmpty && isAtBottom && !repo.iBlocked && !preview
+                if !incoming.isEmpty && isAtBottom && !repo.iBlocked && !quiet
                     && UIApplication.shared.applicationState == .active {
                     // owner audit 2026-10-06 chat #13: a sheet or cover over the chat hides the
                     // newest rows, and sheets fire no onDisappear. Hold the receipt until it closes.
@@ -1233,7 +1245,7 @@ struct ThreadView: View {
     private var canShowComposer: Bool {
         // The UIKit bar lives in the list's controller, so the preview's empty `bottomBarContent`
         // never hid it: `nil` state here is what takes it out (`hideComposer`). See `showsJumpButton`.
-        !preview && !selecting && !searchActive && !notAMember && !groupModBlocked && !cannotSendAnnouncement && !iAmMuted
+        !quiet && !selecting && !searchActive && !notAMember && !groupModBlocked && !cannotSendAnnouncement && !iAmMuted
             && !repo.iBlocked && requestStance != .incoming
             // ⛔ A CORRECT CHAT KEY OPENS THE COMPOSER AT ONCE — owner, 2026-10-04: "don't show Chat
             // Key accepted, open the text bar automatically". The server has already accepted the
@@ -1257,6 +1269,9 @@ struct ThreadView: View {
             if preview {
                 // The reference's preview has no bottom bar at all.
                 EmptyView()
+            } else if let guest {
+                // owner 2026-10-21: a public group seen from outside, Join where the composer goes.
+                PublicJoinBar(guest: guest).transition(.opacity)
             } else if selecting {
                 selectionActionBar.transition(.opacity)
             } else if searchActive {
@@ -1309,6 +1324,8 @@ struct ThreadView: View {
         // draws avatar, name, icons and subtitle with the reference app's own metrics. Selection mode
         // hides it the same way as before: `isActive` hands the title area to the `.principal` item.
         .background(ChatNavigationItem(model: headerModel, bar: navigationBar, onTap: {
+            // A guest has no group page to open: it is the members' (owner 2026-10-21).
+            guard guest == nil else { return }
             // Close the keyboard before pushing the profile, else it stays up behind the pushed screen
             // and is still there when you swipe back (the reported bug).
             inputFocused = false
@@ -2025,6 +2042,7 @@ struct ThreadView: View {
             // message of a burst — which is exactly the case where several notes arrive together and
             // all of them should already be downloading.
             MediaAutoDownloader.sweepVoiceNotes(repo.items, cid: cid)
+            await fillGuestNames()   // a public group seen from outside (owner 2026-10-21)
             try? await Task.sleep(nanoseconds: 1_200_000_000)   // let the open settle first
             guard !Task.isCancelled else { return }
             MediaAutoDownloader.sweep(repo.items, cid: cid)
@@ -2227,19 +2245,18 @@ struct ThreadView: View {
         // Owner, 2026-10-14: arriving from the No answer page's "Record voice message", the recorder
         // starts at once, locked hands-free, the same state a hold dragged up to the lock leaves.
         .task {
-            guard !preview, AppRouter.shared.pendingVoiceNoteCid == cid else { return }
+            guard !quiet, AppRouter.shared.pendingVoiceNoteCid == cid else { return }
             AppRouter.shared.pendingVoiceNoteCid = nil
             beginHoldRecording()
             if holdStarted { lockRecording() }
         }
         .onAppear {
-            cachedConv = ConversationsRepository.shared.conversations.first { $0.id == cid }
-                ?? FormerGroups.removed[cid]   // a group I was removed from earlier this session
+            cachedConv = openingConversation()
             startOwnGroupDoc()
             noteHistoryStart()
             // A preview owns its repository; a real chat shares the live one (`forChat`), so it
             // counts itself in and out rather than stopping a run another screen may be using.
-            if preview { repo.start() } else { repo.open() }
+            if quiet { repo.start() } else { repo.open() }
             // PAY THE GIF KEY'S ROUND TRIP NOW, quietly, instead of on the first tap of the button.
             // Opening a chat is the moment we learn a GIF might be sent, and it is a moment with
             // nothing else competing for the network. No-op once the key is on the phone, which is
@@ -2294,7 +2311,7 @@ struct ThreadView: View {
             // A parked note from last time — leaving the chat, or the whole app, mid-recording —
             // is adopted back and the bar lands on the review: listen, continue with the red mic,
             // send or bin. His order, the reference's model: nothing recorded is silently gone.
-            if !preview, !recordLocked, AudioRecorder.hasDraft(cid), recorder.adoptDraft(cid: cid) {
+            if !quiet, !recordLocked, AudioRecorder.hasDraft(cid), recorder.adoptDraft(cid: cid) {
                 recordLocked = true
                 beginPreview()
             }
@@ -2315,7 +2332,7 @@ struct ThreadView: View {
             // A preview is a glance, not an open: none of what follows (the call listener, banner
             // suppression, clearing notifications, the unread reset and the read receipt) may happen
             // from it.
-            if !preview {
+            if !quiet {
             if isGroup || !cid.contains("_") { startGroupCallListener() }
             AppRouter.shared.activeChatId = cid          // suppress this chat's own banners
             keyChanged = !keyChangedUids.isEmpty   // groups included now, one member is enough
@@ -2336,7 +2353,7 @@ struct ThreadView: View {
         }
         .onDisappear {
             // A preview only stops what it started listening to; it never opened anything else.
-            if preview {
+            if quiet {
                 repo.stop()
                 groupCallListener?.remove(); groupCallListener = nil
                 return
@@ -2402,7 +2419,7 @@ struct ThreadView: View {
         // Back in front with the newest message on screen: send the read receipt the background
         // arrivals were denied above (2026-09-24 audit).
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            guard !preview, isAtBottom, !repo.iBlocked, AppRouter.shared.activeChatId == cid else { return }
+            guard !quiet, isAtBottom, !repo.iBlocked, AppRouter.shared.activeChatId == cid else { return }
             if chatCovered { armCoveredRead(); return }   // owner audit 2026-10-06 chat #13
             ChatService.markReadThrottled(cid)
             Task { await ChatService.resetUnread(cid) }
@@ -2458,7 +2475,9 @@ struct ThreadView: View {
     /// A class box in @State: a pointer on the stack (the build 990 stack note).
     @State private var ownGroupDoc = ListenerBox()
     private func startOwnGroupDoc() {
-        guard ownGroupDoc.reg == nil, cachedConv?.isGroup ?? false else { return }
+        // A guest may not read the group's document (owner 2026-10-21); a refused listener would
+        // only count as a refusal in SessionRecovery.
+        guard ownGroupDoc.reg == nil, guest == nil, cachedConv?.isGroup ?? false else { return }
         ownGroupDoc.reg = FirestoreHub.db.collection("conversations").document(cid)
             .addSnapshotListener { snap, _ in
                 guard let snap, snap.exists, let data = snap.data() else { return }
@@ -2472,6 +2491,44 @@ struct ThreadView: View {
                     || fresh.hideHistoryAt != old.hideHistoryAt || fresh.memberSince != old.memberSince
                 if changed { cachedConv = fresh; noteHistoryStart() }
             }
+    }
+
+    /// No side effect on the server: the long-press preview, or a public group seen from outside.
+    private var quiet: Bool { preview || guest != nil }
+
+    /// The conversation the chat opens with (moved out of `onAppear`, the body's type-check budget).
+    /// A public group seen from outside has none on this phone and may not read the group document
+    /// (it carries invite codes and unread maps), so it gets a stand-in from the join page's
+    /// preview: a group with nobody in `users`, which keeps every member-only path closed
+    /// (`notAMember`: no calls, no composer, no welcome card). owner 2026-10-21.
+    private func openingConversation() -> Conversation? {
+        if let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) { return c }
+        if let c = FormerGroups.removed[cid] { return c }   // a group I was removed from earlier this session
+        guard let g = guest?.preview else { return nil }
+        var data: [String: Any] = ["type": "group", "title": g.title, "e2ee": false]
+        if let p = g.photoUrl { data["avatarUrl"] = p }
+        return Conversation(id: cid, data: data)
+    }
+
+    /// A guest's senders' names (owner 2026-10-21). The members' names live on the group document,
+    /// which a guest may not read, so each sender's own profile gives the name, a few per pass,
+    /// into the stand-in conversation (its `names` key the row cache, so the rows redraw).
+    private func fillGuestNames() async {
+        guard guest != nil, let known = cachedConv?.names else { return }
+        var missing: [String] = []
+        for m in repo.items where !m.isSystem && m.authorId != me && !m.authorId.isEmpty
+            && known[m.authorId] == nil && !missing.contains(m.authorId) {
+            missing.append(m.authorId)
+            if missing.count >= 20 { break }
+        }
+        guard !missing.isEmpty else { return }
+        var found: [String: String] = [:]
+        for uid in missing {
+            let name = await ProfileStore.shared.fetch(uid)?.name ?? ""
+            found[uid] = name.isEmpty ? "User" : name
+        }
+        guard cachedConv != nil else { return }
+        cachedConv?.names.merge(found) { _, new in new }
     }
 
     /// Chat history hidden from new members: where this chat starts for me, for the repository.
@@ -2999,6 +3056,8 @@ struct ThreadView: View {
     }
 
     private var presenceSubtitle: String? {
+        // A guest's count comes from the join page's preview (the stand-in has nobody in `users`).
+        if let g = guest?.preview { return GroupDirectory.membersLine(g.memberCount) }
         if isGroup {
             // Show who's typing in the group; otherwise the member count.
             if typingPref, repo.otherTyping, !repo.typingNames.isEmpty {
@@ -3341,7 +3400,7 @@ struct ThreadView: View {
                 if atBottom {
                     let hadNew = newWhileAway > 0
                     newWhileAway = 0
-                    if !repo.iBlocked, !preview {
+                    if !repo.iBlocked, !quiet {
                         ChatService.markReadThrottled(cid)
                         // Mirror the arrival path: zero the stored counter the moment these are seen,
                         // so the badge is right even if the app dies before onDisappear.
@@ -3776,7 +3835,8 @@ struct ThreadView: View {
     // deliberately NO "React…" row — the floating bar above the message IS reacting, and it appears
     // for exactly the rows customReactInfo allows; its "…" opens the same full picker.
     private func customMenuActions(for rowId: String) -> [CMAction] {
-        guard let idx = repo.indexById[rowId], idx < repo.items.count else { return [] }
+        // A guest has no menu (owner 2026-10-21): react, reply, pin and delete are the members'.
+        guard guest == nil, let idx = repo.indexById[rowId], idx < repo.items.count else { return [] }
         let m = repo.items[idx]
         // ⛔ A STORY REACTION HAS NO MENU — owner 2026-10-13: "block long press" on an emoji sent from
         // a story's react bar. An empty list is what stops the press ripening (see the notice below).
@@ -3996,7 +4056,7 @@ struct ThreadView: View {
     }
 
     private func canReact(_ m: Message) -> Bool {
-        m.sendState == nil && !iAmMuted && !m.isCall && !m.isSystem
+        guest == nil && m.sendState == nil && !iAmMuted && !m.isCall && !m.isSystem
             && !m.deleted && m.pinNotice == nil && !m.isUnsupportedFeature
             && !m.isStoryReaction   // a story react-bar emoji takes no reaction (see Message.isStoryReaction)
     }
@@ -4515,7 +4575,7 @@ struct ThreadView: View {
                 // ⛔ NOT ON A STORY REACTION (owner 2026-10-13: "swipe reply still works"). The row
                 // model's `canSwipeToReply` said no, but the swipe pan asks THIS closure and never read
                 // the model, so the earlier fix had nothing listening to it.
-                repo.indexById[id].map { repo.items[$0].sendState == nil && !repo.items[$0].isStoryReaction } ?? false
+                guest == nil && (repo.indexById[id].map { repo.items[$0].sendState == nil && !repo.items[$0].isStoryReaction } ?? false)
             },
             onSwipeReply: { id in
                 if let idx = repo.indexById[id], idx < repo.items.count { beginReply(to: repo.items[idx]) }
@@ -6383,7 +6443,7 @@ struct ThreadView: View {
             ownGroupDoc.reg = nil
             startOwnGroupDoc()
         }
-        guard !preview else { return }
+        guard !quiet else { return }
         Task { @MainActor in
             SendQueue.releaseClaimsAfterSwap()
             await drainSendQueue()
@@ -7462,7 +7522,7 @@ struct ThreadView: View {
     /// never held. A row the paging could not reach leaves this true, which is why the hold is
     /// `&& !savedRowPagingDone` at the call site: the land then goes to the newest, as before.
     private var savedRowNeedsPaging: Bool {
-        guard !preview, !openedOnFocusMessage, unreadOnOpen == 0, firstUnreadId == nil,
+        guard !quiet, !openedOnFocusMessage, unreadOnOpen == 0, firstUnreadId == nil,
               let saved = ChatScrollStore.shared.position(for: cid) else { return false }
         return !repo.items.contains(where: { $0.rowId == saved.rowId })
     }
