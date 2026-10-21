@@ -1304,11 +1304,14 @@ struct ThreadView: View {
                 awaitingReplyBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if cannotMessageThem && !keyAccepted {
                 cannotMessageBar.transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else if newPersonUnanswered {
+                newPersonComposer.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else {
                 composerArea.transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
         .animation(.easeInOut(duration: 0.25), value: repo.iBlocked)
+        .animation(.easeInOut(duration: 0.25), value: newPersonUnanswered)
         // Leaving, being muted, announcement mode or a moderation hold swap the bar too; without
         // these it jumped in with no motion (owner 2026-10-20, after Leave Group).
         .animation(.easeInOut(duration: 0.25), value: notAMember)
@@ -8440,6 +8443,46 @@ struct ThreadView: View {
 
     /// THEIR request, waiting for me. Accept or Delete, in the conversation itself — his spec was
     /// explicit that there is no separate requests inbox to go and find.
+    // ⛔ ACCEPT OR DELETE A NEW PERSON, WITH REQUESTS OFF — owner 2026-10-21: "when a new user
+    // messages me, add Delete and Accept; once I accept we see each other's stories". With Message
+    // Requests switched off in the panel the chat opens with a composer (`stance` says .open), but
+    // underneath it is still an unanswered request (`rawStance` .incoming), and friendship (stories,
+    // "My Chats" privacy) only begins at Accept or a reply. The two buttons sit above the composer;
+    // typing a reply accepts too, as it always has.
+    private var newPersonUnanswered: Bool {
+        guard !isGroup, let c = conversation, requestStance == .open else { return false }
+        return MessageRequests.rawStance(c, myUid: me) == .incoming && !c.isBlockedByMe(me)
+    }
+
+    private var newPersonComposer: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                Button {
+                    let id = cid
+                    dismiss()
+                    Task { try? await MessageRequests.decline(id) }
+                } label: {
+                    Text("Delete").font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity).frame(height: ChatNoticeButton.height)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+                .liquidGlass(ChatNoticeButton.shape, interactive: true)
+                Button {
+                    Task { try? await MessageRequests.accept(cid) }
+                } label: {
+                    Text("Accept").font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity).frame(height: ChatNoticeButton.height)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.onAccent(dark))
+                .liquidGlass(ChatNoticeButton.shape, interactive: true, tint: Theme.accent(dark))
+            }
+            .padding(.horizontal, 16)
+            composerArea
+        }
+    }
+
     private var requestBar: some View {
         composerNotice {
             VStack(spacing: 10) {
