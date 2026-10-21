@@ -411,17 +411,22 @@ struct VideoPlayerScreen: View {
                 panelButton("ic_link_share", label: "Share",
                             enabled: localVideoURL != nil && !savingLocked) { share() }
                 Spacer()
-                Button { togglePlay() } label: {
-                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 22, weight: .regular))
-                        .foregroundStyle(.primary)
-                        .contentTransition(.symbolEffect(.replace))
-                        .frame(width: 44, height: 44)
+                // 10s back / forward beside play in ONE capsule (owner 2026-10-21, with the
+                // reference's picture), only on a clip of 20s or more: on a short one a 10s jump
+                // is half the video.
+                if duration >= 20 {
+                    HStack(spacing: 18) {
+                        skipButton(-10)
+                        playButton
+                        skipButton(10)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: 44)
+                    .liquidGlass(Capsule(), interactive: true)
+                } else {
+                    playButton
                         .liquidGlass(Circle(), interactive: true)
-                        .contentShape(Circle())
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(isPlaying ? "Pause" : "Play")
                 Spacer()
                 panelButton("arrowshape.turn.up.right", label: "Forward",
                             enabled: localVideoURL != nil && message.sendState == nil
@@ -435,6 +440,39 @@ struct VideoPlayerScreen: View {
         .padding(.horizontal, 20)
         .padding(.bottom, 24)
         .transition(.opacity)
+    }
+
+    private var playButton: some View {
+        Button { togglePlay() } label: {
+            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                .font(.system(size: 22, weight: .regular))
+                .foregroundStyle(.primary)
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isPlaying ? "Pause" : "Play")
+    }
+
+    private func skipButton(_ seconds: Double) -> some View {
+        Button { skip(by: seconds) } label: {
+            Image(systemName: seconds < 0 ? "gobackward.10" : "goforward.10")
+                .font(.system(size: 20, weight: .regular))
+                .foregroundStyle(.primary)
+                .frame(width: 36, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(seconds < 0 ? "Back 10 seconds" : "Forward 10 seconds")
+    }
+
+    private func skip(by seconds: Double) {
+        guard duration > 0 else { return }
+        let t = min(max(current + seconds, 0), duration)
+        current = t
+        progress = t / duration
+        seek(to: t / duration)
     }
 
     /// One of the row's round glass buttons: a 24pt-class icon in a 44pt circle, greyed while the
