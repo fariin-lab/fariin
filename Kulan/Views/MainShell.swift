@@ -3165,7 +3165,11 @@ struct ChatsView: View {
             } message: {
                 Text("This removes the chat from your list. It comes back if you get a new message.")
             }
-            .toolbar(selecting ? .hidden : .automatic, for: .tabBar)
+            // The list asks for the tab bar itself, from the stack's path (owner 2026-10-21: after
+            // leaving a chat the bar came back late). `.automatic` waited for the pop to finish
+            // before the pushed page's `.hidden` let go; the path empties as Back starts, so the
+            // bar now slides in with the pop.
+            .toolbar(selecting || !path.isEmpty ? .hidden : .visible, for: .tabBar)
             // (The archive is PUSHED now — see `archiveRoute` on the navigationDestination above.)
             .sheet(isPresented: $showMyQR) { MyQRView() }
             // Get Started's New Group and Add Photo (owner 2026-10-18).
