@@ -39,6 +39,10 @@ struct GroupInfoView: View {
     @State private var notice = ""
     @State private var noticeShown = false
     @State private var profileOf: MemberAction?   // Info on a member's sheet (owner 2026-10-19)
+    /// An @name in the description, pushed from THIS page (owner 2026-10-21: it opened with no
+    /// animation). The page is itself an `isPresented` destination, and appending to the chats path
+    /// from here swapped the stack without a slide; its own destination is the system push.
+    @State private var mentionChat: ChatTarget?
     @State private var confirmLeave = false
     @State private var confirmBlock = false
     @State private var confirmEnd = false
@@ -185,6 +189,9 @@ struct GroupInfoView: View {
             .navigationDestination(isPresented: $showMemberChanges) { GroupHistoryView(cid: cid) }
             .navigationDestination(isPresented: $showMemberLink) {
                 if let link = inviteLink { GroupLinkShareView(title: title, photo: conv?.avatarUrl, link: link) }
+            }
+            .navigationDestination(item: $mentionChat) { t in
+                ThreadView(cid: t.id, title: t.name, photoUrl: t.photo).id(t.id)
             }
             .navigationDestination(item: $profileOf) { m in
                 ContactInfoView(cid: ChatService.convId(me, m.id), name: m.name,
@@ -492,7 +499,13 @@ struct GroupInfoView: View {
                         // slide (owner 2026-10-21: the tap did nothing). The card door, as invites.
                         case "kulan":
                             let handle = url.lastPathComponent
-                            Task { @MainActor in _ = await ProfileCardDoor.open(handle, push: true) }
+                            Task { @MainActor in
+                                guard let u = await ChatService.findByHandle(handle) else { return }
+                                mentionChat = ChatTarget(id: ChatService.convId(me, u.id),
+                                                         name: u.name.isEmpty ? u.handle : u.name, photo: u.photoUrl)
+                                // The chat document is written behind the open, as the card door does.
+                                Task { _ = try? await ChatService.openConversation(other: u) }
+                            }
                         default: return .discarded
                         }
                         return .handled
