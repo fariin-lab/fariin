@@ -464,6 +464,14 @@ struct ChatSearchPage: View {
         personRows = recentFirst(personRows)
         // Public groups from the server join the people under Global Search, minus the ones I am in.
         let mine = Set(repo.conversations.filter { $0.isGroup && $0.users.contains(me) }.map { $0.id })
+        // ⛔ A PUBLIC GROUP I AM IN, FOUND BY ITS @NAME — owner 2026-10-21 ("waraa3", No Results):
+        // the local match reads titles only, and Global Search leaves out groups I am in, so a group
+        // titled "All right" with the link waraa3 showed nowhere. It goes with my groups, as my chat.
+        for g in groupHits where g.isMember || mine.contains(g.cid) {
+            guard m.chats[g.cid] == nil, let c = repo.conversations.first(where: { $0.id == g.cid }) else { continue }
+            m.chats[g.cid] = c
+            groupRows.append(SearchPageRow(kind: .group, key: g.cid))
+        }
         for g in groupHits where !g.isMember && !mine.contains(g.cid) {
             m.groups[g.cid] = g
             // The first few public hits are fetched ahead, so a tap opens with nothing to wait for
