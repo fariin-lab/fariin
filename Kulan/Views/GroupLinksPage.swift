@@ -13,7 +13,46 @@ import SwiftUI
 
 /// The last list seen per group (owner 2026-10-20: a spinner every time the page opened). The page
 /// paints from it at once and refreshes behind, as the chat lists do.
-@MainActor enum GroupLinksCache { static var lists: [String: GroupLinkList] = [:] }
+/// ⛔ NO SPINNER ON OPEN (owner 2026-10-21: "every time I enter, it is loading"). The reference app
+/// draws this page from links it already holds on the phone and refreshes behind it. Ours: the last
+/// answer is kept in memory AND on disk (one small file per group), and Group Settings fetches it
+/// ahead, so the page opens on real links and the server copy replaces them quietly.
+@MainActor enum GroupLinksCache {
+    static var lists: [String: GroupLinkList] = [:]
+
+    private static var dir: URL? {
+        guard let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
+        let d = base.appendingPathComponent("groupLinks", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }
+    private static func file(_ cid: String) -> URL? {
+        guard KulanApp.safeSegment(cid) else { return nil }
+        return dir?.appendingPathComponent("\(cid).json")
+    }
+
+    /// Memory first, then the saved file.
+    static func list(_ cid: String) -> GroupLinkList? {
+        if let l = lists[cid] { return l }
+        guard let url = file(cid), let data = try? Data(contentsOf: url),
+              let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let l = GroupLinkList(raw)
+        lists[cid] = l
+        return l
+    }
+
+    static func store(cid: String, list: GroupLinkList, raw: [String: Any]) {
+        lists[cid] = list
+        guard let url = file(cid), JSONSerialization.isValidJSONObject(raw),
+              let data = try? JSONSerialization.data(withJSONObject: raw) else { return }
+        try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    /// Fetched ahead (Group Settings), so the page opens already filled.
+    static func warm(_ cid: String) {
+        Task { _ = try? await GroupInviteService.listLinks(cid: cid) }
+    }
+}
 
 struct GroupLinksPage: View {
     let cid: String
@@ -22,7 +61,7 @@ struct GroupLinksPage: View {
     init(cid: String, groupTitle: String) {
         self.cid = cid
         self.groupTitle = groupTitle
-        _list = State(initialValue: GroupLinksCache.lists[cid])
+        _list = State(initialValue: GroupLinksCache.list(cid))
     }
 
     @State private var list: GroupLinkList?
@@ -262,8 +301,7 @@ struct GroupLinksPage: View {
     private func reload() async {
         do {
             let fresh = try await GroupInviteService.listLinks(cid: cid)
-            list = fresh
-            GroupLinksCache.lists[cid] = fresh
+            list = fresh   // listLinks has saved it (memory + disk)
             loadError = nil
             // A group with no link (turned off before Turn Off went away): one is made at once.
             // Once per page, for a loaded group that is open (audit 2026-10-20: an ended group tried

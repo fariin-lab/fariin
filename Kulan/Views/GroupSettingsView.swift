@@ -86,7 +86,10 @@ struct GroupSettingsView: View {
         .onAppear {
             attachListeners()
             // Again on every return: the link page may have reset or turned off the link.
-            if can(.inviteUsers) { Task { await loadShareCode() } }
+            if can(.inviteUsers) {
+                Task { await loadShareCode() }
+                GroupLinksCache.warm(cid)   // the Invite Link page then opens filled (owner 2026-10-21)
+            }
         }
         // 2026-10-20 (owner): after `FirestoreHub.swap` both listeners belong to the stuck client.
         // Let go of them off-main and attach again on the fresh one; what is on screen stays.

@@ -127,7 +127,10 @@ enum GroupInviteService {
 
     /// The link page: the primary link, the others this admin may see, the revoked ones.
     static func listLinks(cid: String) async throws -> GroupLinkList {
-        GroupLinkList(try await call("listGroupLinks", ["cid": cid]))
+        let raw = try await call("listGroupLinks", ["cid": cid])
+        let list = GroupLinkList(raw)
+        await GroupLinksCache.store(cid: cid, list: list, raw: raw)
+        return list
     }
 
     /// A new primary link (the first one, or Reset Link: the old one is revoked in the same step).
