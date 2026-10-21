@@ -347,21 +347,23 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             for v in [stripGlass, strip, editButton] as [UIView] { v.transform = .identity }
             let pad: CGFloat = 6
             let smallEditW: CGFloat = 48, smallEditH: CGFloat = 28
-            let room = w - 2 * (M.side + smallEditW + 8)
+            let room = w - 2 * M.side   // Edit lives at the top now (2026-10-21)
             let barW = min(room, strip.contentSize.width + 2 * pad)
             let barY = h - footGap - M.stripH
             let bar = CGRect(x: (w - barW) / 2, y: barY, width: barW, height: M.stripH)
             stripGlass.frame = bar
             stripGlass.layer.cornerRadius = M.stripH / 2
             strip.frame = bar.insetBy(dx: pad, dy: 0)
-            let editY = editing ? h - (44 + sb) - 8 - smallEditH : barY + (M.stripH - smallEditH) / 2
+            // ⛔ EDIT AT THE TOP RIGHT — owner 2026-10-21 (reverses 10-19's "on the bar's right"): level
+            // with the first section heading, and it stays there while the grid scrolls or edits.
+            let editY = M.top + 4
             editButton.frame = CGRect(x: w - M.side - smallEditW, y: editY, width: smallEditW, height: smallEditH)
             editGlass.frame = editButton.bounds
             editGlass.layer.cornerRadius = smallEditH / 2
             let down = hideBars ? h - barY : 0
-            for v in [stripGlass, strip, editButton] as [UIView] { v.transform = CGAffineTransform(translationX: 0, y: down) }
+            for v in [stripGlass, strip] as [UIView] { v.transform = CGAffineTransform(translationX: 0, y: down) }
             for v in [stripGlass, strip] as [UIView] { v.alpha = hideBars || editing ? 0 : 1 }
-            editButton.alpha = hideBars && !editing ? 0 : 1
+            editButton.alpha = 1
             grid.frame = CGRect(x: 0, y: M.top, width: w, height: max(0, h - M.top))
             gifGrid.frame = CGRect(x: 0, y: M.top, width: w, height: max(0, h - M.top))
             // Room under the last row for the floating bar (and the Delete bar while editing).
