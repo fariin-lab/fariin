@@ -137,6 +137,8 @@ struct GroupTypeView: View {
                         .frame(maxWidth: .infinity).frame(height: 48)
                         // Blue-tinted liquid glass (owner 2026-10-21); was a flat blue fill.
                         .liquidGlass(Capsule(), interactive: true, tint: Color(hex: 0x2392FE))
+                        // The whole capsule takes the tap (owner 2026-10-21: only the words did).
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .sheet(isPresented: $showSend) { SendContactSheet(contactText: url) }   // the app's own Share with sheet (owner 2026-10-21)
