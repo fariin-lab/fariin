@@ -1,5 +1,6 @@
 import UIKit
 import ImageIO
+import Lottie
 
 // ⛔ ONE STICKER, STILL OR MOVING — 2026-10-17, the sticker keyboard. A plain UIKit view: frames are
 // decoded OFF the main thread, DOWNSAMPLED to the pixel size the tile is drawn at (ImageIO thumbnail
@@ -7,6 +8,10 @@ import ImageIO
 // here), cached by url + pixel size, and played by a Core Animation keyframe animation on a layer's
 // `contents`. No display link, no timer, and ⛔ never SwiftUI repeatForever (the iOS 26 deadlock).
 // Plays only when told to (visible cells), and never in Low Power Mode.
+//
+// ⛔ A .TGS PLAYS AS VECTORS — owner 2026-10-21: an animated .tgs (gzipped Lottie) is decoded off the
+// main thread by `TGSSticker` and drawn by a `LottieAnimationView` over the same tile, under the same
+// rules: plays only while told to and in a window, paused in Low Power Mode. Never turned into frames.
 
 final class StickerFrames {
     let images: [CGImage]
@@ -81,6 +86,9 @@ enum StickerFrameCache {
 final class StickerPlayerView: UIView {
     private let art = CALayer()
     private var frames: StickerFrames?
+    /// A .tgs sticker (owner 2026-10-21): the decoded animation and the view that draws it.
+    private var tgs: LottieAnimation?
+    private var lottie: LottieAnimationView?
     private var token = 0
     private(set) var url: URL?
     /// What the owner asked for; Low Power Mode and a missing window can still hold it back.
@@ -109,19 +117,27 @@ final class StickerPlayerView: UIView {
         art.frame = bounds
         art.contentsScale = window?.screen.scale ?? UIScreen.main.scale
         CATransaction.commit()
+        lottie?.frame = bounds
         skeleton.frame = bounds.insetBy(dx: 2, dy: 2)
         skeleton.layer.cornerRadius = min(16, skeleton.bounds.width * 0.18)
     }
 
     /// Shows a sticker. `pixelSize` is the longest side the tile is drawn at, in pixels.
     func setSticker(url: URL?, pixelSize: Int) {
-        guard url != self.url || frames == nil else { return }
+        guard url != self.url || (frames == nil && tgs == nil) else { return }
         token += 1
         self.url = url
         frames = nil
         art.removeAnimation(forKey: Self.animKey)
         art.contents = nil
+        tgs = nil
+        if let v = lottie {
+            v.stop()
+            v.animation = nil
+            v.isHidden = true
+        }
         guard let url else { skeleton.setActive(false); return }
+        if TGSSticker.isTGS(url) { loadTGS(url); return }
         let key = StickerFrameCache.key(url, pixelSize)
         if let hit = StickerFrameCache.cache.object(forKey: key) {
             skeleton.setActive(false)
@@ -157,6 +173,43 @@ final class StickerPlayerView: UIView {
         apply()
     }
 
+    /// The .tgs path: a cache hit shows at once; otherwise decoded on the sticker queue.
+    private func loadTGS(_ url: URL) {
+        if let hit = TGSSticker.cached(url.path) {
+            skeleton.setActive(false)
+            showTGS(hit)
+            return
+        }
+        skeleton.setActive(true)
+        let mine = token
+        StickerFrameCache.queue.addOperation {
+            let anim = TGSSticker.animation(url: url)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.token == mine else { return }
+                guard let anim else { self.skeleton.setActive(false); return }
+                self.showTGS(anim)
+            }
+        }
+    }
+
+    private func showTGS(_ anim: LottieAnimation) {
+        tgs = anim
+        let v: LottieAnimationView
+        if let have = lottie {
+            v = have
+            v.animation = anim
+        } else {
+            v = TGSSticker.makeView(anim)
+            insertSubview(v, belowSubview: skeleton)
+            lottie = v
+        }
+        v.frame = bounds
+        v.isHidden = false
+        v.currentProgress = 0
+        skeleton.fadeOut()
+        apply()
+    }
+
     func play() { wantsPlay = true; apply() }
     func stop() { wantsPlay = false; apply() }
 
@@ -170,6 +223,15 @@ final class StickerPlayerView: UIView {
     }
 
     private func apply() {
+        if let v = lottie, tgs != nil {
+            let should = wantsPlay && window != nil && !ProcessInfo.processInfo.isLowPowerModeEnabled
+            if should {
+                if !v.isAnimationPlaying { v.play() }
+            } else if v.isAnimationPlaying {
+                v.pause()
+            }
+            return
+        }
         let running = art.animation(forKey: Self.animKey) != nil
         let should = wantsPlay && window != nil && !ProcessInfo.processInfo.isLowPowerModeEnabled
             && (frames?.images.count ?? 0) > 1

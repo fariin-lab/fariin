@@ -1,5 +1,6 @@
 import UIKit
 import ImageIO
+import Lottie
 
 // ⛔ A STICKER IN THE CHAT LIST — owner 2026-10-17. Drawn on a plain CALayer, no SwiftUI: a SwiftUI
 // repeatForever animation near the text field deadlocked on iOS 26 (BUILD 959), so every moving
@@ -13,6 +14,9 @@ import ImageIO
 //     fariin.com (cached on disk like any picture);
 //   • a sticker I made is a sealed PNG: decrypted like a photo, kept in `DiskImageCache` as PNG so
 //     the alpha survives, and the same bytes serve "Save to Favorites".
+//   • ⛔ an animated .tgs (owner 2026-10-21) is not a picture: its bytes are unzipped and decoded off
+//     the main thread (`TGSSticker`) and a `LottieAnimationView` draws it as vectors, playing on the
+//     same terms (on screen, in a window, not hidden).
 final class RowStickerView: UIView {
     private let art = CALayer()
     private var key: String?            // what is on screen (or loading)
@@ -21,6 +25,9 @@ final class RowStickerView: UIView {
     private var onScreen = true
     private var playing = false
     private var generation = 0          // bumped on every change; a stale load or animator stops
+    /// A .tgs sticker (owner 2026-10-21): the decoded animation and its view.
+    private var tgs: LottieAnimation?
+    private var lottie: LottieAnimationView?
     /// Owner 2026-10-18: a sticker still downloading or decoding was an empty gap in the chat. The
     /// shimmer holds its place until the first frame is up; a sticker already seen never shows it.
     private let skeleton = SkeletonShimmerView()
@@ -42,6 +49,7 @@ final class RowStickerView: UIView {
         art.frame = bounds
         art.contentsScale = window?.screen.scale ?? UIScreen.main.scale
         CATransaction.commit()
+        lottie?.frame = bounds
         skeleton.frame = bounds.insetBy(dx: 4, dy: 4)
         skeleton.layer.cornerRadius = min(16, skeleton.bounds.width * 0.18)
     }
@@ -54,6 +62,12 @@ final class RowStickerView: UIView {
     func configure(_ s: Sticker, url: String?, enc: EncMeta?, cid: String, localData: Data?) {
         let k = "\(s.id)|\(url ?? "")"
         guard k != key else { updatePlayback(); return }
+        // The same .tgs sticker, now uploaded: keep the playing view (see the note just below).
+        if let old = key, old.hasPrefix("\(s.id)|"), tgs != nil {
+            key = k
+            updatePlayback()
+            return
+        }
         // ⛔ THE SAME STICKER, NOW UPLOADED (owner 2026-10-18, build 969: "after the upload it flashes").
         // A sent sticker is drawn from its local PNG with no link, then the server copy arrives WITH
         // the link: a new key, so the row reset to the shimmer and loaded the same picture again. Same
@@ -80,6 +94,13 @@ final class RowStickerView: UIView {
         // Then by the sticker alone ("id|", what the local pending copy was filed under), so a new row
         // for the same sent sticker also starts with its picture instead of the shimmer.
         let bare = "\(s.id)|" as NSString
+        // A .tgs already decoded (owner 2026-10-21): on the first frame too.
+        let tgsKey = "row:\(s.id)"
+        if let anim = TGSSticker.cached(tgsKey) {
+            bytes = (Self.bytesCache.object(forKey: k as NSString) ?? Self.bytesCache.object(forKey: bare)).map { $0 as Data }
+            showTGS(anim)
+            return
+        }
         if let first = Self.firstCache.object(forKey: k as NSString) ?? Self.firstCache.object(forKey: bare),
            let data = Self.bytesCache.object(forKey: k as NSString) ?? Self.bytesCache.object(forKey: bare) {
             bytes = data as Data
@@ -94,13 +115,23 @@ final class RowStickerView: UIView {
         // loads in a moment, but the shimmer went up at once and faded over it. Only a load that is
         // still running after a short wait shows the shimmer; a fast one never does.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-            guard let self, self.generation == gen, self.art.contents == nil else { return }
+            guard let self, self.generation == gen, self.art.contents == nil, self.tgs == nil else { return }
             self.skeleton.setActive(true)
         }
         Task { @MainActor [weak self] in
             guard let data = await Self.load(s, url: url, enc: enc, cid: cid, localData: localData) else {
                 // Nothing came: no shimmer forever over an empty box.
                 if let self, self.generation == gen { self.skeleton.setActive(false) }
+                return
+            }
+            if TGSSticker.isTGS(data) {
+                // Decoded into TGSSticker's cache off the main thread; only a yes/no crosses back.
+                let ok = await Task.detached(priority: .userInitiated) { TGSSticker.animation(data: data, key: tgsKey) != nil }.value
+                Self.bytesCache.setObject(data as NSData, forKey: k as NSString, cost: data.count)
+                guard let self, self.generation == gen else { return }
+                guard ok, let anim = TGSSticker.cached(tgsKey) else { self.skeleton.setActive(false); return }
+                self.bytes = data
+                self.showTGS(anim)
                 return
             }
             let first = await Task.detached(priority: .userInitiated) { Self.firstFrame(data, maxPixel: px) }.value
@@ -114,6 +145,25 @@ final class RowStickerView: UIView {
             self.skeleton.fadeOut()
             self.updatePlayback()
         }
+    }
+
+    /// Puts a decoded .tgs up and lets `updatePlayback` start it.
+    private func showTGS(_ anim: LottieAnimation) {
+        tgs = anim
+        let v: LottieAnimationView
+        if let have = lottie {
+            v = have
+            v.animation = anim
+        } else {
+            v = TGSSticker.makeView(anim)
+            insertSubview(v, belowSubview: skeleton)
+            lottie = v
+        }
+        v.frame = bounds
+        v.isHidden = false
+        v.currentProgress = 0
+        skeleton.fadeOut()
+        updatePlayback()
     }
 
     /// First frames and bytes of stickers already shown (see `configure`). Bounded: ~30MB of bytes.
@@ -134,6 +184,12 @@ final class RowStickerView: UIView {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         art.contents = nil
         CATransaction.commit()
+        tgs = nil
+        if let v = lottie {
+            v.stop()
+            v.animation = nil
+            v.isHidden = true
+        }
         skeleton.setActive(false)
     }
 
@@ -141,6 +197,15 @@ final class RowStickerView: UIView {
     var loadedBytes: Data? { bytes }
 
     private func updatePlayback() {
+        if let v = lottie, tgs != nil {
+            let want = onScreen && window != nil && !isHidden
+            if want {
+                if !v.isAnimationPlaying { v.play() }
+            } else if v.isAnimationPlaying {
+                v.pause()
+            }
+            return
+        }
         let want = animated && onScreen && window != nil && bytes != nil && !isHidden
         if want == playing { return }
         playing = want

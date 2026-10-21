@@ -8749,8 +8749,11 @@ struct ThreadView: View {
     private func replyThumb(_ r: Message) -> ChatComposerBanner.Thumb? {
         // 2026-10-17 (owner): a sticker shows itself in the reply card, not just "🙂 Sticker". The
         // app's own art is on this phone; one I made or saved is too. Its first frame is enough.
-        if r.isSticker, let s = r.sticker, let url = StickerStore.shared.fileURL(for: s),
-           let ui = UIImage(contentsOfFile: url.path) { return .image(ui) }
+        if r.isSticker, let s = r.sticker, let url = StickerStore.shared.fileURL(for: s) {
+            // owner 2026-10-21: a .tgs has no picture of its own; its first frame, drawn once and cached.
+            if TGSSticker.isTGS(url), let ui = TGSSticker.still(url: url, side: 96) { return .image(ui) }
+            if let ui = UIImage(contentsOfFile: url.path) { return .image(ui) }
+        }
         if r.isGif, let url = r.imageUrl { return .gif(url: url) }
         if let local = r.localImageData, let ui = UIImage(data: local) { return .image(ui) }
         if let firstLocal = r.localAlbum.first, let ui = UIImage(data: firstLocal) { return .image(ui) }

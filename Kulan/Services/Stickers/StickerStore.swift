@@ -149,7 +149,8 @@ final class StickerStore {
             guard r.shown else { off.formUnion(r.stickers.map { "\(r.id)/\($0.id)" }); continue }
             off.formUnion(r.stickers.filter { $0.hidden == true }.map { "\(r.id)/\($0.id)" })
             let items = r.stickers.filter { $0.hidden != true && !($0.url ?? "").isEmpty }.map {
-                Sticker(source: .bundled, packId: r.id, stickerId: $0.id, emoji: $0.emoji ?? "", animated: $0.animated ?? false)
+                Sticker(source: .bundled, packId: r.id, stickerId: $0.id, emoji: $0.emoji ?? "",
+                        animated: $0.ext == "tgs" ? true : ($0.animated ?? false))   // owner 2026-10-21: .tgs moves
             }
             if !items.isEmpty {
                 entries.append((r.order, StickerPack(id: r.id, title: r.title.isEmpty ? r.id : r.title, stickers: items)))
@@ -232,13 +233,23 @@ final class StickerStore {
     func fileURL(for s: Sticker) -> URL? {
         switch s.source {
         case .bundled:
-            if let u = Bundle.main.url(forResource: s.stickerId, withExtension: "webp",
-                                       subdirectory: "packs/\(s.packId)") { return u }
+            if let u = Self.bundledFile(s.stickerId, pack: s.packId) { return u }
             return catalogFile(for: s)   // a pack from the admin panel
         case .mine:
             let u = Self.mineDir.appendingPathComponent("\(s.stickerId).png")
             return FileManager.default.fileExists(atPath: u.path) ? u : nil
         }
+    }
+
+    /// A built-in sticker's art in this build: WebP, or (owner 2026-10-21) an animated .tgs, which
+    /// `TGSSticker` plays as vectors.
+    nonisolated static func bundledFile(_ stickerId: String, pack: String) -> URL? {
+        for ext in ["webp", "tgs"] {
+            if let u = Bundle.main.url(forResource: stickerId, withExtension: ext, subdirectory: "packs/\(pack)") {
+                return u
+            }
+        }
+        return nil
     }
 
     func sticker(packId: String, stickerId: String) -> Sticker? {
@@ -417,13 +428,12 @@ final class StickerStore {
               let data = try? Data(contentsOf: url),
               let m = try? JSONDecoder().decode(Manifest.self, from: data) else { return [] }
         return m.packs.compactMap { p in
-            let items = p.stickers.map {
-                Sticker(source: .bundled, packId: p.id, stickerId: $0.id, emoji: $0.emoji,
-                        animated: $0.animated ?? true)
-            }
             // A pack with no art files in this build is left out, not shown as empty tiles.
-            let present = items.filter {
-                Bundle.main.url(forResource: $0.stickerId, withExtension: "webp", subdirectory: "packs/\(p.id)") != nil
+            // A .tgs is always animated (owner 2026-10-21), whatever the manifest says.
+            let present: [Sticker] = p.stickers.compactMap {
+                guard let file = bundledFile($0.id, pack: p.id) else { return nil }
+                return Sticker(source: .bundled, packId: p.id, stickerId: $0.id, emoji: $0.emoji,
+                               animated: TGSSticker.isTGS(file) ? true : ($0.animated ?? true))
             }
             return present.isEmpty ? nil : StickerPack(id: p.id, title: p.title, stickers: present)
         }

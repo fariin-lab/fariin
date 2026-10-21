@@ -29,6 +29,11 @@ packages:
   # header→profile tap, swipe-down dismiss, exact Instagram sizing, transitions).
   StoryUI:
     path: StoryUI
+  # owner 2026-10-21: animated .tgs stickers (gzipped Lottie JSON) play natively, vector-drawn.
+  # The SPM mirror ships a prebuilt xcframework (one binary download, no long source compile).
+  Lottie:
+    url: https://github.com/airbnb/lottie-spm
+    exactVersion: "4.5.2"
   # (TOCropViewController removed 2026-08-03 on the owner's word: "use my owner crop… remove that
   # library". The story editor was its only caller and now uses ChatCropView, which is ours and is
   # what the chat's image editor has always used. One cropper in the app instead of two.)
@@ -188,6 +193,8 @@ targets:
         product: LiveKit
       - package: StoryUI
         product: StoryUI
+      - package: Lottie
+        product: Lottie
       # 2026-09-25 delivered ticks: embedded notification extension (see NotificationService/).
       - target: NotificationService
       # 2026-10-07 screen sharing: embedded Broadcast Upload extension (see BroadcastUpload/).

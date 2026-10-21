@@ -1,0 +1,141 @@
+import UIKit
+import Compression
+import Lottie
+
+// ⛔ ANIMATED .TGS STICKERS, PLAYED AS VECTORS — owner 2026-10-21: stickers in the .tgs format
+// (gzip-compressed Lottie JSON, 512x512 canvas, usually 60 fps, about 3 s) play natively and loop,
+// in the panel and in the chat, as the reference app does. Never converted to WebP (he said no).
+//
+//   • unzip: Foundation has no gzip. The gzip wrapper is read by hand (RFC 1952: 10-byte header,
+//     optional extra / name / comment / header-crc fields, 8-byte trailer) and the deflate stream
+//     inside is handed to Apple's Compression framework, whose COMPRESSION_ZLIB is RAW deflate
+//     (RFC 1951) — exactly what sits between the gzip header and trailer. The trailer's ISIZE gives
+//     the output size up front, so it is one `compression_decode_buffer` call, no streaming loop.
+//     No zlib module import (whether `import zlib` resolves differs between SDKs).
+//   • decode: `LottieAnimation.from(data:)`, off the main thread, cached by file (NSCache).
+//   • draw: `LottieAnimationView`, Core Animation engine by default (the render server runs it,
+//     smooth at 60 fps, nothing on our main thread per frame). The views that host it decide when
+//     it plays (only on screen, never in Low Power Mode), as they do for WebP.
+//   • a still, where the app needs a picture (the reply quote): frame 0 drawn once by the main-thread
+//     engine into a UIImage, cached.
+enum TGSSticker {
+    static func isTGS(_ url: URL) -> Bool { url.pathExtension.lowercased() == "tgs" }
+
+    /// The gzip magic. WebP starts "RIFF" and PNG 0x89 "PNG", so this never mistakes one for them.
+    static func isTGS(_ data: Data) -> Bool {
+        data.count > 18 && data[data.startIndex] == 0x1f && data[data.startIndex + 1] == 0x8b
+    }
+
+    private static let animations: NSCache<NSString, LottieAnimation> = {
+        let c = NSCache<NSString, LottieAnimation>()
+        c.countLimit = 96
+        return c
+    }()
+
+    private static let stills: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 64
+        return c
+    }()
+
+    /// Already decoded, or nil. Safe from any thread.
+    static func cached(_ key: String) -> LottieAnimation? { animations.object(forKey: key as NSString) }
+
+    /// Off the main thread: reads, unzips and decodes the file once; later calls hit the cache.
+    static func animation(url: URL) -> LottieAnimation? {
+        let key = url.path
+        if let hit = cached(key) { return hit }
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return animation(data: data, key: key)
+    }
+
+    /// Off the main thread: the same, from bytes already in hand (a chat row's loaded file).
+    static func animation(data: Data, key: String) -> LottieAnimation? {
+        if let hit = cached(key) { return hit }
+        guard let json = isTGS(data) ? gunzip(data) : data,
+              let anim = try? LottieAnimation.from(data: json) else { return nil }
+        animations.setObject(anim, forKey: key as NSString)
+        return anim
+    }
+
+    /// A view that plays `anim` on a loop, fitted to its bounds. The caller plays and pauses it.
+    @MainActor static func makeView(_ anim: LottieAnimation) -> LottieAnimationView {
+        let v = LottieAnimationView(animation: anim)
+        v.loopMode = .loop
+        v.contentMode = .scaleAspectFit
+        // Leaving the app pauses it where it is; coming back resumes only if it was playing.
+        v.backgroundBehavior = .pauseAndRestore
+        v.isUserInteractionEnabled = false
+        v.backgroundColor = .clear
+        return v
+    }
+
+    /// Frame 0 as a picture, `side` points square. Drawn once per file and size, then cached.
+    @MainActor static func still(url: URL, side: CGFloat) -> UIImage? {
+        let key = "\(url.path)#\(Int(side))" as NSString
+        if let hit = stills.object(forKey: key) { return hit }
+        guard let anim = animation(url: url), let img = still(anim, side: side) else { return nil }
+        stills.setObject(img, forKey: key)
+        return img
+    }
+
+    /// The main-thread engine draws into ordinary layers, which `render(in:)` can copy; the Core
+    /// Animation engine's frames live in the render server and would come out blank.
+    @MainActor static func still(_ anim: LottieAnimation, side: CGFloat) -> UIImage? {
+        guard side > 0 else { return nil }
+        let v = LottieAnimationView(animation: anim,
+                                    configuration: LottieConfiguration(renderingEngine: .mainThread))
+        v.frame = CGRect(x: 0, y: 0, width: side, height: side)
+        v.contentMode = .scaleAspectFit
+        v.backgroundColor = .clear
+        v.currentProgress = 0
+        v.setNeedsLayout()
+        v.layoutIfNeeded()
+        v.forceDisplayUpdate()
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.opaque = false
+        return UIGraphicsImageRenderer(size: v.bounds.size, format: format).image { ctx in
+            v.layer.render(in: ctx.cgContext)
+        }
+    }
+
+    // MARK: - gzip
+
+    /// The JSON inside a .tgs, or nil when the wrapper is damaged or the size does not match.
+    static func gunzip(_ data: Data) -> Data? {
+        let b = [UInt8](data)
+        let n = b.count
+        // ID1 ID2, CM = 8 (deflate).
+        guard n > 18, b[0] == 0x1f, b[1] == 0x8b, b[2] == 8 else { return nil }
+        let flags = b[3]
+        var i = 10
+        if flags & 0x04 != 0 {                       // FEXTRA: 2-byte length, then that many bytes
+            guard i + 2 <= n else { return nil }
+            i += 2 + (Int(b[i]) | Int(b[i + 1]) << 8)
+        }
+        if flags & 0x08 != 0 {                       // FNAME: zero-terminated
+            while i < n, b[i] != 0 { i += 1 }
+            i += 1
+        }
+        if flags & 0x10 != 0 {                       // FCOMMENT: zero-terminated
+            while i < n, b[i] != 0 { i += 1 }
+            i += 1
+        }
+        if flags & 0x02 != 0 { i += 2 }              // FHCRC
+        let end = n - 8                              // CRC32 + ISIZE trail the deflate stream
+        guard i < end else { return nil }
+        // ISIZE: the unzipped length mod 2^32, little-endian. A sticker's JSON is well under 32 MB.
+        let size = Int(b[n - 4]) | Int(b[n - 3]) << 8 | Int(b[n - 2]) << 16 | Int(b[n - 1]) << 24
+        guard size > 0, size <= 32 * 1024 * 1024 else { return nil }
+        // One byte of room past ISIZE: a stream that would overflow it shows up as a wrong count.
+        var out = [UInt8](repeating: 0, count: size + 1)
+        let written = b.withUnsafeBufferPointer { src -> Int in
+            out.withUnsafeMutableBufferPointer { dst -> Int in
+                guard let s = src.baseAddress, let d = dst.baseAddress else { return 0 }
+                return compression_decode_buffer(d, size + 1, s + i, end - i, nil, COMPRESSION_ZLIB)
+            }
+        }
+        guard written == size else { return nil }
+        return Data(out[0..<size])
+    }
+}
