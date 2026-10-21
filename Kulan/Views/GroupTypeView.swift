@@ -139,7 +139,7 @@ struct GroupTypeView: View {
                         .liquidGlass(Capsule(), interactive: true, tint: Color(hex: 0x2392FE))
                 }
                 .buttonStyle(.plain)
-                .sheet(isPresented: $showSend) { ForwardPicker(shareText: url) }
+                .sheet(isPresented: $showSend) { SendContactSheet(contactText: url) }   // the app's own Share with sheet (owner 2026-10-21)
             } else {
                 Text("This group has no invite link on.").foregroundStyle(.secondary)
             }

@@ -20,6 +20,10 @@ import UIKit
 // becomes Send. Without that, picking somebody would do nothing at all.
 struct SendContactSheet: View {
     let contactText: String   // e.g. "Chat with Kasim on Fariin: kulan://u/abdi1"
+    /// Messages to FORWARD instead of a text (owner 2026-10-21: the selection bar's Forward opens
+    /// this sheet too). Re-encrypted for each chat by `ChatService.forwardMessage`, oldest first.
+    var forwardMessages: [Message] = []
+    var sourceCid: String = ""
 
     @Environment(\.dismiss) private var dismiss
     @State private var repo = ConversationsRepository.shared
@@ -411,6 +415,8 @@ struct SendContactSheet: View {
         // whole selection even when every send had failed. None reached → the existing failure line.
         let order = selected.compactMap { id in repo.conversations.first { $0.id == id } }
         let text = contactText
+        let forwards = forwardMessages.sorted { $0.createdAt < $1.createdAt }
+        let src = sourceCid
         let targets: [(cid: String, group: [String]?)] = selected.map { cid in
             let conv = repo.conversations.first { $0.id == cid }
             return (cid: cid, group: conv?.isGroup == true ? conv?.users : nil)
@@ -430,8 +436,14 @@ struct SendContactSheet: View {
             for target in targets {
                 tasks.addTask {
                     do {
-                        try await ChatService.sendText(cid: target.cid, text: text,
-                                                       group: target.group, preview: preview)
+                        if !forwards.isEmpty {
+                            for m in forwards {
+                                try await ChatService.forwardMessage(m, from: src, to: target.cid)
+                            }
+                        } else {
+                            try await ChatService.sendText(cid: target.cid, text: text,
+                                                           group: target.group, preview: preview)
+                        }
                         return target.cid
                     } catch {
                         return nil

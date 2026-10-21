@@ -1955,9 +1955,9 @@ struct ThreadView: View {
         }
         .sheet(isPresented: Binding(get: { bulkForward != nil }, set: { if !$0 { bulkForward = nil } })) {
             if let msgs = bulkForward {
-                ForwardPicker(messages: msgs, sourceCid: cid, onSent: { exitSelection() },
-                              onQueued: { showJumpToast($0) },
-                              onFailed: { showJumpToast("Couldn't forward some messages") })
+                // The app's own Share with sheet (owner 2026-10-21), forwarding the selection.
+                SendContactSheet(contactText: "", forwardMessages: msgs, sourceCid: cid,
+                                 onSent: { exitSelection(); showJumpToast($0) })
             }
         }
         .sheet(isPresented: $showPinnedSheet) {
@@ -9878,7 +9878,10 @@ struct SelectionToolbar: UIViewRepresentable {
                                   style: .plain, target: c, action: #selector(Coordinator.forward))
         fwd.accessibilityLabel = "Forward"   // audit: an icon-only bar button had nothing for VoiceOver
         let labelItem = UIBarButtonItem(customView: c.label)
-        labelItem.isEnabled = false        // a caption, not a control — theirs disables it too
+        // Enabled so the text is drawn at full strength (owner 2026-10-21: "looks small", the
+        // disabled item was a dim capsule hugging its text). Still not a control: the label takes no
+        // touches. Apple's 44 pt height, 16 pt each side (see `updateUIView`).
+        c.label.isUserInteractionEnabled = false
         bar.items = [trash, .flexibleSpace(), labelItem, .flexibleSpace(), fwd]
         return bar
     }
@@ -9889,6 +9892,8 @@ struct SelectionToolbar: UIViewRepresentable {
         // `updateContent()` rebuilds theirs.
         context.coordinator.label.text = "\(count) selected"
         context.coordinator.label.sizeToFit()
+        let fit = context.coordinator.label.bounds.size
+        context.coordinator.label.frame.size = CGSize(width: ceil(fit.width) + 32, height: max(44, ceil(fit.height)))
         bar.items?.first?.isEnabled = deleteEnabled
         // A forced red kept a disabled trash looking live (2026-09-27); let the bar dim it when off.
         bar.items?.first?.tintColor = deleteEnabled ? .systemRed : nil
