@@ -192,6 +192,8 @@ struct SecureImageView: View {
         defer { MediaDownloads.shared.stopObserving(url, watch) }
         // A tap is consent: once he has asked for this picture, the policy and its size stop mattering.
         let held = gated && !userRequested
+        // Sealed before I joined the group: it can never open, so no download (2026-10-21).
+        if MediaFetch.sealedWithoutMe(enc) { MediaDownloads.shared.markUnreadable(url); failed = true; return }
         let ok = await MediaDownloads.shared.download(
             url, priority: held ? .auto : .user,
             autoAllowed: !held || AutoDownloadPrefs.allowedNow(.photos),

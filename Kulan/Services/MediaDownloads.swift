@@ -194,6 +194,23 @@ final class MediaDownloads {
     ///   then only records `.waitingTap` so the bubble can show its Download button.
     /// - `autoLimit`: bytes over which an AUTOMATIC job stops at the headers and waits for a tap.
     /// A `.user` request always runs, and upgrades a waiting or queued automatic job.
+    /// ⛔ A FILE SEALED BEFORE I JOINED — owner 2026-10-21 (joined a public group: its old photos
+    /// spun forever). An end-to-end group file carries one wrapped key per member AT SEND TIME
+    /// (`EncMeta.w`). A later member has no copy, so the bytes can never be opened: downloading them
+    /// again and again only spun the ring and then offered a retry that could not work. Marked a
+    /// permanent failure at once, with nothing downloaded.
+    func markUnreadable(_ url: String) {
+        guard !url.isEmpty else { return }
+        let job = jobs[url] ?? {
+            let j = Job(url: url, finish: { _ in false }, priority: .auto, autoLimit: nil)
+            jobs[url] = j
+            return j
+        }()
+        job.failedAt = Date()
+        set(job, .failed(permanent: true))
+        resumeWaiters(job, false)
+    }
+
     func request(_ url: String, priority: Priority, autoAllowed: Bool = true,
                  autoLimit: Int64? = nil, finish: @escaping Finisher) {
         guard !url.isEmpty else { return }
@@ -564,9 +581,17 @@ enum MediaFetch {
     /// Start (or join) a chat photo's download under the photos policy.
     /// `gated`: the chat bubble's photos obey Settings › Storage and Data and the automatic ceiling;
     /// other callers (the viewer, a reply thumbnail) are the user asking for it directly.
+    /// A group file whose key was wrapped for the members of the day, without me (see
+    /// `MediaDownloads.markUnreadable`).
+    @MainActor static func sealedWithoutMe(_ enc: EncMeta?) -> Bool {
+        guard let w = enc?.w, let me = AuthService.shared.uid else { return false }
+        return w[me] == nil
+    }
+
     @MainActor
     static func requestPhoto(url: String, enc: EncMeta?, cid: String, gated: Bool,
                              priority: MediaDownloads.Priority = .auto) {
+        if sealedWithoutMe(enc) { MediaDownloads.shared.markUnreadable(url); return }
         MediaDownloads.shared.request(url, priority: priority,
                                       autoAllowed: !gated || AutoDownloadPrefs.allowedNow(.photos),
                                       autoLimit: gated ? MediaAutoDownloader.photoAutoBytes : nil,
@@ -592,6 +617,7 @@ enum MediaFetch {
     @MainActor
     static func requestVideo(url: String, enc: EncMeta?, cid: String, messageId: String,
                              authorId: String, priority: MediaDownloads.Priority) {
+        if sealedWithoutMe(enc) { MediaDownloads.shared.markUnreadable(url); return }
         MediaDownloads.shared.request(url, priority: priority,
                                       autoAllowed: AutoDownloadPrefs.allowedNow(.videos),
                                       autoLimit: MediaAutoDownloader.maxAutoBytes,

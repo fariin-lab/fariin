@@ -579,6 +579,9 @@ final class MediaDownloadBadge: UIView {
             if let t = total ?? size, t > 0 { sizeText = "\(Self.mb(received)) / \(Self.mb(t))" }
         case .failed(let permanent):
             symbol = permanent ? "icloud.slash" : "arrow.clockwise"
+            // Said in words (owner 2026-10-21): a file gone from the server, or sealed for the
+            // group's members before I joined, will not come; the icon alone read as "loading".
+            if permanent { sizeText = "Unavailable" }
         case .waitingTap(let total):
             symbol = "arrow.down"
             if let t = total ?? size { sizeText = Self.mb(t) }
