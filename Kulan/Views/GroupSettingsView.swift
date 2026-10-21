@@ -526,7 +526,8 @@ struct GroupSettingsView: View {
             if icon.hasPrefix("ic_") {
                 Image(icon).resizable().scaledToFit().frame(width: 24, height: 24).frame(width: 26)
             } else {
-                Image(systemName: icon).font(.system(size: 17)).frame(width: 26)
+                // 21, not 17 (owner 2026-10-21: beside his 24pt drawings these looked small).
+                Image(systemName: icon).font(.system(size: 21)).frame(width: 26)
             }
             Text(title)
             Spacer(minLength: 12)

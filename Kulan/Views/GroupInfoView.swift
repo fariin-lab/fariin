@@ -475,7 +475,11 @@ struct GroupInfoView: View {
                     .environment(\.openURL, OpenURLAction { url in
                         switch url.scheme?.lowercased() {
                         case "http", "https": WebLink.open(url)
-                        case "kulan": UIApplication.shared.open(url)
+                        // An @name opens that person's chat ON TOP of this page, with the system's
+                        // slide (owner 2026-10-21: the tap did nothing). The card door, as invites.
+                        case "kulan":
+                            let handle = url.lastPathComponent
+                            Task { @MainActor in _ = await ProfileCardDoor.open(handle, push: true) }
                         default: return .discarded
                         }
                         return .handled
