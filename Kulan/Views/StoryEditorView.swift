@@ -459,7 +459,7 @@ struct StoryEditorView: View {
     @State private var postError = false
     /// The X asked about, when there is something behind it worth asking about. See `closeEditor()`.
     @State private var showDiscard = false
-    // The tile flight (`flySourceKey`). See `flyEntry`, `flyDismissHost`.
+    // The tile flight (`flySourceKey`). See `flyDismissHost`.
     @State private var flyEntered = false        // the controls have been sent to their rest
     @State private var flyCardHidden = false     // a close owns the picture: the copy draws it
     @State private var flyChromeHidden = false   // …and the controls are faded for it
@@ -584,18 +584,6 @@ struct StoryEditorView: View {
     private var flies: Bool { flySourceKey != nil }
     /// The photo and the black may be drawn: no flight, or the copy has landed and no close owns it.
     private var flyPhotoShown: Bool { !flies || (arrival.landed && !flyCardHidden) }
-    /// ⛔ THE CONTROLS GROW OUT OF THE TILE — the reference's `componentView` in `animateIn(.gallery)`:
-    /// position from the tile's centre and scale from tile width / screen width, over 0.4s on the
-    /// picture's curve, while its alpha goes 0 to 1 in 0.3s. Nil once sent home, and for every
-    /// other door. Offsets are from this screen's centre, which sits in the safe area.
-    private var flyEntry: (scale: CGFloat, offset: CGSize)? {
-        guard let key = flySourceKey, !flyEntered, let tile = MediaOpenRects.rect(key),
-              let win = Self.flyWindow, win.bounds.width > 1 else { return nil }
-        let ins = win.safeAreaInsets
-        let centre = CGPoint(x: win.bounds.midX, y: ins.top + (win.bounds.height - ins.top - ins.bottom) / 2)
-        return (max(0.05, tile.width / win.bounds.width),
-                CGSize(width: tile.midX - centre.x, height: tile.midY - centre.y))
-    }
     /// X and NEXT on top of that: `cancelButton` / `doneButton` scale 0.1 to 1 over 0.2s.
     private var flyPop: CGFloat { flies && !flyEntered ? 0.1 : 1 }
     /// How far the card's bottom edge sits above the bottom of this screen. `toolZoneHeight` when the
@@ -1331,14 +1319,11 @@ struct StoryEditorView: View {
             trimOverlay
                 .ignoresSafeArea(.keyboard)
         }
-        // A TILE FLIGHT'S ENTRY (`flyEntry`): everything grows from the tile on the picture's 0.4s
-        // curve and fades in over 0.3s, as their component view does. The photo and the black are
-        // hidden until the copy lands, so what grows here is the controls. Identity once entered,
-        // and for every other door.
-        .animation(.timingCurve(0.38, 0.7, 0.125, 1, duration: MediaOpen.storyEditorDuration)) {
-            $0.scaleEffect(flyEntry?.scale ?? 1).offset(flyEntry?.offset ?? .zero)
-        }
-        .animation(.easeInOut(duration: 0.3)) { $0.opacity(flies && !flyEntered ? 0 : 1) }
+        // ⛔ CONTROLS NEVER IN THE WRONG PLACE (owner 2026-10-21, with a screenshot of the X and the
+        // caption bar shrunk onto the flying photo): they no longer grow out of the tile (b238199f).
+        // Laid out at their final place from the first frame, hidden while the photo flies, faded in
+        // as it settles.
+        .animation(.easeInOut(duration: 0.25).delay(0.15)) { $0.opacity(flies && !flyEntered ? 0 : 1) }
         .overlay { flyDismissHost }
         // Nothing is tappable until the photo has landed (the attach editor's rule).
         .allowsHitTesting(!flies || arrival.landed)
