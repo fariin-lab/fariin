@@ -181,7 +181,7 @@ struct GroupLinksPage: View {
                     publicCircle("ic_link_copy", "Copy") { copyText(url) }
                     publicCircle("ic_link_send", "Send") { shareText = url }
                     ShareLink(item: URL(string: url) ?? URL(string: "https://fariin.com")!) {
-                        PosterActionIcon(icon: "square.and.arrow.up", diameter: 54, onPhoto: false, label: "Share")
+                        PosterActionIcon(icon: "ic_link_share", diameter: 54, onPhoto: false, label: "Share")
                     }
                     .buttonStyle(.plain)
                     publicCircle("ic_qr", "QR Code") { publicQR = true }
@@ -483,7 +483,7 @@ private struct PrimaryLinkCard: View {
                 circle("ic_link_copy", "Copy") { onCopy(link) }
                 circle("ic_link_send", "Send") { onShareInApp(link) }
                 ShareLink(item: URL(string: link.url) ?? URL(string: "https://fariin.com")!) {
-                    PosterActionIcon(icon: "square.and.arrow.up", diameter: 54, onPhoto: false, label: "Share")
+                    PosterActionIcon(icon: "ic_link_share", diameter: 54, onPhoto: false, label: "Share")
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Share to other apps")
@@ -729,7 +729,7 @@ struct GroupLinkSheet: View {
             circle("paperplane", "Send") { onSend(); dismiss() }
             if let url = URL(string: link.url) {
                 ShareLink(item: url) {
-                    PosterActionIcon(icon: "square.and.arrow.up", diameter: 54, onPhoto: false, label: "Share")
+                    PosterActionIcon(icon: "ic_link_share", diameter: 54, onPhoto: false, label: "Share")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.plain)
