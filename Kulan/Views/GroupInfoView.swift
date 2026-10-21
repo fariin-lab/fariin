@@ -859,8 +859,9 @@ struct GroupInfoView: View {
     private var joinRequestsRow: some View {
         Button { showJoinRequests = true } label: {
             HStack(spacing: 14) {
-                Image(systemName: "person.badge.clock").font(.system(size: 17))
-                    .frame(width: 26)
+                // The owner's request icon (2026-10-21), as on Group Settings.
+                Image("ic_gs_join_requests").renderingMode(.template).resizable().scaledToFit()
+                    .frame(width: 24, height: 24).frame(width: 26)
                 Text("Join Requests")
                 Spacer()
                 HStack(spacing: -8) {
@@ -2061,6 +2062,7 @@ struct GroupMemberSheet: View {
     // badges as they will read, then the grouped cards the rest of the group pages use: Role, what
     // an admin may do, and the tag with its count, an example and Remove Tag.
     private var editPage: some View {
+        ScrollViewReader { proxy in
         Form {
             Section {
                 VStack(spacing: 8) {
@@ -2119,6 +2121,7 @@ struct GroupMemberSheet: View {
                     }
                     .padding(.vertical, 4)
                     .disabled(busy)
+                    .id("tagColours")
                 } header: {
                     Text("Tag")
                 } footer: {
@@ -2133,6 +2136,13 @@ struct GroupMemberSheet: View {
             }
         }
         .scrollDismissesKeyboard(.interactively)
+        // The tag field and its colours rise above the keyboard (owner 2026-10-21: the keys covered
+        // them). The field is UIKit (`TagTextField`), so the Form does not scroll to it by itself.
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+            guard canEditRole else { return }
+            withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("tagColours", anchor: .bottom) }
+        }
+        }   // ScrollViewReader
         // The photo close under the title (owner 2026-10-20: a large empty band above it).
         .contentMargins(.top, 0, for: .scrollContent)
         .listSectionSpacing(.compact)

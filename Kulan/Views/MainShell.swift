@@ -3184,7 +3184,10 @@ struct ChatsView: View {
             // leaving a chat the bar came back late). `.automatic` waited for the pop to finish
             // before the pushed page's `.hidden` let go; the path empties as Back starts, so the
             // bar now slides in with the pop.
-            .toolbar(selecting || !path.isEmpty ? .hidden : .visible, for: .tabBar)
+            // ⚠️ `.automatic` AT THE ROOT, NEVER `.visible` (owner 2026-10-21, same day: a quick
+            // Search + Cancel left the tab bar gone and the top buttons empty). Forcing it visible
+            // fought the system hiding it for the search field.
+            .toolbar(selecting || !path.isEmpty ? .hidden : .automatic, for: .tabBar)
             // (The archive is PUSHED now — see `archiveRoute` on the navigationDestination above.)
             .sheet(isPresented: $showMyQR) { MyQRView() }
             // Get Started's New Group and Add Photo (owner 2026-10-18).

@@ -364,7 +364,9 @@ struct JoinGroupSheet: View {
                     .padding(.top, 10)
             }
 
-            if !p.faces.isEmpty {
+            // Only when someone I chat with is in it (owner 2026-10-21): strangers' faces and a
+            // second "N members" under the first one told me nothing.
+            if !p.faces.isEmpty, !p.mutuals.isEmpty {
                 Divider().padding(.horizontal, 20).padding(.top, 20)
                 mutualsRow(p).padding(.top, 16).padding(.horizontal, 24)
             }
@@ -500,6 +502,12 @@ struct JoinGroupSheet: View {
                 case "requested":
                     GroupLinkDoor.noteRequested(code)
                     requestSent = true
+                    Haptics.notify(.success)
+                    // Closes by itself once "Request Sent" has been read (owner 2026-10-21).
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 1_200_000_000)
+                        dismiss()
+                    }
                 default:
                     joinError = "Couldn't join. The link may be invalid."
                 }

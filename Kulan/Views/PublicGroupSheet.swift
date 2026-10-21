@@ -314,6 +314,7 @@ struct PublicJoinBar: View {
                     return
                 case .requested:
                     requestSent = true
+                    Haptics.notify(.success)
                 }
             } catch {
                 joinError = error.localizedDescription
