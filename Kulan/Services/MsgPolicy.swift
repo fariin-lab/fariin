@@ -52,7 +52,19 @@ final class MsgPolicy: @unchecked Sendable {
     /// themselves sit behind a lock: `stance` is also called from send paths off the main thread.
     private(set) var revision = 0
     private let lock = NSLock()
-    @ObservationIgnored private var global = Global()
+    /// 2026-10-21 (owner: with Message Requests OFF in the panel, a first message still went to
+    /// Requests and flickered on the sender's side): until the config listener answered, every
+    /// phone ran on the built-in `requests = true`, so a cold launch filed a stranger's chat under
+    /// Requests and gave the sender the one-short-text request composer. The last answer is kept on
+    /// the phone and used from the first frame; the listener still corrects it within a second.
+    @ObservationIgnored private var global = MsgPolicy.savedGlobal()
+    private static let savedKey = "msgPolicy.global.v1"
+    private static func savedGlobal() -> Global {
+        guard let d = UserDefaults.standard.dictionary(forKey: savedKey) else { return Global() }
+        return Global(requests: d["requests"] as? Bool ?? true,
+                      chatKeyRequired: d["chatKeyRequired"] as? Bool ?? true,
+                      chatKeyVisible: d["chatKeyVisible"] as? Bool ?? true)
+    }
     @ObservationIgnored private var overrides: [String: Override] = [:]
     @ObservationIgnored private var configListener: ListenerRegistration?
     @ObservationIgnored private var meListener: ListenerRegistration?
@@ -125,7 +137,11 @@ final class MsgPolicy: @unchecked Sendable {
         let changed = global != g
         global = g
         lock.unlock()
-        if changed { bump() }
+        if changed {
+            UserDefaults.standard.set(["requests": g.requests, "chatKeyRequired": g.chatKeyRequired,
+                                       "chatKeyVisible": g.chatKeyVisible], forKey: Self.savedKey)
+            bump()
+        }
     }
 
     private func bump() {
