@@ -169,6 +169,8 @@ enum BubbleBody: Equatable {
         var correct: [Int] = []
         var endsAt: Double? = nil
         var closed: Bool = false
+        /// "Hide who voted": no voter faces on the bubble (owner 2026-10-21).
+        var hideVoters: Bool = false
     }
 
     struct LocationBody: Equatable {

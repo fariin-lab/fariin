@@ -506,6 +506,7 @@ final class PollBubbleView: UIView {
         total.lineBreakMode = .byTruncatingTail
         addSubview(total)
         addSubview(hairline)
+        addSubview(footerStack)
     }
     required init?(coder: NSCoder) { fatalError() }
     deinit { listener?.remove() }
@@ -583,15 +584,31 @@ final class PollBubbleView: UIView {
         let showResults = !mine.isEmpty || !isOpen
         // A quiz shows right and wrong once I have answered, or once the poll is over.
         let reveal = !body.correct.isEmpty && showResults
+        // VOTER FACES (owner 2026-10-21, his mockup): up to three of the people who chose each
+        // answer beside its percentage, and up to three voters beside "N votes". Never on a poll
+        // that hides who voted. Photos from the group's own member map.
+        let conv = ConversationsRepository.shared.conversations.first { $0.id == cid }
+        let showFaces = showResults && !body.hideVoters
+        func faces(_ uids: [String]) -> [(String, String?)] {
+            uids.sorted().prefix(3).map { (conv?.names[$0] ?? "", conv?.photos[$0]) }
+        }
         for (i, r) in rows.enumerated() where i < plan.options.count {
-            let count = votes.values.reduce(0) { $0 + ($1.contains(i) ? 1 : 0) }
+            let chose = votes.filter { $0.value.contains(i) }.map(\.key)
+            let count = chose.count
             let fraction = voters > 0 ? Double(count) / Double(voters) : 0
             let mark: PollOptionRow.QuizMark = !reveal ? .none
                 : body.correct.contains(i) ? .right : (mine.contains(i) ? .wrong : .none)
             r.paint(fraction: fraction, chosen: mine.contains(i), multiple: body.multiple,
                     showResults: showResults, quiz: mark)
+            r.setFaces(showFaces ? faces(chose) : [])
         }
+        let footerFaces = (!body.hideVoters && voters > 0) ? faces(Array(votes.keys)) : []
+        footerStack.set(footerFaces, side: 18)
+        let textW = ceil(total.attributedText?.size().width ?? 0)
+        footerStack.frame.origin = CGPoint(x: total.frame.minX + min(textW, total.frame.width) + 6,
+                                           y: total.frame.midY - footerStack.frame.height / 2)
     }
+    private let footerStack = PollFaceStack()
 
     /// The footer ("N votes · Results ›"), for the tap that opens the results page.
     func hitsResults(_ point: CGPoint) -> Bool {
@@ -605,6 +622,8 @@ final class PollBubbleView: UIView {
     /// the tap upwards would have meant a second copy of the votes, one update behind.
     func castVote(option i: Int) {
         guard let body, isOpen else { return }
+        // A light tap under the finger as the vote lands (owner 2026-10-21: "make the user feel it").
+        Haptics.impact(.light)
         // A quiz takes one answer and keeps it: changing it after seeing right/wrong is cheating.
         if !body.correct.isEmpty, !(votes[AuthService.shared.uid ?? ""] ?? []).isEmpty { return }
         let me = AuthService.shared.uid ?? ""
@@ -667,6 +686,7 @@ final class PollOptionRow: UIView {
         addSubview(label)
         percent.textAlignment = .right
         addSubview(percent)
+        addSubview(faceStack)
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -689,6 +709,17 @@ final class PollOptionRow: UIView {
     }
 
     enum QuizMark { case none, right, wrong }
+
+    private let faceStack = PollFaceStack()
+
+    /// The people who chose this answer, just left of its percentage (owner 2026-10-21).
+    func setFaces(_ faces: [(String, String?)]) {
+        let side: CGFloat = 20
+        faceStack.set(faces, side: side)
+        let textW = ceil(percent.attributedText?.size().width ?? percent.intrinsicContentSize.width)
+        faceStack.frame.origin = CGPoint(x: percent.frame.maxX - textW - 6 - faceStack.frame.width,
+                                         y: percent.frame.midY - side / 2)
+    }
 
     func paint(fraction: Double, chosen: Bool, multiple: Bool, showResults: Bool, quiz: QuizMark = .none) {
         guard let o = option else { return }
@@ -794,5 +825,37 @@ final class ContactBubbleView: UIView {
         } else {
             button.isHidden = true; buttonLabel.isHidden = true; divider.isHidden = true
         }
+    }
+}
+
+/// Up to three small round faces, overlapping, each with a thin ring (owner 2026-10-21: voters on
+/// a poll). Sized by `set`; the caller places it.
+final class PollFaceStack: UIView {
+    private var views: [RowAvatarView] = []
+    override init(frame: CGRect) { super.init(frame: frame); isUserInteractionEnabled = false }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func set(_ faces: [(String, String?)], side: CGFloat) {
+        while views.count < faces.count {
+            let v = RowAvatarView()
+            v.layer.borderWidth = 1.5
+            v.layer.borderColor = UIColor.systemBackground.cgColor
+            v.clipsToBounds = true
+            addSubview(v)
+            views.append(v)
+        }
+        let step = side * 0.68
+        for (i, v) in views.enumerated() {
+            guard i < faces.count else { v.isHidden = true; continue }
+            v.isHidden = false
+            v.frame = CGRect(x: CGFloat(i) * step, y: 0, width: side, height: side)
+            v.layer.cornerRadius = side / 2
+            v.configure(name: faces[i].0, photoUrl: faces[i].1)
+            // The first face on top, as a stack reads.
+            bringSubviewToFront(views[faces.count - 1 - i])
+        }
+        isHidden = faces.isEmpty
+        frame.size = faces.isEmpty ? .zero
+            : CGSize(width: side + CGFloat(faces.count - 1) * step, height: side)
     }
 }

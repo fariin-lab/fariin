@@ -402,6 +402,9 @@ enum MessageRowLayout {
             // in a row from the same person touched. It always keeps a gap above it.
             var top = m.topSpacing
             if case .media(let mb) = b.body, mb.kind == .sticker { top = max(top, 8) }
+            // 2026-10-21 (owner, "spaces between polls are small"): two big poll cards from the same
+            // person read as one block at the 2 pt grouped gap. A poll keeps 10 above it.
+            if case .poll = b.body { top = max(top, 10) }
             var p = bubble(b, originX: contentX, availableWidth: contentW, rowWidth: width,
                            topSpacing: top)
             contentHeight = p.totalHeight
