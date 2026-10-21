@@ -45,6 +45,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // 2026-09-24 fix-all #161: App Check provider, installed before configure (see AppCheckSetup).
         AppCheckSetup.install()
         DiagLog.launched()
+        PerfTrace.start()   // owner 2026-10-21: the phone's own speed numbers (PERF# lines)
         StoryTraceBridge.install()   // the story player's timeline into the same log (2026-10-14)
         FirebaseApp.configure()
         // Background App Refresh (owner 2026-10-17): registered before launch ends, asked for again

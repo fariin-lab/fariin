@@ -227,6 +227,7 @@ final class ConversationsRepository {
             if !cached.isEmpty {
                 conversations = cached
                 hasLoaded = true
+                PerfTrace.mark("chatlist_first_rows_cache")
             } else if ConversationsDiskCache.shared.savedEmpty(uid: uid) {
                 // The server said "no chats" last time: show No chats yet now, not after the first
                 // server answer or the 3s net (owner 2026-10-21: it came late). A chat that arrived
@@ -295,6 +296,7 @@ final class ConversationsRepository {
                 // snapshot right after the window widened holds fewer than the limit, and used to
                 // flip this off, stop the paging and drop every pinned chat kept below the window.
                 let fromServer = !snap.metadata.isFromCache
+                if fromServer { PerfTrace.mark("chatlist_first_server_answer") }
                 let full = snap.documents.count >= limit
                 if fromServer || full { self.hasOlder = full }
                 if fromServer {

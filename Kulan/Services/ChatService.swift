@@ -1524,6 +1524,7 @@ enum ChatService {
             // rules; the text says which (including "evaluation limit").
             let ns = error as NSError
             DiagLog.add("SEND# refused code=\(ns.code) \(ns.localizedDescription.prefix(200))")
+            DiagLog.flagForUpload()   // sent within seconds, so the cause can be read the same day
             await MainActor.run { SessionRecovery.noteRefusal(error, "send") }
             throw error
         }
