@@ -460,6 +460,7 @@ struct ThreadView: View {
     @State private var newWhileAway = 0
     @State private var unreadOnOpen = 0
     @State private var firstUnreadId: String?
+    @State private var unreadJumpUsed = false   // owner 2026-10-21: the arrow's first-unread stop is spent
     @State private var didAnchorUnread = false
     /// This chat was opened ON a message (the floating voice bar): captured in `init`, see there.
     @State private var openedOnFocusMessage = false
@@ -1172,7 +1173,7 @@ struct ThreadView: View {
                 // owner audit 2026-10-06 chat #11: the index comes from the same doc-id search as the
                 // row. `indexById` is keyed by rowId (clientId ?? id), so looking the doc id up there
                 // was nil for every modern message and this branch never ran.
-                if let unread = firstUnreadId,
+                if !unreadJumpUsed, let unread = firstUnreadId,
                    let unreadIdx = repo.items.firstIndex(where: { $0.id == unread }),
                    !visibleRows.ids.isEmpty,
                    !repo.items.enumerated().contains(where: { i, m in
@@ -1182,7 +1183,10 @@ struct ThreadView: View {
                     // modern message has a clientId, so the untranslated id failed the lookup
                     // silently and the first tap did nothing (audit finding).
                     nativeScrollTarget = repo.items[unreadIdx].rowId
-                    firstUnreadId = nil   // consumed → next press goes to the bottom
+                    // Consumed → next press goes to the bottom. owner 2026-10-21: by a flag, not by
+                    // clearing `firstUnreadId`, which took the 33pt divider out of the row being
+                    // scrolled to. The divider stays put for the whole visit.
+                    unreadJumpUsed = true
                 } else {
                     // STRAIGHT TO THE LIST, NOT THROUGH FIVE LAYERS (owner, third report, still dead
                     // on 570 with all three earlier fixes in it). The binding below is one-shot, and
@@ -2596,6 +2600,11 @@ struct ThreadView: View {
         // also says 0, and a live arrival read at the bottom has already zeroed it legitimately.
         let n = await ChatService.myUnread(cid)
         await MainActor.run {
+            // ⛔ ONLY BEFORE THE REVEAL — owner 2026-10-21. The divider is a 33pt header INSIDE a row;
+            // moving it after the chat is on screen took it off one row and put it on another, a
+            // visible jump of both. It is placed once, before the reader sees the chat, and stays
+            // where it is for the rest of the visit. A server answer that comes later is ignored.
+            guard !revealed else { return }
             if cachedConv == nil {
                 unreadOnOpen = n
             } else if n > 0, n != unreadOnOpen {
@@ -3503,6 +3512,7 @@ struct ThreadView: View {
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
+            let now = Date()   // the builder's own clamp, `min(createdAt, Date())`, for the time token
             for (i, m) in repo.items.enumerated() {
                 let g = i < geo.count ? geo[i] : RowGeometry(showDate: true, first: true, last: true, gap: 0, dateLabel: nil)
                 // CLUSTER GEOMETRY BELONGS IN THE SIGNATURE. The corner radii and top gap are read
@@ -3578,7 +3588,26 @@ struct ThreadView: View {
                 // recompute at all; this token is what makes the right row differ.)
                 let hiddenTiles = m.album.isEmpty ? "-"
                     : (0..<m.album.count).filter { HiddenMessages.isHidden("\(m.id)-\($0)") }.map(String.init).joined(separator: ",")
-                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
+                // ⛔ WHAT THE FOOTER AND THE MEDIA FRAME ARE MADE FROM — owner 2026-10-21, the same
+                // key-vs-value rule a seventh time. A row is re-measured only when this string moves,
+                // and three height inputs were not in it:
+                //   time  - the shortened time text changes only with the minute, so the minute IS the
+                //           token (cheap, no formatter per row). "9:59" -> "10:00" is one character
+                //           wider and can wrap the footer; a pending row taking its server stamp moves it.
+                //   media - the picture's pixel size sets the bubble's aspect, and it can arrive after
+                //           the row (an upload finishing, an album tile's size).
+                //   link  - a link card arriving (or its image) adds a whole card to the row.
+                let timeTok: Int = Int(min(m.createdAt, now).timeIntervalSince1970 / 60)
+                var mediaTok: String = "\(m.width ?? 0)x\(m.height ?? 0)"
+                if !m.album.isEmpty {
+                    mediaTok += ":" + m.album.map { "\($0.width)x\($0.height)" }.joined(separator: ",")
+                }
+                if !m.albumSizes.isEmpty { mediaTok += ":\(m.albumSizes.hashValue)" }
+                var linkTok: String = "-"
+                if let lp = m.linkPreview {
+                    linkTok = "L\(lp.imageUrl != nil ? 1 : 0):\(lp.title.hashValue):\(lp.desc.hashValue)"
+                }
+                out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
             }
             sigCache.key = key
             sigCache.base = out
@@ -4633,7 +4662,11 @@ struct ThreadView: View {
             // UIKit half is no longer pinned either.
             forceDark: false,
             noScreenshots: repo.noScreenshots,  // Disable Sharing (2026-10-03)
-            hidesHeaderBlur: preview            // the long-press peek has no header (2026-10-11)
+            hidesHeaderBlur: preview,           // the long-press peek has no header (2026-10-11)
+            // owner 2026-10-21 (the open jump): why these rows changed, keyed by the version that
+            // produced them, so the list holds the reader still for a cache-to-server swap.
+            updateReason: repo.itemsUpdateReason,
+            updateReasonVersion: repo.itemsVersion
         )
         // ⛔ THE KEYBOARD MUST NOT REACH THE LIST THROUGH SWIFTUI'S SAFE AREA — owner, 2026-08-25,
         // build 681, GIF and "+" with the keyboard up: "the chat/message list jumps downward during
