@@ -220,6 +220,13 @@ struct NativeMessageList: UIViewControllerRepresentable {
     /// The chat list's long-press peek: no header there, so no header blur over the top messages
     /// (owner, 2026-10-11). The opened chat keeps its blur. Declared last for the same reason.
     var hidesHeaderBlur: Bool = false
+    /// ⛔ WHY THE ROWS CHANGED — owner 2026-10-21, the open jump. The cache's rows show first and the
+    /// server's window lands later; without a reason the list read that swap as a live arrival and
+    /// glided or let rows move. Anything but `.live` keeps the reader where they are: at the newest
+    /// message if they were there, else on their anchor row. `updateReasonVersion` is the repo's
+    /// `itemsVersion`, so one reason is spent on the one update it came with. Declared last, as above.
+    var updateReason: MessageListUpdateReason = .live
+    var updateReasonVersion: Int = -1
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -342,6 +349,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         let freshTarget: String? = (scrollTarget != nil && scrollTarget == coord.consumedScrollTarget)
             ? nil : scrollTarget
         if let t = scrollTarget { coord.consumedScrollTarget = t }
+        vc.noteUpdateReason(updateReason, version: updateReasonVersion)   // before the apply it describes
         vc.apply(rowIds: rowIds, scrollTarget: freshTarget)
         // Belt-and-braces from the 325 field failure: push geometry-neutral model changes (read ticks)
         // STRAIGHT onto the visible uikit cells â€” even if the reconfigure chain misses, ticks repaint.
@@ -550,9 +558,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     func setLiveWindowSettled(_ settled: Bool) {
         guard settled != liveWindowSettled else { return }
         liveWindowSettled = settled
+        if settled { PerfTrace.mark("chat_open_server_settled") }   // owner 2026-10-21 timing log
         guard settled, didFirstLand, Date() < landingHoldUntil else { return }
         landingHoldUntil = max(landedAt.addingTimeInterval(1.2), Date().addingTimeInterval(0.4))
         reopenLog("server window settled inside the hold; hold ends in \(Int(landingHoldUntil.timeIntervalSinceNow * 1000))ms")
+    }
+
+    /// ⛔ THE REASON FOR THE NEXT LAND — owner 2026-10-21, the open jump. A non-live reason (the
+    /// cache's rows, the server's window replacing them, a re-decrypt, a page of history) waits here
+    /// until an apply actually lands it, so a land parked behind the gate keeps it. A live update
+    /// arriving while a non-live one still waits does not overwrite it: both land in the one apply,
+    /// and holding the reader still is the safe answer for the pair (the reference app's reload
+    /// marks every visible row stationary).
+    private var pendingUpdateReason: MessageListUpdateReason?
+    private var lastUpdateReasonVersion = Int.min
+    func noteUpdateReason(_ reason: MessageListUpdateReason, version: Int) {
+        guard version != lastUpdateReasonVersion else { return }
+        lastUpdateReasonVersion = version
+        if reason != .live { pendingUpdateReason = reason }
+    }
+    /// The reason the apply landing now carries, spent by that apply.
+    private func takeUpdateReason() -> MessageListUpdateReason {
+        defer { pendingUpdateReason = nil }
+        return pendingUpdateReason ?? .live
     }
 
     /// ⚠️ TEMPORARY DIAGNOSTICS for the first-open-only reopen jump (owner, 2026-10-07: "only the
@@ -2865,6 +2893,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 if selectionAnimationState == .willAnimate { refreshSelectionExceptMenuSource() }
                 return
             }
+            // owner 2026-10-21: a content-only update lands here and spends its reason. The paths
+            // below already hold the reader (top row, or the bottom for a reader at the newest).
+            _ = takeUpdateReason()
             // A jump with no data change (target already in the loaded window), behind the gate.
             // owner audit 2026-10-06 chat #91: before the first land `perform` refuses every move
             // and the binding is one-shot, so a jump here was lost. It waits for the land instead.
@@ -2904,6 +2935,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // received message. Rows added at the FRONT are paged-in history; they sit above the reader and
         // the continuity delta below holds the reader still across them. A mixed batch (history AND a
         // new message in one emission) is handled by the same delta, not classified.
+        // owner 2026-10-21 (the open jump): `.live` is a real arrival; anything else (the cache's
+        // rows, the server's window replacing them, a re-decrypt, a page of history) must not move
+        // the reader. See the glide and `holdReaderAfterLand` below.
+        let updateReason = takeUpdateReason()
         let oldSet = Set(currentIds)
         let newlyNewest = ids.reversed().prefix(while: { !oldSet.contains($0) }).count
         let oldNewestId = currentIds.last   // read now: `currentIds` is replaced before the glide test
@@ -3096,7 +3131,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // rows), so a window swap is not mistaken for arrivals.
         let pureAppend = newlyNewest > 0 && oldNewestId != nil
             && ids.dropLast(newlyNewest).last == oldNewestId
-        let glide = ((wasAtNewest && (newlyNewest == 1 || pureAppend)) || ownSendLanded)
+        // owner 2026-10-21: only a LIVE arrival glides. The server's window landing after the cache
+        // can append rows too (messages sent while the chat was closed); gliding to them on open was
+        // the visible jump. A reader at the newest is put at the new newest in this same turn instead
+        // (`holdReaderAfterLand`). My own send still glides whatever the reason it rode in with.
+        let glide = ((wasAtNewest && (newlyNewest == 1 || pureAppend) && updateReason == .live) || ownSendLanded)
             && scrollTarget == nil && !isUserScrolling
         if glide { sendAnimating = true }
         // owner audit 2026-10-06 chat #25: my own send that lands under a finger is not dropped. The
@@ -3197,6 +3236,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             DispatchQueue.main.async { [weak self] in self?.autoLoadMoreIfNeeded() }
         }
         startGlide()   // same frame as the landed row — the completion above is only the net
+        if scrollTarget == nil, !glide, !parkOwnSendForLift {
+            holdReaderAfterLand(ids: ids, wasAtNewest: wasAtNewest, anchor: landedAnchor,
+                                adjustment: adjustment, reason: updateReason)
+        }
 
         // Re-flow the just-inserted bubble at its FINAL cell width. UIHostingConfiguration lays a freshly
         // inserted cell's SwiftUI out at the pre-final width and does NOT re-flow it until a later update
@@ -3205,6 +3248,36 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             let inserted = Array(ids.suffix(newlyNewest))
             DispatchQueue.main.async { [weak self] in self?.reflowInserted(inserted) }
         }
+    }
+
+    /// ⛔ THE READER IS PUT BACK IN THE TURN THE ROWS LAND, NOT A FRAME LATER — owner 2026-10-21.
+    /// Two reports, one cause. (1) The open: the cache's rows reveal, the server's window lands a
+    /// moment later and reshapes them, and nothing held the reader across it. (2) A new message
+    /// reshapes the row above it (tail, gap, date pill) or the unread divider's row: rows above the
+    /// anchor change height. The continuity delta already rides the layout, but UIKit does not always
+    /// consult it, and the nets that check it (`verifyAnchor`, `restoreReaderPosition`) ran only in the
+    /// apply's completion, after a frame could be drawn. Same rule as `refreshVisible`'s in-turn check:
+    ///   · a reader at the newest stays at the newest (bottom-pinned), for every reason;
+    ///   · a reader further up keeps the anchor row where it was: always for a non-live reason (the
+    ///     reference app's reload keeps every visible row stationary), and for a live one whenever
+    ///     something above the anchor moved.
+    /// Only once UIKit holds THIS snapshot: before that its index paths and frames are the old ones,
+    /// and the completion's nets do the work exactly as before. Never under a finger or a coast.
+    private func holdReaderAfterLand(ids: [String], wasAtNewest: Bool, anchor: Anchor?,
+                                     adjustment: CGFloat, reason: MessageListUpdateReason) {
+        guard didFirstLand, !isDisappearing, !isUpdatingInsets,
+              !isUserScrolling, !collectionView.isDecelerating,
+              dataSource.snapshot().itemIdentifiers == ids else { return }
+        if wasAtNewest {
+            collectionView.layoutIfNeeded()
+            layout.pendingContentOffsetAdjustment = 0   // taken now; a late batch must not add it again
+            restoreReaderPosition()   // invariant 2: a reader at the newest message is AT it
+            return
+        }
+        guard reason != .live || adjustment != 0 else { return }
+        collectionView.layoutIfNeeded()
+        layout.pendingContentOffsetAdjustment = 0
+        verifyAnchor(anchor)
     }
 
     /// Land the selection flip on every visible row EXCEPT the one the context menu lifted from, so the
@@ -3535,6 +3608,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard !didReveal, collectionView.bounds.height > 0 else { return }
         didReveal = true
         collectionView.alpha = 1
+        if !currentIds.isEmpty { PerfTrace.mark("chat_open_first_rows") }   // owner 2026-10-21 timing log
         // First frame is on screen â€” from here on, keep an extra viewport of rows rendered on each side so
         // scrolling always reveals already-rendered bubbles (the connected-sheet feel).
         layout.overdrawEnabled = true

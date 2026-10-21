@@ -97,6 +97,17 @@ enum HiddenMessages {
     }
 }
 
+/// Why a publish of `ThreadRepository.items` happened (owner 2026-10-21, the open jump). The message
+/// list holds the reader still for every reason except `.live`, the way the reference app's reload
+/// keeps every visible row stationary. `.live` is a real arrival, edit, delete or send.
+enum MessageListUpdateReason: Equatable {
+    case initial        // the first rows: cache seed, a cache window before the server answered
+    case serverSettle   // the server's first window replacing what the cache showed
+    case live           // something actually happened in the chat
+    case olderPage      // a page of history paged in above the reader
+    case redecrypt      // the same window decrypted again once the keys arrived
+}
+
 /// Live messages for one conversation. Loads a bounded WINDOW (most-recent page)
 /// with a live listener, pages OLDER messages in on scroll-to-top, and reuses
 /// already-decrypted messages so each snapshot only decrypts new/changed docs.
@@ -378,7 +389,7 @@ final class ThreadRepository {
         let now = Date()
         messages = cached.filter { m in m.expiresAt.map { now < $0 } ?? true }
         didInitialLoad = true
-        refreshItems()
+        refreshItems(reason: .initial)
         scheduleNextBurn()
     }
 
@@ -484,7 +495,13 @@ final class ThreadRepository {
     // work (row signatures) instead of recomputing it on every SwiftUI body run.
     private(set) var indexById: [String: Int] = [:]
     private(set) var itemsVersion = 0
-    private func refreshItems() {
+    /// ⛔ WHY THIS PUBLISH HAPPENED (owner 2026-10-21, the open jump). The list could not tell the
+    /// server's window replacing the cache from a message arriving, so it treated both as an arrival
+    /// (glided, let neighbours move). Every publish now says which it is; the list holds the reader
+    /// still for anything that is not `.live`. Read together with `itemsVersion`.
+    private(set) var itemsUpdateReason: MessageListUpdateReason = .initial
+    private func refreshItems(reason: MessageListUpdateReason = .live) {
+        itemsUpdateReason = reason
         // ⚠️ MY OWN PHOTO MUST NOT TURN INTO A BLUR WHILE IT UPLOADS.
         //
         // A photo message is written to the server the instant Send is tapped now, carrying its
@@ -644,7 +661,7 @@ final class ThreadRepository {
             didInitialLoad = true
             canLoadOlder = false
             otherOnline = true
-            refreshItems()
+            refreshItems(reason: .initial)
             return
         }
         skeletonArmed = false
@@ -992,7 +1009,7 @@ final class ThreadRepository {
                 // `fromCache: false` always, so a window that came from the local cache was treated as
                 // the server's answer and its delete pass removed newer messages until the real
                 // server snapshot put them back.
-                self.applyLiveSnapshot(self.lastDocs, fromCache: self.lastDocsFromCache)
+                self.applyLiveSnapshot(self.lastDocs, fromCache: self.lastDocsFromCache, redecrypt: true)
             }
         }
     }
@@ -1197,7 +1214,7 @@ final class ThreadRepository {
 
     // Apply the live (recent-window) snapshot: refresh/insert the window's messages,
     // reconcile deletes within the window's time range, keep paged-older messages.
-    private func applyLiveSnapshot(_ docs: [QueryDocumentSnapshot], fromCache: Bool) {
+    private func applyLiveSnapshot(_ docs: [QueryDocumentSnapshot], fromCache: Bool, redecrypt: Bool = false) {
         lastDocs = docs   // remember the window so we can re-decrypt once the key arrives
         lastDocsFromCache = fromCache   // #19: and where it came from
         snapshotSeq += 1
@@ -1231,16 +1248,23 @@ final class ThreadRepository {
                 // Drop this batch if a NEWER snapshot already committed (out-of-order completion).
                 guard seq >= self.committedSeq else { return }
                 for (id, m) in built { self.byId[id] = m; self.rawReactions[id] = sigs[id] ?? "" }
-                self.commitSnapshot(docs, seq: seq, fromCache: fromCache)
+                self.commitSnapshot(docs, seq: seq, fromCache: fromCache, redecrypt: redecrypt)
             }
         }
     }
 
     // Reconcile the window (deletes, paging cursor, first-load flag) and republish — runs
     // on the main thread AFTER the (off-main) decryption merges its results into the cache.
-    private func commitSnapshot(_ docs: [QueryDocumentSnapshot], seq: Int, fromCache: Bool) {
+    private func commitSnapshot(_ docs: [QueryDocumentSnapshot], seq: Int, fromCache: Bool, redecrypt: Bool = false) {
         guard seq >= committedSeq else { return }   // never let an older snapshot overwrite a newer one
         committedSeq = seq
+        // owner 2026-10-21 (the open jump): what this window IS, for the list. A cache window before the
+        // server has answered is still the open; the server's first window is the settle; a replay
+        // after the keys arrived is a re-decrypt. Only what comes after those is a live arrival.
+        let reason: MessageListUpdateReason = redecrypt ? .redecrypt
+            : (!fromCache && !sawServerWindow) ? .serverSettle
+            : (fromCache && !sawServerWindow) ? .initial
+            : .live
         let windowIds = Set(docs.map { $0.documentID })
         // A doc missing from the window but newer than its oldest edge was deleted — but ONLY trust the
         // SERVER for this. A from-cache/resync snapshot can transiently omit a doc that still exists;
@@ -1286,7 +1310,7 @@ final class ThreadRepository {
             if docs.count < pageSize { canLoadOlder = false }   // short first SERVER page => no history
         }
         trimWindowIfNeeded()
-        rebuild()
+        rebuild(reason: reason)
         // ⚠️ `!$0.uploading` — THE SECOND PLACE THAT DROPS A PENDING, and it has to agree with the
         // one in `refreshItems`.
         //
@@ -1481,7 +1505,7 @@ final class ThreadRepository {
         burnDue()
     }
 
-    private func rebuild() {
+    private func rebuild(reason: MessageListUpdateReason = .live) {
         // BEFORE anything is sorted: measure each person's clock against the server's, from the whole
         // window rather than the filtered view, so a blocked or expired message still contributes a
         // sample. `refreshItems` reuses whatever this leaves behind.
@@ -1545,7 +1569,7 @@ final class ThreadRepository {
         guard sorted != messages else { scheduleNextBurn(); return }
         messages = sorted
         ThreadMessageCache.shared.store(cid, messages)   // keep the warm cache fresh for the next open (instant render)
-        refreshItems()
+        refreshItems(reason: reason)
         // The message set just changed, so the next expiry may have too. Cheap: one timer.
         scheduleNextBurn()
     }
@@ -1695,7 +1719,7 @@ final class ThreadRepository {
                 }
                 let finish = {
                     self.loadingOlder = false
-                    self.rebuild()
+                    self.rebuild(reason: .olderPage)
                     completion()
                     // #1: everyone who asked while this page was in flight. Swapped out first, so a
                     // waiter that starts the next page queues on a fresh list.
