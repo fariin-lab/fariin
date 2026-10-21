@@ -13,9 +13,9 @@ import Lottie
 //     the output size up front, so it is one `compression_decode_buffer` call, no streaming loop.
 //     No zlib module import (whether `import zlib` resolves differs between SDKs).
 //   • decode: `LottieAnimation.from(data:)`, off the main thread, cached by file (NSCache).
-//   • draw: `LottieAnimationView`, Core Animation engine by default (the render server runs it,
-//     smooth at 60 fps, nothing on our main thread per frame). The views that host it decide when
-//     it plays (only on screen, never in Low Power Mode), as they do for WebP.
+//   • draw: `TGSFramePlayer` draws frames off the main thread into bitmaps and swaps them on screen
+//     (a LottieAnimationView per sticker lagged, owner's second report 2026-10-21). The views that
+//     host it decide when it plays (only on screen, never in Low Power Mode), as they do for WebP.
 //   • a still, where the app needs a picture (the reply quote): frame 0 drawn once by the main-thread
 //     engine into a UIImage, cached.
 enum TGSSticker {
@@ -56,18 +56,6 @@ enum TGSSticker {
               let anim = try? LottieAnimation.from(data: json) else { return nil }
         animations.setObject(anim, forKey: key as NSString)
         return anim
-    }
-
-    /// A view that plays `anim` on a loop, fitted to its bounds. The caller plays and pauses it.
-    @MainActor static func makeView(_ anim: LottieAnimation) -> LottieAnimationView {
-        let v = LottieAnimationView(animation: anim)
-        v.loopMode = .loop
-        v.contentMode = .scaleAspectFit
-        // Leaving the app pauses it where it is; coming back resumes only if it was playing.
-        v.backgroundBehavior = .pauseAndRestore
-        v.isUserInteractionEnabled = false
-        v.backgroundColor = .clear
-        return v
     }
 
     /// Frame 0 as a picture, `side` points square. Drawn once per file and size, then cached.

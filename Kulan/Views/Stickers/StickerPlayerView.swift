@@ -9,9 +9,11 @@ import Lottie
 // `contents`. No display link, no timer, and ⛔ never SwiftUI repeatForever (the iOS 26 deadlock).
 // Plays only when told to (visible cells), and never in Low Power Mode.
 //
-// ⛔ A .TGS PLAYS AS VECTORS — owner 2026-10-21: an animated .tgs (gzipped Lottie) is decoded off the
-// main thread by `TGSSticker` and drawn by a `LottieAnimationView` over the same tile, under the same
-// rules: plays only while told to and in a window, paused in Low Power Mode. Never turned into frames.
+// ⛔ A .TGS — owner 2026-10-21: an animated .tgs (gzipped Lottie) is decoded off the main thread by
+// `TGSSticker` and played by `TGSFramePlayer` on the same `art` layer: frames drawn off the main
+// thread at the tile's pixel size, swapped on screen (the second lag report: a LottieAnimationView
+// per tile lagged). Same rules: plays only while told to and in a window, paused in Low Power Mode.
+// The file stays .tgs; only what is shown is pixels.
 
 final class StickerFrames {
     let images: [CGImage]
@@ -86,9 +88,9 @@ enum StickerFrameCache {
 final class StickerPlayerView: UIView {
     private let art = CALayer()
     private var frames: StickerFrames?
-    /// A .tgs sticker (owner 2026-10-21): the decoded animation and the view that draws it.
+    /// A .tgs sticker (owner 2026-10-21): the decoded animation and the player that draws it.
     private var tgs: LottieAnimation?
-    private var lottie: LottieAnimationView?
+    private var live: TGSFramePlayer?
     private var token = 0
     private(set) var url: URL?
     /// What the owner asked for; Low Power Mode and a missing window can still hold it back.
@@ -97,11 +99,9 @@ final class StickerPlayerView: UIView {
     private var tilePoints: CGFloat = 80
     private static let animKey = "sticker.frames"
 
-    // ⛔ NO LIVE .tgs WHILE THE PANEL SCROLLS — owner 2026-10-21: "the sticker keyboard lags when I
-    // scroll". Every tile built a whole Lottie layer tree on the main thread as it came on screen.
-    // Now a moving panel shows each animated sticker's saved still (`TGSSticker.stillAsync`); live
-    // animations start once the grid stops, one tile per run-loop turn, and a tile that leaves the
-    // screen lets its animation go.
+    // The panel still reports when it scrolls, but a .tgs no longer stops for it (see `apply`): the
+    // pause was for the old per-tile Lottie views. Live players still start one per run-loop turn,
+    // and a tile that leaves the screen lets its player go.
     static let scrollChanged = Notification.Name("StickerPanel.scrollChanged")
     @MainActor static private(set) var panelScrolling = false
     @MainActor static func setPanelScrolling(_ on: Bool) {
@@ -151,7 +151,6 @@ final class StickerPlayerView: UIView {
         art.frame = bounds
         art.contentsScale = window?.screen.scale ?? UIScreen.main.scale
         CATransaction.commit()
-        lottie?.frame = bounds
         skeleton.frame = bounds.insetBy(dx: 2, dy: 2)
         skeleton.layer.cornerRadius = min(16, skeleton.bounds.width * 0.18)
     }
@@ -238,15 +237,13 @@ final class StickerPlayerView: UIView {
         }
     }
 
-    /// The live view goes entirely when not playing, so a scrolled-past tile holds no layer tree.
+    /// The player goes when not playing; the tile keeps the frame it was on.
     private func dropLottie() {
         startPending = false
-        guard let v = lottie else { return }
-        v.stop()
-        v.removeFromSuperview()
-        lottie = nil
+        guard let p = live else { return }
+        p.stop()
+        live = nil
         Self.liveCount = max(0, Self.liveCount - 1)
-        art.isHidden = false
     }
 
     func play() { wantsPlay = true; apply() }
@@ -263,11 +260,13 @@ final class StickerPlayerView: UIView {
 
     private func apply() {
         if let anim = tgs {
+            // ⛔ KEEPS PLAYING WHILE THE PANEL SCROLLS — owner 2026-10-21 ("the reference app keeps
+            // animating while scrolling"). The scroll pause was for the old per-tile Lottie views; the
+            // frame player does its drawing off the main thread, so a moving grid costs it nothing.
             let should = wantsPlay && window != nil && !ProcessInfo.processInfo.isLowPowerModeEnabled
-                && !Self.panelScrolling
             guard should else { dropLottie(); return }
-            if let v = lottie {
-                if !v.isAnimationPlaying { v.play() }
+            if let p = live {
+                p.start()
                 return
             }
             guard !startPending else { return }
@@ -275,20 +274,19 @@ final class StickerPlayerView: UIView {
             let mine = token
             Self.enqueueStart { [weak self] in
                 guard let self, self.token == mine, self.startPending, self.tgs === anim,
-                      self.wantsPlay, self.window != nil, !Self.panelScrolling,
+                      self.wantsPlay, self.window != nil,
                       Self.liveCount < Self.liveCap else {
                     self?.startPending = false
                     return
                 }
-                Self.liveCount += 1
                 self.startPending = false
-                let v = TGSSticker.makeView(anim)
-                v.frame = self.bounds
-                self.insertSubview(v, belowSubview: self.skeleton)
-                self.lottie = v
-                v.currentProgress = 0
-                self.art.isHidden = true
-                v.play()
+                guard let url = self.url else { return }
+                Self.liveCount += 1
+                let scale = self.window?.screen.scale ?? UIScreen.main.scale
+                let p = TGSFramePlayer(anim: anim, key: url.path, pixel: Int(self.tilePoints * scale),
+                                       fps: 30, target: self.art)
+                self.live = p
+                p.start()
             }
             return
         }
