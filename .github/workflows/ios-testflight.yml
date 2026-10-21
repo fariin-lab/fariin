@@ -74,7 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: GET NOTIFICATIONS FOR SOMEONE'S STORIES.
+            THIS BUILD: SMOOTH ANIMATED STICKERS, CRASH FIXED.
+            Animated stickers are drawn in the background as pictures: no more lag in chats or the sticker panel.
+            Fixes the crash from the last build while animated stickers played.
+            Search: a public group you are in shows when you search its @name.
+            Group page: the mute button uses the same bell icons as a person's profile.
+            PLEASE TEST: open a chat with many animated stickers, scroll fast, open the sticker panel and scroll it.
+
+            EARLIER: GET NOTIFICATIONS FOR SOMEONE'S STORIES.
             Story menu (someone else's story): Get notifications / Mute notifications, per person, off by default. A bar confirms it with the person's name.
             Hiding someone's stories also mutes their story notifications.
             Custom story page: the emoji circle sits right under the header.
