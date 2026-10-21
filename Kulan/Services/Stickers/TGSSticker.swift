@@ -144,15 +144,36 @@ enum TGSSticker {
         v.frame = CGRect(x: 0, y: 0, width: side, height: side)
         v.contentMode = .scaleAspectFit
         v.backgroundColor = .clear
-        v.currentProgress = 0
-        v.setNeedsLayout()
-        v.layoutIfNeeded()
-        v.forceDisplayUpdate()
         let format = UIGraphicsImageRendererFormat.preferred()
         format.opaque = false
-        return UIGraphicsImageRenderer(size: v.bounds.size, format: format).image { ctx in
-            v.layer.render(in: ctx.cgContext)
+        func draw(at progress: CGFloat) -> UIImage {
+            v.currentProgress = progress
+            v.setNeedsLayout()
+            v.layoutIfNeeded()
+            v.forceDisplayUpdate()
+            return UIGraphicsImageRenderer(size: v.bounds.size, format: format).image { ctx in
+                v.layer.render(in: ctx.cgContext)
+            }
         }
+        // ⛔ A STICKER THAT POPS IN STARTS EMPTY — owner 2026-10-21 (Mice Hugs tabs and tiles blank):
+        // all 24 of that pack's animations begin on a transparent frame. Frame 0 stays the picture when
+        // it shows something; otherwise the middle of the animation is used.
+        let first = draw(at: 0)
+        return Self.mostlyEmpty(first) ? draw(at: 0.5) : first
+    }
+
+    /// Under 3% of a 16x16 sample has any ink.
+    private static func mostlyEmpty(_ img: UIImage) -> Bool {
+        guard let cg = img.cgImage else { return true }
+        let side = 16
+        var px = [UInt8](repeating: 0, count: side * side * 4)
+        guard let ctx = CGContext(data: &px, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: side, height: side))
+        var inked = 0
+        for i in stride(from: 3, to: px.count, by: 4) where px[i] > 20 { inked += 1 }
+        return inked < (side * side * 3) / 100
     }
 
     // MARK: - gzip
