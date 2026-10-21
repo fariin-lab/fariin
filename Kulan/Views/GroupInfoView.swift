@@ -1993,15 +1993,22 @@ struct GroupMemberSheet: View {
                 // Typing or pasting past the limit keeps the first 24, as RoleEditorView does.
                 if new.utf16.count > GroupRole.maxText { roleText = GroupRole.fit(new, max: GroupRole.maxText) }
             }
-            .alert("Make \(member.name) an admin?", isPresented: $confirmPromote) {
-                Button("Cancel", role: .cancel) {}
-                // Blue (owner 2026-10-21): the system's confirm role, tinted.
-                Button("Make Admin", role: .confirm) {
-                    let cid = cid, uid = member.id, name = member.name, list = rightsList
-                    run { try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: list) }
-                }
-            } message: {
-                Text("They will be able to manage the group with the usual admin rights. You can change or remove them any time.")
+            // ⛔ BLUE MAKE ADMIN — owner 2026-10-21, asked twice. The confirm role alone came out grey:
+            // an alert's main button takes the presenting view's TINT, and the app's tint is
+            // `.primary`. The alert hangs off a clear background view tinted blue, so only it changes.
+            .background {
+                Color.clear
+                    .alert("Make \(member.name) an admin?", isPresented: $confirmPromote) {
+                        Button("Cancel", role: .cancel) {}
+                        Button("Make Admin", role: .confirm) {
+                            let cid = cid, uid = member.id, name = member.name, list = rightsList
+                            run { try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: list) }
+                        }
+                        .keyboardShortcut(.defaultAction)
+                    } message: {
+                        Text("They will be able to manage the group with the usual admin rights. You can change or remove them any time.")
+                    }
+                    .tint(Color(hex: 0x0A84FF))
             }
             .alert("Dismiss \(member.name) as admin?",
                                 isPresented: Binding(get: { !showEdit && confirmDismissAdmin },
