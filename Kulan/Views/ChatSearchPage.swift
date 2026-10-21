@@ -115,7 +115,9 @@ struct ChatSearchOverlay: View {
 @Observable final class RecentSearches {
     static let shared = RecentSearches()
 
-    enum Kind: String, Equatable { case chat, person }
+    /// `.group`: a public group tapped in search (owner 2026-10-21: "I click the group, Recent does
+    /// not show it"). Drawn as the chat once I am in it.
+    enum Kind: String, Equatable { case chat, person, group }
 
     struct Entry: Identifiable, Equatable {
         let kind: Kind
@@ -126,6 +128,8 @@ struct ChatSearchOverlay: View {
         let title: String
         /// The username, for a person. Empty for a chat.
         let handle: String
+        /// A public group's photo url; empty otherwise.
+        var photo: String = ""
         var id: String { "\(kind.rawValue):\(key)" }
     }
 
@@ -161,7 +165,7 @@ struct ChatSearchOverlay: View {
         // ⚠️ `otherUid` RETURNS A PLAIN STRING AND ANSWERS "" FOR A GROUP, not nil. Tested for
         // emptiness rather than unwrapped, or a group's twin would be the id "person:".
         let other = chat.isGroup ? "" : chat.otherUid(me)
-        let twin = other.isEmpty ? nil : "\(Kind.person.rawValue):\(other)"
+        let twin = other.isEmpty ? "\(Kind.group.rawValue):\(chat.id)" : "\(Kind.person.rawValue):\(other)"
         remember(Entry(kind: .chat, key: chat.id, title: chat.displayName(me), handle: ""), twin: twin)
     }
 
@@ -171,6 +175,12 @@ struct ChatSearchOverlay: View {
                        title: person.name.isEmpty ? person.handle : person.name,
                        handle: person.handle),
                  twin: twin)
+    }
+
+    func record(group: PublicGroupHit) {
+        remember(Entry(kind: .group, key: group.cid, title: group.title, handle: group.handle,
+                       photo: group.photoUrl ?? ""),
+                 twin: "\(Kind.chat.rawValue):\(group.cid)")
     }
 
     /// Everything, at once. There is no per-row delete: the section is a convenience, and a
@@ -208,13 +218,13 @@ struct ChatSearchOverlay: View {
         return raw.compactMap { d in
             guard let k = d["k"], let kind = Kind(rawValue: k),
                   let key = d["i"], !key.isEmpty else { return nil }
-            return Entry(kind: kind, key: key, title: d["t"] ?? "", handle: d["h"] ?? "")
+            return Entry(kind: kind, key: key, title: d["t"] ?? "", handle: d["h"] ?? "", photo: d["p"] ?? "")
         }
     }
 
     private func persist() {
         guard !account.isEmpty else { return }
-        let raw = entries.map { ["k": $0.kind.rawValue, "i": $0.key, "t": $0.title, "h": $0.handle] }
+        let raw = entries.map { ["k": $0.kind.rawValue, "i": $0.key, "t": $0.title, "h": $0.handle, "p": $0.photo] }
         UserDefaults.standard.set(raw, forKey: Self.key(for: account))
     }
 }
@@ -394,6 +404,16 @@ struct ChatSearchPage: View {
             case .person:
                 m.recents[e.key] = e
                 rows.append(SearchPageRow(kind: .recentPerson, key: e.key))
+            case .group:
+                // In it now: the chat row. Otherwise the public group row from what was saved.
+                if let c = byId[e.key] {
+                    m.chats[e.key] = c
+                    rows.append(SearchPageRow(kind: .recentChat, key: e.key))
+                } else if let hit = PublicGroupHit(["kind": "group", "cid": e.key, "handle": e.handle,
+                                                     "title": e.title, "photoUrl": e.photo]) {
+                    m.groups[e.key] = hit
+                    rows.append(SearchPageRow(kind: .publicGroup, key: e.key))
+                }
             }
         }
         if !rows.isEmpty {
@@ -519,6 +539,7 @@ struct ChatSearchPage: View {
         case .publicGroup:
             // The join page (or the chat, when I joined meanwhile), presented by the Chats tab.
             guard let g = m.groups[row.key] else { return }
+            recents.record(group: g)
             GroupDirectory.open(cid: g.cid, name: g.handle)
             dismissSearch()
         case .recentPerson:
