@@ -544,6 +544,7 @@ final class GroupCallService: ObservableObject {
         } catch {
             if gen != joinGeneration { await abandonJoin(); return }   // owner audit 2026-10-06 #4
             connecting = false
+            Telemetry.event(.error, component: "groupcall", code: "join_" + Telemetry.code(error))   // owner 2026-10-21
             // Only tear down if THIS task never established a call. Calling disconnect()
             // unconditionally is what let a losing second task kill the winner's live room.
             if activeCid == nil {
@@ -2009,6 +2010,7 @@ final class GroupCallService: ObservableObject {
             // it is not a failure to report.
             if gen != joinGeneration { await abandonJoin(); return false }
             connecting = false
+            Telemetry.event(.error, component: "groupcall", code: "connect_" + Telemetry.code(error))   // owner 2026-10-21
             if activeCid == nil { await failJoin(Self.joinNotice(error, link: isLinkRoom)) }
             return false
         }

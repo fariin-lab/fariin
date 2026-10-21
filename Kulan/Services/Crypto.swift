@@ -639,6 +639,7 @@ final class Crypto {
             // so the next render heals instead of showing this lock forever. See refreshKeyAfterFailure.
             // Keyed by this message's nonce (2026-09-24 fix-all #70): once per message per session.
             refreshKeyAfterFailure(otherUid(cid), item: parts[1])
+            Telemetry.event(.warning, component: "crypto", code: "decrypt_text_failed")   // owner 2026-10-21
             return "🔒"
         }
         return text
@@ -773,6 +774,7 @@ final class Crypto {
             // signature of a stale peer key, so drop it and refetch for the next attempt.
             // Once per file per session (2026-09-24 fix-all #70), keyed by its wrap nonce.
             refreshKeyAfterFailure(otherUid(cid), item: meta.kn)
+            Telemetry.event(.warning, component: "crypto", code: "decrypt_file_failed")   // owner 2026-10-21
             return nil
         }
         guard let opened = sodium.secretBox.open(authenticatedCipherText: Bytes(cipher),
@@ -858,7 +860,7 @@ final class Crypto {
               let wrappedKey = Data(base64Encoded: wp[0]),
               let keyNonce = Data(base64Encoded: wp[1]) else { return "🔒" }
         guard let msgKey = openFrom(authorId, current: authorPub, box: Bytes(wrappedKey),
-                                    nonce: Bytes(keyNonce), sk: sk) else { return "🔒" }
+                                    nonce: Bytes(keyNonce), sk: sk) else { Telemetry.event(.warning, component: "crypto", code: "decrypt_group_failed"); return "🔒" }   // owner 2026-10-21
         guard let opened = sodium.secretBox.open(authenticatedCipherText: Bytes(ct),
                                                  secretKey: msgKey, nonce: Bytes(dataNonce)),
               let text = String(bytes: opened, encoding: .utf8) else { return "🔒" }

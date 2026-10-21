@@ -118,6 +118,8 @@ targets:
         # A link that does not ask keeps running at 60 with the key set, which is exactly how this
         # looks like it did nothing.
         CADisableMinimumFrameDuration: true
+        # Production monitoring (owner 2026-10-21): Crashlytics crash reports on. See Services/Telemetry.swift.
+        FirebaseCrashlyticsCollectionEnabled: true
         # NOTE: this is the owner's export-compliance declaration. If the app's crypto or its
         # distribution (e.g. enabling France, or a stricter reading of E2EE as non-exempt) changes,
         # revisit this — the earlier stance treated E2EE as NON-exempt (would be `true` + an
@@ -185,6 +187,10 @@ targets:
       # 2026-09-24 fix-all #161: App Check (App Attest, DeviceCheck fallback). See AppCheckSetup.swift.
       - package: Firebase
         product: FirebaseAppCheck
+      # 2026-10-21 production monitoring: crash reports (Services/Telemetry.swift). Same mirror; the
+      # dSYMs go up from ios-testflight.yml with the mirror's own `upload-symbols`.
+      - package: Firebase
+        product: FirebaseCrashlytics
       - package: Sodium
         product: Sodium
       - package: WebRTC

@@ -59,6 +59,7 @@ enum PerfTrace {
         NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification,
                                                object: nil, queue: nil) { _ in
             DiagLog.add("PERF# memory_warning mem_mb=\(footprintMB())")
+            Telemetry.event(.warning, component: "perf", code: "memory_warning", detail: ["mb": String(footprintMB())])   // owner 2026-10-21
         }
         DiagLog.flagForUpload(after: 240)
     }
@@ -89,6 +90,7 @@ enum PerfTrace {
                     guard Date().timeIntervalSince(lastHangLog) > 2 else { return }
                     lastHangLog = Date()
                     DiagLog.add("PERF# main_stall ms=\(lag)")
+                    if lag >= 1000 { Telemetry.event(.warning, component: "perf", code: "main_stall", detail: ["ms": String(lag)]) }   // owner 2026-10-21
                 }
             }
             queue.asyncAfter(deadline: .now() + 0.5) { watchdog() }

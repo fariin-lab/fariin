@@ -337,7 +337,10 @@ enum ChatService {
                     // waiting on a finger. Six tries reach roughly two minutes, which covers a lift,
                     // a tunnel or a cell handover — and `autoRetryFailedMedia` picks up whatever is
                     // still failing after that, the moment the signal is genuinely back.
-                    guard attempt < 6, !Task.isCancelled, isRetryableUpload(error) else { throw error }
+                    guard attempt < 6, !Task.isCancelled, isRetryableUpload(error) else {
+                        if !Task.isCancelled { Telemetry.event(.error, component: "media", code: "upload_" + Telemetry.code(error), detail: ["attempt": String(attempt)]) }   // owner 2026-10-21
+                        throw error
+                    }
                     await Backoff.sleep(attempt: attempt, base: 2, cap: 60)
                 }
             }
@@ -1524,6 +1527,7 @@ enum ChatService {
             // rules; the text says which (including "evaluation limit").
             let ns = error as NSError
             DiagLog.add("SEND# refused code=\(ns.code) \(ns.localizedDescription.prefix(200))")
+            Telemetry.event(.error, component: "send", code: Telemetry.code(error))   // owner 2026-10-21: code only, never the text
             DiagLog.flagForUpload()   // sent within seconds, so the cause can be read the same day
             await MainActor.run { SessionRecovery.noteRefusal(error, "send") }
             throw error

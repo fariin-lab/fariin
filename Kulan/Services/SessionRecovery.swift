@@ -157,6 +157,7 @@ enum SessionRecovery {
         // Callable functions use the same code numbers (7 permission denied, 16 unauthenticated,
         // 14 unavailable, 4 deadline exceeded), so a refused or unanswered callable counts too.
         guard ns.domain == FirestoreErrorDomain || ns.domain == FunctionsErrorDomain else { return }
+        Telemetry.event((ns.code == 7 || ns.code == 16) ? .error : .warning, component: "firestore", code: Telemetry.code(error), detail: ["where": from])   // owner 2026-10-21
         // 14 = unavailable, 4 = deadline exceeded: the server did not refuse, it did not answer.
         // That is a stall, and a fresh token alone would not unstick it.
         if ns.code == 14 || ns.code == 4 {

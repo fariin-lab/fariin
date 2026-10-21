@@ -3379,6 +3379,7 @@ final class CallService: NSObject {
         // in a burst on reconnect, a moment before the snapshot carrying their newest beat.
         guard let ack = lastOwnBeatAckAt, ack.timeIntervalSince(last) > 10 else { return }
         endReason = .failed
+        Telemetry.event(.error, component: "call", code: "peer_silent")   // owner 2026-10-21
         hangUp()   // ~15s instead of frozen for 30s+
     }
     // The user's EXPLICIT speaker choice. CallKit/WebRTC re-activate the audio session at
@@ -4720,6 +4721,7 @@ final class CallService: NSObject {
         guard Thread.isMainThread else { DispatchQueue.main.async { self.failOutgoing(attempt: attempt) }; return }
         guard dialAttempt == attempt, state == .outgoing else { return }
         endReason = .failed
+        Telemetry.event(.error, component: "call", code: "dial_failed")   // owner 2026-10-21
         hangUp()
     }
 
@@ -6551,6 +6553,7 @@ final class CallService: NSObject {
         guard sealSignalling, attempt <= 4 else {
             print("[Call] answer could not be sealed, not sent")
             guard current() else { return }
+            Telemetry.event(.error, component: "call", code: "answer_unsealed")   // owner 2026-10-21
             endReason = .failed; hangUp()
             return
         }
