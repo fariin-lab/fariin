@@ -1293,6 +1293,26 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // owner 2026-10-21: APP HEALTH. What phones report about crashes, errors and slowness goes in
+    // through the telemetryIngest callable only (it cleans every event and writes with the admin SDK,
+    // which skips these rules). telemetryRate is that callable's per-account counter. Phones read and
+    // write none of it, not even their own. Admins may read (the panel reads through adminApi).
+    match /telemetry/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+    match /opsIssues/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+    match /opsAlerts/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+    match /telemetryRate/{uid} {
+      allow read, write: if false;
+    }
+
     // ⛔ 2026-10-16 Official Stories: written ONLY by the admin panel's server (adminApi ostorySave /
     // ostoryRemove, admin SDK, bypasses these rules) and handed to phones ONLY by the
     // officialStoriesFeed callable, which filters by country, build and iOS. So no phone reads this
