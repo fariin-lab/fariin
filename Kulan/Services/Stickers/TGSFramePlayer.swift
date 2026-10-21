@@ -23,6 +23,14 @@ import Lottie
 // eight at once, while stills drew the same decoded animations on the main thread. The engine is not
 // made for that. Every .tgs drawing, frames and stills, now goes through `renderQueue`, one at a
 // time; the threads were all waiting on Core Animation's one lock anyway, so nothing was gained.
+//
+// ⛔ NEVER SET `currentFrame` ON THE LOTTIE LAYER — build 1007 still crashed (SIGSEGV in
+// ShapeNode.rebuildOutputs, one copy on the main thread). That setter wraps the change in a
+// CATransaction whose completion block redraws the layer, and the completion runs on the MAIN
+// queue: the main thread redrew the same drawer the render queue was drawing. The frame is set on
+// Lottie's inner root layer instead (its `currentFrame` is a plain Core Animation property), which
+// schedules nothing. Making a drawer sets the frame once the old way, so a new drawer is not used
+// until the main queue has run that one completion.
 // The .tgs file itself is never converted (owner: stickers stay .tgs); only what is shown is pixels.
 final class TGSFramePlayer {
     let key: String
@@ -124,6 +132,15 @@ final class TGSFramePlayer {
         guard !inFlight else { return }
         inFlight = true
         Self.renderQueue.async { [self] in
+            if drawer == nil {
+                drawer = Self.makeDrawer(anim)
+                // Its one main-queue completion runs before this hop (the main queue is in order).
+                DispatchQueue.main.async { [self] in
+                    inFlight = false
+                    request(wanted)
+                }
+                return
+            }
             let img = draw(i)
             DispatchQueue.main.async { [self] in
                 inFlight = false
@@ -148,40 +165,47 @@ final class TGSFramePlayer {
 
     /// On `renderQueue`. Frame `i` at this player's rate, as a bitmap `pixel` wide on its longest side.
     private func draw(_ i: Int) -> CGImage? {
+        guard let drawer else { return nil }
         let frame = anim.startFrame + CGFloat(Double(i) * anim.framerate / fps)
-        return Self.render(anim, frame: frame, pixel: pixel, drawer: &drawer)
+        return Self.render(anim, frame: frame, pixel: pixel, drawer: drawer)
+    }
+
+    /// On `renderQueue`. Off any window, main-thread engine. Lottie queues one redraw of it on the
+    /// main queue as it is made (see the note above).
+    private static func makeDrawer(_ anim: LottieAnimation) -> LottieAnimationLayer {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        let layer = LottieAnimationLayer(animation: anim,
+                                         configuration: LottieConfiguration(renderingEngine: .mainThread))
+        layer.frame = anim.bounds
+        return layer
     }
 
     /// One frame (0...1 through the loop) as a bitmap, for a still. Drawn on `renderQueue`; the
     /// caller waits for it.
     static func stillFrame(_ anim: LottieAnimation, progress: CGFloat, pixel: Int) -> CGImage? {
+        // A drawer of its own, thrown away after: the redraw Lottie queues for it on the main queue
+        // touches nothing the render queue still uses.
         renderQueue.sync {
-            var drawer: LottieAnimationLayer?
             let frame = anim.startFrame + (anim.endFrame - anim.startFrame) * min(1, max(0, progress))
-            return render(anim, frame: frame, pixel: max(16, pixel), drawer: &drawer)
+            return render(anim, frame: frame, pixel: max(16, pixel), drawer: makeDrawer(anim))
         }
     }
 
-    /// On `renderQueue`. `drawer` is made on first use and kept by the caller.
+    /// On `renderQueue`.
     private static func render(_ anim: LottieAnimation, frame: CGFloat, pixel: Int,
-                               drawer: inout LottieAnimationLayer?) -> CGImage? {
+                               drawer layer: LottieAnimationLayer) -> CGImage? {
         let b = anim.bounds
         guard b.width > 0, b.height > 0 else { return nil }
-        // An explicit transaction: this thread has no run loop to flush implicit ones, and Lottie's
-        // own nested transactions finish (and run their completion) when this one commits, here.
+        // Lottie's root layer, the one sublayer with a `currentFrame` (see the note above).
+        guard let root = layer.sublayers?.first(where: { $0.responds(to: NSSelectorFromString("currentFrame")) })
+        else { return nil }
+        // An explicit transaction: this thread has no run loop to flush implicit ones.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
-        let layer: LottieAnimationLayer
-        if let have = drawer {
-            layer = have
-        } else {
-            layer = LottieAnimationLayer(animation: anim,
-                                         configuration: LottieConfiguration(renderingEngine: .mainThread))
-            layer.frame = b
-            drawer = layer
-        }
-        layer.currentFrame = min(frame, anim.endFrame)
+        root.setValue(min(frame, anim.endFrame), forKey: "currentFrame")
         layer.forceDisplayUpdate()
         let scale = CGFloat(pixel) / max(b.width, b.height)
         let w = max(1, Int((b.width * scale).rounded())), h = max(1, Int((b.height * scale).rounded()))
