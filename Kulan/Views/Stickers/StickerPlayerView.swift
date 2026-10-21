@@ -122,6 +122,10 @@ final class StickerPlayerView: UIView {
         DispatchQueue.main.async { job(); starting = false; drainStarts() }
     }
     private var startPending = false
+    /// At most this many live animations at once (owner 2026-10-21, panel lag): a stopped grid with
+    /// thirty animated tiles started thirty Lottie trees; past the cap a tile keeps its still.
+    @MainActor private static var liveCount = 0
+    private static let liveCap = 12
     /// Owner 2026-10-18: a tile still decoding showed nothing. The shimmer stands in until its
     /// first frame is up; a cache hit never shows it.
     private let skeleton = SkeletonShimmerView()
@@ -241,6 +245,7 @@ final class StickerPlayerView: UIView {
         v.stop()
         v.removeFromSuperview()
         lottie = nil
+        Self.liveCount = max(0, Self.liveCount - 1)
         art.isHidden = false
     }
 
@@ -270,10 +275,12 @@ final class StickerPlayerView: UIView {
             let mine = token
             Self.enqueueStart { [weak self] in
                 guard let self, self.token == mine, self.startPending, self.tgs === anim,
-                      self.wantsPlay, self.window != nil, !Self.panelScrolling else {
+                      self.wantsPlay, self.window != nil, !Self.panelScrolling,
+                      Self.liveCount < Self.liveCap else {
                     self?.startPending = false
                     return
                 }
+                Self.liveCount += 1
                 self.startPending = false
                 let v = TGSSticker.makeView(anim)
                 v.frame = self.bounds

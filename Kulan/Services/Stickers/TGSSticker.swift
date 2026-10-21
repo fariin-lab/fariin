@@ -89,7 +89,16 @@ enum TGSSticker {
         if let hit = stills.object(forKey: key) { done(hit); return }
         let file = stillFile(url, side)
         let scale = UIScreen.main.scale
+        // ⛔ SHIPPED STILLS FIRST — owner 2026-10-21, second report of panel lag. Drawing a still
+        // on the phone runs Lottie on the main thread, the scroll's own thread. Every bundled pack
+        // ships `<name>_still.png` (made once on the build machine, first frame that shows ink), so
+        // a bundled sticker never draws one: it is read and decoded here, off the main thread.
+        let shipped = URL(fileURLWithPath: url.deletingPathExtension().path + "_still.png")
         diskQueue.async {
+            if let data = try? Data(contentsOf: shipped), let img = UIImage(data: data)?.preparingForDisplay() {
+                DispatchQueue.main.async { stills.setObject(img, forKey: key); done(img) }
+                return
+            }
             if let file, let data = try? Data(contentsOf: file), let img = UIImage(data: data, scale: scale) {
                 DispatchQueue.main.async { stills.setObject(img, forKey: key); done(img) }
                 return
