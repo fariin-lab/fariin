@@ -408,7 +408,7 @@ struct VideoPlayerScreen: View {
         VStack(spacing: 24) {
             scrubberCapsule
             HStack {
-                panelButton("square.and.arrow.up", label: "Share",
+                panelButton("ic_link_share", label: "Share",
                             enabled: localVideoURL != nil && !savingLocked) { share() }
                 Spacer()
                 Button { togglePlay() } label: {
@@ -442,7 +442,7 @@ struct VideoPlayerScreen: View {
     private func panelButton(_ symbol: String, label: String, enabled: Bool,
                              action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol)
+            Image(glyph: symbol)
                 .font(.system(size: 20, weight: .regular))
                 .foregroundStyle(.primary)
                 .frame(width: 44, height: 44)

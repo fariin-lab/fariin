@@ -563,7 +563,7 @@ struct GroupLinkShareView: View {
                     row("Send in Fariin", "paperplane") { shareText = link }
                     Divider().padding(.leading, 16)
                     ShareLink(item: URL(string: link) ?? URL(string: "https://fariin.com")!) {
-                        rowLabel("Share", "square.and.arrow.up")
+                        rowLabel("Share", "ic_link_share")
                     }
                     .buttonStyle(.plain)
                     Divider().padding(.leading, 16)
@@ -603,7 +603,7 @@ struct GroupLinkShareView: View {
         HStack {
             Text(title).foregroundStyle(.primary)
             Spacer()
-            Image(systemName: icon).font(.system(size: 18)).foregroundStyle(.primary)
+            Image(glyph: icon).font(.system(size: 18)).foregroundStyle(.primary)
         }
         .padding(.horizontal, 16).padding(.vertical, 15)
         .contentShape(Rectangle())

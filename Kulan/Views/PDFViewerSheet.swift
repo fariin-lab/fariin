@@ -64,7 +64,7 @@ struct PDFViewerSheet: View {
                 .liquidGlass(Capsule(), interactive: false)
             Spacer(minLength: 8)
             Button { showShare = true } label: {
-                Image(systemName: "square.and.arrow.up").font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary)
+                Image("ic_link_share").renderingMode(.template).resizable().scaledToFit().frame(width: 22, height: 22).foregroundStyle(.primary)
                     .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true).contentShape(Circle())
             }
             .buttonStyle(.plain)

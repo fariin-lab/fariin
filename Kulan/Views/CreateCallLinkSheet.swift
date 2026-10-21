@@ -378,7 +378,7 @@ struct CallLinkRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: icon)
+            Image(glyph: icon)
                 .font(.system(size: 17))
                 .foregroundStyle(tint)
                 .frame(width: 24)
@@ -457,7 +457,7 @@ struct CallLinkShareRows: View {
             HStack(spacing: 10) {
                 roundAction("paperplane", "Send", sendInKulan)
                 roundAction("doc.on.doc", "Copy", copyLink)
-                roundAction("square.and.arrow.up", "Share", shareLink)
+                roundAction("ic_link_share", "Share", shareLink)
             }
         } else {
             CallLinkGroup {
@@ -472,7 +472,7 @@ struct CallLinkShareRows: View {
                 .buttonStyle(.plain)
                 CallLinkDivider()
                 Button(action: shareLink) {
-                    CallLinkRow(icon: "square.and.arrow.up", title: "Share Link")
+                    CallLinkRow(icon: "ic_link_share", title: "Share Link")
                 }
                 .buttonStyle(.plain)
             }
@@ -483,7 +483,7 @@ struct CallLinkShareRows: View {
     private func roundAction(_ icon: String, _ title: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 6) {
-                Image(systemName: icon).font(.system(size: 18, weight: .medium))
+                Image(glyph: icon).font(.system(size: 18, weight: .medium))
                 Text(title).font(.footnote.weight(.medium))
             }
             .foregroundStyle(.primary)

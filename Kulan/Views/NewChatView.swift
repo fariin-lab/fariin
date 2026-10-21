@@ -99,7 +99,7 @@ struct NewChatView: View {
                             // lives on the top-right button already.
                             // The system share sheet (see `InviteShare.present`).
                             Button { InviteShare.present() } label: {
-                                actionRow("square.and.arrow.up", "Invite friends")
+                                actionRow("ic_link_share", "Invite friends")
                             }
                             .tint(.primary)
                         }
@@ -189,7 +189,7 @@ struct NewChatView: View {
 
     private func actionRow(_ icon: String, _ title: String) -> some View {
         HStack(spacing: 14) {
-            Image(systemName: icon).font(.system(size: 18)).foregroundStyle(.primary).frame(width: 30)
+            Image(glyph: icon).font(.system(size: 18)).foregroundStyle(.primary).frame(width: 30)
             Text(title).foregroundStyle(.primary)
             Spacer(minLength: 0)   // ShareLink's label would otherwise hug its text and centre it
         }

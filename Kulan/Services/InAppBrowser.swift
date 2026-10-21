@@ -441,7 +441,7 @@ final class InAppBrowserViewController: UIViewController {
             self?.webView.goForward()
         }
         let pageLoaded = webView.url != nil
-        let shareItem = UIAction(title: "Share", image: UIImage(systemName: "square.and.arrow.up"),
+        let shareItem = UIAction(title: "Share", image: UIImage(named: "ic_link_share")?.withRenderingMode(.alwaysTemplate),
                                  attributes: pageLoaded ? [] : .disabled) { [weak self] _ in self?.share() }
         let copy = UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { _ in
             UIPasteboard.general.url = url

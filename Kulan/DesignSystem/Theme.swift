@@ -647,3 +647,11 @@ struct ReceivedBubbleSurface: View {
         }
     }
 }
+
+extension Image {
+    /// "ic_" names one of the owner's drawings (drawn as a template, in the text colour); anything
+    /// else is an SF Symbol. Lets one helper take either (owner 2026-10-21: his share icon everywhere).
+    init(glyph name: String) {
+        if name.hasPrefix("ic_") { self = Image(name).renderingMode(.template) } else { self.init(systemName: name) }
+    }
+}

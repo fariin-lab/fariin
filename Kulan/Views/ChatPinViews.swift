@@ -432,7 +432,7 @@ struct ChatPinPage: View {
                                 .buttonStyle(.plain)
                                 .background(Color(.secondarySystemFill), in: Capsule())
                                 ShareLink(item: "My Chat Key on Fariin is \(mine). Enter it to message me directly.") {
-                                    Label("Share", systemImage: "square.and.arrow.up")
+                                    Label { Text("Share") } icon: { Image("ic_link_share").renderingMode(.template) }
                                         .font(.subheadline.weight(.semibold))
                                         .frame(maxWidth: .infinity).frame(height: 40)
                                 }

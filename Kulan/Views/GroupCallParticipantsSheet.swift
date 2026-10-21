@@ -198,7 +198,7 @@ struct GroupCallParticipantsSheet: View {
                         // Everyone may copy or share the link (the access table).
                         if !service.linkRevoked, let url = linkURL {
                             roundAction(copied ? "checkmark" : "doc.on.doc", copied ? "Copied" : "Copy") { copy(url) }
-                            ShareLink(item: url) { roundLabel("square.and.arrow.up", "Share") }
+                            ShareLink(item: url) { roundLabel("ic_link_share", "Share") }
                                 .buttonStyle(.plain)
                         }
                     }

@@ -693,7 +693,7 @@ struct ImageViewerView: View {
         HStack {
             // A one-time photo keeps Delete only — see the note in `header`.
             if !savingLocked {
-                barButton("square.and.arrow.up") { share() }
+                barButton("ic_link_share") { share() }
             }
             Spacer()
             // PEN (replaces Reply, user spec): opens the pen editor on THIS image; Done lands in the
@@ -740,7 +740,7 @@ struct ImageViewerView: View {
     // renders light, white when it renders dark (the hardcoded .white vanished on light glass).
     private func barButton(_ icon: String, tint: Color = .primary, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon)
+            Image(glyph: icon)
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(tint)
                 .frame(width: 48, height: 48)

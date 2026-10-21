@@ -736,12 +736,12 @@ struct ShareProfileSheet: View {
             // loads, so the row does not change width under the eye.
             if !handle.isEmpty, let url = URL(string: link) {
                 ShareLink(item: url, subject: Text(shareLine), message: Text(shareLine)) {
-                    actionLabel("Share", icon: "square.and.arrow.up", busy: false)
+                    actionLabel("Share", icon: "ic_link_share", busy: false)
                 }
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity)
             } else {
-                actionLabel("Share", icon: "square.and.arrow.up", busy: false)
+                actionLabel("Share", icon: "ic_link_share", busy: false)
                     .frame(maxWidth: .infinity)
                     .opacity(0.35)
             }
@@ -767,7 +767,7 @@ struct ShareProfileSheet: View {
                 if busy {
                     ProgressView()
                 } else {
-                    Image(systemName: icon)
+                    Image(glyph: icon)
                         .font(.system(size: 20, weight: .medium))
                         .foregroundStyle(.primary)
                 }

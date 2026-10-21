@@ -140,7 +140,7 @@ struct SendContactSheet: View {
             HStack {
                 circleButton("magnifyingglass") { openSearch() }
                 Spacer()
-                circleButton("square.and.arrow.up") { showSystemShare = true }
+                circleButton("ic_link_share") { showSystemShare = true }
             }
         }
         .padding(.horizontal, 16)
@@ -166,7 +166,7 @@ struct SendContactSheet: View {
 
     private func circleButton(_ icon: String, _ tap: @escaping () -> Void) -> some View {
         Button(action: tap) {
-            Image(systemName: icon)
+            Image(glyph: icon)
                 .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(.primary)
                 .frame(width: 48, height: 48)

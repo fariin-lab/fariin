@@ -751,7 +751,7 @@ struct ContactInfoView: View {
         }
         // "Share Profile", not "Share Contact" — what it sends is a Fariin profile link, and there is no
         // contact card behind it (no phone book, no numbers).
-        Button { showShare = true } label: { Label("Share Profile", systemImage: "square.and.arrow.up") }
+        Button { showShare = true } label: { Label { Text("Share Profile") } icon: { Image("ic_link_share").renderingMode(.template) } }
         // ⛔ EXPORT CHAT — 2026-09-25. Messages left "Your Account Data" (see `DataExport`) and are
         // saved one conversation at a time from here, the way large messengers do it. Only where a
         // real chat exists: not your own profile, not a profile with no conversation behind it.

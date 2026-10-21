@@ -12284,8 +12284,8 @@ struct FilePreviewSheet: View {
             .overlay(alignment: .topLeading) {
                 if canShare {
                     ShareLink(item: url) {
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary)
+                        Image("ic_link_share").renderingMode(.template).resizable().scaledToFit().frame(width: 22, height: 22)
+                            .foregroundStyle(.primary)
                             .frame(width: 40, height: 40)
                             .liquidGlass(Circle(), interactive: true)
                             .contentShape(Circle())

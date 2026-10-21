@@ -616,7 +616,7 @@ struct MediaGalleryView: View {
             ToolbarItem(placement: .bottomBar) {
                 Button { shareSelected() } label: {
                     if preparingShare { ProgressView() }
-                    else { Image(systemName: "square.and.arrow.up") }
+                    else { Image("ic_link_share").renderingMode(.template).resizable().scaledToFit().frame(width: 22, height: 22) }
                 }
                 .disabled(selection.isEmpty || preparingShare)
                 .accessibilityLabel("Share")
@@ -1025,7 +1025,7 @@ struct MediaGalleryView: View {
     @ViewBuilder private func itemMenu(_ m: Message) -> some View {
         Button { goToChat(m) } label: { goToChatLabel }
         if !ChatRestrictions.isOn(.noSaving, cid: cid) {   // Disable Sharing › No Saving
-            Button { share(m) } label: { Label("Share", systemImage: "square.and.arrow.up") }
+            Button { share(m) } label: { Label { Text("Share") } icon: { Image("ic_link_share").renderingMode(.template) } }
         }
         Button { selecting = true; selection = [m.id] } label: { Label("Select", systemImage: "checkmark.circle") }
         // Delete-for-everyone is only for MY OWN media â€” received media can't be deleted from the server.

@@ -277,7 +277,7 @@ struct GroupLinksPage: View {
         Button { copy(l) } label: { Label("Copy", systemImage: "doc.on.doc") }
         Button { shareText = l.url } label: { Label("Send in Fariin", systemImage: "paperplane") }
         ShareLink(item: URL(string: l.url) ?? URL(string: "https://fariin.com")!) {
-            Label("Share", systemImage: "square.and.arrow.up")
+            Label { Text("Share") } icon: { Image("ic_link_share").renderingMode(.template) }
         }
         Button { qrLink = l } label: { Label("QR Code", systemImage: "qrcode") }
         Button { editTarget = LinkEditTarget(link: l) } label: { Label("Edit", systemImage: "pencil") }

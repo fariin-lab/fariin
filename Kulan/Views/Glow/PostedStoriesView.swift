@@ -200,7 +200,7 @@ struct PostedStoriesView: View {
                             sendLink = StoryLinkPayload(url: u)
                         }
                     } label: {
-                        Label("Share", systemImage: "square.and.arrow.up")
+                        Label { Text("Share") } icon: { Image("ic_link_share").renderingMode(.template) }
                     }
                 }
                 Button(role: .destructive) {

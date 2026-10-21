@@ -650,7 +650,7 @@ struct GroupInfoView: View {
             if let link = inviteLink {
                 Button {
                     if can(.inviteUsers) { shareGroupText = link } else { showMemberLink = true }
-                } label: { Label { Text("Share Group") } icon: { MenuIcon(system: "square.and.arrow.up", size: 24) } }
+                } label: { Label { Text("Share Group") } icon: { MenuIcon("ic_link_share") } }
                 Button { showQR = true } label: {
                     Label { Text("QR Code") } icon: { MenuIcon("ic_qr") }
                 }

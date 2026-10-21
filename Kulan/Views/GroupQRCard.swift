@@ -130,11 +130,11 @@ struct GroupLinkQRSheet: View {
             if let img = cardImage {
                 ShareLink(item: Image(uiImage: img),
                           preview: SharePreview(title, image: Image(uiImage: img))) {
-                    PosterActionIcon(icon: "square.and.arrow.up", diameter: 50, label: "Share")
+                    PosterActionIcon(icon: "ic_link_share", diameter: 50, label: "Share")
                 }
                 .buttonStyle(.plain)
             } else {
-                PosterActionIcon(icon: "square.and.arrow.up", diameter: 50, label: "Share").opacity(0.5)
+                PosterActionIcon(icon: "ic_link_share", diameter: 50, label: "Share").opacity(0.5)
             }
             Button { save() } label: {
                 PosterActionIcon(icon: "arrow.down.to.line", diameter: 50, label: saving ? "Saving…" : "Save")
