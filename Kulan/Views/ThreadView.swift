@@ -4072,6 +4072,21 @@ struct ThreadView: View {
         // ⛔ A GROUP LINK OPENS THE JOIN SHEET, NOT A WEB PAGE (owner 2026-10-18). The link, its card
         // and the card's button all come here: a group I am in opens at once, any other the join
         // sheet (`GroupLinkDoor`). Both https://fariin.com/g/<code> and kulan://g/<code>.
+        // A PUBLIC NAME LINK, fariin.com/<name> (owner 2026-10-21: it opened the browser): the group
+        // page in the app, or that person when the name is a username. Same lookup as a link from
+        // outside (`KulanApp.openNameLink`).
+        if Flags.groupsEnabled, case .name(let name)? = KulanApp.route(from: url) {
+            inputFocused = false
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            Task { @MainActor in
+                if case .group(let cid) = await GroupDirectory.resolve(name) {
+                    GroupDirectory.open(cid: cid, name: name)
+                } else {
+                    openProfileHandle(name)
+                }
+            }
+            return true
+        }
         guard Flags.groupsEnabled, case .group(let code)? = KulanApp.route(from: url) else { return false }
         inputFocused = false
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)

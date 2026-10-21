@@ -634,6 +634,16 @@ enum MessageRowModelBuilder {
         if let code = URL(string: p.url).flatMap({ LinkPreviewService.groupCode(in: $0) }) {
             return groupLinkBody(p, code: code)
         }
+        // A PUBLIC GROUP'S NAME LINK, fariin.com/<name> (owner 2026-10-21: "no Join button"): its
+        // card was sent from `publicGroupDraft` ("N members"), so it gets the group card's button.
+        // The tap goes through `openGroupLink`, which opens the group page in the app.
+        if let u = URL(string: p.url), case .name(let name)? = KulanApp.route(from: u),
+           p.desc.range(of: #"^[0-9]+ members?$"#, options: .regularExpression) != nil {
+            return BubbleBody.LinkPreview(
+                shape: .group(code: name, member: false),
+                url: p.url, title: p.title, desc: p.desc, host: p.host,
+                imageUrl: p.imageUrl, imageEnc: p.imageEnc)
+        }
         let shape: BubbleBody.LinkPreview.Shape
         if handle != nil, p.desc.isEmpty, p.title == "Unavailable" {
             shape = .profileUnavailable
