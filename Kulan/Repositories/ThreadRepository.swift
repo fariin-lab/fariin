@@ -616,7 +616,15 @@ final class ThreadRepository {
         refreshItems()
     }
     func markFailed(clientId: String) {
-        if let i = pending.firstIndex(where: { $0.clientId == clientId }) { pending[i].sendState = .failed }
+        if let i = pending.firstIndex(where: { $0.clientId == clientId }) {
+            pending[i].sendState = .failed
+        } else if var back = echoedPending.removeValue(forKey: clientId) {
+            // Its local echo had replaced it, and the server's refusal took the echo away (see
+            // `echoedPending`): back as a failed bubble with its red !, never silently gone.
+            back.sendState = .failed
+            pending.append(back)
+            DiagLog.add("SEND# refused after echo cid=\(cid) client=\(clientId)")
+        }
         refreshItems()
     }
     func removePending(clientId: String) { pending.removeAll { $0.clientId == clientId }; refreshItems() }
@@ -1292,8 +1300,18 @@ final class ThreadRepository {
         //
         // A message that is still uploading is not an echo yet. It is a promise.
         let echoed = Set(byId.values.filter { !$0.uploading }.compactMap { $0.clientId })
+        // ⛔ KEPT ASIDE, NOT FORGOTTEN (owner 2026-10-21: "the message disappears in seconds"). The
+        // echo above is Firestore's LOCAL copy, delivered before the server has answered. When the
+        // server then refuses the batch, the SDK takes that copy back out and `markFailed` found no
+        // pending bubble to mark: the message simply vanished, with no red !. The dropped copy waits
+        // here so a refusal can put it back as failed.
+        for p in pending where p.clientId.map(echoed.contains) ?? false {
+            if let cid = p.clientId { echoedPending[cid] = p }
+        }
+        if echoedPending.count > 50 { echoedPending.removeAll() }
         pending.removeAll { p in p.clientId.map(echoed.contains) ?? false }
     }
+    private var echoedPending: [String: Message] = [:]
 
     // Incoming typing self-clears after 15s without a refresh: if the
     // sender's app crashed/lost network before writing typing=false, the bubble would otherwise stick

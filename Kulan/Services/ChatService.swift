@@ -1520,6 +1520,10 @@ enum ChatService {
             answered.set()
         } catch {
             answered.set()
+            // Why the server said no (owner 2026-10-21, first messages vanishing): code 7 is the
+            // rules; the text says which (including "evaluation limit").
+            let ns = error as NSError
+            DiagLog.add("SEND# refused code=\(ns.code) \(ns.localizedDescription.prefix(200))")
             await MainActor.run { SessionRecovery.noteRefusal(error, "send") }
             throw error
         }
