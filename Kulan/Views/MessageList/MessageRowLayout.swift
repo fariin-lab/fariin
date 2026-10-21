@@ -108,20 +108,37 @@ struct ContactPlan {
 }
 
 /// A poll. Every rect is fixed; only the bars' FILL and the percentages change as votes land.
+///
+/// owner 2026-10-21: two looks, chosen from his mockups. "Thick bars" (default): each option a row
+/// with an 8pt bar under it. "Filled rows" (`AppFeatures.pollRows`): each option a rounded row that
+/// fills from the left behind its words. The plan carries which one, so the view never asks again.
 struct PollPlan {
     struct Option {
         var glyph: CGRect
         var label: CGRect
         var labelAttr: NSAttributedString
+        /// The same words in the chosen weight (semibold in Filled rows). Measured with the label,
+        /// so switching to it never needs more room.
+        var labelChosenAttr: NSAttributedString
         var percent: CGRect             // the slot, right-aligned; the text is written live
+        /// Thick bars: the bar under the words. Filled rows: the whole row, which the fill grows in.
         var track: CGRect
+        /// The tap target for a vote.
+        var hit: CGRect
     }
+    var filledRows: Bool
+    /// The side inset, so the in-bubble sender name lines up with the question.
+    var inset: CGFloat
     var question: CGRect
     var questionAttr: NSAttributedString
     var subtitle: CGRect
     var subtitleAttr: NSAttributedString
     var options: [Option]
-    var total: CGRect                   // "N votes", written live
+    var trackRadius: CGFloat
+    /// The colour of the tick inside a chosen option's filled circle: the bubble's own fill.
+    var checkColor: UIColor
+    var hairline: CGRect?               // Thick bars only, above the footer
+    var total: CGRect                   // footer left, "N votes · View results", written live
 }
 
 /// A capsule with a glyph and a word.
@@ -1185,7 +1202,8 @@ enum MessageRowLayout {
             // `nameHeaderBottom` of room at its top. The inset is the kind's own content inset, so
             // the name lines up with the words (or the quote) under it. A fixed-width bubble (photo,
             // poll, voice) does not grow for the name; it truncates to fit instead.
-            let inset: CGFloat = (plan.pollPlan != nil || plan.contactPlan != nil) ? 12 : BubbleMetrics.hPad
+            // A poll's own side inset (owner 2026-10-21 redesign: 16 or 14), so the name sits over the question.
+            let inset: CGFloat = plan.pollPlan?.inset ?? (plan.contactPlan != nil ? 12 : BubbleMetrics.hPad)
             let tick: CGFloat = b.sender?.verified == true ? 4 + 11 : 0
             let nameW = max(0, min(senderNameSize.width, bubbleRect.width - inset * 2 - tick))
             let nameY = bubbleRect.minY + BubbleMetrics.nameTop
@@ -2141,12 +2159,18 @@ enum MessageRowLayout {
                              senderNameAttr: NSAttributedString?, senderNameSize: CGSize,
                              forwardedSize: CGSize, forwardedIconW: CGFloat) -> BubbleResult {
         let y = startY
-        let pad: CGFloat = 12
-        let bubbleW = min(columnW, maxBubble * 0.9)
+        // ⛔ TWO LOOKS, ONE PLAN — owner 2026-10-21. Read once here: this plan is both the height the
+        // list measures and the rects the cell draws, so the switch can never split the two.
+        // Every number below is from his chosen mockups.
+        let rows = AppFeatures.pollRows
+        let padTop: CGFloat = rows ? 16 : 18
+        let pad: CGFloat = rows ? 14 : 16          // sides
+        let padBottom: CGFloat = 10
+        let bubbleW = min(columnW, rows ? 330 : 320)
         let contentW = max(1, bubbleW - pad * 2)
         // Under an in-bubble name (owner 2026-10-18).
         var innerY = contentTop(b, senderNameSize: senderNameSize, forwardedSize: forwardedSize,
-                                otherwise: pad)
+                                otherwise: padTop)
 
         var quoteRect: CGRect?
         var quoteInner: QuoteInnerPlan?
@@ -2157,61 +2181,109 @@ enum MessageRowLayout {
             innerY += size.height + 8
         }
 
+        let qFont = UIFont.systemFont(ofSize: rows ? 19 : 20, weight: .bold)
+        let qLine: CGFloat = rows ? 24 : 25
+        let qPara = NSMutableParagraphStyle()
+        qPara.minimumLineHeight = qLine
+        qPara.maximumLineHeight = qLine
+        qPara.lineBreakMode = .byWordWrapping
         let questionAttr = NSAttributedString(string: p.question, attributes: [
-            .font: UIFont.systemFont(ofSize: 16, weight: .semibold), .foregroundColor: textColor])
+            .font: qFont, .foregroundColor: textColor, .paragraphStyle: qPara,
+            // A fixed line taller than the font sits the glyphs low; this centres them in it.
+            .baselineOffset: max(0, (qLine - qFont.lineHeight) / 4)])
         let qSize = BubbleText.size(questionAttr, width: contentW)
         let question = CGRect(x: pad, y: innerY, width: contentW, height: qSize.height)
-        innerY = question.maxY + 2
+        innerY = question.maxY + 4
 
         let subtitleAttr = NSAttributedString(
             // 2026-10-19: a quiz says so, so nobody votes thinking it is only an opinion.
             string: (p.correct.isEmpty ? "" : "Quiz · ") + (p.multiple ? "Select one or more" : "Select one"),
-            attributes: [.font: UIFont.systemFont(ofSize: 11),
-                         .foregroundColor: textColor.withAlphaComponent(0.7)])
+            attributes: [.font: UIFont.systemFont(ofSize: 13),
+                         .foregroundColor: textColor.withAlphaComponent(0.75)])
         let sSize = lineSizeOf(subtitleAttr, cap: contentW)
         let subtitle = CGRect(x: pad, y: innerY, width: contentW, height: sSize.height)
-        innerY = subtitle.maxY + 12
+        innerY = subtitle.maxY + (rows ? 14 : 16)
 
-        let glyphW: CGFloat = 16, gap: CGFloat = 8, percentW: CGFloat = 42, trackH: CGFloat = 6
+        let labelFont = UIFont.systemFont(ofSize: 17)
+        let labelChosenFont = rows ? UIFont.systemFont(ofSize: 17, weight: .semibold) : labelFont
+        let percentW: CGFloat = 52, percentH = ceil(UIFont.systemFont(ofSize: 17, weight: .bold).lineHeight)
         var options: [PollPlan.Option] = []
         for (i, opt) in p.options.enumerated() {
             let labelAttr = NSAttributedString(string: opt, attributes: [
-                .font: UIFont.systemFont(ofSize: 15), .foregroundColor: textColor])
-            let labelW = max(1, contentW - glyphW - gap - percentW - gap)
-            let lSize = BubbleText.size(labelAttr, width: labelW)
-            let rowH = max(glyphW, lSize.height)
-            options.append(PollPlan.Option(
-                glyph: CGRect(x: pad, y: innerY + (rowH - glyphW) / 2, width: glyphW, height: glyphW),
-                label: CGRect(x: pad + glyphW + gap, y: innerY + (rowH - lSize.height) / 2,
-                              width: labelW, height: lSize.height),
-                labelAttr: labelAttr,
-                percent: CGRect(x: pad + contentW - percentW, y: innerY + (rowH - 16) / 2,
-                                width: percentW, height: 16),
-                track: CGRect(x: pad, y: innerY + rowH + 5, width: contentW, height: trackH)))
-            innerY += rowH + 5 + trackH
-            if i < p.options.count - 1 { innerY += 12 }
+                .font: labelFont, .foregroundColor: textColor])
+            let labelChosenAttr = NSAttributedString(string: opt, attributes: [
+                .font: labelChosenFont, .foregroundColor: textColor])
+            if rows {
+                // FILLED ROWS: a 48pt rounded row; the fill grows inside it, behind the content.
+                let inner: CGFloat = 14, glyphW: CGFloat = 20, gap: CGFloat = 12
+                let labelX = pad + inner + glyphW + gap
+                let labelW = max(1, contentW - inner - glyphW - gap - 8 - percentW - inner)
+                let lH = max(BubbleText.size(labelAttr, width: labelW).height,
+                             BubbleText.size(labelChosenAttr, width: labelW).height)
+                let rowH = max(48, lH + 24)          // a long option grows the row, never clips
+                let row = CGRect(x: pad, y: innerY, width: contentW, height: rowH)
+                options.append(PollPlan.Option(
+                    glyph: CGRect(x: pad + inner, y: innerY + (rowH - glyphW) / 2, width: glyphW, height: glyphW),
+                    label: CGRect(x: labelX, y: innerY + (rowH - lH) / 2, width: labelW, height: lH),
+                    labelAttr: labelAttr, labelChosenAttr: labelChosenAttr,
+                    percent: CGRect(x: row.maxX - inner - percentW, y: innerY + (rowH - percentH) / 2,
+                                    width: percentW, height: percentH),
+                    track: row, hit: row))
+                innerY += rowH
+                if i < p.options.count - 1 { innerY += 10 }
+            } else {
+                // THICK BARS: the row (circle, words, percentage), then an 8pt bar under the words.
+                let glyphW: CGFloat = 22, gap: CGFloat = 12, barGap: CGFloat = 8, barH: CGFloat = 8
+                let labelX = pad + glyphW + gap
+                let labelW = max(1, contentW - glyphW - gap - 8 - percentW)
+                let lH = BubbleText.size(labelAttr, width: labelW).height
+                let rowH = max(glyphW, lH)
+                let bar = CGRect(x: labelX, y: innerY + rowH + barGap, width: contentW - glyphW - gap, height: barH)
+                options.append(PollPlan.Option(
+                    glyph: CGRect(x: pad, y: innerY + (rowH - glyphW) / 2, width: glyphW, height: glyphW),
+                    label: CGRect(x: labelX, y: innerY + (rowH - lH) / 2, width: labelW, height: lH),
+                    labelAttr: labelAttr, labelChosenAttr: labelChosenAttr,
+                    percent: CGRect(x: pad + contentW - percentW, y: innerY + (rowH - percentH) / 2,
+                                    width: percentW, height: percentH),
+                    track: bar,
+                    // Half the gap to each neighbour, so every point between two options votes.
+                    hit: CGRect(x: pad, y: innerY - 7, width: contentW, height: bar.maxY + 7 - (innerY - 7))))
+                innerY = bar.maxY
+                if i < p.options.count - 1 { innerY += 14 }
+            }
         }
-        innerY += 12
 
-        let totalAttr = NSAttributedString(string: "0 votes", attributes: [
-            .font: UIFont.systemFont(ofSize: 11), .foregroundColor: textColor.withAlphaComponent(0.7)])
-        let tSize = lineSizeOf(totalAttr, cap: contentW)
-        let total = CGRect(x: pad, y: innerY, width: contentW, height: tSize.height)
-        innerY = total.maxY + 8
+        var hairline: CGRect?
+        if rows {
+            innerY += 12
+        } else {
+            innerY += 14
+            hairline = CGRect(x: pad, y: innerY, width: contentW, height: 1)
+            innerY += 1 + 10
+        }
 
+        // FOOTER: "N votes · View results" on the left, the time and ticks on the right, one row.
         let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
         let metaSize = BubbleText.lineSize(metaAttr)
-        let metaRect = CGRect(x: pad + contentW - metaSize.width, y: innerY,
+        let totalH = ceil(UIFont.systemFont(ofSize: 13, weight: .semibold).lineHeight)
+        let footerH = max(totalH, metaSize.height)
+        let metaRect = CGRect(x: pad + contentW - metaSize.width, y: innerY + (footerH - metaSize.height) / 2,
                               width: metaSize.width, height: metaSize.height)
-        innerY = metaRect.maxY + pad
+        let total = CGRect(x: pad, y: innerY + (footerH - totalH) / 2,
+                           width: max(1, contentW - metaSize.width - 8), height: totalH)
+        innerY += footerH + padBottom
 
-        let plan = PollPlan(question: question, questionAttr: questionAttr,
+        let plan = PollPlan(filledRows: rows, inset: pad,
+                            question: question, questionAttr: questionAttr,
                             subtitle: subtitle, subtitleAttr: subtitleAttr,
-                            options: options, total: total)
+                            options: options, trackRadius: rows ? 14 : 4,
+                            checkColor: b.fill.representative,
+                            hairline: hairline, total: total)
         let bubbleRect = CGRect(x: b.isMe ? (columnX + columnW - bubbleW) : columnX,
                                 y: y, width: bubbleW, height: innerY)
         var out = BubblePlan(
-            bubble: bubbleRect, radii: b.radii, isCapsule: false, fill: b.fill, rim: b.rim,
+            // Corner 22 on every corner (owner 2026-10-21 mockups), not the cluster's tail corners.
+            bubble: bubbleRect, radii: .uniform(22), isCapsule: false, fill: b.fill, rim: b.rim,
             text: .zero, meta: metaRect, metaOnOwnLine: true,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,

@@ -484,6 +484,7 @@ final class PollBubbleView: UIView {
     private let question = UILabel()
     private let subtitle = UILabel()
     private let total = UILabel()
+    private let hairline = UIView()             // Thick bars only (owner 2026-10-21)
     private var rows: [PollOptionRow] = []
 
     private var listener: ListenerRegistration?
@@ -504,6 +505,7 @@ final class PollBubbleView: UIView {
         addSubview(subtitle)
         total.lineBreakMode = .byTruncatingTail
         addSubview(total)
+        addSubview(hairline)
     }
     required init?(coder: NSCoder) { fatalError() }
     deinit { listener?.remove() }
@@ -519,6 +521,9 @@ final class PollBubbleView: UIView {
         subtitle.frame = plan.subtitle
         subtitle.attributedText = plan.subtitleAttr
         total.frame = plan.total
+        hairline.isHidden = plan.hairline == nil
+        hairline.frame = plan.hairline ?? .zero
+        hairline.backgroundColor = tint.withAlphaComponent(0.22)
 
         while rows.count < plan.options.count {
             let r = PollOptionRow()
@@ -529,7 +534,8 @@ final class PollBubbleView: UIView {
             guard i < plan.options.count else { r.isHidden = true; continue }
             r.isHidden = false
             r.frame = bounds
-            r.apply(plan.options[i], tint: tint)
+            r.apply(plan.options[i], filledRows: plan.filledRows, trackRadius: plan.trackRadius,
+                    ink: tint, check: plan.checkColor)
         }
 
         let key = "\(cid)|\(p.messageId)"
@@ -559,21 +565,31 @@ final class PollBubbleView: UIView {
         guard let plan, let body else { return }
         let voters = votes.count
         let mine = Set(votes[AuthService.shared.uid ?? ""] ?? [])
-        // The footer is the door to the results page (who voted, Stop Poll).
+        // The footer is the door to the results page (who voted, Stop Poll). owner 2026-10-21 redesign:
+        // "N votes · View results", or "No votes yet"; semibold once there are votes.
         let count = "\(voters) vote\(voters == 1 ? "" : "s")"
+        let words: String
+        if isOpen {
+            words = voters > 0 ? "\(count) · View results" : "No votes yet"
+        } else {
+            words = voters > 0 ? "Poll ended · \(count)" : "Poll ended"
+        }
         total.attributedText = NSAttributedString(
-            string: isOpen ? "\(count) · Results ›" : "Poll ended · \(count) ›",
-            attributes: [.font: UIFont.systemFont(ofSize: 11, weight: .medium),
-                         .foregroundColor: tint.withAlphaComponent(0.75)])
+            string: words,
+            attributes: [.font: UIFont.systemFont(ofSize: 13, weight: voters > 0 ? .semibold : .regular),
+                         .foregroundColor: tint.withAlphaComponent(0.85)])
+        // Bars and percentages show once I have voted or the poll is over (owner 2026-10-21 mockups:
+        // the rows are plain before voting). The results page is always one tap away in the footer.
+        let showResults = !mine.isEmpty || !isOpen
         // A quiz shows right and wrong once I have answered, or once the poll is over.
-        let reveal = !body.correct.isEmpty && (!mine.isEmpty || !isOpen)
+        let reveal = !body.correct.isEmpty && showResults
         for (i, r) in rows.enumerated() where i < plan.options.count {
             let count = votes.values.reduce(0) { $0 + ($1.contains(i) ? 1 : 0) }
             let fraction = voters > 0 ? Double(count) / Double(voters) : 0
             let mark: PollOptionRow.QuizMark = !reveal ? .none
                 : body.correct.contains(i) ? .right : (mine.contains(i) ? .wrong : .none)
-            r.paint(fraction: fraction, chosen: mine.contains(i),
-                    multiple: body.multiple, tint: tint, quiz: mark)
+            r.paint(fraction: fraction, chosen: mine.contains(i), multiple: body.multiple,
+                    showResults: showResults, quiz: mark)
         }
     }
 
@@ -609,10 +625,8 @@ final class PollBubbleView: UIView {
     /// Which option is at this point, for the tap that casts a vote.
     func optionIndex(at point: CGPoint) -> Int? {
         guard let plan else { return nil }
-        for (i, o) in plan.options.enumerated() {
-            let hit = o.glyph.union(o.label).union(o.percent).insetBy(dx: 0, dy: -4)
-            if hit.contains(point) { return i }
-        }
+        // The plan's own tap rect: the whole filled row, or the row plus its bar (owner 2026-10-21).
+        for (i, o) in plan.options.enumerated() where o.hit.contains(point) { return i }
         return nil
     }
 
@@ -624,68 +638,108 @@ final class PollBubbleView: UIView {
     }
 }
 
+/// One option. owner 2026-10-21 redesign: the circle (or square) is drawn by hand so its stroke is
+/// exactly 2pt, and a chosen option is a filled circle with a tick in the bubble's own colour.
+/// The track is added FIRST, so in Filled rows the fill grows behind the words, not over them.
 final class PollOptionRow: UIView {
-    private let glyph = UIImageView()
-    private let label = UILabel()
-    private let percent = UILabel()
     private let track = UIView()
     private let fill = UIView()
+    private let glyph = UIView()                // the ring / square, or the filled mark
+    private let mark = UIImageView()            // the tick (or a quiz cross) inside a filled mark
+    private let label = UILabel()
+    private let percent = UILabel()
     private var option: PollPlan.Option?
+    private var filledRows = false
+    private var ink: UIColor = .label
+    private var check: UIColor = .systemBlue
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
-        glyph.contentMode = .scaleAspectFit
+        track.clipsToBounds = true
+        addSubview(track)
+        track.addSubview(fill)
         addSubview(glyph)
+        mark.contentMode = .center
+        glyph.addSubview(mark)
         label.numberOfLines = 0
         label.lineBreakMode = .byWordWrapping
         addSubview(label)
         percent.textAlignment = .right
         addSubview(percent)
-        track.clipsToBounds = true
-        addSubview(track)
-        track.addSubview(fill)
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func apply(_ o: PollPlan.Option, tint: UIColor) {
+    func apply(_ o: PollPlan.Option, filledRows: Bool, trackRadius: CGFloat, ink: UIColor, check: UIColor) {
         option = o
+        self.filledRows = filledRows
+        self.ink = ink
+        self.check = check
         glyph.frame = o.glyph
+        mark.frame = glyph.bounds
         label.frame = o.label
         label.attributedText = o.labelAttr
         percent.frame = o.percent
         track.frame = o.track
-        track.layer.cornerRadius = o.track.height / 2
-        track.backgroundColor = tint.withAlphaComponent(0.18)
-        fill.layer.cornerRadius = o.track.height / 2
+        track.layer.cornerRadius = trackRadius
+        track.layer.cornerCurve = .continuous
+        // Thick bars: the fill has the bar's own rounded ends. Filled rows: a plain rectangle the
+        // row's corners clip, so it reads as the row filling from the left.
+        fill.layer.cornerRadius = filledRows ? 0 : trackRadius
     }
 
     enum QuizMark { case none, right, wrong }
 
-    func paint(fraction: Double, chosen: Bool, multiple: Bool, tint: UIColor, quiz: QuizMark = .none) {
+    func paint(fraction: Double, chosen: Bool, multiple: Bool, showResults: Bool, quiz: QuizMark = .none) {
         guard let o = option else { return }
-        var symbol = multiple
-            ? (chosen ? "checkmark.square.fill" : "square")
-            : (chosen ? "largecircle.fill.circle" : "circle")
-        var color = tint
+        let side = o.glyph.width
+        let squareRadius = side * 0.27
+        glyph.layer.cornerRadius = multiple ? squareRadius : side / 2
+        glyph.layer.cornerCurve = .continuous
+        let markConfig = UIImage.SymbolConfiguration(pointSize: side * 0.5, weight: .bold)
         switch quiz {
-        case .right: symbol = "checkmark.circle.fill"; color = .systemGreen
-        case .wrong: symbol = "xmark.circle.fill"; color = .systemRed
-        case .none: break
+        case .right:
+            glyph.layer.borderWidth = 0
+            glyph.backgroundColor = .systemGreen
+            mark.image = UIImage(systemName: "checkmark", withConfiguration: markConfig)
+            mark.tintColor = .white
+        case .wrong:
+            glyph.layer.borderWidth = 0
+            glyph.backgroundColor = .systemRed
+            mark.image = UIImage(systemName: "xmark", withConfiguration: markConfig)
+            mark.tintColor = .white
+        case .none:
+            if chosen {
+                glyph.layer.borderWidth = 0
+                glyph.backgroundColor = ink
+                mark.image = UIImage(systemName: "checkmark", withConfiguration: markConfig)
+                mark.tintColor = check
+            } else {
+                glyph.backgroundColor = .clear
+                glyph.layer.borderWidth = 2
+                glyph.layer.borderColor = ink.withAlphaComponent(0.85).cgColor
+                mark.image = nil
+            }
         }
-        glyph.image = UIImage(systemName: symbol,
-                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 16))
-        glyph.tintColor = color
+        // Filled rows: the chosen option's words go semibold (measured for it in the plan).
+        label.attributedText = (filledRows && chosen) ? o.labelChosenAttr : o.labelAttr
+
+        percent.isHidden = !showResults
         percent.attributedText = NSAttributedString(
             string: "\(Int((fraction * 100).rounded()))%",
-            attributes: [.font: UIFont.systemFont(ofSize: 13, weight: .semibold),
-                         .foregroundColor: tint.withAlphaComponent(0.85)])
-        fill.backgroundColor = tint
-        // The one thing that animates in a poll: the bar growing as a vote lands.
+            attributes: [.font: UIFont.systemFont(ofSize: 17, weight: .bold), .foregroundColor: ink])
+
+        if filledRows {
+            track.backgroundColor = ink.withAlphaComponent(showResults ? 0.10 : 0.14)
+            fill.backgroundColor = ink.withAlphaComponent(chosen ? 0.32 : 0.20)
+        } else {
+            track.backgroundColor = ink.withAlphaComponent(0.22)
+            fill.backgroundColor = chosen ? ink : ink.withAlphaComponent(0.70)
+        }
+        let shown = showResults ? CGFloat(max(0, min(1, fraction))) : 0
+        // The one thing that animates in a poll: the fill growing as a vote lands.
         UIView.animate(withDuration: 0.25) {
-            self.fill.frame = CGRect(x: 0, y: 0,
-                                     width: o.track.width * CGFloat(max(0, min(1, fraction))),
-                                     height: o.track.height)
+            self.fill.frame = CGRect(x: 0, y: 0, width: o.track.width * shown, height: o.track.height)
         }
     }
 }

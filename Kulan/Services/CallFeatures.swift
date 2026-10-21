@@ -51,4 +51,8 @@ enum AppFeatures {
     /// The My Profile card under the header in Settings (owner 2026-10-11: hidden). The page it
     /// opens is kept; this is only its door in Settings.
     static var myProfileCard: Bool { RemoteFeatures.value("myProfileCard", default: false) }
+    /// The poll bubble's look (owner 2026-10-21, chosen from two mockups). false = "Thick bars"
+    /// (each option a row with a thick bar under it, the default); true = "Filled rows" (each option
+    /// a rounded row that fills from the left). Read once per layout pass, so one launch is one look.
+    static var pollRows: Bool { RemoteFeatures.value("pollRows", default: false) }
 }
