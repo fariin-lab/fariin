@@ -93,7 +93,35 @@ final class StickerPlayerView: UIView {
     private(set) var url: URL?
     /// What the owner asked for; Low Power Mode and a missing window can still hold it back.
     private var wantsPlay = false
+    /// The tile's side in points, for a .tgs still drawn at the size it shows.
+    private var tilePoints: CGFloat = 80
     private static let animKey = "sticker.frames"
+
+    // ⛔ NO LIVE .tgs WHILE THE PANEL SCROLLS — owner 2026-10-21: "the sticker keyboard lags when I
+    // scroll". Every tile built a whole Lottie layer tree on the main thread as it came on screen.
+    // Now a moving panel shows each animated sticker's saved still (`TGSSticker.stillAsync`); live
+    // animations start once the grid stops, one tile per run-loop turn, and a tile that leaves the
+    // screen lets its animation go.
+    static let scrollChanged = Notification.Name("StickerPanel.scrollChanged")
+    @MainActor static private(set) var panelScrolling = false
+    @MainActor static func setPanelScrolling(_ on: Bool) {
+        guard on != panelScrolling else { return }
+        panelScrolling = on
+        NotificationCenter.default.post(name: scrollChanged, object: nil)
+    }
+    @MainActor private static var startJobs: [() -> Void] = []
+    @MainActor private static var starting = false
+    @MainActor private static func enqueueStart(_ job: @escaping () -> Void) {
+        startJobs.append(job)
+        drainStarts()
+    }
+    @MainActor private static func drainStarts() {
+        guard !starting, !startJobs.isEmpty else { return }
+        starting = true
+        let job = startJobs.removeFirst()
+        DispatchQueue.main.async { job(); starting = false; drainStarts() }
+    }
+    private var startPending = false
     /// Owner 2026-10-18: a tile still decoding showed nothing. The shimmer stands in until its
     /// first frame is up; a cache hit never shows it.
     private let skeleton = SkeletonShimmerView()
@@ -106,6 +134,8 @@ final class StickerPlayerView: UIView {
         addSubview(skeleton)
         NotificationCenter.default.addObserver(self, selector: #selector(powerChanged),
                                                name: .NSProcessInfoPowerStateDidChange, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(powerChanged),
+                                               name: Self.scrollChanged, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -126,16 +156,13 @@ final class StickerPlayerView: UIView {
     func setSticker(url: URL?, pixelSize: Int) {
         guard url != self.url || (frames == nil && tgs == nil) else { return }
         token += 1
+        tilePoints = CGFloat(pixelSize) / max(1, UIScreen.main.scale)
         self.url = url
         frames = nil
         art.removeAnimation(forKey: Self.animKey)
         art.contents = nil
         tgs = nil
-        if let v = lottie {
-            v.stop()
-            v.animation = nil
-            v.isHidden = true
-        }
+        dropLottie()
         guard let url else { skeleton.setActive(false); return }
         if TGSSticker.isTGS(url) { loadTGS(url); return }
         let key = StickerFrameCache.key(url, pixelSize)
@@ -194,20 +221,27 @@ final class StickerPlayerView: UIView {
 
     private func showTGS(_ anim: LottieAnimation) {
         tgs = anim
-        let v: LottieAnimationView
-        if let have = lottie {
-            v = have
-            v.animation = anim
-        } else {
-            v = TGSSticker.makeView(anim)
-            insertSubview(v, belowSubview: skeleton)
-            lottie = v
+        guard let url else { return }
+        let mine = token
+        TGSSticker.stillAsync(url: url, side: tilePoints) { [weak self] img in
+            guard let self, self.token == mine else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            self.art.contents = img?.cgImage
+            CATransaction.commit()
+            self.skeleton.fadeOut()
+            self.apply()
         }
-        v.frame = bounds
-        v.isHidden = false
-        v.currentProgress = 0
-        skeleton.fadeOut()
-        apply()
+    }
+
+    /// The live view goes entirely when not playing, so a scrolled-past tile holds no layer tree.
+    private func dropLottie() {
+        startPending = false
+        guard let v = lottie else { return }
+        v.stop()
+        v.removeFromSuperview()
+        lottie = nil
+        art.isHidden = false
     }
 
     func play() { wantsPlay = true; apply() }
@@ -223,12 +257,31 @@ final class StickerPlayerView: UIView {
     }
 
     private func apply() {
-        if let v = lottie, tgs != nil {
+        if let anim = tgs {
             let should = wantsPlay && window != nil && !ProcessInfo.processInfo.isLowPowerModeEnabled
-            if should {
+                && !Self.panelScrolling
+            guard should else { dropLottie(); return }
+            if let v = lottie {
                 if !v.isAnimationPlaying { v.play() }
-            } else if v.isAnimationPlaying {
-                v.pause()
+                return
+            }
+            guard !startPending else { return }
+            startPending = true
+            let mine = token
+            Self.enqueueStart { [weak self] in
+                guard let self, self.token == mine, self.startPending, self.tgs === anim,
+                      self.wantsPlay, self.window != nil, !Self.panelScrolling else {
+                    self?.startPending = false
+                    return
+                }
+                self.startPending = false
+                let v = TGSSticker.makeView(anim)
+                v.frame = self.bounds
+                self.insertSubview(v, belowSubview: self.skeleton)
+                self.lottie = v
+                v.currentProgress = 0
+                self.art.isHidden = true
+                v.play()
             }
             return
         }

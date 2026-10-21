@@ -79,6 +79,62 @@ enum TGSSticker {
         return img
     }
 
+    // MARK: Stills without stutter (owner 2026-10-21: "the sticker keyboard lags when I scroll")
+
+    /// Frame 0 for a tile, never stalling a scroll: memory, then a PNG kept in Caches (read off the
+    /// main thread), and only a sticker never seen before is drawn, on the main thread, ONE per run-
+    /// loop turn, then written to disk so it is drawn once per phone, ever.
+    @MainActor static func stillAsync(url: URL, side: CGFloat, _ done: @escaping (UIImage?) -> Void) {
+        let key = "\(url.path)#\(Int(side))" as NSString
+        if let hit = stills.object(forKey: key) { done(hit); return }
+        let file = stillFile(url, side)
+        let scale = UIScreen.main.scale
+        diskQueue.async {
+            if let file, let data = try? Data(contentsOf: file), let img = UIImage(data: data, scale: scale) {
+                DispatchQueue.main.async { stills.setObject(img, forKey: key); done(img) }
+                return
+            }
+            let anim = animation(url: url)   // decoded here, off the main thread
+            DispatchQueue.main.async { enqueueDraw(anim, key: key, file: file, side: side, done) }
+        }
+    }
+
+    private static let diskQueue = DispatchQueue(label: "TGSStills", qos: .userInitiated)
+    @MainActor private static var drawJobs: [() -> Void] = []
+    @MainActor private static var drawing = false
+
+    @MainActor private static func enqueueDraw(_ anim: LottieAnimation?, key: NSString, file: URL?, side: CGFloat,
+                                               _ done: @escaping (UIImage?) -> Void) {
+        drawJobs.append {
+            if let hit = stills.object(forKey: key) { done(hit); return }
+            guard let anim, let img = still(anim, side: side) else { done(nil); return }
+            stills.setObject(img, forKey: key)
+            done(img)
+            if let file, let png = img.pngData() { diskQueue.async { try? png.write(to: file, options: .atomic) } }
+        }
+        drainDraws()
+    }
+
+    @MainActor private static func drainDraws() {
+        guard !drawing, !drawJobs.isEmpty else { return }
+        drawing = true
+        let job = drawJobs.removeFirst()
+        DispatchQueue.main.async {
+            job()
+            drawing = false
+            drainDraws()
+        }
+    }
+
+    private static func stillFile(_ url: URL, _ side: CGFloat) -> URL? {
+        guard let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
+        let dir = base.appendingPathComponent("tgsStills", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let pack = url.deletingLastPathComponent().lastPathComponent
+        let name = url.deletingPathExtension().lastPathComponent
+        return dir.appendingPathComponent("\(pack)_\(name)_\(Int(side)).png")
+    }
+
     /// The main-thread engine draws into ordinary layers, which `render(in:)` can copy; the Core
     /// Animation engine's frames live in the render server and would come out blank.
     @MainActor static func still(_ anim: LottieAnimation, side: CGFloat) -> UIImage? {

@@ -388,6 +388,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        StickerPlayerView.setPanelScrolling(false)   // a panel closed mid-fling must not stay frozen
         // Back on screen: pick up what changed while away (a sticker just sent, one just made).
         if window != nil, !editing { reload() }
         if window != nil { gifGrid.refreshLocalShelf() }
@@ -952,11 +953,29 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         // stickers hides them, scrolling back shows them. Only a drag moves them, so a layout pass or
         // the strip's own jump never flickers them.
         guard sv.isTracking || sv.isDecelerating else { lastY = sv.contentOffset.y; return }
+        // Animated (.tgs) tiles show stills while the grid moves (owner 2026-10-21, scroll lag).
+        StickerPlayerView.setPanelScrolling(true)
         let y = sv.contentOffset.y, dy = y - lastY
         lastY = y
         if y <= 0 { setHeaderHidden(false) }
         else if dy > 6 { setHeaderHidden(true) }
         else if dy < -6 { setHeaderHidden(false) }
+    }
+
+    // The grid has stopped: the stickers on screen start moving.
+    func scrollViewDidEndDecelerating(_ sv: UIScrollView) {
+        guard sv === grid else { return }
+        StickerPlayerView.setPanelScrolling(false)
+    }
+
+    func scrollViewDidEndDragging(_ sv: UIScrollView, willDecelerate decelerate: Bool) {
+        guard sv === grid, !decelerate else { return }
+        StickerPlayerView.setPanelScrolling(false)
+    }
+
+    func scrollViewDidEndScrollingAnimation(_ sv: UIScrollView) {
+        guard sv === grid else { return }
+        StickerPlayerView.setPanelScrolling(false)
     }
 
     private var lastY: CGFloat = 0
