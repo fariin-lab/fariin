@@ -299,6 +299,13 @@ struct GroupHistoryView: View {
 
     var body: some View {
         List {
+            // In the list again (owner 2026-10-21: floated in a top inset they vanished under the
+            // bar's own scroll-edge fade). The gap above them is the content margin below.
+            Section {
+                shelves
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+            }
             if events.isEmpty {
                 Section { emptyState.listRowBackground(Color.clear) }
             } else if shown.isEmpty {
@@ -323,9 +330,8 @@ struct GroupHistoryView: View {
         }
         .listStyle(.insetGrouped)
         .listSectionSpacing(.compact)
-        // Tabs float in glass right under the header (owner 2026-10-21: the list row put a big gap
-        // above them); the list scrolls under them.
-        .safeAreaInset(edge: .top, spacing: 0) { shelves }
+        // No band above the tabs (owner 2026-10-21): the list starts right under the header.
+        .contentMargins(.top, 0, for: .scrollContent)
         .animation(.snappy(duration: 0.25), value: shelf)
         .animation(.snappy(duration: 0.25), value: actor)
         // At the foot, as Members has it (owner 2026-10-20).
