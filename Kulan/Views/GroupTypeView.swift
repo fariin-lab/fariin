@@ -135,8 +135,8 @@ struct GroupTypeView: View {
                 Button { showSend = true } label: {
                     Text("Share Link").fontWeight(.semibold).foregroundStyle(.white)
                         .frame(maxWidth: .infinity).frame(height: 48)
-                        // The app's tint is `.primary` (white in dark mode, so the button was blank).
-                        .background(Capsule().fill(Color(hex: 0x2392FE)))
+                        // Blue-tinted liquid glass (owner 2026-10-21); was a flat blue fill.
+                        .liquidGlass(Capsule(), interactive: true, tint: Color(hex: 0x2392FE))
                 }
                 .buttonStyle(.plain)
                 .sheet(isPresented: $showSend) { ForwardPicker(shareText: url) }
