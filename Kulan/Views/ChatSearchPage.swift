@@ -413,6 +413,8 @@ struct ChatSearchPage: View {
                                                      "title": e.title, "photoUrl": e.photo]) {
                     m.groups[e.key] = hit
                     rows.append(SearchPageRow(kind: .publicGroup, key: e.key))
+                    let cid = e.key
+                    DispatchQueue.main.async { GroupDirectory.warm(cid: cid) }   // opens at once (2026-10-21)
                 }
             }
         }
@@ -464,6 +466,9 @@ struct ChatSearchPage: View {
         let mine = Set(repo.conversations.filter { $0.isGroup && $0.users.contains(me) }.map { $0.id })
         for g in groupHits where !g.isMember && !mine.contains(g.cid) {
             m.groups[g.cid] = g
+            // The first few public hits are fetched ahead, so a tap opens with nothing to wait for
+            // (owner 2026-10-21). Next turn: not while the page's model is being built.
+            if m.groups.count <= 3 { let cid = g.cid; DispatchQueue.main.async { GroupDirectory.warm(cid: cid) } }
             personRows.append(SearchPageRow(kind: .publicGroup, key: g.cid))
         }
         if !showAllPeople, personRows.count > Self.globalCollapsed {

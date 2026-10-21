@@ -211,6 +211,38 @@ enum GroupNameCheck: Equatable {
         case failed(String)
     }
 
+    // ⛔ OPEN AT ONCE, AS THE REFERENCE APP DOES — owner 2026-10-21: tapping a group in search showed
+    // a spinner page while two server calls ran one after the other. Their search row already holds
+    // the peer, so the chat opens on what is known and fills in behind. Ours: every answer is kept
+    // (by cid and by @name), search warms the first few public hits, and the page asks both
+    // questions at once.
+    @MainActor private static var previews: [String: PublicGroupPreview] = [:]
+    @MainActor private static var peeks: [String: Bool] = [:]
+
+    @MainActor static func cachedPreview(name: String?, cid: String?) -> PublicGroupPreview? {
+        if let cid, let p = previews["c:" + cid] { return p }
+        if let name, let p = previews["n:" + name.lowercased()] { return p }
+        return nil
+    }
+    @MainActor static func cachedPeek(_ cid: String) -> Bool? { peeks[cid] }
+
+    @MainActor fileprivate static func remember(_ p: PublicGroupPreview) {
+        previews["c:" + p.cid] = p
+        if !p.username.isEmpty { previews["n:" + p.username.lowercased()] = p }
+    }
+
+    /// Fetched ahead (search results, Recent), so a tap opens with nothing left to wait for.
+    @MainActor private static var warming = Set<String>()
+    @MainActor static func warm(cid: String) {
+        guard previews["c:" + cid] == nil, warming.insert(cid).inserted else { return }
+        Task {
+            async let a = preview(name: nil, cid: cid)
+            async let b = canPeek(cid: cid)
+            _ = await (a, b)
+            await MainActor.run { _ = warming.remove(cid) }
+        }
+    }
+
     /// By @name (a link) or by cid (a search row).
     static func preview(name: String?, cid: String?) async -> PreviewOutcome {
         var args: [String: Any] = [:]
@@ -222,6 +254,7 @@ enum GroupNameCheck: Equatable {
             guard let p = PublicGroupPreview(res.data as? [String: Any] ?? [:]) else {
                 return .refused("This group is not public.")
             }
+            await MainActor.run { remember(p) }
             return .found(p)
         } catch {
             let ns = error as NSError
@@ -243,8 +276,12 @@ enum GroupNameCheck: Equatable {
             _ = try await FirestoreHub.db.collection("conversations").document(cid).collection("messages")
                 .order(by: "createdAt", descending: true).limit(to: 1)
                 .getDocuments(source: .server)
+            await MainActor.run { peeks[cid] = true }
             return true
         } catch {
+            // Offline is not an answer to keep; a refusal is.
+            let ns = error as NSError
+            if ns.code == FirestoreErrorCode.permissionDenied.rawValue { await MainActor.run { peeks[cid] = false } }
             return false
         }
     }

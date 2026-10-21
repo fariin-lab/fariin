@@ -200,22 +200,41 @@ struct PublicGroupSheet: View {
     // MARK: - Work
 
     private func load() async {
-        let answer = await GroupDirectory.preview(name: target.name, cid: target.cid)
+        // owner 2026-10-21 (a spinner page after tapping a searched group): what is already known
+        // opens at once, the server corrects it behind (see `GroupDirectory.cachedPreview`).
+        if preview == nil, let p = GroupDirectory.cachedPreview(name: target.name, cid: target.cid) {
+            if p.isMember { openChat(p); return }
+            if GroupDirectory.cachedPeek(p.cid) == true { guest = PublicGroupGuest(p) }
+            preview = p
+        }
+        // Both questions at once when the group is known by id (a search row); by @name the
+        // second needs the first's answer.
+        async let answerTask = GroupDirectory.preview(name: target.name, cid: target.cid)
+        async let earlyPeek = Self.peek(target.cid)
+        let answer = await answerTask
         // Closed while it loaded: nothing opens behind the user's back (audit 2026-10-20).
         guard !Task.isCancelled else { return }
         switch answer {
         case .found(let p):
             if p.isMember { openChat(p); return }
             // owner 2026-10-21: the real chat when the rules let me read it from outside.
-            let readable = await GroupDirectory.canPeek(cid: p.cid)
+            let early = await earlyPeek
+            let readable: Bool
+            if let early { readable = early } else { readable = await GroupDirectory.canPeek(cid: p.cid) }
             guard !Task.isCancelled else { return }
-            if readable { guest = PublicGroupGuest(p) }
+            // An open guest chat stays the same view; only a newly readable group switches to it.
+            if readable, guest == nil { guest = PublicGroupGuest(p) }
             preview = p
         case .refused(let why):
             if preview == nil { refusedText = why }
         case .failed(let why):
             if preview == nil { failedText = why }
         }
+    }
+
+    private static func peek(_ cid: String?) async -> Bool? {
+        guard let cid else { return nil }
+        return await GroupDirectory.canPeek(cid: cid)
     }
 
     private func openChat(_ p: PublicGroupPreview) {
