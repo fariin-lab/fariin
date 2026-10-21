@@ -980,6 +980,26 @@ jobs:
 
         run: fastlane beta
 
+      # Crash reports readable in Crashlytics (owner 2026-10-21). The archive's dSYM zip goes up with
+      # the `upload-symbols` tool that ships inside the Firebase xcframeworks mirror (Sources/
+      # FirebaseCrashlytics). Never fails the job: the build is already on TestFlight by now, and
+      # the step below still keeps the dSYM as an artifact either way.
+      - name: Upload dSYM to Crashlytics
+        if: success()
+        continue-on-error: true
+        timeout-minutes: 10
+        run: |
+          TOOL=$(find ~/Library/Developer/Xcode/DerivedData -path '*/checkouts/*/Sources/FirebaseCrashlytics/upload-symbols' -type f 2>/dev/null | head -n1)
+          if [ -z "$TOOL" ]; then echo "::warning::upload-symbols not found in SourcePackages; dSYM kept as artifact only"; exit 0; fi
+          chmod +x "$TOOL"
+          found=0
+          for z in $(find . -maxdepth 2 -name '*.dSYM.zip'); do
+            found=1
+            echo "uploading $z"
+            "$TOOL" -gsp Kulan/Resources/GoogleService-Info.plist -p ios "$z" || echo "::warning::upload-symbols failed for $z"
+          done
+          [ "$found" = "1" ] || echo "::warning::no .dSYM.zip found next to the project"
+
       # ⛔ KEEP THE SYMBOLS — 2026-09-29: build 797 crashed on the owner's phone and the report
       # could not be read. The archive makes a dSYM, the export is told not to send it to Apple
       # (`uploadSymbols: false`, see the Fastfile for why), and the runner threw it away, so nothing
