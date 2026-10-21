@@ -726,7 +726,14 @@ struct GroupLinkSheet: View {
 
     private var actions: some View {
         HStack(spacing: 0) {
-            circle("paperplane", "Send") { onSend(); dismiss() }
+            // Copy first, as on the main link card (owner 2026-10-21). Stays open: the pill above
+            // turns green, the same answer a tap on it gives.
+            circle("ic_link_copy", "Copy") {
+                onCopy()
+                withAnimation(.easeInOut(duration: 0.2)) { copied = true }
+                Task { try? await Task.sleep(nanoseconds: 1_500_000_000); withAnimation { copied = false } }
+            }
+            circle("ic_link_send", "Send") { onSend(); dismiss() }
             if let url = URL(string: link.url) {
                 ShareLink(item: url) {
                     PosterActionIcon(icon: "ic_link_share", diameter: 54, onPhoto: false, label: "Share")
@@ -734,7 +741,7 @@ struct GroupLinkSheet: View {
                 }
                 .buttonStyle(.plain)
             }
-            circle("qrcode", "QR Code") { onQR(); dismiss() }
+            circle("ic_qr", "QR Code") { onQR(); dismiss() }
         }
         .padding(.horizontal, 20)
     }
