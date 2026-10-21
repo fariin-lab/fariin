@@ -374,8 +374,11 @@ struct AttachRecentsStrip: View {
     // ⚠️ The selected COUNT used to be a circle at the header's top right. The header is gone
     // (owner, 2026-09-02) and the count did NOT move onto the send button — the numbered ticks on
     // the photos themselves are the only count now. That is what his screenshot shows.
+    // ⛔ THE REFERENCE APP'S NUMBERS (owner 2026-10-21: "sides too small, use exactly theirs"):
+    // 28pt each side at rest, 16 with the keyboard up; ONE glass capsule, radius 20, min height 40,
+    // the send a 40x34 blue pill INSIDE it, 3pt from its right/top/bottom. Same in half and full sheet.
     private var captionBar: some View {
-        HStack(alignment: .bottom, spacing: 10) {   // send hugs the bottom as the caption grows
+        HStack(alignment: .bottom, spacing: 0) {   // send hugs the bottom as the caption grows
             HStack(alignment: .bottom, spacing: 8) {
                 // View-once media can't carry a caption, so the field is disabled + the
                 // prompt says why when View Once is on.
@@ -407,25 +410,22 @@ struct AttachRecentsStrip: View {
                 }
             }
             .padding(.leading, 16).padding(.trailing, 4).frame(minHeight: 40)
-            // ⛔ GLASS ON EVERY OS — owner, 2026-08-25, same call as the attach bar above it. See
-            // that one for why the ported blur went, and for the commits it lives in.
-            .liquidGlass(RoundedRectangle(cornerRadius: 23, style: .continuous), interactive: true)   // real native Liquid Glass
             Button { sendSelected() } label: {
-                // Match the main composer send: WHITE arrow on a blue-tinted glass circle (was a blue
-                // arrow on clear glass, which read as a different, washed-out button).
-                Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold))
+                // White arrow on the blue pill, as the main composer send.
+                Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold))
                     .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)   // 40px send (user spec)
-                    .liquidGlass(Circle(), interactive: true, tint: Theme.defaultBubble(false))
-                    .contentShape(Circle())
+                    .frame(width: 40, height: 34)
+                    .background(Capsule().fill(Theme.defaultBubble(false)))
+                    .contentShape(Capsule())
             }
             .buttonStyle(.plain)
+            .padding(.trailing, 3).padding(.vertical, 3)
         }
-        // ⛔ THE COMPOSER'S BOTTOM, NOT A FLAT 4 — owner, 2026-08-25. Sides, top, height and corners
-        // are untouched: he asked for the bottom padding behaviour and said twice not to change the
-        // bar's size. At rest this dips into the indicator band exactly as the composer does; with
-        // the keyboard up it keeps the composer's 8pt gap above the keys.
-        .padding(.horizontal, 16).padding(.top, 8)
+        // ⛔ GLASS ON EVERY OS — owner, 2026-08-25. One capsule round field and send (reference).
+        .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
+        // ⛔ THE COMPOSER'S BOTTOM, NOT A FLAT 4 — owner, 2026-08-25. At rest this dips into the
+        // indicator band as the composer does; with the keyboard up it keeps the 8pt gap above the keys.
+        .padding(.horizontal, keyboard.height > 0 ? 16 : 28).padding(.top, 8)
         .systemBarBottomChrome(keyboardUp: keyboard.height > 0)
         // Focusing the caption grows the sheet to .large so this bar pins above the keyboard instead of
         // the medium sheet shoving the whole content up (the caption "jumping" to mid-screen).
