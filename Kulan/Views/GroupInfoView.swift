@@ -2241,7 +2241,10 @@ struct GroupMemberSheet: View {
     /// The tag as it reads right now: the field while it can be edited, else the saved one.
     private var liveTag: GroupRole? {
         let words = canEditRole ? cleanedRole : (role?.text ?? "")
-        return words.isEmpty ? nil : GroupRole(text: words, emoji: role?.emoji, color: canEditRole ? roleColor : role?.color)
+        // The saved colour until the editor has loaded its own copy (owner 2026-10-21: the card
+        // showed the tag grey; `roleColor` is only filled when Edit Admin Rights opens).
+        return words.isEmpty ? nil : GroupRole(text: words, emoji: role?.emoji,
+                                               color: canEditRole && rightsLoaded ? roleColor : role?.color)
     }
 
     /// One chip only (owner 2026-10-19): the tag, when there is one, stands in for Owner/Admin.
