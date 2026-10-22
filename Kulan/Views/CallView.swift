@@ -728,8 +728,8 @@ struct CallView: View {
         // with it away it drops toward the bottom edge. Drag can park it in any corner; these are
         // the travel bounds.
         // 1:1 audit r3 G4, 2026-10-08: with the "Allow camera access" line up, clear its measured
-        // height (bar 76 + 22 below it + the line + 4); at default text size that is still 132.
-        let barClear: CGFloat = max(132, call.cameraDenied ? 22 + 76 + cameraLineHeight + 4 : 0)
+        // height (bar + 22 below it + the line + 4); at default text size that is still bar + 56.
+        let barClear: CGFloat = max(Self.barHeight + 56, call.cameraDenied ? 22 + Self.barHeight + cameraLineHeight + 4 : 0)
         let bottomPad = safeBottom + ((controlsVisible && !landscape) ? barClear : 12) + pillLift
         let trailingPad = 12 + winInsets.right
         let maxLeft = -(geo.size.width - tileW - 24 - winInsets.left - winInsets.right)
@@ -1066,7 +1066,7 @@ struct CallView: View {
         // away, the card rises to just under the status bar and the tiles sink to the bottom edge;
         // with them up, the layout clears the header and the call buttons as before.
         let top = controlsVisible ? max(headerHeight, winInsets.top + 76) + 4 : winInsets.top + 8
-        let bottom = controlsVisible ? winInsets.bottom + 22 + 76 + 14 : max(winInsets.bottom, 12) + 4
+        let bottom = controlsVisible ? winInsets.bottom + 22 + Self.barHeight + 14 : max(winInsets.bottom, 12) + 4
         let tileH: CGFloat = min(150, max(96, geo.size.height * 0.17))
         return VStack(alignment: .leading, spacing: 12) {
             shareCard
@@ -1193,7 +1193,7 @@ struct CallView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Exit full screen")
         .padding(.trailing, 16 + winInsets.right)
-        .padding(.bottom, winInsets.bottom + 22 + 76 + 14)
+        .padding(.bottom, winInsets.bottom + 22 + Self.barHeight + 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         .opacity(controlsVisible ? 1 : 0)
         .allowsHitTesting(controlsVisible)
@@ -1201,11 +1201,11 @@ struct CallView: View {
 
     // MARK: - Screen share pill (2026-10-08)
 
-    /// Just above the bar (bar is 52 + 2×12 tall, 14pt gap), or the bar's own spot while it is away.
+    /// Just above the bar (`barHeight` tall, 14pt gap), or the bar's own spot while it is away.
     private var sharePillBottom: CGFloat {
         var bottom: CGFloat = winInsets.bottom + 22
         if controlsVisible {
-            bottom += 76 + 14
+            bottom += Self.barHeight + 14
             if call.cameraDenied { bottom += 32 }   // clear the "Allow camera access" line
         }
         return bottom
@@ -1321,34 +1321,57 @@ struct CallView: View {
         router.pendingChatId = cid
     }
 
+    // ⛔ BIGGER BUTTONS WITH THEIR NAMES — Kasim 2026-10-22, with the other big app's call screen
+    // beside ours: theirs ~72 pt circles with a name under each, ours 52 pt and unnamed. Apple's
+    // own call screen is the model kept: one row, big circles, a name under each. 64 pt with four
+    // buttons; 58 pt when Flip makes five, so the row still fits a 375 pt phone:
+    // 5 x 58 + 4 x 8 + 2 x 12 (panel) + 2 x 12 (gutters) = 370.
+    /// The control bar's height: 64 pt circle + 6 + the name (~15) + 12 above + 10 below. Everything
+    /// that clears the bar reads this (it was a bare 76, the old 52 pt row + 2 x 12).
+    static let barHeight: CGFloat = 108
+    private var controlCount: Int { (call.cameraOn && !myScreenOnCamera) ? 5 : 4 }
+    private var circleSize: CGFloat { controlCount >= 5 ? 58 : 64 }
+
+    /// A control's name under its circle (Mute, Video, Speaker...).
+    private func named(_ title: String, _ circle: some View) -> some View {
+        VStack(spacing: 6) {
+            circle
+            Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.9))
+                .lineLimit(1).fixedSize()
+                .accessibilityHidden(true)   // the circle's own label already says it
+        }
+    }
+
     private var controlBar: some View {
-        HStack(spacing: 14) {
+        HStack(alignment: .top, spacing: controlCount >= 5 ? 8 : 14) {
             // Labels: owner audit 2026-10-06 #19 — icon-only buttons read as "button" or the raw
             // symbol name under VoiceOver. Each says what a tap does now.
             callCircle(call.isMuted ? "mic.slash.fill" : "mic.fill", active: call.isMuted,
-                       label: call.isMuted ? "Unmute" : "Mute") { call.toggleMute() }
+                       label: call.isMuted ? "Unmute" : "Mute", title: "Mute") { call.toggleMute() }
             // MY camera — turn it on/off freely (the other side just sees it, no
             // permission). When it can be pressed: see `cameraButtonEnabled` (M-052).
             callCircle(call.cameraOn ? "video.fill" : "video.slash.fill", active: !call.cameraOn,
-                       label: call.cameraOn ? "Turn camera off" : "Turn camera on") { call.toggleCamera() }
+                       label: call.cameraOn ? "Turn camera off" : "Turn camera on", title: "Video") { call.toggleCamera() }
                 // Dimmed while my screen is shared too: the share owns my video until it stops, and
                 // stopping brings the camera back exactly as it was.
                 .disabled(!cameraButtonEnabled)
                 .opacity(cameraButtonEnabled ? 1 : 0.4)
             // Flip front/back only while my camera is on (and actually showing, not a shared screen).
             if call.cameraOn && !myScreenOnCamera {
-                callCircle("arrow.triangle.2.circlepath", active: false, label: "Flip camera") { flipCamera() }
+                callCircle("arrow.triangle.2.circlepath", active: false, label: "Flip camera", title: "Flip") { flipCamera() }
             }
-            speakerCircle
-            endCircle
+            named("Speaker", speakerCircle)
+            named("End", endCircle)
         }
-        .padding(.horizontal, 16).padding(.vertical, 12)
+        .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 10)
         .background {
-            Capsule().fill(.ultraThinMaterial).environment(\.colorScheme, .dark)
-                .overlay(Capsule().fill(Color.black.opacity(0.25)))
-                .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 1))
+            // A rounded panel, not a capsule: the names under the circles make the row taller.
+            let panel = RoundedRectangle(cornerRadius: 30, style: .continuous)
+            panel.fill(.ultraThinMaterial).environment(\.colorScheme, .dark)
+                .overlay(panel.fill(Color.black.opacity(0.25)))
+                .overlay(panel.stroke(.white.opacity(0.12), lineWidth: 1))
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, 12)
     }
 
     // Smart speaker: no external device → plain earpiece/speaker toggle.
@@ -1360,10 +1383,10 @@ struct CallView: View {
                 // The external glyph is the DEVICE, not one generic pair of cans — see
                 // CallService.externalRouteIcon.
                 Image(systemName: call.audioRoute == .external ? call.externalRouteIcon : "speaker.wave.2.fill")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.system(size: circleSize * 0.38, weight: .semibold))
                     .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))   // r3 G2
                     .foregroundStyle(call.audioRoute == .earpiece ? .white : .black)
-                    .frame(width: 52, height: 52)
+                    .frame(width: circleSize, height: circleSize)
                     .background(call.audioRoute == .earpiece ? AnyShapeStyle(.clear) : AnyShapeStyle(.white), in: Circle())
                     .liquidGlass(Circle(), interactive: true, enabled: call.audioRoute == .earpiece)
                     .accessibilityHidden(true)   // #19: the picker on top is the one control
@@ -1371,28 +1394,33 @@ struct CallView: View {
                 AudioRoutePicker(onUse: { open in
                     // r2 H9a: no hide clock while the route sheet is up (as Add people, #40).
                     showControls(); if open { hideTask?.cancel() }
-                }).frame(width: 52, height: 52).clipShape(Circle())
+                }).frame(width: circleSize, height: circleSize).clipShape(Circle())
                     .accessibilityLabel("Audio output")
             }
         } else {
             // One steady speaker glyph; ON = filled white circle (the slash icon looked like
             // something was muted even when it wasn't).
-            callCircle("speaker.wave.2.fill", active: call.isSpeaker, label: "Speaker") { call.toggleSpeaker() }
+            circleButton("speaker.wave.2.fill", active: call.isSpeaker, label: "Speaker") { call.toggleSpeaker() }
                 .accessibilityAddTraits(call.isSpeaker ? .isSelected : [])
         }
     }
 
-    private func callCircle(_ icon: String, active: Bool, label: String, _ action: @escaping () -> Void) -> some View {
+    private func callCircle(_ icon: String, active: Bool, label: String, title: String,
+                            _ action: @escaping () -> Void) -> some View {
+        named(title, circleButton(icon, active: active, label: label, action))
+    }
+
+    private func circleButton(_ icon: String, active: Bool, label: String, _ action: @escaping () -> Void) -> some View {
         Button {
             buzz()   // r2 H9d
             showControls()          // using a button restarts the clock, never cuts it short
             action()
         } label: {
             Image(systemName: icon)
-                .font(.system(size: 20, weight: .semibold))
+                .font(.system(size: circleSize * 0.38, weight: .semibold))
                 .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))   // mic/speaker/camera slash morphs in (r3 G2)
                 .foregroundStyle(active ? .black : .white)
-                .frame(width: 52, height: 52)
+                .frame(width: circleSize, height: circleSize)
                 // Idle = real Liquid Glass circle (was a flat white-16% fill); active keeps the
                 // solid white pop, where glass would just mute the contrast.
                 .background(active ? AnyShapeStyle(.white) : AnyShapeStyle(.clear), in: Circle())
@@ -1411,8 +1439,8 @@ struct CallView: View {
             CallKitManager.shared.end()
         } label: {
             Image(systemName: "phone.down.fill")
-                .font(.system(size: 21, weight: .semibold)).foregroundStyle(.white)
-                .frame(width: 52, height: 52)
+                .font(.system(size: circleSize * 0.4, weight: .semibold)).foregroundStyle(.white)
+                .frame(width: circleSize, height: circleSize)
                 // Red Liquid Glass (still unmistakably the hang-up button, but native glass).
                 .liquidGlass(Circle(), interactive: true, tint: Color(.systemRed))
                 .contentShape(Circle())   // 2026-10-10: the whole circle, as the other buttons

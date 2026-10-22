@@ -153,9 +153,9 @@ struct GroupCallView: View {
             .transition(.opacity)
         }
     }
-    /// The capsule's top edge above the safe bottom (10 screen padding + 54 buttons + 2x12 capsule
-    /// padding) and a 12pt gap.
-    private static let moreMenuLift: CGFloat = 100
+    /// The panel's top edge above the safe bottom (10 screen padding + 58 buttons + 6 + ~15 name +
+    /// 12 + 10 panel padding, Kasim 2026-10-22) and a 12pt gap.
+    private static let moreMenuLift: CGFloat = 124
 
     // MARK: - Screen (layout switches and the hide clock's own triggers)
 
@@ -668,28 +668,31 @@ struct GroupCallView: View {
     private var controls: some View {
         // Fits a 375 pt phone inside its 14 pt gutters: 5 x 54 + 4 x 10 + 2 x 14 = 338 (audit
         // 2026-10-20: 12 and 18 made 354, past the gutters).
-        HStack(spacing: 10) {
+        // ⛔ BIGGER, NAMED — Kasim 2026-10-22 (with the 1:1 call, see `CallView.controlBar`): 58 pt
+        // circles with a name under each, in a rounded panel. On a 375 pt phone:
+        // 5 x 58 + 4 x 8 + 2 x 12 = 346, inside the 14 pt gutters (347).
+        HStack(alignment: .top, spacing: 8) {
             cameraButton
             micButton
             speakerButton
             moreButton
             endButton
         }
-        .padding(.horizontal, 14).padding(.vertical, 12)
-        .background(.ultraThinMaterial, in: Capsule())
+        .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
     }
 
     // A voice call link: the camera button is there, greyed and inert (owner, 2026-10-06).
     // VoiceOver labels name what a tap does (no visual change).
     private var cameraButton: some View {
-        ctrl(service.cameraOn ? "video.fill" : "video.slash.fill") { service.toggleCamera() }
+        ctrl(service.cameraOn ? "video.fill" : "video.slash.fill", title: "Video") { service.toggleCamera() }
             .disabled(service.cameraLocked)
             .opacity(service.cameraLocked ? 0.35 : 1)
             .accessibilityLabel(cameraLabel)
     }
 
     private var micButton: some View {
-        ctrl(service.micOn ? "mic.fill" : "mic.slash.fill") { service.toggleMic() }
+        ctrl(service.micOn ? "mic.fill" : "mic.slash.fill", title: "Mute") { service.toggleMic() }
             .accessibilityLabel(service.micOn ? "Mute" : "Unmute")
     }
 
@@ -698,7 +701,7 @@ struct GroupCallView: View {
     // solid white with a dark glyph, as the 1:1 call's Speaker does (`CallView.callCircle`). The
     // waves appearing and a fade were too faint to read as on or off.
     private var speakerButton: some View {
-        ctrl("speaker.wave.2.fill", active: service.speakerOn) { service.toggleSpeaker() }
+        ctrl("speaker.wave.2.fill", title: "Speaker", active: service.speakerOn) { service.toggleSpeaker() }
             .accessibilityLabel(service.speakerOn ? "Turn speaker off" : "Turn speaker on")
     }
 
@@ -706,7 +709,7 @@ struct GroupCallView: View {
     // and end. Reactions, raise hand and flip camera live in its panel (`GroupCallMoreMenu`). They
     // all need the room, so it waits for the call to be joined.
     private var moreButton: some View {
-        ctrl("ellipsis") { showMore.toggle() }
+        ctrl("ellipsis", title: "More") { showMore.toggle() }
             .disabled(!moreEnabled)
             .opacity(moreEnabled ? 1 : 0.35)
             .accessibilityLabel("More")
@@ -716,7 +719,7 @@ struct GroupCallView: View {
     // owner audit 2026-10-06 #4: before the room is up `activeCid` never changes, so the
     // onChange that closes this screen never fired and End looked dead. Close it here.
     private var endButton: some View {
-        ctrl("phone.down.fill", tint: Color(.systemRed)) { endCall() }
+        ctrl("phone.down.fill", title: "End", tint: Color(.systemRed)) { endCall() }
             .accessibilityLabel("End call")
     }
 
@@ -734,14 +737,24 @@ struct GroupCallView: View {
     /// Every press restarts the hide clock (the 1:1 screen's rule): hitting mute must not leave you
     /// two seconds from losing the rest of the buttons.
     /// `active`: the solid white "on" circle with a dark glyph (the 1:1 call's look), glass otherwise.
-    private func ctrl(_ icon: String, tint: Color? = nil, active: Bool = false,
+    private func ctrl(_ icon: String, title: String, tint: Color? = nil, active: Bool = false,
                       action: @escaping () -> Void) -> some View {
+        VStack(spacing: 6) {
+            ctrlCircle(icon, tint: tint, active: active, action: action)
+            Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.9))
+                .lineLimit(1).fixedSize()
+                .accessibilityHidden(true)   // the circle's own label already says it
+        }
+    }
+
+    private func ctrlCircle(_ icon: String, tint: Color?, active: Bool,
+                            action: @escaping () -> Void) -> some View {
         Button {
             action()
             armAutoHide()
         } label: {
-            Image(systemName: icon).font(.title3).foregroundStyle(active ? .black : .white)
-                .frame(width: 54, height: 54)
+            Image(systemName: icon).font(.system(size: 22, weight: .semibold)).foregroundStyle(active ? .black : .white)
+                .frame(width: 58, height: 58)
                 .background(active ? AnyShapeStyle(.white) : AnyShapeStyle(.clear), in: Circle())
                 // Real Liquid Glass circles (was a flat white-20% fill); end button = red glass.
                 .liquidGlass(Circle(), interactive: true, tint: tint, enabled: !active)
