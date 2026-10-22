@@ -72,6 +72,11 @@ struct NativeMessageList: UIViewControllerRepresentable {
     /// body chain. Handed over as a function, the rows are built from `updateUIViewController`, whose
     /// stack does not carry that chain. Returns the models and their version. Nil = use the two above.
     var rowModelsProvider: (() -> ([String: MessageRowModel], Int))? = nil
+    /// A card drawn ABOVE the oldest message, at the very start of the history (Kasim 2026-10-22: the
+    /// group's welcome card stays after the first message). nil = none. `historyHeaderKey` changes
+    /// whenever what the card shows changes; the card is re-hosted and re-measured only then.
+    var historyHeader: AnyView? = nil
+    var historyHeaderKey: String? = nil
     // The UIKit rows route their taps back up through these. A link, a quote, a reaction badge, the
     // retry line and a group sender are rectangles in the row's plan, so the CELL hit-tests them and
     // reports which one was hit — no gesture recogniser per element, and a row with none of them
@@ -243,6 +248,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.loadViewIfNeeded()
         vc.setCaptureProtected(noScreenshots)
         vc.setHeaderBlurHidden(hidesHeaderBlur)
+        vc.setHistoryHeader(historyHeader, key: historyHeaderKey)
         // The dark pin, before anything reads a colour. `.unspecified` is the way back to the
         // phone's own appearance, NOT `.light` — a chat whose wallpaper is removed has to start
         // following the system again rather than being pinned the other way.
@@ -489,6 +495,70 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var coordinator: NativeMessageList.Coordinator!
     private var collectionView: UICollectionView!
     private var layout: MessageLayout!
+
+    // MARK: History header (the group card at the start of the chat)
+
+    /// ⛔ A SUBVIEW OF THE LIST, NOT A ROW — Kasim 2026-10-22: the group's welcome card stays at the
+    /// top of the history after messages arrive. A fake row would go through every id-keyed table
+    /// here (heights, plans, routes, the date pill, the anchors); instead the layout starts the rows
+    /// `headerHeight` lower (`MessageLayout.headerHeight`) and the card sits in that space, scrolling
+    /// with the content. Only shown once the whole history is loaded (the caller decides), so it is
+    /// never wedged between pages.
+    private var historyHeaderHost: UIHostingController<AnyView>?
+    private var historyHeaderKey: String?
+    private var historyHeaderWidth: CGFloat = 0
+
+    func setHistoryHeader(_ content: AnyView?, key: String?) {
+        guard key != historyHeaderKey else { return }
+        historyHeaderKey = key
+        if let content {
+            if let host = historyHeaderHost {
+                host.rootView = content
+            } else {
+                let host = UIHostingController(rootView: content)
+                host.view.backgroundColor = .clear
+                addChild(host)
+                collectionView.addSubview(host.view)
+                host.didMove(toParent: self)
+                historyHeaderHost = host
+            }
+        } else if let host = historyHeaderHost {
+            host.willMove(toParent: nil)
+            host.view.removeFromSuperview()
+            host.removeFromParent()
+            historyHeaderHost = nil
+        }
+        historyHeaderWidth = 0   // re-measure
+        layoutHistoryHeader()
+    }
+
+    /// Measures the card at the list's width and moves the rows by the difference, keeping every
+    /// row where it is on screen (the offset follows the rows down or up by the same amount).
+    private func layoutHistoryHeader() {
+        let w = collectionView.bounds.width
+        var height: CGFloat = 0
+        if let host = historyHeaderHost {
+            guard w > 0 else { return }   // asked again from viewDidLayoutSubviews once there is a width
+            if w != historyHeaderWidth {
+                historyHeaderWidth = w
+                height = ceil(host.sizeThatFits(in: CGSize(width: w, height: .greatestFiniteMagnitude)).height)
+                host.view.frame = CGRect(x: 0, y: 0, width: w, height: height)
+            } else {
+                height = host.view.frame.height
+            }
+        }
+        let delta = height - layout.headerHeight
+        guard abs(delta) > 0.5 else { return }
+        let keep = collectionView.contentOffset
+        layout.headerHeight = height
+        layout.generation += 1
+        layout.invalidateLayout()
+        collectionView.layoutIfNeeded()
+        UIView.performWithoutAnimation {
+            collectionView.setContentOffset(CGPoint(x: keep.x, y: keep.y + delta), animated: false)
+        }
+        updateInsets()
+    }
     private var dataSource: UICollectionViewDiffableDataSource<Int, String>!
     private var reg: UICollectionView.CellRegistration<UICollectionViewCell, String>!
 
@@ -5134,6 +5204,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        if historyHeaderHost != nil, collectionView.bounds.width != historyHeaderWidth { layoutHistoryHeader() }
         // ⛔ THE WIDTH CHANGE, ASKED AGAIN NOW THAT IT IS REAL — owner audit 2026-10-06 chat #30. In
         // `viewWillLayoutSubviews` the list's constraints have not been applied yet, so on the pass
         // that rotates it still reports the OLD width and the re-measure waited a whole extra pass,
@@ -6611,6 +6682,9 @@ final class MessageLayout: UICollectionViewLayout {
     // FROZEN during a reply swipe: a horizontal gesture has no reason to change any frame, so the layout is
     // fully locked and the only thing that moves is the swiped bubble's transform.
     var frozen = false
+    /// Room above the oldest row for the history header (see `setHistoryHeader`). Changing it must
+    /// come with a `generation` bump.
+    var headerHeight: CGFloat = 0
 
     override func prepare() {
         super.prepare()
@@ -6628,7 +6702,7 @@ final class MessageLayout: UICollectionViewLayout {
         layoutWidth = cv.bounds.width
         frames.removeAll(keepingCapacity: true)
         frames.reserveCapacity(count)
-        var y: CGFloat = 0
+        var y: CGFloat = headerHeight
         for i in 0..<count {
             let h = heightForItem?(i) ?? 44
             frames.append(CGRect(x: 0, y: y, width: layoutWidth, height: h))

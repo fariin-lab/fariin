@@ -1120,6 +1120,19 @@ struct ThreadView: View {
     // An OVERLAY, not a list row. Same reason as the recording bubble: a transient row goes through the
     // inverted list's scroll machine, and this one would insert and remove itself at the exact moment
     // the first message arrives — the worst possible time to move that layout.
+    /// ⛔ THE GROUP CARD STAYS — Kasim 2026-10-22 (reverses "gone at the first real message", owner
+    /// 2026-10-19): once the group has real messages the card moves from the middle of the empty chat
+    /// to the very start of the history, above the oldest message, and stays there. Only when the
+    /// whole history is loaded (`!repo.canLoadOlder`), so it is never wedged between pages; scrolling
+    /// up to the start shows it. The empty chat keeps the centred card (`encryptionNotice`).
+    private var groupHistoryCard: (view: AnyView, key: String)? {
+        guard repo.didInitialLoad, isGroup, !notAMember, !preview, !repo.canLoadOlder,
+              let conv = conversation, repo.items.contains(where: { !$0.isSystem }) else { return nil }
+        let key = [conv.id, conv.title, conv.avatarUrl ?? "", "\(conv.users.count)", "\(conv.admins.count)",
+                   conv.createdBy, "\(dark)", "\(conv.hashValue)"].joined(separator: "|")
+        return (AnyView(GroupWelcomeCard(conv: conv, me: me, dark: dark).padding(.vertical, 20)), key)
+    }
+
     @ViewBuilder private var encryptionNotice: some View {
         // A group with only its own notices in it (the "created the group" line) shows the group's
         // welcome card instead (owner 2026-10-19). Gone at the first real message.
@@ -4271,6 +4284,8 @@ struct ThreadView: View {
             // Built by the list from its own update step, not here in the body (see
             // `NativeMessageList.rowModelsProvider`: builds 974/975 ran out of stack here).
             rowModelsProvider: { (uikitModels, uikitModelCache.version) },
+            historyHeader: groupHistoryCard?.view,
+            historyHeaderKey: groupHistoryCard?.key,
             onTapLink: { url, rowId in routeThreadURL(url, rowId: rowId) },
             onTapQuote: { id in jumpToQuotedOriginal(id) },
             onTapStoryQuote: { rowId, replyId in
