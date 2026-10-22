@@ -1975,23 +1975,16 @@ struct GroupMemberSheet: View {
 
     // ⛔ SHORT CARD (owner 2026-10-19, after the reference app's member card): the sheet is as tall
     // as what is on it and never grows. Photo, name, Message/Voice/Video, then the rows that apply:
-    // Make Group Admin, Info, Remove from Group. Rights and tag sit on their own pushed page; only
-    // that page (or the profile) takes the sheet to full height.
+    // Make Group Admin, Info, Remove from Group. Rights, tag and the profile each rise as their own
+    // sheet over it (owner 2026-10-22), so the card never grows.
     @State private var showEdit = false
     // The last card measured, so the next opens at about its size instead of jumping from a guess.
     @State private var cardHeight: CGFloat = MemberCardMemo.height
-    @State private var growing = false
-    /// Grow to full height first, then push, so no page slides in while the card is short.
-    private func growThenPush(_ push: @escaping () -> Void) {
-        growing = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { push() }
-    }
     /// "@name", or one blank space so the line keeps its height until the profile is in.
     private var handleLine: String {
         guard let h = profile?.handle, !h.isEmpty else { return " " }
         return "@\(h)"
     }
-    private var expanded: Bool { showProfileHere || growing }
 
     var body: some View {
         NavigationStack {
@@ -2003,11 +1996,14 @@ struct GroupMemberSheet: View {
                 NavigationStack { editPage }
                     .presentationDetents([.large])
             }
-            // Back to the short card once the pushed page goes (audit 2026-10-20: it stayed tall).
-            .onChange(of: showProfileHere) { _, on in if !on { growing = false } }
-            .navigationDestination(isPresented: $showProfileHere) {
-                ContactInfoView(cid: ChatService.convId(me, member.id), name: member.name,
-                                photoUrl: gatedMemberPhoto, source: .calls)
+            // ⛔ THE PROFILE RISES FROM THE BOTTOM, THE CARD STAYS SHORT (owner 2026-10-22: "dont make
+            // sheet full ... make it bottom"). Reverses 2026-10-20's grow-then-push, as Edit above.
+            .sheet(isPresented: $showProfileHere) {
+                NavigationStack {
+                    ContactInfoView(cid: ChatService.convId(me, member.id), name: member.name,
+                                    photoUrl: gatedMemberPhoto, source: .calls)
+                }
+                .presentationDetents([.large])
             }
             .task {
                 // The phone's saved copy first (no network), then the server's (2026-10-20).
@@ -2097,7 +2093,7 @@ struct GroupMemberSheet: View {
                        ])
             .onAppear { memberBlocked = BlockList.shared.contains(member.id) }
         }
-        .presentationDetents(expanded ? [.large] : [.height(cardHeight)])
+        .presentationDetents([.height(cardHeight)])
         .presentationBackground(Color(uiColor: .systemGroupedBackground))
     }
 
@@ -2446,9 +2442,7 @@ struct GroupMemberSheet: View {
             dismiss()
             onInfo(uid)
         } else {
-            // Grow to full height FIRST, then push (owner 2026-10-20: the profile slid in while
-            // the card was still short, and the card's empty bottom showed as a white band).
-            growThenPush { showProfileHere = true }
+            showProfileHere = true   // its own sheet over the card (see `body`)
         }
     }
 
