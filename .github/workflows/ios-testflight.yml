@@ -74,7 +74,16 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: NEW CALL BUTTONS, GROUP CALL RINGING, GROUP CARD.
+            THIS BUILD: STICKER CRASH + CUT STICKERS, GROUP SEARCH BACK SWIPE, VOICE DRAFT.
+            Stickers: back to the older player. 1009 crashed and showed stickers cut to a corner; both gone. Scrolling may lag a little again until the new player lands.
+            Group from search: the join page opens like a chat; swipe back returns to the list, no tab bar on it.
+            Voice draft: Play starts at once after a pause; dragging the waveform seeks instead of closing the draft.
+            Group page: Add group description opens with the keyboard in Description; your own @name in a description opens your profile; Open Profile on a member rises from the bottom without the card growing first.
+            Group chat: a deleted message shows the sender's name inside its bubble; the welcome card's camera badge shows in dark mode with the new camera icon.
+            Also: Make Admin alert with white text, new Add Members icon, smaller "+N" in the sticker panel, month label while scrolling the attach gallery, tapping your own name on your story opens your Posted Stories, group description limit 150 (set the panel's Limits row to 150 too).
+            PLEASE TEST: send and scroll stickers; search a public group, open it, swipe back, open another; record a voice note, pause, play, drag the waveform both ways.
+
+            EARLIER (1009): NEW CALL BUTTONS, GROUP CALL RINGING, GROUP CARD.
             Call buttons: one bar with Share Screen, Video, Speaker, Mute and End (1:1 and group). In a group call, raise hand and flip camera are under the new "..." at the top.
             Group calls: the caller now hears ringing (still silent in 1008). Speaker turns into a white circle when on.
             Ring sound: the familiar tone is back (1008 changed it), still louder than before.
