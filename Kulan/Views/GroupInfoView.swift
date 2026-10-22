@@ -2020,23 +2020,20 @@ struct GroupMemberSheet: View {
                 // Typing or pasting past the limit keeps the first 24, as RoleEditorView does.
                 if new.utf16.count > GroupRole.maxText { roleText = GroupRole.fit(new, max: GroupRole.maxText) }
             }
-            // ⛔ BLUE MAKE ADMIN — owner 2026-10-21, asked twice. The confirm role alone came out grey:
-            // an alert's main button takes the presenting view's TINT, and the app's tint is
-            // `.primary`. The alert hangs off a clear background view tinted blue, so only it changes.
-            .background {
-                Color.clear
-                    .alert("Make \(member.name) an admin?", isPresented: $confirmPromote) {
-                        Button("Cancel", role: .cancel) {}
-                        Button("Make Admin", role: .confirm) {
-                            let cid = cid, uid = member.id, name = member.name, list = rightsList
-                            run { try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: list) }
-                        }
-                        .keyboardShortcut(.defaultAction)
-                    } message: {
-                        Text("They will be able to manage the group with the usual admin rights. You can change or remove them any time.")
-                    }
-                    .tint(Color(hex: 0x0A84FF))
-            }
+            // ⛔ BLUE MAKE ADMIN, WHITE TEXT — owner 2026-10-21 (blue) and 2026-10-22 (white text on
+            // both buttons). A SwiftUI `.alert` paints every label in its tint, so blue fill meant blue
+            // text; the UIKit alert sets the fill (tint) and the labels apart.
+            .darkAlert("Make \(member.name) an admin?",
+                       message: "They will be able to manage the group with the usual admin rights. You can change or remove them any time.",
+                       isPresented: $confirmPromote,
+                       tint: UIColor(red: 0x0A / 255, green: 0x84 / 255, blue: 0xFF / 255, alpha: 1),
+                       actions: [
+                           DarkAlertAction(title: "Cancel", style: .cancel, run: {}, textColor: .white),
+                           .confirm("Make Admin") {
+                               let cid = cid, uid = member.id, name = member.name, list = rightsList
+                               run { try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: list) }
+                           }
+                       ])
             .alert("Dismiss \(member.name) as admin?",
                                 isPresented: Binding(get: { !showEdit && confirmDismissAdmin },
                                                      set: { confirmDismissAdmin = $0 })) {

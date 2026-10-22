@@ -27,7 +27,16 @@ struct DarkAlertAction {
     let title: String
     let style: UIAlertAction.Style
     let run: () -> Void
+    /// The alert's main button: iOS 26 fills it with the alert's tint.
+    var preferred = false
+    /// Label colour. A SwiftUI `.alert` paints every label in its tint, so a blue main button came
+    /// out blue text on blue (owner 2026-10-22: "make white only text").
+    var textColor: UIColor? = nil
 
+    /// Blue filled main button, white text.
+    static func confirm(_ title: String, _ run: @escaping () -> Void) -> DarkAlertAction {
+        DarkAlertAction(title: title, style: .default, run: run, preferred: true, textColor: .white)
+    }
     static func cancel(_ title: String = "Cancel", _ run: @escaping () -> Void = {}) -> DarkAlertAction {
         DarkAlertAction(title: title, style: .cancel, run: run)
     }
@@ -46,6 +55,7 @@ private struct DarkAlertHost: UIViewControllerRepresentable {
     let message: String?
     @Binding var isPresented: Bool
     let actions: [DarkAlertAction]
+    var tint: UIColor? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
     /// ⚠️ A LATCH, AND IT HAS TO BE ONE. `updateUIViewController` runs many times for a single state
@@ -70,12 +80,20 @@ private struct DarkAlertHost: UIViewControllerRepresentable {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         // THE LINE THE WHOLE TYPE EXISTS FOR.
         alert.overrideUserInterfaceStyle = .dark
+        if let tint { alert.view.tintColor = tint }
         for a in actions {
-            alert.addAction(UIAlertAction(title: a.title, style: a.style) { _ in
+            let action = UIAlertAction(title: a.title, style: a.style) { _ in
                 isPresented = false
                 context.coordinator.presented = false
                 a.run()
-            })
+            }
+            // ⚠️ No public setter for an action's label colour. KVC falls back to the `_titleTextColor`
+            // ivar; checked first, because KVC on a missing key throws and takes the app down.
+            if let color = a.textColor, class_getInstanceVariable(UIAlertAction.self, "_titleTextColor") != nil {
+                action.setValue(color, forKey: "titleTextColor")
+            }
+            alert.addAction(action)
+            if a.preferred { alert.preferredAction = action }
         }
         // ⚠️ FROM WHATEVER IS ACTUALLY ON SCREEN, not from this host. The host sits at zero size
         // inside a page that may itself be inside a sheet or a cover, and presenting from a
@@ -92,9 +110,10 @@ extension View {
     func darkAlert(_ title: String,
                    message: String? = nil,
                    isPresented: Binding<Bool>,
+                   tint: UIColor? = nil,
                    actions: [DarkAlertAction]) -> some View {
         background(
-            DarkAlertHost(title: title, message: message, isPresented: isPresented, actions: actions)
+            DarkAlertHost(title: title, message: message, isPresented: isPresented, actions: actions, tint: tint)
                 .frame(width: 0, height: 0)
                 .allowsHitTesting(false)
         )
