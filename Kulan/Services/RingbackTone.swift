@@ -5,6 +5,27 @@ import Foundation
 // unavailable. Ended: a short descending two-beep when a connected call hangs up.
 // These mirror the call-state sounds big messaging apps play.
 enum RingbackTone {
+    // ⛔ HEARD AT ARM'S LENGTH — Kasim 2026-10-22: the big apps' ring is heard without the speaker
+    // on, ours was not. Two causes, both fixed here for the calling, ringing and busy sounds:
+    //   • LEVEL. The rings peaked near 11000 of 32767 (~-9.5 dBFS); `level` is ~70% of full
+    //     (~-3 dBFS), about 6.5 dB louder, which reads as roughly 1.5x as loud.
+    //   • PITCH. The earpiece is weak below ~1 kHz, where the classic 440/480 Hz pair sits. A quieter
+    //     copy one octave up (880/960 Hz) is added (`tone`): heard as the same ring, but the
+    //     earpiece can carry it. Every ring fades in and out over 20-40 ms so the louder level
+    //     does not click.
+    // Volume still follows iOS's call volume (the player runs in the call's audio session).
+    private static let level = 23000.0
+    /// The two notes of a tone plus their softer octave, peak at most 1.
+    private static func tone(_ t: Double, _ a: Double, _ b: Double) -> Double {
+        let base = (sin(2 * .pi * a * t) + sin(2 * .pi * b * t)) / 2
+        let octave = (sin(2 * .pi * 2 * a * t) + sin(2 * .pi * 2 * b * t)) / 2
+        return 0.75 * base + 0.25 * octave
+    }
+    /// 0...1 fade at both ends of a sound `length` seconds long, `t` seconds in.
+    private static func fade(_ t: Double, _ length: Double, _ edge: Double = 0.02) -> Double {
+        max(0, min(1, t / edge, (length - t) / edge))
+    }
+
     // Ringback (440+480 Hz), reference-style cadence, user-tuned 2026-07-22: 1.8s ring / 3.4s quiet
     // (5.2s cycle). The old 1.2s gap rang again too soon and sounded like one constant noise
     // instead of a phone ringing. Looped forever by the player.
@@ -16,8 +37,7 @@ enum RingbackTone {
             let t = Double(i) / Double(sampleRate)
             let phase = t.truncatingRemainder(dividingBy: cycle)
             if phase < 1.8 {   // 1.8s on, 3.4s off
-                let v = (sin(2 * .pi * 440 * t) + sin(2 * .pi * 480 * t)) / 2
-                samples[i] = Int16(max(-1, min(1, v)) * 11000)
+                samples[i] = Int16(max(-1, min(1, tone(t, 440, 480))) * level * fade(phase, 1.8))
             }
         }
         return wav(samples, sampleRate: sampleRate)
@@ -42,9 +62,7 @@ enum RingbackTone {
             for i in 0..<count where from + i < total {
                 let t = Double(i) / Double(sampleRate)
                 // 40 ms fades at both ends, so a ring does not click on or off.
-                let env = min(1, t / 0.04, (r.length - t) / 0.04)
-                let v = (sin(2 * .pi * 440 * t) + sin(2 * .pi * 480 * t)) / 2
-                samples[from + i] = Int16(max(-1, min(1, v)) * 11000 * env)
+                samples[from + i] = Int16(max(-1, min(1, tone(t, 440, 480))) * level * fade(t, r.length, 0.04))
             }
         }
         return wav(samples, sampleRate: sampleRate)
@@ -58,9 +76,9 @@ enum RingbackTone {
         var samples = [Int16](repeating: 0, count: total)
         for i in 0..<total {
             let t = Double(i) / Double(sampleRate)
-            if t.truncatingRemainder(dividingBy: 1.0) < 0.5 {   // 0.5 on, 0.5 off
-                let v = (sin(2 * .pi * 480 * t) + sin(2 * .pi * 620 * t)) / 2
-                samples[i] = Int16(max(-1, min(1, v)) * 10000)
+            let phase = t.truncatingRemainder(dividingBy: 1.0)
+            if phase < 0.5 {   // 0.5 on, 0.5 off
+                samples[i] = Int16(max(-1, min(1, tone(t, 480, 620))) * level * fade(phase, 0.5))
             }
         }
         return wav(samples, sampleRate: sampleRate)
