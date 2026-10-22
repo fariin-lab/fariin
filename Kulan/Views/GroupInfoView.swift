@@ -77,6 +77,7 @@ struct GroupInfoView: View {
     @State private var joinReqBox = ListenerBox()
     @State private var showJoinRequests = false
     @State private var showEdit = false
+    @State private var editAtDescription = false   // Edit Group opened from "Add group description..."
     @State private var showGroupPhoto = false    // tap the photo → the same morph a person's photo uses
     @State private var photoCloseTick = 0        // toolbar X → viewer close (see ProfilePhotoViewer.closeSignal)
     /// Where the header's photo is drawn, for the viewer's flight. A plain box, not observed: the
@@ -261,8 +262,9 @@ struct GroupInfoView: View {
             .sheet(isPresented: $showAdd) { AddMembersSheet(cid: cid, existing: Set(conv?.users ?? [])) }
             .sheet(isPresented: $showEdit) {
                 EditGroupView(cid: cid, title: title, photoUrl: conv?.avatarUrl,
-                              description: conv?.groupDescription ?? "")
+                              description: conv?.groupDescription ?? "", focusDescription: editAtDescription)
             }
+            .onChange(of: showEdit) { _, on in if !on { editAtDescription = false } }
             .fullScreenCover(item: $viewerImage) { msg in
                 ImageViewerView(message: msg, cid: cid, rectScope: .profile)
             }
@@ -523,7 +525,7 @@ struct GroupInfoView: View {
             } else if canEditInfo {
                 // No description yet: whoever may edit is offered one, the reference app's line
                 // (owner 2026-10-19). It opens Edit Group, as the Edit button does.
-                Button { showEdit = true } label: {
+                Button { editAtDescription = true; showEdit = true } label: {
                     // A grey prompt, not a blue link (owner 2026-10-20, from the reference app).
                     Text("Add group description...").font(.body).foregroundStyle(Color(hex: 0x8E8E93))
                         .multilineTextAlignment(.center)

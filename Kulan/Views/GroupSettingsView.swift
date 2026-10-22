@@ -1250,6 +1250,8 @@ struct EditGroupView: View {
     let photoUrl: String?
     /// The group's description now (owner 2026-10-18: "add a Description card here too").
     var description: String = ""
+    /// Opened from "Add group description...": the keyboard comes up in Description (owner 2026-10-22).
+    var focusDescription = false
     @Environment(\.dismiss) private var dismiss
 
     @State private var name = ""
@@ -1382,6 +1384,8 @@ struct EditGroupView: View {
             .onAppear {
                 if name.isEmpty { name = title }
                 if !descLoaded { desc = Limits.oneParagraph(description, max: Self.descChars); descLoaded = true }
+                // A beat after the sheet starts rising, so the field is in a window to take focus.
+                if focusDescription { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { descFocused = true } }
             }
             // The app's own photo sheet, as New Group's photo uses.
             .sheet(isPresented: $showPicker) {
