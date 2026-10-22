@@ -694,9 +694,11 @@ struct GroupCallView: View {
     }
 
     // Speaker on / off (owner, 2026-10-04): a real switch with its state, not the route picker.
+    // Kasim 2026-10-22: the icon always wears its sound waves, and ON is the whole circle turning
+    // solid white with a dark glyph, as the 1:1 call's Speaker does (`CallView.callCircle`). The
+    // waves appearing and a fade were too faint to read as on or off.
     private var speakerButton: some View {
-        ctrl(service.speakerOn ? "speaker.wave.2.fill" : "speaker.fill") { service.toggleSpeaker() }
-            .opacity(service.speakerOn ? 1 : 0.7)
+        ctrl("speaker.wave.2.fill", active: service.speakerOn) { service.toggleSpeaker() }
             .accessibilityLabel(service.speakerOn ? "Turn speaker off" : "Turn speaker on")
     }
 
@@ -731,15 +733,19 @@ struct GroupCallView: View {
 
     /// Every press restarts the hide clock (the 1:1 screen's rule): hitting mute must not leave you
     /// two seconds from losing the rest of the buttons.
-    private func ctrl(_ icon: String, tint: Color? = nil, action: @escaping () -> Void) -> some View {
+    /// `active`: the solid white "on" circle with a dark glyph (the 1:1 call's look), glass otherwise.
+    private func ctrl(_ icon: String, tint: Color? = nil, active: Bool = false,
+                      action: @escaping () -> Void) -> some View {
         Button {
             action()
             armAutoHide()
         } label: {
-            Image(systemName: icon).font(.title3).foregroundStyle(.white)
+            Image(systemName: icon).font(.title3).foregroundStyle(active ? .black : .white)
                 .frame(width: 54, height: 54)
+                .background(active ? AnyShapeStyle(.white) : AnyShapeStyle(.clear), in: Circle())
                 // Real Liquid Glass circles (was a flat white-20% fill); end button = red glass.
-                .liquidGlass(Circle(), interactive: true, tint: tint)
+                .liquidGlass(Circle(), interactive: true, tint: tint, enabled: !active)
+                .contentShape(Circle())
         }
     }
 }
