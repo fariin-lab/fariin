@@ -29,9 +29,9 @@ enum RingbackTone {
     // long (`shortFirst: false`); when it rings at once, its first ring is the short one. Same
     // 440+480 Hz as the calling sound above. One file holds 90s of rings, past any ring timeout,
     // because a looped file would start again with the short ring.
-    static let longRingSeconds = 4.0
+    static let longRingSeconds = 6.0
     static func ringingData(shortFirst: Bool, sampleRate: Int = 8000) -> Data {
-        let gap = 2.0   // Kasim 2026-10-22: 4s ring, 2s quiet; the pause waits for his measurement
+        let gap = 2.2   // Kasim 2026-10-22 timed the other big app at ~11s ring, ~4s quiet (73% sound); same share, shorter ring
         var rings: [(start: Double, length: Double)] = shortFirst ? [(0, 1.8)] : []   // the short first ring
         var t0 = shortFirst ? 1.8 + gap : 0
         while t0 < 90 { rings.append((t0, longRingSeconds)); t0 += longRingSeconds + gap }
