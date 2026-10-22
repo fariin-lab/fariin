@@ -759,6 +759,10 @@ final class GroupCallService: ObservableObject {
                 self.groupConv = Conversation(id: id, data: data)
                 if let mine = self.groupRole(of: self.myUid), mine != self.myRole { self.myRole = mine }
                 self.rolesVersion &+= 1   // other people's badges and buttons redraw too
+                // Build 1008, Kasim: a group chat's call still rang in silence. `groupRingingMembers`
+                // needs this member list, which lands a moment AFTER the start asked for the ring,
+                // and nothing asked again. Ask again whenever it lands.
+                self.updateRingback()
             }
         }
     }
