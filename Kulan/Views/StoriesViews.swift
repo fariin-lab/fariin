@@ -1279,6 +1279,7 @@ struct StoryViewer: View {
     @State private var editViewers: Story?
     @State private var ownRepostGone = false            // the repost's original was mine and is gone
     @State private var profileSheet: StoryGroup?        // tap the header → profile sheet OVER the story (paused)
+    @State private var myPostedUp = false                // tap MY header → my Posted Stories, over the story
     /// Fariin's header tapped (official stories, owner 2026-10-16): the channel's own info page.
     @State private var officialInfoUp = false
     @State private var toastText = "Sent"               // reused for "Sent" (reply) and "Saved"
@@ -1708,7 +1709,7 @@ struct StoryViewer: View {
     // with the 09-11 pass-on work and neither was added here, so the story ran on under them; under
     // the composer that was the whole "repost is frozen" report (see `StoryComposerPresenter`).
     private var sheetUp: Bool {
-        shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || officialInfoUp || editViewers != nil
+        shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || myPostedUp || officialInfoUp || editViewers != nil
             || repostUp || repostLoading || shareURL != nil || ownRepostGone
         // ⛔ `repostLoading` (owner, 2026-10-12: "I tap Repost on a video story and the original
         // keeps playing, I can hear it"). The story was held only once the composer was up, but the
@@ -2054,6 +2055,13 @@ struct StoryViewer: View {
                             .accessibilityLabel("Back")
                         }
                     }
+            }
+            .presentationDetents([.large])
+        }
+        .sheet(isPresented: $myPostedUp) {
+            NavigationStack {
+                PostedStoriesView(uid: AuthService.shared.uid ?? "", isMe: true,
+                                  title: StoriesRepository.shared.mine?.name ?? "My Story")
             }
             .presentationDetents([.large])
         }
@@ -2812,7 +2820,9 @@ struct StoryViewer: View {
                 // Tested against the signed-in uid rather than `g.isMine`, because a mixed feed can
                 // page onto my own bucket mid-visit and the tap has to answer for the story that is
                 // on screen at that moment, not the one the viewer was opened with.
-                guard user.id != AuthService.shared.uid else { return }
+                // owner 2026-10-22 (reverses 08-07's do-nothing): my own header opens my Posted
+                // Stories, the page the Stories tab's My Story leads to, over the story (paused).
+                guard user.id != AuthService.shared.uid else { myPostedUp = true; return }
                 // Fariin is not an account: its "profile" is the official chat's own info page,
                 // over the story like anybody's (owner 2026-10-16: "click profile, show profile").
                 if OfficialChannel.isOfficial(user.id) { officialInfoUp = true; return }
