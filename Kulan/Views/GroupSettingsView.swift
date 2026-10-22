@@ -981,7 +981,7 @@ struct GroupMembersListView: View {
         return List {
             if canAdd && query.isEmpty {
                 Section {
-                    Button { showAdd = true } label: { Label("Add Members", systemImage: "person.badge.plus") }
+                    Button { showAdd = true } label: { Label { Text("Add Members") } icon: { Image("ic_add_members_line") }   // owner's icon 2026-10-22 }
                 }
             }
             // ⛔ ROLE — owner 2026-10-18: who holds a role, together at the top, so an admin sees
@@ -1212,7 +1212,7 @@ struct GroupRequestsView: View {
         Section {
             Button { showInvite = true } label: { Label("Share Invite Link", systemImage: "link") }
             if canAdd {
-                Button { showAdd = true } label: { Label("Add Members", systemImage: "person.badge.plus") }
+                Button { showAdd = true } label: { Label { Text("Add Members") } icon: { Image("ic_add_members_line") }   // owner's icon 2026-10-22 }
             }
         } header: {
             Text("Invite more people")
@@ -1267,7 +1267,7 @@ struct EditGroupView: View {
     private var trimmed: String { name.trimmingCharacters(in: .whitespaces) }
     private var trimmedDesc: String { desc.trimmingCharacters(in: .whitespacesAndNewlines) }
     /// A group description's ceiling, the size the large messengers give one.
-    /// From the admin panel (`group_desc_max`, fallback 255; owner 2026-10-21).
+    /// From the admin panel (`group_desc_max`, fallback 150; owner 2026-10-22).
     private static var descChars: Int { AppLimits.shared.groupDescMax }
     private static let descCounterAppearsAt = 20
     private var descRemaining: Int { max(0, Self.descChars - desc.count) }
