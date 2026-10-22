@@ -2370,11 +2370,6 @@ struct ChatsView: View {
                 set: { router.pendingInviteCode = $0?.code })
     }
 
-    private var pendingPublicGroup: Binding<PublicGroupTarget?> {
-        Binding(get: { Flags.groupsEnabled ? router.pendingPublicGroup : nil },
-                set: { router.pendingPublicGroup = $0 })
-    }
-
     /// THE CHAT LIST, AND EVERYTHING THE SCREEN HAS TO HAND IT.
     ///
     /// ⚠️ A PROPERTY OF ITS OWN FOR THE SAME REASON `loadedChatList` IS ONE: this file's type-checker
@@ -2907,13 +2902,29 @@ struct ChatsView: View {
         // The stories row had a persisted copy all along; it just could not reach the screen in
         // time, because every path to it went through `await load(force:)`. See `seedRowFromDisk`.
         .onAppear {
-            repo.start(); StoriesRepository.shared.seedRowFromDisk(); openPendingChat()
+            repo.start(); StoriesRepository.shared.seedRowFromDisk(); openPendingChat(); openPendingPublicGroup()
             // The attach grid's recents and their first thumbnails, fetched now rather than when
             // the sheet opens (owner 2026-10-14: blank for seconds after a relaunch). No-op once warm.
             RecentsCache.prewarm()
         }
         .onChange(of: router.pendingChatId) { _, _ in openPendingChat() }
         .onChange(of: repo.conversations.count) { _, _ in openPendingChat() }   // retry once chats load
+        .onChange(of: router.pendingPublicGroup) { _, _ in openPendingPublicGroup() }
+    }
+
+    /// A public group's page goes on `path` like a chat: the tab bar hides, Back and the edge swipe
+    /// return to the list.
+    /// One main-queue turn first, as `openPendingChat` waits, so the tab switch made for the same
+    /// intent is on screen before the path changes.
+    private func openPendingPublicGroup() {
+        guard Flags.groupsEnabled, let t = router.pendingPublicGroup else { return }
+        DispatchQueue.main.async {
+            guard router.pendingPublicGroup == t else { return }
+            router.pendingPublicGroup = nil
+            path.append(t)
+            // Same as a chat row: the search page closed itself, its text goes too.
+            chatSearch = ""
+        }
     }
 
     /// SLICE ONE of the chat list's chain. ⚠️ THE CHAIN IS CUT INTO THREE AND EACH JOIN IS AN
@@ -3205,7 +3216,10 @@ struct ChatsView: View {
             }
             // 2026-10-19 groups v2: a public group from global search or a fariin.com/<name> link.
             // Pushed from the right like any page (owner 2026-10-20: it came up from the bottom).
-            .navigationDestination(item: pendingPublicGroup) { PublicGroupSheet(target: $0, pushed: true) }
+            // ⛔ ON `path`, LIKE A CHAT (owner 2026-10-22: swipe back stuck, tab bar still up). An
+            // item destination pushed beside the path while search was still closing; the path stayed
+            // empty, so the stack treated the page as the root list. See `openPendingPublicGroup`.
+            .navigationDestination(for: PublicGroupTarget.self) { PublicGroupSheet(target: $0, pushed: true) }
             .confirmationDialog("Delete \(selection.count) chat\(selection.count == 1 ? "" : "s")?",
                                 isPresented: $showDeleteSelected, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) { deleteSelected() }
