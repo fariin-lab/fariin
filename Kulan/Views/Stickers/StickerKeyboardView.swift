@@ -1349,7 +1349,7 @@ private final class StickerCell: UICollectionViewCell {
     override init(frame: CGRect) {
         super.init(frame: frame)
         contentView.addSubview(player)
-        moreLabel.font = .systemFont(ofSize: 22, weight: .bold)
+        moreLabel.font = .systemFont(ofSize: 18, weight: .bold)   // owner 2026-10-22: "make small, not too much"
         moreLabel.textColor = .secondaryLabel
         moreLabel.textAlignment = .center
         moreLabel.adjustsFontSizeToFitWidth = true
@@ -1385,7 +1385,8 @@ private final class StickerCell: UICollectionViewCell {
         plusGlyph.frame = CGRect(x: 0, y: pb.midY - 22, width: pb.width, height: 26)
         createLabel.frame = CGRect(x: 2, y: pb.midY + 6, width: pb.width - 4, height: 16)
         check.frame = CGRect(x: contentView.bounds.width - 22, y: contentView.bounds.height - 22, width: 20, height: 20)
-        moreLabel.frame = contentView.bounds.insetBy(dx: 4, dy: 4)
+        let side = (min(contentView.bounds.width, contentView.bounds.height) * 0.72).rounded()   // was the tile less 4pt
+        moreLabel.frame = CGRect(x: (contentView.bounds.width - side) / 2, y: (contentView.bounds.height - side) / 2, width: side, height: side)
         moreLabel.layer.cornerRadius = moreLabel.bounds.width / 2
     }
 
