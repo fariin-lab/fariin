@@ -140,22 +140,23 @@ struct GroupCallView: View {
     @ViewBuilder
     private var moreLayer: some View {
         if showMore {
-            ZStack(alignment: .bottom) {
+            ZStack(alignment: .topTrailing) {
                 Color.clear
                     .contentShape(Rectangle())
                     .ignoresSafeArea()
                     .onTapGesture { showMore = false }
                     .accessibilityLabel("Close menu")
                     .accessibilityAddTraits(.isButton)
+                // Under the header now, where its button is (Kasim 2026-10-22).
                 GroupCallMoreMenu(onClose: { showMore = false })
-                    .padding(.bottom, Self.moreMenuLift)
+                    .padding(.top, Self.moreMenuDrop + headerHeight)
+                    .padding(.trailing, 14)
             }
             .transition(.opacity)
         }
     }
-    /// The panel's top edge above the safe bottom (10 screen padding + 58 buttons + 6 + ~15 name +
-    /// 12 + 10 panel padding, Kasim 2026-10-22) and a 12pt gap.
-    private static let moreMenuLift: CGFloat = 124
+    /// The header's top padding (10) and an 8pt gap: the panel hangs under the header.
+    private static let moreMenuDrop: CGFloat = 18
 
     // MARK: - Screen (layout switches and the hide clock's own triggers)
 
@@ -645,6 +646,8 @@ struct GroupCallView: View {
                     .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)   // owner, 2026-10-06: Liquid Glass
             }
             .accessibilityLabel("Minimize")
+            // Balances the two buttons on the right, so the title stays centred.
+            Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
             Spacer()
             VStack(spacing: 2) {
                 Text(title).font(.headline).foregroundStyle(.white).lineLimit(1)
@@ -652,13 +655,20 @@ struct GroupCallView: View {
                     .lineLimit(1)   // owner, 2026-10-07: the ringing line wrapped onto two
             }
             Spacer()
-            Button { showParticipants = true } label: {
-                Image(systemName: "person.2.fill").font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)   // owner, 2026-10-06: Liquid Glass
+            HStack(spacing: 8) {
+                moreButton
+                participantsButton
             }
-            .accessibilityLabel("Participants")
         }
+    }
+
+    private var participantsButton: some View {
+        Button { showParticipants = true } label: {
+            Image(systemName: "person.2.fill").font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)   // owner, 2026-10-06: Liquid Glass
+        }
+        .accessibilityLabel("Participants")
     }
 
     // MARK: - Controls
@@ -668,31 +678,32 @@ struct GroupCallView: View {
     private var controls: some View {
         // Fits a 375 pt phone inside its 14 pt gutters: 5 x 54 + 4 x 10 + 2 x 14 = 338 (audit
         // 2026-10-20: 12 and 18 made 354, past the gutters).
-        // ⛔ BIGGER, NAMED — Kasim 2026-10-22 (with the 1:1 call, see `CallView.controlBar`): 58 pt
-        // circles with a name under each, in a rounded panel. On a 375 pt phone:
-        // 5 x 58 + 4 x 8 + 2 x 12 = 346, inside the 14 pt gutters (347).
-        HStack(alignment: .top, spacing: 8) {
+        // ⛔ SHARE, VIDEO, SPEAKER, MUTE, END in one capsule — Kasim 2026-10-22, as the 1:1 call
+        // (`CallView.controlBar`): big circles, no names, Share Screen where the "..." was. The "..."
+        // (raise hand, flip camera) moved up into the header. On a 375 pt phone:
+        // 5 x 56 + 4 x 10 + 2 x 12 = 344, inside the 14 pt gutters (347).
+        HStack(spacing: 10) {
+            shareButton
             cameraButton
-            micButton
             speakerButton
-            moreButton
+            micButton
             endButton
         }
-        .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .padding(12)
+        .background(.ultraThinMaterial, in: Capsule())
     }
 
     // A voice call link: the camera button is there, greyed and inert (owner, 2026-10-06).
     // VoiceOver labels name what a tap does (no visual change).
     private var cameraButton: some View {
-        ctrl(service.cameraOn ? "video.fill" : "video.slash.fill", title: "Video") { service.toggleCamera() }
+        ctrl(service.cameraOn ? "video.fill" : "video.slash.fill") { service.toggleCamera() }
             .disabled(service.cameraLocked)
             .opacity(service.cameraLocked ? 0.35 : 1)
             .accessibilityLabel(cameraLabel)
     }
 
     private var micButton: some View {
-        ctrl(service.micOn ? "mic.fill" : "mic.slash.fill", title: "Mute") { service.toggleMic() }
+        ctrl(service.micOn ? "mic.fill" : "mic.slash.fill") { service.toggleMic() }
             .accessibilityLabel(service.micOn ? "Mute" : "Unmute")
     }
 
@@ -701,25 +712,40 @@ struct GroupCallView: View {
     // solid white with a dark glyph, as the 1:1 call's Speaker does (`CallView.callCircle`). The
     // waves appearing and a fade were too faint to read as on or off.
     private var speakerButton: some View {
-        ctrl("speaker.wave.2.fill", title: "Speaker", active: service.speakerOn) { service.toggleSpeaker() }
+        ctrl("speaker.wave.2.fill", active: service.speakerOn) { service.toggleSpeaker() }
             .accessibilityLabel(service.speakerOn ? "Turn speaker off" : "Turn speaker on")
     }
 
-    // Owner, 2026-10-06: the one new button, same glass circle as its neighbours, between speaker
-    // and end. Reactions, raise hand and flip camera live in its panel (`GroupCallMoreMenu`). They
-    // all need the room, so it waits for the call to be joined.
+    // Share Screen, moved out of the "..." panel into the bar (Kasim 2026-10-22). Same rule as
+    // that row had: once the room is up, never on a voice call link. Solid white while sharing.
+    private var shareButton: some View {
+        let can = service.isActive && !service.cameraLocked
+        return ctrl(service.screenSharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle",
+                    active: service.screenSharing) { service.toggleScreenShare() }
+            .disabled(!can && !service.screenSharing)
+            .opacity(can || service.screenSharing ? 1 : 0.35)
+            .accessibilityLabel(service.screenSharing ? "Stop Sharing" : "Share Screen")
+    }
+
+    // Owner, 2026-10-06: raise hand and flip camera live in its panel (`GroupCallMoreMenu`). They
+    // need the room, so it waits for the call to be joined. Kasim 2026-10-22: a header button now,
+    // beside Participants; its panel hangs under the header.
     private var moreButton: some View {
-        ctrl("ellipsis", title: "More") { showMore.toggle() }
-            .disabled(!moreEnabled)
-            .opacity(moreEnabled ? 1 : 0.35)
-            .accessibilityLabel("More")
+        Button { showMore.toggle(); armAutoHide() } label: {
+            Image(systemName: "ellipsis").font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)
+        }
+        .disabled(!moreEnabled)
+        .opacity(moreEnabled ? 1 : 0.35)
+        .accessibilityLabel("More")
     }
     private var moreEnabled: Bool { service.joinState == .joined }
 
     // owner audit 2026-10-06 #4: before the room is up `activeCid` never changes, so the
     // onChange that closes this screen never fired and End looked dead. Close it here.
     private var endButton: some View {
-        ctrl("phone.down.fill", title: "End", tint: Color(.systemRed)) { endCall() }
+        ctrl("phone.down.fill", tint: Color(.systemRed)) { endCall() }
             .accessibilityLabel("End call")
     }
 
@@ -737,24 +763,15 @@ struct GroupCallView: View {
     /// Every press restarts the hide clock (the 1:1 screen's rule): hitting mute must not leave you
     /// two seconds from losing the rest of the buttons.
     /// `active`: the solid white "on" circle with a dark glyph (the 1:1 call's look), glass otherwise.
-    private func ctrl(_ icon: String, title: String, tint: Color? = nil, active: Bool = false,
+    /// `active`: the solid white "on" circle with a dark glyph (the 1:1 call's look), glass otherwise.
+    private func ctrl(_ icon: String, tint: Color? = nil, active: Bool = false,
                       action: @escaping () -> Void) -> some View {
-        VStack(spacing: 6) {
-            ctrlCircle(icon, tint: tint, active: active, action: action)
-            Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.9))
-                .lineLimit(1).fixedSize()
-                .accessibilityHidden(true)   // the circle's own label already says it
-        }
-    }
-
-    private func ctrlCircle(_ icon: String, tint: Color?, active: Bool,
-                            action: @escaping () -> Void) -> some View {
         Button {
             action()
             armAutoHide()
         } label: {
             Image(systemName: icon).font(.system(size: 22, weight: .semibold)).foregroundStyle(active ? .black : .white)
-                .frame(width: 58, height: 58)
+                .frame(width: 56, height: 56)
                 .background(active ? AnyShapeStyle(.white) : AnyShapeStyle(.clear), in: Circle())
                 // Real Liquid Glass circles (was a flat white-20% fill); end button = red glass.
                 .liquidGlass(Circle(), interactive: true, tint: tint, enabled: !active)

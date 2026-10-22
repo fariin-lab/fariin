@@ -588,41 +588,10 @@ struct CallView: View {
             .accessibilityHidden(!controlsVisible)
             Spacer()
 
-            // ⛔ ONE BUTTON, NOT A MENU — owner 2026-10-15: "remove the dots button, put the screen
-            // share button there". The menu held Share Screen and End Call (End Call is the red
-            // button already) and Add people, which shows only with `CallFeatures.groupCalls`, OFF.
-            // ⚠️ If group calls are switched on, Add people needs a new home: it lived in this menu.
-            // Same rules as the menu item it replaces: starting needs a connected call and nobody
-            // else sharing; STOPPING is never disabled (audit M-165).
-            let sharingOn = call.screenSharePhase != .off
-            // ⛔ THREE STATES YOU CAN SEE — owner 2026-10-15: "the user can't tell when screen share is
-            // disabled and when it is enabled". Not available yet (calling, or they are sharing):
-            // dimmed. Ready: the plain glass circle. Sharing: filled white with a dark icon, the way
-            // the speaker button shows "on" in the bar below.
-            let canStart = call.state == .active && call.connectedDate != nil && !call.remoteScreenSharing
-            Button {
-                if sharingOn { call.stopScreenShareByUser() } else { call.toggleScreenShare() }
-            } label: {
-                if sharingOn {
-                    Image("ic_share_screen").renderingMode(.template).resizable()
-                        .scaledToFit().frame(width: 22, height: 22)
-                        .foregroundStyle(.black)
-                        .frame(width: 48, height: 48)
-                        .background(Color.white, in: Circle())
-                        .contentShape(Circle())
-                } else {
-                    // Owner, 2026-10-10: his own Share Screen icon (asset ic_share_screen, template).
-                    topCircle(image: Image("ic_share_screen").renderingMode(.template).resizable()
-                        .scaledToFit().frame(width: 22, height: 22))
-                        .opacity(canStart ? 1 : 0.4)
-                }
-            }
-            .disabled(!sharingOn && !canStart)
-            .buttonStyle(CallControlStyle())
-            .accessibilityLabel(sharingOn ? "Stop Sharing" : "Share Screen")
-            .opacity(controlsVisible ? 1 : 0)        // r2 H2, as the minimize button
-            .allowsHitTesting(controlsVisible)
-            .accessibilityHidden(!controlsVisible)
+            // Share Screen moved down into the control bar (Kasim 2026-10-22, see `shareCircle`).
+            // The same space stays here so the name keeps its centre.
+            Color.clear.frame(width: 48, height: 48)
+                .accessibilityHidden(true)
         }
         .padding(.horizontal, 16)
         .padding(.top, safeTop + 14)   // clear the iOS status-bar call indicator (green pill)
@@ -1321,57 +1290,73 @@ struct CallView: View {
         router.pendingChatId = cid
     }
 
-    // ⛔ BIGGER BUTTONS WITH THEIR NAMES — Kasim 2026-10-22, with the other big app's call screen
-    // beside ours: theirs ~72 pt circles with a name under each, ours 52 pt and unnamed. Apple's
-    // own call screen is the model kept: one row, big circles, a name under each. 64 pt with four
-    // buttons; 58 pt when Flip makes five, so the row still fits a 375 pt phone:
-    // 5 x 58 + 4 x 8 + 2 x 12 (panel) + 2 x 12 (gutters) = 370.
-    /// The control bar's height: 64 pt circle + 6 + the name (~15) + 12 above + 10 below. Everything
-    /// that clears the bar reads this (it was a bare 76, the old 52 pt row + 2 x 12).
-    static let barHeight: CGFloat = 108
-    private var controlCount: Int { (call.cameraOn && !myScreenOnCamera) ? 5 : 4 }
-    private var circleSize: CGFloat { controlCount >= 5 ? 58 : 64 }
-
-    /// A control's name under its circle (Mute, Video, Speaker...).
-    private func named(_ title: String, _ circle: some View) -> some View {
-        VStack(spacing: 6) {
-            circle
-            Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.9))
-                .lineLimit(1).fixedSize()
-                .accessibilityHidden(true)   // the circle's own label already says it
-        }
-    }
+    // ⛔ ONE ROW, ONE CAPSULE: SHARE, VIDEO, SPEAKER, MUTE, END — Kasim 2026-10-22, with the other
+    // big app's in-call bar as the model (and reversing the named two-size panel of an hour before):
+    // big circles in one capsule, no names, Share Screen where that app keeps its "..." (it was a
+    // header button), Mute next to End under the right thumb. Flip joins only while my camera shows.
+    // On a 375 pt phone: 5 x 56 + 4 x 10 + 2 x 12 (capsule) + 2 x 12 (gutters) = 368; with Flip,
+    // 6 x 46 + 5 x 8 + 48 = 364.
+    /// The control bar's height: the circle + 12 above and below. Everything that clears the bar
+    /// reads this (it was a bare 76, the old 52 pt row + 2 x 12).
+    static let barHeight: CGFloat = 80
+    private var controlCount: Int { (call.cameraOn && !myScreenOnCamera) ? 6 : 5 }
+    private var circleSize: CGFloat { controlCount >= 6 ? 46 : 56 }
 
     private var controlBar: some View {
-        HStack(alignment: .top, spacing: controlCount >= 5 ? 8 : 14) {
-            // Labels: owner audit 2026-10-06 #19 — icon-only buttons read as "button" or the raw
-            // symbol name under VoiceOver. Each says what a tap does now.
-            callCircle(call.isMuted ? "mic.slash.fill" : "mic.fill", active: call.isMuted,
-                       label: call.isMuted ? "Unmute" : "Mute", title: "Mute") { call.toggleMute() }
+        HStack(spacing: controlCount >= 6 ? 8 : 10) {
+            shareCircle
             // MY camera — turn it on/off freely (the other side just sees it, no
             // permission). When it can be pressed: see `cameraButtonEnabled` (M-052).
             callCircle(call.cameraOn ? "video.fill" : "video.slash.fill", active: !call.cameraOn,
-                       label: call.cameraOn ? "Turn camera off" : "Turn camera on", title: "Video") { call.toggleCamera() }
+                       label: call.cameraOn ? "Turn camera off" : "Turn camera on") { call.toggleCamera() }
                 // Dimmed while my screen is shared too: the share owns my video until it stops, and
                 // stopping brings the camera back exactly as it was.
                 .disabled(!cameraButtonEnabled)
                 .opacity(cameraButtonEnabled ? 1 : 0.4)
             // Flip front/back only while my camera is on (and actually showing, not a shared screen).
             if call.cameraOn && !myScreenOnCamera {
-                callCircle("arrow.triangle.2.circlepath", active: false, label: "Flip camera", title: "Flip") { flipCamera() }
+                callCircle("arrow.triangle.2.circlepath", active: false, label: "Flip camera") { flipCamera() }
             }
-            named("Speaker", speakerCircle)
-            named("End", endCircle)
+            speakerCircle
+            // Labels: owner audit 2026-10-06 #19 — icon-only buttons read as "button" or the raw
+            // symbol name under VoiceOver. Each says what a tap does now.
+            callCircle(call.isMuted ? "mic.slash.fill" : "mic.fill", active: call.isMuted,
+                       label: call.isMuted ? "Unmute" : "Mute") { call.toggleMute() }
+            endCircle
         }
-        .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 10)
+        .padding(12)
         .background {
-            // A rounded panel, not a capsule: the names under the circles make the row taller.
-            let panel = RoundedRectangle(cornerRadius: 30, style: .continuous)
-            panel.fill(.ultraThinMaterial).environment(\.colorScheme, .dark)
-                .overlay(panel.fill(Color.black.opacity(0.25)))
-                .overlay(panel.stroke(.white.opacity(0.12), lineWidth: 1))
+            Capsule().fill(.ultraThinMaterial).environment(\.colorScheme, .dark)
+                .overlay(Capsule().fill(Color.black.opacity(0.25)))
+                .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 1))
         }
         .padding(.horizontal, 12)
+    }
+
+    /// Share Screen, moved down from the header (Kasim 2026-10-22). Its rules are the header
+    /// button's (owner 2026-10-15): starting needs a connected call and nobody else sharing, STOPPING
+    /// is never disabled (audit M-165); dimmed = not yet, glass = ready, solid white = sharing.
+    private var shareCircle: some View {
+        let sharingOn = call.screenSharePhase != .off
+        let canStart = call.state == .active && call.connectedDate != nil && !call.remoteScreenSharing
+        return Button {
+            buzz()
+            showControls()
+            if sharingOn { call.stopScreenShareByUser() } else { call.toggleScreenShare() }
+        } label: {
+            // Owner, 2026-10-10: his own Share Screen icon (asset ic_share_screen, template).
+            Image("ic_share_screen").renderingMode(.template).resizable().scaledToFit()
+                .frame(width: circleSize * 0.42, height: circleSize * 0.42)
+                .foregroundStyle(sharingOn ? .black : .white)
+                .frame(width: circleSize, height: circleSize)
+                .background(sharingOn ? AnyShapeStyle(.white) : AnyShapeStyle(.clear), in: Circle())
+                .liquidGlass(Circle(), interactive: true, enabled: !sharingOn)
+                .contentShape(Circle())
+                .opacity(sharingOn || canStart ? 1 : 0.4)
+        }
+        .disabled(!sharingOn && !canStart)
+        .buttonStyle(CallControlStyle())
+        .accessibilityLabel(sharingOn ? "Stop Sharing" : "Share Screen")
     }
 
     // Smart speaker: no external device → plain earpiece/speaker toggle.
@@ -1400,17 +1385,12 @@ struct CallView: View {
         } else {
             // One steady speaker glyph; ON = filled white circle (the slash icon looked like
             // something was muted even when it wasn't).
-            circleButton("speaker.wave.2.fill", active: call.isSpeaker, label: "Speaker") { call.toggleSpeaker() }
+            callCircle("speaker.wave.2.fill", active: call.isSpeaker, label: "Speaker") { call.toggleSpeaker() }
                 .accessibilityAddTraits(call.isSpeaker ? .isSelected : [])
         }
     }
 
-    private func callCircle(_ icon: String, active: Bool, label: String, title: String,
-                            _ action: @escaping () -> Void) -> some View {
-        named(title, circleButton(icon, active: active, label: label, action))
-    }
-
-    private func circleButton(_ icon: String, active: Bool, label: String, _ action: @escaping () -> Void) -> some View {
+    private func callCircle(_ icon: String, active: Bool, label: String, _ action: @escaping () -> Void) -> some View {
         Button {
             buzz()   // r2 H9d
             showControls()          // using a button restarts the clock, never cuts it short

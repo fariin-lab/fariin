@@ -64,16 +64,7 @@ struct GroupCallMoreMenu: View {
                 divider
                 row("Flip Camera", icon: "arrow.triangle.2.circlepath.camera") { service.flipCamera() }
             }
-            // Screen sharing, 2026-10-07. Starting opens the system's broadcast sheet (the SDK
-            // presents it); the person taps Start there. Not on a voice call link, and only once
-            // the room is up.
-            if service.isActive, !service.cameraLocked {
-                divider
-                row(service.screenSharing ? "Stop Sharing" : "Share Screen",
-                    icon: service.screenSharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle") {
-                    service.toggleScreenShare()
-                }
-            }
+            // Screen sharing moved to its own button in the call bar (Kasim 2026-10-22).
         }
         .liquidGlass(RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
