@@ -501,6 +501,12 @@ struct GroupInfoView: View {
                         // slide (owner 2026-10-21: the tap did nothing). The card door, as invites.
                         case "kulan":
                             let handle = url.lastPathComponent
+                            // My own @name opens My Profile at once, no lookup (owner 2026-10-22:
+                            // tapping his own @name in the description opened nothing on 1009).
+                            if handle == (ProfileStore.shared.me?.handle ?? "").lowercased() {
+                                mentionSelf = true
+                                return .handled
+                            }
                             Task { @MainActor in
                                 // allowSelf: my own name is a real person too, and opens my profile.
                                 guard let u = await ChatService.findByHandle(handle, allowSelf: true) else { return }
