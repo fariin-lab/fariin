@@ -43,10 +43,12 @@ struct GroupWelcomeCard: View {
                     AvatarView(name: conv.title, photoUrl: conv.avatarUrl, size: 92)
                         .overlay(alignment: .bottomTrailing) {
                             if canEdit && (conv.avatarUrl ?? "").isEmpty {
-                                Image(systemName: "camera.fill")
-                                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
+                                // His camera icon on a fixed blue (owner 2026-10-22): the accent is
+                                // white in dark mode, so the white glyph vanished into its circle.
+                                Image("ic_group_camera").renderingMode(.template).resizable().scaledToFit()
+                                    .frame(width: 16, height: 16).foregroundStyle(.white)
                                     .frame(width: 30, height: 30)
-                                    .background(Color.accentColor, in: Circle())
+                                    .background(Color(hex: 0x0A84FF), in: Circle())
                                     .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2))
                             }
                         }
