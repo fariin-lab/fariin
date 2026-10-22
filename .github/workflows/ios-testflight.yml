@@ -74,7 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: STICKER CRASH, CALL SOUNDS, GROUP PAGE.
+            THIS BUILD: NEW CALL BUTTONS, GROUP CALL RINGING, GROUP CARD.
+            Call buttons: one bar with Share Screen, Video, Speaker, Mute and End (1:1 and group). In a group call, raise hand and flip camera are under the new "..." at the top.
+            Group calls: the caller now hears ringing (still silent in 1008). Speaker turns into a white circle when on.
+            Ring sound: the familiar tone is back (1008 changed it), still louder than before.
+            Group chat: the group card (photo, Add Members, Group Link, Description) stays at the top of the chat after messages are sent.
+            PLEASE TEST: a 1:1 call and a group call (buttons, ringing, speaker); open a group with messages and scroll to the top.
+
+            EARLIER (1008): STICKER CRASH, CALL SOUNDS, GROUP PAGE.
             Sticker crash fixed: sending an animated sticker, or opening a chat that has one, no longer closes the app.
             Chat list: fixed a crash while the list updated as the app opened.
             Calls: "Calling..." now plays a ring from the first second (it was silent). When the other phone rings it changes to longer rings.
