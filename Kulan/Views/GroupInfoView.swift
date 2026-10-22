@@ -46,7 +46,6 @@ struct GroupInfoView: View {
     /// My own @name tapped (owner 2026-10-21, "@v does nothing"): My Profile, pushed the same way.
     @State private var mentionSelf = false
     @State private var confirmLeave = false
-    @State private var confirmBlock = false
     @State private var confirmEnd = false
     @State private var confirmClear = false
     @State private var confirmReport = false
@@ -244,7 +243,7 @@ struct GroupInfoView: View {
                                        showDisappear: $showDisappear, pendingDisappear: $pendingDisappear,
                                        actionError: $actionError))
             .modifier(GroupInfoExits(cid: cid, conv: conv, me: me,
-                                     confirmLeave: $confirmLeave, confirmBlock: $confirmBlock, confirmEnd: $confirmEnd,
+                                     confirmLeave: $confirmLeave, confirmEnd: $confirmEnd,
                                      confirmClear: $confirmClear,
                                      confirmReport: $confirmReport, confirmDelete: $confirmDelete,
                                      actionError: $actionError, onGone: { dismiss() },
@@ -728,18 +727,18 @@ struct GroupInfoView: View {
     }
 
     /// ⛔ THE FOOT OF THE PAGE, TWO CARDS (owner 2026-10-20, with the reference app's page): Leave
-    /// Group, Block Group and Report Spam in one, End Group (and Delete Group) in the other, for the
+    /// Group and Report Spam (members only) in one, End Group (and Delete Group) in the other, for the
     /// owner. Red words and red icons, the rows the rest of the page uses.
     private var exitCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(spacing: 0) {
                 ProfileInfoRow(title: "Leave Group", icon: "rectangle.portrait.and.arrow.right",
                                tint: Self.exitRed, chevron: false) { confirmLeave = true }
-                // Kasim 2026-10-21: an admin or the owner reporting or blocking their own group is
-                // odd; those two rows are for plain members only.
+                // Kasim 2026-10-21: an admin or the owner reporting their own group is odd (the
+                // reference app hides Report for both too), so Report is for plain members only.
+                // No Block Group row: neither big app has one. Blocking rides inside Report as
+                // "Report and Leave" (see the Report alert), as the other big app does it.
                 if !(iAmAdmin || iAmOwner) {
-                    rowDivider
-                    ProfileInfoRow(title: "Block Group", icon: "nosign", tint: Self.exitRed, chevron: false) { confirmBlock = true }
                     rowDivider
                     ProfileInfoRow(title: "Report Spam", icon: "exclamationmark.octagon", tint: Self.exitRed, chevron: false) { confirmReport = true }
                 }
@@ -1527,7 +1526,6 @@ private struct GroupInfoExits: ViewModifier {
     let conv: Conversation?
     let me: String
     @Binding var confirmLeave: Bool
-    @Binding var confirmBlock: Bool
     @Binding var confirmEnd: Bool
     @Binding var confirmClear: Bool
     @Binding var confirmReport: Bool
@@ -1536,6 +1534,16 @@ private struct GroupInfoExits: ViewModifier {
     let onGone: () -> Void
     /// The page's own notice after a report (owner 2026-10-19: it was silent).
     var onReported: () -> Void = {}
+
+    /// Who a group report names: admins.first can be ME (self-report), so another admin, else the
+    /// creator, else any other member.
+    private var reportTarget: String {
+        let creator = conv?.createdBy
+        return conv?.admins.first(where: { $0 != me })
+            ?? ((creator?.isEmpty == false && creator != me) ? creator : nil)
+            ?? conv?.users.first(where: { $0 != me })
+            ?? ""
+    }
 
     /// Close only on success (audit, 2026-09-24): a refused leave or delete was swallowed by `try?`
     /// and the page closed anyway.
@@ -1565,10 +1573,6 @@ private struct GroupInfoExits: ViewModifier {
                 Button("Cancel", role: .cancel) {}
                 Button("Leave", role: .destructive) { run { try await ChatService.leaveGroup(cid: cid) } }
             } message: { Text("You won't get messages from this group any more.") }
-            .alert("Block This Group?", isPresented: $confirmBlock) {
-                Button("Cancel", role: .cancel) {}
-                Button("Block", role: .destructive) { run { try await ChatService.blockGroup(cid: cid) } }
-            } message: { Text("You'll leave the group, and nobody in it can add you back. You can still join again with a link.") }
             .alert("End This Group?", isPresented: $confirmEnd) {
                 Button("Cancel", role: .cancel) {}
                 Button("End Group", role: .destructive) {
@@ -1579,18 +1583,23 @@ private struct GroupInfoExits: ViewModifier {
                 }
             } message: { Text("Nobody will be able to send messages or start calls, and invite links stop working. Messages stay. This can't be undone.") }
             .alert("Report Spam?", isPresented: $confirmReport) {
-                Button("Report", role: .destructive) {
-                    // admins.first can be ME (self-report) — pick another admin, else the creator, else any other member.
-                    let creator = conv?.createdBy
-                    let target = conv?.admins.first(where: { $0 != me })
-                        ?? ((creator?.isEmpty == false && creator != me) ? creator : nil)
-                        ?? conv?.users.first(where: { $0 != me })
-                        ?? ""
+                // Report and Leave also blocks: nobody in the group can add me back (what the old
+                // Block Group row did). Joining again by a link stays my own choice.
+                Button("Report and Leave", role: .destructive) {
+                    let target = reportTarget
+                    // The report lands while I am still a member, then I leave.
+                    run {
+                        await ChatService.report(reportedUid: target, cid: cid, reason: "group")
+                        try await ChatService.blockGroup(cid: cid)
+                    }
+                }
+                Button("Report") {
+                    let target = reportTarget
                     Task { await ChatService.report(reportedUid: target, cid: cid, reason: "group") }
                     onReported()
                 }
                 Button("Cancel", role: .cancel) {}
-            } message: { Text("The group will be reported to moderators for review.") }
+            } message: { Text("The group will be reported to moderators for review. If you leave too, nobody in it can add you back.") }
             .alert("Delete Group?", isPresented: $confirmDelete) {
                 Button("Cancel", role: .cancel) {}
                 Button("Delete", role: .destructive) { run { try await GroupInviteService.deleteGroup(cid: cid) } }
