@@ -701,17 +701,22 @@ enum MessageRowLayout {
         // delivery state to report.
         if isTombstone {
             let iconW: CGFloat = 14
-            let innerW = iconW + 6 + bodySize.width
+            // ⛔ NAME INSIDE — owner 2026-10-22: in a group the sender's name sat above the deleted
+            // capsule, outside it, unlike every other bubble. With a name it is a two-line bubble:
+            // the name band on top (`nameHeader`), the slashed circle and the words under it.
+            let named = nameHeader > 0
+            let textTop: CGFloat = named ? nameHeader + BubbleMetrics.nameToText : 8
+            let innerW = max(iconW + 6 + bodySize.width, nameHeaderW)
             let bubbleW = min(maxBubble, innerW + 28)
-            let bubbleH = bodySize.height + 16
+            let bubbleH = textTop + bodySize.height + 8
             let x = b.isMe ? (columnX + columnW - bubbleW) : columnX
             let rect = CGRect(x: x, y: y, width: bubbleW, height: bubbleH)
             var plan = BubblePlan(
-                bubble: rect, radii: .uniform(bubbleH / 2), isCapsule: true, fill: b.fill, rim: b.rim,
-                text: CGRect(x: 14 + iconW + 6, y: 8, width: bubbleW - 28 - iconW - 6, height: bodySize.height),
+                bubble: rect, radii: .uniform(named ? 18 : bubbleH / 2), isCapsule: !named, fill: b.fill, rim: b.rim,
+                text: CGRect(x: 14 + iconW + 6, y: textTop, width: bubbleW - 28 - iconW - 6, height: bodySize.height),
                 meta: .zero, metaOnOwnLine: false, quote: nil, quoteInner: nil,
                 bodyAttr: bodyAttr, links: [], textColor: textColor, metaColor: metaColor,
-                tombstoneIcon: CGRect(x: 14, y: (bubbleH - iconW) / 2, width: iconW, height: iconW),
+                tombstoneIcon: CGRect(x: 14, y: textTop + (bodySize.height - iconW) / 2, width: iconW, height: iconW),
                 mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
                 avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
                 forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
@@ -724,12 +729,16 @@ enum MessageRowLayout {
             // the message — but a group sender's name still sits above it, so the run reads
             // correctly. Positioned against the capsule's own edge, like every other tag.
             if let attr = senderNameAttr {
-                plan.senderName = CGRect(x: rect.minX + 12, y: topSpacing,
-                                         width: senderNameSize.width, height: senderNameSize.height)
+                // Inside the bubble's top-left when named (see above), else above it as before.
+                let nameX = rect.minX + (named ? 14 : 12)
+                let nameY = named ? rect.minY + BubbleMetrics.nameTop : topSpacing
+                let tick: CGFloat = b.sender?.verified == true ? 4 + 11 : 0
+                let nameW = named ? max(0, min(senderNameSize.width, bubbleW - 28 - tick)) : senderNameSize.width
+                plan.senderName = CGRect(x: nameX, y: nameY, width: nameW, height: senderNameSize.height)
                 plan.senderNameAttr = attr
                 if b.sender?.verified == true {
-                    plan.verifiedMark = CGRect(x: rect.minX + 12 + senderNameSize.width + 4,
-                                               y: topSpacing + (senderNameSize.height - 11) / 2,
+                    plan.verifiedMark = CGRect(x: nameX + nameW + 4,
+                                               y: nameY + (senderNameSize.height - 11) / 2,
                                                width: 11, height: 11)
                 }
             }
@@ -1276,7 +1285,8 @@ enum MessageRowLayout {
     static func nameInBubble(_ b: BubbleRow) -> Bool {
         guard !b.isMe, let s = b.sender, s.showsName else { return false }
         switch b.body {
-        case .jumbomoji, .tombstone, .pill:
+        // A deleted message keeps its sender's name inside, like a text bubble (owner 2026-10-22).
+        case .jumbomoji, .pill:
             return false
         case .media(let m):
             // A sticker sent as a reply keeps its bubble (see `media`), so it holds the name too.
