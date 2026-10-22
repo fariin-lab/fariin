@@ -23,20 +23,27 @@ enum RingbackTone {
         return wav(samples, sampleRate: sampleRate)
     }
 
-    // Kasim 2026-10-21: once the other phone really rings, a LONGER beep than the calling sound
-    // above (same 440+480 Hz) with a SHORT pause ("a long beep with a long stop would be weird"),
-    // so the caller hears the moment it starts ringing.
+    // Kasim 2026-10-21, timed on the other big app: once the other phone really rings, the FIRST
+    // ring is the ordinary short one, and every ring after it is a LONGER beep with a short pause
+    // ("a long beep with a long stop would be weird"). Same 440+480 Hz as the calling sound above.
+    // One file holds the short ring and then long rings for 90s, past any ring timeout, because a
+    // looped file would start again with the short ring.
+    static let longRingSeconds = 2.5
     static func ringingData(sampleRate: Int = 8000) -> Data {
-        let on = 2.5, cycle = 4.0   // 2.5s beep, 1.5s quiet
-        let total = Int(Double(sampleRate) * cycle)
+        let gap = 1.5
+        var rings: [(start: Double, length: Double)] = [(0, 1.8)]   // the short first ring
+        var t0 = 1.8 + gap
+        while t0 < 90 { rings.append((t0, longRingSeconds)); t0 += longRingSeconds + gap }
+        let total = Int(Double(sampleRate) * t0)
         var samples = [Int16](repeating: 0, count: total)
-        for i in 0..<total {
-            let t = Double(i) / Double(sampleRate)
-            if t < on {
-                // 40 ms fades at both ends, so the long beep does not click on or off.
-                let env = min(1, t / 0.04, (on - t) / 0.04)
+        for r in rings {
+            let from = Int(r.start * Double(sampleRate)), count = Int(r.length * Double(sampleRate))
+            for i in 0..<count where from + i < total {
+                let t = Double(i) / Double(sampleRate)
+                // 40 ms fades at both ends, so a ring does not click on or off.
+                let env = min(1, t / 0.04, (r.length - t) / 0.04)
                 let v = (sin(2 * .pi * 440 * t) + sin(2 * .pi * 480 * t)) / 2
-                samples[i] = Int16(max(-1, min(1, v)) * 11000 * env)
+                samples[from + i] = Int16(max(-1, min(1, v)) * 11000 * env)
             }
         }
         return wav(samples, sampleRate: sampleRate)
