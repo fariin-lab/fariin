@@ -9,17 +9,15 @@ enum RingbackTone {
     // on, ours was not. Two causes, both fixed here for the calling, ringing and busy sounds:
     //   • LEVEL. The rings peaked near 11000 of 32767 (~-9.5 dBFS); `level` is ~70% of full
     //     (~-3 dBFS), about 6.5 dB louder, which reads as roughly 1.5x as loud.
-    //   • PITCH. The earpiece is weak below ~1 kHz, where the classic 440/480 Hz pair sits. A quieter
-    //     copy one octave up (880/960 Hz) is added (`tone`): heard as the same ring, but the
-    //     earpiece can carry it. Every ring fades in and out over 20-40 ms so the louder level
-    //     does not click.
+    //   • Every ring fades in and out over 20-40 ms so the louder level does not click.
+    // ⛔ NO OCTAVE ON TOP — Kasim 2026-10-22 on build 1008: a softer copy one octave up (880/960 Hz)
+    // was added for the earpiece, and it changed the CHARACTER of the ring away from the one people
+    // know. The plain two-note tone is back; only the level stays raised.
     // Volume still follows iOS's call volume (the player runs in the call's audio session).
     private static let level = 23000.0
-    /// The two notes of a tone plus their softer octave, peak at most 1.
+    /// The two notes of a tone, peak at most 1.
     private static func tone(_ t: Double, _ a: Double, _ b: Double) -> Double {
-        let base = (sin(2 * .pi * a * t) + sin(2 * .pi * b * t)) / 2
-        let octave = (sin(2 * .pi * 2 * a * t) + sin(2 * .pi * 2 * b * t)) / 2
-        return 0.75 * base + 0.25 * octave
+        (sin(2 * .pi * a * t) + sin(2 * .pi * b * t)) / 2
     }
     /// 0...1 fade at both ends of a sound `length` seconds long, `t` seconds in.
     private static func fade(_ t: Double, _ length: Double, _ edge: Double = 0.02) -> Double {
