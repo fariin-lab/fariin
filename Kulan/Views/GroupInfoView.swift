@@ -1535,6 +1535,19 @@ private struct GroupInfoExits: ViewModifier {
     /// The page's own notice after a report (owner 2026-10-19: it was silent).
     var onReported: () -> Void = {}
 
+    /// The owner leaving hands the group on (`ChatService.leaveGroup`: the longest-serving admin who
+    /// is still a member, else the longest-serving member). Kasim 2026-10-21: say who, before it
+    /// happens, so the owner never leaves without knowing.
+    private var leaveMessage: String {
+        let plain = "You won't get messages from this group any more."
+        guard let conv, !conv.createdBy.isEmpty, conv.createdBy == me else { return plain }
+        let heir = conv.admins.first(where: { $0 != me && conv.users.contains($0) })
+            ?? conv.users.first(where: { $0 != me })
+        guard let heir else { return plain }
+        let name = conv.names[heir].flatMap { $0.isEmpty ? nil : $0 } ?? "another member"
+        return plain + " You own this group, so \(name) will become the owner."
+    }
+
     /// Who a group report names: admins.first can be ME (self-report), so another admin, else the
     /// creator, else any other member.
     private var reportTarget: String {
@@ -1572,7 +1585,7 @@ private struct GroupInfoExits: ViewModifier {
             .alert("Leave Group?", isPresented: $confirmLeave) {
                 Button("Cancel", role: .cancel) {}
                 Button("Leave", role: .destructive) { run { try await ChatService.leaveGroup(cid: cid) } }
-            } message: { Text("You won't get messages from this group any more.") }
+            } message: { Text(leaveMessage) }
             .alert("End This Group?", isPresented: $confirmEnd) {
                 Button("Cancel", role: .cancel) {}
                 Button("End Group", role: .destructive) {
@@ -1602,7 +1615,7 @@ private struct GroupInfoExits: ViewModifier {
             } message: { Text("The group will be reported to moderators for review. If you leave too, nobody in it can add you back.") }
             .alert("Delete Group?", isPresented: $confirmDelete) {
                 Button("Cancel", role: .cancel) {}
-                Button("Delete", role: .destructive) { run { try await GroupInviteService.deleteGroup(cid: cid) } }
+                Button("Delete for Everyone", role: .destructive) { run { try await GroupInviteService.deleteGroup(cid: cid) } }
             } message: { Text("This permanently deletes the group and all its messages for everyone. This cannot be undone.") }
             .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
                                                               set: { if !$0 { actionError = nil } })) {
