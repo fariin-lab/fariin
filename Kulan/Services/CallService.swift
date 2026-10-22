@@ -3735,13 +3735,20 @@ final class CallService: NSObject {
     /// the other phone really rings it changes to a longer beep with a longer pause. The silent
     /// "Calling…" made the caller think nothing was happening.
     private var ringbackIsRinging = false
+    /// When the calling sound started this call (nil: it has not played). Reset in `stopRingback`.
+    private var callingToneSince: Date?
 
     /// (Re)loads the player with the sound for where the call is now. The session is already set up
     /// by `startRingback`; swapping only the sound needs no session change.
     private func playRingbackTone() {
         ringbackPlayer?.stop()
+        // The first short ring is heard once per call: if "Calling..." already played one (its ring
+        // is 1.8s), ringing starts on the long rings; if it rings at once, it starts short.
+        let heardShortRing = callingToneSince.map { Date().timeIntervalSince($0) >= 1.8 } ?? false
         ringbackIsRinging = calleeRinging
-        ringbackPlayer = try? AVAudioPlayer(data: calleeRinging ? RingbackTone.ringingData() : RingbackTone.wavData())
+        if !calleeRinging { callingToneSince = Date() }
+        ringbackPlayer = try? AVAudioPlayer(data: calleeRinging
+            ? RingbackTone.ringingData(shortFirst: !heardShortRing) : RingbackTone.wavData())
         ringbackPlayer?.numberOfLoops = -1
         ringbackPlayer?.prepareToPlay()
         ringbackPlayer?.play()
@@ -3753,6 +3760,7 @@ final class CallService: NSObject {
         ringbackFallback?.invalidate(); ringbackFallback = nil
         let wasPlaying = ringbackPlayer != nil
         ringbackPlayer?.stop(); ringbackPlayer = nil
+        callingToneSince = nil
         // HAND THE SESSION BACK TO THE CALL (owner audit 2026-10-06 #8). startRingback swapped the
         // options to include .mixWithOthers and nothing ever swapped them back, so the CALLER's whole
         // call stayed mixable: music in another app kept playing under it, while the callee's call

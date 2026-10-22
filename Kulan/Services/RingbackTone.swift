@@ -23,16 +23,17 @@ enum RingbackTone {
         return wav(samples, sampleRate: sampleRate)
     }
 
-    // Kasim 2026-10-21, timed on the other big app: once the other phone really rings, the FIRST
-    // ring is the ordinary short one, and every ring after it is a LONGER beep with a short pause
-    // ("a long beep with a long stop would be weird"). Same 440+480 Hz as the calling sound above.
-    // One file holds the short ring and then long rings for 90s, past any ring timeout, because a
-    // looped file would start again with the short ring.
+    // Kasim 2026-10-21, timed on the other big app: the caller's FIRST ring is always the ordinary
+    // short one, and every ring after it is a LONGER beep with a short pause ("a long beep with a
+    // long stop would be weird"). So when "Calling..." already played the short ring, ringing starts
+    // long (`shortFirst: false`); when it rings at once, its first ring is the short one. Same
+    // 440+480 Hz as the calling sound above. One file holds 90s of rings, past any ring timeout,
+    // because a looped file would start again with the short ring.
     static let longRingSeconds = 2.5
-    static func ringingData(sampleRate: Int = 8000) -> Data {
+    static func ringingData(shortFirst: Bool, sampleRate: Int = 8000) -> Data {
         let gap = 1.5
-        var rings: [(start: Double, length: Double)] = [(0, 1.8)]   // the short first ring
-        var t0 = 1.8 + gap
+        var rings: [(start: Double, length: Double)] = shortFirst ? [(0, 1.8)] : []   // the short first ring
+        var t0 = shortFirst ? 1.8 + gap : 0
         while t0 < 90 { rings.append((t0, longRingSeconds)); t0 += longRingSeconds + gap }
         let total = Int(Double(sampleRate) * t0)
         var samples = [Int16](repeating: 0, count: total)
