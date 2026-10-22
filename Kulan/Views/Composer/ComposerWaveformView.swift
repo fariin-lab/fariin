@@ -43,6 +43,17 @@ final class ComposerWaveformView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    /// ⛔ A DRAG THAT STARTS ON THIS WAVEFORM IS A SCRUB AND NOTHING ELSE (owner 2026-10-22: "hold the
+    /// timeline and drag, the whole voice draft closes"). The delegate below lets every gesture run
+    /// beside ours, and that included the navigation's back swipe, which on iOS 26 starts anywhere on
+    /// the screen: a drag to the right (2s to 5s) began leaving the chat, and leaving parks the draft.
+    /// UIKit asks the touched view before an ANCESTOR'S recogniser may begin (how UISlider keeps the
+    /// swipe off its thumb), so every pan or swipe that is not ours is refused here. Taps still pass.
+    override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        if g.view !== self, g is UIPanGestureRecognizer || g is UISwipeGestureRecognizer { return false }
+        return super.gestureRecognizerShouldBegin(g)
+    }
+
     override func draw(_ rect: CGRect) {
         let width = bounds.width, height = bounds.height
         guard width > 0 else { return }

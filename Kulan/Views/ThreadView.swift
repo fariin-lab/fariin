@@ -9521,7 +9521,7 @@ struct ThreadView: View {
     /// Everything the first tap on play used to pay for, done while the review is appearing instead.
     ///
     /// Called from `beginPreview`. Safe to call more than once: the player is built only when there
-    /// isn't one, and setting the session to what it already is costs nothing.
+    /// isn't one, and the session is touched only when it is not already set (see below).
     ///
     /// ⚠️ THE SESSION IS THE SLOW HALF, not the file. Changing the category and activating the session
     /// blocks the caller while the route actually changes, which is why the delay was audible on the
@@ -9534,9 +9534,18 @@ struct ThreadView: View {
         // The recorder leaves the session on .playAndRecord, which plays through the EARPIECE on some
         // handsets — a note you cannot hear reads as a note that did not record. Force the speaker
         // for the listen-back, then let the recorder re-warm its own session afterwards.
+        //
+        // ⛔ ONLY WHEN THE SESSION IS NOT ALREADY SET (owner 2026-10-22: "play takes too long", also
+        // after pause). His own VOICE# lines answered it: warm=true, play()=~22ms, but setup=~400ms on
+        // EVERY play after a pause. Setting the same category and activating an active session again
+        // is not free; it renegotiated the route on each tap. The recorder already leaves exactly this
+        // category, so normally nothing runs here. If the session was dropped, `play()` activates it.
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .duckOthers])
-        try? session.setActive(true)
+        if session.category != .playAndRecord || session.mode != .default
+            || !session.categoryOptions.contains(.defaultToSpeaker) {
+            try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .duckOthers])
+            try? session.setActive(true)
+        }
     }
 
     private func startPreviewPlayback() {
