@@ -15,9 +15,8 @@ import Lottie
 //   • a sticker I made is a sealed PNG: decrypted like a photo, kept in `DiskImageCache` as PNG so
 //     the alpha survives, and the same bytes serve "Save to Favorites".
 //   • ⛔ an animated .tgs (owner 2026-10-21) is not a picture: its bytes are unzipped and decoded off
-//     the main thread (`TGSSticker`) and `TGSFramePlayer` draws its frames off the main thread into
-//     `art`, playing on the same terms (on screen, in a window, not hidden). Not a LottieAnimationView:
-//     the owner's second lag report ("the reference app's stickers have no lag").
+//     the main thread (`TGSSticker`) and a `LottieAnimationView` draws it as vectors, playing on the
+//     same terms (on screen, in a window, not hidden).
 final class RowStickerView: UIView {
     private let art = CALayer()
     private var key: String?            // what is on screen (or loading)
@@ -26,10 +25,9 @@ final class RowStickerView: UIView {
     private var onScreen = true
     private var playing = false
     private var generation = 0          // bumped on every change; a stale load or animator stops
-    /// A .tgs sticker (owner 2026-10-21): the decoded animation, its cache key and its player.
+    /// A .tgs sticker (owner 2026-10-21): the decoded animation and its view.
     private var tgs: LottieAnimation?
-    private var tgsKey = ""
-    private var live: TGSFramePlayer?
+    private var lottie: LottieAnimationView?
     /// Owner 2026-10-18: a sticker still downloading or decoding was an empty gap in the chat. The
     /// shimmer holds its place until the first frame is up; a sticker already seen never shows it.
     private let skeleton = SkeletonShimmerView()
@@ -51,6 +49,7 @@ final class RowStickerView: UIView {
         art.frame = bounds
         art.contentsScale = window?.screen.scale ?? UIScreen.main.scale
         CATransaction.commit()
+        lottie?.frame = bounds
         skeleton.frame = bounds.insetBy(dx: 4, dy: 4)
         skeleton.layer.cornerRadius = min(16, skeleton.bounds.width * 0.18)
     }
@@ -99,7 +98,7 @@ final class RowStickerView: UIView {
         let tgsKey = "row:\(s.id)"
         if let anim = TGSSticker.cached(tgsKey) {
             bytes = (Self.bytesCache.object(forKey: k as NSString) ?? Self.bytesCache.object(forKey: bare)).map { $0 as Data }
-            showTGS(anim, key: tgsKey)
+            showTGS(anim)
             return
         }
         if let first = Self.firstCache.object(forKey: k as NSString) ?? Self.firstCache.object(forKey: bare),
@@ -132,7 +131,7 @@ final class RowStickerView: UIView {
                 guard let self, self.generation == gen else { return }
                 guard ok, let anim = TGSSticker.cached(tgsKey) else { self.skeleton.setActive(false); return }
                 self.bytes = data
-                self.showTGS(anim, key: tgsKey)
+                self.showTGS(anim)
                 return
             }
             let first = await Task.detached(priority: .userInitiated) { Self.firstFrame(data, maxPixel: px) }.value
@@ -148,18 +147,21 @@ final class RowStickerView: UIView {
         }
     }
 
-    /// Puts a decoded .tgs up (its first frame, then `updatePlayback` starts it).
-    private func showTGS(_ anim: LottieAnimation, key: String) {
+    /// Puts a decoded .tgs up and lets `updatePlayback` start it.
+    private func showTGS(_ anim: LottieAnimation) {
         tgs = anim
-        tgsKey = key
-        live?.stop()
-        // Sized to the row's box in pixels; a row not laid out yet uses the sticker's usual size.
-        let side = max(bounds.width, bounds.height)
-        let scale = window?.screen.scale ?? UIScreen.main.scale
-        let p = TGSFramePlayer(anim: anim, key: key, pixel: Int((side > 0 ? side : 160) * scale),
-                               fps: 60, target: art)
-        live = p
-        p.prime()
+        let v: LottieAnimationView
+        if let have = lottie {
+            v = have
+            v.animation = anim
+        } else {
+            v = TGSSticker.makeView(anim)
+            insertSubview(v, belowSubview: skeleton)
+            lottie = v
+        }
+        v.frame = bounds
+        v.isHidden = false
+        v.currentProgress = 0
         skeleton.fadeOut()
         updatePlayback()
     }
@@ -183,8 +185,11 @@ final class RowStickerView: UIView {
         art.contents = nil
         CATransaction.commit()
         tgs = nil
-        live?.stop()
-        live = nil
+        if let v = lottie {
+            v.stop()
+            v.animation = nil
+            v.isHidden = true
+        }
         skeleton.setActive(false)
     }
 
@@ -197,8 +202,11 @@ final class RowStickerView: UIView {
     /// the snapshot. Nil for a still sticker.
     func liveCopy() -> UIView? {
         if let anim = tgs {
-            return TGSFrameView(frame: bounds, anim: anim, key: tgsKey, fps: live?.fps ?? 60,
-                                progress: live?.progress ?? 0, still: art.contents)
+            let v = TGSSticker.makeView(anim)
+            v.frame = bounds
+            v.currentProgress = lottie?.realtimeAnimationProgress ?? 0
+            v.play()
+            return v
         }
         guard animated, let data = bytes else { return nil }
         let v = UIView(frame: bounds)
@@ -220,9 +228,13 @@ final class RowStickerView: UIView {
     }
 
     private func updatePlayback() {
-        if let p = live, tgs != nil {
+        if let v = lottie, tgs != nil {
             let want = onScreen && window != nil && !isHidden
-            if want { p.start() } else { p.stop() }
+            if want {
+                if !v.isAnimationPlaying { v.play() }
+            } else if v.isAnimationPlaying {
+                v.pause()
+            }
             return
         }
         let want = animated && onScreen && window != nil && bytes != nil && !isHidden
