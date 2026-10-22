@@ -735,10 +735,14 @@ struct GroupInfoView: View {
             VStack(spacing: 0) {
                 ProfileInfoRow(title: "Leave Group", icon: "rectangle.portrait.and.arrow.right",
                                tint: Self.exitRed, chevron: false) { confirmLeave = true }
-                rowDivider
-                ProfileInfoRow(title: "Block Group", icon: "nosign", tint: Self.exitRed, chevron: false) { confirmBlock = true }
-                rowDivider
-                ProfileInfoRow(title: "Report Spam", icon: "exclamationmark.octagon", tint: Self.exitRed, chevron: false) { confirmReport = true }
+                // Kasim 2026-10-21: an admin or the owner reporting or blocking their own group is
+                // odd; those two rows are for plain members only.
+                if !(iAmAdmin || iAmOwner) {
+                    rowDivider
+                    ProfileInfoRow(title: "Block Group", icon: "nosign", tint: Self.exitRed, chevron: false) { confirmBlock = true }
+                    rowDivider
+                    ProfileInfoRow(title: "Report Spam", icon: "exclamationmark.octagon", tint: Self.exitRed, chevron: false) { confirmReport = true }
+                }
             }
             .profileSurface(plain: cardColor)
             if iAmOwner {
