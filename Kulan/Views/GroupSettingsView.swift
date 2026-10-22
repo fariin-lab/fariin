@@ -981,7 +981,7 @@ struct GroupMembersListView: View {
         return List {
             if canAdd && query.isEmpty {
                 Section {
-                    Button { showAdd = true } label: { Label { Text("Add Members") } icon: { Image("ic_add_members_line") }   // owner's icon 2026-10-22 }
+                    Button { showAdd = true } label: { Label { Text("Add Members") } icon: { Image("ic_add_members_line") } }
                 }
             }
             // ⛔ ROLE — owner 2026-10-18: who holds a role, together at the top, so an admin sees
@@ -1212,7 +1212,7 @@ struct GroupRequestsView: View {
         Section {
             Button { showInvite = true } label: { Label("Share Invite Link", systemImage: "link") }
             if canAdd {
-                Button { showAdd = true } label: { Label { Text("Add Members") } icon: { Image("ic_add_members_line") }   // owner's icon 2026-10-22 }
+                Button { showAdd = true } label: { Label { Text("Add Members") } icon: { Image("ic_add_members_line") } }
             }
         } header: {
             Text("Invite more people")
