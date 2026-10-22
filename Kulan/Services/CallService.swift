@@ -3726,11 +3726,25 @@ final class CallService: NSObject {
                            options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP])
         s.unlockForConfiguration()
         try? AVAudioSession.sharedInstance().overrideOutputAudioPort(isSpeaker ? .speaker : .none)
-        ringbackPlayer = try? AVAudioPlayer(data: RingbackTone.wavData())
+        playRingbackTone()
+        armRingbackWatchdog()
+    }
+
+    /// Which of the two waiting sounds is up. Kasim 2026-10-21, from the other big app: "Calling…"
+    /// has its own sound from the first second (the short ring, stop, ring we always had), and when
+    /// the other phone really rings it changes to a longer beep with a longer pause. The silent
+    /// "Calling…" made the caller think nothing was happening.
+    private var ringbackIsRinging = false
+
+    /// (Re)loads the player with the sound for where the call is now. The session is already set up
+    /// by `startRingback`; swapping only the sound needs no session change.
+    private func playRingbackTone() {
+        ringbackPlayer?.stop()
+        ringbackIsRinging = calleeRinging
+        ringbackPlayer = try? AVAudioPlayer(data: calleeRinging ? RingbackTone.ringingData() : RingbackTone.wavData())
         ringbackPlayer?.numberOfLoops = -1
         ringbackPlayer?.prepareToPlay()
         ringbackPlayer?.play()
-        armRingbackWatchdog()
     }
     private func stopRingback() {
         ringbackWatchdog?.invalidate(); ringbackWatchdog = nil
@@ -3852,9 +3866,10 @@ final class CallService: NSObject {
     // the first second of "Calling…", inaudible at arm's length, and the loudspeaker merely made it
     // heard. Checked against the reference app's call audio source on 2026-10-07: while DIALING it
     // plays one short connecting cue and nothing more; its looped ringback starts on REMOTE RINGING.
-    // The 2026-07-22 note that said the reference rings from the start was wrong. "Calling…" is
-    // quiet now; the ring begins when `ringingAt` lands (`calleeRinging`), started by whichever of
-    // the two, that signal or this activation, arrives second.
+    // The 2026-07-22 note that said the reference rings from the start was wrong.
+    // ⚠️ REVERSED IN PART, Kasim 2026-10-21: a silent "Calling…" read as a broken call. The calling
+    // sound now starts here, at activation, and `ringingAt` (`calleeRinging`) swaps it for the
+    // longer ringing sound (see `ringbackIsRinging`).
     func audioSessionActivated() {
         // 1:1 audit r2 C5, 2026-10-08: a late activation for a call already reset to idle must not
         // leave callAudioLive on for the next dial.
@@ -3870,9 +3885,13 @@ final class CallService: NSObject {
     /// because the accept can land first (over the data channel, or in the same snapshot as
     /// `ringingAt`) while `state` is still `.outgoing`: the old code had a playing tone for
     /// `stopRingback` to stop at that point; this one would have started it for the first time.
+    ///
+    /// Kasim 2026-10-21: no longer waits for `calleeRinging`. The calling sound plays from the dial,
+    /// and the ringing signal changes it to the ringing sound (`playRingbackTone`).
     private func startRingbackIfDue() {
-        guard state == .outgoing, calleeRinging, !calleeAccepted, ringbackPlayer == nil else { return }
-        startRingback()
+        guard state == .outgoing, !calleeAccepted else { return }
+        if ringbackPlayer == nil { startRingback() }
+        else if ringbackIsRinging != calleeRinging { playRingbackTone() }
     }
 
     /// Belt for the case CallKit never activates the session (activation failure, or a device that

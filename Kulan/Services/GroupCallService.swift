@@ -370,7 +370,8 @@ final class GroupCallService: ObservableObject {
     /// Their own add time when the doc (or this phone) has one, the call's start otherwise. Read by
     /// the people sheet's "Ringing..." too.
     func inviteStart(for uid: String) -> Date? {
-        currentAdhocDoc?.invitedAt[uid] ?? roomStartedAt
+        // A group chat's call has no invite times: its ring minute starts when I started it.
+        currentAdhocDoc?.invitedAt[uid] ?? groupRingStartedAt ?? roomStartedAt
     }
     /// audit M-102, 2026-10-07: people the owner removed from the running multi-person call. The
     /// server refuses to put them back on the list, and one of them in an add made the whole add fail.
@@ -521,6 +522,10 @@ final class GroupCallService: ObservableObject {
                 do { try await ref.setData(callDoc); started = true } catch { started = false }
                 if started, gen == joinGeneration, activeCid == cid {
                     groupRecordId = recordId
+                    // I am ringing the group: the caller's sound and "Ringing…" (Kasim 2026-10-21).
+                    groupRingStartedAt = Date()
+                    listenGroupAnswers(cid)
+                    updateRingback()
                     await Self.writeRecord(cid: cid, id: recordId, video: video)
                 } else if started {
                     // Audit M-139, 2026-10-07: ended (or left) while the start write was out. The
@@ -1095,12 +1100,59 @@ final class GroupCallService: ObservableObject {
     /// audit M-065, 2026-10-07: each person inside THEIR OWN ring minute (`inviteStart(for:)`).
     /// "Add people" used to restart one clock for the whole room, so everyone rang again.
     func ringingMembers(at now: Date) -> [CallMember] {
+        if case .group? = activeRoom { return groupRingingMembers(at: now) }
         guard isAdhoc, isActive else { return [] }
         let me = myUid
         return members
             .filter { $0.uid != me && !joinedUids.contains($0.uid)
                 && !declinedUids.contains($0.uid) && !busyUids.contains($0.uid)
                 && inviteStart(for: $0.uid).map { start in now.timeIntervalSince(start) < Self.ringWindow } == true }
+    }
+
+    /// ⛔ A CALL STARTED IN A GROUP CHAT RANG IN SILENCE — Kasim 2026-10-21: the other phones rang,
+    /// the caller heard nothing and saw nobody "Ringing…". `ringingMembers` answered only for an
+    /// ad-hoc call (its doc lists who was invited), so for a group chat's call it was always empty,
+    /// and both the caller's ringing sound and the ringing screen hang on it.
+    ///
+    /// The server rings a group chat's members when the group has at most `groupRingMaxMembers`
+    /// (functions-groups GROUP_RING_MAX_MEMBERS); a bigger group is only told. So this is the same
+    /// list, for the person who STARTED the call, for the ring minute, until somebody comes; people
+    /// who said no or were busy (the call doc's `declined` / `busy`, `groupAnswersListener`) drop off.
+    private func groupRingingMembers(at now: Date) -> [CallMember] {
+        guard isActive, !someoneJoined, let start = groupRingStartedAt,
+              now.timeIntervalSince(start) < Self.ringWindow,
+              let conv = groupConv, conv.users.count <= Self.groupRingMaxMembers else { return [] }
+        let me = myUid
+        let here = Set(room.remoteParticipants.values.compactMap { $0.identity?.stringValue })
+        return conv.users
+            .filter { $0 != me && !here.contains($0) && !declinedUids.contains($0) && !busyUids.contains($0) }
+            .map { CallMember(uid: $0, name: conv.names[$0].flatMap { $0.isEmpty ? nil : $0 } ?? "Member", photoUrl: nil) }
+    }
+    /// functions-groups GROUP_RING_MAX_MEMBERS: a bigger group's call is announced, not rung.
+    static let groupRingMaxMembers = 16
+    /// When I started the group chat's call (nil when I joined one), the start of its ring minute.
+    private var groupRingStartedAt: Date?
+    /// The group call doc's `declined` / `busy` while I ring the group (written by `groupRingAnswer`).
+    private var groupAnswersListener: ListenerRegistration?
+    private func listenGroupAnswers(_ cid: String) {
+        groupAnswersListener?.remove()
+        groupAnswersListener = db.collection("groupCalls").document(cid).addSnapshotListener { [weak self] snap, _ in
+            guard let d = snap?.data() else { return }
+            let declined = Set(d["declined"] as? [String] ?? [])
+            let busy = Set(d["busy"] as? [String] ?? [])
+            let names = d["names"] as? [String: String] ?? [:]
+            Task { @MainActor [weak self] in
+                guard let self, case .group(let now)? = self.activeRoom, now == cid else { return }
+                if let uid = busy.subtracting(self.busyUids).first, let name = names[uid] ?? self.groupConv?.names[uid] {
+                    self.showToast("\(name) is busy")
+                } else if let uid = declined.subtracting(self.declinedUids).first,
+                          let name = names[uid] ?? self.groupConv?.names[uid] {
+                    self.showToast("\(name) declined")
+                }
+                self.declinedUids = declined; self.busyUids = busy
+                self.updateRingback()
+            }
+        }
     }
 
     /// The room a join is running for, from the tap until it is joined or dropped. With `activeCid`
@@ -2091,6 +2143,8 @@ final class GroupCallService: ObservableObject {
         joinedAt = nil
         stopRingback()
         declinedUids = []; busyUids = []; roomAnswersSeeded = false
+        groupRingStartedAt = nil
+        groupAnswersListener?.remove(); groupAnswersListener = nil
         // Idempotent on both sides: this also runs for a join that never became a call.
         GroupCallSocial.shared.reset()
         GroupCallRinging.shared.callEnded()

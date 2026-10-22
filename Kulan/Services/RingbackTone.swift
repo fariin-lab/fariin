@@ -23,6 +23,25 @@ enum RingbackTone {
         return wav(samples, sampleRate: sampleRate)
     }
 
+    // Kasim 2026-10-21: once the other phone really rings, a LONGER beep than the calling sound
+    // above (same 440+480 Hz) with a SHORT pause ("a long beep with a long stop would be weird"),
+    // so the caller hears the moment it starts ringing.
+    static func ringingData(sampleRate: Int = 8000) -> Data {
+        let on = 2.5, cycle = 4.0   // 2.5s beep, 1.5s quiet
+        let total = Int(Double(sampleRate) * cycle)
+        var samples = [Int16](repeating: 0, count: total)
+        for i in 0..<total {
+            let t = Double(i) / Double(sampleRate)
+            if t < on {
+                // 40 ms fades at both ends, so the long beep does not click on or off.
+                let env = min(1, t / 0.04, (on - t) / 0.04)
+                let v = (sin(2 * .pi * 440 * t) + sin(2 * .pi * 480 * t)) / 2
+                samples[i] = Int16(max(-1, min(1, v)) * 11000 * env)
+            }
+        }
+        return wav(samples, sampleRate: sampleRate)
+    }
+
     // US-style busy / "declined" tone (480+620 Hz, 0.5s on / 0.5s off), one cycle —
     // the player loops it a few times. Tells the caller the other side rejected /
     // couldn't be reached.
