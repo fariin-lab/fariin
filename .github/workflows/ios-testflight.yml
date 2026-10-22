@@ -74,12 +74,19 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: SMOOTH ANIMATED STICKERS, CRASH FIXED.
+            THIS BUILD: STICKER CRASH, CALL SOUNDS, GROUP PAGE.
+            Sticker crash fixed: sending an animated sticker, or opening a chat that has one, no longer closes the app.
+            Chat list: fixed a crash while the list updated as the app opened.
+            Calls: "Calling..." now plays a ring from the first second (it was silent). When the other phone rings it changes to longer rings.
+            Group calls: the caller now hears ringing and sees who is still ringing (it was silent).
+            Call sounds are louder and easier to hear without the speaker on.
+            Group page: Report only for members; Block Group removed (Report offers Report and Leave); the owner's Leave says who becomes the new owner; Delete Group says Delete for Everyone.
+            PLEASE TEST: open the chat with the sticker that crashed; send several stickers; make a 1:1 call and a group call and listen.
+
+            EARLIER: SMOOTH ANIMATED STICKERS.
             Animated stickers are drawn in the background as pictures: no more lag in chats or the sticker panel.
-            Fixes the crash from the last build while animated stickers played.
             Search: a public group you are in shows when you search its @name.
             Group page: the mute button uses the same bell icons as a person's profile.
-            PLEASE TEST: open a chat with many animated stickers, scroll fast, open the sticker panel and scroll it.
 
             EARLIER: GET NOTIFICATIONS FOR SOMEONE'S STORIES.
             Story menu (someone else's story): Get notifications / Mute notifications, per person, off by default. A bar confirms it with the person's name.
