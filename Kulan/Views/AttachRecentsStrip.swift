@@ -220,6 +220,10 @@ struct AttachRecentsStrip: View {
     /// The bottom inset handed to `FolderNavHost`, written only when it changes (see `body`).
     @State private var navBottomInset: CGFloat = 0
     @State private var albums: [AttachAlbum] = []
+    /// The month pill's state lives in its own observable object, never in `@State` here: it moves
+    /// on every scroll frame, and a `@State` write would re-run this whole body (and the grid's
+    /// ForEach) sixty times a second. Only `AttachMonthPill` reads it.
+    @State private var monthPill = AttachMonthPillModel()
 
     /// ⛔ **THE GRID IS EDGE TO EDGE — owner, 2026-09-02: "now images Is Runded cornders and Laft and
     /// right has space… make it exactly like image no space".**
@@ -447,6 +451,23 @@ struct AttachRecentsStrip: View {
                     let side = (g.containerSize.width - 2 * Self.tileGap) / 3
                     return g.contentOffset.y + g.contentInsets.top >= side + Self.tileGap
                 } action: { _, scrolled in onScrolledARow(scrolled) }
+                // ⛔ MONTH PILL WHILE SCROLLING — owner 2026-10-22, screenshot of the reference app's
+                // gallery: a small capsule at the right edge says which month and year the photos at
+                // that point were taken ("August 2026"). As the reference does it: the pill rides
+                // down the right edge in step with how far the grid is scrolled, names the TOPMOST
+                // visible photo's month, appears while scrolling, stays 2s after the scroll stops and
+                // fades. Hidden when the library is under about two screens tall.
+                .onScrollGeometryChange(for: AttachPillGeo.self) { g in
+                    AttachPillGeo(
+                        top: g.contentOffset.y + g.contentInsets.top,
+                        rowH: (g.containerSize.width - 2 * Self.tileGap) / 3 + Self.tileGap,
+                        insetTop: g.contentInsets.top,
+                        visibleH: g.containerSize.height - g.contentInsets.top - g.contentInsets.bottom)
+                } action: { _, geo in
+                    monthPill.layout(geo, assets: assets, total: max(fetchResult?.count ?? 0, assets.count))
+                }
+                .onScrollPhaseChange { _, phase in monthPill.scrolling(phase.isScrolling) }
+                .overlay(alignment: .topTrailing) { AttachMonthPill(model: monthPill) }
         }
     }
 
@@ -1067,6 +1088,100 @@ struct AttachAlbum: Identifiable {
     let title: String
     let collection: PHAssetCollection?
     let isAllRecents: Bool
+}
+
+// MARK: - Month pill (owner 2026-10-22)
+
+/// What the grid's scroll position says, in grid terms: how far down the first row is (`top`),
+/// one row's height including the gap, and the part of the scroll view photos are visible in.
+struct AttachPillGeo: Equatable {
+    var top: CGFloat
+    var rowH: CGFloat
+    var insetTop: CGFloat
+    var visibleH: CGFloat
+}
+
+/// The pill's text, position and visibility. The reference app's numbers: 32pt tall, 3pt clear of
+/// the top and bottom of the visible area, travels top to bottom with the scroll fraction, hidden
+/// when the visible part is 55% or more of the content, visible until 2s after scrolling stops.
+@MainActor @Observable final class AttachMonthPillModel {
+    static let height: CGFloat = 32
+    var text = ""
+    var y: CGFloat = 0
+    var shown = false
+    var fits = true
+
+    @ObservationIgnored private var hideTask: Task<Void, Never>?
+    @ObservationIgnored private var lastId = ""
+    /// "LLLL" = the stand-alone month name, so languages that inflect month names in a date
+    /// ("augusta") still show the plain form ("avgust") the way a heading should.
+    private let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = .current
+        f.dateFormat = "LLLL yyyy"
+        return f
+    }()
+
+    func layout(_ g: AttachPillGeo, assets: [PHAsset], total: Int) {
+        guard g.rowH > 1, g.visibleH > 0, total > 0 else { return }
+        // The WHOLE library's height, not just the pages loaded so far, so the pill does not jump
+        // back up each time the next 200 photos page in.
+        let rows = (total + 2) / 3
+        let fullH = CGFloat(rows) * g.rowH
+        let nowFits = g.visibleH / fullH >= 0.55
+        if nowFits != fits { fits = nowFits }
+        let scrollable = fullH - g.visibleH
+        let fraction = scrollable > 0 ? min(1, max(0, g.top / scrollable)) : 0
+        let newY = g.insetTop + 3 + fraction * max(0, g.visibleH - 6 - Self.height)
+        if abs(newY - y) >= 0.5 { y = newY }
+
+        guard !assets.isEmpty else { return }
+        let index = min(max(0, Int(floor(max(0, g.top) / g.rowH)) * 3), assets.count - 1)
+        let asset = assets[index]
+        guard asset.localIdentifier != lastId else { return }
+        lastId = asset.localIdentifier
+        if let date = asset.creationDate {
+            let s = formatter.string(from: date)
+            if s != text { text = s }
+        }
+    }
+
+    func scrolling(_ on: Bool) {
+        hideTask?.cancel()
+        if on {
+            if !shown { shown = true }
+            return
+        }
+        hideTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            self?.shown = false
+        }
+    }
+}
+
+/// The capsule itself. Colours follow the reference: the grouped-list card colour (dark grey in
+/// dark mode, white in light) with primary text and a faint shadow. Never takes touches.
+private struct AttachMonthPill: View {
+    let model: AttachMonthPillModel
+
+    var body: some View {
+        let visible = model.shown && !model.fits && !model.text.isEmpty
+        Text(model.text)
+            .font(.system(size: 13, weight: .medium))
+            .monospacedDigit()
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .padding(.horizontal, 13)
+            .frame(height: AttachMonthPillModel.height)
+            .background(Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
+            .shadow(color: .black.opacity(0.2), radius: 4, y: -1)
+            .padding(.trailing, 12)
+            .offset(y: model.y)
+            .opacity(visible ? 1 : 0)
+            .animation(.easeInOut(duration: 0.2), value: visible)
+            .allowsHitTesting(false)
+    }
 }
 
 // Album cover thumbnail (newest asset in the album / library).
