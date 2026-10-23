@@ -2671,9 +2671,20 @@ final class StoriesService {
     /// (which is already there). `viewedAt` is not carried: the footer never shows a time, and
     /// inventing one here would put a wrong time on the sheet if these ever merged.
     static func face(uid: String, convs: [Conversation], me: String) -> StoryViewerInfo {
-        let c = convs.first { $0.otherUid(me) == uid }
-        return StoryViewerInfo(id: uid, name: c?.name(for: me) ?? "Someone",
-                               photoUrl: c?.photoUrl(for: me), viewedAt: Date(), reaction: nil)
+        let (name, photo) = who(uid, convs: convs, me: me)
+        return StoryViewerInfo(id: uid, name: name, photoUrl: photo, viewedAt: Date(), reaction: nil)
+    }
+
+    /// A viewer's name and face: our 1:1 chat first, else a group we share (its names/photos maps).
+    /// A group story is watched by members I have never messaged; they read "Someone" (2026-10-23).
+    static func who(_ uid: String, convs: [Conversation], me: String) -> (String, String?) {
+        if let c = convs.first(where: { !$0.isGroup && $0.otherUid(me) == uid }) {
+            return (c.name(for: me), c.photoUrl(for: me))
+        }
+        if let g = convs.first(where: { $0.isGroup && $0.names[uid] != nil }) {
+            return (g.names[uid] ?? "Someone", g.photos[uid].flatMap { $0.isEmpty ? nil : $0 })
+        }
+        return ("Someone", nil)
     }
 
     /// The same mapping for a caller that holds nothing but uids — the footer's remembered faces.
@@ -2844,11 +2855,11 @@ final class StoriesService {
         let (convs, me) = await MainActor.run { (ConversationsRepository.shared.conversations, uid) }
         return docs.map { d in
             let u = d.documentID
-            let c = convs.first { $0.otherUid(me) == u }
+            let (name, photo) = Self.who(u, convs: convs, me: me)
             return StoryViewerInfo(
                 id: u,
-                name: c?.name(for: me) ?? "Someone",
-                photoUrl: c?.photoUrl(for: me),
+                name: name,
+                photoUrl: photo,
                 viewedAt: (d.data()["viewedAt"] as? Timestamp)?.dateValue() ?? Date(),
                 reaction: d.data()["reaction"] as? String
             )

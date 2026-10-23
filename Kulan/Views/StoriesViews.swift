@@ -1571,6 +1571,19 @@ struct StoryViewer: View {
     private var me: String { AuthService.shared.uid ?? "" }
     private var currentIsMine: Bool { groups.first { $0.authorUid == currentBucketUid }?.isMine ?? false }
     private var myStories: [Story] { groups.first { $0.isMine && $0.groupConvId == nil }?.stories ?? [] }
+    /// THE STORIES THE VIEWERS SHEET PAGES THROUGH: the ring on screen. A group story's sheet used
+    /// My Story's list, so its card was not in the carousel: swipes did nothing and the selected card
+    /// was another story, whose list said "No views yet" under the group story's "1" (owner
+    /// 2026-10-23). Live from the repo, falling back to this viewer's snapshot.
+    private var sheetStories: [Story] {
+        // The bucket arrives a beat late on open; the ring the door opened stands in until then.
+        let key = currentBucketUid.isEmpty ? (StoryDoorState.shared.openGroup?.authorUid ?? "") : currentBucketUid
+        if key.hasPrefix(StoryGroup.groupKeyPrefix) {
+            return StoriesRepository.shared.others.first { $0.authorUid == key }?.stories
+                ?? groups.first { $0.authorUid == key }?.stories ?? []
+        }
+        return StoriesRepository.shared.mine?.stories ?? myStories
+    }
     // My-story viewers are always fed my bucket ALONE, so this is stable for the whole session
     // (no mid-swipe layout jumps) — it drives the card+footer layout below.
     // ⚠️ `mineOnly` IS DELETED, AND IT IS NOT COMING BACK. It was
@@ -1702,7 +1715,7 @@ struct StoryViewer: View {
     // firstUnseenIndex, NOT the newest, so a fast swipe-up doesn't grab the wrong story.
     private var targetStoryId: String {
         if !currentStoryId.isEmpty { return currentStoryId }
-        return myStories.first(where: { !StoryPrefs.isStorySeen($0.id) })?.id ?? myStories.first?.id ?? ""
+        return sheetStories.first(where: { !StoryPrefs.isStorySeen($0.id) })?.id ?? sheetStories.first?.id ?? ""
     }
     // Any sheet shown over the story → pause it (share, forward, "…" menu, delete confirm). The
     // VIEWERS sheet is handled separately via `viewersProgress` (below) so the story is frozen the
@@ -4570,7 +4583,7 @@ struct StoryViewer: View {
         let carIn = max(0, min(1, (pull - 0.88) / 0.12))
         // Feed the row from the LIVE repo (not the viewer's immutable snapshot), so a story
         // deleted while viewing doesn't linger as a ghost card. Fall back to the snapshot.
-        let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories
+        let liveMyStories = sheetStories
         ZStack(alignment: .top) {
             MyStoriesCarousel(stories: liveMyStories, activeId: $sheetStoryId,
                               countsTick: countsTick,
@@ -4627,7 +4640,7 @@ struct StoryViewer: View {
         // Neighbour flags for the sheet's horizontal page-swipe (the reference app's sheet-to-sheet slide),
         // in the SAME live order the carousel lays its cards out in, so "next" is the card to the
         // right and never a stale snapshot's idea of it.
-        let arr = StoriesRepository.shared.mine?.stories ?? myStories
+        let arr = sheetStories
         let idx = arr.firstIndex { $0.id == sheetStoryId }
         // WHICH TABS A STORY'S VIEWERS LIST GETS, from the same two functions the story's own
         // audience pill reads. BY ID rather than for the active story alone: the sheet holds a real
@@ -4667,7 +4680,7 @@ struct StoryViewer: View {
                               // changes and everything follows it: the list reloads, the carousel
                               // recentres (activeId IS sheetStoryId), and the frozen story under
                               // the card jumps via the existing onChange choreography.
-                              let live = StoriesRepository.shared.mine?.stories ?? myStories
+                              let live = sheetStories
                               guard let i = live.firstIndex(where: { $0.id == sheetStoryId }),
                                     live.indices.contains(i + d) else {
                                   pageDragBox.value = 0
