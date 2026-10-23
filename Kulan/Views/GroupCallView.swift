@@ -776,7 +776,10 @@ struct GroupCallView: View {
     // A voice call link: the camera button is there, greyed and inert (owner, 2026-10-06).
     // VoiceOver labels name what a tap does (no visual change).
     private var cameraButton: some View {
-        ctrl(service.cameraOn ? "video.fill" : "video.slash.fill") { cameraTapped() }
+        // Camera off = the solid white circle, as the 1:1 call's camera and this bar's Mute (owner
+        // 2026-10-23: "camera still not white like the other buttons").
+        ctrl(service.cameraOn ? "video.fill" : "video.slash.fill",
+             active: !service.cameraOn && !service.cameraLocked) { cameraTapped() }
             .disabled(service.cameraLocked)
             .opacity(service.cameraLocked ? 0.35 : 1)
             .accessibilityLabel(cameraLabel)

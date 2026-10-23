@@ -414,13 +414,28 @@ struct GroupCallParticipantsSheet: View {
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.red)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .frame(height: 52)
+                    // Owner 2026-10-23: "not like the Apple card, different corners". The list's own
+                    // inset card: the same corner (iOS 26 grouped rows, continuous) and the same side
+                    // inset as the cards above it (16pt on a narrow phone, 20pt from 400pt wide).
+                    .background(RoundedRectangle(cornerRadius: 26, style: .continuous)
                         .fill(Color(.secondarySystemGroupedBackground)))
             }
             .buttonStyle(.plain)
-            .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 8)
-            .background(Color(.systemGroupedBackground))
+            .padding(.horizontal, UIScreen.main.bounds.width >= 400 ? 20 : 16)
+            .padding(.top, 10).padding(.bottom, 8)
+            // The rows scroll under the bar: a short fade into the sheet colour instead of a hard
+            // edge, so a card passing under it reads as scrolling, not cut off.
+            .background(alignment: .top) {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [Color(.systemGroupedBackground).opacity(0), Color(.systemGroupedBackground)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: 16)
+                    Color(.systemGroupedBackground)
+                }
+                .padding(.top, -16)
+                .ignoresSafeArea(edges: .bottom)
+            }
         }
     }
 
