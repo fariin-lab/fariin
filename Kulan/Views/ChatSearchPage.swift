@@ -45,6 +45,7 @@ struct ChatSearchOverlay: View {
     var personRow: (UserProfile) -> AnyView
     var onOpenChat: (Conversation) -> Void
     var onOpenPerson: (UserProfile) -> Void
+    var onOpenPublicGroup: (PublicGroupTarget) -> Void
 
     @Environment(\.isSearching) private var isSearching
 
@@ -56,7 +57,8 @@ struct ChatSearchOverlay: View {
          people: @escaping () -> [UserProfile],
          personRow: @escaping (UserProfile) -> AnyView,
          onOpenChat: @escaping (Conversation) -> Void,
-         onOpenPerson: @escaping (UserProfile) -> Void) {
+         onOpenPerson: @escaping (UserProfile) -> Void,
+         onOpenPublicGroup: @escaping (PublicGroupTarget) -> Void) {
         self.query = query
         self.me = me
         self.dark = dark
@@ -66,6 +68,7 @@ struct ChatSearchOverlay: View {
         self.personRow = personRow
         self.onOpenChat = onOpenChat
         self.onOpenPerson = onOpenPerson
+        self.onOpenPublicGroup = onOpenPublicGroup
     }
 
     var body: some View {
@@ -85,7 +88,8 @@ struct ChatSearchOverlay: View {
         if isSearching {
             ChatSearchPage(query: query, me: me, dark: dark, searching: searching,
                            chats: chats, people: people, personRow: personRow,
-                           onOpenChat: onOpenChat, onOpenPerson: onOpenPerson)
+                           onOpenChat: onOpenChat, onOpenPerson: onOpenPerson,
+                           onOpenPublicGroup: onOpenPublicGroup)
                 // ⛔ AFTER THE BAR HAS GONE UP (owner 2026-10-18, build 973: "the Recent heading goes
                 // under the search bar"). The page is laid out at once for the bar's FINAL place, so
                 // while the field was still rising it passed over Recent and the first rows. The
@@ -293,6 +297,7 @@ struct ChatSearchPage: View {
 
     var onOpenChat: (Conversation) -> Void
     var onOpenPerson: (UserProfile) -> Void
+    var onOpenPublicGroup: (PublicGroupTarget) -> Void
 
     @Environment(\.dismissSearch) private var dismissSearch
     private var repo = ConversationsRepository.shared
@@ -315,7 +320,8 @@ struct ChatSearchPage: View {
          people: @escaping () -> [UserProfile],
          personRow: @escaping (UserProfile) -> AnyView,
          onOpenChat: @escaping (Conversation) -> Void,
-         onOpenPerson: @escaping (UserProfile) -> Void) {
+         onOpenPerson: @escaping (UserProfile) -> Void,
+         onOpenPublicGroup: @escaping (PublicGroupTarget) -> Void) {
         self.query = query
         self.me = me
         self.dark = dark
@@ -325,6 +331,7 @@ struct ChatSearchPage: View {
         self.personRow = personRow
         self.onOpenChat = onOpenChat
         self.onOpenPerson = onOpenPerson
+        self.onOpenPublicGroup = onOpenPublicGroup
     }
 
     var body: some View {
@@ -561,7 +568,12 @@ struct ChatSearchPage: View {
                 dismissSearch()
                 return
             }
-            GroupDirectory.open(cid: g.cid, name: g.handle)
+            // ⛔ AND A GROUP I AM NOT IN OPENS THE SAME WAY, ON THIS TAP (owner 2026-10-23, 4th
+            // report: list on screen, top buttons blank, no tab bar). `GroupDirectory.open` goes
+            // through the router, which appends a main-queue turn later while the search is closing;
+            // the stack took the page (its tab bar and toolbar preferences won) but kept showing the
+            // list. Appended here before the search closes, it is the same navigation as a chat row.
+            onOpenPublicGroup(PublicGroupTarget(cid: g.cid, name: g.handle))
             dismissSearch()
         case .recentPerson:
             guard let e = m.recents[row.key] else { return }

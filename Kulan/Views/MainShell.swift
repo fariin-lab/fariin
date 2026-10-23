@@ -1894,7 +1894,13 @@ struct ChatsView: View {
                     // goes with it, so Back lands on the plain list, as on Stories.
                     chatSearch = ""
                 },
-                onOpenPerson: { openPerson($0) })
+                onOpenPerson: { openPerson($0) },
+                // A public group I am not in: its page on `path`, pushed on the tap like a chat
+                // (the router door, `openPendingPublicGroup`, is for links from outside the list).
+                onOpenPublicGroup: { t in
+                    path.append(t)
+                    chatSearch = ""
+                })
         )
     }
 
