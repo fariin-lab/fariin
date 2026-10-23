@@ -3343,6 +3343,7 @@ service cloud.firestore {
       }
       function groupPoster(c) {
         return c.get('type', '') == 'group' && request.auth.uid in c.get('users', [])
+          && request.resource.data.recipientUids.size() <= c.get('users', []).size()
           && (request.auth.uid == c.get('createdBy', '')
               || (request.auth.uid in c.get('admins', []) && c.get('adminsPostStories', true) != false));
       }
@@ -3473,62 +3474,18 @@ service cloud.firestore {
                   && dailyStoryBudget().get('count', 0) < appLimit('stories_per_day_verified', 100)
                 )
            )
-        // PUBLIC STORIES ARE BACK, on the owner's explicit order of 2026-08-06, and the rule that
-        // refused them is gone with the audience option that was removed alongside it.
-        //
-        // WHAT HE ASKED FOR, in his words: "Anyone on Fariin can view your story if they reach your
-        // profile, but only existing interactions/friends should get your story displayed directly
-        // in their Story List. It should not become a public story feed." That is exactly what this
-        // flag has always meant — the only query that reads it is `publicStoryGroup(for:)`, which
-        // asks for ONE named person's stories and is run from their profile. There is no browse and
-        // no feed to add it to, so the flag cannot become one.
-        //
-        // WHAT IT COSTS, written down so the next reader does not think it was overlooked. An
-        // audience with no recipient list has no key to seal a story with, so story encryption, when
-        // it lands, will cover Friends and Custom lists and not this one. And this is the one
-        // surface where an App Store reviewer can be shown a stranger's content, which is what Apple
-        // pulled Telegram over on 2026-08-04 — so the report-and-ban path has to keep covering it.
-        // Both were put to him before this rule was changed and he chose to go ahead.
-        //
+        // Public stories: owner 2026-08-06 (profile reach only, no feed; see publicStoryGroup).
         // A banned account still cannot post anything anybody else can find.
         && !isBanned()
-        && request.resource.data.recipientUids.size() <= 1000   // limit fan-out abuse
+        // Fan-out cap 1000; a group story is capped by its group's size instead (groupPoster).
+        && (request.resource.data.recipientUids.size() <= 1000 || request.resource.data.get('groupId', '') != '')
         // Kill "immortal stories": expiry must be within ~30h of now (client sets +24h; the
         // margin tolerates device-clock skew). Blocks a hostile client from setting expiresAt
         // years out so cleanupStories never collects it.
         && request.resource.data.expiresAt is timestamp
         && request.resource.data.expiresAt > request.time
         && request.resource.data.expiresAt < request.time + duration.value(30, 'h')
-        // ⛔ AND `createdAt` IS THE SERVER'S CLOCK, NOT THE PHONE'S — 2026-09-11 security pass.
-        //
-        // Every field beside it was already pinned: `authorUid` to the caller, `mediaPath` to this
-        // story's own folder, `type` paired with that path, `expiresAt` bounded to ~30h. This one
-        // was required to be PRESENT and then never looked at — and the update rule freezes it for
-        // life, so whatever a client stamped was permanent and unrepairable.
-        //
-        // ⚠️ IT IS NOT COSMETIC. `createdAt` decides where a story sits in every recipient's tray
-        // and what the "posted Xh ago" label says, for the story's whole life. Back-dated, it
-        // arrives already buried; forward-dated, it sits at the top of everyone's row until it
-        // expires. Neither needs anything more than a modified client.
-        //
-        // ⚠️ SAFE FOR BOTH POST PATHS, CHECKED RATHER THAN ASSUMED. The photo and video creates
-        // both send `FieldValue.serverTimestamp()`. The one place that stamps a CLIENT date is
-        // `writePublicMirror`, and that writes to `users/{uid}/publicStories`, a different
-        // collection this rule does not govern — it is deliberately given the original story's time
-        // so a re-mirrored story does not claim to be brand new. This does not reach it.
-        //
-        // ⛔ A WINDOW, NOT `== request.time`, AND THE REASON IS THAT THE STRICT FORM CANNOT BE
-        // TESTED HERE. The suites drive the emulator over REST with literal ISO timestamps; a
-        // server-timestamp sentinel is a DocumentTransform and there is no way to express one
-        // through this harness. So strict equality would be a rule whose ALLOW path no test could
-        // ever exercise — and if the equivalence were ever wrong, every story post in the app would
-        // be refused with nothing having caught it.
-        //
-        // The window closes exactly the same hole. The attack is a story that arrives already
-        // buried, or one that sits at the top of every recipient's row until it expires; both need
-        // hours, not minutes. Five minutes each way also absorbs the device-clock skew the
-        // `expiresAt` clause above already says it is tolerating, and `serverTimestamp()` lands
-        // trivially inside it.
+        // createdAt = the server's clock within 5 min (2026-09-11): it orders every tray and is frozen for life.
         && request.resource.data.createdAt is timestamp
         && request.resource.data.createdAt > request.time - duration.value(5, 'm')
         && request.resource.data.createdAt < request.time + duration.value(5, 'm')
@@ -3594,7 +3551,8 @@ service cloud.firestore {
         //     would put somebody back in and hand them a second look at a story they have already
         //     burned. `public` and `audienceLabel` are pinned with it, or the same story could be
         //     made public and read off the profile after its one view was gone.
-        && request.resource.data.recipientUids.size() <= 1000
+        && (request.resource.data.recipientUids.size() <= 1000
+            || (resource.data.get('groupId', '') != '' && resource.data.recipientUids.hasAll(request.resource.data.recipientUids)))
         // ⚠️ A ONE-TIME STORY'S AUDIENCE MAY SHRINK, AND ONLY SHRINK. Pinning it outright was too
         // strong and broke a real thing: `revokeAudience` takes a blocked person off every live
         // story, and a one-time story needs that as much as any other. `hasAll` is a subset test —
@@ -3638,6 +3596,34 @@ service cloud.firestore {
       }
 
       // A recipient records they viewed it; the author can read the viewer list.
+      // GROUP STORY REPLIES (owner 2026-10-23, the reference (signal) way): one shared thread per
+      // group story, read and written by everyone it reached until it expires; deleted by the writer
+      // or a group admin. onStoryDeleted removes them with the story.
+      match /replies/{replyId} {
+        function rReader() {
+          let st = storyData();
+          return st.get('groupId', '') != ''
+            && (request.auth.uid == st.authorUid || audienceToken(request.auth.uid) in st.recipientUids);
+        }
+        function rText(f, n) {
+          return request.resource.data.get(f, '') is string && request.resource.data.get(f, '').size() <= n;
+        }
+        allow read: if signedIn() && rReader();
+        allow create: if signedIn() && rReader()
+          && storyData().expiresAt > request.time
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.keys().hasOnly(['uid', 'text', 'emoji', 'createdAt'])
+          && rText('text', 1000) && rText('emoji', 16)
+          && request.resource.data.get('text', '').size() + request.resource.data.get('emoji', '').size() > 0
+          && request.resource.data.createdAt is timestamp
+          && request.resource.data.createdAt > request.time - duration.value(5, 'm')
+          && request.resource.data.createdAt < request.time + duration.value(5, 'm');
+        allow delete: if signedIn() && (resource.data.uid == request.auth.uid
+          || groupAdminOf(get(/databases/$(database)/documents/conversations/$(storyData().groupId)).data));
+      }
+      function groupAdminOf(c) {
+        return request.auth.uid == c.get('createdBy', '') || request.auth.uid in c.get('admins', []);
+      }
       match /views/{viewerUid} {
         allow read: if signedIn() && (
           request.auth.uid == storyData().authorUid
