@@ -2789,25 +2789,60 @@ enum MessageRowLayout {
         case .pill:
             let hPad: CGFloat = 12, vPad: CGFloat = 5
             let avail = max(1, width - BubbleMetrics.rowMargin * 2 - hPad * 2)
-            let size = BubbleText.size(attr, width: avail)
+            // ⛔ ONE LAYOUT FOR THE WORDS AND THEIR GREYS — owner 2026-10-23, build 1014, the "no
+            // longer end-to-end encrypted" notice: the first line's words hung out of its grey at
+            // both ends. The per-line greys took their tops and bottoms from a bare TextKit layout,
+            // while a UILabel drew the words with its own line heights, centred in a frame sized by
+            // a third measurement (`boundingRect`). They disagreed by a few points, so the first
+            // line was drawn lower than its grey: its lower half sat where only the narrower second
+            // line's grey is, and both ends of the line showed bare. The breaks could disagree the
+            // same way (the label wraps with UIKit's standard strategy, the layout manager without
+            // it). Now the breaks TextKit chose are written into the string, every line is pinned
+            // to one fixed height, and the greys are cut on those same lines.
+            var drawn: NSAttributedString = attr
+            var lineCount = 1
+            if let broken = Self.noticeWithLineBreaks(attr, wrapWidth: avail) {
+                drawn = broken.text
+                lineCount = broken.lines
+            }
+            let lineH = ceil(BubbleMetrics.noticeFont.lineHeight)
+            let multiLine = lineCount > 1
+            let measured = BubbleText.size(drawn, width: avail)
+            let size = multiLine ? CGSize(width: measured.width, height: lineH * CGFloat(lineCount)) : measured
             let capsuleW = size.width + hPad * 2
             let capsuleH = size.height + vPad * 2
             let rect = CGRect(x: (width - capsuleW) / 2, y: 0, width: capsuleW, height: capsuleH)
+            // Centred text in a centred frame draws the same wherever the frame's edges are, so a
+            // multi-line label gets the whole available width: a fraction of a point between how
+            // TextKit and the label measure a line can then never push a word onto a new line.
+            let textRect = multiLine
+                ? CGRect(x: ((capsuleW - avail) / 2).rounded(), y: vPad, width: avail, height: size.height)
+                : CGRect(x: hPad, y: vPad, width: size.width, height: size.height)
             var plan = NoticePlan(capsule: rect,
-                                  text: CGRect(x: hPad, y: vPad, width: size.width, height: size.height),
-                                  attr: attr, style: .pill,
+                                  text: textRect,
+                                  attr: drawn, style: .pill,
                                   onWallpaper: n.onWallpaper, wallpaperBlur: n.wallpaperBlur)
             plan.buttons = noticeButtons(n.actions, under: rect, rowWidth: width)
             // ⛔ ONE BACKGROUND PER LINE — owner 2026-10-17, the reference app's service message: a
             // two-line notice drew one box around both lines, wide line and short line alike. Each
             // line now gets its own grey hugging its own width. A single line keeps the capsule.
             let single = BubbleMetrics.noticeFont.lineHeight + vPad * 2
-            let rows = noticeLineRows(attr, wrapWidth: avail, hPad: hPad, vPad: vPad,
-                                      capsule: rect.size, radius: (single / 2).rounded())
-            if rows.count > 1 {
-                plan.lineRows = rows
-                let minH = rows.map(\.height).min() ?? single
-                plan.lineRadius = min((single / 2).rounded(), (minH / 2).rounded(.down))
+            if multiLine {
+                // Widths from each line's ink; tops and bottoms from the fixed line height the
+                // label draws with, so a grey and its words share their edges exactly.
+                var rows = noticeLineRows(drawn, wrapWidth: avail, hPad: hPad, vPad: vPad,
+                                          capsule: rect.size, radius: (single / 2).rounded())
+                if rows.count == lineCount {
+                    for i in rows.indices {
+                        let top = i == 0 ? 0 : vPad + lineH * CGFloat(i)
+                        let bottom = i == rows.count - 1 ? capsuleH : vPad + lineH * CGFloat(i + 1)
+                        rows[i].origin.y = top
+                        rows[i].size.height = bottom - top
+                    }
+                    plan.lineRows = rows
+                    let minH = rows.map(\.height).min() ?? single
+                    plan.lineRadius = min((single / 2).rounded(), (minH / 2).rounded(.down))
+                }
             }
             return plan
         case .storyCard:
@@ -2859,6 +2894,54 @@ enum MessageRowLayout {
                               attr: attr, style: .unsupported,
                               onWallpaper: n.onWallpaper, wallpaperBlur: n.wallpaperBlur)
         }
+    }
+
+    /// The notice with a hard break at every place TextKit wraps it at `wrapWidth`, each line's
+    /// trailing blanks dropped, and every line pinned to the notice font's line height, centred.
+    /// Nil when it fits on one line. The breaks are U+2028 LINE SEPARATOR, so the lines stay one
+    /// paragraph; a "\n" already in the text is kept where it was.
+    private static func noticeWithLineBreaks(_ attr: NSAttributedString,
+                                             wrapWidth: CGFloat) -> (text: NSAttributedString, lines: Int)? {
+        guard attr.length > 0 else { return nil }
+        let storage = NSTextStorage(attributedString: attr)
+        let lm = NSLayoutManager()
+        storage.addLayoutManager(lm)
+        let tc = NSTextContainer(size: CGSize(width: max(1, wrapWidth), height: .greatestFiniteMagnitude))
+        tc.lineFragmentPadding = 0
+        lm.addTextContainer(tc)
+        lm.ensureLayout(for: tc)
+        var ranges: [NSRange] = []
+        lm.enumerateLineFragments(forGlyphRange: NSRange(location: 0, length: lm.numberOfGlyphs)) {
+            _, _, _, glyphs, _ in
+            ranges.append(lm.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil))
+        }
+        guard ranges.count > 1 else { return nil }
+        let text = attr.string as NSString
+        let out = NSMutableAttributedString()
+        for (i, r) in ranges.enumerated() {
+            var line = r
+            var endsInNewline = false
+            while line.length > 0,
+                  let u = UnicodeScalar(text.character(at: line.location + line.length - 1)),
+                  CharacterSet.whitespacesAndNewlines.contains(u) {
+                if CharacterSet.newlines.contains(u) { endsInNewline = true }
+                line.length -= 1
+            }
+            out.append(attr.attributedSubstring(from: line))
+            guard i < ranges.count - 1 else { break }
+            // The break wears the attributes of the line it ends, so its line box keeps the
+            // notice's font.
+            let at = max(0, min(attr.length - 1, r.location))
+            out.append(NSAttributedString(string: endsInNewline ? "\n" : "\u{2028}",
+                                          attributes: attr.attributes(at: at, effectiveRange: nil)))
+        }
+        let lineH = ceil(BubbleMetrics.noticeFont.lineHeight)
+        let para = NSMutableParagraphStyle()
+        para.alignment = .center
+        para.minimumLineHeight = lineH
+        para.maximumLineHeight = lineH
+        out.addAttribute(.paragraphStyle, value: para, range: NSRange(location: 0, length: out.length))
+        return (out, ranges.count)
     }
 
     /// Each laid-out line of a pill notice as its own background row, centred, in capsule
