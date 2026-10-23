@@ -2298,7 +2298,8 @@ struct ThreadView: View {
             noteHistoryStart()
             // A preview owns its repository; a real chat shares the live one (`forChat`), so it
             // counts itself in and out rather than stopping a run another screen may be using.
-            if quiet { repo.start() } else { repo.open() }
+            // A guest who may not read the messages starts no listener (it could only be refused).
+            if quiet { if guest?.readable != false { repo.start() } } else { repo.open() }
             // PAY THE GIF KEY'S ROUND TRIP NOW, quietly, instead of on the first tap of the button.
             // Opening a chat is the moment we learn a GIF might be sent, and it is a moment with
             // nothing else competing for the network. No-op once the key is on the phone, which is

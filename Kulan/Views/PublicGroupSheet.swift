@@ -20,7 +20,11 @@ import Observation
 @Observable final class PublicGroupGuest {
     let preview: PublicGroupPreview
     var joined = false
-    init(_ preview: PublicGroupPreview) { self.preview = preview }
+    /// Whether the rules let me read its messages from outside. When they do not (an older, still
+    /// encrypted group, or history hidden from new members) the chat still opens, as the reference
+    /// app's does, with "join to see the messages" in place of them (owner 2026-10-23).
+    let readable: Bool
+    init(_ preview: PublicGroupPreview, readable: Bool = true) { self.preview = preview; self.readable = readable }
 }
 
 struct PublicGroupSheet: View {
@@ -51,6 +55,18 @@ struct PublicGroupSheet: View {
             } else if let g = guest {
                 ThreadView(cid: g.preview.cid, title: g.preview.title, photoUrl: g.preview.photoUrl, guest: g)
                     .id("guest")
+                    .overlay {
+                        if !g.readable {
+                            // The reference app's words for a group it cannot show from outside.
+                            Text("You need to join this group to view its messages.")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 16).padding(.vertical, 10)
+                                .liquidGlass(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                .padding(.horizontal, 40)
+                                .allowsHitTesting(false)
+                        }
+                    }
             } else {
                 joinPage
             }
@@ -222,8 +238,10 @@ struct PublicGroupSheet: View {
             let readable: Bool
             if let early { readable = early } else { readable = await GroupDirectory.canPeek(cid: p.cid) }
             guard !Task.isCancelled else { return }
-            // An open guest chat stays the same view; only a newly readable group switches to it.
-            if readable, guest == nil { guest = PublicGroupGuest(p) }
+            // ⛔ THE CHAT, ALWAYS (owner 2026-10-23, the reference app read by five agents): a public
+            // group's link pushes its chat with Join at the foot, readable or not. The info page is
+            // left for a group that could not be found or loaded. An open guest chat stays as it is.
+            if guest == nil { guest = PublicGroupGuest(p, readable: readable) }
             preview = p
         case .refused(let why):
             if preview == nil { refusedText = why }
@@ -288,13 +306,17 @@ struct PublicJoinBar: View {
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
             }
+            // The reference app's join panel: ONE centred accent glass pill (min 166 wide, 19pt side
+            // inset, medium 17), "Join Group" / "Apply to Join Group" (owner 2026-10-23).
             Button(action: join) {
                 Text(title)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: 17, weight: .medium))
                     .foregroundStyle(enabled ? Color.white : Color.secondary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(Capsule().fill(enabled ? PublicGroupSheet.blue : Color(.tertiarySystemFill)))
+                    .padding(.horizontal, 19)
+                    .frame(minWidth: 166)
+                    .frame(height: 44)
+                    .liquidGlass(Capsule(), interactive: true,
+                                 tint: enabled ? PublicGroupSheet.blue : nil)
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -309,7 +331,7 @@ struct PublicJoinBar: View {
     private var title: String {
         if waiting { return "Request Sent" }
         if joining { return p.needsApproval ? "Sending…" : "Joining…" }
-        return p.needsApproval ? "Request to Join" : "Join Group"
+        return p.needsApproval ? "Apply to Join Group" : "Join Group"
     }
 
     private func join() {
