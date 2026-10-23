@@ -306,6 +306,10 @@ final class GroupCallService: ObservableObject {
     @Published var pendingRequests: [CallMember] = [] // link creator: people waiting to be let in
     @Published private(set) var isLinkCreator = false
     @Published var incomingInvite: AdhocInvite?
+    /// A group chat's call ringing me, shown by the same full-screen invitation as a multi-person call
+    /// (owner 2026-10-23, "fix all": a group ring had only the system call banner). Set and cleared
+    /// by `GroupCallRinging` while its ring is up and still ringing.
+    @Published var groupRingScreen: AdhocInvite?
     /// An ad-hoc or link call wants its screen up. `IncomingGroupCallLayer` presents GroupCallView for
     /// these; group conversation calls keep their own covers in the chat and in group info.
     @Published var presentsRoomScreen = false

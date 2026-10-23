@@ -31,13 +31,14 @@ struct IncomingGroupCallLayer: View {
             Color.clear.frame(width: 0, height: 0).allowsHitTesting(false)
             // owner, 2026-10-06: not for a room already declined on the lock screen (the list of
             // invitations can load after that decline).
-            if CallFeatures.groupCalls, let invite = service.incomingInvite,
+            // 2026-10-23 (owner): a group chat's ring shows here too (`groupRingScreen`).
+            if CallFeatures.groupCalls, let invite = service.incomingInvite ?? service.groupRingScreen,
                !GroupCallRinging.shared.isDeclined(invite.roomId) {
                 IncomingGroupCallScreen(invite: invite)
                     .transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: service.incomingInvite?.roomId)
+        .animation(.easeInOut(duration: 0.2), value: service.incomingInvite?.roomId ?? service.groupRingScreen?.roomId)
         .onAppear { service.startInviteListener() }
         // owner, 2026-10-06: and the service forgets that invitation too, so nothing waits behind.
         .onChange(of: service.incomingInvite?.roomId) { _, roomId in

@@ -56,8 +56,16 @@ final class GroupCallRinging {
     /// inCall: the room is up; the CallKit call stays for the whole call.
     private enum Phase { case ringing, joining, inCall }
 
-    private var ring: Ring?
-    private var phase: Phase = .ringing
+    private var ring: Ring? { didSet { syncScreen() } }
+    private var phase: Phase = .ringing { didSet { syncScreen() } }
+
+    /// The in-app invitation for a group chat's ring goes the moment that ring stops ringing, by
+    /// whatever path (answered, declined, ended, timed out, a 1:1 took over).
+    private func syncScreen() {
+        let service = GroupCallService.shared
+        guard let shown = service.groupRingScreen else { return }
+        if ring?.roomId != shown.roomId || phase != .ringing { service.groupRingScreen = nil }
+    }
     private var listener: ListenerRegistration?
     private var timeoutTask: Task<Void, Never>?
     private var watch: Set<AnyCancellable> = []
@@ -141,6 +149,14 @@ final class GroupCallRinging {
         }
         ring = r
         phase = .ringing
+        // A group chat's call gets the full-screen invitation too (owner 2026-10-23), as a
+        // multi-person call already does: the group's title, the caller's face.
+        if kind == "group" {
+            service.groupRingScreen = AdhocInvite(
+                roomId: roomId, title: title ?? callerName, video: video, startedBy: callerUid,
+                startedAt: r.startedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date(),
+                others: callerUid.isEmpty ? [] : [CallMember(uid: callerUid, name: callerName, photoUrl: nil)])
+        }
         // The caller's name; for a group chat's call, the group's title.
         CallKitManager.shared.reportGroupRing(uuid: r.uuid, name: kind == "group" ? (title ?? callerName) : callerName,
                                               video: video, completion: completion)
@@ -341,7 +357,7 @@ final class GroupCallRinging {
             ring = nil
             CallKitManager.shared.endGroupCall(uuid: r.uuid, reason: .declinedElsewhere)
         }
-        settleDecline(roomKind: "adhoc", roomId: invite.roomId,
+        settleDecline(roomKind: invite.roomId.hasPrefix("adhoc_") ? "adhoc" : "group", roomId: invite.roomId,
                       startedAtMs: invite.startedAt.timeIntervalSince1970 * 1000)
     }
 
@@ -356,7 +372,15 @@ final class GroupCallRinging {
         }
         remember(invite.roomId)
         let service = GroupCallService.shared
-        if service.incomingInvite?.roomId == invite.roomId {
+        if !invite.roomId.hasPrefix("adhoc_") {
+            // A group chat's call (owner 2026-10-23): joined the way a CallKit answer joins it, only
+            // a call that is still on, on the root layer's call screen.
+            let video = Self.joinsWithVideo(invite.video)
+            service.presentsRoomScreen = true
+            Task { @MainActor in
+                await service.start(cid: invite.roomId, title: invite.title, video: video, requireLive: true)
+            }
+        } else if service.incomingInvite?.roomId == invite.roomId {
             service.acceptInvite()   // applies the same camera rule
         } else {
             let video = Self.joinsWithVideo(invite.video)
