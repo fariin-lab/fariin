@@ -494,6 +494,9 @@ struct GroupCallParticipantsSheet: View {
         // Link calls: the invite list follows the link the call is on now.
         .task(id: service.isLink ? link?.roomId : nil) {
             if service.isLink, let link { linkInvites.listen(roomId: link.roomId) } else { linkInvites.stop() }
+            // Invites from an earlier call on the same link count for nothing (server contract):
+            // the media room's session id tells this call's from those.
+            if service.isLink, let sid = try? await service.room.sid() { linkInvites.currentSid = sid.stringValue }
         }
         .onDisappear { linkInvites.stop() }
         .overlay(alignment: .bottom) { toastView }
@@ -559,12 +562,16 @@ struct GroupCallParticipantsSheet: View {
                 let rung = data["rung"] as? [String] ?? []
                 let skipped = data["skipped"] as? [[String: Any]] ?? []
                 let reasons = skipped.compactMap { $0["reason"] as? String }
+                // The server's reasons (contract): full, unavailable, unreachable (rung, no phone
+                // took it: the bell can nudge them), the rest = already here or already rung.
                 if reasons.contains("full") {
                     showSheetToast("The call is full")
+                } else if reasons.contains("unavailable") {
+                    showSheetToast(picked.count == 1 ? "They can't be added" : "Some people can't be added")
+                } else if reasons.contains("unreachable") {
+                    showSheetToast("Couldn't reach their phone. Use the bell to nudge them.")
                 } else if rung.isEmpty, !skipped.isEmpty {
                     showSheetToast(picked.count == 1 ? "Already invited" : "They were already invited")
-                } else if !skipped.isEmpty {
-                    showSheetToast("Some people couldn't be added")
                 }
             } catch {
                 let ns = error as NSError
@@ -572,6 +579,8 @@ struct GroupCallParticipantsSheet: View {
                    ns.code == FunctionsErrorCode.notFound.rawValue
                     || ns.code == FunctionsErrorCode.unimplemented.rawValue {
                     sendLink(url, to: picked)
+                } else if ns.domain == FunctionsErrorDomain, ns.code == FunctionsErrorCode.permissionDenied.rawValue {
+                    showSheetToast("Couldn't add people. Try again.")
                 } else {
                     actionError = Self.errorText(error)
                 }
@@ -583,7 +592,7 @@ struct GroupCallParticipantsSheet: View {
     private func nudge(_ uid: String, name: String) {
         guard let link else { return }
         nudgedAt[uid] = Date()
-        let payload: [String: Any] = ["roomId": link.roomId, "uid": uid]
+        let payload: [String: Any] = ["roomId": link.roomId, "key": link.key, "uid": uid]
         Task {
             do {
                 _ = try await Functions.functions(region: "me-central1")
@@ -594,7 +603,7 @@ struct GroupCallParticipantsSheet: View {
                 let code: FunctionsErrorCode? = ns.domain == FunctionsErrorDomain ? FunctionsErrorCode(rawValue: ns.code) : nil
                 switch code {
                 case .resourceExhausted?: showSheetToast("Wait a minute before nudging again")
-                case .failedPrecondition?: showSheetToast("They're already in the call")
+                case .failedPrecondition?, .permissionDenied?: showSheetToast("Can't nudge them now")
                 default:
                     nudgedAt[uid] = nil
                     showSheetToast("Couldn't nudge. Try again.")
@@ -968,11 +977,19 @@ final class LinkCallInvites: ObservableObject {
     struct Invite: Identifiable, Equatable {
         let uid: String
         let at: Date?
+        let sid: String?
         let state: String   // ringing | declined | missed | joined
         var id: String { uid }
     }
 
-    @Published private(set) var invites: [Invite] = []
+    /// Every invite doc under the link, this call's and older ones.
+    @Published private var all: [Invite] = []
+    /// The running call's media session. Known: invites of another session are left out.
+    @Published var currentSid: String?
+    var invites: [Invite] {
+        guard let currentSid else { return all }
+        return all.filter { $0.sid == nil || $0.sid == currentSid }
+    }
     @Published private(set) var people: [String: CallMember] = [:]
     private var listener: ListenerRegistration?
     private var roomId: String?
@@ -1002,13 +1019,14 @@ final class LinkCallInvites: ObservableObject {
                     let d = doc.data()
                     let uid = d["uid"] as? String ?? doc.documentID
                     guard !uid.isEmpty else { return nil }
-                    return Invite(uid: uid, at: (d["at"] as? Timestamp)?.dateValue(),
+                    let sid = (d["sid"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                    return Invite(uid: uid, at: (d["at"] as? Timestamp)?.dateValue(), sid: sid,
                                   state: d["state"] as? String ?? "ringing")
                 }
                 .sorted { ($0.at ?? .distantPast) < ($1.at ?? .distantPast) }
                 Task { @MainActor [weak self] in
                     guard let self, self.roomId == roomId else { return }
-                    self.invites = rows
+                    self.all = rows
                     self.loadProfiles(rows.map(\.uid))
                 }
             }
@@ -1017,7 +1035,8 @@ final class LinkCallInvites: ObservableObject {
     func stop() {
         listener?.remove(); listener = nil
         roomId = nil
-        invites = []
+        all = []
+        currentSid = nil
     }
 
     /// The people just picked: their names are known at once.

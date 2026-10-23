@@ -148,7 +148,11 @@ final class GroupCallRinging {
                 case .none: break
                 }
             }
-            reportBusy(roomKind: kind, roomId: roomId)
+            // A link's answer is matched to its call by the push's `startedAt` (server contract).
+            let pushStart = (d["startedAt"] as? NSNumber)?.doubleValue ?? 0
+            reportBusy(roomKind: kind, roomId: roomId,
+                       startedAt: kind == "link" && pushStart > 0
+                           ? Date(timeIntervalSince1970: (pushStart < 100_000_000_000 ? pushStart : pushStart / 1000)) : nil)
             return
         }
         let callerName = (d["callerName"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Call"
@@ -375,7 +379,7 @@ final class GroupCallRinging {
             }
             guard self.ring?.uuid == r.uuid else { return }   // ended meanwhile
             if service.activeCid == Self.joinRoomId(r.roomId, linkKey: r.linkKey) {
-                if r.roomKind == "link" { self.reportLinkJoined(roomId: r.roomId) }
+                if r.roomKind == "link" { self.reportLinkJoined(roomId: r.roomId, startedAtMs: r.startedAtMs) }
                 self.callJoined()
             } else {
                 self.endCallKitCall(.failed)   // the join never became a call
@@ -449,9 +453,12 @@ final class GroupCallRinging {
             // Mute pill goes as the join's own mic wish (joinLink sets it from `mic`).
             let video = Self.joinsWithVideo(invite.video)
             let joinRoom = Self.joinRoomId(invite.roomId, linkKey: key)
+            let startedAtMs = invite.startedAt.timeIntervalSince1970 * 1000
             Task { @MainActor in
                 await service.joinLink(key: key, video: video, mic: !muted)
-                if service.activeCid == joinRoom { self.reportLinkJoined(roomId: invite.roomId) }
+                if service.activeCid == joinRoom {
+                    self.reportLinkJoined(roomId: invite.roomId, startedAtMs: startedAtMs)
+                }
             }
         } else if !invite.roomId.hasPrefix("adhoc_") {
             // A group chat's call (owner 2026-10-23): joined the way a CallKit answer joins it, only
@@ -481,8 +488,8 @@ final class GroupCallRinging {
         guard Auth.auth().currentUser != nil, !oneToOneLive, ring == nil,
               service.activeCid == nil, !service.connecting, !service.waitingForApproval else { return }
         let screen = AdhocInvite(
-            roomId: n.roomId, title: n.title ?? n.callerName, video: false, startedBy: n.callerUid,
-            startedAt: Date(),
+            roomId: n.roomId, title: n.title ?? n.callerName, video: n.video, startedBy: n.callerUid,
+            startedAt: n.startedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date(),
             others: n.callerUid.isEmpty ? [] : [CallMember(uid: n.callerUid, name: n.callerName, photoUrl: n.photoUrl)],
             linkKey: n.key, fromNudge: true)
         service.groupRingScreen = screen
@@ -594,8 +601,8 @@ final class GroupCallRinging {
     /// A call link I was rung into (owner 2026-10-23): I am in. The server marks my invite joined
     /// and stops the ring on my other phones. Also for the nudge banner's Join. An older server
     /// refuses the answer and nothing changes.
-    func reportLinkJoined(roomId: String) {
-        sendAnswer("joined", roomKind: "link", roomId: roomId, tries: 2)
+    func reportLinkJoined(roomId: String, startedAtMs: Double?) {
+        sendAnswer("joined", roomKind: "link", roomId: roomId, startedAtMs: startedAtMs, tries: 2)
     }
 
     private func endCallKitCall(_ reason: CXCallEndedReason) {
@@ -743,14 +750,17 @@ enum GroupCallKitAudio {
     }
 }
 
-/// A nudge from someone in a call link (owner 2026-10-23): the alert push
-/// `{ type: "linknudge", roomId, key, callerUid, callerName }` sent by `linkCallNudge`.
+/// A nudge from someone in a call link (owner 2026-10-23): the alert push sent by `linkCallNudge`,
+/// data all strings: `{ type: "linknudge", roomId, key, callerUid, callerName, title, video, startedAt }`.
 struct LinkNudge: Equatable {
     let roomId: String
     let key: String
     let callerUid: String
     let callerName: String
     let title: String?
+    let video: Bool
+    /// The call's start (ms), when the push said.
+    let startedAtMs: Double?
     var photoUrl: String?
 
     /// Nil unless the push names a room and carries a key that reads as one.
@@ -763,6 +773,9 @@ struct LinkNudge: Equatable {
         self.callerUid = d["callerUid"] as? String ?? ""
         self.callerName = (d["callerName"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Someone"
         self.title = (d["title"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        self.video = (d["video"] as? String) == "true" || (d["video"] as? Bool) == true
+        let start = (d["startedAt"] as? String).flatMap(Double.init) ?? (d["startedAt"] as? NSNumber)?.doubleValue ?? 0
+        self.startedAtMs = start > 0 ? (start < 100_000_000_000 ? start * 1000 : start) : nil
         self.photoUrl = nil
     }
 }
