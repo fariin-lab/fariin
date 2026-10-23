@@ -257,9 +257,9 @@ final class GroupCallLogicTests: XCTestCase {
     }
 
     func testNoRoomWritesNoRoomField() throws {
-        let marker = "m" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(20)
-        GCLog.event("noroom", room: nil, ["id": String(marker)])
-        GCLog.event("noroom", room: "", ["id": String(marker) + "e"])
+        let marker: String = "m" + String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(20))
+        GCLog.event("noroom", room: nil, ["id": marker])
+        GCLog.event("noroom", room: "", ["id": marker + "e"])
         let lines = logText().split(separator: "\n").filter { $0.contains(marker) }
         XCTAssertEqual(lines.count, 2)
         XCTAssertFalse(lines.contains(where: { $0.contains("room=") }))
