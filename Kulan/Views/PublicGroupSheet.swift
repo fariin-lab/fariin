@@ -57,10 +57,8 @@ struct PublicGroupSheet: View {
     init(target: PublicGroupTarget, pushed: Bool = false) {
         self.target = target
         self.pushed = pushed
-        let me = AuthService.shared.uid ?? ""
-        if let p = GroupDirectory.cachedPreview(name: target.name, cid: target.cid),
-           !(p.isMember && ConversationsRepository.shared.conversations
-                .contains(where: { $0.id == p.cid && $0.users.contains(me) })),
+        // Only for a group I am NOT in: a member's page swaps itself for the chat (`openChat`).
+        if let p = GroupDirectory.cachedPreview(name: target.name, cid: target.cid), !p.isMember,
            let readable = GroupDirectory.cachedPeek(p.cid) {
             _preview = State(initialValue: p)
             _guest = State(initialValue: PublicGroupGuest(p, readable: readable))
@@ -274,8 +272,7 @@ struct PublicGroupSheet: View {
             // One that arrives now waits for the push to end, so the chat's navigation item is never
             // installed mid-transition (see `init`).
             if guest == nil {
-                let left = 0.45 - Date().timeIntervalSince(appearedAt)
-                if left > 0 { try? await Task.sleep(nanoseconds: UInt64(left * 1_000_000_000)) }
+                await afterPush()
                 guard !Task.isCancelled else { return }
                 if guest == nil { guest = PublicGroupGuest(p, readable: readable) }
             }
@@ -297,7 +294,23 @@ struct PublicGroupSheet: View {
         return await GroupDirectory.canPeek(cid: cid)
     }
 
+    /// Until the push that brought this page in has finished, nothing here changes `path`.
+    private func afterPush() async {
+        let left = 0.6 - Date().timeIntervalSince(appearedAt)
+        if left > 0 { try? await Task.sleep(nanoseconds: UInt64(left * 1_000_000_000)) }
+    }
+
     private func openChat(_ p: PublicGroupPreview) {
+        // Pushed: wait for the push to end before the router swaps this page (review 2026-10-23: a
+        // swap that landed mid-push left the list on screen with blank buttons and no tab bar).
+        guard pushed else { openChatNow(p); return }
+        Task { @MainActor in
+            await afterPush()
+            openChatNow(p)
+        }
+    }
+
+    private func openChatNow(_ p: PublicGroupPreview) {
         AppRouter.shared.pendingPublicGroup = nil
         // Pushed on the Chats path, the router swaps THIS page for the chat and keeps the pages under
         // it (audit N3; it used to replace the whole stack, so Back lost the chat you came from).

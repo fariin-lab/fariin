@@ -262,7 +262,9 @@ enum GroupNameCheck: Equatable {
     /// Fetched ahead (search results, Recent), so a tap opens with nothing left to wait for.
     @MainActor private static var warming = Set<String>()
     @MainActor static func warm(cid: String) {
-        guard previews["c:" + cid] == nil, warming.insert(cid).inserted else { return }
+        // Skipped only when BOTH answers are kept: a peek lost to the network was never asked again,
+        // so a tap missed the first-frame chat (review 2026-10-23).
+        guard previews["c:" + cid] == nil || peeks[cid] == nil, warming.insert(cid).inserted else { return }
         Task {
             async let a = preview(name: nil, cid: cid)
             async let b = canPeek(cid: cid)

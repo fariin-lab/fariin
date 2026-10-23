@@ -1917,7 +1917,15 @@ struct ChatsView: View {
                 // A public group I am not in: its page on `path`, pushed on the tap like a chat
                 // (the router door, `openPendingPublicGroup`, is for links from outside the list).
                 onOpenPublicGroup: { t in
-                    path.append(t)
+                    // A group the server says I am in, but outside the loaded part of my chat list
+                    // (owner 2026-10-23, 5th report: @v is an admin of Juni). Its chat goes on the
+                    // path at once, like a chat row, instead of a visitor's page that swaps itself
+                    // for the chat in the middle of the push.
+                    if let cid = t.cid, let p = GroupDirectory.cachedPreview(name: nil, cid: cid), p.isMember {
+                        path.append(ChatTarget(id: cid, name: p.title, photo: p.photoUrl))
+                    } else {
+                        path.append(t)
+                    }
                     chatSearch = ""
                 })
         )
