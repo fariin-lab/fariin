@@ -1112,6 +1112,10 @@ final class GroupCallService: ObservableObject {
     /// A plain "is anything broadcasting" check could stop a share that belongs to a 1:1 call.
     private var shareAsked = false
     private var shareBusy = false
+    /// 2026-10-23 controls round 2: true from the Share tap until the broadcast really starts (the
+    /// person tapped Start in the system sheet) or the pending share ends (cancelled, timed out, call
+    /// left). The Share button shows it, so a tap that is waiting on the sheet reads as waiting.
+    @Published private(set) var sharePending = false
 
     /// Share Screen / Stop Sharing in the call's "..." menu. Never on a voice call link (the
     /// server's token cannot publish a screen there either).
@@ -1127,6 +1131,7 @@ final class GroupCallService: ObservableObject {
         if screenSharing || shareSession != nil { endScreenShare(); return }
         shareAsked = true; lateShareWatch = nil   // audit M-106: this share is wanted
         shareBusy = true
+        sharePending = true
         let gen = joinGeneration
         Task { @MainActor in
             defer { shareBusy = false }
@@ -1137,7 +1142,7 @@ final class GroupCallService: ObservableObject {
             let session = ScreenShareSession { buffer, degrees in
                 capturer?.capture(buffer, rotation: VideoRotation(rawValue: degrees) ?? ._0)
             }
-            session.onStarted = { [weak self] in self?.publishShare(gen: gen) }
+            session.onStarted = { [weak self] in self?.sharePending = false; self?.publishShare(gen: gen) }
             session.onEnded = { [weak self] _ in self?.endScreenShare(requestStop: false) }
             // The system sheet is pressed for the person (ScreenSharePickerView in GroupCallView).
             guard session.start() else { showToast("Couldn't share your screen"); return }
@@ -1181,6 +1186,7 @@ final class GroupCallService: ObservableObject {
     private func endScreenShare(requestStop: Bool = true) {
         let session = shareSession, publication = sharePublication, track = shareTrack
         shareSession = nil; sharePublication = nil; shareTrack = nil
+        sharePending = false
         if requestStop { session?.stop() }
         Task { @MainActor in
             if let publication { try? await room.localParticipant.unpublish(publication: publication) }
