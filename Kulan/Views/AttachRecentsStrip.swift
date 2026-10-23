@@ -191,6 +191,9 @@ struct AttachRecentsStrip: View {
     /// The grid has been scrolled by at least a row (or back above it). Declared last: see the
     /// note on `removedIds` at the call site, the arguments are matched by position too.
     var onScrolledARow: (Bool) -> Void = { _ in }
+    /// The sheet is at full height. The month pill shows only then (owner 2026-10-23). Declared
+    /// last, after `onScrolledARow`: the call site passes the arguments in this order.
+    var sheetFull: Bool = false
     @FocusState private var captionFocused: Bool
     /// The KEYBOARD's state, which is not the same thing as `captionFocused`. The composer moved off
     /// its focus flag for exactly this reason — focus flips a beat before the keys move, and on one
@@ -224,6 +227,8 @@ struct AttachRecentsStrip: View {
     /// on every scroll frame, and a `@State` write would re-run this whole body (and the grid's
     /// ForEach) sixty times a second. Only `AttachMonthPill` reads it.
     @State private var monthPill = AttachMonthPillModel()
+    /// Lets the month pill drive the grid when it is held and dragged (owner 2026-10-23).
+    @State private var gridPosition = ScrollPosition(edge: .top)
 
     /// ⛔ **THE GRID IS EDGE TO EDGE — owner, 2026-09-02: "now images Is Runded cornders and Laft and
     /// right has space… make it exactly like image no space".**
@@ -467,7 +472,9 @@ struct AttachRecentsStrip: View {
                     monthPill.layout(geo, assets: assets, total: max(fetchResult?.count ?? 0, assets.count))
                 }
                 .onScrollPhaseChange { _, phase in monthPill.scrolling(phase.isScrolling) }
-                .overlay(alignment: .topTrailing) { AttachMonthPill(model: monthPill) }
+                .overlay(alignment: .topTrailing) {
+                    AttachMonthPill(model: monthPill, enabled: sheetFull) { y in gridPosition.scrollTo(y: y) }
+                }
         }
     }
 
@@ -531,6 +538,7 @@ struct AttachRecentsStrip: View {
             // edges of the sheet; the only curve is the one the presentation cuts for itself.
         }
         // The region a tile may be drawn in while the editor flies out of it or back into it.
+        .scrollPosition($gridPosition)
         .background { MediaViewAnchor(key: MediaOpenRects.attachGridKey) }
         // Scrolling the photos puts the caption keyboard away (owner 2026-10-21, as the reference
         // app's attach sheet does); the caption keeps its words.
@@ -1110,6 +1118,16 @@ struct AttachPillGeo: Equatable {
     var y: CGFloat = 0
     var shown = false
     var fits = true
+    /// Held and dragged (owner 2026-10-23): the pill slides 80pt left, as the reference app's does.
+    var dragging = false
+    var slid = false
+
+    // The last scroll geometry, for turning a finger's travel into a scroll offset.
+    @ObservationIgnored private var top: CGFloat = 0
+    @ObservationIgnored private var scrollable: CGFloat = 0
+    @ObservationIgnored private var track: CGFloat = 1
+    @ObservationIgnored private var dragStartTop: CGFloat = 0
+    @ObservationIgnored private let tick = UISelectionFeedbackGenerator()
 
     @ObservationIgnored private var hideTask: Task<Void, Never>?
     @ObservationIgnored private var lastId = ""
@@ -1131,8 +1149,11 @@ struct AttachPillGeo: Equatable {
         let nowFits = g.visibleH / fullH >= 0.55
         if nowFits != fits { fits = nowFits }
         let scrollable = fullH - g.visibleH
+        top = g.top
+        self.scrollable = max(0, scrollable)
+        track = max(1, g.visibleH - 6 - Self.height)
         let fraction = scrollable > 0 ? min(1, max(0, g.top / scrollable)) : 0
-        let newY = g.insetTop + 3 + fraction * max(0, g.visibleH - 6 - Self.height)
+        let newY = g.insetTop + 3 + fraction * track
         if abs(newY - y) >= 0.5 { y = newY }
 
         guard !assets.isEmpty else { return }
@@ -1142,8 +1163,33 @@ struct AttachPillGeo: Equatable {
         lastId = asset.localIdentifier
         if let date = asset.creationDate {
             let s = formatter.string(from: date)
-            if s != text { text = s }
+            if s != text {
+                text = s
+                if dragging { tick.selectionChanged() }   // a tap of the haptic per month, while held
+            }
         }
+    }
+
+    /// THE HOLD-AND-DRAG — the reference app's SparseItemGridScrollingArea, read from its source:
+    /// the touch takes the pill at once, it slides 80pt left with a haptic, and the finger's travel
+    /// maps onto the whole library: offset = start + travel x (scrollable / track). No momentum.
+    /// Returns the new offset to scroll to.
+    func drag(_ dy: CGFloat) -> CGFloat {
+        if !dragging {
+            dragging = true
+            dragStartTop = top
+            hideTask?.cancel()
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            tick.prepare()
+            slid = true
+        }
+        return min(scrollable, max(0, dragStartTop + dy * scrollable / track))
+    }
+
+    func endDrag() {
+        dragging = false
+        slid = false
+        scrolling(false)   // the usual 2s, then it fades
     }
 
     func scrolling(_ on: Bool) {
@@ -1152,21 +1198,24 @@ struct AttachPillGeo: Equatable {
             if !shown { shown = true }
             return
         }
+        guard !dragging else { return }
         hideTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(2))
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, self?.dragging == false else { return }
             self?.shown = false
         }
     }
 }
 
-/// The capsule itself. Colours follow the reference: the grouped-list card colour (dark grey in
-/// dark mode, white in light) with primary text and a faint shadow. Never takes touches.
+/// The capsule itself: liquid glass (owner 2026-10-23; the reference app's pill is the system glass
+/// too), primary text. Takes touches only while it is visible, and only when the sheet is full.
 private struct AttachMonthPill: View {
     let model: AttachMonthPillModel
+    let enabled: Bool
+    let scrollTo: (CGFloat) -> Void
 
     var body: some View {
-        let visible = model.shown && !model.fits && !model.text.isEmpty
+        let visible = enabled && (model.shown || model.dragging) && !model.fits && !model.text.isEmpty
         Text(model.text)
             .font(.system(size: 13, weight: .medium))
             .monospacedDigit()
@@ -1174,13 +1223,21 @@ private struct AttachMonthPill: View {
             .lineLimit(1)
             .padding(.horizontal, 13)
             .frame(height: AttachMonthPillModel.height)
-            .background(Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
-            .shadow(color: .black.opacity(0.2), radius: 4, y: -1)
+            .contentTransition(.numericText())
+            .liquidGlass(Capsule(), interactive: true)
+            .contentShape(Capsule())
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                    .onChanged { v in scrollTo(model.drag(v.translation.height)) }
+                    .onEnded { _ in model.endDrag() },
+                including: visible ? .all : .none)
             .padding(.trailing, 12)
-            .offset(y: model.y)
+            .offset(x: model.slid ? -80 : 0, y: model.y)
+            .animation(.easeInOut(duration: model.slid ? 0.1 : 0.2), value: model.slid)
+            .animation(.easeInOut(duration: 0.2), value: model.text)
             .opacity(visible ? 1 : 0)
             .animation(.easeInOut(duration: 0.2), value: visible)
-            .allowsHitTesting(false)
+            .allowsHitTesting(visible)
     }
 }
 

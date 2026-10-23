@@ -5615,7 +5615,8 @@ struct ThreadView: View {
                 showAlbums: $attachShowAlbums,
                 inAlbum: $attachInAlbum,
                 albumsInstant: $attachAlbumsInstant,
-                onScrolledARow: { attachGridScrolled = $0 })
+                onScrolledARow: { attachGridScrolled = $0 },
+                sheetFull: attachSheetFull)
                 // (The back swipe out of a folder is the SYSTEM's now: the folder is a page pushed
                 // inside the strip — owner, 2026-10-04, "use the native Apple swipe". See
                 // `AttachRecentsStrip.selectAlbum` and `FolderNavHost`.)
