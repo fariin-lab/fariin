@@ -12,7 +12,8 @@ import FirebaseFirestore
 //   • mine: the transparent PNG, sealed and uploaded on the photo path (`uploadEncrypted`) but never
 //     re-encoded to JPEG, which would drop the alpha. `imageUrl` + `enc` as a photo carries them.
 //     The file is already final when it is saved (StickerCreator: 512 px max side, scale 1), so a
-//     send never decodes, resizes or re-encodes it: read, seal, put.
+//     send never decodes, resizes or re-encodes it: read, seal, put. Since 2026-10-23 the message
+//     is written first (`uploading: true`) and the file attached when the put lands.
 //
 // ⚠️ WHY EACH SEND OF ONE OF MINE UPLOADS AGAIN (owner 2026-10-18, speed pass). Reusing one sealed
 // file for every send is what the reference app does, and the crypto would allow it (the file key
@@ -99,9 +100,9 @@ enum StickerSend {
             trace.mark("bubble")
             do {
                 try await write(sticker, png: png, size: size, cid: cid, reply: reply,
-                                clientId: clientId, group: group, trace: trace)
+                                clientId: clientId, group: group, trace: trace,
+                                onLanded: { PendingOutbox.markLanded(clientId: clientId) })
                 StickerStore.shared.noteUsed(sticker)
-                trace.mark("commit")
                 DiagLog.add("STICKER# done kind=\(kind) \(trace.line) ok=1")
             } catch {
                 // The red (!) on the bubble is the failure; the retry path is the resend from the keyboard.
@@ -125,7 +126,7 @@ enum StickerSend {
         /// -1 = the step did not happen (a pack sticker never uploads).
         var line: String {
             lock.lock(); defer { lock.unlock() }
-            let order = ["bubble", "members", "sealed", "upload", "commit"]
+            let order = ["bubble", "members", "sealed", "commit", "upload"]   // 2026-10-23: the write no longer waits on the upload
             return order.map { "\($0)=\(marks[$0] ?? -1)" }.joined(separator: " ") + " sent=\(sentBytes)"
         }
     }
@@ -134,7 +135,7 @@ enum StickerSend {
 
     private static func write(_ s: Sticker, png: Data?, size: CGSize, cid: String, reply: ReplyRef?,
                               clientId: String, group: [String]?, forwarded: Bool = false,
-                              trace: Trace? = nil) async throws {
+                              trace: Trace? = nil, onLanded: (@Sendable () -> Void)? = nil) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // the tap, before any upload
         let db = ChatService.db, uid = ChatService.uid
         var found = await ChatService.freshGroupMembers(cid, group)
@@ -156,7 +157,7 @@ enum StickerSend {
         // long"). The old order was: the 1:1 conversation write, a full server round trip, THEN the
         // seal, THEN the upload, THEN the two text seals, THEN the message. Now the file is sealed
         // and its upload starts first; the conversation write and the text seals run underneath
-        // it, and the message waits only for the slowest of them. Same order the photo path uses
+        // it, and (2026-10-23) the message no longer waits for the upload at all; see below. Same order the photo path uses
         // (ChatService `ensureConv`). A built-in sticker has no file, so nothing is uploaded at all.
         var sealedFile: (cipher: Data, meta: EncMeta)?
         if s.source == .mine {
@@ -199,18 +200,16 @@ enum StickerSend {
             msg["replyTo"] = e
         }
 
-        try await convReady
-        if s.source == .mine {
-            guard let url = try await uploaded, let fileMeta, let png else {
-                throw ChatService.ForwardError.sourceUnavailable
-            }
-            trace?.mark("upload")
-            // The plaintext PNG under its url, so the confirmed bubble draws at once, alpha intact.
-            if let ui = UIImage(data: png) { DiskImageCache.shared.store(ui, data: png, for: url, owned: true) }
-            msg["imageUrl"] = url
-            msg["enc"] = fileMeta.asDict
-        }
+        // ⛔ THE MESSAGE DOES NOT WAIT FOR THE FILE — owner 2026-10-23 (build 1014, group Juni): a
+        // sticker I made sat on the clock while its PNG went up to Storage, because the message was
+        // written only after the put. A built-in one has no file, so it went at once. Now one of
+        // mine is written at once too, as a photo is: `uploading: true` and no file yet, and the
+        // file is attached by the one-way "finishing an upload" write when the put lands (the rules
+        // already take it). My bubble already holds the PNG, so it stops showing a send in
+        // progress the moment the message is on the server (`onLanded`).
+        if s.source == .mine { msg["uploading"] = true }
 
+        try await convReady
         try Task.checkCancellation()
         let batch = db.batch()
         batch.setData(msg, forDocument: msgRef)
@@ -225,6 +224,23 @@ enum StickerSend {
         }
         batch.updateData(convUpdate, forDocument: convRef)
         try await batch.commit()
+        trace?.mark("commit")
+        guard s.source == .mine else { return }
+        onLanded?()
+        do {
+            guard let url = try await uploaded, let fileMeta, let png else {
+                throw ChatService.ForwardError.sourceUnavailable
+            }
+            trace?.mark("upload")
+            // The plaintext PNG under its url, so the attached copy draws at once, alpha intact.
+            if let ui = UIImage(data: png) { DiskImageCache.shared.store(ui, data: png, for: url, owned: true) }
+            try await msgRef.updateData(["imageUrl": url, "enc": fileMeta.asDict, "uploading": false])
+        } catch {
+            // No file: the message would stay an empty sticker on every phone. It goes; my bubble
+            // turns failed (the caller), and a resend from the keyboard starts over.
+            try? await msgRef.delete()
+            throw error
+        }
     }
 
     /// The sealed file's upload, or nil with no network at all (a built-in sticker has no file).

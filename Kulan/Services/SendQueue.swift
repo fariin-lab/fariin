@@ -192,6 +192,17 @@ enum SendQueue {
         save(map)
     }
 
+    /// 2026-10-23: a link card fetched after Send joins its queued text (only while it is still
+    /// queued), so a retry or a re-drive after a kill still attaches it.
+    static func setPreview(clientId: String, url: String, title: String, desc: String) {
+        lock.lock(); defer { lock.unlock() }
+        var map = load()
+        guard var e = map[clientId], e.previewUrl == nil else { return }
+        e.previewUrl = url; e.previewTitle = title; e.previewDesc = desc
+        map[clientId] = e
+        save(map)
+    }
+
     /// Queues a voice note whose send failed. The bytes are already parked on disk by the recorder;
     /// this is the note that they are owed a retry.
     static func addAudio(clientId: String, cid: String, duration: Double, waveform: [Int],

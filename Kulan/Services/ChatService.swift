@@ -1112,6 +1112,43 @@ enum ChatService {
         return d
     }
 
+    /// 2026-10-23 (owner, build 1014): THE CARD FOLLOWS THE TEXT, the reference app's way. A text
+    /// holding a link is written at once (`sendText` with no preview) and its card is added here,
+    /// in one update of `linkPreview` on that same message, once it has been fetched, sealed and its
+    /// image uploaded. The rules take this once, from the author, within two minutes of the send.
+    /// Best effort: false means the message simply stays without a card.
+    /// Not on a 1:1 request still waiting for its answer (a request is one short text), and not for
+    /// a group member kept from sending links.
+    @discardableResult
+    static func attachLinkPreview(cid: String, clientId: String, preview: OutgoingLinkPreview,
+                                  group: [String]?) async -> Bool {
+        guard !clientId.isEmpty, !clientId.contains("/") else { return false }
+        let convRef = db.collection("conversations").document(cid)
+        var members = await freshGroupMembers(cid, group)
+        if members == nil, !cid.contains("_") { members = try? await groupDocMembers(cid) }
+        if members == nil, !cid.contains("_") { return false }
+        let me = uid
+        let local = await MainActor.run { ConversationsRepository.shared.conversations.first { $0.id == cid } }
+        if members != nil {
+            if local?.isRestricted(me, .sendLinks, now: Date().timeIntervalSince1970 * 1000) == true { return false }
+        } else {
+            func open(_ c: Conversation) -> Bool { c.startedBy.isEmpty || c.accepted || c.reqOff }
+            if !(local.map(open) ?? false) {
+                // The phone's copy can be a beat behind (my reply that accepts rides the send).
+                guard let d = (try? await convRef.getDocument(source: .server))?.data(),
+                      open(Conversation(id: cid, data: d)) else { return false }
+            }
+        }
+        guard let lp = await sealLinkPreview(preview, cid: cid, members: members, msgId: clientId) else { return false }
+        do {
+            try await convRef.collection("messages").document(clientId).updateData(["linkPreview": lp])
+            return true
+        } catch {
+            DiagLog.add("LINK# card not attached cid=\(cid) err=\((error as NSError).code)")
+            return false
+        }
+    }
+
     /// ⛔ `countsAsUnread` — a NOTICE IS NOT A MESSAGE. Pin notices, poll cards and location markers
     /// all route through here, and this unconditionally incremented the other person's unread badge,
     /// so pinning something in an already-read chat lit up their chat row with a "1" for a message

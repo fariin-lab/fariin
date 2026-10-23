@@ -61,6 +61,21 @@ enum PendingOutbox {
 
     static let didFail = Notification.Name("PendingOutbox.didFail")
 
+    /// 2026-10-23: the message itself is on the server and only its file is still going up (a
+    /// sticker I made, StickerSend.write). The bubble already holds the file, so it is drawn sent.
+    static let didLand = Notification.Name("PendingOutbox.didLand")
+    static func markLanded(clientId: String) {
+        lock.lock()
+        for (cid, list) in byCid {
+            byCid[cid] = list.map { m in
+                guard m.clientId == clientId, m.sendState == .sending else { return m }
+                var c = m; c.sendState = nil; return c
+            }
+        }
+        lock.unlock()
+        DispatchQueue.main.async { NotificationCenter.default.post(name: didLand, object: clientId) }
+    }
+
     /// The forward failed, so nothing is coming to replace its bubble.
     ///
     /// Two places can be holding it and ForwardPicker can reach neither: the outbox if that chat was
@@ -117,6 +132,7 @@ final class ThreadRepository {
     private var listener: ListenerRegistration?
     private var outboxObserver: NSObjectProtocol?
     private var outboxAddObserver: NSObjectProtocol?
+    private var outboxLandObserver: NSObjectProtocol?   // 2026-10-23, PendingOutbox.didLand
     private var hiddenObserver: NSObjectProtocol?
     /// A peer's fresh key arrived after this window was decrypted (audit 04 F2).
     private var keyObserver: NSObjectProtocol?
@@ -199,6 +215,9 @@ final class ThreadRepository {
     // an overlay in rebuild() so the bubble reads as deleted immediately; cleared the moment the real
     // tombstone (or the message's removal) arrives. See markDeletedLocally.
     private var locallyDeleted: Set<String> = []
+    // clientId -> my link card while its attach write is on the way (see showLocalCard).
+    private var localCards: [String: Message.LinkPreviewData] = [:]
+    private var droppedCards: Set<String> = []   // attach settled without a card: never shown again
     private var oldestDoc: DocumentSnapshot?   // cursor for paging older
     private var lastDocs: [QueryDocumentSnapshot] = []   // last window, to re-decrypt once the key loads
     private var lastDocsFromCache = false   // owner audit 2026-10-06 chat #19: `lastDocs` came from the local cache
@@ -567,6 +586,28 @@ final class ThreadRepository {
 
     func addPending(_ m: Message) { pending.append(m); refreshItems() }
 
+    /// 2026-10-23 (owner, build 1014): THE CARD FOLLOWS THE TEXT. A text with a link is written at
+    /// once and its card is attached by a second write a moment later. Between the two, my own
+    /// bubble shows the card from the local draft: on the pending copy, and as an overlay on the
+    /// server copy (the echo drops the pending one), until the server copy has its own card.
+    func showLocalCard(clientId: String, card: Message.LinkPreviewData) {
+        guard !droppedCards.contains(clientId) else { return }
+        if localCards.count > 50 { localCards.removeAll() }
+        localCards[clientId] = card
+        if let i = pending.firstIndex(where: { $0.clientId == clientId }), pending[i].linkPreview == nil {
+            pending[i].linkPreview = card
+            refreshItems()
+        }
+        if byId[clientId] != nil { rebuild() }
+    }
+    /// The attach write failed or was not allowed: my bubble shows what the other side sees.
+    func dropLocalCard(clientId: String) {
+        if droppedCards.count > 50 { droppedCards.removeAll() }
+        droppedCards.insert(clientId)
+        guard localCards.removeValue(forKey: clientId) != nil else { return }
+        rebuild()
+    }
+
     /// Give an already-visible pending message the file a retry would re-send.
     ///
     /// Needed because the video path now draws its bubble BEFORE the transcode runs, so at
@@ -716,6 +757,18 @@ final class ThreadRepository {
                     let claimed = PendingOutbox.take(self.cid)
                     guard !claimed.isEmpty else { return }
                     self.pending.append(contentsOf: claimed)
+                    self.refreshItems()
+                }
+        }
+        // A sticker I made is on the server while its file still uploads: my bubble (which holds
+        // the PNG) stops showing a send in progress (2026-10-23, see StickerSend.write).
+        if outboxLandObserver == nil {
+            outboxLandObserver = NotificationCenter.default.addObserver(
+                forName: PendingOutbox.didLand, object: nil, queue: .main) { [weak self] n in
+                    guard let self, let id = n.object as? String,
+                          let i = self.pending.firstIndex(where: { $0.clientId == id }),
+                          self.pending[i].sendState == .sending else { return }
+                    self.pending[i].sendState = nil
                     self.refreshItems()
                 }
         }
@@ -1115,9 +1168,14 @@ final class ThreadRepository {
         // phone's time (and its disappearing timer counted from it) until the chat was reopened.
         // Display order is unaffected: the order key is sticky per row.
         let stamp = (data["createdAt"] as? Timestamp).map { "\($0.seconds).\($0.nanoseconds)" } ?? "-"
+        // 2026-10-23 (owner, build 1014): THE LINK CARD ARRIVES AFTER THE TEXT. A message with a link
+        // is written at once and its author adds `linkPreview` a moment later (ChatService
+        // .attachLinkPreview). Without it here the cached card-less Message was reused forever.
+        let lp = data["linkPreview"] as? [String: Any]
+        let link = lp.map { "L" + ($0["imageUrl"] as? String ?? "") } ?? "-"
         return (data["text"] as? String ?? "") + "|" + String(data["edited"] as? Bool ?? false)
             + "|" + reactions + "|" + albumSig + "|" + deleted + "|" + type + "|" + call
-            + "|" + uploading + "|" + media + "|" + stamp
+            + "|" + uploading + "|" + media + "|" + stamp + "|" + link
     }
 
     // Build a message, reusing the cached copy unless a mutable field (reactions / edit) changed.
@@ -1562,6 +1620,15 @@ final class ThreadRepository {
         if !locallyDeleted.isEmpty {
             msgs = msgs.map { locallyDeleted.contains($0.id) && !$0.deleted ? $0.tombstoned() : $0 }
         }
+        // My own link card while its attach write is on the way (see `showLocalCard`). Dropped the
+        // moment the server copy carries one.
+        if !localCards.isEmpty {
+            localCards = localCards.filter { k, _ in byId[k].map { $0.linkPreview == nil && !$0.deleted } ?? true }
+            msgs = msgs.map { m in
+                guard m.linkPreview == nil, !m.deleted, let k = m.clientId, let card = localCards[k] else { return m }
+                var c = m; c.linkPreview = card; return c
+            }
+        }
         // ⛔ HIDE WHAT THE SERVER IS ABOUT TO DELETE, AND NOTHING ELSE.
         //
         // This used to read `createdAt >= now - disappearSeconds`, which had two faults. It hid
@@ -1887,6 +1954,8 @@ final class ThreadRepository {
         outboxObserver = nil
         if let outboxAddObserver { NotificationCenter.default.removeObserver(outboxAddObserver) }
         outboxAddObserver = nil
+        if let outboxLandObserver { NotificationCenter.default.removeObserver(outboxLandObserver) }
+        outboxLandObserver = nil
         if let hiddenObserver { NotificationCenter.default.removeObserver(hiddenObserver) }
         hiddenObserver = nil
         if let keyObserver { NotificationCenter.default.removeObserver(keyObserver) }

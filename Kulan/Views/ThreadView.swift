@@ -6434,8 +6434,8 @@ struct ThreadView: View {
         // ⛔ SEND BEFORE THE CARD HAS LOADED STILL GETS THE CARD — owner 2026-10-13: a YouTube link
         // pasted and sent straight away went out as a bare link, because only a card already on
         // screen rode the send. Same conditions as the composer's fetch (cards allowed here, previews
-        // on, the reader did not close this card); `deliver` then waits a few seconds for it. The
-        // bubble appears at once either way; only the server write waits.
+        // on, the reader did not close this card); the fetch runs on beside the send and the card is
+        // attached once it is in (see below). Neither the bubble nor the server write waits for it.
         let lateCardURL: URL? = {
             guard draft == nil, linkCardAllowed,
                   UserDefaults.standard.object(forKey: "linkPreviewsEnabled") as? Bool ?? true,
@@ -6459,17 +6459,25 @@ struct ThreadView: View {
         }
         repo.addPending(Message(localText: text, authorId: me, clientId: clientId, replyTo: reply,
                                 sendState: .sending, linkPreview: pendingPreview))
+        // 2026-10-23: the card is attached after the text lands; my bubble keeps it meanwhile.
+        if let pendingPreview { repo.showLocalCard(clientId: clientId, card: pendingPreview) }
         broadcastTyping(false)   // serialized with any in-flight typing write (no stuck "typing…")
         // KILL THE KEEP-ALIVE HERE TOO. Sending clears typingSent directly, so the onChange flip
         // branch that normally invalidates this timer never runs, and clearing the field also
         // cancels the idle-stop that was the only other cleanup — the timer then re-broadcast
         // "typing…" every 10s forever and the other side never saw it stop (my own regression).
         typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
+        // ⛔ THE TEXT DOES NOT WAIT FOR ITS CARD — owner 2026-10-23 (build 1014, group Juni): a
+        // message with a link sat on the clock for seconds while the card was fetched, sealed and
+        // its picture uploaded. Now, the reference app's way, the text is written at once and the
+        // card (ready now, or fetched for up to 6 s alongside) is attached to that same message
+        // a moment later (`ChatService.attachLinkPreview`).
+        let lateCard: Task<LinkPreviewService.LinkDraft?, Never>? = lateCardURL.map { u in
+            Task { await LinkPreviewService.draft(for: u, within: 6) }
+        }
         Task {
-            var draft = draft
-            if let lateCardURL { draft = await LinkPreviewService.draft(for: lateCardURL, within: 3) }
             await deliver(text: text, reply: reply, clientId: clientId, mentions: mentions, draft: draft,
-                          tapTs: tapTs, turn: turn)
+                          lateCard: lateCard, tapTs: tapTs, turn: turn)
         }
     }
 
@@ -6745,6 +6753,7 @@ struct ThreadView: View {
             // mentions and the card to send from the queued entry.
             repo.addPending(Message(localText: m.text, authorId: me, clientId: clientId,
                                     replyTo: m.replyTo, sendState: .sending, linkPreview: m.linkPreview))
+            if let lp = m.linkPreview { repo.showLocalCard(clientId: clientId, card: lp) }   // 2026-10-23
             Task { await deliver(text: m.text, reply: m.replyTo, clientId: clientId) }
         }
         // (empty text + no payload: nothing to resend — drop the pending rather than recreate a ghost)
@@ -7208,6 +7217,7 @@ struct ThreadView: View {
 
     private func deliver(text: String, reply: ReplyRef?, clientId: String, mentions: [String] = [],
                          draft: LinkPreviewService.LinkDraft? = nil,
+                         lateCard: Task<LinkPreviewService.LinkDraft?, Never>? = nil,
                          tapTs: Double? = nil, turn: ChatService.SendTurn? = nil) async {
         // owner audit 2026-10-06 chat #24: a place in the send line taken at the tap is given back on
         // EVERY way out of here (the early return below included), or the next send would wait on it.
@@ -7234,15 +7244,45 @@ struct ThreadView: View {
         // bubble stays; the original's echo or failure settles it.
         guard SendQueue.beginSending(clientId) else { return }
         defer { SendQueue.endSending(clientId) }
+        // A card still loading shows on my bubble the moment it is in, landed or not.
+        let cardKey = SendQueue.previewImageKey(clientId)
+        if let lateCard {
+            Task { @MainActor in
+                guard let d = await lateCard.value else { return }
+                if let img = d.image { DiskImageCache.shared.store(img, for: cardKey) }
+                SendQueue.setPreview(clientId: clientId, url: d.url.absoluteString, title: d.title, desc: d.desc)
+                repo.showLocalCard(clientId: clientId, card: Message.LinkPreviewData(
+                    url: d.url.absoluteString, title: d.title, desc: d.desc,
+                    imageUrl: d.image == nil ? nil : cardKey, imageEnc: nil))
+            }
+        }
         do {
             let preview = draft.map {
                 ChatService.OutgoingLinkPreview(url: $0.url.absoluteString, title: $0.title,
                                                 desc: $0.desc, imageJPEG: $0.imageJPEG)
             } ?? priorPreview   // 2026-09-24 fix-all #220
+            // 2026-10-23 (owner, build 1014): the text goes WITHOUT its card, so nothing (fetch,
+            // seal, image upload) stands between Send and the write. The card follows below.
             try await ChatService.sendText(cid: cid, text: text, replyTo: reply, clientId: clientId,
                                            group: isGroup ? groupMembers : nil, mentions: mentions,
-                                           preview: preview, tapTs: tapTs, turn: turn)
+                                           preview: nil, tapTs: tapTs, turn: turn)
             SendQueue.remove(clientId: clientId)   // landed → no re-drive needed
+            let members = isGroup ? groupMembers : nil
+            let convId = cid
+            // Its own task: the send line (`turn`) is not held while the card is attached.
+            Task {
+                var card = preview
+                if card == nil, let d = await lateCard?.value {
+                    card = ChatService.OutgoingLinkPreview(url: d.url.absoluteString, title: d.title,
+                                                           desc: d.desc, imageJPEG: d.imageJPEG)
+                }
+                var ok = false
+                if let card {
+                    ok = await ChatService.attachLinkPreview(cid: convId, clientId: clientId,
+                                                             preview: card, group: members)
+                }
+                if !ok { await MainActor.run { repo.dropLocalCard(clientId: clientId) } }
+            }
         } catch {
             // Keep the message as a failed bubble (tap to retry); flag the encryption case. The queue
             // entry stays so the next chat open retries it automatically.
@@ -7289,6 +7329,7 @@ struct ThreadView: View {
                     repo.addPending(Message(localText: entry.text, authorId: me, clientId: entry.clientId,
                                             replyTo: reply, sendState: entry.refused == true ? .failed : .sending,
                                             linkPreview: card))
+                    if let card { repo.showLocalCard(clientId: entry.clientId, card: card) }   // 2026-10-23
                 }
             }
             // 2026-09-24 decision D-composer-2: a refused send is drawn as failed and waits for the

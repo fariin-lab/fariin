@@ -2856,6 +2856,24 @@ service cloud.firestore {
                 && 'pollMulti' in resource.data
                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pollClosed'])
                 && request.resource.data.pollClosed == true)
+            // 2026-10-23 (owner, build 1014): THE LINK CARD FOLLOWS THE TEXT. The text is written at
+            // once; its author adds `linkPreview` once, alone, within 2 minutes, to their own live
+            // text that has none, under the card's create checks. Not on a pending request.
+            || (request.auth.uid == resource.data.authorId
+                && !('linkPreview' in resource.data)
+                && 'linkPreview' in request.resource.data
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['linkPreview'])
+                && resource.data.get('type', 'text') == 'text'
+                && resource.data.get('deleted', false) != true
+                && resource.data.get('createdAt', null) is timestamp
+                && request.time < resource.data.createdAt + duration.value(2, 'm')
+                && linkPreviewOk()
+                && memberSendOk()
+                && !groupModBlocked(convData())
+                && (convData().get('type', '') != 'group' || groupSendRestrictOk())
+                && (convData().get('startedBy', '') == ''
+                    || convData().get('accepted', false) == true
+                    || convData().get('reqOff', false) == true))
             // FINISHING AN UPLOAD. A photo message is now written the moment Send is tapped,
             // carrying its blurhash and size but no media yet, so the recipient sees a real bubble
             // immediately instead of nothing until the whole upload lands. This branch is how the
