@@ -374,12 +374,14 @@ final class CallsRepository {
         let fresh = Self.entries(snap.documents, cid: cid, name: known.name,
                                  photo: known.photoUrl, other: known.otherUid,
                                  group: known.groupCid != nil)
-            .filter { !HiddenCalls.isHidden($0.id) }
         await MainActor.run {
             guard self.generation == myGeneration else { return }
             // A full load started meanwhile will publish this chat too, after it ends.
             guard !self.loading else { self.reloadRequested = true; return }
-            var merged = self.calls.filter { !($0.cid == cid && $0.adhoc == nil) } + fresh
+            // Full audit 05-calls F5: HiddenCalls is a plain Set a swipe-delete changes on main; this
+            // runs from ChatService.recordCall off main, so it is read here, on main, not before.
+            let shown = fresh.filter { !HiddenCalls.isHidden($0.id) }
+            var merged = self.calls.filter { !($0.cid == cid && $0.adhoc == nil) } + shown
             merged.sort { $0.date > $1.date }
             self.calls = merged
         }
