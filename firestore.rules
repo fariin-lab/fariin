@@ -3047,23 +3047,18 @@ service cloud.firestore {
         && startStampNew()
         && mayStartCall()
         && callModOK();
-      // audit M-034 (2026-10-07): somebody the owner removed from this call (still in `removedUids`)
-      // may not switch it off for everyone on the way out.
-      allow update: if signedIn() && !isAdhoc() && isGroupMember() && groupRemovedKept() && (
-           (isStartWrite() && startStampNewOrKept()
-             && mayStartCall()   // a start write is a START: joiners never write one
-             && callModOK()
-             && (resource.data.get('active', false) != true
-                 || resource.data.get('startedBy', '') == request.auth.uid
-                 || (resource.data.get('startedAt', null) is timestamp
-                     && resource.data.startedAt < request.time - duration.value(4, 'h'))))
-        || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active'])
-            && request.resource.data.active == false
-            && !(request.auth.uid in resource.data.get('removedUids', []))
-            // 2026-10-20: starter or admin; others via groupCallClose
-            && (resource.data.get('startedBy', '') == request.auth.uid
-                || request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.get('admins', [])))
-      );
+      // 2026-10-23: a phone only ever STARTS a group call. Ending one is the server's (groupCallClose
+      // when the room is empty, callAdmin for the owner, the sweep); the starter/admin `active:false`
+      // write let any admin switch off a running call. `joined` and `rung` are server-only: not in
+      // isStartWrite's keys, so no phone writes them.
+      allow update: if signedIn() && !isAdhoc() && isGroupMember() && groupRemovedKept()
+        && isStartWrite() && startStampNewOrKept()
+        && mayStartCall()   // a start write is a START: joiners never write one
+        && callModOK()
+        && (resource.data.get('active', false) != true
+            || resource.data.get('startedBy', '') == request.auth.uid
+            || (resource.data.get('startedAt', null) is timestamp
+                && resource.data.startedAt < request.time - duration.value(4, 'h')));
 
       // Keyed on the doc's own `members`, NOT on isAdhoc(): the Calls tab and the invite listener
       // QUERY this collection (members array-contains me), and a list query cannot be proven

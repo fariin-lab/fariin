@@ -28,6 +28,8 @@ const mocks = ({ calls = 'contacts', pair = friends, listed = false }) => [
   ex(`users/${B}/blocked/${A}`, listed),
   ex(`conversations/${PAIR}`, !!pair), ...(pair ? [gt(`conversations/${PAIR}`, pair)] : []),
   ex(`users/${B}`, true), gt(`users/${B}`, { name: 'B', privacy: { calls } }),
+  // r3 J2 (2026-10-08): the silent-block switch; absent = a blocked caller's create is refused.
+  ex('config/calls', false),
 ];
 
 function cases() {
@@ -40,9 +42,10 @@ function cases() {
     ['OK      a friend rings', 'ALLOW', 'ALLOW', A, one, 'create', dial(), null, mocks({})],
     ['OK      a stranger rings somebody on My Chats (still refused)', 'DENY', 'DENY', A, one, 'create', dial(), null,
       mocks({ pair: null })],
-    ['G6      a blocked person rings somebody on Everyone (silent now)', 'DENY', 'ALLOW', A, one, 'create', dial(), null,
+    // r3 J2 put G6 behind config/calls.silentBlocks (off when absent), so today both are refused again.
+    ['G6      a blocked person rings somebody on Everyone (J2: refused while the switch is off)', 'DENY', 'DENY', A, one, 'create', dial(), null,
       mocks({ calls: 'everyone', pair: null, listed: true })],
-    ['G6      a blocked friend rings (old chat block, silent now)', 'DENY', 'ALLOW', A, one, 'create', dial(), null,
+    ['G6      a blocked friend rings (old chat block; J2: refused while the switch is off)', 'DENY', 'DENY', A, one, 'create', dial(), null,
       mocks({ pair: { ...friends, blockedBy: { [B]: true } } })],
     ['HOLE    caller pre-writes screenedAt on create', 'ALLOW', 'DENY', A, one, 'create',
       dial({ screenedAt: REQ_TIME }), null, mocks({})],

@@ -23,7 +23,7 @@ const LINK = 'a'.repeat(64);
 
 const gt = (path, data) => ({ function: 'get', args: [{ exactValue: `${D}/${path}` }], result: { value: { data } } });
 const noExists = { function: 'exists', args: [{ anyValue: {} }], result: { value: false } };
-const mocks = [gt(`conversations/${CID}`, { users: [A, B, R], createdBy: A, admins: [A] }),
+const mocks = [gt(`conversations/${CID}`, { type: 'group', users: [A, B, R], createdBy: A, admins: [A] }),
   gt(`callLinks/${LINK}`, { creatorUid: A }), noExists];
 
 const without = (o, k) => { const x = { ...o }; delete x[k]; return x; };
@@ -44,7 +44,8 @@ function cases() {
     ['FIX     app starts a group call (start write carries recordId)', 'DENY', 'ALLOW', B, gc, 'create', gstart(B), null],
     ['FIX     app starts a group call over an ended doc (recordId)', 'DENY', 'ALLOW', B, gc, 'update', gstart(B), old],
     ['OK      start without recordId over an ended doc', 'ALLOW', 'ALLOW', B, gc, 'update', without(gstart(B), 'recordId'), old],
-    ['OK      last one out ends the group call (removals kept)', 'ALLOW', 'ALLOW', B, gc, 'update', ended, live],
+    // 2026-10-20 / 2026-10-23: a phone no longer ends a group call; the last one out asks groupCallClose.
+    ['CHANGED last one out ends the group call (removals kept)', 'ALLOW', 'DENY', B, gc, 'update', ended, live],
     ['OK      stranger starts a group call', 'DENY', 'DENY', C, gc, 'create', gstart(C), null],
     // ── group: removedUids is the server's ──
     ['OK      member creates the doc with a removed list', 'DENY', 'DENY', B, gc, 'create',

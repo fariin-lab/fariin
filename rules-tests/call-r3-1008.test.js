@@ -35,6 +35,7 @@ const convMocks = [
   ex(`requestDeclines/${B}/from/${A}`, false), ex(`requestDeclines/${A2}/from/${A}`, false),
   ex(`requestDeclines/${A}/from/${A}`, false),
   ex(`conversations/${PAIR}`, false), ex(`config/limits`, false), ex(`users/${A}/limits/requests`, false),
+  ex(`config/features`, false),   // 2026-10-18 "Create new groups" switch (absent = on)
 ];
 
 // ── call create: A rings B. `pair` = the doc at the pair id, `listed` = on B's account block list ──

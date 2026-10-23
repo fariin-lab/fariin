@@ -20,7 +20,8 @@ const LINK = 'a'.repeat(64);
 
 const gt = (path, data) => ({ function: 'get', args: [{ exactValue: `${D}/${path}` }], result: { value: { data } } });
 const noExists = { function: 'exists', args: [{ anyValue: {} }], result: { value: false } };
-const groupMocks = [gt('conversations/g1', { users: [A, B] }), noExists];
+// `type: 'group'`: required for a group call since audit M-077 (2026-10-07).
+const groupMocks = [gt('conversations/g1', { type: 'group', users: [A, B] }), noExists];
 const linkMocks = [gt(`callLinks/${LINK}`, { creatorUid: A }), noExists];
 
 const adhoc = (over = {}) => ({ kind: 'adhoc', active: true, startedBy: A, video: false, title: 'B',
