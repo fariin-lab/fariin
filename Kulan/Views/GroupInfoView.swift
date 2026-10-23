@@ -284,9 +284,10 @@ struct GroupInfoView: View {
             .navigationDestination(isPresented: $showJoinRequests) { GroupRequestsView(cid: cid) }
             .fullScreenCover(isPresented: $showCall) { GroupCallView() }
             // Nobody to call (owner 2026-10-20): said in a centred alert.
-            .alert("Call failed", isPresented: $showSoloCall) {
+            // One wording with the chat (A11, 2026-10-23): nothing failed, there is nobody to ring.
+            .alert("Can't Call", isPresented: $showSoloCall) {
                 Button("OK", role: .cancel) {}
-            } message: { Text("You are the only person in this group.") }
+            } message: { Text("You're the only one in this group.") }
             // Local first (offline + instant), then the server; a failed load leaves what we have.
             .task {
                 live.start(cid)   // roles and rights change in front of you (2026-10-20)
@@ -322,10 +323,8 @@ struct GroupInfoView: View {
         callListener.reg = FirestoreHub.db.collection("groupCalls").document(cid)
             .addSnapshotListener { snap, _ in
                 let d = snap?.data()
-                var on = (d?["active"] as? Bool) ?? false
-                if on, let ts = d?["startedAt"] as? Timestamp,
-                   Date().timeIntervalSince(ts.dateValue()) > 4 * 3600 { on = false }
-                callLive = on
+                // B11 (2026-10-23): no 4-hour phone-clock guard; the server's sweep closes zombies.
+                callLive = (d?["active"] as? Bool) ?? false
             }
     }
 
@@ -619,11 +618,18 @@ struct GroupInfoView: View {
     // another call, or the group leaves calls to admins. A tap says which.
     private func callTapped(video: Bool) {
         if !CallFeatures.groupCalls { flashNotice("Group calls are not available yet"); return }
-        if busyElsewhere { flashNotice("You're already on a call"); return }
+        // A2/A3 (2026-10-23): my own call of this group comes back (no second cover); any other
+        // call, joining or live, is "already on a call".
+        switch GroupCallService.shared.door(for: cid) {
+        case .restore: GroupCallService.shared.restoreCall(); return
+        case .busy: flashNotice("You're already on a call"); return
+        case .open: break
+        }
         // Joining a call that is already going is open to every member (audit 2026-10-20).
         if !mayCall && !callLive { flashNotice("Only admins can start a call"); return }
         // Nobody to ring (owner 2026-10-19): said here, not after an empty call screen.
-        if (conv?.users.count ?? 0) <= 1 { flashNotice("You're the only one in this group"); return }
+        // A10/A11: only once the group has loaded, and in the chat's centred alert.
+        if let c = conv, c.users.count <= 1 { showSoloCall = true; return }
         startCall(video: video)
     }
 
@@ -805,8 +811,10 @@ struct GroupInfoView: View {
     private func startCall(video: Bool) {
         // Always the group's call, however few are in it (owner 2026-10-20; see ThreadView
         // startGroupCall). Nobody else in it: said, as in the chat.
-        if (conv?.users.count ?? 0) <= 1 { showSoloCall = true; return }
-        Task { await GroupCallService.shared.start(cid: cid, title: title, video: video) }
+        if let c = conv, c.users.count <= 1 { showSoloCall = true; return }
+        // A5 (2026-10-23): on a live call the circles JOIN it; if it ended a moment ago that says
+        // "Call ended" instead of ringing the whole group with a new call.
+        Task { await GroupCallService.shared.start(cid: cid, title: title, video: video, requireLive: callLive) }
         InstantCover.run { showCall = true }   // a cut, not a slide (owner, 2026-10-06)
     }
 

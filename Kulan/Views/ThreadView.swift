@@ -575,9 +575,10 @@ struct ThreadView: View {
         ScrollViewReader { proxy in scrollStack(proxy) }
             // Nobody to call (owner 2026-10-20): said in a centred alert. Here, not on the body's
             // chain, which is past the type-checker's budget.
-            .alert("Call failed", isPresented: $showSoloCall) {
+            // One wording with the group page (A11, 2026-10-23): nothing failed, there is nobody to ring.
+            .alert("Can't Call", isPresented: $showSoloCall) {
                 Button("OK", role: .cancel) {}
-            } message: { Text("You are the only person in this group.") }
+            } message: { Text("You're the only one in this group.") }
             // ⛔ A GROUP FARIIN SUSPENDED OR CLOSED SHOWS NOTHING BUT WHY (owner 2026-10-20, after the
             // reference app): the messages are hidden, the reason sits in a pill in the middle, and
             // there is no message bar. A group its owner ENDED keeps its messages (groupModHidesChat).
@@ -5459,8 +5460,10 @@ struct ThreadView: View {
     }
 
     private func startGroupCall(video: Bool) {
-        // Nobody to ring (owner 2026-10-19), as on the group info page.
-        if (conversation?.users.count ?? 0) <= 1 { showSoloCall = true; return }
+        if groupCallDoorHandled() { return }
+        // Nobody to ring (owner 2026-10-19), as on the group info page. A10: only once the
+        // conversation has loaded; "not loaded yet" is not "alone" (the server checks anyway).
+        if let c = conversation, c.users.count <= 1 { showSoloCall = true; return }
         // ⛔ A CALL STARTED IN A GROUP IS THE GROUP'S CALL, with any number of members (owner
         // 2026-10-20: the two-member shortcut placed a personal call, so the chat list and Calls said
         // "you called Zaki" for a call made in the group). The other member is rung by the group ring.
@@ -5471,8 +5474,19 @@ struct ThreadView: View {
     /// Join only joins (audit M-059, 2026-10-07): with `requireLive` an ended call is refused with
     /// "Call ended" instead of starting a new one that rings the whole group. Only the Call button creates.
     private func joinLiveGroupCall() {
+        if groupCallDoorHandled() { return }
         InstantCover.run { showGroupCall = true }   // a cut, not a slide (owner, 2026-10-06)
         Task { await GroupCallService.shared.start(cid: cid, title: title, video: groupCallVideo, requireLive: true) }
+    }
+
+    /// A2/A3 (2026-10-23): this group's call already mine = bring it back (no second cover); another
+    /// call running = "already in a call". True when the tap was answered here.
+    private func groupCallDoorHandled() -> Bool {
+        switch GroupCallService.shared.door(for: cid) {
+        case .open: return false
+        case .restore: GroupCallService.shared.restoreCall(); return true
+        case .busy: GroupCallService.presentOverTop(GroupCallService.busyNotice); return true
+        }
     }
 
     /// Who is in the call, asked of the server every 12 s while the bar shows: the media room's
@@ -5503,13 +5517,10 @@ struct ThreadView: View {
         groupCallListener = FirestoreHub.db.collection("groupCalls").document(cid)
             .addSnapshotListener { snap, _ in
                 let d = snap?.data()
-                var active = (d?["active"] as? Bool) ?? false
-                // ZOMBIE GUARD: if the last participant crashed/force-quit, nobody wrote active=false
-                // and the "Join call" bar would show FOREVER. Ignore call docs older than 4 hours.
-                if active, let ts = d?["startedAt"] as? Timestamp,
-                   Date().timeIntervalSince(ts.dateValue()) > 4 * 3600 {
-                    active = false
-                }
+                // B11 (2026-10-23): no 4-hour guard on the phone's clock any more; it hid the bar on a
+                // real call past 4 h. Zombies (last person crashed) are closed by the server's sweep,
+                // which shuts any active doc whose media room is empty.
+                let active = (d?["active"] as? Bool) ?? false
                 groupCallActive = active
                 groupCallVideo = (d?["video"] as? Bool) ?? false
             }

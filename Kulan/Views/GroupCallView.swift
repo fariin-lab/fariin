@@ -1,5 +1,6 @@
 import SwiftUI
 import LiveKit
+import AVFoundation
 
 // Group call screen: header, the stage (Views/GroupCall/, owner spec §8-16), frosted-capsule
 // controls to match the 1:1 call UI. ⛔ Owner, 2026-10-06: the header and the controls capsule stay
@@ -225,6 +226,49 @@ struct GroupCallView: View {
     /// tap that hid the chrome three seconds earlier).
     private func toastChanged(_ toast: String?) {
         if toast != nil { showChrome() }
+        if let toast { accessCheck(after: toast) }
+    }
+
+    // MARK: - Mic / camera access (A12, 2026-10-23)
+
+    private enum AccessOff { case mic, camera }
+    /// A refused microphone or camera, asked in a centred alert with a way to Settings (the 1:1
+    /// call's rule) instead of a toast that goes by while nobody hears me.
+    @State private var accessOff: AccessOff?
+
+    private static var micDenied: Bool { AVAudioApplication.shared.recordPermission == .denied }
+    private static var cameraDenied: Bool {
+        let s = AVCaptureDevice.authorizationStatus(for: .video)
+        return s == .denied || s == .restricted
+    }
+
+    /// The service says a mic or camera switch failed (a toast); when the cause is access turned off,
+    /// the alert says where to fix it.
+    private func accessCheck(after toast: String) {
+        let t = toast.lowercased()
+        if t.contains("microphone"), !service.micOn, Self.micDenied { accessOff = .mic }
+        else if t.contains("camera"), !service.cameraOn, Self.cameraDenied { accessOff = .camera }
+    }
+
+    private func micTapped() {
+        if !service.micOn, Self.micDenied { accessOff = .mic; return }
+        service.toggleMic()
+    }
+
+    private func cameraTapped() {
+        if !service.cameraOn, Self.cameraDenied { accessOff = .camera; return }
+        service.toggleCamera()
+    }
+
+    private var accessOffShown: Binding<Bool> {
+        Binding(get: { accessOff != nil }, set: { if !$0 { accessOff = nil } })
+    }
+    private var accessOffTitle: String {
+        accessOff == .camera ? "Camera Access Is Off" : "Microphone Access Is Off"
+    }
+    private var accessOffMessage: String {
+        accessOff == .camera ? "Allow Kulan to use the camera in Settings so others can see you."
+                             : "Allow Kulan to use the microphone in Settings so others can hear you."
     }
 
     // MARK: - Alerts, sheets, lifetime
@@ -254,6 +298,14 @@ struct GroupCallView: View {
                 removeButtons(t)
             } message: { _ in
                 Text(removeMessage)
+            }
+            .alert(accessOffTitle, isPresented: accessOffShown) {
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(accessOffMessage)
             }
             .sheet(isPresented: $showParticipants) { GroupCallParticipantsSheet(stage: stage) }
     }
@@ -696,14 +748,14 @@ struct GroupCallView: View {
     // A voice call link: the camera button is there, greyed and inert (owner, 2026-10-06).
     // VoiceOver labels name what a tap does (no visual change).
     private var cameraButton: some View {
-        ctrl(service.cameraOn ? "video.fill" : "video.slash.fill") { service.toggleCamera() }
+        ctrl(service.cameraOn ? "video.fill" : "video.slash.fill") { cameraTapped() }
             .disabled(service.cameraLocked)
             .opacity(service.cameraLocked ? 0.35 : 1)
             .accessibilityLabel(cameraLabel)
     }
 
     private var micButton: some View {
-        ctrl(service.micOn ? "mic.fill" : "mic.slash.fill") { service.toggleMic() }
+        ctrl(service.micOn ? "mic.fill" : "mic.slash.fill") { micTapped() }
             .accessibilityLabel(service.micOn ? "Mute" : "Unmute")
     }
 

@@ -298,3 +298,31 @@ struct GroupFloatingCallWindow: View {
             .overlay(Circle().stroke(Color.green, lineWidth: speaking ? 2.5 : 0))
     }
 }
+
+// MARK: - Call doors (group call overhaul A2/A3, 2026-10-23)
+
+/// What a group call door (chat header, Join bar, group page, Calls tab) does when tapped.
+enum GroupCallDoor { case open, restore, busy }
+
+extension GroupCallService {
+    /// ⛔ EVERY DOOR ASKS THIS BEFORE IT PUTS A CALL SCREEN UP. `start()` returns silently while a
+    /// call is up or joining, so a door that opened its own cover first showed the OTHER group's
+    /// call under this group's tap (A2), or a second screen over my own minimized call (A3).
+    /// Same group = bring my call back (`restoreCall`); anything else running = "already on a call".
+    /// Lives here, in a view file, so the service file stays with its own agent.
+    func door(for cid: String) -> GroupCallDoor {
+        let mine = activeCid == cid || (activeCid == nil && connecting && ringIsMine(roomId: cid, callerUid: ""))
+        if mine && !leaving { return .restore }
+        if activeCid != nil || connecting || waitingForApproval { return .busy }
+        let s = CallService.shared.state
+        if s == .outgoing || s == .incoming || s == .active || s == .reconnecting { return .busy }
+        return .open
+    }
+
+    /// My call back on screen through the one restore path (the floating card's tap): clearing
+    /// `minimized` makes `CallContainer` present the call screen. No second cover.
+    func restoreCall() {
+        guard minimized else { return }
+        CallPipMorph.restore { minimized = false }
+    }
+}

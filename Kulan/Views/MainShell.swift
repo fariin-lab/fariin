@@ -594,9 +594,39 @@ struct CallsView: View {
 
     /// Join a live group call from the Calls tab: the same start the chat's Join bar makes.
     private func joinLive(_ live: LiveGroupCalls.Live) {
+        if groupDoorHandled(live.id) { return }   // A2/A4: my own call comes back (RETURN)
         let title = ConversationsRepository.shared.conversations.first { $0.id == live.id }?.title ?? "Group"
         InstantCover.run { showLiveCall = true }
         Task { await GroupCallService.shared.start(cid: live.id, title: title, video: live.video, requireLive: true) }
+    }
+
+    /// A2/A3 (2026-10-23): this group's call already mine = brought back, no second cover; another
+    /// call running or joining = "already in a call". True when the tap was answered here.
+    private func groupDoorHandled(_ cid: String) -> Bool {
+        switch GroupCallService.shared.door(for: cid) {
+        case .open: return false
+        case .restore: GroupCallService.shared.restoreCall(); return true
+        case .busy: GroupCallService.presentOverTop(GroupCallService.busyNotice); return true
+        }
+    }
+
+    /// A group history row (A6/A10, 2026-10-23): the same checks as the group page, said before any
+    /// call screen. A running call is open to every member and is joined, never started again.
+    private func callGroupAgain(_ g: String, title: String, video: Bool) {
+        if groupDoorHandled(g) { return }
+        let live = LiveGroupCalls.shared.calls.contains { $0.id == g }
+        if let c = ConversationsRepository.shared.conversations.first(where: { $0.id == g }) {
+            if !live && !c.canStartCall(AuthService.shared.uid ?? "") {
+                GroupCallService.presentOverTop(.init(title: "Can't Call", message: "Only admins can start a call in this group."))
+                return
+            }
+            if c.users.count <= 1 {
+                GroupCallService.presentOverTop(.init(title: "Can't Call", message: "You're the only one in this group."))
+                return
+            }
+        }
+        InstantCover.run { showLiveCall = true }
+        Task { await GroupCallService.shared.start(cid: g, title: title, video: video, requireLive: live) }
     }
 
     private var shown: [CallEntry] {
@@ -767,8 +797,7 @@ struct CallsView: View {
                     if bringLiveCallForward() { return }   // 2026-09-24 decision D26
                     if let g = call.groupCid {
                         // The group again: its call (joined if one is running), never one member.
-                        InstantCover.run { showLiveCall = true }
-                        Task { await GroupCallService.shared.start(cid: g, title: call.name, video: call.video) }
+                        callGroupAgain(g, title: call.name, video: call.video)
                         return
                     }
                     CallService.shared.startCall(to: call.otherUid, name: call.name,

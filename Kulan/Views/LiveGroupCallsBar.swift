@@ -59,11 +59,9 @@ final class LiveGroupCalls {
     private func apply(_ cid: String, _ d: [String: Any]?) {
         // A snapshot queued before `sync` dropped this group must not put it back (audit).
         guard regs[cid] != nil else { return }
-        var active = (d?["active"] as? Bool) ?? false
-        // The chat's zombie guard: a call doc older than 4 hours is not live.
-        if active, let ts = d?["startedAt"] as? Timestamp, Date().timeIntervalSince(ts.dateValue()) > 4 * 3600 {
-            active = false
-        }
+        // B11 (2026-10-23): no 4-hour guard on the phone's clock (it hid real long calls); the
+        // server's sweep closes a doc whose media room is empty, and that write arrives here.
+        let active = (d?["active"] as? Bool) ?? false
         byCid[cid] = active ? Live(id: cid, video: (d?["video"] as? Bool) ?? false,
                                    joined: d?["joined"] as? [String] ?? [],
                                    startedAt: (d?["startedAt"] as? Timestamp)?.dateValue()) : nil
@@ -71,10 +69,6 @@ final class LiveGroupCalls {
     }
 
     private func publish() {
-        // The 4-hour guard again on every publish (each Calls tab visit): a doc left active sends
-        // no new snapshot, so the row stayed past the limit (audit 2026-10-20).
-        let cutoff = Date().addingTimeInterval(-4 * 3600)
-        for (cid, l) in byCid where (l.startedAt ?? .distantFuture) < cutoff { byCid[cid] = nil }
         let next = byCid.values.sorted { $0.id < $1.id }
         if next != calls { calls = next }
     }
@@ -91,6 +85,9 @@ struct LiveGroupCallRow: View {
     let live: LiveGroupCalls.Live
     let conv: Conversation?
     let onJoin: () -> Void
+    /// A4 (2026-10-23): the row of the call I am in says RETURN (the tap brings it back), not JOIN.
+    @ObservedObject private var service = GroupCallService.shared
+    private var isMine: Bool { service.activeCid == live.id }
 
     /// Who is in it, from the media server (groupCallPeek), asked while the row is on screen.
     @State private var people: [String] = []
@@ -113,14 +110,14 @@ struct LiveGroupCallRow: View {
             Spacer(minLength: 8)
             faces
             Button(action: onJoin) {
-                Text("JOIN")
+                Text(isMine ? "RETURN" : "JOIN")
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 16).frame(height: 32)
                     .background(Capsule().fill(Color.green))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Join the call in \(title)")
+            .accessibilityLabel(isMine ? "Return to the call in \(title)" : "Join the call in \(title)")
         }
         .padding(.vertical, 4)
         .task(id: live.id) { await follow() }
