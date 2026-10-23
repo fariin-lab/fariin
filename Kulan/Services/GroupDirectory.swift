@@ -318,6 +318,9 @@ enum GroupNameCheck: Equatable {
     static func openChat(_ cid: String, title: String, photo: String?) {
         let router = AppRouter.shared
         if router.activeChatId == cid { return }
+        // owner 2026-10-23: a group link opened the chat with no slide. Without `pendingChatPush` the
+        // Chats tab REPLACES its path; a user link sets it and pushes from the right (ProfileCardDoor).
+        router.pendingChatPush = true
         router.pendingChatName = title
         router.pendingChatPhoto = photo
         router.pendingChatId = cid
