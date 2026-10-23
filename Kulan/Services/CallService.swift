@@ -863,6 +863,12 @@ final class CallService: NSObject {
     private var incomingAttach = 0            // which attach is current; an older one's error or retry does nothing
     private var incomingRetryStep = 0         // back-off position (5s, 15s, 30s, then 60s), reset by a server snapshot
     private var recoveryObserved = false
+    /// 2026-10-23 (owner "fix all log bugs"): whose ringing calls the incoming listener asks for.
+    /// Sign-out never removed it, so the account that left kept a listener for `callee == old uid`,
+    /// Firestore asked again under no account (or the next one), was refused, and the phone reported
+    /// a firfirestore_7 "incoming calls" P1. The listener now goes with its account (`authHandle`).
+    private var incomingUid = ""
+    @ObservationIgnored private var authHandle: AuthStateDidChangeListenerHandle?
     private var callDocWatch: DocumentReference?       // the live call's doc, for re-attaching observeCallDoc
     private var callDocListener: ListenerRegistration?
     private var candidatesWatch: CollectionReference?  // the other side's candidates, for observeRemoteCandidates
@@ -5209,6 +5215,7 @@ final class CallService: NSObject {
         incomingListener?.remove(); incomingListener = nil
         observeRecoveryIfNeeded()
         guard !me.isEmpty else { return }
+        incomingUid = me
         incomingWanted = true
         incomingDead = false
         incomingHeardServer = false
@@ -5283,6 +5290,13 @@ final class CallService: NSObject {
     private func incomingFailed(_ err: Error, attach: Int) {
         guard attach == incomingAttach else { return }   // an older listener, already replaced
         incomingListener?.remove(); incomingListener = nil
+        // The account this listener asked for has left the phone (sign-out, or another account in):
+        // its refusal is the teardown, not an error. The new account's own attach is the shell's.
+        guard incomingUid == me else {
+            incomingDead = false
+            if incomingWanted, !me.isEmpty { observeIncoming() }
+            return
+        }
         incomingDead = true
         Self.reportToRecovery(err, "incoming calls")
         guard !Self.isRefusal(err) else { return }
@@ -5312,6 +5326,27 @@ final class CallService: NSObject {
     private func observeRecoveryIfNeeded() {
         guard !recoveryObserved else { return }
         recoveryObserved = true
+        // 2026-10-23: the ring listener belongs to one account. Signed out: it goes now, before
+        // Firestore asks for `callee == old uid` under no account and is refused. Another account
+        // signed in directly: the same, then attached again for the new one (Firestore has taken
+        // the new user before this async callback runs). Token refreshes do not call this.
+        authHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
+            guard let self else { return }
+            let uid = user?.uid ?? ""
+            guard uid != self.incomingUid else { return }
+            if !self.incomingUid.isEmpty {
+                print("[Recovery] incoming calls: account changed, listener dropped")
+                self.incomingListener?.remove(); self.incomingListener = nil
+                self.incomingAttach += 1   // an older listener's late error or retry does nothing
+                self.incomingDead = false
+                self.incomingHeardServer = false
+                self.incomingRetryStep = 0
+                self.incomingUid = ""
+            }
+            // The next account rings too, even if the shell does not appear again (MainShell's
+            // onAppear also asks; attaching twice just replaces the listener).
+            if !uid.isEmpty, self.incomingWanted { self.observeIncoming() }
+        }
         NotificationCenter.default.addObserver(forName: SessionRecovery.recovered, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
             // Every listener comes back, healthy or not: removing and re-adding one is cheap and

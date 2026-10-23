@@ -149,6 +149,8 @@ enum SessionRecovery {
         stallEpisodeRecovered = false
         answeringSince = nil
         stallDuringCall = false
+        noAnswerSeen.removeAll()
+        lastRefusalAt = .distantPast
     }
 
     @MainActor static func noteRefusal(_ error: Error?, _ from: String) {
@@ -157,18 +159,26 @@ enum SessionRecovery {
         // Callable functions use the same code numbers (7 permission denied, 16 unauthenticated,
         // 14 unavailable, 4 deadline exceeded), so a refused or unanswered callable counts too.
         guard ns.domain == FirestoreErrorDomain || ns.domain == FunctionsErrorDomain else { return }
-        Telemetry.event((ns.code == 7 || ns.code == 16) ? .error : .warning, component: "firestore", code: Telemetry.code(error), detail: ["where": from])   // owner 2026-10-21
         // 14 = unavailable, 4 = deadline exceeded: the server did not refuse, it did not answer.
         // That is a stall, and a fresh token alone would not unstick it.
         if ns.code == 14 || ns.code == 4 {
             print("[Recovery] no answer (\(from)), code \(ns.code)")   // console only, never on screen
+            reportNoAnswer(error, from)
             noteStall(from)
             return
         }
         // 7 = permission denied, 16 = unauthenticated (the numbers SendQueue and PushManager test too).
-        guard ns.code == 7 || ns.code == 16 else { return }
+        guard ns.code == 7 || ns.code == 16 else {
+            Telemetry.event(.warning, component: "firestore", code: Telemetry.code(error), detail: ["where": from])   // owner 2026-10-21
+            return
+        }
         // Signed out: there is no session to get back into, and sign-out tears the listeners down.
-        guard Auth.auth().currentUser != nil else { return }
+        // A listener of the account that just left, refused on its way out, is not an app error, so
+        // it is not reported either (2026-10-23: every firfirestore_7 of the day was one phone
+        // switching between five accounts).
+        guard let user = Auth.auth().currentUser else { return }
+        lastRefusalAt = Date()
+        reportRefusalIfUnhealed(error, from, uid: user.uid)
         if Date().timeIntervalSince(lastRecoveredAt) > 300 {
             attempt = 0
             refusalReturns = 0
@@ -191,6 +201,61 @@ enum SessionRecovery {
         unrecovered = true
         watchForeground()
         schedule()
+    }
+
+    // MARK: - What reaches telemetry (owner 2026-10-23, "fix all log bugs")
+
+    /// How long a refusal has to heal (a fresh token that passes, `recovered`) before it counts as an
+    /// app error. The back-off's first tries are 1s, 3s, 10s and 30s, so a blip is over well before.
+    private static let refusalGrace: Double = 90
+    /// "No answer" from the same place this many times inside `noAnswerWindow`, on screen and with a
+    /// route, before it is reported. One unanswered read is a slow line, not a broken app.
+    private static let noAnswerRepeats = 2
+    private static let noAnswerWindow: Double = 300
+    @MainActor private static var lastRefusalAt = Date.distantPast
+    @MainActor private static var refusalWatched: Set<String> = []
+    @MainActor private static var noAnswerSeen: [String: [Date]] = [:]
+
+    /// A refusal is reported only when it did NOT heal: still unrecovered after `refusalGrace` on
+    /// screen, or refused again after the recovery. A self-healed blip goes in as `info`
+    /// ("refusal_healed"), which is counted but never pages. One watch per place at a time.
+    @MainActor private static func reportRefusalIfUnhealed(_ error: Error, _ from: String, uid: String) {
+        guard !refusalWatched.contains(from) else { return }
+        refusalWatched.insert(from)
+        let code = Telemetry.code(error)
+        let at = Date()
+        Task { @MainActor in
+            defer { refusalWatched.remove(from) }
+            try? await Task.sleep(nanoseconds: UInt64(refusalGrace * 1_000_000_000))
+            // Recovery pauses off screen, so the grace starts again once the app is back.
+            var waited = false
+            while !isActive {
+                waited = true
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            }
+            if waited { try? await Task.sleep(nanoseconds: UInt64(refusalGrace * 1_000_000_000)) }
+            // Signed out or another account since: the refusal belonged to the session that left.
+            guard Auth.auth().currentUser?.uid == uid else { return }
+            let secs = String(Int(Date().timeIntervalSince(at)))
+            let healed = !unrecovered && lastRecoveredAt >= at && lastRefusalAt <= lastRecoveredAt
+            if healed {
+                Telemetry.event(.info, component: "firestore", code: "refusal_healed", detail: ["where": from, "code": code])
+            } else {
+                Telemetry.event(.error, component: "firestore", code: code, detail: ["where": from, "secs": secs])
+            }
+        }
+    }
+
+    /// 14 / 4 from Firestore or a callable. Offline, in the background, or a one-off: not reported.
+    @MainActor private static func reportNoAnswer(_ error: Error, _ from: String) {
+        guard Auth.auth().currentUser != nil, isActive, ConnectionStatus.shared.routeUp else { return }
+        let now = Date()
+        var seen = (noAnswerSeen[from] ?? []).filter { now.timeIntervalSince($0) < noAnswerWindow }
+        seen.append(now)
+        if noAnswerSeen.count > 50 { noAnswerSeen.removeAll() }
+        noAnswerSeen[from] = seen
+        guard seen.count >= noAnswerRepeats else { return }
+        Telemetry.event(.warning, component: "firestore", code: Telemetry.code(error), detail: ["where": from])
     }
 
     /// The connection looks stuck without a refusal: no server answer for a long time while the
