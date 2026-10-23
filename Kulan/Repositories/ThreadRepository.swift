@@ -221,6 +221,9 @@ final class ThreadRepository {
     /// the messages are listened to: the rules let a non-member read those of a public group sent
     /// in the clear, never the group document. Set before `start()`.
     @ObservationIgnored var previewOnly = false
+    /// A public group whose messages I may not read from outside (owner 2026-10-23): the chat opens
+    /// with its header and Join, and no listener is started (it could only be refused).
+    @ObservationIgnored var lockedGuest = false
     var otherTyping = false
     var otherRecording = false       // someone is recording a voice note (string "audio…" in the typing map)
     var typingNames: [String] = []   // group: who is currently typing
@@ -661,6 +664,13 @@ final class ThreadRepository {
             didInitialLoad = true
             canLoadOlder = false
             otherOnline = true
+            refreshItems(reason: .initial)
+            return
+        }
+        if lockedGuest {
+            convLoaded = true
+            didInitialLoad = true
+            canLoadOlder = false
             refreshItems(reason: .initial)
             return
         }

@@ -67,8 +67,12 @@ struct PublicGroupSheet: View {
                                 .allowsHitTesting(false)
                         }
                     }
-            } else {
+            } else if refusedText != nil || failedText != nil {
                 joinPage
+            } else {
+                // owner 2026-10-23 ("two different pages"): while the group loads, the chat's own
+                // ground, not the info page, so the chat is the only page anybody sees.
+                Color(uiColor: .systemBackground).ignoresSafeArea()
             }
         }
         .task { await load() }
@@ -220,7 +224,7 @@ struct PublicGroupSheet: View {
         // opens at once, the server corrects it behind (see `GroupDirectory.cachedPreview`).
         if preview == nil, let p = GroupDirectory.cachedPreview(name: target.name, cid: target.cid) {
             if p.isMember { openChat(p); return }
-            if GroupDirectory.cachedPeek(p.cid) == true { guest = PublicGroupGuest(p) }
+            if let known = GroupDirectory.cachedPeek(p.cid) { guest = PublicGroupGuest(p, readable: known) }
             preview = p
         }
         // Both questions at once when the group is known by id (a search row); by @name the

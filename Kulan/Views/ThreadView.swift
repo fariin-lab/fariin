@@ -559,6 +559,7 @@ struct ThreadView: View {
         // Join starts clean from the shared one.
         let r = (preview || guest != nil) ? ThreadRepository(cid: cid) : ThreadRepository.forChat(cid)
         if guest != nil { r.previewOnly = true }
+        if guest?.readable == false { r.lockedGuest = true }
         _repo = State(initialValue: r)
         // ALWAYS start hidden — even a warm cache hit. Video showed the bug: when revealed started true
         // (cache hit), the chat was visible DURING the push transition at a not-yet-bottom position, then
@@ -2299,8 +2300,7 @@ struct ThreadView: View {
             noteHistoryStart()
             // A preview owns its repository; a real chat shares the live one (`forChat`), so it
             // counts itself in and out rather than stopping a run another screen may be using.
-            // A guest who may not read the messages starts no listener (it could only be refused).
-            if quiet { if guest?.readable != false { repo.start() } } else { repo.open() }
+            if quiet { repo.start() } else { repo.open() }
             // PAY THE GIF KEY'S ROUND TRIP NOW, quietly, instead of on the first tap of the button.
             // Opening a chat is the moment we learn a GIF might be sent, and it is a moment with
             // nothing else competing for the network. No-op once the key is on the phone, which is
