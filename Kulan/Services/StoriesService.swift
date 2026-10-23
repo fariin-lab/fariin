@@ -76,6 +76,13 @@ struct StoryAudienceTag {
     /// as the reference app links a story to its list rather than to a name. See `StoryAudienceLink`.
     var listIds: [String] = []
     var oneTime: Bool { label == "oneTime" }
+    /// GROUP STORY (owner 2026-10-23): label "group", the group's conversation id in `listIds[0]` and
+    /// its name in `name`. Carried this way because the tag already rides every post path, the
+    /// outboxes included, so a retried upload still knows which group it was for.
+    var groupId: String? { label == "group" ? listIds.first.flatMap { $0.isEmpty ? nil : $0 } : nil }
+    static func group(_ id: String, name: String) -> StoryAudienceTag {
+        StoryAudienceTag(label: "group", name: name, listIds: [id])
+    }
     static let friends = StoryAudienceTag(label: "friends")
     static let everyone = StoryAudienceTag(label: "everyone")
     /// ⚠️ ITS OWN LABEL, NOT "friends". This is the word the author's own header shows and the key
@@ -160,6 +167,16 @@ struct Story: Identifiable, Hashable, Codable {
     /// find a custom list's name when this phone has lost it (see `storyAudienceTitle`). Optional so
     /// a story cached before this existed still decodes.
     var recipientTokens: [String]? = nil
+    /// Set on a group story: the group's conversation id, name and photo as they were at posting.
+    /// Optional for the same reason as the tokens above, so the row cache from older builds decodes.
+    var groupId: String? = nil
+    var groupName: String? = nil
+    var groupPhoto: String? = nil
+    /// The ring this story sits in for somebody else: the group's for a group story, else the author's.
+    var ringKey: String {
+        guard let g = groupId, !g.isEmpty else { return authorUid }
+        return StoryGroup.groupKeyPrefix + g
+    }
 
     // What card/ring/reply thumbnails should render: the photo itself, or the video's poster.
     // Every image consumer (row cards, morph carousel, reply quotes, archive) reads THIS, never
@@ -230,6 +247,22 @@ struct StoryRepost: Equatable, Hashable, Codable {
                            storyId: m["storyId"] as? String ?? "",
                            modified: m["modified"] as? Bool ?? false,
                            card: m["card"] as? Bool)
+    }
+}
+
+/// WHO MAY POST A GROUP STORY (owner 2026-10-23). The same test as firestore.rules `groupStoryOK`:
+/// the owner always, an admin while the owner leaves "Allow Admins to Add Story" on, nobody else.
+enum GroupStoryRights {
+    static func canPost(_ c: Conversation, _ uid: String) -> Bool {
+        guard c.isGroup, !uid.isEmpty, c.users.contains(uid) else { return false }
+        if c.isOwner(uid) { return true }
+        return c.isAdmin(uid) && c.adminsPostStories
+    }
+    /// The groups the New Group Story list offers, from the live chat list.
+    @MainActor static func eligibleGroups() -> [Conversation] {
+        let me = AuthService.shared.uid ?? ""
+        return ConversationsRepository.shared.conversations
+            .filter { canPost($0, me) && !DemoMode.isDemoConversation($0.id) }
     }
 }
 
@@ -342,6 +375,14 @@ struct StoryGroup: Identifiable, Codable {
     var isMine: Bool
 
     var id: String { authorUid }
+
+    /// A GROUP'S RING (owner 2026-10-23) keeps the group's key in `authorUid` ("g:" + conversation
+    /// id): one ring per group, whoever of its admins posted. Code that would treat the key as a
+    /// person (profile, 1:1 chat, notify) asks `groupConvId` first.
+    static let groupKeyPrefix = "g:"
+    var groupConvId: String? {
+        authorUid.hasPrefix(Self.groupKeyPrefix) ? String(authorUid.dropFirst(Self.groupKeyPrefix.count)) : nil
+    }
 
     // Unseen ⇔ ANY story I haven't watched yet (the standard rule: watching 1 of 5 no
     // longer greys the whole ring). A story counts as seen if I viewed that exact item on this
@@ -1346,6 +1387,9 @@ final class StoriesService {
         /// post queued behind another one while the person signed out therefore evaporated along
         /// with the only record that could have brought it back.
         case signedOut
+        /// A group story for a group I am no longer allowed to post in (owner 2026-10-23).
+        case groupNotAllowed
+        case groupStoryFixed
         var errorDescription: String? {
             switch self {
             case .audienceUnavailable:
@@ -1362,8 +1406,34 @@ final class StoriesService {
                 "Couldn't load your Glows, so this story would reach nobody. Check your connection and try again."
             case .signedOut:
                 "You're logged out, so this story wasn't posted. Log in and try again."
+            case .groupNotAllowed:
+                "You can't post stories in this group any more."
+            case .groupStoryFixed:
+                "A group story is always seen by the group's members."
             }
         }
+    }
+
+    /// A GROUP STORY GOES TO THE GROUP'S MEMBERS AS THE SERVER HAS THEM, read fresh rather than from
+    /// the chat list, so somebody removed a minute ago is not in it. Refused here when I may no longer
+    /// post, which the rules refuse anyway (`groupStoryOK`). Capped at the rules' 1000.
+    func groupStoryAudience(me: String, groupId: String) async throws -> Set<String> {
+        let snap = try await db.collection("conversations").document(groupId).getDocument(source: .server)
+        guard let c = snap.data().map({ Conversation(id: snap.documentID, data: $0) }),
+              GroupStoryRights.canPost(c, me) else { throw PostRefusal.groupNotAllowed }
+        let blocked = await MainActor.run { Set(BlockList.snapshot.entries.keys) }
+        return Set(c.users.filter { $0 != me && !blocked.contains($0) }.prefix(1000))
+    }
+
+    /// What a group story adds to its document: which group, and the name and photo its members' row
+    /// shows when their chat list has not caught up. Never public. Empty for every other story.
+    static func groupStoryFields(_ tag: StoryAudienceTag) async -> [String: Any] {
+        guard let gid = tag.groupId else { return [:] }
+        let photo = await MainActor.run { () -> String in
+            let me = AuthService.shared.uid ?? ""
+            return ConversationsRepository.shared.conversations.first { $0.id == gid }?.photoUrl(for: me) ?? ""
+        }
+        return ["groupId": gid, "groupName": String(tag.name.prefix(128)), "groupPhoto": photo, "public": false]
     }
 
     /// `applyHiddenFrom` is TRUE only for an Everyone post. The hide list is Everyone's own — see
@@ -1373,6 +1443,7 @@ final class StoriesService {
     private func resolveAudience(me: String, excluded: Set<String>, included: Set<String>,
                                  applyHiddenFrom: Bool,
                                  tag: StoryAudienceTag) async throws -> (Set<String>, String) {
+        if let gid = tag.groupId { return (try await groupStoryAudience(me: me, groupId: gid), "group") }
         // ⛔ AN AUDIENCE THAT IS ITS OWN LIST MUST NOT FALL THROUGH TO THE POOL. The three lines at
         // the bottom of this function read a non-empty `included` first, a non-empty `excluded`
         // second, and otherwise hand back everybody — so a Glowers post that resolved to nothing was
@@ -1818,6 +1889,7 @@ final class StoriesService {
             ]
             // A repost carries where it came from; an ordinary post carries no such key at all.
             if let repostOf { payload["repostOf"] = repostOf.asData }
+            payload.merge(await Self.groupStoryFields(tag)) { _, new in new }
             try await docRef.setData(payload)
             StoryPrefs.rememberAudienceName(storyId: storyId, tag: tag)
             StoryAudienceStore.shared.linkStory(storyId, tag: tag)
@@ -2193,6 +2265,7 @@ final class StoriesService {
         ]
         // A video repost carries its credit exactly as a photo repost does (owner 2026-10-11).
         if let repostOf { payload["repostOf"] = repostOf.asData }
+        payload.merge(await Self.groupStoryFields(tag)) { _, new in new }
         try await docRef.setData(payload)
         StoryPrefs.rememberAudienceName(storyId: storyId, tag: tag)
         StoryAudienceStore.shared.linkStory(storyId, tag: tag)
@@ -2312,6 +2385,8 @@ final class StoriesService {
         // Signed out mid-sheet, or somehow reached on somebody else's story, and he would have been
         // told the opposite of what happened.
         guard !me.isEmpty, story.authorUid == me else { throw PostRefusal.notMine }
+        // A group story's audience is its group, and the rules pin `groupId` (owner 2026-10-23).
+        if story.groupId != nil || tag.groupId != nil { throw PostRefusal.groupStoryFixed }
         // A one-time story's audience is spent as it is watched — see the note above, and the rule
         // that refuses it on the server whatever this does.
         guard !story.oneTime else { throw PostRefusal.oneTimeAudienceFrozen }
@@ -2389,9 +2464,10 @@ final class StoriesService {
         // Advance my per-author watermark to this story's POST time — never backwards, one write
         // per advance. (Was a wall-clock serverTimestamp, which made watching 1 of 5 stories mark
         // the whole ring seen; the watermark now means "the newest story of theirs I've watched".)
-        if await StoriesRepository.shared.advanceServerWatermark(story.authorUid, to: story.createdAt) {
+        // A group story's watermark is the group ring's (`ringKey`), so it never greys the poster's own.
+        if await StoriesRepository.shared.advanceServerWatermark(story.ringKey, to: story.createdAt) {
             try? await db.collection("users").document(me)
-                .collection("storyContexts").document(story.authorUid)
+                .collection("storyContexts").document(story.ringKey)
                 .setData(["lastViewedAt": Timestamp(date: story.createdAt)], merge: true)
         }
 
@@ -3097,7 +3173,10 @@ final class StoriesRepository {
                             : -1,
                          // Absent on every story that is not a repost, which is nearly all of them.
                          repostOf: StoryRepost.from(data["repostOf"]),
-                         recipientTokens: author == me ? data["recipientUids"] as? [String] : nil)
+                         recipientTokens: author == me ? data["recipientUids"] as? [String] : nil,
+                         groupId: (data["groupId"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                         groupName: data["groupName"] as? String,
+                         groupPhoto: data["groupPhoto"] as? String)
         }
     }
 
@@ -3408,8 +3487,28 @@ final class StoriesRepository {
 
         var myGroup: StoryGroup?
         var groups: [StoryGroup] = []
-        for (author, list) in Dictionary(grouping: all, by: { $0.authorUid }) {
+        // GROUP STORIES (owner 2026-10-23) get the group's ring, keyed by `ringKey`. My own stay in
+        // My Story, where the viewer list and Posted Stories are. A blocked author's group story is
+        // dropped story by story, so the rest of that group's ring still shows.
+        var byRing: [String: [Story]] = [:]
+        for s in all {
+            let key = s.authorUid == me ? me : s.ringKey
+            if key != s.authorUid && blockedAuthors.contains(s.authorUid) { continue }
+            byRing[key, default: []].append(s)
+        }
+        for (key, list) in byRing {
             let sorted = list.sorted { $0.createdAt < $1.createdAt }
+            if key.hasPrefix(StoryGroup.groupKeyPrefix) {
+                let gid = String(key.dropFirst(StoryGroup.groupKeyPrefix.count))
+                let conv = convs.first { $0.id == gid }
+                let last = sorted.last
+                let name = conv?.name(for: me) ?? last?.groupName ?? ""
+                let photo = conv?.photoUrl(for: me) ?? last?.groupPhoto
+                groups.append(StoryGroup(authorUid: key, name: name, photoUrl: photo,
+                                         stories: sorted, lastViewedAt: nil, isMine: false))
+                continue
+            }
+            let author = key
             let (name, photo) = display(author)
             let g = StoryGroup(authorUid: author, name: name, photoUrl: photo,
                                stories: sorted, lastViewedAt: nil, isMine: author == me)

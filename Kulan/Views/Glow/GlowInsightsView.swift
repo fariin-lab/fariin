@@ -839,6 +839,7 @@ struct GlowInsightsView: View {
         switch label {
         case "everyone": return "Everyone"
         case "glowers": return "Glowers"
+        case "group": return "Group Stories"
         case "custom": return "Custom"
         default: return "My Chats"
         }

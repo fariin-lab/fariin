@@ -268,6 +268,14 @@ struct ShareStorySheet: View {
     /// one audience between posts (the first-ticked list), because "which lists went together" is a
     /// property of a post, not a setting. Empty = the store's single selection rules, as always.
     @State private var multiCustom: Set<String> = []
+    /// GROUP STORY (owner 2026-10-23): picked from New Group Story here, or handed in by the camera
+    /// opened for a group (`GroupStoryCompose`). Either way the sheet becomes `groupBody`.
+    @State private var pickedGroup: GroupStoryTarget?
+    @State private var groupPicking = false
+    private var groupTarget: GroupStoryTarget? {
+        guard editing == nil, repostOf == nil else { return nil }
+        return pickedGroup ?? GroupStoryCompose.target
+    }
 
     private var contactIds: Set<String> { StoryContact.ids(contacts) }
     /// The Glowers audience's people, read here on the main actor and handed DOWN to the audience
@@ -482,6 +490,8 @@ struct ShareStorySheet: View {
         // it stays up instead. Never for an edit or a repost.
         if OfficialStoryCompose.active, editing == nil, repostOf == nil {
             OfficialStoryForm(image: image, video: video, caption: caption, extras: extras, onPosted: onPosted)
+        } else if let g = groupTarget {
+            groupBody(g)
         } else {
             standardBody
         }
@@ -530,7 +540,8 @@ struct ShareStorySheet: View {
                             // menu, dimmed (a nil handler), as on the Settings page.
                             NewAudienceButton(onCustom: { creating = true },
                                               canAddCustom: store.canAddCustom,
-                                              onOneTime: repostOf == nil ? { oneTimePicking = true } : nil)
+                                              onOneTime: repostOf == nil ? { oneTimePicking = true } : nil,
+                                              onGroup: repostOf == nil ? { groupPicking = true } : nil)
                         }
                     }
                     // Sentence case, his reference. A section header uppercases its text by
@@ -637,6 +648,14 @@ struct ShareStorySheet: View {
         // button, and two ways to send from one screen is how somebody sends a story they meant to
         // reconsider. The picker's own Done is disabled until somebody is ticked, so a one-time
         // story can never arrive here with no recipients; the X clears the selection outright.
+        .sheet(isPresented: $groupPicking) {
+            GroupStoryPicker(onPick: { t in
+                oneTimeViewers = []
+                multiCustom = []
+                pickedGroup = t
+                groupPicking = false
+            }, onCancel: { groupPicking = false })
+        }
         .sheet(isPresented: $oneTimePicking) {
             NavigationStack {
                 SelectViewersView(title: "One-Time Story", actionTitle: "Done",
@@ -695,6 +714,86 @@ struct ShareStorySheet: View {
     /// HERE too or a fast thumb posts a zero-byte story. Editing an existing story is exempt: it
     /// uploads nothing and only changes who can see what is already up.
     private var isPreparing: Bool { editing == nil && image.isEmpty }
+
+    /// THE LAST SHEET OF A GROUP STORY, owner 2026-10-23, his second picture: "Post story as" the
+    /// group, one row, and the same Post Story button. No audience list: the group is the audience.
+    private func groupBody(_ g: GroupStoryTarget) -> some View {
+        NavigationStack {
+            List {
+                Section {
+                    GroupStoryRow(name: g.name, photoUrl: g.photoUrl, members: g.memberCount) {
+                        StoryTick(on: true)
+                    }
+                    .listRowInsets(Self.audienceRowInsets)
+                } header: {
+                    Text("Post story as \(g.name)")
+                } footer: {
+                    Text("Only members of this group can see this story. It disappears after 24 hours.")
+                }
+                Section {
+                    Toggle("Block screenshots", isOn: $captureProtectedChoice)
+                        .tint(Color(.systemGreen))
+                } footer: {
+                    Text(Self.captureFooter)
+                }
+            }
+            .floatingBottomBar { postButton }
+            .navigationTitle("Share Story")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    // Back to the normal audiences when the group was picked here; a camera opened
+                    // for a group has nowhere else to go, so its X closes the sheet.
+                    Button {
+                        if pickedGroup != nil { pickedGroup = nil } else { dismiss() }
+                    } label: { Image(systemName: pickedGroup != nil ? "chevron.backward" : "xmark") }
+                }
+            }
+        }
+        .presentationDetents([.height(groupSheetHeight), .large])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(Color(.systemGroupedBackground))
+    }
+
+    /// The same pieces `sheetHeight` adds up, for one row and its footer.
+    private var groupSheetHeight: CGFloat {
+        56 + 44 + 60 + 40 + Self.captureSectionHeight + 76 + Self.bottomSafeInset
+    }
+
+    /// Posts to the group: `StoriesService` reads its members from the server and the rules check I
+    /// may still post there. The tag carries the group through the upload queue and any retry.
+    private func postToGroup(_ g: GroupStoryTarget) {
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        posting = true
+        let tag = StoryAudienceTag.group(g.id, name: g.name)
+        if let video {
+            StoriesService.shared.postVideoStoryBackground(
+                videoURL: video.url, thumbnail: video.thumbnail, muted: video.muted,
+                burn: video.burn, trim: video.trim, caption: caption, stickers: stickers,
+                excluded: [], included: [], everyone: false,
+                allowsReplies: true, tag: tag, captureProtected: captureProtected)
+        } else {
+            StoriesService.shared.postStoryBackground(
+                image: image, caption: caption, stickers: stickers,
+                excluded: [], included: [], everyone: false,
+                allowsReplies: true, tag: tag, captureProtected: captureProtected)
+        }
+        for extra in extras {
+            if let v = extra.video {
+                StoriesService.shared.postVideoStoryBackground(
+                    videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim,
+                    caption: extra.caption, stickers: extra.stickers,
+                    excluded: [], included: [], everyone: false,
+                    allowsReplies: true, tag: tag, captureProtected: captureProtected)
+            } else if let p = extra.photo {
+                StoriesService.shared.postStoryBackground(
+                    image: p, caption: extra.caption, stickers: extra.stickers,
+                    excluded: [], included: [], everyone: false,
+                    allowsReplies: true, tag: tag, captureProtected: captureProtected)
+            }
+        }
+        onPosted()
+    }
 
     private var postButton: some View {
         Button { post() } label: {
@@ -763,6 +862,7 @@ struct ShareStorySheet: View {
     private func post() {
         guard !posting else { return }   // ignore a second tap while the first is in flight
         if editing != nil { updateAudience(); return }
+        if let g = groupTarget { postToGroup(g); return }
         if oneTimeActive { postOneTime(); return }
         if !multiCustom.isEmpty { postToLists(); return }
         let a = chosen

@@ -1101,6 +1101,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         return Date(timeIntervalSince1970: since / 1000)
     }
     var membersCanShareLink = false    // group: non-admins see Share and the QR of the invite link (owner 2026-10-19)
+    var adminsPostStories = true       // group: admins may post group stories; owner-only switch (owner 2026-10-23)
     /// 2026-10-19 groups v2 (owner): the group's document says `e2ee == false`, so its new messages
     /// are NOT end-to-end encrypted (ChatService.groupIsPlain). Server-written; false for every 1:1.
     var e2eeOff = false
@@ -1272,6 +1273,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.hideHistoryAt = ms(data["hideHistoryAt"])
         self.memberSince = (data["memberSince"] as? [String: Any] ?? [:]).mapValues { ms($0) }
         self.membersCanShareLink = false
+        self.adminsPostStories = data["adminsPostStories"] as? Bool ?? true
         self.e2eeOff = (data["type"] as? String) == "group" && (data["e2ee"] as? Bool) == false
         self.lastPlainTag = data["lastPlainTag"] as? String
         self.roles = self.convType == "group"

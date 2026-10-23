@@ -1864,9 +1864,12 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
             let key = MediaOpenRects.key(.storyRow, g.id)
             let lv = friendCards[g.id]?.labelView
             // A friend's card dips on press exactly as mine does, so its lift takes the drawn rect too.
+            // A group's ring (owner 2026-10-23) has no profile to view.
             return StoryMenuTarget(key: key, rect: lifted(key, r), actions: [
                 CMAction(title: "Send Message", icon: "message") { [weak self] in self?.onMessage(g) },
+            ] + (g.groupConvId != nil ? [] : [
                 CMAction(title: "View Profile", icon: "person.crop.circle") { [weak self] in self?.onProfile(g) },
+            ]) + [
                 CMAction(title: "Hide Stories", icon: "ic_eye_off", destructive: true) { [weak self] in   // his eye, 2026-10-17
                     self?.confirmHide(g)
                 },

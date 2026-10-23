@@ -306,6 +306,7 @@ struct GroupSettingsView: View {
                 Text("Turned off, only admins can do it.")
             }
             if AppFeatures.slowMode { slowModeSection }
+            adminStoriesSection
             privacySection
         }
         .animation(.snappy(duration: 0.25), value: mediaExpanded)
@@ -499,6 +500,23 @@ struct GroupSettingsView: View {
                            write: @escaping (Bool) async throws -> Void) -> some View {
         Toggle(title, isOn: bool(get: get, set: write))
             .disabled(!canEdit)
+    }
+
+    // MARK: Admins (owner 2026-10-23)
+
+    /// Whether admins may post group stories. The owner's alone to change, here and in the rules
+    /// (the key is outside every admin's writable list); admins see it greyed.
+    private var adminStoriesSection: some View {
+        Section {
+            Toggle("Allow Admins to Add Story",
+                   isOn: bool(get: { $0.adminsPostStories },
+                              set: { v in try await ChatService.setGroupPermission(cid: cid, key: "adminsPostStories", v) }))
+                .disabled(!(conv?.isOwner(me) ?? false))
+        } header: {
+            Text("Admins")
+        } footer: {
+            Text("Only the owner can change this. The owner can always post group stories.")
+        }
     }
 
     // MARK: Privacy

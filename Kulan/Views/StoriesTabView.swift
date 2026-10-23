@@ -1500,7 +1500,8 @@ struct StoriesTabView: View {
         // chat mark and Settings' profile mark; Hide is eye.slash (owner 2026-10-16: not the Archive mark), as in the story. `CMContextMenu` falls back to an
         // asset when the name is not a symbol.
         // Fariin (official stories, 2026-10-16) has a chat but no profile: no View Profile.
-        let official = OfficialChannel.isOfficial(g.authorUid)
+        // A group's ring (owner 2026-10-23) has no profile or bell either: Open Chat and Hide only.
+        let official = OfficialChannel.isOfficial(g.authorUid) || g.groupConvId != nil
         // 2026-10-18 (owner): nobody writes to Fariin, so its first entry OPENS its messages. People get
         // the story viewer's per-person bell too (`StoryNotifyStore`, off by default).
         let notifyOn = !official && StoryNotifyStore.shared.isOn(g.authorUid)
@@ -1641,6 +1642,8 @@ struct StoriesTabView: View {
     }
 
     private func storyCid(_ other: String) -> String {
+        // A group's ring (owner 2026-10-23) opens the group chat itself.
+        if other.hasPrefix(StoryGroup.groupKeyPrefix) { return String(other.dropFirst(StoryGroup.groupKeyPrefix.count)) }
         [AuthService.shared.uid ?? "", other].sorted().joined(separator: "_")
     }
 

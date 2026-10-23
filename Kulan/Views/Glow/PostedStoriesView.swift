@@ -134,6 +134,7 @@ struct PostedStoriesView: View {
                 case "everyone": name = "Everyone"
                 case "friends":  name = "My Chats"
                 case "glowers":  name = "Glowers"
+                case "group":    name = "Group Stories"
                 case "custom":   name = mergeCustom ? "Custom"
                                      : (StoryAudienceStore.shared.storyName(s.id)
                                         ?? StoryPrefs.audienceName(storyId: s.id) ?? "Custom")

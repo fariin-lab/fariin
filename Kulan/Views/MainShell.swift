@@ -1705,6 +1705,8 @@ struct ChatsView: View {
     }
 
     private func storyCid(_ other: String) -> String {
+        // A group's ring (owner 2026-10-23) opens the group chat itself.
+        if other.hasPrefix(StoryGroup.groupKeyPrefix) { return String(other.dropFirst(StoryGroup.groupKeyPrefix.count)) }
         [AuthService.shared.uid ?? "", other].sorted().joined(separator: "_")
     }
     private func openStoryChat(_ g: StoryGroup) {
@@ -3654,6 +3656,8 @@ struct ArchivedChatsView: View {
     /// The 1:1 conversation id for a person, built the way the chat list builds it: both uids
     /// sorted, joined. A story card knows an author, not a chat.
     private func storyCid(_ other: String) -> String {
+        // A group's ring (owner 2026-10-23) opens the group chat itself.
+        if other.hasPrefix(StoryGroup.groupKeyPrefix) { return String(other.dropFirst(StoryGroup.groupKeyPrefix.count)) }
         [me, other].sorted().joined(separator: "_")
     }
 
@@ -3694,9 +3698,12 @@ struct ArchivedChatsView: View {
             // do with hiding, were missing for no reason. Only the last entry differs, because a
             // card that is already hidden has nothing to hide. Keep the order: the destructive-ish
             // one stays at the bottom on both screens.
+            // A group's ring (owner 2026-10-23) has no profile to view.
             return StoryMenuTarget(key: key, rect: cardRect, actions: [
                 CMAction(title: "Send Message", icon: "message") { openStoryChat(g) },
+            ] + (g.groupConvId != nil ? [] : [
                 CMAction(title: "View Profile", icon: "person.crop.circle") { profileGroup = g },
+            ]) + [
                 CMAction(title: "Unhide Story", icon: "tray.and.arrow.up") {
                     StoryPrefs.toggleHidden(g.authorUid)
                     prefsTick += 1

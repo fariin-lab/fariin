@@ -1427,6 +1427,9 @@ struct NewAudienceButton: UIViewRepresentable {
     /// the audiences you keep — an entry there would open a picker with nothing to send.
     /// Nil means no menu at all, and the button goes straight to New Custom Story.
     var onOneTime: (() -> Void)? = nil
+    /// NEW GROUP STORY (owner 2026-10-23, back after the 2026-08-06 hide): opens the group list.
+    /// Nil dims it, as One-Time is dimmed where it cannot be used.
+    var onGroup: (() -> Void)? = nil
 
     func makeUIView(context: Context) -> UIButton {
         // SIZED FOR A SECTION HEADER, which is what it sits in.
@@ -1473,6 +1476,7 @@ struct NewAudienceButton: UIViewRepresentable {
     func updateUIView(_ b: UIButton, context: Context) {
         context.coordinator.onCustom = onCustom
         context.coordinator.onOneTime = onOneTime
+        context.coordinator.onGroup = onGroup
         // NEW GROUP STORY IS STILL GONE (owner 2026-08-06: "plz hide new group story that feature").
         // One-Time Story takes the slot it used to hold, and unlike Group Story it exists.
         //
@@ -1510,7 +1514,13 @@ struct NewAudienceButton: UIViewRepresentable {
         // Nil handler == this screen cannot post, only manage audiences. Visible, and dimmed.
         oneTime.attributes = onOneTime == nil ? [.disabled] : []
         b.removeTarget(nil, action: nil, for: .touchUpInside)
-        b.menu = UIMenu(children: [custom, oneTime])
+        let group = UIAction(title: "New Group Story",
+                             subtitle: "Share to the members of a group you run.",
+                             image: Self.menuIcon(symbol: "person.3")) { _ in
+            context.coordinator.onGroup?()
+        }
+        group.attributes = onGroup == nil ? [.disabled] : []
+        b.menu = UIMenu(children: [custom, group, oneTime])
         b.showsMenuAsPrimaryAction = true   // one tap opens it; there is no other action to lose
         b.isEnabled = true
     }
@@ -1573,6 +1583,7 @@ struct NewAudienceButton: UIViewRepresentable {
     final class Coordinator: NSObject {
         var onCustom: () -> Void
         var onOneTime: (() -> Void)?
+        var onGroup: (() -> Void)?
         init(_ onCustom: @escaping () -> Void) { self.onCustom = onCustom }
         @objc func fire() { onCustom() }
     }

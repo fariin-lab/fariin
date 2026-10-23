@@ -1145,10 +1145,22 @@ struct GroupInfoView: View {
                 }
                 .tint(.primary)
             }
-        } else if canEditInfo {
-            // Edit Group, top right (owner 2026-10-19).
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Edit") { showEdit = true }
+        } else {
+            // ADD GROUP STORY, top right (owner 2026-10-23): the owner, and admins while the owner
+            // allows it. The normal camera and editor; the last sheet posts to this group.
+            if let c = conv, GroupStoryRights.canPost(c, me) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { GroupStoryCompose.open(GroupStoryTarget(c)) } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel("Add group story")
+                }
+            }
+            if canEditInfo {
+                // Edit Group, top right (owner 2026-10-19).
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Edit") { showEdit = true }
+                }
             }
         }
     }

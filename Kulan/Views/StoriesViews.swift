@@ -1813,7 +1813,7 @@ struct StoryViewer: View {
                     // ⛔ THE LOCKED LINE RIDES IN THE CARD (owner 2026-10-16: it stayed still while
                     // the cube turned). Same rule `replyLockReason` had for the overlay: somebody
                     // else's story with no reply bar — a stranger, replies off, or Fariin.
-                    let canMessage = (deliveredToMe || StoryContact.isFriend(g.authorUid)) && s.allowsReplies
+                    let canMessage = (deliveredToMe || StoryContact.isFriend(s.authorUid)) && s.allowsReplies
                     let locked: String? = g.isMine ? nil
                         : (OfficialChannel.isOfficial(g.authorUid) || !canMessage) ? Self.replyLocked : nil
                     // A repost cannot be reposted again (owner, 2026-10-12: "Ali reposts Abdi, Ahmed cannot repost that, but can repost Ali's own story"). Share and Copy Link are unchanged.
@@ -2826,6 +2826,8 @@ struct StoryViewer: View {
                 // Fariin is not an account: its "profile" is the official chat's own info page,
                 // over the story like anybody's (owner 2026-10-16: "click profile, show profile").
                 if OfficialChannel.isOfficial(user.id) { officialInfoUp = true; return }
+                // A group's ring (owner 2026-10-23) is not a person: there is no profile to open.
+                if user.id.hasPrefix(StoryGroup.groupKeyPrefix) { return }
                 // Open the profile OVER the story (paused) — do NOT close the viewer.
                 if let g = groups.first(where: { $0.authorUid == user.id }) { profileSheet = g }
             },
@@ -3327,6 +3329,7 @@ struct StoryViewer: View {
         case "everyone": return StoryAudienceBadge(systemImage: "globe", text: text)
         // Glow's own mark, so the pill on the story says the same thing as the row in the sheet.
         case "glowers": return StoryAudienceBadge(systemImage: "sparkles", text: text)
+        case "group": return StoryAudienceBadge(systemImage: "person.3.fill", text: text)
         case "custom":
             // The owner's own folder drawing (2026-08-07). OUTLINE here: this pill is a thin line of
             // white over a photograph, next to a light-weight name, and the filled version reads as a
@@ -5253,7 +5256,7 @@ struct StoryViewer: View {
     // advance the local watermark so the ring/row update instantly (H8 race fix).
     private func markSeenItem(_ storyId: String) {
         guard let s = groups.flatMap(\.stories).first(where: { $0.id == storyId }) else { return }
-        StoriesRepository.shared.markSeenLocally(s.authorUid, upTo: s.createdAt)
+        StoriesRepository.shared.markSeenLocally(s.ringKey, upTo: s.createdAt)
         Task { await StoriesService.shared.markViewed(s) }
     }
 
@@ -6470,6 +6473,11 @@ func storyAudienceTitle(for s: Story) -> String {
     // gap; it silently becomes the default, which is the most convincing way to be wrong.
     // The other two are `storyAudienceBadge` below and `ShareStorySheet.seedFromStory`.
     case "glowers": return "Glowers"
+    // A group story (owner 2026-10-23) wears its group's name; one still uploading, the name it was sent with.
+    case "group":
+        let name = StoriesService.isPending(s.id) ? StoriesService.shared.uploadingAudienceName(for: s.id)
+                                                  : (s.groupName ?? "")
+        return name.isEmpty ? "Group" : name
     case "custom":
         // The author's private name for the list. A name this device happens not to have (posted
         // from another phone, or reinstalled) falls through to the plain type, which is the safe way

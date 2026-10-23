@@ -1944,7 +1944,8 @@ service cloud.firestore {
         let rightsKeys = n.get('adminRights', {}).diff(o.get('adminRights', {})).affectedKeys().difference(gone);
         let byKeys = n.get('adminBy', {}).diff(o.get('adminBy', {})).affectedKeys().difference(gone);
         let touched = promoted.union(demoted).union(rightsKeys).union(byKeys);
-        return !keys.hasAny(['createdBy', 'type'])
+        // adminsPostStories (owner 2026-10-23): the owner's switch, never an admin's.
+        return !keys.hasAny(['createdBy', 'type', 'adminsPostStories'])
           && ((touched.size() == 0 && !('adminEdit' in keys)) || delegatedAdminEditOK(touched))
           // owner 2026-10-18: removing ANOTHER admin from the group is a demotion as well, so the
           // remove-members right covers members only. The owner removes admins; anyone may leave.
@@ -3262,13 +3263,6 @@ service cloud.firestore {
       function storyData() {
         return get(/databases/$(database)/documents/stories/$(storyId)).data;
       }
-      // Only the author or someone in the audience can read a story — PLUS "Everyone" (public)
-      // stories, which any signed-in user may read (they surface from the author's profile to
-      // anyone who finds them). The profile query filters on `public == true`; the DIRECT
-      // `resource.data.public == true` form (not .get(...)) is what lets that query validate. It's
-      // safe: only the public-filtered query reaches this clause (author/recipient reads short-circuit
-      // on the clauses above), so a doc lacking the field never evaluates it, and all new stories
-      // write the field anyway.
       // ⚠️ `public == true` IS NOT A READ CLAUSE ANY MORE, and taking it out is a SECURITY FIX.
       //
       // It granted any signed-in user the WHOLE document, and the document carries `recipientUids` —
@@ -3340,8 +3334,21 @@ service cloud.firestore {
       function dailyStoryBudget() {
         return get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/storiesDaily).data;
       }
+      // GROUP STORY (owner 2026-10-23): `groupId` names a group I own, or one I am an admin of
+      // while its owner leaves adminsPostStories on. Never public. App: GroupStoryRights.
+      function groupStoryOK() {
+        let g = request.resource.data.get('groupId', '');
+        return g == '' || (request.resource.data.get('public', false) == false
+          && groupPoster(get(/databases/$(database)/documents/conversations/$(g)).data));
+      }
+      function groupPoster(c) {
+        return c.get('type', '') == 'group' && request.auth.uid in c.get('users', [])
+          && (request.auth.uid == c.get('createdBy', '')
+              || (request.auth.uid in c.get('admins', []) && c.get('adminsPostStories', true) != false));
+      }
       allow create: if signedIn()
         && request.auth.uid == request.resource.data.authorUid
+        && groupStoryOK()
         // ⛔ WHO MAY POST A STORY AT ALL, DECIDED ON THE SERVER, WITH NO BUILD. Two switches, one
         // per kind of account, and they are INDEPENDENT (owner, 2026-08-21: "Disable Stories for all
         // users … only for verified users … only for normal users … Enable Stories for one user type
@@ -3540,12 +3547,7 @@ service cloud.firestore {
       //
       // ⚠️ THE PICTURE AND THE CAPTION FREEZE ONCE THEY ARE SET, and this is not tidiness.
       //
-      // Telegram was pulled from the App Store on 2026-08-05 because an extortionist EDITED an old
-      // message in a public group: the change was invisible to everybody who had already scrolled
-      // past, so nobody could report it, while Apple could still be pointed straight at it. Durov
-      // wrote it up himself. That trick worked on us too — mediaUrl and caption were mutable
-      // forever, so anyone could post something ordinary, let their contacts watch it, swap the
-      // picture the next day, and report their own story.
+      // An edited old post is invisible to everyone who already saw it, so it can't be reported.
       //
       // Worse, the pin was on the wrong field. `mediaPath` was locked to this story's own folder,
       // but the app RENDERS `mediaUrl`, which nothing checked — so it could be pointed at any URL
@@ -3563,6 +3565,7 @@ service cloud.firestore {
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.expiresAt == resource.data.expiresAt
         && request.resource.data.mediaPath == resource.data.mediaPath
+        && request.resource.data.get('groupId', '') == resource.data.get('groupId', '')
         // type is pinned with the path (they were validated as a pair at create).
         && request.resource.data.type == resource.data.type
         // A story cannot change what KIND of story it is after people have it. Without this an

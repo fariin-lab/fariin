@@ -203,9 +203,11 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
     /// guard, so a tap that does not open a camera never leaves Fariin's mode on for the next one,
     /// and every other open clears it (review 2026-10-18).
     @discardableResult
-    static func open(official: Bool = false) -> Bool {
+    static func open(official: Bool = false, group: GroupStoryTarget? = nil) -> Bool {
         guard presented == nil, let top = topViewController() else { return false }
         OfficialStoryCompose.setActive(official)
+        // Group story (owner 2026-10-23): the last sheet posts to this group. Same lifetime as above.
+        GroupStoryCompose.setTarget(official ? nil : group)
         let sheet = AddStorySheet(onPosted: { Task { await StoriesRepository.shared.load(force: true) } },
                                   onDismiss: { StoryCameraDoor.close() },
                                   onPostedClose: { StoryCameraDoor.closeAfterPost() })
@@ -238,6 +240,7 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
     /// keeps the old behaviour for the case the door is ever used with nothing presenting it.
     static func close() {
         OfficialStoryCompose.end()   // Fariin's form is for the camera the "+" opened, no other
+        GroupStoryCompose.end()
         guard let host = presented else { return }
         presented = nil
         (host.presentingViewController ?? host).dismiss(animated: true)
@@ -253,6 +256,7 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
     /// already standing under the copies when they start to move. The ✕ keeps `close()`.
     static func closeAfterPost() {
         OfficialStoryCompose.end()
+        GroupStoryCompose.end()
         let source = StoryPostFlight.takePending()
         guard let host = presented else { return }
         var top: UIViewController = host
