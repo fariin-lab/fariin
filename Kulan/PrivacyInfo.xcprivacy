@@ -11,9 +11,9 @@
 
   WHAT WE DO NOT DO, and each of these is why a key is absent rather than forgotten:
     · No tracking of any kind. NSPrivacyTracking is false and there are no tracking domains,
-      which is honest: the app ships FirebaseFirestore, Auth, Storage, Messaging and
-      Functions, and NEITHER Analytics NOR Crashlytics. Nothing here follows anybody across
-      other companies' apps or sites.
+      which is honest: the app ships FirebaseFirestore, Auth, Storage, Messaging, Functions
+      and Crashlytics (crash reports, declared below), and no Analytics. Nothing here follows
+      anybody across other companies' apps or sites.
     · No contacts are collected. There is no NSContactsUsageDescription in the app at all —
       people are found by typing an exact username, never by uploading an address book.
     · No advertising identifier, no third-party ad SDK, no attribution SDK.
@@ -125,6 +125,45 @@
                 <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
             </array>
         </dict>
+        <!-- Crash reports (Crashlytics, MetricKit), linked to the account so a report can be traced. (audit 07 F5, 2026-10-23) -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypeCrashData</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+        <!-- Launch and hang timings (MetricKit, Telemetry). (audit 07 F5, 2026-10-23) -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypePerformanceData</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+        <!-- The app's own diagnostic log, uploaded when something fails. (audit 07 F5, 2026-10-23) -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypeOtherDiagnosticData</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
     </array>
 
     <key>NSPrivacyAccessedAPITypes</key>
@@ -137,6 +176,8 @@
             <key>NSPrivacyAccessedAPITypeReasons</key>
             <array>
                 <string>CA92.1</string>
+                <!-- The App Group suite shared with the notification extension (audit 07 F5). -->
+                <string>1C8F.1</string>
             </array>
         </dict>
         <!-- File timestamps, in DiskImageCache/AudioCache/VideoCache: last-access dates on

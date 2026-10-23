@@ -272,7 +272,10 @@ final class RowStickerView: UIView {
             if let cached = await DiskImageCache.shared.rawData(for: u) { return cached }
             guard let remote = URL(string: u), remote.scheme == "https",
                   let (d, _) = try? await MediaSession.shared.data(from: remote),
-                  CGImageSourceCreateWithData(d as CFData, nil).map({ CGImageSourceGetCount($0) > 0 }) == true
+                  // An animated .tgs is gzip JSON, which no image decoder reads (audit 06 F11):
+                  // accepted as itself, or a newer pack's animated sticker stayed blank for good.
+                  TGSSticker.isTGS(d)
+                    || CGImageSourceCreateWithData(d as CFData, nil).map({ CGImageSourceGetCount($0) > 0 }) == true
             else { return nil }
             DiskImageCache.shared.storeBytes(d, for: u)
             return d

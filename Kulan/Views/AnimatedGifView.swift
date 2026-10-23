@@ -61,12 +61,18 @@ struct AnimatedGifView: UIViewRepresentable {
         if context.coordinator.loadedURL != url { load(into: v, context.coordinator) }
     }
 
+    /// The GIF provider's media hosts and our own storage.
+    static let allowedHosts = ["giphy.com", "firebasestorage.googleapis.com", "storage.googleapis.com", "fariin.com"]
+
     func makeCoordinator() -> Coordinator { Coordinator() }
     final class Coordinator { var loadedURL: String? }
 
     private func load(into v: UIImageView, _ coord: Coordinator) {
         coord.loadedURL = url   // mark BEFORE loading so re-renders/updates don't re-download+re-decode
-        guard let u = URL(string: url) else { return }
+        // Only hosts the app itself serves GIFs from (audit 06 F9): a crafted GIF message with any
+        // https url made every reader's phone fetch it, leaking their IP and when they read.
+        guard let u = URL(string: url), u.scheme == "https", let host = u.host?.lowercased(),
+              Self.allowedHosts.contains(where: { host == $0 || host.hasSuffix("." + $0) }) else { return }
         // Memory (decoded) → instant.
         if let cached = Self.cache.object(forKey: url as NSString) { v.image = cached; return }
         let requested = url

@@ -162,6 +162,20 @@ struct MainShell: View {
         .task {
             let d = UserDefaults.standard.integer(forKey: "keepMediaDays")
             if d > 0 { DiskImageCache.shared.sweep(olderThanDays: d) }
+            // Leftovers in tmp (audit 06 F10): a decrypted view-once voice note left by a kill while
+            // its page was open, and whole copies of picked videos, never removed after the send.
+            // Upload files are left alone: a background upload may still be using them.
+            Task.detached(priority: .utility) {
+                let fm = FileManager.default
+                let tmp = fm.temporaryDirectory
+                let rules: [(String, TimeInterval)] = [("voice-once-page-", 600), ("pick-", 1800), ("story-up-", 86_400)]
+                for name in (try? fm.contentsOfDirectory(atPath: tmp.path)) ?? [] {
+                    guard let age = rules.first(where: { name.hasPrefix($0.0) })?.1 else { continue }
+                    let url = tmp.appendingPathComponent(name)
+                    let made = (try? fm.attributesOfItem(atPath: url.path)[.modificationDate] as? Date) ?? Date()
+                    if Date().timeIntervalSince(made) > age { try? fm.removeItem(at: url) }
+                }
+            }
         }
         // An invite deep link (kulan://g/<code>) presents its Join sheet from the Chats tab — foreground
         // it so the sheet isn't dropped on a hidden tab.
