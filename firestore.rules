@@ -3344,6 +3344,7 @@ service cloud.firestore {
       }
       function groupPoster(c) {
         return c.get('type', '') == 'group' && request.auth.uid in c.get('users', [])
+          && (c.get('users', []).size() >= appLimit('group_story_min_members', 50) || isAdmin())
           && request.resource.data.recipientUids.size() <= c.get('users', []).size()
           && (request.auth.uid == c.get('createdBy', '')
               || (request.auth.uid in c.get('admins', []) && c.get('adminsPostStories', true) != false));

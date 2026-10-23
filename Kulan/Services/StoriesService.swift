@@ -311,6 +311,9 @@ extension StoriesService {
 enum GroupStoryRights {
     static func canPost(_ c: Conversation, _ uid: String) -> Bool {
         guard c.isGroup, !uid.isEmpty, c.users.contains(uid) else { return false }
+        // owner 2026-10-23: only a group of 50 or more (panel-set) has stories, except for app
+        // admins (like @v), who may post to any group they run.
+        guard c.users.count >= AppLimits.shared.groupStoryMinMembers || AdminStore.shared.isAdmin else { return false }
         if c.isOwner(uid) { return true }
         return c.isAdmin(uid) && c.adminsPostStories
     }
@@ -1417,8 +1420,13 @@ final class StoriesService {
         // The day is not spent, so the hour is what refused it — that is the reasoning above, and it
         // is why the number can be named. It is read from the same place the rule reads its own, so
         // the sentence cannot go stale when the ceiling is raised on the server.
-        return "You've hit the limit of \(AppLimits.shared.storiesPerHour) stories an hour. "
-             + "Wait a little and try again."
+        // owner 2026-10-23: "says 40 an hour, I posted 3". A rules refusal does not say which rule,
+        // and this used to name the hour whatever refused it (his group story; counters read 3/40).
+        // The sentence now names both honest possibilities, and the real error goes to the log.
+        DiagLog.add("STORYPOST# refused \((error as NSError).domain) \((error as NSError).code) \(error.localizedDescription.prefix(160))")
+        DiagLog.flagForUpload()
+        return "This story couldn't be posted. If you've posted a lot in the last hour (the limit is "
+             + "\(AppLimits.shared.storiesPerHour)), wait a little and try again."
     }
 
     enum PostRefusal: LocalizedError {

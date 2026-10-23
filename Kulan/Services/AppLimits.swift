@@ -213,6 +213,13 @@ final class AppLimits {
         number("group_desc_max", Fallback.groupDescMax)
     }
 
+    /// GROUP STORIES NEED A REAL GROUP (owner 2026-10-23): at least this many members, app admins
+    /// excepted. Panel row "Members a group needs for stories"; firestore.rules `groupPoster` reads the
+    /// same key with the same fallback.
+    var groupStoryMinMembers: Int {
+        number("group_story_min_members", 50)
+    }
+
     /// How many groups one person may own at once (owner 2026-10-20: 10), from the panel's
     /// `groups_owned_max`. The server counts and judges it (groupCreateCheck).
     var groupsOwnedMax: Int {

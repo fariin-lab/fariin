@@ -1167,6 +1167,9 @@ struct GroupInfoView: View {
                     }
                     .accessibilityLabel("Add group story")
                 }
+                // Two buttons, not one capsule (owner 2026-10-23): iOS 26 groups neighbouring bar
+                // items into one glass shape unless a spacer splits them.
+                if canEditInfo { ToolbarSpacer(.fixed, placement: .topBarTrailing) }
             }
             if canEditInfo {
                 // Edit Group, top right (owner 2026-10-19).

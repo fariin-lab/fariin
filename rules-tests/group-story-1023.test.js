@@ -24,7 +24,8 @@ const convPath = `${D}/conversations/${CID}`;
 const dmPath = `${D}/conversations/${DM}`;
 const storyPath = `${D}/stories/${SID}`;
 
-const users = [OWNER, ADMIN, MEMBER];
+// 50: the group-story minimum since 2026-10-23 (group-story-min-1023 tests the minimum itself).
+const users = [OWNER, ADMIN, MEMBER, ...Array.from({ length: 47 }, (_, i) => `uidFill${i}`)];
 const group = (over = {}) => ({
   type: 'group', title: 'Plans', users, admins: [OWNER, ADMIN], createdBy: OWNER,
   names: Object.fromEntries(users.map((u) => [u, u])),
