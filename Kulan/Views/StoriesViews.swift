@@ -5965,13 +5965,15 @@ struct StoryOwnerBarView: View {
 // grows with real progress). Generous frame so the whole ring is an easy tap target.
 struct UploadCancelRing: View {
     var diameter: CGFloat = 28
-    @State private var spin = false
     var body: some View {
         ZStack {
-            Circle()
-                .trim(from: 0, to: 0.72)
-                .stroke(Color.white.opacity(0.9), style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                .rotationEffect(.degrees(spin ? 360 : 0))
+            // A timeline turns it, never repeatForever (iOS 26 deadlock; audit H3).
+            TimelineView(.animation) { ctx in
+                Circle()
+                    .trim(from: 0, to: 0.72)
+                    .stroke(Color.white.opacity(0.9), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .rotationEffect(.degrees(Self.turn(ctx.date)))
+            }
             Image(systemName: "xmark")
                 .font(.system(size: diameter * 0.42, weight: .bold))
                 .foregroundStyle(.white)
@@ -5979,9 +5981,11 @@ struct UploadCancelRing: View {
         .frame(width: diameter, height: diameter)
         .padding(6)                       // bigger tap target around the ring
         .contentShape(Rectangle())
-        .onAppear {
-            withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { spin = true }
-        }
+    }
+
+    /// One turn every 0.9s, linear: the angle the spinning rings show at `date`.
+    static func turn(_ date: Date) -> Double {
+        date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.9) / 0.9 * 360
     }
 }
 
@@ -5991,7 +5995,6 @@ struct UploadCancelRing: View {
 struct UploadingAvatarRing: View {
     let name: String
     let photoUrl: String?
-    @State private var spin = false
     var body: some View {
         // AN OVERLAY, NOT A SECOND ITEM IN A STACK, and 37 rather than 42. Both halves of his report
         // come from that one line: a ZStack takes the size of its LARGEST child, so the ring made
@@ -6006,16 +6009,15 @@ struct UploadingAvatarRing: View {
                 // `.inset(by: lineWidth / 2)` that keeps the stroke INSIDE that frame. Without the
                 // inset a stroke straddles its path, so a 2.5pt line reached 38.25 — a ring that grew
                 // by a point and a quarter the moment the upload finished.
-                Circle()
-                    .inset(by: 1)
-                    .trim(from: 0, to: 0.72)
-                    .stroke(Color.white.opacity(0.95), style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                    .frame(width: 37, height: 37)
-                    .rotationEffect(.degrees(spin ? 360 : 0))
+                TimelineView(.animation) { ctx in
+                    Circle()
+                        .inset(by: 1)
+                        .trim(from: 0, to: 0.72)
+                        .stroke(Color.white.opacity(0.95), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .frame(width: 37, height: 37)
+                        .rotationEffect(.degrees(UploadCancelRing.turn(ctx.date)))
+                }
             }
-        .onAppear {
-            withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { spin = true }
-        }
     }
 }
 

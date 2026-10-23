@@ -10126,6 +10126,8 @@ struct UploadingRing: View {
     @ObservedObject private var uploads = UploadProgress.shared
     @State private var trimEnd: CGFloat = 0
     @State private var rotation: Double = 0
+    /// When phase two began; the timeline turns the arc from here.
+    @State private var spinFrom: Date?
 
     private static let phaseOne: Double = 1     // stroke grows and does its initial turn
     private static let phaseTwo: Double = 1     // one full revolution, repeated
@@ -10156,9 +10158,16 @@ struct UploadingRing: View {
                 } else {
                     // INDETERMINATE, the reference app's two phases: the stroke grows from nothing to half the
                     // circle while turning 270°, then that half circle spins for as long as it takes.
-                    Circle().trim(from: 0, to: trimEnd)
-                        .stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                        .rotationEffect(.degrees(rotation - 90))
+                    // Phase two is a timeline from `spinFrom`, never repeatForever (iOS 26
+                    // deadlock in a chat with the keyboard up; audit H3).
+                    TimelineView(.animation(paused: spinFrom == nil)) { ctx in
+                        let turn = spinFrom.map {
+                            ctx.date.timeIntervalSince($0).truncatingRemainder(dividingBy: Self.phaseTwo) / Self.phaseTwo * 360
+                        } ?? 0
+                        Circle().trim(from: 0, to: trimEnd)
+                            .stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                            .rotationEffect(.degrees(rotation + turn - 90))
+                    }
                 }
             }
             .frame(width: 26, height: 26)
@@ -10174,9 +10183,7 @@ struct UploadingRing: View {
         // Phase two takes over exactly where phase one ended, so the turn never stutters: it
         // continues from 270 rather than restarting.
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.phaseOne) {
-            withAnimation(.linear(duration: Self.phaseTwo).repeatForever(autoreverses: false)) {
-                rotation = 270 + 360
-            }
+            if spinFrom == nil { spinFrom = Date() }
         }
     }
 }
@@ -12310,44 +12317,53 @@ private struct RetrySweep: ViewModifier {
     }
 }
 
+/// 0 -> 1 -> 0 eased, one cycle per `period` seconds, starting `delay` late. The bouncing bars
+/// below run on this through a timeline, never repeatForever (iOS 26 deadlock; audit H3).
+private func pulse(_ date: Date, period: Double, delay: Double) -> CGFloat {
+    let t = (date.timeIntervalSinceReferenceDate - delay).truncatingRemainder(dividingBy: period * 2)
+    let x = (t < 0 ? t + period * 2 : t) / period
+    let up = x < 1 ? x : 2 - x
+    return CGFloat(up * up * (3 - 2 * up))
+}
+
 struct RecordingBubble: View {
     let dark: Bool
-    @State private var animating = false
 
     var body: some View {
         HStack(spacing: 7) {
             Image(systemName: "mic.fill")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
-            HStack(spacing: 3) {
-                ForEach(0..<3, id: \.self) { i in
-                    Capsule().fill(Color.accentColor)
-                        .frame(width: 3, height: 14)
-                        .scaleEffect(y: animating ? 1 : 0.35)
-                        .animation(.easeInOut(duration: 0.5).repeatForever().delay(Double(i) * 0.15), value: animating)
+            TimelineView(.animation) { ctx in
+                HStack(spacing: 3) {
+                    ForEach(0..<3, id: \.self) { i in
+                        Capsule().fill(Color.accentColor)
+                            .frame(width: 3, height: 14)
+                            .scaleEffect(y: 0.35 + 0.65 * pulse(ctx.date, period: 0.5, delay: Double(i) * 0.15))
+                    }
                 }
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
         .background(Theme.received(dark))
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .onAppear { animating = true }
     }
 }
 
 struct TypingBubble: View {
     let dark: Bool
-    @State private var animating = false
 
     var body: some View {
         HStack {
-            HStack(spacing: 4) {
-                ForEach(0..<3, id: \.self) { i in
-                    Circle().fill(Color.secondary)
-                        .frame(width: 7, height: 7)
-                        .scaleEffect(animating ? 1 : 0.5)
-                        .opacity(animating ? 1 : 0.4)
-                        .animation(.easeInOut(duration: 0.6).repeatForever().delay(Double(i) * 0.2), value: animating)
+            TimelineView(.animation) { ctx in
+                HStack(spacing: 4) {
+                    ForEach(0..<3, id: \.self) { i in
+                        let p = pulse(ctx.date, period: 0.6, delay: Double(i) * 0.2)
+                        Circle().fill(Color.secondary)
+                            .frame(width: 7, height: 7)
+                            .scaleEffect(0.5 + 0.5 * p)
+                            .opacity(0.4 + 0.6 * p)
+                    }
                 }
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
@@ -12355,7 +12371,6 @@ struct TypingBubble: View {
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             Spacer(minLength: 0)
         }
-        .onAppear { animating = true }
     }
 }
 

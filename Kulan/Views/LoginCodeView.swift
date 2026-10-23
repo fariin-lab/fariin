@@ -460,14 +460,16 @@ struct CodeBoxes: View {
 
 /// The blinking bar in the next empty box.
 private struct CodeCaret: View {
-    @State private var on = true
     var body: some View {
-        RoundedRectangle(cornerRadius: 1)
-            .fill(Color.primary)
-            .frame(width: 2, height: 26)
-            .opacity(on ? 1 : 0)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) { on = false }
-            }
+        // A timeline drives the blink, never repeatForever (iOS 26 deadlock beside the keyboard,
+        // build 959; audit H3). Same 0.5s ease in and out.
+        TimelineView(.animation) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.0)
+            let x = t < 0.5 ? t / 0.5 : (1 - t) / 0.5          // 0 -> 1 -> 0 over a second
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Color.primary)
+                .frame(width: 2, height: 26)
+                .opacity(1 - (x * x * (3 - 2 * x)))
+        }
     }
 }

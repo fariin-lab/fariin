@@ -10,24 +10,25 @@ import UIKit
 // usable on its own (e.g. as an image placeholder instead of a spinner).
 struct SkeletonFill: View {
     @Environment(\.colorScheme) private var scheme
-    @State private var phase: CGFloat = -1
 
     var body: some View {
         // Opaque system greys — a REAL skeleton block that's clearly visible on any background
         // (including over a chat wallpaper), not a near-transparent tint that vanished.
         let base = scheme == .dark ? Color(.systemGray5) : Color(.systemGray4)
         let highlight = scheme == .dark ? Color.white.opacity(0.14) : Color.white.opacity(0.55)
+        // A timeline drives the sweep, never repeatForever (iOS 26 deadlock, build 959; audit H3).
         base.overlay(
-            GeometryReader { geo in
-                LinearGradient(colors: [.clear, highlight, .clear],
-                               startPoint: .leading, endPoint: .trailing)
-                    .frame(width: geo.size.width * 0.55)
-                    .offset(x: phase * geo.size.width * 1.7)
+            TimelineView(.animation) { ctx in
+                let phase = -1 + 2 * ctx.date.timeIntervalSinceReferenceDate
+                    .truncatingRemainder(dividingBy: 1.25) / 1.25
+                GeometryReader { geo in
+                    LinearGradient(colors: [.clear, highlight, .clear],
+                                   startPoint: .leading, endPoint: .trailing)
+                        .frame(width: geo.size.width * 0.55)
+                        .offset(x: phase * geo.size.width * 1.7)
+                }
             }
         )
-        .onAppear {
-            withAnimation(.linear(duration: 1.25).repeatForever(autoreverses: false)) { phase = 1 }
-        }
     }
 }
 

@@ -259,7 +259,6 @@ struct StoryListRow: View {
             .allowsHitTesting(false)
     }
 
-    @State private var spin = false
 
     private var unseenGradient: LinearGradient {
         LinearGradient(colors: [Color(hex: 0x34C76F), Color(hex: 0x3DA1FD)],
@@ -271,15 +270,14 @@ struct StoryListRow: View {
     /// turn every 0.9s, linear — in the unseen ring's colours, owner 2026-10-11.
     @ViewBuilder private var faceRing: some View {
         if isUploading {
-            Circle()
-                .inset(by: Self.ring / 2)
-                .trim(from: 0, to: 0.72)
-                .stroke(unseenGradient, style: StrokeStyle(lineWidth: Self.ring, lineCap: .round))
-                .rotationEffect(.degrees(spin ? 360 : 0))
-                .onAppear {
-                    withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { spin = true }
-                }
-                .onDisappear { spin = false }
+            // A timeline turns it, never repeatForever (iOS 26 deadlock; audit H3).
+            TimelineView(.animation) { ctx in
+                Circle()
+                    .inset(by: Self.ring / 2)
+                    .trim(from: 0, to: 0.72)
+                    .stroke(unseenGradient, style: StrokeStyle(lineWidth: Self.ring, lineCap: .round))
+                    .rotationEffect(.degrees(UploadCancelRing.turn(ctx.date)))
+            }
         } else if !seenFlags.isEmpty {
             StoryRingView(seen: seenFlags, lineWidth: Self.ring)
         } else {
