@@ -40,6 +40,10 @@ enum OfficialStoryCompose {
         var buttonText = ""
         var buttonUrl = ""
         var hours = 24
+        /// Who sees it, the admin panel's three (owner 2026-10-23): "everyone", "welcome" (new
+        /// accounts only) or "countries" (`countries`, two-letter codes; needs Choose countries).
+        var scope = "everyone"
+        var countries: [String] = []
     }
 
     enum Failure: LocalizedError {
@@ -100,6 +104,7 @@ enum OfficialStoryCompose {
             "buttonText": draft.buttonText.trimmingCharacters(in: .whitespacesAndNewlines),
             "buttonUrl": draft.buttonUrl.trimmingCharacters(in: .whitespacesAndNewlines),
             "hours": draft.hours,
+            "audience": ["scope": draft.scope, "countries": draft.countries],
         ]
         do {
             _ = try await Functions.functions(region: "me-central1")

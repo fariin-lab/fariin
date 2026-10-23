@@ -1251,8 +1251,27 @@ private struct OfficialStoryForm: View {
                     .pickerStyle(.segmented)
                 } header: {
                     Text("Stays up").textCase(nil)
+                }
+                // WHO SEES IT — owner 2026-10-23: the admin panel's choices, from the phone too.
+                Section {
+                    Picker("Who sees it", selection: $draft.scope) {
+                        Text("All users").tag("everyone")
+                        Text("New users").tag("welcome")
+                        if AdminStore.shared.can(.targetCountry) { Text("Countries").tag("countries") }
+                    }
+                    .pickerStyle(.segmented)
+                    if draft.scope == "countries" {
+                        NavigationLink {
+                            OfficialCountryPicker(selected: $draft.countries)
+                        } label: {
+                            LabeledContent("Countries", value: draft.countries.isEmpty
+                                           ? "Choose" : draft.countries.joined(separator: ", "))
+                        }
+                    }
+                } header: {
+                    Text("Who sees it").textCase(nil)
                 } footer: {
-                    Text("Everyone sees it, as Fariin, until it comes down.")
+                    Text(audienceFooter)
                 }
                 if let error {
                     Section { Text(error).foregroundStyle(.red).font(.footnote) }
@@ -1279,6 +1298,14 @@ private struct OfficialStoryForm: View {
         .interactiveDismissDisabled(posting)
     }
 
+    private var audienceFooter: String {
+        switch draft.scope {
+        case "welcome": return "Only new accounts see it, as Fariin, until it comes down."
+        case "countries": return "Only people in these countries see it, as Fariin, until it comes down."
+        default: return "Everyone sees it, as Fariin, until it comes down."
+        }
+    }
+
     /// Posted here, not in the background like a person's story: the server can refuse (a bad link,
     /// a permission taken away), and the admin has to see that sentence on this sheet.
     private func post() {
@@ -1286,6 +1313,10 @@ private struct OfficialStoryForm: View {
         let u = draft.buttonUrl.trimmingCharacters(in: .whitespaces)
         if t.isEmpty != u.isEmpty {
             error = t.isEmpty ? "Give the button a label, like \"Learn more\"." : "Give the button a link."
+            return
+        }
+        if draft.scope == "countries", draft.countries.isEmpty {
+            error = "Choose at least one country."
             return
         }
         posting = true; error = nil
@@ -1312,5 +1343,47 @@ private struct OfficialStoryForm: View {
                 self.error = error.localizedDescription
             }
         }
+    }
+}
+
+/// The countries a Fariin story goes to, by two-letter code (the server's form). The phone's own
+/// country is offered first and ticked when the list opens empty ("same country").
+private struct OfficialCountryPicker: View {
+    @Binding var selected: [String]
+    @State private var query = ""
+
+    private static let all: [(code: String, name: String)] = Locale.Region.isoRegions
+        .map(\.identifier)
+        .filter { $0.count == 2 && $0.allSatisfy(\.isLetter) }
+        .compactMap { c in Locale.current.localizedString(forRegionCode: c).map { (c, $0) } }
+        .sorted { $0.name < $1.name }
+
+    private var mine: String? { Locale.current.region?.identifier }
+
+    private var shown: [(code: String, name: String)] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        var list = Self.all
+        if let mine, let i = list.firstIndex(where: { $0.code == mine }) { list.insert(list.remove(at: i), at: 0) }
+        guard !q.isEmpty else { return list }
+        return list.filter { $0.name.localizedCaseInsensitiveContains(q) || $0.code.localizedCaseInsensitiveContains(q) }
+    }
+
+    var body: some View {
+        List(shown, id: \.code) { c in
+            Button {
+                if let i = selected.firstIndex(of: c.code) { selected.remove(at: i) } else { selected.append(c.code) }
+            } label: {
+                HStack {
+                    Text(c.name).foregroundStyle(.primary)
+                    Text(c.code).foregroundStyle(.secondary)
+                    Spacer()
+                    if selected.contains(c.code) { Image(systemName: "checkmark").foregroundStyle(.blue) }
+                }
+            }
+        }
+        .searchable(text: $query)
+        .navigationTitle("Countries")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { if selected.isEmpty, let mine { selected = [mine] } }
     }
 }
