@@ -3716,7 +3716,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             return false
         }
         let before = collectionView.contentOffset.y
-        reapplyLanding()
+        // ⛔ NEVER INSIDE SOMEONE ELSE'S ANIMATION (owner 2026-10-23, build 1017: under "Unread
+        // Messages" the second bubble rode over the first and the first's Role tag hung up on the
+        // divider). This re-land runs from `updateInsets` and other passes that can sit inside the
+        // keyboard's or an inset change's animation block. Moving the list there lays out and dequeues
+        // rows INSIDE that block, so their new sub-frames animate from stale ones: a tag slides in from
+        // where another plan put it, a row starts where its neighbour's old height ended. The landing is
+        // a correction, not a motion: done with animations off and laid out on the spot.
+        UIView.performWithoutAnimation {
+            reapplyLanding()
+            collectionView.layoutIfNeeded()
+        }
         let after = collectionView.contentOffset.y
         if abs(after - before) > 0.5 {
             reopenLog("hold re-landed from \(caller): y \(String(format: "%.1f", before)) -> \(String(format: "%.1f", after))")
