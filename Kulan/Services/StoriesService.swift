@@ -1896,8 +1896,16 @@ final class StoriesService {
         //
         // What the old order bought was one main-actor hop of overlap on the warm path (the wait loop
         // does not run when the list is already there), which is not worth an orphaned file.
-        let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included,
-                                                     applyHiddenFrom: everyone, tag: tag)
+        let recipients: Set<String>, mode: String
+        do {
+            (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included,
+                                                           applyHiddenFrom: everyone, tag: tag)
+        } catch {
+            DiagLog.add("STORYPOST# step=audience gid=\(tag.groupId ?? "-") \((error as NSError).domain) \((error as NSError).code)")
+            throw error
+        }
+        // Which write a refusal came from (owner 2026-10-23: group story refused, the rules replay passes).
+        var step = "create"
 
         // An unchanged repost is copied on the server after the doc exists (see `serverCopySource`);
         // only if that copy fails are the bytes sent from here.
@@ -1973,13 +1981,16 @@ final class StoriesService {
             // Both halves were in flight together; wait for the photo to land before asking for its
             // URL. If the doc write above threw, this child task is cancelled and awaited on the way
             // out, and the catch deletes whatever reached Storage.
+            step = "upload"
             try await uploadedJPEG   // `jpeg` is already in scope; this only waits for the transfer
             if let copyFrom, !(await copyRepostMedia(from: copyFrom, to: storyId)) {
                 let meta = StorageMetadata(); meta.contentType = "image/jpeg"
                 _ = try await ref.putDataAsync(jpeg, metadata: meta)
             }
             try Task.checkCancellation()   // cancelled during upload → undo
+            step = "url"
             let url = try await ref.downloadURL().absoluteString
+            step = "media"
             try await docRef.updateData(["mediaUrl": url])
             // The story is up: tell the people its caption mentions (`StoryMentions`).
             StoryMentions.send(storyId: storyId, caption: caption, thumbUrl: url, recipients: recipients, me: me)
@@ -2011,6 +2022,8 @@ final class StoriesService {
             // run together, so neither cleanup is optional. Storage deletes are `allow delete: if
             // false` for clients, so that one fails harmlessly and onStoryDeleted sweeps the bytes
             // when the doc goes; it stays here so the intent is on the record.
+            DiagLog.add("STORYPOST# step=\(step) gid=\(tag.groupId ?? "-") rcpt=\(recipients.count) "
+                        + "\((error as NSError).domain) \((error as NSError).code)")
             try? await docRef.delete()
             try? await ref.delete()
             throw error

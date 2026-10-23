@@ -255,13 +255,11 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
     /// then the camera and everything it raised are taken down with no animation, so the real app is
     /// already standing under the copies when they start to move. The ✕ keeps `close()`.
     static func closeAfterPost() {
-        // A group or Fariin story does not fly into My Story (it is not there): the camera simply
-        // closes onto that page, where its upload ring turns (owner 2026-10-23).
-        if GroupStoryCompose.target != nil || OfficialStoryCompose.active {
-            _ = StoryPostFlight.takePending()
-            close()
-            return
-        }
+        // A group or Fariin story does not fly into My Story (it is not there): it flies into that
+        // page's photo circle, where its upload ring turns (owner 2026-10-23, the reference app's way).
+        var circle: String?
+        if let g = GroupStoryCompose.target { circle = StoryPostFlight.groupCircleKey(g.id) }
+        else if OfficialStoryCompose.active { circle = StoryPostFlight.officialCircleKey }
         OfficialStoryCompose.end()
         GroupStoryCompose.end()
         let source = StoryPostFlight.takePending()
@@ -313,7 +311,7 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
         DiagLog.add("POSTEXIT# levels=\(chain.count) heldAfterDismiss=\(held)")
         if held { DiagLog.flagForUpload() }
         StoryPostFlight.run(scene: scene, appWindow: window, source: source,
-                            chrome: chrome, sheet: sheet)
+                            chrome: chrome, sheet: sheet, circle: circle)
         // And if it is still up when the flight lands, it is taken down again: an invisible camera
         // left over the app would swallow every touch.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
@@ -386,6 +384,10 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
 
     /// My Story's card, wherever this layout draws it, if it is on screen now. The row turns into the
     /// uploading row a frame after the post; all three sit in the same slot.
+    /// The photo circle on a group's page and on Fariin's, where a story posted to them lands.
+    static func groupCircleKey(_ gid: String) -> String { MediaOpenRects.key(.storyRow, "groupcircle-\(gid)") }
+    static let officialCircleKey = MediaOpenRects.key(.storyRow, "officialcircle")
+
     private static func destination(in bounds: CGRect) -> (key: String, rect: CGRect, radius: CGFloat)? {
         var ids = [StoryDoor.uploadingSourceKey]
         if let mine = StoriesRepository.shared.mine?.id { ids.append(mine) }
@@ -399,7 +401,8 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
     }
 
     static func run(scene: UIWindowScene, appWindow: UIWindow, source: Source?,
-                    chrome: UIView?, sheet: (image: UIImage, frame: CGRect, radius: CGFloat)?) {
+                    chrome: UIView?, sheet: (image: UIImage, frame: CGRect, radius: CGFloat)?,
+                    circle: String? = nil) {
         let bounds = appWindow.bounds
         window?.isHidden = true
         let overlay = UIWindow(windowScene: scene)
@@ -516,7 +519,28 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
             return
         }
 
-        guard let dest = destination(in: bounds) else {
+        // INTO A PHOTO CIRCLE (group or Fariin): the circle keeps showing its own photo, so nothing is
+        // hidden; the picture lands as a circle on it and fades over the last 0.25s, the reference
+        // app's avatar fade seen from the other side.
+        if let circle {
+            if let r = MediaOpenRects.liveViewRect(circle), bounds.intersects(r) {
+                let w = source.rect.width, h = source.rect.height
+                let scale = r.width / w
+                let anim = UIViewPropertyAnimator(duration: flight, timingParameters: springCurve())
+                anim.addAnimations {
+                    card.center = CGPoint(x: r.midX, y: r.midY)
+                    card.transform = CGAffineTransform(scaleX: scale, y: scale)
+                    card.bounds = CGRect(x: 0, y: (h - w) / 2, width: w, height: w)
+                    card.layer.cornerRadius = w / 2
+                }
+                UIView.animate(withDuration: 0.25, delay: flight - 0.25, options: .curveEaseInOut) { card.alpha = 0 }
+                anim.addCompletion { _ in finish(nil) }
+                anim.startAnimation()
+                return
+            }
+        }
+
+        guard circle == nil, let dest = destination(in: bounds) else {
             let anim = UIViewPropertyAnimator(duration: flight, timingParameters: springCurve())
             anim.addAnimations {
                 card.transform = CGAffineTransform(translationX: 0, y: bounds.height).scaledBy(x: 0.8, y: 0.8)

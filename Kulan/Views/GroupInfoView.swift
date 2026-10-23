@@ -438,7 +438,9 @@ struct GroupInfoView: View {
             }
             }
             // A group story going up turns round the group's photo here (owner 2026-10-23, the
-            // reference app's way), not on My Story.
+            // reference app's way), not on My Story. The posted picture flies into this circle
+            // (`StoryPostFlight`, `groupCircleKey`).
+            .modifier(MediaRectReporter(id: "groupcircle-\(cid)", scope: .storyRow, cornerRadius: Self.photoSide / 2))
             .overlay { GroupStoryUploadRing(active: StoriesService.shared.uploadingGroups.contains(cid)) }
             headerCaption(.primary)
             actionsRow.padding(.top, 2)

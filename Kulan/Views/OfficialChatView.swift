@@ -661,6 +661,8 @@ struct OfficialChatInfoView: View {
             if let g = storyGroup, !g.stories.isEmpty {
                 OfficialAvatar(size: 104)
                     .modifier(MediaRectReporter(id: "officialinfo-\(g.id)", scope: .storyRow, cornerRadius: 52))
+                    // Where a Fariin story posted from this phone lands (`StoryPostFlight.officialCircleKey`).
+                    .modifier(MediaRectReporter(id: "officialcircle", scope: .storyRow, cornerRadius: 52))
                     .overlay {
                         StoryRingView(seen: StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt), lineWidth: 3)
                             .frame(width: 118, height: 118)
@@ -676,6 +678,7 @@ struct OfficialChatInfoView: View {
                     .accessibilityAddTraits(.isButton)
             } else {
                 OfficialAvatar(size: 112)
+                    .modifier(MediaRectReporter(id: "officialcircle", scope: .storyRow, cornerRadius: 56))
                     // A Fariin story going up from this phone (owner 2026-10-23).
                     .overlay { GroupStoryUploadRing(active: OfficialStoryUploads.shared.count > 0) }
             }
