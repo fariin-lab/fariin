@@ -1476,6 +1476,26 @@ service cloud.firestore {
       function isRequestPending() {
         return resource.data.get('startedBy', '') != '' && resource.data.get('accepted', false) == false;
       }
+      // audit F4, 2026-10-23: NOBODY IS PUT IN A GROUP WITH SOMEONE WHO BLOCKED THEM, or whom they
+      // blocked (the account block lists /calls reads). Rules have no loops and one request may make
+      // 10 lookups, so a write is checked at three list positions from `from` (2 lookups each): an
+      // add (appended by arrayUnion, old list kept as the prefix) or a create of up to 3 people is
+      // checked in full; a bigger create, or an add of 4 or more, only for its first three.
+      function blockFree(u) {
+        return u == request.auth.uid
+          || (!exists(/databases/$(database)/documents/users/$(u)/blocked/$(request.auth.uid))
+              && !exists(/databases/$(database)/documents/users/$(request.auth.uid)/blocked/$(u)));
+      }
+      function addsBlockFree(n, from) {
+        return (n.size() <= from || blockFree(n[from]))
+          && (n.size() <= from + 1 || blockFree(n[from + 1]))
+          && (n.size() <= from + 2 || blockFree(n[from + 2]));
+      }
+      function groupAddOK() {
+        let o = resource.data.users;
+        let n = request.resource.data.get('users', []);
+        return n.size() <= o.size() || (n[0:o.size()] == o && addsBlockFree(n, o.size()));
+      }
 
       // A PER-USER MAP MAY ONLY CHANGE THE CALLER'S OWN KEY.
       //
@@ -1497,8 +1517,13 @@ service cloud.firestore {
         return request.resource.data.get(f, {}).diff(resource.data.get(f, {}))
                  .affectedKeys().hasOnly([request.auth.uid]);
       }
+      // 2026-10-23: one diff first, so a write touching none of these maps skips the 13 map diffs
+      // (about 120 of the engine's 1,000 expressions; the audit F3/F4 checks needed the room).
       function privateMapsUntouched() {
-        return ownKeyOnly('blockedBy') && ownKeyOnly('blockedAt') && ownKeyOnly('blockClearedAt')
+        return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['blockedBy', 'blockedAt',
+                 'blockClearedAt', 'clearedAt', 'mutedBy', 'pinnedBy', 'archivedBy', 'pinOrder', 'lastRead',
+                 'lastPlayedVoice', 'markedUnread', 'delivered'])
+          || ownKeyOnly('blockedBy') && ownKeyOnly('blockedAt') && ownKeyOnly('blockClearedAt')
             && ownKeyOnly('clearedAt') && ownKeyOnly('mutedBy') && ownKeyOnly('pinnedBy')
             && ownKeyOnly('archivedBy') && ownKeyOnly('pinOrder') && ownKeyOnly('lastRead')
             // Voice-note played receipts. On this list for the same reason `lastRead` is: it is MY
@@ -1794,6 +1819,7 @@ service cloud.firestore {
             // 2026-10-19: the cap is config/limits.group_members_max (admin panel, 2..500), not 30.
             && request.resource.data.users.size() <= appLimit('group_members_max', 30)
             && request.auth.uid in request.resource.data.admins
+            && addsBlockFree(request.resource.data.users, 0)   // audit F4
             // 2026-10-19 group fix round S8: the owner is the creator. `createdBy` holds every right
             // (the admin rules, the owner hand-off), so a create naming somebody else made them the
             // owner of a group they never made. ChatService.createGroup has written `uid` since June.
@@ -1975,7 +2001,13 @@ service cloud.firestore {
           && (!('bannedUids' in keys) || adminHasRight('banUsers')
               || (adminHasRight('inviteUsers') && o.get('bannedUids', []).hasAll(n.get('bannedUids', []))))
           // 2026-10-19 group fix round S7: without Pin messages, only the clean-up unpin (memberUnpinOK).
-          && (!('pinnedMessageIds' in keys) || adminHasRight('pinMessages') || memberUnpinOK());
+          && (!('pinnedMessageIds' in keys) || adminHasRight('pinMessages') || memberUnpinOK())
+          // audit F3, 2026-10-23: the name/photo mirrors move only at my key or the people added or removed.
+          && (!keys.hasAny(['names', 'photos', 'posters'])
+              || n.get('names', {}).diff(o.get('names', {})).affectedKeys()
+                   .union(n.get('photos', {}).diff(o.get('photos', {})).affectedKeys())
+                   .union(n.get('posters', {}).diff(o.get('posters', {})).affectedKeys())
+                   .difference(added.union(gone).union([request.auth.uid].toSet())).size() == 0);
       }
       // 2026-09-24 audit: two floors every group write keeps, whichever branch lets it through.
       // The member cap (config/limits.group_members_max since 2026-10-19, was 30): the create rule
@@ -2016,7 +2048,8 @@ service cloud.firestore {
       // A group the panel never touched has no `mod` at all, so it costs one lookup: the rules stop
       // evaluating at 1,000 expressions, and the heaviest admin writes are close to that already.
       function groupModWriteOK() {
-        return !('mod' in resource.data) || groupModRestrictedWriteOK();
+        // audit G1, 2026-10-23: an ENDED group (endedAt, no `mod`) took the shortcut and stayed editable.
+        return (!('mod' in resource.data) && resource.data.get('endedAt', null) == null) || groupModRestrictedWriteOK();
       }
       // ...and one in good standing (a label only, or restored) only the state test: the set
       // arithmetic below runs for a limited, suspended or disabled group alone.
@@ -2121,6 +2154,7 @@ service cloud.firestore {
         // 1,000-expression ceiling (rules-tests/role-1018).
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt', 'memberSince', 'endedAt'])
         && groupModWriteOK()
+        && groupAddOK()   // audit F4: no adding someone with a block either way
         // owner 2026-10-18: the group wallpaper, groups only and a known shape (groupWallpaperOK).
         && (!('wallpaper' in request.resource.data.diff(resource.data).affectedKeys()) || groupWallpaperOK())
         // owner 2026-10-18: a member's Role, admins only and a known shape (roleWriteOK). Checked
@@ -2186,17 +2220,19 @@ service cloud.firestore {
               || resource.data.get('reqOff', false) == true   // owner 2026-10-21
             )
             && reqOffStampOk()   // owner 2026-10-21
-            // 1:1 audit r2 G1, 2026-10-08: the clause above lets the starter through while
-            // `lastSender` is still empty (a fresh request), so a stranger could accept their own
-            // request before sending anything and pass every call gate as a friend. Whatever
-            // `lastSender` says, the person who started a pending request never writes `accepted`.
+            // audit H1, 2026-10-23 (was r2 G1, keyed on `startedBy`, which since 10-21 is only who
+            // OPENED the chat): a pending request is accepted only by the person written to, so the
+            // last word must already be the other member's. And while pending, `lastSender` may
+            // only become '' or the writer: nobody forges "they replied". (A callee's call row
+            // naming the caller is refused then; the caller's own copy writes the same line.)
             && (
               !isRequestPending()
-              || request.auth.uid != resource.data.get('startedBy', '')
               || request.resource.data.get('accepted', false) == false
-              // owner 2026-10-21: unless the other member spoke first (the starter was asked).
               || resource.data.get('lastSender', '') == otherExistingMember()
             )
+            && (!isRequestPending()
+                || !('lastSender' in request.resource.data.diff(resource.data).affectedKeys())
+                || request.resource.data.get('lastSender', '') in ['', request.auth.uid])
             // ACCEPTED IS A ONE-WAY DOOR, and `startedBy` never changes once written.
             //
             // `openConversation` decides whether a conversation is new by reading it first, and on a
@@ -2403,6 +2439,8 @@ service cloud.firestore {
           return request.resource.data.get('type', '') == 'call'
             && mid.matches('call_.+')
             && request.resource.data.get('callerUid', '') in convData().users
+            // audit F6, 2026-10-23: a group's call row is the writer's own (GroupCallService).
+            && (convData().get('type', '') != 'group' || request.resource.data.callerUid == request.auth.uid)
             && request.resource.data.authorId == request.resource.data.callerUid
             && request.resource.data.get('text', '') == ''
             && request.resource.data.keys().hasOnly([
@@ -3344,12 +3382,10 @@ service cloud.firestore {
         return g == '' || (request.resource.data.get('public', false) == false
           && groupPoster(get(/databases/$(database)/documents/conversations/$(g)).data));
       }
-      // The members a group needs (owner 2026-10-23): the poster's country's own number from the panel
-      // (config/limits.group_story_countries, by the story's posterCountry), else the global one.
+      // The members a group needs (owner 2026-10-23). audit H5: the global number only. The per-country
+      // one read the story's `posterCountry`, which the phone writes; it waits for a server-stamped country.
       function groupStoryMin() {
-        let cc = request.resource.data.get('posterCountry', '');
-        let byCountry = limitsExist() ? limitsData().get('group_story_countries', {}) : {};
-        return cc is string && byCountry.get(cc, null) is int ? byCountry.get(cc, 0) : appLimit('group_story_min_members', 50);
+        return appLimit('group_story_min_members', 50);
       }
       function groupPoster(c) {
         return c.get('type', '') == 'group' && request.auth.uid in c.get('users', [])
@@ -3369,33 +3405,9 @@ service cloud.firestore {
         //
         //   config/limits.stories_enabled_default    0 = ordinary accounts cannot post
         //   config/limits.stories_enabled_verified   0 = verified accounts cannot post
-        //
-        // ⚠️ TWO SWITCHES RATHER THAN ONE SETTING WITH THREE VALUES, and the difference is the
-        // fourth case. This started as `stories_enabled` with 0/1/2 — nobody, everybody, verified
-        // only — copied from the reference app's own `stories_posting` (enabled / premium /
-        // disabled). Three values can express three of the four combinations he asked for and not
-        // the fourth: there is no way to say "ordinary accounts yes, verified accounts no". A pair
-        // of independent flags gives all four and needs no new mechanism, because every other limit
-        // on this document is already a `_default` / `_verified` pair.
-        //
-        // ⚠️ THIS IS ITS OWN CLAUSE AND THAT IS THE ENTIRE POINT. Setting the daily ceiling to zero
-        // looks like it should do this and does not: the two budget clauses below open with
-        // `!exists(the counter)`, a deliberate fail-open — an app that has never written a counter
-        // must not be an app that cannot post — so an account that has never posted a story, or
-        // whose 24-hour window has rolled over, sails past the ceiling without it ever being read.
-        // MEASURED, not reasoned: with the daily limit at 0, an account with a live counter is
-        // refused and an account with no counter document is ALLOWED. A switch with a hole in it is
-        // worse than no switch, because it reads as working. So this sits in front, joined with
-        // `&&`, where nothing can short-circuit around it.
-        //
-        // ⚠️ ANYTHING THAT IS NOT A ZERO IS ON, and that is the whole safety of it. The reference
-        // app's version is a string and ours is a number for the reason written up in `appLimit`: a
-        // field typed in a console is text unless somebody says otherwise, and text falls back. So a
-        // typo, a missing key, or a 3 that means nothing all land on "can post". The one thing that
-        // cannot happen by accident is the feature going dark.
-        //
-        // The user document read costs nothing extra: `isBanned()` further down reads the same
-        // document and rule evaluation caches it, so this is the same one read either way.
+        // Two flags, not one 3-value setting, so all four combinations exist. Its own clause: a daily
+        // limit of 0 does not do this (the budget clauses below fail open with no counter doc,
+        // measured). Anything but 0 is on, so a typo never turns stories off.
         && ( isVerifiedCaller()
                ? appLimit('stories_enabled_verified', 1) != 0
                : appLimit('stories_enabled_default', 1) != 0 )

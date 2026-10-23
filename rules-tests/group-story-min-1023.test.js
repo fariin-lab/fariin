@@ -51,12 +51,13 @@ const cases = [
   ['OK      the panel lowers it to 5: a 6-member group', 'ALLOW', 'ALLOW', OWNER, mocks(OWNER, group(6), { config: { group_story_min_members: 5 } })],
   ['FIX     the panel raises it to 200: a 120-member group', 'ALLOW', 'DENY', OWNER, mocks(OWNER, group(120), { config: { group_story_min_members: 200 } })],
   ['GUARD   an APP admin who is not in the group', 'DENY', 'DENY', 'uidStranger', mocks('uidStranger', group(3), { appAdmin: true })],
-  // Per country (config/limits.group_story_countries) and per person (users/{uid}.groupStoryOpen).
-  ['FIX     Somalia set to 5: a 6-member group from SO', 'DENY', 'ALLOW', OWNER,
+  // Per country: switched off by audit H5 (2026-10-23), the story's posterCountry is the phone's own
+  // claim; these rows now prove it is ignored. Per person (users/{uid}.groupStoryOpen) still counts.
+  ['GUARD   Somalia set to 5: a 6-member group claiming SO', 'DENY', 'DENY', OWNER,
     mocks(OWNER, group(6), { config: { group_story_countries: { SO: 5 } } }), 'SO'],
   ['GUARD   Somalia set to 5: the same group from KE', 'DENY', 'DENY', OWNER,
     mocks(OWNER, group(6), { config: { group_story_countries: { SO: 5 } } }), 'KE'],
-  ['FIX     Somalia raised to 300: a 120-member group from SO', 'ALLOW', 'DENY', OWNER,
+  ['OK      Somalia raised to 300: a 120-member group claiming SO', 'ALLOW', 'ALLOW', OWNER,
     mocks(OWNER, group(120), { config: { group_story_countries: { SO: 300 } } }), 'SO'],
   ['FIX     a person opened by the panel, 3-member group', 'DENY', 'ALLOW', OWNER, mocks(OWNER, group(3), { open: true })],
   ['GUARD   a person opened by the panel, not in the group', 'DENY', 'DENY', 'uidStranger', mocks('uidStranger', group(3), { open: true })],
