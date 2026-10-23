@@ -74,6 +74,11 @@ struct AdhocInvite: Identifiable, Equatable {
     let startedBy: String
     let startedAt: Date
     let others: [CallMember]   // starter first
+    /// A call link's ring (owner 2026-10-23, Add people in a link call): the link's key, which Join
+    /// opens with `joinLink(key:video:)`. Nil for a multi-person or group chat's call.
+    var linkKey: String? = nil
+    /// Opened from a nudge ("👋 X wants to talk"), not a ring: Ignore only closes it.
+    var fromNudge = false
     var id: String { roomId }
 }
 

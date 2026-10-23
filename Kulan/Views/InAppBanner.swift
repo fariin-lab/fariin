@@ -23,6 +23,8 @@ final class InAppBannerCenter {
         let title: String
         let body: String
         let photoUrl: String?
+        /// A call link's nudge (owner 2026-10-23): drawn as the dark capsule with a Join pill.
+        var nudge: LinkNudge? = nil
     }
 
     private(set) var item: Item?
@@ -64,6 +66,16 @@ final class InAppBannerCenter {
             return
         }
         let next = Item(cid: cid, title: title, body: body, photoUrl: cid.flatMap(Self.photo(forCid:)))
+        withAnimation(Self.slide) { item = next }
+        armHide()
+    }
+
+    /// ⛔ THE NUDGE (owner 2026-10-23, his screenshot): someone in a call link wants me in. A dark
+    /// capsule: their face, "👋 NAME wants to talk", a white "🔊 Join" pill. Join (or a tap anywhere)
+    /// opens the call's invitation, not the call itself.
+    @MainActor
+    func showNudge(_ n: LinkNudge) {
+        let next = Item(cid: nil, title: n.callerName, body: "wants to talk", photoUrl: n.photoUrl, nudge: n)
         withAnimation(Self.slide) { item = next }
         armHide()
     }
@@ -220,6 +232,52 @@ struct InAppBannerCard: View {
     }
 
     @ViewBuilder private func card(safeTop: CGFloat) -> some View {
+        if let nudge = item.nudge {
+            nudgeCard(nudge, safeTop: safeTop)
+        } else {
+            messageCard(safeTop: safeTop)
+        }
+    }
+
+    /// The nudge capsule: dark in both themes, as his reference draws it.
+    private func nudgeCard(_ n: LinkNudge, safeTop: CGFloat) -> some View {
+        HStack(spacing: 10) {
+            AvatarView(name: n.callerName, photoUrl: n.photoUrl, size: 40)
+            Text("👋 \(n.callerName) wants to talk")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 4)
+            Button { open() } label: {
+                Text("🔊 Join")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 14)
+                    .frame(height: 36)
+                    .background(Capsule().fill(Color.white))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Join the call")
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 14)
+        .frame(height: Self.cardHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Capsule().fill(Color(white: 0.11)))
+        .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .shadow(color: .black.opacity(0.3), radius: 14, y: 4)
+        .environment(\.colorScheme, .dark)
+        .padding(.horizontal, Self.sideInset)
+        .padding(.top, topInset(safeTop: safeTop))
+        .offset(y: rubberBanded(dragY))
+        .contentShape(Capsule())
+        .gesture(dragGesture)
+        .onTapGesture { open() }
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder private func messageCard(safeTop: CGFloat) -> some View {
         HStack(spacing: Self.avatarToText) {
             if let cid = item.cid, OfficialChannel.isOfficial(cid) {
                 OfficialAvatar(size: Self.avatar)
@@ -318,6 +376,11 @@ struct InAppBannerCard: View {
     }
 
     private func open() {
+        if let nudge = item.nudge {
+            center.dismiss()
+            GroupCallRinging.shared.openNudge(nudge)
+            return
+        }
         if let cid = item.cid { AppRouter.shared.pendingChatId = cid }
         center.dismiss()
     }

@@ -39,8 +39,8 @@ final class GroupCallRinging {
     private var swapObserver: NSObjectProtocol?
 
     private struct Ring {
-        let roomKind: String     // "adhoc" (multi-person) or "group" (a group chat's call)
-        let roomId: String       // the adhoc_… id, or the group's cid
+        let roomKind: String     // "adhoc" (multi-person), "group" (a group chat's call) or "link"
+        let roomId: String       // the adhoc_… id, the group's cid, or the call link's room id
         let callTitle: String    // the group's title, for `start(cid:title:video:)`
         let video: Bool
         let uuid: UUID           // the CallKit call
@@ -51,6 +51,14 @@ final class GroupCallRinging {
         /// Round 2 (V5 N3): when the server sent this ring's push (seconds, server clock), for
         /// telling a late cancel of an EARLIER call in the same group from this ring's own.
         var sentAt: TimeInterval?
+        /// A call link's ring (owner 2026-10-23): the link's key, which the answer joins with.
+        var linkKey: String?
+    }
+
+    /// The room a link ring's answer lands in: the key's own room (the same as `roomId` unless the
+    /// link was made new during the call). Any other ring: its room id.
+    private static func joinRoomId(_ roomId: String, linkKey: String?) -> String {
+        linkKey.flatMap { CallLinkKey(text: $0)?.roomId } ?? roomId
     }
     /// ringing: CallKit is ringing. joining: answered through CallKit, the room is coming up.
     /// inCall: the room is up; the CallKit call stays for the whole call.
@@ -63,7 +71,8 @@ final class GroupCallRinging {
     /// whatever path (answered, declined, ended, timed out, a 1:1 took over).
     private func syncScreen() {
         let service = GroupCallService.shared
-        guard let shown = service.groupRingScreen else { return }
+        // A nudge's invitation has no ring behind it: it keeps its own clock (`openNudge`).
+        guard let shown = service.groupRingScreen, !shown.fromNudge else { return }
         if ring?.roomId != shown.roomId || phase != .ringing { service.groupRingScreen = nil }
     }
     private var listener: ListenerRegistration?
@@ -87,8 +96,12 @@ final class GroupCallRinging {
         let kind = d["roomKind"] as? String ?? ""
         let roomId = d["roomId"] as? String ?? ""
         let adhocId = roomId.hasPrefix("adhoc_")
+        // A call link's ring (owner 2026-10-23, Add people in a link call) carries the link's key;
+        // without a key that reads as one, there is nothing to join.
+        let linkKey = kind == "link" ? (d["key"] as? String).flatMap { CallLinkKey(text: $0) != nil ? $0 : nil } : nil
         guard !roomId.isEmpty, !roomId.contains("/"),
-              (kind == "adhoc" && adhocId) || (kind == "group" && !adhocId) else {
+              (kind == "adhoc" && adhocId) || (kind == "group" && !adhocId)
+                || (kind == "link" && !adhocId && linkKey != nil) else {
             CallKitManager.shared.reportGroupDiscard(completion: completion)
             return
         }
@@ -105,6 +118,7 @@ final class GroupCallRinging {
         // nobody signed in.
         if service.ringIsMine(roomId: roomId, callerUid: callerUid)
             || ring?.roomId == roomId || service.activeCid == roomId
+            || (linkKey != nil && service.activeCid == Self.joinRoomId(roomId, linkKey: linkKey))
             || (sentAt.map { now - $0 > Self.ringWindow } ?? false)
             || wasFinished(roomId, adhoc: adhocId, sentAt: sentAt)
             || Auth.auth().currentUser == nil {
@@ -142,6 +156,7 @@ final class GroupCallRinging {
         let video = d["video"] as? Bool ?? false
         var r = Ring(roomKind: kind, roomId: roomId, callTitle: title ?? callerName, video: video, uuid: UUID())
         r.sentAt = sentAt   // round 2, V5 N3
+        r.linkKey = linkKey
         // Round 2 (F7): the ring push carries the call's `startedAt` (ms; 0 when unknown), so the
         // ring knows which call it is before the room snapshot arrives.
         if let at = (d["startedAt"] as? NSNumber)?.doubleValue, at > 0 {
@@ -150,12 +165,29 @@ final class GroupCallRinging {
         ring = r
         phase = .ringing
         // A group chat's call gets the full-screen invitation too (owner 2026-10-23), as a
-        // multi-person call already does: the group's title, the caller's face.
-        if kind == "group" {
-            service.groupRingScreen = AdhocInvite(
+        // multi-person call already does: the group's title, the caller's face. A call link's ring
+        // too (owner 2026-10-23): the person who added me, and Join opens the link.
+        if kind == "group" || kind == "link" {
+            let screen = AdhocInvite(
                 roomId: roomId, title: title ?? callerName, video: video, startedBy: callerUid,
                 startedAt: r.startedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date(),
-                others: callerUid.isEmpty ? [] : [CallMember(uid: callerUid, name: callerName, photoUrl: nil)])
+                others: callerUid.isEmpty ? [] : [CallMember(uid: callerUid, name: callerName, photoUrl: nil)],
+                linkKey: linkKey)
+            service.groupRingScreen = screen
+            // The push has no photo: the caller's face from the profile cache, once it is read.
+            if !callerUid.isEmpty {
+                Task { @MainActor in
+                    var profile = await ProfileStore.shared.cachedPeer(callerUid)
+                    if profile?.photoUrl == nil { profile = await ProfileStore.shared.fetch(callerUid) }
+                    guard let url = profile?.photoUrl, !url.isEmpty,
+                          service.groupRingScreen == screen else { return }
+                    service.groupRingScreen = AdhocInvite(
+                        roomId: screen.roomId, title: screen.title, video: screen.video,
+                        startedBy: screen.startedBy, startedAt: screen.startedAt,
+                        others: [CallMember(uid: callerUid, name: callerName, photoUrl: url)],
+                        linkKey: screen.linkKey)
+                }
+            }
         }
         // The caller's name; for a group chat's call, the group's title.
         CallKitManager.shared.reportGroupRing(uuid: r.uuid, name: kind == "group" ? (title ?? callerName) : callerName,
@@ -228,6 +260,7 @@ final class GroupCallRinging {
     private func attachRoomListener(_ r: Ring) {
         let uuid = r.uuid
         let me = Auth.auth().currentUser?.uid ?? ""
+        if r.roomKind == "link" { attachInviteListener(r, me: me); return }
         listener = FirestoreHub.db.collection("groupCalls").document(r.roomId)
             .addSnapshotListener(includeMetadataChanges: true) { [weak self] snap, error in
                 let failed = error != nil
@@ -253,6 +286,30 @@ final class GroupCallRinging {
                         self.finishRing(.answeredElsewhere)
                     } else if declined.contains(me) {
                         self.finishRing(.declinedElsewhere)
+                    }
+                }
+            }
+    }
+
+    /// A call link has no `groupCalls` doc: its ring follows my own invite
+    /// (`callLinks/{roomId}/invites/{me}`, written only by the server). Answered or declined on my
+    /// other phone, or settled as missed, the ring stops. A read the rules refuse (rules not out yet)
+    /// leaves the ring to its timeout and the server's cancel push.
+    private func attachInviteListener(_ r: Ring, me: String) {
+        guard !me.isEmpty else { return }
+        let uuid = r.uuid
+        listener = FirestoreHub.db.collection("callLinks").document(r.roomId)
+            .collection("invites").document(me)
+            .addSnapshotListener(includeMetadataChanges: true) { [weak self] snap, error in
+                guard error == nil, let snap, !snap.metadata.isFromCache, snap.exists else { return }
+                let state = snap.get("state") as? String ?? ""
+                Task { @MainActor [weak self] in
+                    guard let self, let r = self.ring, r.uuid == uuid, self.phase == .ringing else { return }
+                    switch state {
+                    case "joined": self.finishRing(.answeredElsewhere)
+                    case "declined": self.finishRing(.declinedElsewhere)
+                    case "missed": self.finishRing(.unanswered)
+                    default: break
                     }
                 }
             }
@@ -304,6 +361,10 @@ final class GroupCallRinging {
             let service = GroupCallService.shared
             if r.roomKind == "adhoc" {
                 await service.joinAdhoc(roomId: r.roomId, video: video)
+            } else if r.roomKind == "link", let key = r.linkKey {
+                // Invited, so no approval wait (the server let me through). joinLink brings its own
+                // call screen up. A Mute on the system screen while joining is read in `connect`.
+                await service.joinLink(key: key, video: video)
             } else {
                 // A group chat's call has no screen of its own outside the chat; the root layer
                 // shows it, as it does for multi-person calls.
@@ -313,7 +374,8 @@ final class GroupCallRinging {
                 await service.start(cid: r.roomId, title: r.callTitle, video: video, requireLive: true)
             }
             guard self.ring?.uuid == r.uuid else { return }   // ended meanwhile
-            if service.activeCid == r.roomId {
+            if service.activeCid == Self.joinRoomId(r.roomId, linkKey: r.linkKey) {
+                if r.roomKind == "link" { self.reportLinkJoined(roomId: r.roomId) }
                 self.callJoined()
             } else {
                 self.endCallKitCall(.failed)   // the join never became a call
@@ -352,12 +414,19 @@ final class GroupCallRinging {
 
     /// Decline on the in-app invitation: the CallKit ring for the same room stops too.
     func declineFromScreen(_ invite: AdhocInvite) {
+        // A nudge's invitation (owner 2026-10-23): Ignore only closes it. The invite stays as the
+        // server has it (declined or missed); no new answer goes.
+        if invite.fromNudge {
+            if GroupCallService.shared.groupRingScreen?.id == invite.id { GroupCallService.shared.groupRingScreen = nil }
+            return
+        }
         if let r = ring, r.roomId == invite.roomId, phase == .ringing {
             stopWatchingRoom()
             ring = nil
             CallKitManager.shared.endGroupCall(uuid: r.uuid, reason: .declinedElsewhere)
         }
-        settleDecline(roomKind: invite.roomId.hasPrefix("adhoc_") ? "adhoc" : "group", roomId: invite.roomId,
+        let kind = invite.linkKey != nil ? "link" : invite.roomId.hasPrefix("adhoc_") ? "adhoc" : "group"
+        settleDecline(roomKind: kind, roomId: invite.roomId,
                       startedAtMs: invite.startedAt.timeIntervalSince1970 * 1000)
     }
 
@@ -365,6 +434,9 @@ final class GroupCallRinging {
     /// as every call joined inside the app does (no CallKit call, the SDK's own audio handling).
     func acceptFromScreen(_ invite: AdhocInvite, muted: Bool = false) {
         if muted { GroupCallService.shared.prepareMutedJoin() }
+        if invite.fromNudge, GroupCallService.shared.groupRingScreen?.id == invite.id {
+            GroupCallService.shared.groupRingScreen = nil   // no ring behind it to take it down
+        }
         if let r = ring, r.roomId == invite.roomId, phase == .ringing {
             stopWatchingRoom()
             ring = nil
@@ -372,7 +444,16 @@ final class GroupCallRinging {
         }
         remember(invite.roomId)
         let service = GroupCallService.shared
-        if !invite.roomId.hasPrefix("adhoc_") {
+        if let key = invite.linkKey {
+            // A call link's ring (owner 2026-10-23): straight in, no approval wait (invited). The
+            // Mute pill goes as the join's own mic wish (joinLink sets it from `mic`).
+            let video = Self.joinsWithVideo(invite.video)
+            let joinRoom = Self.joinRoomId(invite.roomId, linkKey: key)
+            Task { @MainActor in
+                await service.joinLink(key: key, video: video, mic: !muted)
+                if service.activeCid == joinRoom { self.reportLinkJoined(roomId: invite.roomId) }
+            }
+        } else if !invite.roomId.hasPrefix("adhoc_") {
             // A group chat's call (owner 2026-10-23): joined the way a CallKit answer joins it, only
             // a call that is still on, on the root layer's call screen.
             let video = Self.joinsWithVideo(invite.video)
@@ -385,6 +466,29 @@ final class GroupCallRinging {
         } else {
             let video = Self.joinsWithVideo(invite.video)
             Task { @MainActor in await service.joinAdhoc(roomId: invite.roomId, video: video) }
+        }
+    }
+
+    // MARK: - The nudge (owner 2026-10-23)
+
+    /// "👋 <name> wants to talk", tapped (the in-app banner's Join or the notification): the same
+    /// full-screen invitation a ring shows, with Ignore and Join. Join joins the link; Ignore only
+    /// closes it. Nothing when I am already in or joining a call, or in a 1:1. Goes by itself
+    /// after the ring window.
+    func openNudge(_ n: LinkNudge) {
+        let service = GroupCallService.shared
+        let oneToOneLive = [.outgoing, .incoming, .active, .reconnecting].contains(CallService.shared.state)
+        guard Auth.auth().currentUser != nil, !oneToOneLive, ring == nil,
+              service.activeCid == nil, !service.connecting, !service.waitingForApproval else { return }
+        let screen = AdhocInvite(
+            roomId: n.roomId, title: n.title ?? n.callerName, video: false, startedBy: n.callerUid,
+            startedAt: Date(),
+            others: n.callerUid.isEmpty ? [] : [CallMember(uid: n.callerUid, name: n.callerName, photoUrl: n.photoUrl)],
+            linkKey: n.key, fromNudge: true)
+        service.groupRingScreen = screen
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(Self.ringWindow * 1_000_000_000))
+            if service.groupRingScreen == screen { service.groupRingScreen = nil }
         }
     }
 
@@ -438,7 +542,8 @@ final class GroupCallRinging {
     /// start muted because Mute was tapped on the system screen while joining. Read once, as the
     /// local media starts.
     func consumeMuteOnJoin(roomId: String) -> Bool {
-        guard let r = ring, r.roomId == roomId, phase == .joining,
+        guard let r = ring, r.roomId == roomId || Self.joinRoomId(r.roomId, linkKey: r.linkKey) == roomId,
+              phase == .joining,
               let m = muteOnJoin, m.uuid == r.uuid else { return false }
         muteOnJoin = nil
         return m.muted
@@ -484,6 +589,13 @@ final class GroupCallRinging {
     /// An older server refuses the answer and nothing changes.
     func reportJoined(cid: String, startedAtMs: Double?) {
         sendAnswer("joined", roomKind: "group", roomId: cid, startedAtMs: startedAtMs, tries: 2)
+    }
+
+    /// A call link I was rung into (owner 2026-10-23): I am in. The server marks my invite joined
+    /// and stops the ring on my other phones. Also for the nudge banner's Join. An older server
+    /// refuses the answer and nothing changes.
+    func reportLinkJoined(roomId: String) {
+        sendAnswer("joined", roomKind: "link", roomId: roomId, tries: 2)
     }
 
     private func endCallKitCall(_ reason: CXCallEndedReason) {
@@ -628,5 +740,29 @@ enum GroupCallKitAudio {
     static func restoreDefaults() {
         try? AudioManager.shared.setEngineAvailability(.default)
         AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = true
+    }
+}
+
+/// A nudge from someone in a call link (owner 2026-10-23): the alert push
+/// `{ type: "linknudge", roomId, key, callerUid, callerName }` sent by `linkCallNudge`.
+struct LinkNudge: Equatable {
+    let roomId: String
+    let key: String
+    let callerUid: String
+    let callerName: String
+    let title: String?
+    var photoUrl: String?
+
+    /// Nil unless the push names a room and carries a key that reads as one.
+    init?(_ d: [AnyHashable: Any]) {
+        guard d["type"] as? String == "linknudge",
+              let roomId = d["roomId"] as? String, !roomId.isEmpty, !roomId.contains("/"),
+              let key = d["key"] as? String, CallLinkKey(text: key) != nil else { return nil }
+        self.roomId = roomId
+        self.key = key
+        self.callerUid = d["callerUid"] as? String ?? ""
+        self.callerName = (d["callerName"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Someone"
+        self.title = (d["title"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        self.photoUrl = nil
     }
 }

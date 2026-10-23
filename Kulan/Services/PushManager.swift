@@ -258,6 +258,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // A multi-person call invitation while the app is open: the full-screen invitation
         // (IncomingGroupCallLayer) is already up from the live listener, so no banner on top of it.
         if content.userInfo["type"] as? String == "adhoccall" { return [] }
+        // A call link's nudge (owner 2026-10-23): our dark capsule with a Join pill, not the system
+        // banner. The push's own sound still plays.
+        if content.userInfo["type"] as? String == "linknudge" {
+            guard var nudge = LinkNudge(content.userInfo) else { return [] }
+            if !nudge.callerUid.isEmpty, BlockList.snapshot.contains(nudge.callerUid) { return [] }
+            if !nudge.callerUid.isEmpty {
+                nudge.photoUrl = await ProfileStore.shared.cachedPeer(nudge.callerUid)?.photoUrl
+            }
+            let shown = nudge
+            await MainActor.run { InAppBannerCenter.shared.showNudge(shown) }
+            return [.sound]
+        }
         let cid = content.userInfo["cid"] as? String
         if let cid, cid == AppRouter.shared.activeChatId { return [] }
         // A CHAT notification gets OUR banner, not the system one. The iOS drop-down reads as
@@ -315,6 +327,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         let info = response.notification.request.content.userInfo
         if info["type"] as? String == "adhoccall", let roomId = info["roomId"] as? String {
             await Task { @MainActor in await GroupCallService.shared.showInvite(roomId: roomId) }.value
+            return
+        }
+        // A call link's nudge, tapped (owner 2026-10-23): the call's full-screen invitation, with
+        // Ignore and Join; not straight into the call.
+        if info["type"] as? String == "linknudge" {
+            if var nudge = LinkNudge(info) {
+                if !nudge.callerUid.isEmpty {
+                    nudge.photoUrl = await ProfileStore.shared.cachedPeer(nudge.callerUid)?.photoUrl
+                }
+                let shown = nudge
+                await MainActor.run { GroupCallRinging.shared.openNudge(shown) }
+            }
             return
         }
         // A cid becomes a Firestore document id in ThreadView, where an empty or slashed one raises

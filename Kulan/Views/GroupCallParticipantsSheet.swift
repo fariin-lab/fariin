@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import LiveKit
 import FirebaseFunctions
+import FirebaseFirestore
 
 /// The call screen's two-people button: who is in the call right now, who was invited and has not
 /// come in, and (multi-person calls only) "Add people". The "In call" list reads the call stage, so
@@ -32,6 +33,13 @@ struct GroupCallParticipantsSheet: View {
     @State private var makingLink = false
     @State private var copied = false
     @State private var actionError: String?
+    /// Link calls (owner 2026-10-23): everyone Add people rang, live from the server's invite list.
+    @StateObject private var linkInvites = LinkCallInvites()
+    /// The bell's own wait, per person: one nudge a minute (the server holds the same line).
+    @State private var nudgedAt: [String: Date] = [:]
+    /// A short line at the foot of the sheet ("Nudged X", a refusal).
+    @State private var sheetToast: String?
+    @State private var sheetToastTask: Task<Void, Never>?
 
     /// The call screen passes its own stage, so the list and the tiles agree on who is speaking.
     init(stage: GroupCallStage) {
@@ -316,6 +324,60 @@ struct GroupCallParticipantsSheet: View {
         }
     }
 
+    /// ⛔ NOT CONNECTED (owner 2026-10-23, the reference's call sheet): on a link call, everyone Add
+    /// people rang who is not in the call now, with how it went and a bell. Someone who declined or
+    /// missed the ring is not rung again; the bell sends them a nudge instead.
+    @ViewBuilder private func notConnectedSection(at date: Date) -> some View {
+        let rows = notConnected
+        if service.isLink, !rows.isEmpty {
+            Section {
+                ForEach(rows) { notConnectedRow($0, at: date) }
+            } header: {
+                HStack(spacing: 0) {
+                    Text("Not connected").fontWeight(.semibold)
+                    Text(" · \(rows.count)")
+                }
+                .textCase(nil)
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isHeader)
+            }
+        }
+    }
+
+    private var notConnected: [LinkCallInvites.Invite] {
+        let here = Set(stage.tiles.map(\.uid))
+        let me = service.myUid
+        return linkInvites.invites.filter { !here.contains($0.uid) && $0.uid != me }
+    }
+
+    private func notConnectedRow(_ i: LinkCallInvites.Invite, at date: Date) -> some View {
+        let who: CallMember? = linkInvites.people[i.uid]
+        let name: String = who.map { ContactNames.shared.name(for: $0.uid) ?? $0.name } ?? "User"
+        let status: String = LinkCallInvites.status(i, at: date)
+        // No bell for someone who was in and left: they have the link and may come back.
+        let canNudge = i.state != "joined"
+        let waiting: Bool = nudgedAt[i.uid].map { date.timeIntervalSince($0) < 60 } ?? false
+        return HStack(spacing: 12) {
+            AvatarView(name: name, photoUrl: who?.photoUrl, size: 36)
+            Text(name).lineLimit(1)
+            Spacer(minLength: 8)
+            Text(status).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+            if canNudge {
+                Button { nudge(i.uid, name: name) } label: {
+                    Image(systemName: "bell")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(Color(.tertiarySystemFill)))
+                }
+                .buttonStyle(.borderless)
+                .disabled(waiting)
+                .opacity(waiting ? 0.4 : 1)
+                .accessibilityLabel("Nudge \(name)")
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
     @ViewBuilder private var endSection: some View {
         // The owner only: closes the call on the media server for everyone in it.
         if service.myRole == .owner && service.isActive {
@@ -360,6 +422,7 @@ struct GroupCallParticipantsSheet: View {
                 hostSection
                 inCallSection
                 invitedSection(at: context.date)
+                notConnectedSection(at: context.date)
                 endSection
             }
         }
@@ -428,6 +491,13 @@ struct GroupCallParticipantsSheet: View {
         .onChange(of: service.members) { _, members in stage.refreshProfiles(members) }
         // Closes itself when the last person waiting has been answered.
         .sheet(isPresented: $showRequests) { CallLinkBulkRequestsSheet() }
+        // Link calls: the invite list follows the link the call is on now.
+        .task(id: service.isLink ? link?.roomId : nil) {
+            if service.isLink, let link { linkInvites.listen(roomId: link.roomId) } else { linkInvites.stop() }
+        }
+        .onDisappear { linkInvites.stop() }
+        .overlay(alignment: .bottom) { toastView }
+        .animation(.easeInOut(duration: 0.2), value: sheetToast)
         .sheet(isPresented: $showAdd) {
             if service.isAdhoc {
                 // `removedUids`: server-written, read by the service (audit M-102, fix/F4).
@@ -437,11 +507,110 @@ struct GroupCallParticipantsSheet: View {
                                unavailable: removed) { people in
                     Task { await service.invite(people) }
                 }
-            } else if let url = linkURL {
-                AddPeopleSheet(alreadyIn: Set(stage.tiles.map(\.uid)), actionTitle: "Send link") { people in
-                    sendLink(url, to: people)
+            } else if let link, let url = linkURL {
+                // Owner 2026-10-23: Add people RINGS each person (full-screen invitation), it does
+                // not send the link. Everyone rung already, however it went, cannot be picked again.
+                let here = Set(stage.tiles.map(\.uid))
+                AddPeopleSheet(alreadyIn: here.union(linkInvites.invites.map(\.uid)),
+                               notes: linkAddNotes(here: here),
+                               actionTitle: "Add to call", linkCap: LinkCallInvites.cap) { people in
+                    invite(people, link: link, url: url)
                 }
             }
+        }
+    }
+
+    @ViewBuilder private var toastView: some View {
+        if let sheetToast {
+            Text(sheetToast)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(Capsule().fill(Color.black.opacity(0.85)))
+                .padding(.bottom, 24)
+                .transition(.opacity)
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// Add people's second line for someone already rung and not here.
+    private func linkAddNotes(here: Set<String>) -> [String: String] {
+        let now = Date()
+        var notes: [String: String] = [:]
+        for i in linkInvites.invites where !here.contains(i.uid) {
+            notes[i.uid] = "Invited · " + LinkCallInvites.status(i, at: now)
+        }
+        return notes
+    }
+
+    /// Rings the people picked (`linkCallInvite`). A server without it yet (not found /
+    /// unimplemented) gets the old way: the link in each person's 1:1 chat.
+    private func invite(_ people: [CallMember], link: ActiveCallLink, url: URL) {
+        let me = AuthService.shared.uid ?? ""
+        let picked = people.filter { !$0.uid.isEmpty && $0.uid != me }
+        guard !picked.isEmpty else { return }
+        linkInvites.remember(picked)
+        let payload: [String: Any] = ["roomId": link.roomId, "key": link.key, "uids": picked.map(\.uid)]
+        Task {
+            do {
+                let result = try await Functions.functions(region: "me-central1")
+                    .httpsCallable("linkCallInvite").call(payload)
+                let data = result.data as? [String: Any] ?? [:]
+                let rung = data["rung"] as? [String] ?? []
+                let skipped = data["skipped"] as? [[String: Any]] ?? []
+                let reasons = skipped.compactMap { $0["reason"] as? String }
+                if reasons.contains("full") {
+                    showSheetToast("The call is full")
+                } else if rung.isEmpty, !skipped.isEmpty {
+                    showSheetToast(picked.count == 1 ? "Already invited" : "They were already invited")
+                } else if !skipped.isEmpty {
+                    showSheetToast("Some people couldn't be added")
+                }
+            } catch {
+                let ns = error as NSError
+                if ns.domain == FunctionsErrorDomain,
+                   ns.code == FunctionsErrorCode.notFound.rawValue
+                    || ns.code == FunctionsErrorCode.unimplemented.rawValue {
+                    sendLink(url, to: picked)
+                } else {
+                    actionError = Self.errorText(error)
+                }
+            }
+        }
+    }
+
+    /// The bell: "👋 <me> wants to talk" on their phone (`linkCallNudge`). Once a minute per person.
+    private func nudge(_ uid: String, name: String) {
+        guard let link else { return }
+        nudgedAt[uid] = Date()
+        let payload: [String: Any] = ["roomId": link.roomId, "uid": uid]
+        Task {
+            do {
+                _ = try await Functions.functions(region: "me-central1")
+                    .httpsCallable("linkCallNudge").call(payload)
+                showSheetToast("Nudged \(name)")
+            } catch {
+                let ns = error as NSError
+                let code: FunctionsErrorCode? = ns.domain == FunctionsErrorDomain ? FunctionsErrorCode(rawValue: ns.code) : nil
+                switch code {
+                case .resourceExhausted?: showSheetToast("Wait a minute before nudging again")
+                case .failedPrecondition?: showSheetToast("They're already in the call")
+                default:
+                    nudgedAt[uid] = nil
+                    showSheetToast("Couldn't nudge. Try again.")
+                }
+            }
+        }
+    }
+
+    private func showSheetToast(_ text: String) {
+        sheetToast = text
+        UIAccessibility.post(notification: .announcement, argument: text)
+        sheetToastTask?.cancel()
+        sheetToastTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled else { return }
+            sheetToast = nil
         }
     }
 
@@ -785,4 +954,88 @@ private struct GroupCallRaisedHandsSection: View {
 struct ActiveCallLink: CallLinkRef {
     let roomId: String
     let key: String
+}
+
+/// ⛔ CALL LINK INVITES (owner 2026-10-23): `callLinks/{roomId}/invites/{uid}`, written only by the
+/// server (`linkCallInvite`, `groupRingAnswer`). The people sheet's "Not connected" list and the
+/// Add people picker's "already invited" both read it. Names and photos come from the profile
+/// cache (the invite doc holds only the inviter's name), or from the picker for people I added.
+@MainActor
+final class LinkCallInvites: ObservableObject {
+    /// People in a link call, the invited counted in (owner 2026-10-23: "N/30").
+    static let cap = 30
+
+    struct Invite: Identifiable, Equatable {
+        let uid: String
+        let at: Date?
+        let state: String   // ringing | declined | missed | joined
+        var id: String { uid }
+    }
+
+    @Published private(set) var invites: [Invite] = []
+    @Published private(set) var people: [String: CallMember] = [:]
+    private var listener: ListenerRegistration?
+    private var roomId: String?
+    private var asked: Set<String> = []
+
+    /// A ring still "ringing" a minute after it was sent reads as missed (the server may not have
+    /// swept it yet).
+    static func status(_ i: Invite, at now: Date) -> String {
+        switch i.state {
+        case "declined": return "Declined"
+        case "missed": return "Missed"
+        case "joined": return "Left"
+        default:
+            if let at = i.at, now.timeIntervalSince(at) > GroupCallService.ringWindow { return "Missed" }
+            return "Ringing…"
+        }
+    }
+
+    func listen(roomId: String) {
+        guard roomId != self.roomId else { return }
+        stop()
+        self.roomId = roomId
+        listener = FirestoreHub.db.collection("callLinks").document(roomId).collection("invites")
+            .addSnapshotListener { [weak self] snap, _ in
+                guard let snap else { return }   // refused (rules not out yet): nothing to list
+                let rows: [Invite] = snap.documents.compactMap { doc -> Invite? in
+                    let d = doc.data()
+                    let uid = d["uid"] as? String ?? doc.documentID
+                    guard !uid.isEmpty else { return nil }
+                    return Invite(uid: uid, at: (d["at"] as? Timestamp)?.dateValue(),
+                                  state: d["state"] as? String ?? "ringing")
+                }
+                .sorted { ($0.at ?? .distantPast) < ($1.at ?? .distantPast) }
+                Task { @MainActor [weak self] in
+                    guard let self, self.roomId == roomId else { return }
+                    self.invites = rows
+                    self.loadProfiles(rows.map(\.uid))
+                }
+            }
+    }
+
+    func stop() {
+        listener?.remove(); listener = nil
+        roomId = nil
+        invites = []
+    }
+
+    /// The people just picked: their names are known at once.
+    func remember(_ picked: [CallMember]) {
+        for p in picked { people[p.uid] = p }
+    }
+
+    private func loadProfiles(_ uids: [String]) {
+        let missing = uids.filter { people[$0] == nil && !asked.contains($0) }
+        guard !missing.isEmpty else { return }
+        asked.formUnion(missing)
+        Task { @MainActor in
+            for uid in missing {
+                var found = await ProfileStore.shared.cachedPeer(uid)
+                if found == nil { found = await ProfileStore.shared.fetch(uid) }
+                guard let p = found else { continue }
+                self.people[uid] = CallMember(uid: uid, name: p.name.isEmpty ? "User" : p.name, photoUrl: p.photoUrl)
+            }
+        }
+    }
 }

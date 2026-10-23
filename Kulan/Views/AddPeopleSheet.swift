@@ -16,15 +16,23 @@ struct AddPeopleSheet: View {
     /// Audit M-102, 2026-10-07: people who cannot be picked and are not in the call (the owner
     /// removed them). Not counted toward the call's size; one of them in an add made it all fail.
     let unavailable: Set<String>
+    /// ⛔ CALL LINK'S ADD PEOPLE (owner 2026-10-23, two screenshots of the reference): "N/30" under
+    /// the title, search "Name, number, @username", the picked people as chips, a green
+    /// "+ Add to call" button. Nil = the ad-hoc look the owner chose on 2026-10-07, unchanged.
+    /// The number is the cap on people in the call, the invited counted in.
+    let linkCap: Int?
 
     init(alreadyIn: Set<String>, notes: [String: String] = [:], unavailable: Set<String> = [],
-         actionTitle: String = "Add to call", onAdd: @escaping ([CallMember]) -> Void) {
+         actionTitle: String = "Add to call", linkCap: Int? = nil, onAdd: @escaping ([CallMember]) -> Void) {
         self.alreadyIn = alreadyIn.filter { !$0.isEmpty }
         self.notes = notes
         self.unavailable = unavailable.subtracting(alreadyIn)
         self.actionTitle = actionTitle
+        self.linkCap = linkCap
         self.onAdd = onAdd
     }
+
+    private var cap: Int { linkCap ?? Self.maxInCall }
 
     /// Audit M-151, 2026-10-07: what I call this person on my own screen. A private contact name
     /// is shown here but never sent: `member(_:)` carries the profile name, because the people I
@@ -112,7 +120,7 @@ struct AddPeopleSheet: View {
         NavigationStack {
             ScrollViewReader { proxy in
                 List {
-                    if !selected.isEmpty { selectedStrip }
+                    if !selected.isEmpty { if linkCap != nil { chipStrip } else { selectedStrip } }
                     if !trimmedQuery.isEmpty {
                         Section {
                             if matches.isEmpty {
@@ -141,14 +149,23 @@ struct AddPeopleSheet: View {
                 }
             }
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: "Name or username")   // the app's own wording (NewGroupView); there are no numbers here
+                        prompt: linkCap != nil ? "Name, number, @username"   // the link picker's (owner 2026-10-23)
+                                                : "Name or username")   // the app's own wording (NewGroupView); there are no numbers here
             .safeAreaInset(edge: .bottom) { addButton }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // A plain title. The count lives on the members section, the way NewGroupView says
                 // "Members · N", not as a fraction under the title (owner, 2026-10-07).
                 ToolbarItem(placement: .principal) {
-                    Text("Add people").font(.system(size: 17, weight: .semibold))
+                    if let linkCap {
+                        VStack(spacing: 0) {
+                            Text("Add people").font(.system(size: 17, weight: .semibold))
+                            Text("\(total)/\(linkCap)").font(.system(size: 13)).foregroundStyle(.secondary)
+                        }
+                        .accessibilityElement(children: .combine)
+                    } else {
+                        Text("Add people").font(.system(size: 17, weight: .semibold))
+                    }
                 }
                 if #available(iOS 26.0, *) {
                     ToolbarItem(placement: .topBarTrailing) { CloseXButton { dismiss() } }
@@ -189,6 +206,33 @@ struct AddPeopleSheet: View {
             }
         } header: {
             sectionTitle(total >= Self.maxInCall ? "Members · \(total) max" : "Members · \(total)")
+        }
+    }
+
+    /// The link picker's picked people: one row of chips (face, name, x), as the reference has it.
+    private var chipStrip: some View {
+        Section {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(selected) { p in
+                        Button { selected.removeAll { $0.uid == p.uid } } label: {
+                            HStack(spacing: 6) {
+                                AvatarView(name: shown(p), photoUrl: p.photoUrl, size: 26)
+                                Text(shown(p)).font(.system(size: 15)).foregroundStyle(.primary).lineLimit(1)
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.leading, 3).padding(.trailing, 10)
+                            .frame(height: 32)
+                            .background(Capsule().fill(Color(.tertiarySystemFill)))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Remove \(shown(p))")
+                    }
+                }
+                .padding(.vertical, 2)
+            }
         }
     }
 
@@ -263,12 +307,22 @@ struct AddPeopleSheet: View {
             // The app's accent is white-or-black (Theme.accent), so the button is the inverse of the
             // page: white with black lettering in dark mode, black with white in light. No brand
             // green and no plus glyph (owner, 2026-10-07: "make it like my app").
-            Text(actionTitle)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Color(uiColor: .systemBackground))
-                .frame(maxWidth: .infinity)
-                .frame(height: 52)
-                .background(Capsule().fill(Color.primary.opacity(ready ? 1 : 0.35)))
+            if linkCap != nil {
+                // The link picker (owner 2026-10-23): the reference's green "+ Add to call".
+                Label(actionTitle, systemImage: "plus")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 52)
+                    .background(Capsule().fill(Color(.systemGreen).opacity(ready ? 1 : 0.4)))
+            } else {
+                Text(actionTitle)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color(uiColor: .systemBackground))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 52)
+                    .background(Capsule().fill(Color.primary.opacity(ready ? 1 : 0.35)))
+            }
         }
         .buttonStyle(.plain)
         .disabled(!ready)
@@ -286,7 +340,7 @@ struct AddPeopleSheet: View {
             selected.removeAll { $0.uid == p.uid }
             return
         }
-        guard total < Self.maxInCall else { Haptics.notify(.warning); return }
+        guard total < cap else { Haptics.notify(.warning); return }
         selected.append(p)
     }
 
