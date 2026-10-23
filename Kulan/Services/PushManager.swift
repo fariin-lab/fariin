@@ -123,7 +123,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // answered or declined elsewhere): functions-groups sends kind "groupringcancel". Reported
         // to CallKit first, as every push must be, then the ring for that room stops.
         if d["kind"] as? String == "groupringcancel" {
-            CallKitManager.shared.reportAndDiscard(completion: completion)
+            // Group call audit 2026-10-23 (H1): with Recents off, so a cancel never leaves a call entry.
+            CallKitManager.shared.reportGroupDiscard(completion: completion)
             if Thread.isMainThread {
                 MainActor.assumeIsolated { GroupCallRinging.shared.handleCancelPush(d) }
             }

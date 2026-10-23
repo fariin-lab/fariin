@@ -111,17 +111,19 @@ final class GroupCallService: ObservableObject {
     /// group's roles stay as they are). The LiveKit room itself is not Firestore and carries on.
     private func reattachAfterSwap() {
         FirestoreHub.drop([roomListener, requestsListener, myRequestListener, linkDocListener,
-                           inviteListener, groupRoleListener])
+                           inviteListener, groupRoleListener, groupAnswersListener])
         let hadRoom = roomListener != nil, hadRequests = requestsListener != nil
         let hadWait = myRequestListener != nil || linkDocListener != nil
         let hadInvites = inviteListener != nil, hadRoles = groupRoleListener != nil
+        let hadAnswers = groupAnswersListener != nil   // group call audit 2026-10-23 (L1)
         roomListener = nil; requestsListener = nil; myRequestListener = nil; linkDocListener = nil
-        inviteListener = nil; groupRoleListener = nil
+        inviteListener = nil; groupRoleListener = nil; groupAnswersListener = nil
         if hadRoom, let id = roomListenerId { listenRoom(id) }
         if hadRequests, let id = requestsRoomId { attachRequests(id) }
         if hadWait, let w = waitingLink { attachWaitListeners(roomId: w.roomId) }
         if hadInvites, let uid = inviteUid { attachInvites(uid) }
         if hadRoles, case .group(let cid)? = activeRoom { attachGroupRoles(cid) }
+        if hadAnswers, case .group(let cid)? = activeRoom { listenGroupAnswers(cid) }
         print("[Recovery] group call: listeners attached again on the fresh Firestore client")
     }
     private var appObservers: [NSObjectProtocol] = []
@@ -454,16 +456,10 @@ final class GroupCallService: ObservableObject {
                 .httpsCallable("groupCallToken").call(["cid": cid])
             guard gen == joinGeneration else { await abandonJoin(); return }
             guard let d = res.data as? [String: Any], let token = d["token"] as? String else {
-                connecting = false
-                joiningRoomId = nil
-                // Round 2 (V2 N4), 2026-10-07: a Mute or camera-off tapped while connecting is not
-                // carried into the next call (`failJoin` does the same).
-                startMuted = false; startCameraOff = false; micOn = true; cameraOn = false
-                // owner audit 2026-10-06 #44: a speaker toggle made while connecting does not
-                // carry into the next call.
-                speakerOn = true; AudioManager.shared.isSpeakerOutputPreferred = true
-                minimized = false
-                notice = Notice(title: "Call failed", message: nil)   // 2026-09-24 decision D25
+                // Group call audit 2026-10-23 (A1): through `failJoin`, which also says it over the
+                // top screen when the join was minimized (the card used to vanish without a word).
+                // It resets the mute, camera and speaker wishes as this path did (V2 N4, #44).
+                await failJoin(Notice(title: "Call failed", message: nil))   // 2026-09-24 decision D25
                 return
             }
             // Listening BEFORE the room is up: people already in the call send their raised hand
@@ -483,6 +479,21 @@ final class GroupCallService: ObservableObject {
                     await failJoin(Notice(title: snap == nil ? "Call failed" : "Call ended", message: nil))
                     return
                 }
+                // Group call audit 2026-10-23 (B7 / M2): the doc says live, the room is empty. Its
+                // starter's phone died or hung up offline and the server has not closed it yet. A
+                // moment for people the join answer did not list yet; then the server is asked to
+                // close the call, which it does only when the room is really empty. Closed means
+                // over: "Call ended". This join never falls through to a start of its own over that
+                // doc (it was refused, and left the person alone on "Waiting for others").
+                if !(await waitForSomeone(seconds: 2)) {
+                    guard gen == joinGeneration else { await abandonJoin(); return }
+                    let closed = await Self.askServerClose(cid: cid)
+                    guard gen == joinGeneration else { await abandonJoin(); return }
+                    if closed != false, room.remoteParticipants.isEmpty {
+                        await failJoin(Notice(title: closed == true ? "Call ended" : "Call failed", message: nil))
+                        return
+                    }
+                }
             }
             // The link may have dropped during the read above, while `isActive` was still false, so
             // `roomDropped` let it pass (audit 2026-10-20): a dead room is not a call.
@@ -500,8 +511,9 @@ final class GroupCallService: ObservableObject {
             didJoinRoom()
             myRole = CallRole(attribute: d["role"] as? String)
             // 2026-09-24 fix-all #97: an empty room means this tap STARTED the call rather than
-            // joined one, and the starter writes the call's record into the chat.
-            let startedHere = room.remoteParticipants.isEmpty
+            // joined one, and the starter writes the call's record into the chat. A join of a live
+            // call (`requireLive`) never starts one (audit 2026-10-23, M2).
+            var startedHere = !requireLive && room.remoteParticipants.isEmpty
             let ref = FirestoreHub.db.collection("groupCalls").document(cid)
             if startedHere {
                 let recordId = "gcall_\(UUID().uuidString)"
@@ -518,8 +530,27 @@ final class GroupCallService: ObservableObject {
                 // Audit M-020, 2026-10-07: the chat record only once the doc write went through.
                 // A refused start (the rules keep a stale active doc of someone else's) used to
                 // leave an "ongoing" bubble no doc pointed to.
-                let started: Bool
-                do { try await ref.setData(callDoc); started = true } catch { started = false }
+                var started = await Self.writeStart(ref, callDoc)
+                // Group call audit 2026-10-23 (B2): a refused start used to be silent, and the person
+                // sat alone in a room no doc pointed to: nobody rung, no Join bar, no record. The
+                // usual cause is a dead call's doc (someone else's, still "active"): the server closes
+                // it when its room is empty, and the start is tried once more. If somebody is in the
+                // room by then, they started at the same moment and this phone joins their call.
+                if !started, gen == joinGeneration, activeCid == cid, room.remoteParticipants.isEmpty {
+                    _ = await Self.askServerClose(cid: cid)
+                    if gen == joinGeneration, activeCid == cid, room.remoteParticipants.isEmpty {
+                        started = await Self.writeStart(ref, callDoc)
+                    }
+                }
+                if !started, gen == joinGeneration, activeCid == cid {
+                    if room.remoteParticipants.isEmpty {
+                        // Never a call nobody can see. The leave's close is the server's, room-empty only.
+                        await disconnect()
+                        Self.presentOverTop(Notice(title: "Couldn't start the call", message: nil))
+                        return
+                    }
+                    startedHere = false   // their call: joined below like any member
+                }
                 if started, gen == joinGeneration, activeCid == cid {
                     groupRecordId = recordId
                     // I am ringing the group: the caller's sound and "Ringing…" (Kasim 2026-10-21).
@@ -533,7 +564,8 @@ final class GroupCallService: ObservableObject {
                     // call active with nobody in it. Close it here, only if the doc is still mine.
                     await Self.closeCall(cid: cid, adhoc: false, recordId: recordId, answered: false)
                 }
-            } else {
+            }
+            if !startedHere {
                 // owner audit 2026-10-06 #3: a JOINER no longer writes the full doc (it erased the
                 // starter's recordId and reset startedAt/startedBy). Audit M-020, 2026-10-07: its
                 // `active: true` merge was refused by the rules for every non-starter anyway, so it
@@ -545,6 +577,13 @@ final class GroupCallService: ObservableObject {
                 if gen == joinGeneration, activeCid == cid, d?["active"] as? Bool == true {
                     groupRecordId = d?["recordId"] as? String
                 }
+                // Group call audit 2026-10-23 (B5 / H1): the server is told I am in, so my other
+                // phones stop ringing, its "stop ringing" pushes skip me, and the record knows I
+                // took part. Not for a doc the read saw ended; an unread one is the server's to check.
+                if gen == joinGeneration, activeCid == cid, d?["active"] as? Bool != false {
+                    let startedMs = (d?["startedAt"] as? Timestamp).map { $0.dateValue().timeIntervalSince1970 * 1000 }
+                    GroupCallRinging.shared.reportJoined(cid: cid, startedAtMs: startedMs)
+                }
             }
         } catch {
             if gen != joinGeneration { await abandonJoin(); return }   // owner audit 2026-10-06 #4
@@ -552,12 +591,37 @@ final class GroupCallService: ObservableObject {
             Telemetry.event(.error, component: "groupcall", code: "join_" + Telemetry.code(error))   // owner 2026-10-21
             // Only tear down if THIS task never established a call. Calling disconnect()
             // unconditionally is what let a losing second task kill the winner's live room.
+            // Group call audit 2026-10-23 (A1): through `failJoin`, so a join minimized with the
+            // chevron says why over the top screen instead of its card just vanishing.
             if activeCid == nil {
-                await disconnect()
                 // 2026-09-24 decision D25; a member removed from this call is told why.
-                notice = Self.joinNotice(error, link: false)
+                await failJoin(Self.joinNotice(error, link: false))
             }
         }
+    }
+
+    /// Group call audit 2026-10-23 (B2): the start write, true when the server took it.
+    private static func writeStart(_ ref: DocumentReference, _ doc: [String: Any]) async -> Bool {
+        do { try await ref.setData(doc); return true } catch { return false }
+    }
+
+    /// Group call audit 2026-10-23 (B2 / B7): asks the server to close a group's call whose media room
+    /// is empty, me aside (`groupCallClose`; a room with anybody in it is left alone). true = closed,
+    /// false = somebody is still in the room, nil = no answer.
+    private static func askServerClose(cid: String) async -> Bool? {
+        guard let res = try? await Functions.functions(region: "me-central1")
+            .httpsCallable("groupCallClose").call(["cid": cid]) else { return nil }
+        return (res.data as? [String: Any])?["closed"] as? Bool
+    }
+
+    /// Up to `seconds` for somebody to show in the room (a join answer may list people a moment
+    /// late). True once someone is there.
+    private func waitForSomeone(seconds: Double) async -> Bool {
+        let until = Date().addingTimeInterval(seconds)
+        while room.remoteParticipants.isEmpty, room.connectionState == .connected, Date() < until {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        return !room.remoteParticipants.isEmpty
     }
 
     /// 2026-09-24 fix-all #97: a group call left no trace anywhere. It now leaves a call bubble in the
@@ -751,12 +815,24 @@ final class GroupCallService: ObservableObject {
 
     /// The listener alone, keeping `groupConv`, for a Firestore client swap (2026-10-20, owner).
     private func attachGroupRoles(_ cid: String) {
-        groupRoleListener = db.collection("conversations").document(cid).addSnapshotListener { [weak self] snap, _ in
+        groupRoleListener = db.collection("conversations").document(cid).addSnapshotListener { [weak self] snap, error in
+            // Group call audit 2026-10-23 (B9): no longer allowed to read the group = no longer in it.
+            if let e = error as NSError?, e.domain == FirestoreErrorDomain,
+               e.code == FirestoreErrorCode.permissionDenied.rawValue {
+                Task { @MainActor [weak self] in self?.noLongerInGroup(cid) }
+                return
+            }
             guard let snap, let data = snap.data() else { return }
             let id = snap.documentID
+            let fromServer = !snap.metadata.isFromCache
             Task { @MainActor [weak self] in
                 guard let self, case .group(let now)? = self.activeRoom, now == cid else { return }
-                self.groupConv = Conversation(id: id, data: data)
+                let conv = Conversation(id: id, data: data)
+                if fromServer, !self.myUid.isEmpty, !conv.users.contains(self.myUid) {
+                    self.noLongerInGroup(cid)
+                    return
+                }
+                self.groupConv = conv
                 if let mine = self.groupRole(of: self.myUid), mine != self.myRole { self.myRole = mine }
                 self.rolesVersion &+= 1   // other people's badges and buttons redraw too
                 // Build 1008, Kasim: a group chat's call still rang in silence. `groupRingingMembers`
@@ -765,6 +841,16 @@ final class GroupCallService: ObservableObject {
                 self.updateRingback()
             }
         }
+    }
+
+    /// Group call audit 2026-10-23 (B9): I left the group (or was taken out of it) while in its call.
+    /// The call ends here first, quietly, so the server's kick that follows is not shown as "You
+    /// were removed from the call".
+    private var leftGroupMidCall = false
+    private func noLongerInGroup(_ cid: String) {
+        guard case .group(let now)? = activeRoom, now == cid, isActive, !leaving else { return }
+        leftGroupMidCall = true
+        end()
     }
 
     /// audit M-072, 2026-10-07: `uid`'s role in the running group conversation's call, from the
@@ -1122,16 +1208,33 @@ final class GroupCallService: ObservableObject {
     /// (functions-groups GROUP_RING_MAX_MEMBERS); a bigger group is only told. So this is the same
     /// list, for the person who STARTED the call, for the ring minute, until somebody comes; people
     /// who said no or were busy (the call doc's `declined` / `busy`, `groupAnswersListener`) drop off.
+    /// Group call audit 2026-10-23 (B10): once the server has written who it really rang (`rung`:
+    /// it skips people who muted the group or blocked me, and everyone when the ring is rate
+    /// limited), the list is that. Before it lands, or from an older server, the group as above.
+    /// (A8) With the members' photos, not only their initials.
     private func groupRingingMembers(at now: Date) -> [CallMember] {
         guard isActive, !someoneJoined, let start = groupRingStartedAt,
-              now.timeIntervalSince(start) < Self.ringWindow,
-              let conv = groupConv, conv.users.count <= Self.groupRingMaxMembers else { return [] }
+              now.timeIntervalSince(start) < Self.ringWindow else { return [] }
+        let conv = groupConv
+        let base: [String]
+        if let rung = groupRungUids {
+            base = rung
+        } else if let conv, conv.users.count <= Self.groupRingMaxMembers {
+            base = conv.users
+        } else {
+            return []
+        }
         let me = myUid
         let here = Set(room.remoteParticipants.values.compactMap { $0.identity?.stringValue })
-        return conv.users
+        return base
             .filter { $0 != me && !here.contains($0) && !declinedUids.contains($0) && !busyUids.contains($0) }
-            .map { CallMember(uid: $0, name: conv.names[$0].flatMap { $0.isEmpty ? nil : $0 } ?? "Member", photoUrl: nil) }
+            .map { uid in
+                CallMember(uid: uid, name: conv?.names[uid].flatMap { $0.isEmpty ? nil : $0 } ?? "Member",
+                           photoUrl: conv?.photos[uid].flatMap { $0.isEmpty ? nil : $0 })
+            }
     }
+    /// The call doc's server-only `rung` (group call audit 2026-10-23); nil until it is there.
+    private var groupRungUids: [String]?
     /// functions-groups GROUP_RING_MAX_MEMBERS: a bigger group's call is announced, not rung.
     static let groupRingMaxMembers = 16
     /// When I started the group chat's call (nil when I joined one), the start of its ring minute.
@@ -1145,8 +1248,10 @@ final class GroupCallService: ObservableObject {
             let declined = Set(d["declined"] as? [String] ?? [])
             let busy = Set(d["busy"] as? [String] ?? [])
             let names = d["names"] as? [String: String] ?? [:]
+            let rung = d["rung"] as? [String]   // B10: nil = not written (yet), or an older server
             Task { @MainActor [weak self] in
                 guard let self, case .group(let now)? = self.activeRoom, now == cid else { return }
+                if let rung { self.groupRungUids = rung }
                 if let uid = busy.subtracting(self.busyUids).first, let name = names[uid] ?? self.groupConv?.names[uid] {
                     self.showToast("\(name) is busy")
                 } else if let uid = declined.subtracting(self.declinedUids).first,
@@ -1304,7 +1409,9 @@ final class GroupCallService: ObservableObject {
         let n: Notice?
         switch reason {
         case .removed:
-            n = Notice(title: "You were removed from the call", message: nil)
+            // Group call audit 2026-10-23 (B9): leaving the group takes me out of its call on the
+            // server too. That is not being removed from the call, and says nothing.
+            n = leftGroupMidCall ? nil : Notice(title: "You were removed from the call", message: nil)
         case .deleted:
             n = endingForAll ? nil : Notice(title: "The call was ended", message: nil)
         case .duplicate:
@@ -1423,7 +1530,13 @@ final class GroupCallService: ObservableObject {
         // The network part, after the phone is free. Audit M-099: with background time, so ending
         // from the lock screen does not lose the end write and the chat record.
         let closes = cid != nil && wasLast && !link
-        guard knock != nil || closes else { return }
+        // Group call audit 2026-10-23 (L2): a group chat's call row in the Calls tab is read again
+        // after the call (after the close, when this phone made it), as a 1:1 call's is.
+        let groupCid: String? = (adhoc || link) ? nil : cid
+        guard knock != nil || closes else {
+            if let groupCid { Task { await CallsRepository.shared.refreshAfterCall(cid: groupCid) } }
+            return
+        }
         Self.withBackgroundTime("group-call-end") {
             if let knock {
                 try? await FirestoreHub.db.collection("callLinks").document(knock)
@@ -1436,6 +1549,7 @@ final class GroupCallService: ObservableObject {
                 await Self.closeCall(cid: cid, adhoc: adhoc, recordId: recordId,
                                      answered: answered || recordId == nil)
             }
+            if let groupCid { await CallsRepository.shared.refreshAfterCall(cid: groupCid) }
         }
     }
 
@@ -2148,6 +2262,8 @@ final class GroupCallService: ObservableObject {
         stopRingback()
         declinedUids = []; busyUids = []; roomAnswersSeeded = false
         groupRingStartedAt = nil
+        groupRungUids = nil
+        leftGroupMidCall = false
         groupAnswersListener?.remove(); groupAnswersListener = nil
         // Idempotent on both sides: this also runs for a join that never became a call.
         GroupCallSocial.shared.reset()

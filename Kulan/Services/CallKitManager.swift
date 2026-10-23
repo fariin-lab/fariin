@@ -311,6 +311,29 @@ final class CallKitManager: NSObject {
         }
     }
 
+    /// Group call audit 2026-10-23 (H1): the same for a group push that is not a ring here (a
+    /// "stop ringing" push, a repeat, a ring while busy). The plain discard left an unanswered "Call"
+    /// in the Phone app's Recents, often right after the person had taken part in the call. This one
+    /// is reported with Recents off and ended as answered elsewhere; the next real report puts the
+    /// configuration back (`applyConfig`), and so does its own completion.
+    func reportGroupDiscard(completion: @escaping () -> Void) {
+        let uuid = UUID()
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .generic, value: "Call")
+        Self.limitControls(update)
+        let current = provider.configuration
+        let ringtone = current.ringtoneSound
+        if current.includesCallsInRecents {
+            provider.configuration = Self.makeConfig(ringtone: ringtone, inRecents: false)
+        }
+        provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] _ in
+            guard let self else { completion(); return }
+            self.provider.reportCall(with: uuid, endedAt: nil, reason: .answeredElsewhere)
+            self.applyConfig(ringtone: ringtone, peerUid: nil)
+            completion()
+        }
+    }
+
     /// Audit M-004, 2026-10-07: the caller hung up before an answer and the server sent a cancel
     /// push. A ring started by a push could only be stopped by a Firestore listener or a timer in
     /// a process iOS may suspend seconds after the push, so a locked phone kept ringing into a dead

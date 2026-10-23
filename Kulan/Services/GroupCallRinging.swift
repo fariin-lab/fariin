@@ -81,13 +81,16 @@ final class GroupCallRinging {
         let adhocId = roomId.hasPrefix("adhoc_")
         guard !roomId.isEmpty, !roomId.contains("/"),
               (kind == "adhoc" && adhocId) || (kind == "group" && !adhocId) else {
-            CallKitManager.shared.reportAndDiscard(completion: completion)
+            CallKitManager.shared.reportGroupDiscard(completion: completion)
             return
         }
         let sentAt = (d["sentAt"] as? NSNumber).map { $0.doubleValue / 1000 }   // seconds
         let callerUid = d["callerUid"] as? String ?? ""
         let service = GroupCallService.shared
-        let now = Date().timeIntervalSince1970
+        // The server's clock (group call audit 2026-10-23, B3): `sentAt` is the server's, so a phone
+        // running a minute fast used to drop every ring as too old. Before the first sync the offset
+        // is zero, which is the old behaviour.
+        let now = ServerClock.now.timeIntervalSince1970
         // Not a ring, and nobody is told anything: the call I am already in, joining or answered,
         // or the person I am in a 1:1 with carrying both of us into this room (`ringIsMine`); the
         // same push twice; a push older than the ring window; a ring already finished here; or
@@ -97,7 +100,7 @@ final class GroupCallRinging {
             || (sentAt.map { now - $0 > Self.ringWindow } ?? false)
             || wasFinished(roomId, adhoc: adhocId, sentAt: sentAt)
             || Auth.auth().currentUser == nil {
-            CallKitManager.shared.reportAndDiscard(completion: completion)
+            CallKitManager.shared.reportGroupDiscard(completion: completion)
             return
         }
         // In another call, or another ring is up: this one does not ring, and the caller is told.
@@ -106,7 +109,7 @@ final class GroupCallRinging {
         let oneToOneLive = [.outgoing, .incoming, .active, .reconnecting].contains(CallService.shared.state)
         if ring != nil || oneToOneLive
             || service.isActive || service.connecting || service.waitingForApproval {
-            CallKitManager.shared.reportAndDiscard(completion: completion)
+            CallKitManager.shared.reportGroupDiscard(completion: completion)
             // Audit M-094, 2026-10-07: two people who started a multi-person call to each other at
             // the same moment both answered the other "busy" and nobody connected. The service's
             // own rule (`crossedCall`, shared with the in-app invite path so both phones decide
@@ -194,9 +197,9 @@ final class GroupCallRinging {
         stopWatchingRoom()
         attachRoomListener(r)
         // 60s from when the server sent it; never under 5s or over 60s from now, whatever the
-        // two clocks say.
+        // two clocks say. The deadline is server time, so it is measured against `ServerClock` (M4).
         let uuid = r.uuid
-        let left = min(Self.ringWindow, max(5, (deadline ?? .greatestFiniteMagnitude) - Date().timeIntervalSince1970))
+        let left = min(Self.ringWindow, max(5, (deadline ?? .greatestFiniteMagnitude) - ServerClock.now.timeIntervalSince1970))
         timeoutTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(left * 1_000_000_000))
             guard !Task.isCancelled, let self, self.ring?.uuid == uuid, self.phase == .ringing else { return }
@@ -451,6 +454,14 @@ final class GroupCallRinging {
                    startedAtMs: startedAt.map { $0.timeIntervalSince1970 * 1000 }, tries: 1)
     }
 
+    /// Group call audit 2026-10-23 (B5 / H1 / M3): I am in a group chat's call. The server notes me
+    /// as joined, so its "stop ringing" pushes skip me, my other phones stop ringing for it, and the
+    /// call's record can say I took part (`joinedUids`). `startedAtMs`: the call's start, when known.
+    /// An older server refuses the answer and nothing changes.
+    func reportJoined(cid: String, startedAtMs: Double?) {
+        sendAnswer("joined", roomKind: "group", roomId: cid, startedAtMs: startedAtMs, tries: 2)
+    }
+
     private func endCallKitCall(_ reason: CXCallEndedReason) {
         guard let r = ring, phase != .ringing else { return }
         ring = nil
@@ -498,10 +509,16 @@ final class GroupCallRinging {
     /// Audit M-125, 2026-10-07: `startedAtMs`, the call's `startedAt` in milliseconds, goes with
     /// the answer when known; the server ignores an answer meant for an older call of the same
     /// room (a late or retried decline used to land on the next call). Older servers ignore it.
+    /// Group call audit 2026-10-23: the answer also names this phone (`voipToken`, exactly as written
+    /// to `voipTokens`), so the server's "stop ringing" push goes to my OTHER phones only and this one
+    /// gets no stray system call for a ring it already finished. A group chat's room also goes as
+    /// `cid`. Older servers ignore both.
     private func sendAnswer(_ answer: String, roomKind: String, roomId: String, startedAtMs: Double? = nil, tries: Int) {
         guard Auth.auth().currentUser != nil else { return }
         var payload: [String: Any] = ["roomKind": roomKind, "roomId": roomId, "answer": answer]
         if let startedAtMs { payload["startedAt"] = startedAtMs.rounded() }   // a plain JSON number
+        if roomKind == "group" { payload["cid"] = roomId }
+        if let token = Push.latestVoipToken, !token.isEmpty { payload["voipToken"] = token }
         // With background time (audit 2026-10-20): a Decline on the lock screen was lost when iOS
         // suspended the app a moment later, so the others still saw me ringing.
         var bg = UIBackgroundTaskIdentifier.invalid
@@ -516,6 +533,10 @@ final class GroupCallRinging {
                         .call(payload)
                     return
                 } catch {
+                    // A server that does not know this answer (an older one, for "joined") says so
+                    // the same way every time: not worth another try.
+                    let ns = error as NSError
+                    if ns.domain == FunctionsErrorDomain, ns.code == FunctionsErrorCode.invalidArgument.rawValue { return }
                     if attempt + 1 >= tries { return }
                     try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 4_000_000_000)
                 }
@@ -527,7 +548,7 @@ final class GroupCallRinging {
 
     private func finishedRings() -> [String: Double] {
         let all = UserDefaults.standard.dictionary(forKey: Self.memoryKey) as? [String: Double] ?? [:]
-        let now = Date().timeIntervalSince1970
+        let now = ServerClock.now.timeIntervalSince1970   // the stored times are server time (B13)
         return all.filter { now - $0.value < Self.memoryAge }
     }
 

@@ -35,6 +35,29 @@ struct CallEntry: Identifiable, Hashable {
     var missedIncoming: Bool { missed && !mine }
 }
 
+/// ⛔ A GROUP CHAT'S CALL, AS I SAW IT (group call audit 2026-10-23, the reference app's rule).
+/// The record (`conversations/{cid}/messages/gcall_*`) is one row shared by the whole group, so its
+/// `callOutcome` used to be everybody's: a member who joined a call the server closed "missed" saw
+/// red Missed, and one who ignored the ring saw "Incoming · 3 min" because somebody else answered.
+/// The server now writes `joinedUids` (everyone who was in it, any device) when the call closes, and
+/// `rungUids` (who it rang) when it knows them. Each phone works out its own line from those:
+/// - I started it: answered if anybody else came, otherwise my unanswered call ("No answer").
+/// - I was in it on any device: answered, whatever else happened.
+/// - Rung and never in it: missed.
+/// - Never rung (muted group, a group too big to ring): the stored outcome, never a missed call.
+/// A record without `joinedUids` (an older server, a call still going, any 1:1 call) keeps its
+/// stored outcome exactly as before.
+enum GroupCallOutcome {
+    static func mine(stored: String?, callerUid: String?, joined: [String]?, rung: [String]?,
+                     me: String) -> String? {
+        guard let joined, !me.isEmpty, stored != "ongoing", stored != "ringing" else { return stored }
+        if callerUid == me { return joined.contains(where: { $0 != me }) ? "answered" : "missed" }
+        if joined.contains(me) { return "answered" }
+        if let rung, !rung.contains(me) { return stored == "missed" ? "answered" : stored }
+        return "missed"
+    }
+}
+
 /// The people on a multi-person call, read from groupCalls/{roomId} (kind == "adhoc").
 struct AdhocCallInfo: Hashable {
     let roomId: String
@@ -248,14 +271,24 @@ final class CallsRepository {
     private static func entries(_ docs: [QueryDocumentSnapshot], cid: String,
                                 name: String, photo: String?, other: String,
                                 group: Bool = false) -> [CallEntry] {
-        docs.map { d in
+        let me = Auth.auth().currentUser?.uid ?? ""
+        return docs.map { d in
             let data = d.data()
             let ts = data["createdAt"] as? Timestamp
+            let caller = data["callerUid"] as? String ?? ""
+            // A group chat's call reads as I saw it (`GroupCallOutcome`); a 1:1 record never carries
+            // `joinedUids`, so it is untouched.
+            let stored = data["callOutcome"] as? String ?? "answered"
+            let outcome = group
+                ? (GroupCallOutcome.mine(stored: stored, callerUid: caller,
+                                         joined: data["joinedUids"] as? [String],
+                                         rung: data["rungUids"] as? [String], me: me) ?? stored)
+                : stored
             var e = CallEntry(
                 id: d.documentID, cid: cid,
                 name: name, photoUrl: photo, otherUid: other,
-                callerUid: data["callerUid"] as? String ?? "",
-                outcome: data["callOutcome"] as? String ?? "answered",
+                callerUid: caller,
+                outcome: outcome,
                 video: data["callVideo"] as? Bool ?? false,
                 durationSec: (data["callDuration"] as? NSNumber)?.intValue ?? 0,
                 date: ts?.dateValue() ?? Date(timeIntervalSince1970: 0))
@@ -277,8 +310,10 @@ final class CallsRepository {
         let myGeneration = await MainActor.run { generation }
         guard let snap = try? await db.collection("conversations").document(cid)
             .collection("messages").whereField("type", isEqualTo: "call").getDocuments() else { return }
+        // A group's rows stay group rows (audit 2026-10-23: group calls refresh through here too).
         let fresh = Self.entries(snap.documents, cid: cid, name: known.name,
-                                 photo: known.photoUrl, other: known.otherUid)
+                                 photo: known.photoUrl, other: known.otherUid,
+                                 group: known.groupCid != nil)
             .filter { !HiddenCalls.isHidden($0.id) }
         await MainActor.run {
             guard self.generation == myGeneration else { return }

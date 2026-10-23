@@ -916,11 +916,16 @@ enum MessageRowModelBuilder {
         // fallbacks are the safety net for a writer that died mid-call: an orphan "ringing" renders
         // as a normal unanswered call, a stale "ongoing" as a plain ended one.
         let age = Date().timeIntervalSince(m.createdAt)
-        let ringing = m.callOutcome == "ringing" && age < 120
-        let ongoing = m.callOutcome == "ongoing" && age < 4 * 3600
+        // Group call audit 2026-10-23: a group chat's call reads as THIS viewer saw it (joined on any
+        // device, rung and missed, or never rung), not the one outcome the record stores for the
+        // whole group. A record without `joinedUids` (1:1, an older server) keeps its own outcome.
+        let outcome = GroupCallOutcome.mine(stored: m.callOutcome, callerUid: m.callerUid,
+                                            joined: m.callJoinedUids, rung: m.callRungUids, me: ctx.me)
+        let ringing = outcome == "ringing" && age < 120
+        let ongoing = outcome == "ongoing" && age < 4 * 3600
         // Legacy "declined" records render exactly as missed.
-        let missed = m.callOutcome == "missed" || m.callOutcome == "declined"
-            || (m.callOutcome == "ringing" && age >= 120)
+        let missed = outcome == "missed" || outcome == "declined"
+            || (outcome == "ringing" && age >= 120)
         let video = m.callVideo
         // "Missed call" (red) is ONLY for calls I RECEIVED and did not answer. When I was the caller
         // and nobody picked up it is an outgoing call with "No answer" — never red, never "call

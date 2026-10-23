@@ -348,6 +348,10 @@ struct Message: Identifiable, Equatable, Codable {
     /// A notice that exists only on this phone (`init(localNotice:)`): the pill's leading symbol.
     var localNoticeSymbol: String? = nil
     var callDuration: Int? = nil            // seconds (0 if not answered)
+    /// A group chat's call record (server, at close; group call audit 2026-10-23): who was in it, and
+    /// who it rang. Each viewer's own outcome comes from these (`GroupCallOutcome`). nil elsewhere.
+    var callJoinedUids: [String]? = nil
+    var callRungUids: [String]? = nil
     /// A disappearing-timer system notice carries the value it set (0 = turned off), so each phone
     /// can word the line for its own reader ("You set…" / "<name> set…") instead of showing the
     /// writer's baked-in sentence. nil on every other message, including older notices.
@@ -729,7 +733,7 @@ struct Message: Identifiable, Equatable, Codable {
         case fileUrl, fileName, fileSize, duration, waveform, enc
         case clientId, replyTo, storyMention, reactions, mentions, viewOnce, album
         case createdAt, width, blurhash, thumb, height
-        case callerUid, callOutcome, callVideo, callDuration
+        case callerUid, callOutcome, callVideo, callDuration, callJoinedUids, callRungUids
         case edited, deleted, deletedBy, forwarded, clientTs, linkPreview, hasServerTime, uploading, albumSizes
         case expiresAt   // owner audit 2026-10-06 chat #21: a cold open must know what has already expired
         case stickerPack, stickerId, stickerEmoji, stickerAnimated   // 2026-10-17 chat stickers, all optional
@@ -793,6 +797,8 @@ struct Message: Identifiable, Equatable, Codable {
         self.callOutcome = data["callOutcome"] as? String
         self.callVideo = data["callVideo"] as? Bool ?? false
         self.callDuration = (data["callDuration"] as? NSNumber)?.intValue
+        self.callJoinedUids = data["joinedUids"] as? [String]
+        self.callRungUids = data["rungUids"] as? [String]
         self.disappearSeconds = (data["disappearSeconds"] as? NSNumber)?.intValue
         self.isRestrictRequest = data["restrictRequest"] as? Bool ?? false
         self.edited = data["edited"] as? Bool ?? false
