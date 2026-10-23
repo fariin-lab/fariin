@@ -91,6 +91,11 @@ struct LiveGroupCallRow: View {
 
     /// Who is in it, from the media server (groupCallPeek), asked while the row is on screen.
     @State private var people: [String] = []
+    /// owner 2026-10-23: the faces and the count came in late (the first peek is a network round
+    /// trip after the row appears). The row now starts from the last peek of this call, or else the
+    /// call document's own `joined` list, and the peek corrects it.
+    @MainActor private static var lastPeek: [String: [String]] = [:]
+    private var shownPeople: [String] { people.isEmpty ? (Self.lastPeek[live.id] ?? live.joined) : people }
 
     private var title: String { conv?.title ?? "Group" }
 
@@ -125,17 +130,17 @@ struct LiveGroupCallRow: View {
 
     private var subtitle: String {
         let kind = live.video ? "Video Chat" : "Voice Chat"
-        switch people.count {
+        switch shownPeople.count {
         case 0: return kind
         case 1: return "\(kind) · 1 participant"
-        default: return "\(kind) · \(people.count) participants"
+        default: return "\(kind) · \(shownPeople.count) participants"
         }
     }
 
     @ViewBuilder private var faces: some View {
-        if !people.isEmpty {
+        if !shownPeople.isEmpty {
             HStack(spacing: -8) {
-                ForEach(Array(people.prefix(3).enumerated()), id: \.element) { i, uid in
+                ForEach(Array(shownPeople.prefix(3).enumerated()), id: \.element) { i, uid in
                     AvatarView(name: conv?.names[uid] ?? "", photoUrl: conv?.photos[uid], size: 26)
                         .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2))
                         .zIndex(Double(3 - i))
@@ -151,6 +156,7 @@ struct LiveGroupCallRow: View {
             if let r = try? await fn.call(["cid": live.id]), let d = r.data as? [String: Any],
                let list = d["people"] as? [[String: Any]] {
                 let uids = list.compactMap { $0["uid"] as? String }
+                Self.lastPeek[live.id] = uids
                 if uids != people { people = uids }
             }
             try? await Task.sleep(nanoseconds: 15_000_000_000)

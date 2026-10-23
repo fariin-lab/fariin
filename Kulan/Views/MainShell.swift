@@ -1062,7 +1062,9 @@ struct CallsView: View {
                         // Call links sit on top of the history, the create row first. The create row
                         // steps aside while rows are being picked; the links stay, and can be picked
                         // and deleted with the calls (owner, 2026-10-05).
-                        // Live calls in my groups, first (owner 2026-10-20).
+                        // owner 2026-10-23: Create a Call Link ALWAYS first, then live calls in my
+                        // groups (they were above it since 2026-10-20).
+                        if !selecting && CallFeatures.callLinks { createLinkRow }
                         if !selecting && CallFeatures.groupCalls {
                             ForEach(liveCalls.calls) { live in
                                 LiveGroupCallRow(live: live,
@@ -1070,7 +1072,6 @@ struct CallsView: View {
                                                  onJoin: { joinLive(live) })
                             }
                         }
-                        if !selecting && CallFeatures.callLinks { createLinkRow }
                         // Links and calls in ONE time-ordered list; see `mergedRows` for why.
                         ForEach(mergedRows) { row in
                             switch row {
