@@ -119,3 +119,24 @@ extension GroupStoryRow where Trailing == EmptyView {
         self.init(name: name, photoUrl: photoUrl, members: members) { EmptyView() }
     }
 }
+
+/// The ring that turns round a group's photo while a story to it uploads. A timeline drives the
+/// turn (never SwiftUI's repeatForever: the iOS 26 deadlock noted in StickerPlayerView).
+struct GroupStoryUploadRing: View {
+    let active: Bool
+
+    var body: some View {
+        if active {
+            TimelineView(.animation) { ctx in
+                let turn = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.2) / 1.2
+                Circle()
+                    .trim(from: 0, to: 0.28)
+                    .stroke(Color(hex: 0x0A84FF), style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
+                    .rotationEffect(.degrees(turn * 360))
+                    .padding(-7)
+            }
+            .allowsHitTesting(false)
+            .transition(.opacity)
+        }
+    }
+}

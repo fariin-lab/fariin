@@ -255,6 +255,13 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
     /// then the camera and everything it raised are taken down with no animation, so the real app is
     /// already standing under the copies when they start to move. The ✕ keeps `close()`.
     static func closeAfterPost() {
+        // A group story does not fly into My Story (it is not there): the camera simply closes onto
+        // the group's page, where its upload ring turns (owner 2026-10-23).
+        if GroupStoryCompose.target != nil {
+            _ = StoryPostFlight.takePending()
+            close()
+            return
+        }
         OfficialStoryCompose.end()
         GroupStoryCompose.end()
         let source = StoryPostFlight.takePending()

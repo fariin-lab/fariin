@@ -1570,7 +1570,7 @@ struct StoryViewer: View {
 
     private var me: String { AuthService.shared.uid ?? "" }
     private var currentIsMine: Bool { groups.first { $0.authorUid == currentBucketUid }?.isMine ?? false }
-    private var myStories: [Story] { groups.first { $0.isMine }?.stories ?? [] }
+    private var myStories: [Story] { groups.first { $0.isMine && $0.groupConvId == nil }?.stories ?? [] }
     // My-story viewers are always fed my bucket ALONE, so this is stable for the whole session
     // (no mid-swipe layout jumps) — it drives the card+footer layout below.
     // ⚠️ `mineOnly` IS DELETED, AND IT IS NOT COMING BACK. It was
@@ -1890,7 +1890,7 @@ struct StoryViewer: View {
                         // not on a one-time story, whose audience is spent as it is watched, nor on
                         // one still uploading, which has no document to write to yet. See
                         // `Story.canEditAudience` and `StoriesService.updateStoryAudience`.
-                        canEditAudience: g.isMine && !s.oneTime && !StoriesService.isPending(s.id),
+                        canEditAudience: g.isMine && !s.oneTime && s.groupId == nil && !StoriesService.isPending(s.id),
                         // WAS IT POSTED TO EVERYONE. Only the Share entry reads it, and only on my
                         // own story — see `Story.isPublicStory`. A one-time story is never public
                         // whatever its label says, so it is excluded here rather than in the menu.

@@ -411,6 +411,7 @@ struct GroupInfoView: View {
     /// name, the count and the description, then the actions.
     private var header: some View {
         VStack(spacing: 16) {
+            Group {
             if let groupPhoto {
                 AvatarView(name: title, photoUrl: groupPhoto, size: Self.photoSide)
                     .opacity(showGroupPhoto ? 0 : 1)
@@ -435,6 +436,10 @@ struct GroupInfoView: View {
                     .accessibilityLabel(canEditInfo ? "Add Group Photo" : "Group photo")
                     .accessibilityAddTraits(canEditInfo ? .isButton : [])
             }
+            }
+            // A group story going up turns round the group's photo here (owner 2026-10-23, the
+            // reference app's way), not on My Story.
+            .overlay { GroupStoryUploadRing(active: StoriesService.shared.uploadingGroups.contains(cid)) }
             headerCaption(.primary)
             actionsRow.padding(.top, 2)
         }

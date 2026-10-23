@@ -937,7 +937,7 @@ final class StoriesService {
             queuedUploads[pid] = nil
             inFlight.removeAll { $0.id == pid }
         }
-        uploading = !inFlight.isEmpty
+        refreshUploading()
         uploadTask = nil
         currentUploadToken = nil
         guard !stuck.isEmpty else { return }
@@ -970,6 +970,13 @@ final class StoriesService {
 
     // Optimistic upload state — drives the "Uploading…" indicator + spinner ring in the story row.
     var uploading = false
+    /// Groups with a group story going up (owner 2026-10-23: the progress ring belongs on that
+    /// group's page, not on My Story). `uploading` above counts my own stories only.
+    var uploadingGroups: Set<String> = []
+    private func refreshUploading() {
+        uploading = inFlight.contains { $0.tag.groupId == nil }
+        uploadingGroups = Set(inFlight.compactMap { $0.tag.groupId })
+    }
 
     /// WHICH HALF OF THE POST IS RUNNING, because they are not the same kind of wait and must not
     /// look the same.
@@ -1083,7 +1090,7 @@ final class StoriesService {
     /// custom list used to wear "My Friends" until the real document arrived) and its own picture.
     var uploadingStories: [Story] {
         inFlight.compactMap { p in
-            guard p.image != nil else { return nil }
+            guard p.image != nil, p.tag.groupId == nil else { return nil }   // a group post is the group's
             var s = Story(id: p.id, authorUid: uid, createdAt: p.startedAt,
                          expiresAt: p.startedAt.addingTimeInterval(24 * 3600),
                          mediaUrl: p.url, allowsReplies: false,
@@ -1167,7 +1174,7 @@ final class StoriesService {
             self.inFlight[i].image = card
         }
         inFlight.append(pending)
-        uploading = true
+        refreshUploading()
         // Audit #15: only the FIRST post in a queue starts on "Preparing" — a picture added while
         // another is already sending must not set the row back to it.
         if inFlight.count <= 1 { uploadPhase = .preparing }
@@ -1226,7 +1233,7 @@ final class StoriesService {
                 // an older post completing while a newer one is still uploading would never clear
                 // its own entry and the row would show an upload that had already landed.
                 self.inFlight.removeAll { $0.id == pending.id }
-                self.uploading = !self.inFlight.isEmpty
+                self.refreshUploading()
                 // ⚠️ A FAILURE IS REPORTED BY WHICHEVER POST FAILED, NOT ONLY BY THE NEWEST, AND
                 // THIS IS OUTSIDE THE GUARD FOR THE SAME REASON THE LINE ABOVE IT IS.
                 //
@@ -1259,7 +1266,7 @@ final class StoriesService {
         queuedUploads[id]?.cancel()
         queuedUploads[id] = nil
         inFlight.removeAll { $0.id == id }
-        uploading = !inFlight.isEmpty
+        refreshUploading()
     }
     /// Every post task still in the air (including the one currently uploading), keyed by its
     /// placeholder id, so the X on one story reaches that story only. Entries are dropped as they finish.
@@ -2066,7 +2073,7 @@ final class StoriesService {
             StoryImageSeed.seed(placeholder?.jpegData(compressionQuality: 0.9) ?? thumbnail, for: u)
         }
         inFlight.append(pending)
-        uploading = true
+        refreshUploading()
         uploadPhase = .preparing   // video starts on the phone's half too — and it is the long one
         let token = UUID()
         currentUploadToken = token
@@ -2108,7 +2115,7 @@ final class StoriesService {
             await MainActor.run {
                 self.queuedUploads[pending.id] = nil   // finished or cancelled: nothing left to cancel
                 self.inFlight.removeAll { $0.id == pending.id }   // outside the guard — see the photo path
-                self.uploading = !self.inFlight.isEmpty
+                self.refreshUploading()
                 if let failure { self.uploadError = failure }   // any post reports — see the photo path
                 guard self.currentUploadToken == token else { return }
                 self.uploadTask = nil
@@ -3553,12 +3560,13 @@ final class StoriesRepository {
 
         var myGroup: StoryGroup?
         var groups: [StoryGroup] = []
-        // GROUP STORIES (owner 2026-10-23) get the group's ring, keyed by `ringKey`. My own stay in
-        // My Story, where the viewer list and Posted Stories are. A blocked author's group story is
-        // dropped story by story, so the rest of that group's ring still shows.
+        // GROUP STORIES (owner 2026-10-23) get the group's ring, keyed by `ringKey`, mine included
+        // (owner, later the same day: "a group story must not go in my own story"). A ring of only
+        // my posts is `isMine`, so its viewer shows Views and Replies. A blocked author's group story
+        // is dropped story by story, so the rest of that group's ring still shows.
         var byRing: [String: [Story]] = [:]
         for s in all {
-            let key = s.authorUid == me ? me : s.ringKey
+            let key = s.ringKey
             if key != s.authorUid && blockedAuthors.contains(s.authorUid) { continue }
             byRing[key, default: []].append(s)
         }
@@ -3571,7 +3579,8 @@ final class StoriesRepository {
                 let name = conv?.name(for: me) ?? last?.groupName ?? ""
                 let photo = conv?.photoUrl(for: me) ?? last?.groupPhoto
                 groups.append(StoryGroup(authorUid: key, name: name, photoUrl: photo,
-                                         stories: sorted, lastViewedAt: nil, isMine: false))
+                                         stories: sorted, lastViewedAt: nil,
+                                         isMine: sorted.allSatisfy { $0.authorUid == me }))
                 continue
             }
             let author = key
