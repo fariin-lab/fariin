@@ -5,9 +5,11 @@ import XCTest
 // the call screen's status words, the link-call nudge push parser, and the GC# log line's privacy.
 // Group call audit 2026-10-23, controls plan section T. The first automated tests for group calls.
 
-// MARK: - GroupCallOutcome.mine (Calls tab line, as I saw the call)
+// MARK: GroupCallOutcome.mine (Calls tab line, as I saw the call)
 
-final class GroupCallOutcomeTests: XCTestCase {
+// One class, so the iOS Tests workflow's `only` input can run all of it:
+// only = KulanTests/GroupCallLogicTests
+final class GroupCallLogicTests: XCTestCase {
 
     private let me = "me"
     private let other = "bob"
@@ -93,11 +95,8 @@ final class GroupCallOutcomeTests: XCTestCase {
         XCTAssertEqual(GroupCallOutcome.listCap, 64)
         XCTAssertEqual(GroupCallOutcome.notJoined, "notJoined")
     }
-}
 
-// MARK: - GroupCallWords (header and minimized card share these)
-
-final class GroupCallWordsTests: XCTestCase {
+    // MARK: - GroupCallWords (header and minimized card share these)
 
     func testReconnectingOutranksEveryState() {
         for s in [GroupJoinState.notJoined, .joining, .pending, .joined] {
@@ -132,11 +131,8 @@ final class GroupCallWordsTests: XCTestCase {
                        "Ringing Alice, Bob and 2 others…")
         XCTAssertEqual(GroupCallWords.alone(ringing: ["A", "B", "C", "D", "E"]), "Ringing A, B and 3 others…")
     }
-}
 
-// MARK: - LinkNudge (the linknudge alert push)
-
-final class LinkNudgeTests: XCTestCase {
+    // MARK: - LinkNudge (the linknudge alert push)
 
     // 32 letters from the key alphabet, no 4-letter group of one letter repeated.
     private let goodKey = "bcdf-ghkm-npqr-stxz-bcdf-ghkm-npqr-stxz"
@@ -215,11 +211,8 @@ final class LinkNudgeTests: XCTestCase {
         XCTAssertNil(LinkNudge(push(drop: ["title"]))!.title)
         XCTAssertEqual(LinkNudge(push(drop: ["callerUid"]))!.callerUid, "")
     }
-}
 
-// MARK: - GCLog (GC# lines never carry the raw room id)
-
-final class GCLogTests: XCTestCase {
+    // MARK: - GCLog (GC# lines never carry the raw room id)
 
     func testRoomHashKnownValue() {
         // printf 'kulan.gc.v1:room-test-1' | sha256sum, first 12 hex digits. Pins the salt and the
