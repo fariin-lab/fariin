@@ -126,6 +126,17 @@ final class StickerPlayerView: UIView {
         art.contentsScale = window?.screen.scale ?? UIScreen.main.scale
         player.frame = bounds
         CATransaction.commit()
+        // ⛔ SHARP AT THE SIZE IT IS SHOWN (owner 2026-10-23, the pack sheet "losing quality"): the
+        // box was worked out before layout, when bounds were still zero. Grown here to the real
+        // tile: 2x for the panel's small tiles (the reference app's cap), the screen's own scale for
+        // anything bigger (the pack and info sheets).
+        if isTGS, bounds.width > 1 {
+            let scale = window?.screen.scale ?? UIScreen.main.scale
+            let want = Int((bounds.width * (bounds.width > 72 ? scale : min(scale, 2))).rounded(.up))
+            if want > player.pixelBox, let url {
+                player.set(key: url.path, source: .file(url), pixelBox: want, step: 2)
+            }
+        }
         skeleton.frame = bounds.insetBy(dx: 2, dy: 2)
         skeleton.layer.cornerRadius = min(16, skeleton.bounds.width * 0.18)
     }

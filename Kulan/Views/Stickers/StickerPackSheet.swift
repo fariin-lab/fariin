@@ -33,10 +33,10 @@ struct StickerPackSheet: View {
             .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 8)
 
             ScrollView {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 10) {   // five a row (owner 2026-10-23)
                     ForEach(shown.stickers) { s in
                         Button { onSend(s) } label: {
-                            StickerPlayerRep(sticker: s, side: 80).aspectRatio(1, contentMode: .fit)
+                            StickerPlayerRep(sticker: s, side: 64).aspectRatio(1, contentMode: .fit)
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Send sticker \(s.emoji)")
