@@ -1530,9 +1530,9 @@ struct ThreadView: View {
                 .ignoresSafeArea()
         }
         .fullScreenCover(item: $editImage) { wrap in
-            ChatImageEditor(source: wrap.image) { data, caption, _, viewOnce in
+            ChatImageEditor(source: wrap.image) { data, caption, hd, viewOnce in
                 // Caption travels INSIDE the image message (one bubble).
-                Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
+                Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption, quality: PhotoQuality(hd: hd)) }
             }
         }
         .fullScreenCover(item: $mediaToApprove) { wrap in
@@ -5593,7 +5593,7 @@ struct ThreadView: View {
                         if imgs.count == 1, let d = imgs[0].jpegData(compressionQuality: 0.9) {
                             await sendPhoto(d, viewOnce: viewOnce, caption: caption)
                         } else if imgs.count >= 2 {
-                            await sendAlbum(imgs, caption: caption, hd: false)
+                            await sendAlbum(imgs, caption: caption, hd: PhotoQuality.default.isHD)
                         }
                     }
                 },
@@ -5612,7 +5612,7 @@ struct ThreadView: View {
                                 ordered.append(.video(url: url, thumb: thumb ?? UIImage(), duration: dur))
                             }
                         }
-                        await sendMixedGroup(ordered, caption: caption, hd: false, clientId: clientId)
+                        await sendMixedGroup(ordered, caption: caption, hd: PhotoQuality.default.isHD, clientId: clientId)
                     }
                 },
                 // The bubble the sheet posted on the Send tap, from its own grid thumbnails.
@@ -5704,8 +5704,8 @@ struct ThreadView: View {
         // first, the sheet re-appeared for a beat before closing (the flash the user reported).
         .fullScreenCover(item: $panelEditImage) { wrap in
             ChatImageEditor(source: wrap.image,
-                            onSend: { data, caption, _, viewOnce in
-                                Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
+                            onSend: { data, caption, hd, viewOnce in
+                                Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption, quality: PhotoQuality(hd: hd)) }
                                 showAttachPanel = false
                             },
                             selfDismissOnSend: false,
@@ -6743,9 +6743,11 @@ struct ThreadView: View {
             handedOff = mediaRetry
             Task {
                 defer { if mediaRetry { SendQueue.endSending(clientId) } }
+                // `prepared`: `localImageData` is the very JPEG `sendPhoto` made for the upload, so
+                // a retry sends it as it is instead of shrinking it again.
                 do { try await ChatService.sendImage(cid: cid, data: data, replyTo: m.replyTo, clientId: clientId,
                                                      group: isGroup ? groupMembers : nil,
-                                                     viewOnce: m.viewOnce, caption: m.text) }
+                                                     viewOnce: m.viewOnce, caption: m.text, prepared: true) }
                 catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
             }
         } else if !m.text.isEmpty {
@@ -6775,11 +6777,11 @@ struct ThreadView: View {
         for (i, chunk) in stride(from: 0, to: datas.count, by: Limits.albumMaxItems)
             .map({ Array(datas[$0 ..< min($0 + Limits.albumMaxItems, datas.count)]) })
             .enumerated() {
-            await sendOneAlbum(chunk, caption: i == 0 ? caption : "")
+            await sendOneAlbum(chunk, caption: i == 0 ? caption : "", quality: PhotoQuality(hd: hd))
         }
     }
 
-    private func sendOneAlbum(_ datas: [Data], caption: String) async {
+    private func sendOneAlbum(_ datas: [Data], caption: String, quality: PhotoQuality) async {
         // Demo: as sendPhoto — no local representation for media, so no-op (audit).
         if DemoMode.isDemoConversation(cid) { return }
         let previews = datas.map { ChatService.downscaledJPEG($0) }
@@ -6790,7 +6792,8 @@ struct ThreadView: View {
         }
         await runRegisteredSend(clientId) {
             try await ChatService.sendAlbum(cid: cid, images: datas, caption: caption,
-                                            clientId: clientId, group: isGroup ? groupMembers : nil)
+                                            clientId: clientId, group: isGroup ? groupMembers : nil,
+                                            quality: quality)
         }
     }
 
@@ -6890,7 +6893,9 @@ struct ThreadView: View {
             if let posted { await MainActor.run { repo.removePending(clientId: posted) } }
             switch ordered[0] {
             case .image(let ui):
-                if let d = ui.jpegData(compressionQuality: hd ? 0.95 : 0.85) { await sendPhoto(d, caption: caption) }
+                if let d = ui.jpegData(compressionQuality: hd ? 0.95 : 0.85) {
+                    await sendPhoto(d, caption: caption, quality: PhotoQuality(hd: hd))
+                }
             case .video(let url, _, _):
                 await sendVideo(from: url, caption: caption, hd: hd)
             }
@@ -6975,7 +6980,8 @@ struct ThreadView: View {
             sendError = "Couldn't send. \(error.localizedDescription)"
         }) {
             try await ChatService.sendMixedAlbum(cid: cid, items: items, caption: caption,
-                                                 clientId: clientId, group: isGroup ? groupMembers : nil)
+                                                 clientId: clientId, group: isGroup ? groupMembers : nil,
+                                                 quality: PhotoQuality(hd: hd))
         }
     }
 
@@ -7147,12 +7153,19 @@ struct ThreadView: View {
         load.onScreen = { better in flight.replace(image: better); arrival.image = better }
     }
 
-    private func sendPhoto(_ data: Data, viewOnce: Bool = false, caption: String = "") async {
+    private func sendPhoto(_ data: Data, viewOnce: Bool = false, caption: String = "",
+                           quality: PhotoQuality = .default) async {
         // Demo: no local representation for media (repo.addDemoMessage, used by send()/sendMarker(),
         // is text-only), so short-circuit rather than run a real upload against a person who does
         // not exist — it would only hang or fail (audit).
         if DemoMode.isDemoConversation(cid) { return }
-        let preview = ChatService.downscaledJPEG(data)
+        // ONE ENCODE, OFF THE MAIN THREAD (2026-10-23). The bubble's picture and the upload used to
+        // be two separate decode-resize-encode passes over the full 12 MP photo, one for each. Now
+        // the photo is made once at the send size and the bubble shows those same bytes, so the
+        // upload starts sooner and a retry resends exactly what was shown.
+        let preview = await Task.detached(priority: .userInitiated) {
+            ChatService.sendJPEG(data, quality: quality)
+        }.value
         let size = UIImage(data: preview)?.size ?? CGSize(width: 1, height: 1)
         let clientId = UUID().uuidString
         // A photo sent while replying carries the reply (like text/voice) and clears the bar.
@@ -7172,7 +7185,8 @@ struct ThreadView: View {
         // Registered like sendOneAlbum, so Cancel Sending can actually stop this upload instead of
         // letting it run to completion in the background (audit).
         await runRegisteredSend(clientId) {
-            try await ChatService.sendImage(cid: cid, data: data, replyTo: reply, clientId: clientId, group: isGroup ? groupMembers : nil, viewOnce: viewOnce, caption: caption)
+            try await ChatService.sendImage(cid: cid, data: preview, replyTo: reply, clientId: clientId, group: isGroup ? groupMembers : nil, viewOnce: viewOnce, caption: caption,
+                                            prepared: true)
         }
     }
 

@@ -201,7 +201,7 @@ struct SentMediaQualityPage: View {
                     }
                 }
             } footer: {
-                Text("High sends sharper photos (2048px) and 1080p video. Uses more data.")
+                Text("Standard sends photos up to 1280 px so they go fast. High starts the HD button switched on: photos up to 2560 px and 1080p video, using more data. You can still change it on each send.")
             }
         }
         .navigationTitle("Sent Media Quality")

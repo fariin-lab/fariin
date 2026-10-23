@@ -1617,16 +1617,20 @@ enum ChatService {
     /// and the ciphertext is uploaded to Storage; the server never sees the image.
     /// Downscale + recompress a photo before encrypting/uploading. Cuts upload size
     /// (and failure rate) massively; full-res camera/library photos are huge.
-    /// Global Sent Media Quality (Settings > Storage and Data). High = bigger photos
-    /// (2048px @ 0.9) and 1080p video; Standard = the long-standing 1600px @ 0.72 + 720p.
-    static var highQualitySends: Bool {
-        UserDefaults.standard.string(forKey: "sentMediaQuality") == "high"
-    }
+    /// Global Sent Media Quality (Settings > Storage and Data). For photos it only sets where the
+    /// HD button starts (see `PhotoQuality`); for video, High is 1080p.
+    static var highQualitySends: Bool { PhotoQuality.default == .high }
 
     /// The photo-SEND compression (thumbnails/stories/wallpapers keep their own explicit calls).
-    static func sendJPEG(_ data: Data) -> Data {
-        highQualitySends ? downscaledJPEG(data, maxDimension: 2048, quality: 0.9)
-                         : downscaledJPEG(data)
+    /// Size and quality come from `PhotoQuality`; an encode over its byte ceiling is redrawn smaller.
+    static func sendJPEG(_ data: Data, quality: PhotoQuality = .default) -> Data {
+        var side = quality.maxSide
+        var out = downscaledJPEG(data, maxDimension: side, quality: quality.jpegQuality)
+        while out.count > quality.maxBytes, let next = PhotoQuality.nextSide(after: side) {
+            side = next
+            out = downscaledJPEG(data, maxDimension: side, quality: quality.jpegQuality)
+        }
+        return out
     }
 
     /// ⛔ THE PICTURE THAT TRAVELS WITH THE MESSAGE. About 40px on its long side at low quality is
@@ -1753,10 +1757,14 @@ enum ChatService {
         try await batch.commit()
     }
 
-    static func sendImage(cid: String, data rawData: Data, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, viewOnce: Bool = false, caption: String = "", forwarded: Bool = false) async throws {
+    /// `prepared`: `rawData` already went through `sendJPEG` (the thread does it once and shows the
+    /// same bytes in the bubble, and a retry resends those bytes), so it is uploaded as it is rather
+    /// than decoded and encoded a second time.
+    static func sendImage(cid: String, data rawData: Data, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, viewOnce: Bool = false, caption: String = "", forwarded: Bool = false,
+                          quality: PhotoQuality = .default, prepared: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload — order is when send was tapped
         let tap = Date(), trace = UploadTrace()             // PHOTO# timings, 2026-10-17
-        let data = sendJPEG(rawData)
+        let data = prepared ? rawData : sendJPEG(rawData, quality: quality)
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
         let convRef = db.collection("conversations").document(cid)
@@ -1897,7 +1905,8 @@ enum ChatService {
 
     /// Send 2+ photos as ONE album message (grid + one caption), as standard messengers do. Each photo is
     /// E2EE'd + uploaded separately; a single message doc carries the array of {imageUrl, enc, w, h}.
-    static func sendAlbum(cid: String, images: [Data], caption: String, clientId: String? = nil, group: [String]? = nil) async throws {
+    static func sendAlbum(cid: String, images: [Data], caption: String, clientId: String? = nil, group: [String]? = nil,
+                          quality: PhotoQuality = .default) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the uploads
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
@@ -1947,7 +1956,7 @@ enum ChatService {
                     try Task.checkCancellation()
                     let itemKey = clientId.map { MediaSend.itemKey($0, i) }
                     if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { return nil }
-                    let data = sendJPEG(raw)
+                    let data = sendJPEG(raw, quality: quality)
                     let cipher: Data, meta: EncMeta
                     if let sealMembers { (cipher, meta) = try await Crypto.shared.sealBytesForGroup(data, members: sealMembers, cid: cid) }
                     else { (cipher, meta) = try await Crypto.shared.encryptBytes(cid, data) }
@@ -2078,7 +2087,8 @@ enum ChatService {
     }
 
     static func sendMixedAlbum(cid: String, items: [AlbumSendItem], caption: String,
-                               clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
+                               clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false,
+                               quality: PhotoQuality = .default) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the uploads
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
@@ -2152,7 +2162,7 @@ enum ChatService {
                     }
                     switch item {
                     case .image(let raw):
-                        let data = sendJPEG(raw)
+                        let data = sendJPEG(raw, quality: quality)
                         let (cipher, meta) = try await seal(data)
                         guard let url = try await uploadItem(cipher, "\(i)", keyed: true) else { return nil }
                         if let ui = UIImage(data: raw) { DiskImageCache.shared.store(ui, for: url, owned: true) }
@@ -2818,7 +2828,10 @@ enum ChatService {
                       let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta) {
                 bytes = dec
             } else { throw ForwardError.sourceUnavailable }
-            try await sendImage(cid: targetCid, data: bytes, clientId: clientId, caption: m.text, forwarded: forwarded)
+            // .high: a forward keeps the size the photo was sent at (an HD photo stays HD); it is
+            // only re-encoded, never shrunk to Standard.
+            try await sendImage(cid: targetCid, data: bytes, clientId: clientId, caption: m.text, forwarded: forwarded,
+                                quality: .high)
         } else if m.isAlbum {
             // The album forwards as ONE album, grouped like the original — the owner rejected
             // the reference app's break-apart-into-singles ("is broke is send one by one"). Each item
@@ -2859,7 +2872,8 @@ enum ChatService {
             indexed.sort { $0.0 < $1.0 }
             let items = indexed.map(\.1)
             guard !items.isEmpty else { throw ForwardError.sourceUnavailable }
-            try await sendMixedAlbum(cid: targetCid, items: items, caption: m.text, clientId: clientId, forwarded: forwarded)
+            try await sendMixedAlbum(cid: targetCid, items: items, caption: m.text, clientId: clientId, forwarded: forwarded,
+                                     quality: .high)   // as the single photo above
         } else if m.isAudio {
             guard let s = m.audioUrl, let url = URL(string: s), let meta = m.enc,
                   let (cipher, _) = try? await MediaSession.shared.data(from: url),

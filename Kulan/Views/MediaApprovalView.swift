@@ -131,7 +131,8 @@ struct MediaApprovalView: View {
 
     @State private var page = 0
     @State private var caption = ""
-    @State private var hd = false
+    /// Starts at Settings > Sent Media Quality, and is not remembered after the send (`PhotoQuality`).
+    @State private var hd = PhotoQuality.default.isHD
     @State private var editCrop = false
     @State private var editPen = false
     @State private var exporting = false
@@ -378,8 +379,10 @@ struct MediaApprovalView: View {
                         toolButton("scribble") { withAnimation(.easeInOut(duration: 0.28)) { editPen = true } }
                     }
                     toolButton("", active: hd, label: "HD") { hd.toggle() }
+                        .accessibilityValue(hd ? "High quality" : "Standard quality")
                     rail
                 }
+                .photoQualityHint(hd: hd)
                 .padding(.horizontal, 16)
             }
             HStack(spacing: 10) {

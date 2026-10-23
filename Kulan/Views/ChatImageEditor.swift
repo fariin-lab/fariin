@@ -143,7 +143,8 @@ struct ChatImageEditor: View {
     @State private var confirmDiscardDrawing = false
     @State private var filterIndex = 0
     @State private var aspectIndex = 0
-    @State private var hd = false
+    /// Starts at Settings > Sent Media Quality, and is not remembered after the send (`PhotoQuality`).
+    @State private var hd = PhotoQuality.default.isHD
     @State private var sent = false   // see send()
     @State private var canvasSize: CGSize = .zero
     @State private var bottomChromeH: CGFloat = ChatImageEditor.lastChromeH   // measured live from the actual bottom bars (toolbar heights queried at runtime)
@@ -538,9 +539,13 @@ struct ChatImageEditor: View {
                 HStack(spacing: 10) {
                     tool("crop", active: false) { withAnimation(.easeInOut(duration: 0.28)) { showCrop = true } }
                     tool("scribble", active: isDrawing) { if isDrawing { bakeDrawing() }; isDrawing.toggle() }
-                    if !editOnly { tool("", active: hd, label: "HD") { hd.toggle() } }
+                    if !editOnly {
+                        tool("", active: hd, label: "HD") { hd.toggle() }
+                            .accessibilityValue(hd ? "High quality" : "Standard quality")
+                    }
                     Spacer()
                 }
+                .photoQualityHint(hd: hd)
                 .transition(.opacity)
             }
 
