@@ -5648,6 +5648,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
+    /// The sender name (and its mark, role chip, forwarded line) is drawn by the row over the bubble,
+    /// not inside the bubble box, so the bubble snapshot shows a blank where it was. Each one is
+    /// copied onto the lifted snapshot at its place (owner 2026-10-23: "dont hide name").
+    private func addLiftOverlays(of cell: MessageRowCell, to snap: UIView, frame: CGRect) {
+        for v in cell.liftOverlays {
+            let r = v.convert(v.bounds, to: nil)
+            guard frame.intersects(r), let copy = v.snapshotView(afterScreenUpdates: false) else { continue }
+            copy.frame = r.offsetBy(dx: -frame.minX, dy: -frame.minY)
+            snap.addSubview(copy)
+        }
+    }
+
     private func bubbleSource(at indexPath: IndexPath, id: String)
         -> (source: UIView, snapshot: UIView, frame: CGRect)? {
         guard let cell = collectionView.cellForItem(at: indexPath) else { return nil }
@@ -5671,11 +5683,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 guard let snap else { return nil }
                 live.frame = stickerFrame.offsetBy(dx: -frame.minX, dy: -frame.minY)
                 snap.addSubview(live)
+                addLiftOverlays(of: native, to: snap, frame: frame)
                 return (native.previewBubble, snap, frame)
             }
             guard let snap = native.previewBubble.resizableSnapshotView(from: inBubble,
                                                                        afterScreenUpdates: false,
                                                                        withCapInsets: .zero) else { return nil }
+            addLiftOverlays(of: native, to: snap, frame: frame)
             return (native.previewBubble, snap, frame)
         }
         // Hosted (SwiftUI) row: crop the row snapshot to the published bubble rect. The bubble draws

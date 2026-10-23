@@ -56,6 +56,7 @@ final class MessageRowCell: UICollectionViewCell {
     /// bubble still carrying the frame of the last row this cell drew.
     var previewBubble: UIView { rowView.liftTarget }
     var stickerView: RowStickerView? { rowView.stickerView }
+    var liftOverlays: [UIView] { rowView.liftOverlays }
 
     /// Is this point (in `view`'s coordinates) on a media bubble's caption? See
     /// `MessageRowView.hitsMediaCaption`.

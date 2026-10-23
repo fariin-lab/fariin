@@ -633,6 +633,13 @@ final class MessageRowView: UIView {
     private var mediaView: MediaBubbleView?
     /// The animated sticker this row shows, for the long-press lift (owner 2026-10-21).
     var stickerView: RowStickerView? { (mediaView?.isHidden ?? true) ? nil : mediaView?.stickerView }
+    /// What this row draws over the bubble from outside it (sender name, mark, role chip, forwarded
+    /// line), for the long-press lift: a snapshot of the bubble alone leaves a gap where the name
+    /// was (owner 2026-10-23).
+    var liftOverlays: [UIView] {
+        [senderLabel, verifiedView, roleChipView, forwardedLabel, forwardedIcon]
+            .compactMap { $0 }.filter { !$0.isHidden && $0.alpha > 0.01 }
+    }
     private var albumView: AlbumBubbleView?
     private var fileView: FileBubbleView?
     private var locationView: LocationBubbleView?
