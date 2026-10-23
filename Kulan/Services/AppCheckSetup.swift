@@ -88,6 +88,9 @@ final class DeadlineAppCheckProvider: NSObject, AppCheckProvider {
         }
     }
 
+    /// The first App Check failure of this launch is logged; the rest are not (audit 07 F1).
+    private static let failureLogged = Once()
+
     // Whichever comes first, the provider's answer or the deadline, is delivered; the other is dropped.
     private func race(_ handler: @escaping (AppCheckToken?, Error?) -> Void,
                       start: (@escaping (AppCheckToken?, Error?) -> Void) -> Void) {
@@ -108,7 +111,11 @@ final class DeadlineAppCheckProvider: NSObject, AppCheckProvider {
             let ms = Int(Date().timeIntervalSince(began) * 1000)
             if let error {
                 Self.log.error("App Check token failed after \(ms, privacy: .public)ms: \(error.localizedDescription, privacy: .public)")
-                DiagLog.add("App Check failed after \(ms)ms: \(error.localizedDescription)")
+                // Once per launch (audit 07 F1): with the App Check API off in the project, every
+                // exchange fails, and these lines were about 95% of each uploaded log.
+                if Self.failureLogged.claim() {
+                    DiagLog.add("App Check failed after \(ms)ms: \(error.localizedDescription.prefix(200)) (further failures this launch not logged)")
+                }
             } else {
                 Self.log.info("App Check token in \(ms, privacy: .public)ms")
                 if ms > 2000 { DiagLog.add("App Check slow: \(ms)ms") }

@@ -43,8 +43,18 @@ final class DiskImageCache {
                                      attributes: .concurrent)
     private let maxBytes = 250 * 1024 * 1024   // 250 MB budget
 
+    /// What a decoded image holds in memory: its pixels times four bytes.
+    private static func cost(_ img: UIImage) -> Int {
+        let px = img.size.width * img.scale * img.size.height * img.scale
+        return max(1, Int(px) * 4)
+    }
+
     private init() {
         mem.countLimit = 250
+        // AND A BYTE CEILING (audit 06 F7, 2026-10-23): 250 full-size photos decoded is far over a
+        // gigabyte; MetricKit showed a 616 MB peak and background memory kills. Each entry is
+        // costed by its decoded size, so NSCache evicts by memory, not by count alone.
+        mem.totalCostLimit = 120 * 1024 * 1024
         // Application Support, NOT Caches: iOS reclaims Caches under storage pressure, which was making
         // cached photos/avatars re-download after the OS purged them. Application Support is permanent
         // (secure messengers store media here); the 250 MB LRU below bounds growth ourselves. Excluded
@@ -200,7 +210,7 @@ final class DiskImageCache {
         guard isCached(url), let data = try? Data(contentsOf: existingFileURL(url)),
               let raw = UIImage(data: data) else { return nil }
         let img = raw.boundedForDisplay() ?? raw
-        mem.setObject(img, forKey: url as NSString)
+        mem.setObject(img, forKey: url as NSString, cost: Self.cost(img))
         touchOnHit(url)   // 2026-09-24 fix-all #209: a disk read is an access too
         return img
     }
@@ -251,7 +261,7 @@ final class DiskImageCache {
                 // Bounded to display size so a huge original never becomes a huge bitmap in memory.
                 let bounded = raw.boundedForDisplay()
                 let img = (bounded === raw ? raw.preparingForDisplay() : bounded) ?? raw
-                self.mem.setObject(img, forKey: url as NSString)
+                self.mem.setObject(img, forKey: url as NSString, cost: Self.cost(img))
                 // Touch the file so LRU trimming keeps recently-viewed media.
                 try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: f.path)
                 cont.resume(returning: img)
@@ -275,7 +285,7 @@ final class DiskImageCache {
     /// `data` when available to avoid a re-encode; otherwise it is JPEG-encoded.
     /// `owned: true` marks this as a chat photo the phone must KEEP (see the .own note above).
     func store(_ image: UIImage, data: Data? = nil, for url: String, owned: Bool = false) {
-        mem.setObject(image, forKey: url as NSString)
+        mem.setObject(image, forKey: url as NSString, cost: Self.cost(image))
         let bytes = data ?? image.jpegData(compressionQuality: 0.85)
         guard let bytes else { return }
         let f = fileURL(url, owned: owned)
