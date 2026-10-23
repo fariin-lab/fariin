@@ -360,14 +360,11 @@ struct PublicJoinBar: View {
             do {
                 switch try await GroupDirectory.join(cid: p.cid) {
                 case .joined, .already:
-                    // The chat list's listener brings the group in a moment after the server adds
-                    // me; the member's chat opens with it there (header, members, composer rules).
-                    let me = AuthService.shared.uid ?? ""
-                    for _ in 0..<20 {
-                        if ConversationsRepository.shared.conversations
-                            .contains(where: { $0.id == p.cid && $0.users.contains(me) }) { break }
-                        try? await Task.sleep(nanoseconds: 200_000_000)
-                    }
+                    // ⛔ THE MEMBER'S CHAT AT ONCE (owner 2026-10-23: the bar stayed on "Joining…"
+                    // after the server had added him in under 2s). It used to wait for the chat list
+                    // to bring the group in; the member's chat reads its own group document, so it
+                    // does not need the list. `joining` goes back too, in case this bar outlives it.
+                    joining = false
                     withAnimation(.easeInOut(duration: 0.25)) { guest.joined = true }
                     return
                 case .requested:
@@ -410,6 +407,15 @@ struct PublicGroupHitRow: View {
 struct PublicGroupInfoView: View {
     let guest: PublicGroupGuest
     private var p: PublicGroupPreview { guest.preview }
+    // ⛔ THE WHOLE PAGE FROM OUTSIDE (owner 2026-10-23, asked many times): a visitor sees what a
+    // member sees, the members and the shared media, as the reference app shows a public group.
+    // Only sending needs Join, at the chat's foot.
+    @State private var media: [Message] = []
+    @State private var allMembers = false
+    @State private var viewerImage: Message?
+    @State private var viewerVideo: Message?
+    @State private var profile: PublicGroupMember?
+    private var me: String { AuthService.shared.uid ?? "" }
 
     var body: some View {
         ScrollView {
@@ -439,6 +445,14 @@ struct PublicGroupInfoView: View {
                         .padding(.horizontal, 16)
                         .padding(.top, 24)
                 }
+                if guest.readable, !media.isEmpty {
+                    ProfileMediaCard(cid: p.cid, media: media,
+                                     onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
+                                     onSeeAll: {})
+                        .padding(.horizontal, 16)
+                        .padding(.top, 24)
+                }
+                if !p.members.isEmpty { membersCard.padding(.top, 24) }
             }
             .frame(maxWidth: .infinity)
             .padding(.bottom, 24)
@@ -447,5 +461,62 @@ struct PublicGroupInfoView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         // No Join here: the reference app's info page has none (its only Join is the chat's foot).
+        .task { if guest.readable, let m = await ChatService.sharedMedia(p.cid) { media = m } }
+        .fullScreenCover(item: $viewerImage) { msg in
+            ImageViewerView(message: msg, cid: p.cid, rectScope: .profile)
+        }
+        .fullScreenCover(item: $viewerVideo) { msg in
+            VideoPlayerScreen(message: msg, cid: p.cid, clipProvider: { nil }, rectScope: .profile)
+        }
+        .sheet(item: $profile) { m in
+            NavigationStack {
+                ContactInfoView(cid: [me, m.uid].sorted().joined(separator: "_"), name: m.name,
+                                photoUrl: m.photoUrl, source: .story)
+            }
+        }
+    }
+
+    /// The members, owner and admins first, six shown and the rest behind Show All.
+    private var membersCard: some View {
+        let shown = allMembers ? p.members : Array(p.members.prefix(6))
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(GroupDirectory.membersLine(p.memberCount))
+                .font(.headline).foregroundStyle(.secondary)
+                .padding(.leading, 32)
+            VStack(spacing: 0) {
+                ForEach(Array(shown.enumerated()), id: \.element.id) { i, m in
+                    Button { if m.uid != me { profile = m } } label: {
+                        HStack(spacing: 12) {
+                            AvatarView(name: m.name, photoUrl: m.photoUrl, size: 40)
+                            Text(m.uid == me ? "You" : m.name)
+                                .foregroundStyle(.primary).lineLimit(1)
+                            Spacer(minLength: 8)
+                            if m.role != "member" {
+                                Text(m.role == "owner" ? "owner" : "admin")
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: 56)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if i < shown.count - 1 { Divider().padding(.leading, 68) }
+                }
+                if !allMembers, p.members.count > 6 {
+                    Divider().padding(.leading, 16)
+                    Button { allMembers = true } label: {
+                        Text("Show All").foregroundStyle(Color(hex: 0x0A84FF))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16).frame(minHeight: 48)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+            .padding(.horizontal, 16)
+        }
     }
 }

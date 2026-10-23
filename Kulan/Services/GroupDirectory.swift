@@ -57,6 +57,9 @@ struct PublicGroupPreview: Equatable {
     var isMember: Bool
     var needsApproval: Bool
     var requested: Bool
+    /// Who is in it, for a visitor's view of the group page (owner, admins, then the rest; at most
+    /// 100, from `publicGroupPreview`). Empty from an older server.
+    var members: [PublicGroupMember]
 
     init?(_ data: [String: Any]) {
         guard let cid = data["cid"] as? String, GroupDirectory.safeId(cid) else { return nil }
@@ -71,6 +74,26 @@ struct PublicGroupPreview: Equatable {
         self.isMember = data["isMember"] as? Bool ?? false
         self.needsApproval = data["needsApproval"] as? Bool ?? false
         self.requested = data["requested"] as? Bool ?? false
+        self.members = (data["members"] as? [[String: Any]] ?? []).compactMap(PublicGroupMember.init)
+    }
+}
+
+/// One member as a visitor sees them on a public group's page.
+struct PublicGroupMember: Equatable, Identifiable {
+    let uid: String
+    let name: String
+    let photoUrl: String?
+    let role: String   // "owner" | "admin" | "member"
+    var id: String { uid }
+
+    init?(_ d: [String: Any]) {
+        guard let uid = d["uid"] as? String, !uid.isEmpty else { return nil }
+        self.uid = uid
+        let n = (d["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+        self.name = n.isEmpty ? "Member" : n
+        let p = d["photoUrl"] as? String ?? ""
+        self.photoUrl = p.isEmpty ? nil : p
+        self.role = d["role"] as? String ?? "member"
     }
 }
 
@@ -290,7 +313,11 @@ enum GroupNameCheck: Equatable {
 
     static func join(cid: String) async throws -> JoinResult {
         do {
-            let res = try await fns.httpsCallable("joinPublicGroup").call(["cid": cid])
+            // 20s, not the default 70: a join that hangs must give the bar back with a message
+            // (owner 2026-10-23, "Joining…" stuck).
+            let callable = fns.httpsCallable("joinPublicGroup")
+            callable.timeoutInterval = 20
+            let res = try await callable.call(["cid": cid])
             switch (res.data as? [String: Any])?["status"] as? String {
             case "requested": return .requested
             case "already": return .already
