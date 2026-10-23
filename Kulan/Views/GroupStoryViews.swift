@@ -86,7 +86,8 @@ struct GroupStoryPicker: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        // Full height at once (owner 2026-10-23: "this sheet open full").
+        .presentationDetents([.large])
         .presentationDragIndicator(.visible)
     }
 }
