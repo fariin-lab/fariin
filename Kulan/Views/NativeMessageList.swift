@@ -150,6 +150,9 @@ struct NativeMessageList: UIViewControllerRepresentable {
     /// much it is clipped. `nil` means "at the newest message", which is the absence of a position
     /// rather than a kind of one — see `ChatScrollStore.clear`.
     var onReadingPosition: (ChatReadingPosition?) -> Void = { _ in }
+    /// The row ids on screen, reported from the same settle points as the reading position, for the
+    /// voice-note auto-download window (`MediaAutoDownloader.noteViewport`).
+    var onViewportRows: ([String]) -> Void = { _ in }
     var canSwipeReply: (String) -> Bool = { _ in false }   // is this rowId reply-eligible (on the server)?
     var onSwipeReply: (String) -> Void = { _ in }          // swipe past threshold released â†’ reply to this rowId
     var loadingOlder: Bool = false             // show the top spinner while older messages page in
@@ -328,6 +331,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onComposerGeometry = onComposerGeometry
         vc.setVoiceControl(voiceControl)
         vc.onReadingPosition = onReadingPosition
+        vc.onViewportRows = onViewportRows
         vc.initialScrollOffset = initialScrollOffset
         vc.setTopOverlayHeight(topOverlayHeight)
         // (`noteSendTick` is at the top of this method — it has to precede `applyComposer`.)
@@ -596,6 +600,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var initialScrollOffset: CGFloat?         // and where in the viewport it should sit, if restored
     var initialScrollTopInset: CGFloat?       // and the top inset that offset was measured against
     var onReadingPosition: (ChatReadingPosition?) -> Void = { _ in }
+    var onViewportRows: ([String]) -> Void = { _ in }
     /// See the SwiftUI side's `holdFirstLand`. Read by `performFirstLandIfReady` only, so it means
     /// nothing once the first land has happened.
     private var holdFirstLand = false
@@ -1007,6 +1012,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// disagree. Theirs takes the same view — a reader within a screenful of the end short-circuits
     /// to the bottom of the load window rather than restoring a row.
     private func reportReadingPosition() {
+        reportViewportRows()   // every settle point that reports a position reports the rows too
         // Not while the chat is still landing (the hold): a position measured mid-settle would be
         // saved over the one that was just restored, and the next reopen would land on the drift.
         guard didFirstLand, !isDisappearing, Date() >= landingHoldUntil else { return }
@@ -1020,6 +1026,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         onReadingPosition(ChatReadingPosition(rowId: id,
                                               offsetFromTop: attr.frame.minY - viewportTop,
                                               topInset: collectionView.adjustedContentInset.top))
+    }
+
+    /// The rows on screen, for the voice-note auto-download window. Unlike the reading position this
+    /// is wanted during the landing hold too: a note is just as visible while the chat settles.
+    private func reportViewportRows() {
+        guard didFirstLand, !isDisappearing else { return }
+        let ids = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
+        guard !ids.isEmpty else { return }
+        onViewportRows(ids)
     }
 
     /// ⛔ A SMALL SCROLL IS NOT A READING POSITION — owner, 2026-10-04: "a ~50px scroll near the
@@ -3507,6 +3522,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         collectionView.layoutIfNeeded()
         didFirstLand = true
         perform(.initialPosition)
+        reportViewportRows()   // the chat is open: the notes on screen start downloading now
         // The row and placement this land used, kept for every re-assert of it (`reapplyLanding`):
         // the live `initialScrollId` moves on for an unread landing, and the saved offset can be
         // re-saved mid-settle. What landed is what must be put back.

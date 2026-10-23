@@ -39,6 +39,19 @@ enum AudioCache {
         return u
     }
 
+    /// `store`, saying whether the file really landed (a full disk, or the data protection class
+    /// unavailable). The download finisher needs the answer: reporting success for a write that
+    /// failed would leave the note "done" with nothing on disk.
+    static func save(_ data: Data, for messageId: String) -> Bool {
+        let u = fileURL(messageId)
+        do {
+            try data.write(to: u, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            return true
+        } catch {
+            return false
+        }
+    }
+
     static func remove(_ messageId: String) {
         try? FileManager.default.removeItem(at: fileURL(messageId))
     }

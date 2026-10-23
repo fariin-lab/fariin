@@ -427,18 +427,24 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         }
         // Nothing to fetch, or the fetch/decrypt failed: hand the lock screen back rather than leaving
         // the previous note's entry sitting on it with no player behind it.
-        guard let urlStr = message.audioUrl, let url = URL(string: urlStr), let meta = message.enc else {
+        guard let urlStr = message.audioUrl, !urlStr.isEmpty, let meta = message.enc else {
             clearNowPlaying(); return
         }
         loadingId = message.id
         defer { if loadingId == message.id { loadingId = "" } }   // see the note above — mine only
-        guard let (cipher, _) = try? await MediaSession.shared.data(from: url),
-              let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
+        // ⛔ THROUGH THE SHARED DOWNLOADER, AT TAP PRIORITY (2026-10-23). This fetched on its own, so
+        // a tap on a note the automatic pass was already downloading started a SECOND download of
+        // the same file beside it. Now the tap joins that job (or starts one ahead of the automatic
+        // queue), and gets its retries and resume with it. The finisher decrypts into AudioCache,
+        // so the note never downloads twice.
+        let ok = await MediaDownloads.shared.download(
+            urlStr, priority: .user,
+            finish: MediaFetch.voiceFinisher(enc: meta, cid: cid, messageId: message.id))
+        guard ok, let local = AudioCache.url(for: message.id) else {
             failedId = message.id
             clearNowPlaying(); return
         }
-        // Persist the decrypted note so it never downloads twice.
-        open(AudioCache.store(data, for: message.id), for: message.id)
+        open(local, for: message.id)
     }
 
     /// ⛔ `forNote` IS AN ARGUMENT, NOT A READ OF THE CURRENT STATE.

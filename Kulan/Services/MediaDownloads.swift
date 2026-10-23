@@ -79,6 +79,12 @@ final class MediaDownloads {
         var task: URLSessionDownloadTask?
         var resumeData: Data?
         var attempts = 0
+        /// Downloads that arrived whole but would not decrypt or store. See `didComplete`.
+        var finishFailures = 0
+        /// The last failure was the bytes not opening, not the network. The network-back and
+        /// foreground retries leave such a job alone (fetching it again would not change the key);
+        /// a tap, or a later automatic ask after the cool-off, still tries again.
+        var failedOnFinish = false
         var total: Int64?
         /// Waiting because HE cancelled it or it is over the automatic ceiling — as opposed to waiting
         /// on the policy. Only a tap may start it again; a row being laid out again must not.
@@ -347,6 +353,7 @@ final class MediaDownloads {
             task = session.downloadTask(with: u)
         }
         task.taskDescription = job.url
+        job.failedOnFinish = false
         task.priority = job.priority == .user ? URLSessionTask.highPriority : URLSessionTask.defaultPriority
         job.task = task
         job.stopReason = nil
@@ -371,7 +378,7 @@ final class MediaDownloads {
     /// Everything that failed for a reason time can fix, restarted: the signal came back, or the app
     /// is in front again (which also picks up jobs the background time ran out on).
     func retryStalled() {
-        for job in jobs.values where job.task == nil {
+        for job in jobs.values where job.task == nil && !job.failedOnFinish {
             if case .failed(false) = job.state {
                 job.attempts = 0
                 enqueueOrStart(job)
@@ -439,10 +446,20 @@ final class MediaDownloads {
                 await MainActor.run {
                     // A download that decrypts to nothing is corrupt or truncated. Once more from
                     // scratch; after that it is a failure the user can retry.
+                    // ⚠️ ONCE, as this comment always said (2026-10-23): the code handed it to the
+                    // network retry, which fetched the WHOLE file again up to four more times for a
+                    // file that could never open (a key this phone does not have).
                     if ok {
                         MediaDownloads.shared.finishJob(job, .done)
-                    } else {
+                    } else if job.finishFailures < 1 {
+                        job.finishFailures += 1
                         MediaDownloads.shared.retryOrFail(job, resumeData: nil)
+                    } else {
+                        job.finishFailures = 0
+                        job.failedOnFinish = true
+                        job.failedAt = Date()
+                        MediaDownloads.shared.set(job, .failed(permanent: false))
+                        MediaDownloads.shared.resumeWaiters(job, false)
                     }
                 }
             }
@@ -642,6 +659,39 @@ enum MediaFetch {
                                       autoLimit: MediaAutoDownloader.maxAutoBytes,
                                       finish: videoFinisher(url: url, enc: enc, cid: cid,
                                                             messageId: messageId, authorId: authorId))
+    }
+
+    /// A voice note: decrypt into AudioCache under its message id, the place the player looks first.
+    /// Reports success only when the file is really on disk. No server delete here: a voice note is
+    /// not under the mailman model (only delivered 1:1 videos are, see `videoFinisher`), and if that
+    /// ever changes the delete belongs after this store, as it is there.
+    static func voiceFinisher(enc: EncMeta?, cid: String, messageId: String) -> MediaDownloads.Finisher {
+        dataFinisher(enc: enc, cid: cid) { AudioCache.save($0, for: messageId) }
+    }
+
+    /// Start (or join) a voice note's AUTOMATIC download, if `VoiceAutoDownload.decide` allows it
+    /// on this network. A tap does not come here: the player asks `MediaDownloads` at `.user`, which
+    /// joins this same job (one download per file) and runs whatever the policy says.
+    @MainActor
+    static func requestVoice(_ m: Message, cid: String, priority: MediaDownloads.Priority) {
+        guard m.isAudio, let url = m.audioUrl, !url.isEmpty else { return }
+        let cached = AudioCache.url(for: m.id) != nil
+            || (m.clientId.map { AudioCache.url(for: $0) != nil } ?? false)
+        let note = VoiceAutoDownload.Note(viewOnce: m.viewOnce, deleted: m.deleted, hasRemote: true,
+                                          cached: cached, sealedWithoutMe: sealedWithoutMe(m.enc),
+                                          duration: m.duration)
+        let chat: VoiceAutoDownload.ChatKind = cid.contains("_") ? .oneToOne : .group
+        switch VoiceAutoDownload.decide(note, network: AutoDownloadPrefs.currentNetwork,
+                                        policy: AutoDownloadPrefs.voicePolicy, chat: chat) {
+        case .download(let limit):
+            MediaDownloads.shared.request(url, priority: priority, autoLimit: limit,
+                                          finish: voiceFinisher(enc: m.enc, cid: cid, messageId: m.id))
+        case .skip(.unreadable):
+            // Sealed before I joined: downloading it can never open it (see `markUnreadable`).
+            MediaDownloads.shared.markUnreadable(url)
+        case .skip:
+            break
+        }
     }
 
     /// Any other file (voice note, document): decrypt and hand the bytes to `store`.

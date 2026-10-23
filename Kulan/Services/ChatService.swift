@@ -2944,14 +2944,17 @@ enum ChatService {
         guard let snap = try? await db.collection("conversations").document(cid).collection("messages")
             .order(by: "createdAt", descending: true)
             .limit(to: 8).getDocuments() else { return }
-        for doc in snap.documents {
-            let m = Message(id: doc.documentID, data: doc.data(), cid: cid, crypto: Crypto.shared)
-            guard m.isAudio, !m.viewOnce, !m.deleted else { continue }
-            guard AudioCache.url(for: m.id) == nil else { continue }
-            guard let urlStr = m.audioUrl, let url = URL(string: urlStr), let meta = m.enc else { continue }
-            guard let (cipher, _) = try? await MediaSession.shared.data(from: url),
-                  let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else { continue }
-            AudioCache.store(data, for: m.id)
+        // 2026-10-23: through `MediaFetch.requestVoice`, so the same rules as inside a chat apply
+        // here (the Audio row and the network, Low Data Mode, the size ceiling, one-time notes and
+        // files sealed before I joined left alone), and the download is the shared job a tap would
+        // join. It fetched on its own before, ignoring the Audio row altogether, with no retry, and
+        // a tap during it downloaded the same note a second time.
+        let notes = snap.documents
+            .map { Message(id: $0.documentID, data: $0.data(), cid: cid, crypto: Crypto.shared) }
+            .filter { $0.isAudio }
+        guard !notes.isEmpty else { return }
+        await MainActor.run {
+            for m in notes { MediaFetch.requestVoice(m, cid: cid, priority: .auto) }
         }
     }
 

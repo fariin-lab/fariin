@@ -2084,7 +2084,10 @@ struct ThreadView: View {
             // restarts on every arrival, so anything after the sleep is skipped for all but the last
             // message of a burst — which is exactly the case where several notes arrive together and
             // all of them should already be downloading.
-            MediaAutoDownloader.sweepVoiceNotes(repo.items, cid: cid)
+            // Around the visible rows only (2026-10-23); the list reports them on every settle
+            // (`onViewportRows` below), and a note arriving while the reader sits at the newest
+            // counts as visible.
+            MediaAutoDownloader.sweepVoiceNotes(repo.items, cid: cid) { repo.indexById[$0] }
             await fillGuestNames()   // a public group seen from outside (owner 2026-10-21)
             try? await Task.sleep(nanoseconds: 1_200_000_000)   // let the open settle first
             guard !Task.isCancelled else { return }
@@ -4647,6 +4650,10 @@ struct ThreadView: View {
             onReadingPosition: { position in
                 if let position { ChatScrollStore.shared.save(cid, position) }
                 else { ChatScrollStore.shared.clear(cid) }
+            },
+            // Voice notes download by themselves around what is on screen (2026-10-23).
+            onViewportRows: { ids in
+                MediaAutoDownloader.noteViewport(cid: cid, rowIds: ids, items: repo.items) { repo.indexById[$0] }
             },
             canSwipeReply: { id in
                 // ⛔ NOT ON A STORY REACTION (owner 2026-10-13: "swipe reply still works"). The row

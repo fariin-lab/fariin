@@ -13,6 +13,9 @@ final class NetworkState {
     /// 1:1 audit r2 check, 2026-10-08: plainly no path (`.unsatisfied`). `.requiresConnection` (an
     /// on-demand VPN, cellular waking up) is not offline, so a dial is not refused for it.
     private(set) var isUnsatisfied = false
+    /// Low Data Mode is on for the current path (Wi-Fi or cellular). The auto-download policies
+    /// treat it as cellular (owner 2026-10-23), so a "Wi-Fi only" kind waits for a tap there.
+    private(set) var isConstrained = false
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
@@ -21,6 +24,7 @@ final class NetworkState {
             self.isWifi = path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet)
             self.isOnline = path.status == .satisfied
             self.isUnsatisfied = path.status == .unsatisfied
+            self.isConstrained = path.isConstrained
             // THE MOMENT THE SIGNAL COMES BACK, and it is announced rather than polled. A send that
             // died on a dropped connection has no way of knowing the line is up again, so it sat
             // there saying "Not delivered" until somebody tapped it — on a phone in a place where
@@ -81,9 +85,21 @@ enum AutoDownloadPrefs {
     static func allowedNow(_ k: Kind) -> Bool {
         switch policy(k) {
         case "always": return true
-        case "wifi":   return NetworkState.shared.isWifi
+        case "wifi":   return currentNetwork == .wifi
         default:        return false
         }
+    }
+
+    /// The connection as the policies see it: Wi-Fi only when it is Wi-Fi (or wired) AND not in Low
+    /// Data Mode; everything else, no connection included, is cellular (the reference app's rule for
+    /// "no connection").
+    static var currentNetwork: VoiceAutoDownload.Network {
+        VoiceAutoDownload.network(isWifi: NetworkState.shared.isWifi,
+                                  isConstrained: NetworkState.shared.isConstrained)
+    }
+
+    static var voicePolicy: VoiceAutoDownload.Policy {
+        VoiceAutoDownload.Policy(rawValue: policy(.audio)) ?? .always
     }
 }
 
@@ -142,12 +158,42 @@ enum MediaAutoDownloader {
     /// Kept separate from `sweep` rather than merged into it: the full pass walks videos, documents
     /// and the save-to-photos hook, and it wants its debounce. This one is voice only, so it is
     /// cheap enough to run on every arrival.
-    static func sweepVoiceNotes(_ items: [Message], cid: String) {
-        guard AutoDownloadPrefs.allowedNow(.audio) else { return }
-        for m in items where m.isAudio {
-            guard AudioCache.url(for: m.id) == nil, let u = m.audioUrl, !u.isEmpty else { continue }
-            fetch(id: m.id, url: u, meta: m.enc, cid: cid) { AudioCache.store($0, for: m.id) }
+    ///
+    /// ⛔ ONLY AROUND WHAT IS ON SCREEN — owner 2026-10-23, the reference's rule read from its source
+    /// (see `VoiceAutoDownload`). This used to walk EVERY loaded message, so paging back through a
+    /// long chat downloaded every voice note in every page it passed, and a one-time note among them
+    /// was decrypted into the permanent cache. Now: the notes on screen, the next three in the
+    /// reading direction, and nothing else; each one through `VoiceAutoDownload.decide`.
+    @MainActor static func sweepVoiceNotes(_ items: [Message], cid: String,
+                                           index: (String) -> Int?) {
+        let vp = viewports[cid]
+        let range: ClosedRange<Int>? = vp.flatMap { v in
+            guard let a = index(v.firstId), let b = index(v.lastId), a <= b, b < items.count else { return nil }
+            return a...b
         }
+        let rows = VoiceAutoDownload.window(count: items.count, visible: range,
+                                            followsNewest: vp?.followsNewest ?? true,
+                                            towardOlder: vp?.towardOlder ?? true,
+                                            isVoice: { items[$0].isAudio })
+        for i in rows { MediaFetch.requestVoice(items[i], cid: cid, priority: .auto) }
+    }
+
+    /// The list's visible rows for one chat, kept by id because older pages prepend and shift every
+    /// index. `towardOlder` is the reading direction the reference prefetches in.
+    private struct Viewport { var firstId: String; var lastId: String; var followsNewest: Bool; var towardOlder: Bool }
+    @MainActor private static var viewports: [String: Viewport] = [:]
+
+    /// From the message list's settle points: these rows (ids, any order) are on screen now.
+    @MainActor static func noteViewport(cid: String, rowIds: [String], items: [Message],
+                                        index: (String) -> Int?) {
+        let idx = rowIds.compactMap(index).filter { $0 < items.count }
+        guard let lo = idx.min(), let hi = idx.max() else { return }
+        let prev = viewports[cid]
+        var towardOlder = prev?.towardOlder ?? true
+        if let p = prev, let oldLo = index(p.firstId), oldLo != lo { towardOlder = lo < oldLo }
+        viewports[cid] = Viewport(firstId: items[lo].rowId, lastId: items[hi].rowId,
+                                  followsNewest: hi >= items.count - 1, towardOlder: towardOlder)
+        sweepVoiceNotes(items, cid: cid, index: index)
     }
 
     @MainActor static func sweep(_ items: [Message], cid: String) {
@@ -164,10 +210,9 @@ enum MediaAutoDownloader {
                 MediaFetch.requestVideo(url: u, enc: m.enc, cid: cid, messageId: m.id,
                                         authorId: m.authorId, priority: .auto)
             }
-            if m.isAudio, AutoDownloadPrefs.allowedNow(.audio), AudioCache.url(for: m.id) == nil,
-               let u = m.audioUrl, !u.isEmpty {
-                fetch(id: m.id, url: u, meta: m.enc, cid: cid) { AudioCache.store($0, for: m.id) }
-            }
+            // Voice notes are NOT here any more (owner 2026-10-23): this pass walks every loaded
+            // message, and a voice note downloads by itself only around the visible rows
+            // (`sweepVoiceNotes`).
             // Documents: size cap enforced (fileSize travels in the message doc).
             // 2026-09-24 audit: THIS BRANCH WAS EMPTY, so the Documents row in Storage and Data
             // changed nothing. The file is now fetched, decrypted and written to the exact path
@@ -177,7 +222,7 @@ enum MediaAutoDownloader {
                let u = m.fileUrl, !u.isEmpty, m.enc != nil,
                DocumentPrefetch.cached(id: m.id, fileName: m.fileName) == nil {
                 let dest = DocumentPrefetch.localURL(id: m.id, fileName: m.fileName)
-                fetch(id: m.id, url: u, meta: m.enc, cid: cid) { DocumentPrefetch.write($0, to: dest) }
+                fetch(id: m.id, url: u, meta: m.enc, cid: cid) { DocumentPrefetch.write($0, to: dest); return true }
             }
         }
     }
@@ -185,10 +230,10 @@ enum MediaAutoDownloader {
     /// One shared job per url (see MediaDownloads): retries, resume and dedup come with it. The old
     /// per-id set here only deduplicated against itself, not against the player or the bubble.
     private static func fetch(id: String, url: String, meta: EncMeta?, cid: String,
-                              store: @escaping @Sendable (Data) -> Void) {
+                              store: @escaping @Sendable (Data) -> Bool) {
         Task { @MainActor in
             MediaDownloads.shared.request(url, priority: .auto,
-                                          finish: MediaFetch.dataFinisher(enc: meta, cid: cid) { store($0); return true })
+                                          finish: MediaFetch.dataFinisher(enc: meta, cid: cid, store: store))
         }
     }
 }
