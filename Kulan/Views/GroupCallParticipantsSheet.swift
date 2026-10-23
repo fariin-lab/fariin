@@ -39,6 +39,8 @@ struct GroupCallParticipantsSheet: View {
     @StateObject private var linkInvites = LinkCallInvites()
     /// The bell's own wait, per person: one nudge a minute (the server holds the same line).
     @State private var nudgedAt: [String: Date] = [:]
+    /// Group chat calls: when I last rang each person again from here (the button's one-minute wait).
+    @State private var rangAgainAt: [String: Date] = [:]
     /// A short line at the foot of the sheet ("Nudged X", a refusal).
     @State private var sheetToast: String?
     @State private var sheetToastTask: Task<Void, Never>?
@@ -73,6 +75,8 @@ struct GroupCallParticipantsSheet: View {
         let name: String
         let photoUrl: String?
         let subtitle: String?
+        /// Group chat calls (ring again, 2026-10-23): this row has a ring button.
+        var ringable = false
     }
 
     /// Everyone connected right now: you first, then by name (the reference app's order; ties by id
@@ -119,22 +123,49 @@ struct GroupCallParticipantsSheet: View {
     /// own (`service.members` is for ad-hoc calls), so the sheet showed nobody under Invited while the
     /// header said "Ringing…". Now: the people the service is ringing (`ringingMembers`, the server's
     /// `rung` list once it lands), then whoever declined or was busy. Names and photos come from the
-    /// group itself. Ringing someone again from here needs a server "ring again" (not built).
+    /// group itself.
+    /// Ring again (2026-10-23): every other member who is not here gets a row too, with a ring button
+    /// (`groupCallRingAgain`): people whose ring went unanswered, and people the first ring skipped
+    /// (muted the group, a group too big to ring). A decline stands: no button on "Declined". Busy
+    /// is not a no, so it keeps the button. Someone rung from here reads "Ringing…" for the minute.
     private func groupInvited(cid: String, here: Set<String>, at now: Date) -> [Row] {
         let me = service.myUid
         let ringing = service.ringingMembers(at: now).filter { !here.contains($0.uid) && $0.uid != me }
         var rows = ringing.map { Row(id: $0.uid, name: $0.name, photoUrl: $0.photoUrl, subtitle: "Ringing…") }
-        let answered = service.declinedUids.union(service.busyUids)
-            .subtracting(here).subtracting(ringing.map(\.uid))
-        guard !answered.isEmpty else { return rows }
+        var listed = Set(ringing.map(\.uid))
         let conv = ConversationsRepository.shared.conversations.first { $0.id == cid }
+        func name(_ uid: String) -> String {
+            ContactNames.shared.name(for: uid) ?? conv?.names[uid].flatMap { $0.isEmpty ? nil : $0 } ?? "Member"
+        }
+        func photo(_ uid: String) -> String? { conv?.photos[uid].flatMap { $0.isEmpty ? nil : $0 } }
+        let answered = service.declinedUids.union(service.busyUids).subtracting(here).subtracting(listed)
         for uid in answered.sorted() where uid != me {
-            let name = conv?.names[uid].flatMap { $0.isEmpty ? nil : $0 } ?? "Member"
-            let photo = conv?.photos[uid].flatMap { $0.isEmpty ? nil : $0 }
-            rows.append(Row(id: uid, name: name, photoUrl: photo,
-                            subtitle: service.declinedUids.contains(uid) ? "Declined" : "Busy"))
+            let declined = service.declinedUids.contains(uid)
+            let rangNow = !declined && ringingAgain(uid, at: now)
+            rows.append(Row(id: uid, name: name(uid), photoUrl: photo(uid),
+                            subtitle: declined ? "Declined" : rangNow ? "Ringing…" : "Busy",
+                            ringable: !declined))
+            listed.insert(uid)
+        }
+        // The rest of the group, by name. A very big group lists its first ringAgainListMax.
+        let rest: [String] = (conv?.users ?? []).filter { $0 != me && !here.contains($0) && !listed.contains($0) }
+        var named: [(uid: String, name: String)] = rest.map { uid in (uid: uid, name: name(uid)) }
+        named.sort { a, b in a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending }
+        for p in named.prefix(Self.ringAgainListMax) {
+            rows.append(Row(id: p.uid, name: p.name, photoUrl: photo(p.uid),
+                            subtitle: ringingAgain(p.uid, at: now) ? "Ringing…" : "Not in the call",
+                            ringable: true))
         }
         return rows
+    }
+
+    /// How many not-joined members a group chat call's sheet lists with a ring button.
+    private static let ringAgainListMax = 100
+    /// The server's own wait (groupCallRingAgain): one ring again per person per minute.
+    private static let ringAgainWait: TimeInterval = 60
+
+    private func ringingAgain(_ uid: String, at now: Date) -> Bool {
+        rangAgainAt[uid].map { now.timeIntervalSince($0) < Self.ringAgainWait } ?? false
     }
 
     /// Why an invited person is not in the call right now.
@@ -316,7 +347,7 @@ struct GroupCallParticipantsSheet: View {
         let waiting = invited(at: date)
         if !waiting.isEmpty {
             Section("Invited") {
-                ForEach(waiting) { invitedRow($0) }
+                ForEach(waiting) { invitedRow($0, at: date) }
             }
         }
     }
@@ -923,17 +954,82 @@ struct GroupCallParticipantsSheet: View {
         return parts.joined(separator: ", ")
     }
 
-    private func invitedRow(_ r: Row) -> some View {
-        HStack(spacing: 12) {
-            AvatarView(name: r.name, photoUrl: r.photoUrl, size: 36)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(r.name).lineLimit(1)
-                if let s = r.subtitle {
-                    Text(s).font(.caption).foregroundStyle(.secondary)
+    private func invitedRow(_ r: Row, at date: Date) -> some View {
+        let waiting: Bool = ringingAgain(r.id, at: date)
+        return HStack(spacing: 12) {
+            HStack(spacing: 12) {
+                AvatarView(name: r.name, photoUrl: r.photoUrl, size: 36)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(r.name).lineLimit(1)
+                    if let s = r.subtitle {
+                        Text(s).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .accessibilityElement(children: .combine)
+            if r.ringable {
+                Spacer(minLength: 8)
+                Button { ringAgain(r.id, name: r.name) } label: {
+                    Image(systemName: "phone.arrow.up.right")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(Color(.tertiarySystemFill)))
+                }
+                .buttonStyle(.borderless)
+                .disabled(waiting)
+                .opacity(waiting ? 0.4 : 1)
+                .accessibilityLabel("Ring \(r.name)")
+            }
+        }
+    }
+
+    /// Ring again (2026-10-23): rings one member into this group chat's call (`groupCallRingAgain`,
+    /// functions-groups). The server checks everything again; its answer is one line at the foot.
+    private func ringAgain(_ uid: String, name: String) {
+        guard case .group(let cid)? = service.activeRoom else { return }
+        rangAgainAt[uid] = Date()
+        let payload: [String: Any] = ["cid": cid, "uids": [uid]]
+        Task { @MainActor in
+            do {
+                let result = try await Functions.functions(region: "me-central1")
+                    .httpsCallable("groupCallRingAgain").call(payload)
+                let data = result.data as? [String: Any] ?? [:]
+                let rung = data["rung"] as? [String] ?? []
+                if rung.contains(uid) {
+                    showSheetToast("Ringing \(name)")
+                    return
+                }
+                let skipped = data["skipped"] as? [[String: Any]] ?? []
+                let reason = skipped.first { ($0["uid"] as? String) == uid }?["reason"] as? String
+                // Only a ring that went out (or one the server says is still up) holds the wait.
+                if reason != "tooSoon" && reason != "unreachable" && reason != "ringing" { rangAgainAt[uid] = nil }
+                showSheetToast(Self.ringAgainRefusal(reason, name: name))
+            } catch {
+                let ns = error as NSError
+                let code: FunctionsErrorCode? = ns.domain == FunctionsErrorDomain ? FunctionsErrorCode(rawValue: ns.code) : nil
+                if code != .resourceExhausted { rangAgainAt[uid] = nil }
+                switch code {
+                case .resourceExhausted?: showSheetToast("Too many rings. Wait a moment.")
+                case .permissionDenied?: showSheetToast("Only people in the call can ring others")
+                case .failedPrecondition?: showSheetToast("This call has ended")
+                case .notFound?, .unimplemented?: showSheetToast("Ringing again isn't available yet")
+                default: showSheetToast("Couldn't ring. Try again.")
                 }
             }
         }
-        .accessibilityElement(children: .combine)
+    }
+
+    /// The foot line for a person the server did not ring (groupCallRingAgain's `skipped` reasons).
+    private static func ringAgainRefusal(_ reason: String?, name: String) -> String {
+        switch reason {
+        case "declined": return "\(name) declined this call"
+        case "inCall", "joined": return "\(name) is already in the call"
+        case "ringing": return "\(name) is still ringing"
+        case "tooSoon": return "Wait a minute before ringing \(name) again"
+        case "unreachable": return "Couldn't reach \(name)'s phone"
+        case "notMember": return "\(name) isn't in this group"
+        default: return "Can't ring \(name) now"
+        }
     }
 }
 
