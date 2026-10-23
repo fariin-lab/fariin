@@ -1319,30 +1319,12 @@ private struct OfficialStoryForm: View {
             error = "Choose at least one country."
             return
         }
-        posting = true; error = nil
-        Task { @MainActor in
-            do {
-                if let video {
-                    try await OfficialStoryCompose.postVideo(video, caption: caption, draft: draft)
-                } else {
-                    try await OfficialStoryCompose.postPhoto(image, caption: caption, draft: draft)
-                }
-                // The rest of a multi-pick, in order, each with its own caption, the same draft.
-                for e in extras {
-                    if let v = e.video {
-                        try await OfficialStoryCompose.postVideo(v, caption: e.caption, draft: draft)
-                    } else if let p = e.photo {
-                        try await OfficialStoryCompose.postPhoto(p, caption: e.caption, draft: draft)
-                    }
-                }
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-                posting = false
-                onPosted()
-            } catch {
-                posting = false
-                self.error = error.localizedDescription
-            }
-        }
+        // owner 2026-10-23 ("the page is frozen until the upload finishes"): the form closes now and
+        // the upload goes on in the background, ringing Fariin's picture (`OfficialStoryUploads`);
+        // a refusal is shown on Fariin's page instead of here.
+        error = nil
+        OfficialStoryUploads.shared.run(image, video: video, caption: caption, extras: extras, draft: draft)
+        onPosted()
     }
 }
 

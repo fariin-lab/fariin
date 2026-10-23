@@ -616,6 +616,14 @@ struct OfficialChatInfoView: View {
                 }
             }
         }
+        // A Fariin story the server refused after the form had closed (OfficialStoryUploads).
+        .alert("Couldn't post the story", isPresented: Binding(
+            get: { OfficialStoryUploads.shared.lastError != nil },
+            set: { if !$0 { OfficialStoryUploads.shared.lastError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(OfficialStoryUploads.shared.lastError ?? "")
+        }
         .navigationDestination(isPresented: $showAllMedia) {
             OfficialMediaGrid(items: media) { zoomed = $0 }
         }
@@ -656,7 +664,9 @@ struct OfficialChatInfoView: View {
                     .overlay {
                         StoryRingView(seen: StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt), lineWidth: 3)
                             .frame(width: 118, height: 118)
+                            .opacity(OfficialStoryUploads.shared.count > 0 ? 0 : 1)
                     }
+                    .overlay { GroupStoryUploadRing(active: OfficialStoryUploads.shared.count > 0) }
                     .frame(width: 118, height: 118)
                     .contentShape(Circle())
                     .onTapGesture {
@@ -666,6 +676,8 @@ struct OfficialChatInfoView: View {
                     .accessibilityAddTraits(.isButton)
             } else {
                 OfficialAvatar(size: 112)
+                    // A Fariin story going up from this phone (owner 2026-10-23).
+                    .overlay { GroupStoryUploadRing(active: OfficialStoryUploads.shared.count > 0) }
             }
             HStack(spacing: 6) {
                 Text(OfficialChannel.name).font(.system(size: 26, weight: .bold))

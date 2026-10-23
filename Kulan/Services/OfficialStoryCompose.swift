@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import UIKit
 import AVFoundation
 import FirebaseFirestore
@@ -116,5 +117,43 @@ enum OfficialStoryCompose {
             throw Failure.message(text.isEmpty ? "The story could not be posted. Try again." : text)
         }
         OfficialStories.shared.refresh(force: true)
+    }
+}
+
+/// Fariin stories going up from this phone (owner 2026-10-23: "the page is frozen until the upload
+/// finishes"). The form closes at once and the upload runs here; Fariin's page rings its picture
+/// while `count > 0` and shows `lastError` if the server refused.
+@MainActor @Observable
+final class OfficialStoryUploads {
+    static let shared = OfficialStoryUploads()
+    private init() {}
+    var count = 0
+    var lastError: String?
+
+    func run(_ image: Data, video: StoryVideoPayload?, caption: String, extras: [StoryExtra],
+             draft: OfficialStoryCompose.Draft) {
+        count += 1
+        lastError = nil
+        Task { @MainActor in
+            defer { count -= 1 }
+            do {
+                if let video {
+                    try await OfficialStoryCompose.postVideo(video, caption: caption, draft: draft)
+                } else {
+                    try await OfficialStoryCompose.postPhoto(image, caption: caption, draft: draft)
+                }
+                for e in extras {
+                    if let v = e.video {
+                        try await OfficialStoryCompose.postVideo(v, caption: e.caption, draft: draft)
+                    } else if let p = e.photo {
+                        try await OfficialStoryCompose.postPhoto(p, caption: e.caption, draft: draft)
+                    }
+                }
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } catch {
+                lastError = error.localizedDescription
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+            }
+        }
     }
 }
