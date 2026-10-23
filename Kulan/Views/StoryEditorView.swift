@@ -4160,6 +4160,13 @@ struct StoryEditorView: View {
     private func send() async {
         stashCurrent()
         let keep = index
+        // ⛔ THE SCREEN STAYS PUT WHILE THE OTHERS RENDER (owner 2026-10-23: "4 pictures, I stay on the
+        // dog, tap Next, and while the sheet comes up the background changes to the cat and the
+        // monkey by itself"). Rendering walks `index` through every item below, and each await lets
+        // the canvas draw the item being rendered. A still copy of the editor goes over it first, in
+        // the editor's own view (under the sheet), and comes off once the first item is back.
+        let freeze = items.count > 1 ? Self.freezeEditor() : nil
+        defer { Self.unfreeze(freeze) }
 
         // ⛔ THE SHEET GOES UP FIRST, EMPTY, AND THE PICTURE CATCHES IT UP (owner, 2026-08-21: "when
         // i click Next, share story sheet is coming late, feeling lag").
@@ -4238,6 +4245,22 @@ struct StoryEditorView: View {
         pendingShare?.video = leadVideo
         pendingShare?.stickers = rendered.first?.taps ?? []
         pendingExtras = extras
+    }
+
+    /// A still copy of the editor's screen laid over it (see `send`; only with two or more items).
+    @MainActor private static func freezeEditor() -> UIView? {
+        guard let host = WebLink.topViewController()?.view,
+              let snap = host.snapshotView(afterScreenUpdates: false) else { return nil }
+        snap.frame = host.bounds
+        snap.isUserInteractionEnabled = false
+        host.addSubview(snap)
+        return snap
+    }
+
+    /// Off a beat later, once the restored item has drawn under it.
+    @MainActor private static func unfreeze(_ v: UIView?) {
+        guard let v else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { v.removeFromSuperview() }
     }
 
     /// WHERE THE LINK AND PLACE STICKERS ARE, IN THE POSTED FRAME'S OWN TERMS — see `StoryTapTarget`.
