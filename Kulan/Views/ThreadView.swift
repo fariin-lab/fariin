@@ -8547,8 +8547,12 @@ struct ThreadView: View {
         return MessageRequests.rawStance(c, myUid: me) == .incoming && !c.isBlockedByMe(me)
     }
 
+    // ⛔ owner 2026-10-23 (build 1014, two screenshots): the buttons stacked over the composer
+    // overlapped it and the last message, and the keyboard could still come up. No composer now:
+    // Delete and Accept alone, in the same measured notice bar as `requestBar`, so the list's bottom
+    // inset makes room for them. Accept opens the composer (the chat is no longer a request).
     private var newPersonComposer: some View {
-        VStack(spacing: 8) {
+        composerNotice {
             HStack(spacing: 10) {
                 Button {
                     let id = cid
@@ -8571,8 +8575,6 @@ struct ThreadView: View {
                 .foregroundStyle(Theme.onAccent(dark))
                 .liquidGlass(ChatNoticeButton.shape, interactive: true, tint: Theme.accent(dark))
             }
-            .padding(.horizontal, 16)
-            composerArea
         }
     }
 
