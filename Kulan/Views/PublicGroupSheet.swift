@@ -45,6 +45,28 @@ struct PublicGroupSheet: View {
 
     fileprivate static let blue = Color(hex: 0x2392FE)
 
+    /// When the page appeared: a guest chat that arrives later waits for the push to finish.
+    @State private var appearedAt = Date()
+
+    /// ⛔ THE GUEST CHAT IS ON THE FIRST FRAME WHEN WE CAN (owner 2026-10-23, 5th report: a Recent
+    /// public group "sometimes" landed on the chat list, blank top buttons, no tab bar). A chat row
+    /// pushes its ThreadView at once; this page pushed a blank ground and swapped the ThreadView in
+    /// from `.task` IN THE MIDDLE OF THE PUSH, so the chat's own navigation item went in during the
+    /// transition, and when that lost the race the stack showed the list. Search rows and Recent rows
+    /// are warmed (preview + peek), so the chat is built here, before the push begins.
+    init(target: PublicGroupTarget, pushed: Bool = false) {
+        self.target = target
+        self.pushed = pushed
+        let me = AuthService.shared.uid ?? ""
+        if let p = GroupDirectory.cachedPreview(name: target.name, cid: target.cid),
+           !(p.isMember && ConversationsRepository.shared.conversations
+                .contains(where: { $0.id == p.cid && $0.users.contains(me) })),
+           let readable = GroupDirectory.cachedPeek(p.cid) {
+            _preview = State(initialValue: p)
+            _guest = State(initialValue: PublicGroupGuest(p, readable: readable))
+        }
+    }
+
     // owner 2026-10-21: the chat itself when the group can be read from outside (see the top note),
     // and once joined the member's chat in the same place. One ZStack so `load` runs once.
     var body: some View {
@@ -75,7 +97,7 @@ struct PublicGroupSheet: View {
                 Color(uiColor: .systemBackground).ignoresSafeArea()
             }
         }
-        .task { await load() }
+        .task { appearedAt = Date(); await load() }
     }
 
     // ⛔ A FULL PAGE, NOT A SHEET (owner 2026-10-20: "open the group page directly, Join at the
@@ -249,7 +271,14 @@ struct PublicGroupSheet: View {
             // ⛔ THE CHAT, ALWAYS (owner 2026-10-23, the reference app read by five agents): a public
             // group's link pushes its chat with Join at the foot, readable or not. The info page is
             // left for a group that could not be found or loaded. An open guest chat stays as it is.
-            if guest == nil { guest = PublicGroupGuest(p, readable: readable) }
+            // One that arrives now waits for the push to end, so the chat's navigation item is never
+            // installed mid-transition (see `init`).
+            if guest == nil {
+                let left = 0.45 - Date().timeIntervalSince(appearedAt)
+                if left > 0 { try? await Task.sleep(nanoseconds: UInt64(left * 1_000_000_000)) }
+                guard !Task.isCancelled else { return }
+                if guest == nil { guest = PublicGroupGuest(p, readable: readable) }
+            }
             preview = p
         case .refused(let why):
             if preview == nil || guest == nil { refusedText = why }

@@ -29,7 +29,12 @@ struct PublicGroupHit: Identifiable, Equatable {
     var id: String { cid }
 
     /// "@name · 12 members", the search row's second line.
-    var subtitle: String { "@\(handle) · \(GroupDirectory.membersLine(memberCount))" }
+    /// A Recent row is rebuilt from what was saved, which has no count: the warmed preview's count
+    /// then, and no "0 members" when neither knows (owner 2026-10-23).
+    @MainActor var subtitle: String {
+        let n = memberCount > 0 ? memberCount : (GroupDirectory.cachedPreview(name: nil, cid: cid)?.memberCount ?? 0)
+        return n > 0 ? "@\(handle) · \(GroupDirectory.membersLine(n))" : "@\(handle)"
+    }
 
     init?(_ row: [String: Any]) {
         guard (row["kind"] as? String) == "group",
