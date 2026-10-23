@@ -100,6 +100,7 @@ final class ComposerWaveformView: UIView {
         case .began:
             startPct = max(0, min(1, progress))
             VoiceScrubState.active = true
+            holdBackSwipe(true)
             fallthrough
         case .changed:
             let pct = startPct + Double(g.translation(in: self).x / w)
@@ -107,6 +108,7 @@ final class ComposerWaveformView: UIView {
         case .ended, .cancelled, .failed:
             VoiceScrubState.touchOnWaveform = false
             VoiceScrubState.active = false
+            holdBackSwipe(false)
         default:
             break
         }
@@ -114,8 +116,35 @@ final class ComposerWaveformView: UIView {
 }
 
 extension ComposerWaveformView: UIGestureRecognizerDelegate {
+    /// ⛔ OWNER 2026-10-23, SECOND REPORT ("I paused, I try to slide, the voice page closes"): this
+    /// said `true` to EVERY gesture, so the system back swipe ran beside the scrub, began leaving the
+    /// chat, and leaving parks the draft. `gestureRecognizerShouldBegin` above did not hold on iOS 27.
+    /// Now: only our own tap runs beside the scrub; every other pan or swipe has to wait for the scrub
+    /// to fail (the standard UIKit arrangement), and the back swipes are switched off while it runs.
     func gestureRecognizer(_ g: UIGestureRecognizer,
-                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        other.view === self
+    }
+
+    func gestureRecognizer(_ g: UIGestureRecognizer,
+                           shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+        g is AxisLockedScrubRecognizer && other.view !== self
+            && (other is UIPanGestureRecognizer || other is UISwipeGestureRecognizer)
+    }
+}
+
+extension ComposerWaveformView {
+    /// The navigation's two back swipes (edge and, on iOS 26+, content), off while a scrub runs.
+    fileprivate func holdBackSwipe(_ hold: Bool) {
+        var r: UIResponder? = self
+        while let next = r?.next {
+            if let nav = next as? UINavigationController {
+                nav.interactivePopGestureRecognizer?.isEnabled = !hold
+                nav.interactiveContentPopGestureRecognizer?.isEnabled = !hold
+            }
+            r = next
+        }
+    }
 }
 
 /// The LIVE waveform of a locked recording (owner 2026-10-15, with a picture: "X · waveform · 1 ·
