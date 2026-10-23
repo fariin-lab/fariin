@@ -509,7 +509,7 @@ final class PollBubbleView: UIView {
         addSubview(footerStack)
     }
     required init?(coder: NSCoder) { fatalError() }
-    deinit { listener?.remove() }
+    deinit { FirestoreHub.drop([listener]) }   // never remove() directly in a deinit: see ListenerBox
 
     func configure(_ p: BubbleBody.PollBody, plan: PollPlan, tint: UIColor, cid: String) {
         self.plan = plan

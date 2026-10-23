@@ -1539,7 +1539,11 @@ private final class PaddedToastLabel: UILabel {
 /// the box goes (and removes the listener) only when the page itself leaves the stack.
 final class ListenerBox {
     var reg: ListenerRegistration?
-    deinit { reg?.remove() }
+    // ⛔ NEVER `remove()` HERE DIRECTLY (crash builds 1010 + 1011, 2026-10-23, SIGABRT on the
+    // com.google.firebase.firestore thread): the last reference can die inside a Firestore callback
+    // block being released ON FIRESTORE'S OWN QUEUE, and remove() from there trips its assertion.
+    // `FirestoreHub.drop` removes on a utility queue instead.
+    deinit { FirestoreHub.drop([reg]) }
 }
 
 /// ⛔ THE GROUP'S OWN DOCUMENT, LIVE (owner 2026-10-20: "made admin, the page did not show it until I
@@ -1591,7 +1595,7 @@ final class LiveGroupDoc {
     }
 
     deinit {
-        reg?.remove()
+        FirestoreHub.drop([reg])   // never remove() directly in a deinit: see ListenerBox
         if let swapObserver { NotificationCenter.default.removeObserver(swapObserver) }
     }
 }

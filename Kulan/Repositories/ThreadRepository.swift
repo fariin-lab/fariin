@@ -1863,5 +1863,16 @@ final class ThreadRepository {
         typingExpiry?.invalidate(); typingExpiry = nil
     }
 
-    deinit { listener?.remove(); convListener?.remove(); userListener?.remove(); presenceListener?.remove(); keyPreloadTask?.cancel(); expiryTimer?.invalidate(); burnTimer?.invalidate(); typingExpiry?.invalidate() }
+    // ⛔ NEVER `remove()` HERE DIRECTLY (crash builds 1010 + 1011, 2026-10-23, SIGABRT on the
+    // com.google.firebase.firestore thread): the last reference can die inside a Firestore callback
+    // block being released ON FIRESTORE'S OWN QUEUE, and remove() from there trips its assertion.
+    // `FirestoreHub.drop` removes on a utility queue instead.
+    deinit {
+        FirestoreHub.drop([listener, convListener, userListener, presenceListener])
+        keyPreloadTask?.cancel()
+        // Timers belong to the main run loop; invalidated there when this dies elsewhere.
+        let timers = [expiryTimer, burnTimer, typingExpiry]
+        if Thread.isMainThread { timers.forEach { $0?.invalidate() } }
+        else { DispatchQueue.main.async { timers.forEach { $0?.invalidate() } } }
+    }
 }
