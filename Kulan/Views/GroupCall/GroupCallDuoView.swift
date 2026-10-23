@@ -134,6 +134,10 @@ struct GroupCallDuoView: View {
         Color.clear
             .contentShape(Rectangle())
             .onTapGesture { onBackgroundTap() }
+            // Controls audit 4-B4 (2026-10-23): with two people the other person fills the screen
+            // and had no long-press menu (Pin / Mute / Remove…), which every tile has. Only while
+            // they are the big picture; `tileMenu` is nil for my own tile.
+            .callTileMenu(big, big.id == remote?.id ? stage.tileMenu(for: big) : nil)
     }
 
     /// Camera off (or its picture not here yet): that person's photo in the middle.
