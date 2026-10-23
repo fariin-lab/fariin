@@ -58,7 +58,9 @@ enum CallRole: String {
 enum CallAdminAction: String {
     /// `block` is for call links only (the server refuses it elsewhere): out of the call and refused
     /// by that link for good. A plain `remove` on a link only takes the person out; they may ask again.
-    case mute, remove, block, end
+    /// `muteAll` (controls round 2, 2026-10-23): everyone but me, in one request, with the same
+    /// permission as a single mute (the server's `callAdmin`). No target.
+    case mute, remove, block, end, muteAll
 }
 
 /// Where I am on the way into a call (owner 2026-10-06, reference study). ONE state for the screens
@@ -240,7 +242,8 @@ final class GroupCallService: ObservableObject {
     private var startMuted = false
     /// Round 2 (V2 N8), 2026-10-07: the camera switched off during "Connecting…". The join used to
     /// turn it on anyway (`startLocalMedia` set `cameraOn = video`). Cleared with the room.
-    private var startCameraOff = false
+    /// Controls 2-B4, 2026-10-23: the wish itself, on or off (nil = no tap while joining).
+    private var startCameraWish: Bool?
     /// When this phone got into the room. The two-person look's header clock, like a 1:1 call's;
     /// here and not on the screen, which is rebuilt every time the call is restored from its card.
     @Published private(set) var joinedAt: Date?
@@ -455,7 +458,7 @@ final class GroupCallService: ObservableObject {
         closeLobbyForAnotherJoin()
         // 2026-09-24 decision D25: refused while a 1:1 call is ringing or live (audit M-111: not in
         // its closing tail).
-        guard !Self.oneToOneLive else { notice = Self.busyNotice; return }
+        guard !Self.oneToOneLive else { clearJoinWishes(); notice = Self.busyNotice; return }
         connecting = true; isVideo = video; callTitle = title
         cameraOn = video   // round 2 (V2 N8): the camera button shows the call's wish while joining
         joiningRoomId = cid
@@ -598,6 +601,7 @@ final class GroupCallService: ObservableObject {
             if gen != joinGeneration { await abandonJoin(); return }   // owner audit 2026-10-06 #4
             connecting = false
             Telemetry.event(.error, component: "groupcall", code: "join_" + Telemetry.code(error))   // owner 2026-10-21
+            GCLog.failure("join_error", room: cid, ["code": Telemetry.code(error)])
             // Only tear down if THIS task never established a call. Calling disconnect()
             // unconditionally is what let a losing second task kill the winner's live room.
             // Group call audit 2026-10-23 (A1): through `failJoin`, so a join minimized with the
@@ -666,11 +670,15 @@ final class GroupCallService: ObservableObject {
         guard !leaving else { return }   // audit M-060: the dead call screen's buttons do nothing
         guard isActive || connecting || waitingForApproval else { return }   // no call, nothing to mute
         micOn.toggle()
+        GCLog.event("tap", room: logRoom, ["what": "mic", "to": micOn ? "on" : "off", "live": isActive ? "1" : "0"])
         // Still joining: the wish is what the join publishes with (`startMuted`), not a call on a
         // room that is not up yet.
         guard isActive else { startMuted = !micOn; return }
         syncMic()
     }
+
+    /// The room the GC# log lines name (hashed in `GCLog`): the call's, or the one being joined.
+    var logRoom: String? { activeCid ?? joiningRoomId }
 
     // MARK: - Owner and moderator controls (group call permissions, 2026-10-06)
 
@@ -703,10 +711,13 @@ final class GroupCallService: ObservableObject {
             return gen == self.joinGeneration && self.activeRoom == r && self.joinedAt == joined
         }
         if action == .end { endingForAll = true }
+        let logId = logRoom
         do {
             _ = try await functions.httpsCallable("callAdmin").call(payload)
+            GCLog.event("admin", room: logId, ["action": action.rawValue, "result": "ok"])
         } catch {
             if action == .end, sameCall() { endingForAll = false }
+            GCLog.failure("admin", room: logId, ["action": action.rawValue, "result": Telemetry.code(error)])
             throw error
         }
         // The server closed the room and the call's record; I leave quietly, like any hang-up.
@@ -767,7 +778,14 @@ final class GroupCallService: ObservableObject {
     fileprivate func localMicMuteChanged() {
         guard isActive, micOn, micChangesInFlight == 0,
               !room.localParticipant.isMicrophoneEnabled() else { return }
+        noteServerMute()
+    }
+
+    /// The server muted me: the button follows, and the note says so. Also from the mic chain, when
+    /// the mute lands while my own change is running (controls 1-A6).
+    private func noteServerMute() {
         micOn = false
+        GCLog.event("server_mute", room: logRoom)
         // The server now also says WHO ("<Name> muted you", a data message `GroupCallSocial` shows),
         // and that note lands a beat after the mute itself. Wait for it; say the plain line only if
         // none came (an older server, or the note was lost).
@@ -884,19 +902,60 @@ final class GroupCallService: ObservableObject {
     func toggleSpeaker() {
         speakerOn.toggle()
         AudioManager.shared.isSpeakerOutputPreferred = speakerOn
+        GCLog.event("tap", room: logRoom, ["what": "speaker", "to": speakerOn ? "on" : "off"])
+        if !speakerOn { prepareRecordingForEarpiece() }
+    }
+
+    /// Controls 1-A4, 2026-10-23: a call joined muted has recorded nothing, so the SDK keeps the
+    /// session in `.playback`, where the speaker preference does nothing. Speaker off then stayed
+    /// on the loudspeaker while the screen blanked at the ear. Asking the SDK to keep the mic input
+    /// prepared (muted, nothing sent) moves the session to play-and-record, where the earpiece
+    /// works. Only when needed (speaker off, no mic published yet), only with mic access already
+    /// given (this never prompts), and only for a call the SDK configures itself: under CallKit the
+    /// session is ours and is already play-and-record. Turned off again when the call ends.
+    private var recordingPrepared = false
+    private var recordingPreparedChange: Task<Void, Never>?
+    private func prepareRecordingForEarpiece() {
+        guard isActive || connecting, !recordingPrepared,
+              AudioManager.shared.audioSession.isAutomaticConfigurationEnabled,
+              AVAudioApplication.shared.recordPermission == .granted,
+              !room.localParticipant.isMicrophoneEnabled(),
+              room.localParticipant.trackPublications.values.first(where: { $0.source == .microphone }) == nil
+        else { return }
+        recordingPrepared = true
+        setRecordingPrepared(true)
+    }
+
+    private func releasePreparedRecording() {
+        guard recordingPrepared else { return }
+        recordingPrepared = false
+        setRecordingPrepared(false)
+    }
+
+    /// One change at a time, in order, so a leave's "off" can never land after the next call's "on".
+    private func setRecordingPrepared(_ on: Bool) {
+        let previous = recordingPreparedChange
+        recordingPreparedChange = Task { @MainActor in
+            await previous?.value
+            do { try await AudioManager.shared.setRecordingAlwaysPreparedMode(on) }
+            catch { GCLog.event("rec_prepared", room: nil, ["to": on ? "on" : "off", "result": Telemetry.code(error)]) }
+        }
     }
     func toggleCamera() {
         guard !cameraLocked else { return }   // a voice call link: no camera for anybody
         guard !leaving else { return }        // audit M-060
         guard isActive || connecting || waitingForApproval else { return }   // no call, nothing to switch
         cameraOn.toggle()
+        GCLog.event("tap", room: logRoom, ["what": "camera", "to": cameraOn ? "on" : "off", "live": isActive ? "1" : "0"])
         // Owner, 2026-10-06: "when I open camera, group call is not working". The camera was
         // started without asking for access, and any failure was swallowed, so the button said
         // on while no picture went out. `syncCamera` asks first (as the 1:1 call does), and on a
         // failure puts the button back and says why. Audit M-002: one change at a time, latest wish
         // wins, so two quick taps can no longer leave the camera out while the button says off.
-        // Still joining: the wish is kept for the join's own start (round 2, V2 N8).
-        if isActive { syncCamera() } else { startCameraOff = !cameraOn }
+        // Still joining: the wish is kept for the join's own start (round 2, V2 N8). Controls 2-B4,
+        // 2026-10-23: on as well as off; only an off wish used to survive, so a camera turned on
+        // while a voice call joined went back off when the room came up.
+        if isActive { syncCamera() } else { startCameraWish = cameraOn }
     }
 
     // MARK: - Mic and camera, one change at a time (audit M-002, M-084, M-085, 2026-10-07)
@@ -929,18 +988,33 @@ final class GroupCallService: ObservableObject {
         micChain = Task { @MainActor [weak self] in
             guard let self else { return }
             var tries = 0
+            // What this chain itself last put on the publication (nil until its first SDK call).
+            var applied: Bool?
             // Audit M-085: never past the call it was started for. `leaving` is set first thing by
             // `disconnect()`, which waits (at most 1 s) for this chain after it closes the room.
             while gen == self.joinGeneration, self.micChainID == id, self.isActive, !self.leaving, tries < 4 {
                 let want = self.micOn
-                if self.room.localParticipant.isMicrophoneEnabled() == want { break }
+                let live = self.room.localParticipant.isMicrophoneEnabled()
+                // Controls 1-A6, 2026-10-23: this chain turned the mic on, nobody asked for it off,
+                // and the publication is muted now. That is the server (an owner's mute), which
+                // `localMicMuteChanged` skips while a change of mine is running. Going round again
+                // here used to unmute me straight back, with no note. A publication that is gone
+                // (a full reconnect republishing) is not a mute.
+                if applied == true, want, !live, self.micPublicationMuted {
+                    self.noteServerMute()
+                    break
+                }
+                if live == want { break }
                 tries += 1
-                do { try await self.room.localParticipant.setMicrophone(enabled: want) }
-                catch {
+                do {
+                    try await self.room.localParticipant.setMicrophone(enabled: want)
+                    applied = want
+                } catch {
                     guard gen == self.joinGeneration, !self.leaving else { break }
                     // Audit M-084: a refused microphone (permission off) used to fail silently with
                     // the button on. The button now shows what is really published, and says so.
                     let live = self.room.localParticipant.isMicrophoneEnabled()
+                    GCLog.failure("mic_fail", room: self.logRoom, ["want": want ? "on" : "off", "code": Telemetry.code(error)])
                     if self.micOn != live {
                         self.micOn = live
                         self.showToast(want ? "Couldn't turn the microphone on" : "Couldn't turn the microphone off")
@@ -948,9 +1022,26 @@ final class GroupCallService: ObservableObject {
                     break
                 }
             }
+            // Controls 1-A2, 2026-10-23: four SDK calls, each overtaken by a new tap, and the loop
+            // stopped with the wish and the publication apart (the button said Muted while people
+            // heard me). The button now shows what is really published; the next tap goes from there.
+            if tries >= 4, gen == self.joinGeneration, self.micChainID == id, self.isActive, !self.leaving {
+                let live = self.room.localParticipant.isMicrophoneEnabled()
+                if self.micOn != live {
+                    self.micOn = live
+                    GCLog.event("mic_cap", room: self.logRoom, ["live": live ? "on" : "off"])
+                }
+            }
             if self.micChainID == id { self.micChain = nil }
             self.micChangesInFlight -= 1
         }
+    }
+
+    /// My microphone publication is there, with its track, and muted.
+    private var micPublicationMuted: Bool {
+        guard let p = room.localParticipant.trackPublications.values.first(where: { $0.source == .microphone }),
+              p.track != nil else { return false }
+        return p.isMuted
     }
 
     private func syncCamera() {
@@ -980,11 +1071,23 @@ final class GroupCallService: ObservableObject {
                 do { try await self.room.localParticipant.setCamera(enabled: want) }
                 catch {
                     guard gen == self.joinGeneration, !self.leaving else { break }
+                    GCLog.failure("camera_fail", room: self.logRoom, ["want": want ? "on" : "off", "code": Telemetry.code(error)])
                     if want == self.cameraWanted {
                         self.cameraOn = self.room.localParticipant.isCameraEnabled()
                         self.showToast(want ? "Couldn't turn the camera on" : "Couldn't turn the camera off")
                     }
                     break
+                }
+            }
+            // Controls 1-A2 / 2-B2, 2026-10-23: the same cap as the mic's. The button shows what is
+            // really published rather than a wish the chain gave up on (not while the camera is
+            // paused for the background, where off is the point and the wish is kept on purpose).
+            if tries >= 4, gen == self.joinGeneration, self.cameraChainID == id, self.isActive, !self.leaving,
+               !self.cameraPausedByBackground, !self.cameraLocked {
+                let live = self.room.localParticipant.isCameraEnabled()
+                if self.cameraOn != live {
+                    self.cameraOn = live
+                    GCLog.event("camera_cap", room: self.logRoom, ["live": live ? "on" : "off"])
                 }
             }
             guard self.cameraChainID == id else { return }   // let go by a leave; not this call's
@@ -997,18 +1100,85 @@ final class GroupCallService: ObservableObject {
 
     /// Audit M-081, 2026-10-07: the group call's camera cannot keep capturing in the background,
     /// so everyone saw a frozen picture with my camera still "on". Now it stops publishing (they
-    /// see my photo) and comes back when the app does. Not while sharing the screen: the share
-    /// is what they are looking at then, and the shared screen keeps moving.
+    /// see my photo) and comes back when the app does.
+    /// Controls 2-B5, 2026-10-23: while sharing the screen too. iOS stops the capture either way,
+    /// so the camera stayed "on" with a frozen picture, which a viewer who had pinned someone else
+    /// saw in the strip. The share is its own track and keeps running.
     private func appWentToBackground() {
-        guard isActive, cameraOn, !screenSharing, !cameraPausedByBackground else { return }
+        guard isActive, cameraOn, !cameraPausedByBackground else { return }
         cameraPausedByBackground = true
+        GCLog.event("camera_pause", room: logRoom, ["why": "background"])
         syncCamera()
     }
 
     private func appCameBack() {
         guard cameraPausedByBackground else { return }
         cameraPausedByBackground = false
+        GCLog.event("camera_pause", room: logRoom, ["why": "foreground"])
         syncCamera()
+    }
+
+    /// Controls 2-B2, 2026-10-23: a full reconnect takes every track down and puts the unmuted ones
+    /// back up, outside our chains. A mute or camera-off tapped in that gap found no publication,
+    /// did nothing and stopped, and the republish then sent the camera (or mic) while the button
+    /// said off. Called whenever my own mic or camera publication goes up (the republish's own
+    /// publish events): that source's chain compares the wish with what is published and fixes any
+    /// difference. Only that source: the SDK republishes one track after another, and a chain run
+    /// for a track not back yet would publish a second one beside it. A chain already running (our
+    /// own publish) makes this a no-op.
+    fileprivate func resyncLocalMedia(_ source: Track.Source) {
+        guard isActive, !leaving else { return }
+        switch source {
+        case .microphone: syncMic()
+        case .camera: syncCamera()
+        default: break
+        }
+    }
+
+    /// Controls 5-9, 2026-10-23: a group call started or joined inside the app has no CallKit call,
+    /// so a phone call, Siri or an alarm takes the audio and nothing gave it back: the 1:1 call has
+    /// these two observers, the group call had none. When the interruption ends (or the system's
+    /// audio daemon restarted), and the SDK's engine has not come back by itself, the engine is let
+    /// go and allowed again, which makes the SDK set up and start the session afresh. Not for a call
+    /// answered through CallKit (there didActivate brings the engine back, `GroupCallKitAudio`), and
+    /// never while a 1:1 call owns the audio. Installed once, with the first room.
+    private var audioRecoveryObservers: [NSObjectProtocol] = []
+    private func installAudioRecovery() {
+        guard audioRecoveryObservers.isEmpty else { return }
+        let center = NotificationCenter.default
+        audioRecoveryObservers = [
+            center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { note in
+                let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+                MainActor.assumeIsolated { GroupCallService.shared.audioInterrupted(raw) }
+            },
+            center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { GroupCallService.shared.restartAudioIfNeeded(reset: true) }
+            },
+        ]
+    }
+
+    private func audioInterrupted(_ raw: UInt?) {
+        guard isActive, let raw, let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+        GCLog.event("audio_interrupt", room: logRoom, ["step": type == .began ? "began" : "ended"])
+        guard type == .ended else { return }
+        let gen = joinGeneration
+        // A beat for the SDK (and the system) to bring the audio back on their own first.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard gen == joinGeneration else { return }
+            restartAudioIfNeeded(reset: false)
+        }
+    }
+
+    private func restartAudioIfNeeded(reset: Bool) {
+        guard isActive, !leaving, CallService.shared.state == .idle,
+              AudioManager.shared.audioSession.isAutomaticConfigurationEnabled else { return }
+        // After an interruption the engine may well be running again; a reset kills it whatever it says.
+        if !reset, AudioManager.shared.isEngineRunning { return }
+        try? AudioManager.shared.setEngineAvailability(.none)
+        try? AudioManager.shared.setEngineAvailability(.default)
+        GCLog.event("audio_restart", room: logRoom,
+                    ["why": reset ? "reset" : "interruption", "running": AudioManager.shared.isEngineRunning ? "1" : "0"])
     }
 
     /// Audit M-096, 2026-10-07: group, ad-hoc and link calls let the screen lock mid-call and had
@@ -1034,7 +1204,12 @@ final class GroupCallService: ObservableObject {
     private func startLocalMedia(mic: Bool, video: Bool, cameraReady: (() -> Void)? = nil) {
         joinedAt = Date()   // the two-person header's clock (GroupCallView), kept across minimize
         micOn = mic
-        cameraOn = video && !startCameraOff   // round 2 (V2 N8): a camera-off tap while joining holds
+        // Round 2 (V2 N8): a camera tap while joining holds. Controls 2-B4: either way, on or off.
+        cameraOn = (startCameraWish ?? video) && !cameraLocked
+        startCameraWish = nil
+        GCLog.event("media_start", room: logRoom, ["mic": mic ? "on" : "off", "camera": cameraOn ? "on" : "off"])
+        // Controls 1-A4: joined muted with Speaker already off (tapped while connecting).
+        if !mic, !speakerOn { prepareRecordingForEarpiece() }
         // The mic and the camera start side by side: the camera no longer waits behind the mic's
         // publish, which is most of what "Join is slow" was on a video link (owner, 2026-10-07).
         // Audit M-002, 2026-10-07: through the same one-at-a-time chains as the buttons, so a Mute
@@ -1045,7 +1220,7 @@ final class GroupCallService: ObservableObject {
         // after a swipe home): the camera waits for the app, as a camera that went to the
         // background does (audit 2026-10-20: capture failed, "Couldn't turn the camera on", and
         // the video was lost for the whole call).
-        if cameraOn, !screenSharing, UIApplication.shared.applicationState != .active {
+        if cameraOn, UIApplication.shared.applicationState != .active {
             cameraPausedByBackground = true
         }
         syncCamera()
@@ -1069,6 +1244,9 @@ final class GroupCallService: ObservableObject {
         // screen was about to replace and left a live call with no screen. A pending swap keeps it.
         if lobby != nil, !roomInLobbyCover, !lobbySwapPending { lobbyJoin = false; lobby = nil }
         usingFrontCamera = true
+        GCLog.event("joined", room: logRoom, ["kind": isLink ? "link" : isAdhoc ? "adhoc" : "group"])
+        installShareAdoption()        // controls 3-2
+        installAudioRecovery()        // controls 5-9
         GroupCallSocial.shared.attach(room: room, myUid: myUid, myName: ProfileStore.shared.me?.name ?? "")
         GroupCallRinging.shared.callJoined()
         aloneSince = nil; someoneJoined = false
@@ -1087,12 +1265,23 @@ final class GroupCallService: ObservableObject {
               let track = room.localParticipant.firstCameraVideoTrack as? LocalVideoTrack,
               let capturer = track.capturer as? CameraCapturer else { return }
         flippingCamera = true
+        GCLog.event("tap", room: logRoom, ["what": "flip"])
         Task { @MainActor in
             do {
                 _ = try await capturer.switchCameraPosition()
                 usingFrontCamera = capturer.position != .back
             } catch {
+                GCLog.failure("flip_fail", room: logRoom, ["code": Telemetry.code(error)])
                 showToast("Couldn't switch the camera")
+            }
+            // Controls 2-B3, 2026-10-23: the flip is a stop and a start of the capture, and a
+            // camera-off landing in between had its stop undone by that start: nothing went out
+            // (the track is muted) but the camera light stayed on. A track that is muted now gets
+            // its capture stopped again, once the camera chain has settled (an unmute in flight
+            // starts the capture before it clears the muted flag, and must not be cut).
+            if let chain = cameraChain { await chain.value }
+            if track.isMuted, !cameraWanted, cameraChain == nil {
+                _ = try? await capturer.stopCapture()
             }
             flippingCamera = false
         }
@@ -1101,10 +1290,9 @@ final class GroupCallService: ObservableObject {
     // MARK: - Screen sharing
 
     /// True while MY screen share track is published. Set only by the publish and unpublish events
-    /// (`localScreenShareChanged`), never by the button: with the extension the first
-    /// `setScreenShare(true)` only opens the system's broadcast sheet and returns nothing, and the
-    /// track goes up later, when the person taps Start there (or never, if they cancel). Stopping
-    /// from the red status pill or Control Center unpublishes the track too, so this follows that.
+    /// (`localScreenShareChanged`), never by the button: the track goes up only once the person
+    /// taps Start in the system's broadcast sheet (or never, if they cancel). Stopping from the red
+    /// status pill or Control Center ends the extension, which ends the share here too.
     @Published private(set) var screenSharing = false {
         didSet { updateGroupScreenBehavior() }   // audit M-096: a share is never blanked at the ear
     }
@@ -1128,33 +1316,37 @@ final class GroupCallService: ObservableObject {
     /// once the broadcast has really started.
     func toggleScreenShare() {
         guard isActive, !cameraLocked, !shareBusy else { return }
-        if screenSharing || shareSession != nil { endScreenShare(); return }
-        shareAsked = true; lateShareWatch = nil   // audit M-106: this share is wanted
-        shareBusy = true
+        // Controls 3-3, 2026-10-23: only a share that really began is stopped by this tap. A session
+        // still waiting on a sheet that was closed without Start used to swallow the next tap (it
+        // only tore that session down, and the sheet did not open until a third tap). It is dropped
+        // now and a fresh one opens, the way the 1:1 path does.
+        if screenSharing || (shareSession?.hasStarted ?? false) {
+            GCLog.event("tap", room: logRoom, ["what": "share", "to": "off"])
+            endScreenShare()
+            return
+        }
+        if shareSession != nil { endScreenShare() }
+        GCLog.event("tap", room: logRoom, ["what": "share", "to": "on"])
         sharePending = true
         let gen = joinGeneration
         Task { @MainActor in
-            defer { shareBusy = false }
-            let track = await LocalVideoTrack.createBufferTrack(
-                options: BufferCaptureOptions(dimensions: .h1080_169, fps: 15))
-            guard gen == joinGeneration, isActive else { return }
-            let capturer = track.capturer as? BufferCapturer
-            let session = ScreenShareSession { buffer, degrees in
-                capturer?.capture(buffer, rotation: VideoRotation(rawValue: degrees) ?? ._0)
+            guard await openShareSession(), let session = shareSession else {
+                if shareSession == nil { sharePending = false }
+                if gen == joinGeneration, isActive, shareSession == nil {
+                    GCLog.failure("share_fail", room: logRoom, ["step": "open"])
+                    showToast("Couldn't share your screen")
+                }
+                return
             }
-            session.onStarted = { [weak self] in self?.sharePending = false; self?.publishShare(gen: gen) }
-            session.onEnded = { [weak self] _ in self?.endScreenShare(requestStop: false) }
             // The system sheet is pressed for the person (ScreenSharePickerView in GroupCallView).
-            guard session.start() else { showToast("Couldn't share your screen"); return }
             guard ScreenSharePicker.show() else {
-                session.stop()
+                endScreenShare()
+                GCLog.failure("share_fail", room: logRoom, ["step": "picker"])
                 showToast("Couldn't share your screen")
                 return
             }
-            shareTrack = track
-            shareSession = session
             // The sheet closed without Start: nothing tells us, so a share that has not begun within
-            // a minute is dropped (the next tap starts afresh).
+            // a minute is dropped (the next tap starts afresh either way, 3-3).
             Task { @MainActor [weak self, weak session] in
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
                 guard let self, let session, self.shareSession === session, !session.hasStarted else { return }
@@ -1163,18 +1355,71 @@ final class GroupCallService: ObservableObject {
         }
     }
 
+    /// The buffer track, its once-a-second repeat and the extension link, for the Share button and
+    /// for a broadcast started from Control Center (3-2). False when nothing could be opened, or the
+    /// call it was opened for is gone.
+    private func openShareSession() async -> Bool {
+        shareAsked = true; lateShareWatch = nil   // audit M-106: this share is wanted
+        shareBusy = true
+        defer { shareBusy = false }
+        let gen = joinGeneration
+        let track = await LocalVideoTrack.createBufferTrack(
+            options: BufferCaptureOptions(dimensions: .h1080_169, fps: 15))
+        guard gen == joinGeneration, isActive, !leaving, shareSession == nil else { return false }
+        // Controls 3-1, 2026-10-23: a still screen sends no frames (ReplayKit gives none), so a late
+        // joiner or a viewer switched to a sharper layer saw nothing until the screen changed. The
+        // repeater sends the last frame again about once a second, as the 1:1 ScreenShareCapturer does.
+        let repeater = GroupShareRepeater(capturer: track.capturer as? BufferCapturer)
+        let session = ScreenShareSession { buffer, degrees in
+            repeater.push(buffer, rotation: VideoRotation(rawValue: degrees) ?? ._0)
+        }
+        // Controls 3-7: read at the encoder's 15 fps. The session's default 30 polled at 60 Hz and
+        // copied twice the frames the encoder then dropped.
+        session.setMaxFramerate(15)
+        session.onStarted = { [weak self] in
+            self?.sharePending = false
+            self?.publishShare(gen: gen)
+        }
+        session.onEnded = { [weak self] _ in self?.endScreenShare(requestStop: false) }
+        guard session.start() else { return false }
+        shareTrack = track
+        shareSession = session
+        shareRepeater = repeater
+        return true
+    }
+
     private var shareSession: ScreenShareSession?
     private var shareTrack: LocalVideoTrack?
+    private var shareRepeater: GroupShareRepeater?
+    /// Set once this share's publish went through. Not used to take the share down: a full
+    /// reconnect republishes the track under a new publication (3-5).
     private var sharePublication: LocalTrackPublication?
 
     /// The broadcast is running: the buffer track goes up. `screenSharing` follows the publish event.
     private func publishShare(gen: Int) {
         guard let track = shareTrack, sharePublication == nil else { return }
         Task { @MainActor in
-            guard gen == joinGeneration, isActive, shareTrack === track else { endScreenShare(); return }
+            guard gen == joinGeneration, isActive, shareTrack === track else {
+                if shareTrack === track { endScreenShare() }
+                return
+            }
             do {
-                sharePublication = try await room.localParticipant.publish(videoTrack: track)
+                let publication = try await room.localParticipant.publish(videoTrack: track)
+                // Controls 3-4, 2026-10-23: stopped (or the call left) while the publish was out.
+                // The track used to go up anyway, frozen on everyone's screen, with the button
+                // saying Stop Sharing. It comes straight down again.
+                guard gen == joinGeneration, isActive, shareTrack === track else {
+                    GCLog.event("share_orphan", room: logRoom)
+                    try? await room.localParticipant.unpublish(publication: publication)
+                    return
+                }
+                sharePublication = publication
+                shareRepeater?.start()
+                GCLog.event("share_published", room: logRoom)
             } catch {
+                // A share already ended (or a call already left) is not a failure to show.
+                guard gen == joinGeneration, shareTrack === track else { return }
+                GCLog.failure("share_fail", room: logRoom, ["step": "publish", "code": Telemetry.code(error)])
                 showToast("Couldn't share your screen")
                 endScreenShare()
             }
@@ -1184,12 +1429,22 @@ final class GroupCallService: ObservableObject {
     /// Stop Sharing, the extension ending (red pill, Control Center), or leaving the call.
     /// `requestStop` false when the extension itself already ended.
     private func endScreenShare(requestStop: Bool = true) {
-        let session = shareSession, publication = sharePublication, track = shareTrack
-        shareSession = nil; sharePublication = nil; shareTrack = nil
+        let session = shareSession, track = shareTrack, repeater = shareRepeater
+        let had = session != nil || track != nil
+        shareSession = nil; sharePublication = nil; shareTrack = nil; shareRepeater = nil
         sharePending = false
+        repeater?.stop()
         if requestStop { session?.stop() }
+        if had { GCLog.event("share_end", room: logRoom, ["by": requestStop ? "app" : "extension"]) }
+        // Controls 3-5 / 2-B1, 2026-10-23: what is published NOW, not the publication saved at
+        // publish time. A full reconnect republishes the track under a new publication, and
+        // unpublishing the old one only fired a false "unpublished" here while the new one stayed
+        // up, frozen, on everyone else's screen.
+        let live = room.localParticipant.trackPublications.values
+            .compactMap { $0 as? LocalTrackPublication }
+            .filter { $0.source == .screenShareVideo || ($0.track != nil && $0.track === track) }
         Task { @MainActor in
-            if let publication { try? await room.localParticipant.unpublish(publication: publication) }
+            for publication in live { try? await room.localParticipant.unpublish(publication: publication) }
             try? await track?.stop()
         }
     }
@@ -1198,16 +1453,71 @@ final class GroupCallService: ObservableObject {
         // A late event from a room already left must not show a share in the next call.
         guard isActive || !published else { return }
         screenSharing = published
-        // A share started from Control Center or the red pill was never asked for here; it still
-        // belongs to this call, so leaving the call must stop the extension too.
-        if published { shareAsked = true }
+        GCLog.event(published ? "share_up" : "share_down", room: logRoom)
+        // Every share has a session now (the button or the Control Center adoption); leaving the
+        // call must stop the extension too.
+        if published { shareAsked = true; sharePending = false }
+        // Controls 3-8, 2026-10-23: taken down without our asking (a failed republish, a future
+        // moderator stop) while the extension kept recording: the red pill stayed and the next tap
+        // only tore the session down. A full reconnect also takes the track down, and puts it back
+        // within seconds, so the share is ended only if it has not come back once the room is up.
+        if !published, sharePublication != nil, let session = shareSession {
+            Task { @MainActor [weak self, weak session] in
+                var settled = 0
+                for _ in 0..<30 {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    guard let self, let session, self.shareSession === session, self.isActive else { return }
+                    if self.screenSharing { return }   // republished
+                    if self.room.connectionState == .connected { settled += 1 }
+                    if settled >= 3 { break }
+                }
+                guard let self, let session, self.shareSession === session, !self.screenSharing else { return }
+                GCLog.event("share_lost", room: self.logRoom)
+                self.endScreenShare()
+            }
+        }
+    }
+
+    /// Controls 3-2, 2026-10-23: Screen Recording > Kulan from Control Center during a group call.
+    /// Nothing here listened for a broadcast the app had not asked for, so the extension waited for
+    /// an app to take it, gave up after 3 s and said "Start screen sharing from a Kulan call" to a
+    /// person who was in one. The 1:1 call adopts it (`CallService.installShareAdoption`, which
+    /// stands aside during a group call); now the group call does the same. Installed once, with
+    /// the first room.
+    private var shareAdoption: AnyCancellable?
+    private func installShareAdoption() {
+        guard shareAdoption == nil else { return }
+        shareAdoption = KSDarwinNotificationCenter.shared.publisher(for: .broadcastStarted)
+            .sink { _ in
+                Task { @MainActor in GroupCallService.shared.adoptOutsideShare() }
+            }
+    }
+
+    private func adoptOutsideShare() {
+        // Not a share this call already has (the sheet's own Start lands here too), not while one
+        // is being opened, and never while a 1:1 call is up (its share is its own).
+        guard isActive, !leaving, !cameraLocked, !shareBusy, shareSession == nil, !screenSharing,
+              CallService.shared.state == .idle else { return }
+        GCLog.event("share_adopt", room: logRoom)
+        sharePending = true
+        Task { @MainActor in
+            guard await openShareSession(), let session = shareSession else {
+                if shareSession == nil { sharePending = false }
+                return
+            }
+            // Begins the share now; the session's 10 s first-frame wait is the net.
+            session.adoptRunningBroadcast()
+        }
     }
 
     /// Every way out of a room ends my share: the track goes with the room, and the extension is
     /// asked to finish so the red recording pill does not outlive the call.
     private func stopScreenShare() {
+        let hadSession = shareSession != nil
         endScreenShare()   // 2026-10-23: the shared-memory share (the extension's stop flag + unpublish)
-        if screenSharing || shareAsked { BroadcastManager.shared.requestStop() }
+        // Controls 3-6, 2026-10-23: the v3 extension listens for its own stop (the flag and its
+        // notification), not LiveKit's `requestStop`. Only when no session was left to say it.
+        if screenSharing || shareAsked, !hadSession { ScreenShareIPC.Control()?.requestStop() }
         // Audit M-106, 2026-10-07: a share asked for but never started (the system sheet still
         // open as the call ends) can still be started from that sheet afterwards, and nothing
         // would ever tell it to stop. For a minute, a broadcast that starts is told to stop, as
@@ -1227,7 +1537,9 @@ final class GroupCallService: ObservableObject {
                     let service = GroupCallService.shared
                     guard service.lateShareWatch != nil, !service.isActive, !service.connecting,
                           CallService.shared.state == .idle else { return }
-                    BroadcastManager.shared.requestStop()
+                    // Controls 3-6: the v3 stop, so the extension ends quietly instead of with
+                    // "Start screen sharing from a Kulan call" 3 s later.
+                    ScreenShareIPC.Control()?.requestStop()
                 }
             }
         lateShareExpiry = Task { @MainActor [weak self] in
@@ -1420,6 +1732,7 @@ final class GroupCallService: ObservableObject {
     }
 
     func end() {
+        GCLog.event("end", room: logRoom, ["live": isActive ? "1" : "0"])
         // owner audit 2026-10-06 #4: bumped HERE, synchronously, so a join still connecting sees
         // it the moment it resumes, even if the disconnect below has not run yet.
         joinGeneration &+= 1
@@ -1470,6 +1783,15 @@ final class GroupCallService: ObservableObject {
     /// server refuses a removed person a new join pass.
     fileprivate func roomDropped(_ reason: RoomDropReason) {
         guard isActive, !leaving, room.connectionState == .disconnected else { return }
+        let why: String
+        switch reason {
+        case .removed: why = "removed"
+        case .deleted: why = "deleted"
+        case .duplicate: why = "duplicate"
+        case .other: why = "other"
+        }
+        if reason == .other { GCLog.failure("drop", room: logRoom, ["why": why]) }
+        else { GCLog.event("drop", room: logRoom, ["why": why]) }
         // owner 2026-10-06, reference study: every way a call ends says why. Only being removed and
         // "ended for everyone" did; a lost connection, a failed reconnect or a server fault closed
         // the screen without a word.
@@ -1843,7 +2165,7 @@ final class GroupCallService: ObservableObject {
         closeLobbyForAnotherJoin()
         if incomingInvite?.roomId == roomId { incomingInvite = nil }
         presentsRoomScreen = true
-        guard !Self.oneToOneLive else { notice = Self.busyNotice; return }   // audit M-111
+        guard !Self.oneToOneLive else { clearJoinWishes(); notice = Self.busyNotice; return }   // audit M-111
         connecting = true; isVideo = video
         cameraOn = video   // round 2 (V2 N8): the camera button shows the call's wish while joining
         // Audit M-028, 2026-10-07: the room used to go into `declinedInvites` here, before any
@@ -1858,12 +2180,15 @@ final class GroupCallService: ObservableObject {
             guard gen == joinGeneration else { await abandonJoin(); return }
             // Audit M-028: a read that failed is not "the call ended".
             connecting = false; joiningRoomId = nil; cameraOn = false
+            clearJoinWishes()   // controls 1-A5
+            GCLog.failure("join_fail", room: roomId, ["notice": "read"])
             notice = Notice(title: "Couldn't join", message: nil)
             return
         }
         guard gen == joinGeneration else { await abandonJoin(); return }
         guard let d = snap.data(with: .estimate), d["active"] as? Bool == true else {
             connecting = false; joiningRoomId = nil; cameraOn = false
+            clearJoinWishes()   // controls 1-A5
             notice = Notice(title: "Call ended", message: nil)
             return
         }
@@ -2257,6 +2582,7 @@ final class GroupCallService: ObservableObject {
             if gen != joinGeneration { await abandonJoin(); return false }
             connecting = false
             Telemetry.event(.error, component: "groupcall", code: "connect_" + Telemetry.code(error))   // owner 2026-10-21
+            GCLog.failure("connect_error", room: logRoom, ["code": Telemetry.code(error)])
             if activeCid == nil { await failJoin(Self.joinNotice(error, link: isLinkRoom)) }
             return false
         }
@@ -2284,6 +2610,8 @@ final class GroupCallService: ObservableObject {
     /// A join that never became a call. Leaves `presentsRoomScreen` up so GroupCallView can show
     /// the notice; its OK closes the screen.
     private func failJoin(_ n: Notice) async {
+        // Fixed notice titles only (the app's own words), never the server's message.
+        GCLog.failure("join_fail", room: logRoom, ["notice": n.title])
         await room.disconnect()
         cameraLocked = false
         connecting = false
@@ -2320,7 +2648,8 @@ final class GroupCallService: ObservableObject {
     private func resetRoomState() {
         stopScreenShare()   // every leave path comes through here
         startMuted = false
-        startCameraOff = false   // round 2 (V2 N8)
+        startCameraWish = nil    // round 2 (V2 N8), controls 2-B4
+        releasePreparedRecording()   // controls 1-A4: the mic input is let go with the call
         cameraOn = false         // round 2 (V2 N8): set to the wish when a join starts
         cameraPausedByBackground = false   // audit M-081
         pendingCameraReady = nil
@@ -2806,9 +3135,26 @@ final class GroupCallService: ObservableObject {
 
     /// The invitation's Mute pill (owner 2026-10-23): the join goes out with the mic off, the same
     /// wish a Mute tapped while connecting leaves (`startMuted`).
+    ///
+    /// Controls 1-A5, 2026-10-23: only while no call is up or starting. It used to set the wish at
+    /// once, before any join guard: a join refused as busy left the next call muted for no reason,
+    /// and with a call already up it flipped that LIVE call's button to Muted without muting the mic
+    /// (no `syncMic`), so the mic kept sending. A join that fails before it begins clears it again
+    /// (`clearJoinWishes`).
     func prepareMutedJoin() {
+        guard activeCid == nil, !connecting, !waitingForApproval, !Self.oneToOneLive else { return }
         startMuted = true
         micOn = false
+    }
+
+    /// A join refused or failed before `connecting` took over: the wishes made for it (the
+    /// invitation's Mute pill, a camera tap) are not carried to the next call. Only ever with no
+    /// call up, so nothing live is touched.
+    private func clearJoinWishes() {
+        guard activeCid == nil, !connecting, !waitingForApproval else { return }
+        startMuted = false
+        micOn = true
+        startCameraWish = nil
     }
 
     func acceptInvite() {
@@ -2886,8 +3232,33 @@ private final class RoomDropObserver: NSObject, RoomDelegate, @unchecked Sendabl
     /// Screen sharing, 2026-10-07: my screen share track going up or coming down is the only truth
     /// for "I am sharing" (the system sheet, the red pill and Control Center all end here).
     func room(_ room: Room, participant: LocalParticipant, didPublishTrack publication: LocalTrackPublication) {
-        guard publication.source == .screenShareVideo else { return }
+        let source = publication.source
+        // Controls 2-B2, 2026-10-23: my mic or camera going up (a full reconnect's republish among
+        // them) is checked against the button's wish.
+        if source == .microphone || source == .camera {
+            Task { @MainActor in GroupCallService.shared.resyncLocalMedia(source) }
+            return
+        }
+        guard source == .screenShareVideo else { return }
         Task { @MainActor in GroupCallService.shared.localScreenShareChanged(true) }
+    }
+
+    /// Controls 5 (logging), 2026-10-23: reconnects leave a GC# line, so a report of "it froze" or
+    /// "it hung up by itself" can be read against what the connection did.
+    func room(_ room: Room, didStartReconnectWithMode reconnectMode: ReconnectMode) {
+        let mode = reconnectMode == .full ? "full" : "quick"
+        Task { @MainActor in
+            GCLog.event("reconnect", room: GroupCallService.shared.logRoom, ["mode": mode, "step": "start"])
+        }
+    }
+
+    func room(_ room: Room, didCompleteReconnectWithMode reconnectMode: ReconnectMode) {
+        let mode = reconnectMode == .full ? "full" : "quick"
+        let up = room.connectionState == .connected
+        Task { @MainActor in
+            GCLog.event("reconnect", room: GroupCallService.shared.logRoom,
+                        ["mode": mode, "step": "done", "up": up ? "1" : "0"])
+        }
     }
 
     func room(_ room: Room, participant: LocalParticipant, didUnpublishTrack publication: LocalTrackPublication) {
@@ -2899,5 +3270,71 @@ private final class RoomDropObserver: NSObject, RoomDelegate, @unchecked Sendabl
     /// so readers look at `participant.attributes` themselves.
     func room(_ room: Room, participant: Participant, didUpdateAttributes attributes: [String: String]) {
         Task { @MainActor in GroupCallService.shared.attributesChanged() }
+    }
+}
+
+/// Controls 3-1, 2026-10-23: the group share's still-screen repeat. ReplayKit sends nothing while
+/// the screen does not change, and WebRTC can only make a keyframe for a new viewer, a picture
+/// request or a layer switched back on when a frame comes in. So a late joiner saw an empty share
+/// tile until the presenter scrolled. Every new frame goes out at once and is kept; when nothing
+/// new has come for about a second, the kept frame goes out again with a fresh timestamp. The 1:1
+/// `ScreenShareCapturer` does the same for its own sender.
+/// `push` runs on the share session's reader queue, the timer on its own queue; the lock keeps them
+/// apart. `BufferCapturer.capture` is safe from any thread.
+private final class GroupShareRepeater: @unchecked Sendable {
+    private static let interval: CFTimeInterval = 1.0
+    private let lock = NSLock()
+    private let queue = DispatchQueue(label: "kulan.groupshare.repeat", qos: .userInitiated)
+    private weak var capturer: BufferCapturer?
+    private var last: CVPixelBuffer?
+    private var rotation: VideoRotation = ._0
+    private var lastAt: CFTimeInterval = 0
+    private var timer: DispatchSourceTimer?
+
+    init(capturer: BufferCapturer?) { self.capturer = capturer }
+
+    /// A new frame from the extension: sent now, and kept as the one to repeat. The session hands
+    /// over a fresh pool buffer each time and never writes to it again.
+    func push(_ buffer: CVPixelBuffer, rotation: VideoRotation) {
+        lock.lock()
+        last = buffer
+        self.rotation = rotation
+        lastAt = CACurrentMediaTime()
+        let target = capturer
+        lock.unlock()
+        target?.capture(buffer, rotation: rotation)
+    }
+
+    /// Once the share is published.
+    func start() {
+        lock.lock(); defer { lock.unlock() }
+        guard timer == nil else { return }
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + Self.interval, repeating: Self.interval / 2)
+        t.setEventHandler { [weak self] in self?.tick() }
+        timer = t
+        t.resume()
+    }
+
+    func stop() {
+        lock.lock()
+        let t = timer
+        timer = nil
+        last = nil
+        lock.unlock()
+        t?.cancel()
+    }
+
+    private func tick() {
+        lock.lock()
+        let now = CACurrentMediaTime()
+        guard timer != nil, let buffer = last, let target = capturer, now - lastAt >= Self.interval else {
+            lock.unlock()
+            return
+        }
+        lastAt = now
+        let r = rotation
+        lock.unlock()
+        target.capture(buffer, rotation: r)
     }
 }
