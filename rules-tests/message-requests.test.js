@@ -171,10 +171,15 @@ const cases = [
   ['ATTACK  A accepts their own request',
     'DENY', 'DENY', A, convPath, 'update', { ...spent, accepted: true }, spent, [...userDoc(A), ...notAdmin(A)]],
   // 2026-09-27: B replied the old way (typed into the request), so B is `lastSender` of a chat still
-  // marked unaccepted. B's phone writing the acceptance that reply stood for must go through.
-  ['OK      B, who already replied, marks the chat accepted',
-    'DENY', 'ALLOW', B, convPath, 'update',
+  // marked unaccepted. Audit H1, 2026-10-23: the one with the last word never accepts (the rules
+  // cannot tell this from a stranger's knock into a chat the other side only opened), so the heal
+  // moved to A's phone (MessageRequests.healAnsweredRequests): A, written to last, accepts.
+  ['GUARD   B, who already replied, marks the chat accepted (H1)',
+    'DENY', 'DENY', B, convPath, 'update',
     { ...spent, lastSender: B, accepted: true }, { ...spent, lastSender: B }, [...userDoc(B), ...notAdmin(B)]],
+  ['OK      A, whose request B answered the old way, marks it accepted',
+    'ALLOW', 'ALLOW', A, convPath, 'update',
+    { ...spent, lastSender: B, accepted: true }, { ...spent, lastSender: B }, [...userDoc(A), ...notAdmin(A)]],
   // 1:1 audit r2 G1, 2026-10-08: a FRESH request (lastSender still empty) used to let A accept
   // their own request before knocking, and pass every call gate as B's friend.
   ['ATTACK  A accepts their own FRESH request (no message yet)',

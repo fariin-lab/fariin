@@ -2190,16 +2190,8 @@ service cloud.firestore {
                 || (request.resource.data.get('noScreenshots', false) == false
                     && request.resource.data.get('noForwarding', false) == false
                     && request.resource.data.get('noSaving', false) == false))
-            // ONE MESSAGE, AND ONLY ONE. While a request is unanswered, the person who sent it may
-            // not touch the fields that would let them take a second turn: `lastSender` (which the
-            // message rule below reads to decide), `lastMessage`, and `accepted` (nobody accepts
-            // their own request).
-            //
-            // NAMED AS A DENY-LIST, not an allow-list. An allow-list was here first and it refused
-            // the requester's own `openConversation`, which rewrites `users`/`names`/`photos` on
-            // every single open — so re-opening a chat you had sent a request into failed, silently,
-            // and stopped refreshing the other person's name and face. Everything that is not on
-            // this list still works: opening, blocking, muting, archiving, clearing.
+            // ONE MESSAGE, AND ONLY ONE: while unanswered, the sender may not touch the fields that
+            // give a second turn. A deny-list on purpose: an allow-list refused `openConversation`.
             // 2026-09-27: "the person who sent it" is the one who STARTED it. Keyed on `lastSender`
             // alone, this also caught a recipient who had already replied (older builds let them
             // type into a request), so their phone could never write the `accepted` their reply
