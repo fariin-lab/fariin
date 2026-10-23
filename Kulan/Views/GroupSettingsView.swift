@@ -1279,6 +1279,8 @@ struct EditGroupView: View {
     @State private var removePhoto = false
     @State private var confirmRemovePhoto = false
     @State private var showPicker = false
+    @State private var pickedImage: UIImage?
+    @State private var cropItem: GroupCropItem?
     @State private var saving = false
     @State private var error: String?
     @FocusState private var nameFocused: Bool
@@ -1406,13 +1408,27 @@ struct EditGroupView: View {
                 if focusDescription { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { descFocused = true } }
             }
             // The app's own photo sheet, as New Group's photo uses.
-            .sheet(isPresented: $showPicker) {
+            // The picked photo goes to the circle cropper once the picker is down (owner 2026-10-23:
+            // "I can't choose the area"), the same move-and-scale a profile photo uses. One cover
+            // asked for while the sheet is still closing is how "nothing happens" bugs start, so
+            // it waits for onDismiss.
+            .sheet(isPresented: $showPicker, onDismiss: {
+                if let ui = pickedImage { pickedImage = nil; cropItem = GroupCropItem(image: ui) }
+            }) {
                 StoryLibraryPicker(
-                    onImage: { ui, _ in setPhoto(ui) },
+                    onImage: { ui, _ in pickedImage = ui; showPicker = false },
                     onVideo: { _, _ in },   // `photosOnly`: there is no video tile to pick
                     photosOnly: true,
                     pickLabel: "Set Group Photo")
                 .storyAlwaysDark()
+            }
+            .fullScreenCover(item: $cropItem) { c in
+                ProfilePhotoCropper(image: c.image,
+                                    onDone: { circle, _ in cropItem = nil; setPhoto(circle) },
+                                    onCancel: { cropItem = nil },
+                                    circleOnly: true,
+                                    circleSubtitle: "Shown in chats and on the group page")
+                    .ignoresSafeArea()
             }
         }
     }
@@ -1434,7 +1450,6 @@ struct EditGroupView: View {
 
     /// A group photo is a small round picture: 1024 px is plenty, and the upload stays quick.
     private func setPhoto(_ ui: UIImage) {
-        showPicker = false
         Task {
             let data = await Task.detached(priority: .userInitiated) { () -> Data? in
                 guard let jpeg = ui.jpegData(compressionQuality: 0.9) else { return nil }
@@ -1634,3 +1649,6 @@ struct ChatHistoryForNewMembersPage: View {
         }
     }
 }
+
+/// A photo picked for the group, waiting in the circle cropper.
+struct GroupCropItem: Identifiable { let id = UUID(); let image: UIImage }

@@ -26,6 +26,10 @@ struct ProfilePhotoCropper: View {
     /// (avatar, poster) — the circle for every list in the app, the tall one for the profile header.
     var onDone: (UIImage, UIImage) -> Void
     var onCancel: () -> Void
+    /// A group photo has no header, only the circle (owner 2026-10-23): one stage, and the tick
+    /// hands the circle back as both images.
+    var circleOnly = false
+    var circleSubtitle = "Shown in chats, stories and groups"
 
     enum Stage { case avatar, poster }
 
@@ -84,12 +88,12 @@ struct ProfilePhotoCropper: View {
     }
 
     private var title: String {
-        stage == .avatar ? "Avatar" : "Profile photo"
+        circleOnly ? "Group photo" : stage == .avatar ? "Avatar" : "Profile photo"
     }
 
     private var subtitle: String {
         stage == .avatar
-            ? "Shown in chats, stories and groups"
+            ? circleSubtitle
             : "Shown at the top of your profile"
     }
 
@@ -97,7 +101,9 @@ struct ProfilePhotoCropper: View {
     /// both images back. Nothing is uploaded here — Edit Profile holds them until Save.
     private func advance() {
         guard let cropped = controller.crop() else { return }
-        if stage == .avatar {
+        if circleOnly {
+            onDone(cropped, cropped)
+        } else if stage == .avatar {
             avatarResult = cropped
             stage = .poster
         } else if let avatar = avatarResult {

@@ -34,6 +34,8 @@ struct NewGroupView: View {
     @State private var groupName = ""
     @State private var avatarData: Data?
     @State private var showPhotoPicker = false
+    @State private var pickedImage: UIImage?
+    @State private var cropItem: GroupCropItem?
     @State private var disappearSeconds = UserDefaults.standard.integer(forKey: "defaultDisappearSeconds")
     @State private var query = ""
     @State private var results: [UserProfile] = []
@@ -305,13 +307,24 @@ struct NewGroupView: View {
             try? await Task.sleep(for: .milliseconds(600))
             if !Task.isCancelled { nameFocused = true }
         }
-        .sheet(isPresented: $showPhotoPicker) {
+        // Picked photo -> the circle cropper once the picker is down, as Edit Group (owner 2026-10-23).
+        .sheet(isPresented: $showPhotoPicker, onDismiss: {
+            if let ui = pickedImage { pickedImage = nil; cropItem = GroupCropItem(image: ui) }
+        }) {
             StoryLibraryPicker(
-                onImage: { ui, _ in setPhoto(ui) },
+                onImage: { ui, _ in pickedImage = ui; showPhotoPicker = false },
                 onVideo: { _, _ in },   // `photosOnly`: there is no video tile to pick
                 photosOnly: true,
                 pickLabel: "Set Group Photo")
             .storyAlwaysDark()
+        }
+        .fullScreenCover(item: $cropItem) { c in
+            ProfilePhotoCropper(image: c.image,
+                                onDone: { circle, _ in cropItem = nil; setPhoto(circle) },
+                                onCancel: { cropItem = nil },
+                                circleOnly: true,
+                                circleSubtitle: "Shown in chats and on the group page")
+                .ignoresSafeArea()
         }
     }
 
