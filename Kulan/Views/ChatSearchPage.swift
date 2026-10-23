@@ -46,8 +46,17 @@ struct ChatSearchOverlay: View {
     var onOpenChat: (Conversation) -> Void
     var onOpenPerson: (UserProfile) -> Void
     var onOpenPublicGroup: (PublicGroupTarget) -> Void
+    /// Whether the search is up, told to the Chats tab so a door from outside can close it first.
+    var onSearchingChange: (Bool) -> Void = { _ in }
 
     @Environment(\.isSearching) private var isSearching
+    @Environment(\.dismissSearch) private var dismissSearch
+
+    /// Posted by the Chats tab to close its search from outside (a notification, a link). The search
+    /// is closed from INSIDE it, with `dismissSearch`, rather than through an `isPresented` binding
+    /// on `.searchable`: with that binding iOS 26 sometimes drew its X as a wide capsule instead of
+    /// the 44pt circle (owner 2026-10-23).
+    static let closeRequest = Notification.Name("chatSearch.close")
 
     /// ⚠️ SPELLED OUT, NOT SYNTHESISED. A single PRIVATE stored property — the environment read
     /// above — makes Swift's memberwise initialiser private too, and the call site in another file
@@ -58,7 +67,9 @@ struct ChatSearchOverlay: View {
          personRow: @escaping (UserProfile) -> AnyView,
          onOpenChat: @escaping (Conversation) -> Void,
          onOpenPerson: @escaping (UserProfile) -> Void,
-         onOpenPublicGroup: @escaping (PublicGroupTarget) -> Void) {
+         onOpenPublicGroup: @escaping (PublicGroupTarget) -> Void,
+         onSearchingChange: @escaping (Bool) -> Void = { _ in }) {
+        self.onSearchingChange = onSearchingChange
         self.query = query
         self.me = me
         self.dark = dark
@@ -100,6 +111,12 @@ struct ChatSearchOverlay: View {
                     insertion: .opacity.animation(.easeOut(duration: 0.3)),
                     removal: .identity))
         }
+        Color.clear.frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+            .onChange(of: isSearching, initial: true) { _, on in onSearchingChange(on) }
+            .onReceive(NotificationCenter.default.publisher(for: Self.closeRequest)) { _ in
+                if isSearching { dismissSearch() }
+            }
     }
 }
 

@@ -1927,7 +1927,9 @@ struct ChatsView: View {
                         path.append(t)
                     }
                     chatSearch = ""
-                })
+                },
+                // The search reports whether it is up (`clearCovers` closes it before a door moves).
+                onSearchingChange: { searchPresented = $0 })
         )
     }
 
@@ -2460,7 +2462,7 @@ struct ChatsView: View {
     private func clearCovers(then: @escaping () -> Void) {
         PresentationGate.whenClear {
             if searchPresented {
-                searchPresented = false
+                NotificationCenter.default.post(name: ChatSearchOverlay.closeRequest, object: nil)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: then)
             } else {
                 then()
@@ -3142,7 +3144,7 @@ struct ChatsView: View {
             // carries the two answers that existed for them — the reveal on arrival and the footer
             // hold while search opens and closes — and nothing else. If either comes back, the
             // history is in the memory notes; do not add an offset correction (see `ChatListCell`).
-            .searchable(text: $chatSearch, isPresented: $searchPresented, prompt: "Search")
+            .searchable(text: $chatSearch, prompt: "Search")
             // ⚠️ `.task(id:)` RATHER THAN `.onChange`. It cancels the previous lookup when the query
             // moves on, so a slow answer to an abandoned query cannot land after a fast answer to
             // the current one — which is the classic search-race and shows as the wrong person.
