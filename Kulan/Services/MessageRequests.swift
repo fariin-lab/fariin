@@ -127,15 +127,28 @@ enum MessageRequests {
     /// the person who started it: their photo, bio, last seen and calls stay closed to them while
     /// the other side sees everything, because the starter always counts.
     ///
-    /// Healed on the recipient's phone, from the chat list: a request somebody else started, still
-    /// unaccepted, whose newest message is MINE. Today's app cannot produce that shape (the composer
-    /// is hidden until Accept), so it only ever matches a chat that was answered the old way.
-    /// Once per chat per session; a refused write simply tries again next launch.
+    /// ⛔ HEALED ON THE ASKER'S PHONE, AND ONLY AFTER A REAL REPLY (audit H1, 2026-10-23). This used to
+    /// run on the phone whose message was newest and accept from there. Since 2026-10-21 `startedBy`
+    /// is whoever OPENED the chat, so when A opened it and left, and B then wrote first, B's own
+    /// phone matched "somebody else started it, the newest message is mine" and accepted B's own
+    /// knock. A never saw a request.
+    ///
+    /// Now: a request I started, still unaccepted, where the other person has the last word AND the
+    /// oldest message is mine. That is "I asked, they answered", which the old way of replying left
+    /// unaccepted. When they wrote first (the case above) the oldest message is theirs, so nothing is
+    /// written and the request waits for my Accept. The rules agree: only the person who did not
+    /// write the newest message may accept. One read per candidate, once per chat per session.
     @MainActor static func healAnsweredRequests(_ convs: [Conversation], me: String) {
-        for c in convs where c.convType != "group" && !c.startedBy.isEmpty && c.startedBy != me
-            && !c.accepted && c.lastSender == me && !healed.contains(c.id) {
+        for c in convs where c.convType != "group" && c.startedBy == me && !c.accepted
+            && !c.lastSender.isEmpty && c.lastSender != me && !healed.contains(c.id) {
             healed.insert(c.id)
-            Task { try? await accept(c.id) }
+            Task {
+                let first = try? await FirestoreHub.db.collection("conversations").document(c.id)
+                    .collection("messages").order(by: "createdAt").limit(to: 1).getDocuments()
+                guard let author = first?.documents.first?.data()["authorId"] as? String,
+                      author == me else { return }
+                try? await accept(c.id)
+            }
         }
     }
     @MainActor private static var healed = Set<String>()
