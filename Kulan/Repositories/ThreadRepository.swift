@@ -1271,10 +1271,22 @@ final class ThreadRepository {
         // owner 2026-10-21 (the open jump): what this window IS, for the list. A cache window before the
         // server has answered is still the open; the server's first window is the settle; a replay
         // after the keys arrived is a re-decrypt. Only what comes after those is a live arrival.
-        let reason: MessageListUpdateReason = redecrypt ? .redecrypt
+        var reason: MessageListUpdateReason = redecrypt ? .redecrypt
             : (!fromCache && !sawServerWindow) ? .serverSettle
             : (fromCache && !sawServerWindow) ? .initial
             : .live
+        // ⛔ A MESSAGE THAT ARRIVES INSIDE THE SETTLE IS STILL AN ARRIVAL (owner 2026-10-23: "after the
+        // app restarts, the first message they send me pops in; the next ones come in smooth"). After
+        // a cold start the cache paints the chat and the server's first window comes late; a message
+        // sent in between rides in on that window, which the list holds still (no animation). A doc
+        // the list has not shown, newer than everything it has shown, makes this window a live one.
+        if reason == .serverSettle, let newestShown = items.map(\.createdAt).max() {
+            let arrived = docs.contains { d in
+                indexById[d.documentID] == nil
+                    && ((d.data()["createdAt"] as? Timestamp)?.dateValue() ?? .distantPast) > newestShown
+            }
+            if arrived { reason = .live }
+        }
         let windowIds = Set(docs.map { $0.documentID })
         // A doc missing from the window but newer than its oldest edge was deleted — but ONLY trust the
         // SERVER for this. A from-cache/resync snapshot can transiently omit a doc that still exists;
