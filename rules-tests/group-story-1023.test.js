@@ -49,9 +49,9 @@ const authorMocks = (uid) => ([
   { function: 'exists', args: [{ exactValue: `${D}/admins/${uid}` }], result: { value: false } },
   { function: 'exists', args: [{ exactValue: `${D}/users/${uid}` }], result: { value: true } },
   { function: 'get', args: [{ exactValue: `${D}/users/${uid}` }], result: { value: { data: { banned: false } } } },
-  { function: 'exists', args: [{ exactValue: `${D}/users/${uid}/limits/storiesActive` }], result: { value: false } },
-  { function: 'exists', args: [{ exactValue: `${D}/users/${uid}/limits/stories` }], result: { value: false } },
-  { function: 'exists', args: [{ exactValue: `${D}/users/${uid}/limits/storiesDaily` }], result: { value: false } },
+  { function: 'exists', args: [{ exactValue: `${D}/users/${uid}/limits/storiesActive` }], result: { value: false } }, { function: 'get', args: [{ exactValue: `${D}/users/${uid}/limits/storiesActive` }], result: { value: null } },
+  { function: 'exists', args: [{ exactValue: `${D}/users/${uid}/limits/stories` }], result: { value: false } }, { function: 'get', args: [{ exactValue: `${D}/users/${uid}/limits/stories` }], result: { value: null } },
+  { function: 'exists', args: [{ exactValue: `${D}/users/${uid}/limits/storiesDaily` }], result: { value: false } }, { function: 'get', args: [{ exactValue: `${D}/users/${uid}/limits/storiesDaily` }], result: { value: null } },
   { function: 'exists', args: [{ exactValue: `${D}/config/limits` }], result: { value: false } },
 ]);
 const convMocks = (path, data) => ([

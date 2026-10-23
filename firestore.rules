@@ -3344,8 +3344,11 @@ service cloud.firestore {
       ); }
       /// HOW MANY STORIES THIS ACCOUNT HAS POSTED IN THE CURRENT WINDOW — see
       /// `users/{uid}/limits/{name}`, whose own rules are what make the number hard to fake.
+      // ONE get() PER COUNTER, never exists()+get() (2026-10-23: every group story was refused). A
+      // single-document request may make 10 reads; the pairs made an ordinary story exactly 10, so a
+      // group story (+ its group, + admins/) went over. get() of a missing document is null.
       function storyBudget() {
-        return get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/stories).data;
+        return get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/stories);
       }
       /// The same, over a day rather than an hour — see the second clause of the create rule.
       /// HOW MANY OF THIS ACCOUNT'S STORIES ARE ALIVE RIGHT NOW.
@@ -3359,12 +3362,11 @@ service cloud.firestore {
       /// budget counters carry: an account the server has never counted a story for genuinely has
       /// none alive, so zero is the correct answer rather than a shrug.
       function activeStories() {
-        return exists(/databases/$(database)/documents/users/$(request.auth.uid)/limits/storiesActive)
-          ? get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/storiesActive).data.get('count', 0)
-          : 0;
+        let a = get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/storiesActive);
+        return a == null ? 0 : a.data.get('count', 0);
       }
       function dailyStoryBudget() {
-        return get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/storiesDaily).data;
+        return get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/storiesDaily);
       }
       // GROUP STORY (owner 2026-10-23): `groupId` names a group I own, or one I am an admin of
       // while its owner leaves adminsPostStories on. Never public. App: GroupStoryRights.
@@ -3444,15 +3446,15 @@ service cloud.firestore {
         // must not be an app that cannot post — that is an outage rather than a limit. What it stops
         // is the case worth stopping: a client that IS counting, running away.
         && (
-             !exists(/databases/$(database)/documents/users/$(request.auth.uid)/limits/stories)
-             || storyBudget().get('windowStart', request.time) < request.time - duration.value(1, 'h')
-             || storyBudget().get('count', 0) < appLimit('stories_per_hour_default', 40)
+             storyBudget() == null
+             || storyBudget().data.get('windowStart', request.time) < request.time - duration.value(1, 'h')
+             || storyBudget().data.get('count', 0) < appLimit('stories_per_hour_default', 40)
              // The same two tiers as the day below, and for the same reason. Both numbers are 40
              // today, so this clause changes nothing until somebody sets them apart in
              // `config/limits` — it exists so that a raise is an edit rather than a release.
              || (
                   isVerifiedCaller()
-                  && storyBudget().get('count', 0) < appLimit('stories_per_hour_verified', 40)
+                  && storyBudget().data.get('count', 0) < appLimit('stories_per_hour_verified', 40)
                 )
            )
         // ⛔ AND A CEILING ON THE WHOLE DAY (owner, 2026-08-20), because the hour above does not
@@ -3470,9 +3472,9 @@ service cloud.firestore {
         // that has never written this counter must not be a client that cannot post. What it stops
         // is the case worth stopping, a client that IS counting and keeps going.
         && (
-             !exists(/databases/$(database)/documents/users/$(request.auth.uid)/limits/storiesDaily)
-             || dailyStoryBudget().get('windowStart', request.time) < request.time - duration.value(24, 'h')
-             || dailyStoryBudget().get('count', 0) < appLimit('stories_per_day_default', 50)
+             dailyStoryBudget() == null
+             || dailyStoryBudget().data.get('windowStart', request.time) < request.time - duration.value(24, 'h')
+             || dailyStoryBudget().data.get('count', 0) < appLimit('stories_per_day_default', 50)
              // ⛔ AND A VERIFIED ACCOUNT GETS A BIGGER DAY (owner, 2026-08-21): "verify usars
              // upload story dalily limit make it 100 ... normal user dont have verify make it 50".
              //
@@ -3486,7 +3488,7 @@ service cloud.firestore {
              // down reads the same document and rule evaluation caches it.
              || (
                   isVerifiedCaller()
-                  && dailyStoryBudget().get('count', 0) < appLimit('stories_per_day_verified', 100)
+                  && dailyStoryBudget().data.get('count', 0) < appLimit('stories_per_day_verified', 100)
                 )
            )
         // Public stories: owner 2026-08-06 (profile reach only, no feed; see publicStoryGroup).
