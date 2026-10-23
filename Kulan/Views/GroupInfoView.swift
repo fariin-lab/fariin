@@ -407,6 +407,20 @@ struct GroupInfoView: View {
 
     // MARK: Header
 
+    /// This group's live stories, as the Stories row has them (ring key "g:" + cid).
+    private var groupStories: StoryGroup? {
+        StoriesRepository.shared.others.first {
+            $0.authorUid == StoryGroup.groupKeyPrefix + cid && !$0.stories.isEmpty
+        }
+    }
+
+    /// Opens the group's stories from its photo; false when there are none.
+    private func openGroupStory() -> Bool {
+        guard let g = groupStories else { return false }
+        StoryDoor.open(g, from: "groupcircle-\(cid)", deliveredToMe: !g.isMine)
+        return true
+    }
+
     /// ⛔ NO BIG PHOTO HEADER FOR A GROUP (owner 2026-10-19, on device): a group with a photo shows
     /// it as a round picture; without one, the group's own round avatar. Either way the
     /// name, the count and the description, then the actions.
@@ -421,7 +435,7 @@ struct GroupInfoView: View {
                     // photo; the filled picture reached past its clip for taps).
                     .frame(width: Self.photoSide, height: Self.photoSide)
                     .contentShape(Circle())
-                    .onTapGesture { showGroupPhoto = true }
+                    .onTapGesture { if !openGroupStory() { showGroupPhoto = true } }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("Group photo")
                     .accessibilityAddTraits(.isButton)
@@ -432,7 +446,7 @@ struct GroupInfoView: View {
                     .frame(width: Self.photoSide, height: Self.photoSide)
                     .contentShape(Circle())
                     // No photo yet: whoever may change it goes straight to Edit Group.
-                    .onTapGesture { if canEditInfo { showEdit = true } }
+                    .onTapGesture { if !openGroupStory(), canEditInfo { showEdit = true } }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(canEditInfo ? "Add Group Photo" : "Group photo")
                     .accessibilityAddTraits(canEditInfo ? .isButton : [])
@@ -442,6 +456,16 @@ struct GroupInfoView: View {
             // reference app's way), not on My Story. The posted picture flies into this circle
             // (`StoryPostFlight`, `groupCircleKey`).
             .modifier(MediaRectReporter(id: "groupcircle-\(cid)", scope: .storyRow, cornerRadius: Self.photoSide / 2))
+            // ⛔ THE GROUP'S STORIES RING ITS PHOTO (owner 2026-10-23: "when the upload completes the
+            // story is not appearing"; they were only in the Stories row). The same ring as a person's
+            // page, one arc per story, seen ones grey; a tap on the photo opens them.
+            .overlay {
+                if let g = groupStories, !StoriesService.shared.uploadingGroups.contains(cid) {
+                    StoryRingView(seen: StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt), lineWidth: 3)
+                        .frame(width: Self.photoSide + 14, height: Self.photoSide + 14)
+                        .allowsHitTesting(false)
+                }
+            }
             .overlay { GroupStoryUploadRing(active: StoriesService.shared.uploadingGroups.contains(cid)) }
             headerCaption(.primary)
             actionsRow.padding(.top, 2)
