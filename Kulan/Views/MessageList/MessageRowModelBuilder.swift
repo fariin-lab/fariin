@@ -946,6 +946,9 @@ enum MessageRowModelBuilder {
             if ongoing { return "Ongoing · \(time)" }
             if incomingMissed { return "Call back · \(time)" }
             if missed { return "No answer · \(time)" }        // my unanswered outgoing call
+            // Never rung and never in it (controls audit 5-5): the group talked, I did not. No length,
+            // as the Calls tab shows it.
+            if outcome == GroupCallOutcome.notJoined { return time }
             if let d = m.callDuration, d > 0 { return "\(durationLabel(d)) · \(time)" }
             return "\(mine ? "Outgoing" : "Incoming") · \(time)"
         }()
