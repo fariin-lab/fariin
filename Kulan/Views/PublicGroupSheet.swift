@@ -270,9 +270,11 @@ struct PublicGroupSheet: View {
 
     private func openChat(_ p: PublicGroupPreview) {
         AppRouter.shared.pendingPublicGroup = nil
+        // Pushed on the Chats path, the router swaps THIS page for the chat and keeps the pages under
+        // it (audit N3; it used to replace the whole stack, so Back lost the chat you came from).
+        // A pop here as well was a second path change in the same moment (owner 2026-10-23).
+        if pushed { AppRouter.shared.pendingChatReplaceTop = true }
         GroupDirectory.openChat(p.cid, title: p.title, photo: p.photoUrl)
-        // Pushed on the Chats path, the router REPLACES this page with the chat; a pop here as well
-        // was a second path change in the same moment (owner 2026-10-23, the half-open stack).
         if !pushed { dismiss() }
     }
 

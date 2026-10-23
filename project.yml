@@ -24,7 +24,9 @@ packages:
   # (used for 1:1). Binary comes from GitHub releases — fine on this CI (like the Firebase mirror).
   LiveKit:
     url: https://github.com/livekit/client-sdk-swift
-    from: "2.0.0"
+    # Pinned (audit 07 F3, 2026-10-23): `from: 2.0.0` let any build pick up a new release unseen.
+    # 2.18.0 is what the last green builds resolved; raise it on purpose, after a call test.
+    exactVersion: "2.18.0"
   # Story viewer (MIT, vendored as a LOCAL package so we own + customize the source:
   # header→profile tap, swipe-down dismiss, exact Instagram sizing, transitions).
   StoryUI:

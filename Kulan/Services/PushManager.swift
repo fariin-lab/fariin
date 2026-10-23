@@ -389,6 +389,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     /// instead of replacing the stack. Set by a tap made inside a chat (a profile card's Send
     /// Message); a notification tap leaves it false. Cleared with the intent.
     var pendingChatPush = false
+    /// The chat takes the place of the page on top (a public group's page that learned I am a
+    /// member), in one update, so Back still returns to where that page came from (audit N3).
+    var pendingChatReplaceTop = false
     /// Owner, 2026-10-14: "Record voice message" on the No answer page opens this chat with the
     /// voice recorder already running, hands-free. Spent by `ThreadView` when that chat appears.
     var pendingVoiceNoteCid: String?

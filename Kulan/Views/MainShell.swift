@@ -3395,6 +3395,8 @@ struct ChatsView: View {
         // asks this same question (PushManager, `activeChatId`); the covers above still close.
         let push = router.pendingChatPush
         router.pendingChatPush = false
+        let replaceTop = router.pendingChatReplaceTop
+        router.pendingChatReplaceTop = false
         if cid == router.activeChatId {
             router.pendingChatId = nil
             router.pendingChatName = nil
@@ -3406,7 +3408,13 @@ struct ChatsView: View {
         let conv = repo.conversations.first(where: { $0.id == cid })
         let name = conv?.displayName(me) ?? router.pendingChatName ?? "Chat"
         let photo = conv?.displayPhoto(me) ?? router.pendingChatPhoto
-        if push {
+        if replaceTop, !path.isEmpty {
+            // Audit N3: the public group's page is swapped for its chat; the pages under it stay.
+            var p = path
+            p.removeLast()
+            p.append(ChatTarget(id: cid, name: name, photo: photo))
+            path = p
+        } else if push {
             // Owner, 2026-09-30: swapping the stack put the new chat on screen with no transition.
             // Appending is the system push, so it slides in from the right and Back returns to
             // the chat the card was in.

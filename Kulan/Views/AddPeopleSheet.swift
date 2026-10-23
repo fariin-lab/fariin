@@ -17,7 +17,7 @@ struct AddPeopleSheet: View {
     /// removed them). Not counted toward the call's size; one of them in an add made it all fail.
     let unavailable: Set<String>
     /// ⛔ CALL LINK'S ADD PEOPLE (owner 2026-10-23, two screenshots of the reference): "N/30" under
-    /// the title, search "Name, number, @username", the picked people as chips, a green
+    /// the title, search "Name or @username", the picked people as chips, a green
     /// "+ Add to call" button. Nil = the ad-hoc look the owner chose on 2026-10-07, unchanged.
     /// The number is the cap on people in the call, the invited counted in.
     let linkCap: Int?
@@ -149,7 +149,7 @@ struct AddPeopleSheet: View {
                 }
             }
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: linkCap != nil ? "Name, number, @username"   // the link picker's (owner 2026-10-23)
+                        prompt: linkCap != nil ? "Name or @username"   // the link picker's (owner 2026-10-23)
                                                 : "Name or username")   // the app's own wording (NewGroupView); there are no numbers here
             .safeAreaInset(edge: .bottom) { addButton }
             .navigationBarTitleDisplayMode(.inline)
