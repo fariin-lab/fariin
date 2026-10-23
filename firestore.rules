@@ -2646,9 +2646,9 @@ service cloud.firestore {
         }
         // ⛔ A PUBLIC GROUP'S MESSAGES, READ FROM OUTSIDE — owner 2026-10-21 (messages before
         // joining): tapping a public group I am not in opens its real chat with Join at the bottom.
-        // Only when every one of these holds: a group, public (`isPublic`, server-written), sent in
-        // the clear (`e2ee == false`; an old end-to-end group's text means nothing to an outsider
-        // anyway), history not hidden from newcomers (`hideHistoryAt` absent or 0: hidden history
+        // Only when every one of these holds: a group, public (`isPublic`, server-written), switched
+        // (`e2ee == false`; owner 2026-10-23: its WHOLE history, released keys `rk` too), history not
+        // hidden from newcomers (`hideHistoryAt` absent or 0: hidden history
         // means no preview), not ended by its owner (`endedAt` absent or 0), not suspended or
         // disabled by Fariin, and the reader not banned from it. READ ONLY, and only the messages:
         // the conversation document stays members-only (invite codes, unread maps, names), so the
@@ -2674,17 +2674,16 @@ service cloud.firestore {
           // note above this match).
           // ⛔ `expiresAt` BELONGS TO THE SERVER. It is the disappearing-message timer, written by
           // `onNewMessage` out of the conversation's own `disappearSeconds` the moment a message
-          // lands, and swept by `cleanupExpiringMessages`. A client that could set it could send a
-          // message into a chat with a timer on and give it any lifetime it liked — including one
-          // in the year 3000, which is a message that never disappears in a chat that promises it
-          // will. Refusing it at create is what makes the field's presence proof the server put it
-          // there. Every UPDATE branch below is an affectedKeys whitelist and none of them names
-          // it, so it cannot be changed afterwards either.
+          // lands, and swept by `cleanupExpiringMessages`. A client that could set it could give a
+          // message any lifetime (the year 3000) in a chat that promises it disappears. No update
+          // branch below names it either.
           && !('expiresAt' in request.resource.data)
           // 2026-09-24 feature-audit: a message is born with no edit history, and with a `createdAt`
           // that is not in the future. The edit window is measured from `createdAt`, so a forged
           // far-future time would have been an edit window that never closed.
-          && !request.resource.data.keys().hasAny(['edits', 'editedAt'])
+          // 2026-10-23: nor with `rk`, the group keys only releaseGroupKeys writes (every update
+          // branch below is an allowlist without it).
+          && !request.resource.data.keys().hasAny(['edits', 'editedAt', 'rk'])
           // ⛔ A STORY MENTION ONLY INTO A CHAT THAT ALREADY EXISTS — owner 2026-10-16: "mentioning
           // someone in my story must not message people I have never chatted with, and must not
           // create a chat". `exists`/`get` read the state BEFORE this write (and before the batch
