@@ -250,6 +250,62 @@ struct StoryRepost: Equatable, Hashable, Codable {
     }
 }
 
+/// ONE REPLY IN A GROUP STORY'S SHARED THREAD (owner 2026-10-23, group stories v2, the reference
+/// (signal) model): a reply to a group story goes to everyone the story reached, not privately to
+/// the poster. Text, or an emoji for a reaction. Stored at `stories/{id}/replies/{replyId}`; the rules
+/// let everyone the story reached read and write until it expires, and its writer or a group admin
+/// delete. `onStoryDeleted` removes the thread with the story.
+struct GroupStoryReply: Identifiable, Equatable {
+    let id: String
+    let uid: String
+    let text: String
+    let emoji: String
+    let createdAt: Date
+    var isReaction: Bool { text.isEmpty && !emoji.isEmpty }
+}
+
+extension StoriesService {
+    func sendGroupReply(_ story: Story, text: String = "", emoji: String = "") async throws {
+        let me = AuthService.shared.uid ?? ""
+        guard !me.isEmpty, story.groupId != nil else { return }
+        var data: [String: Any] = ["uid": me, "createdAt": FieldValue.serverTimestamp()]
+        let t = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1000))
+        if !t.isEmpty { data["text"] = t }
+        if !emoji.isEmpty { data["emoji"] = String(emoji.prefix(16)) }
+        guard data["text"] != nil || data["emoji"] != nil else { return }
+        try await FirestoreHub.db.collection("stories").document(story.id)
+            .collection("replies").addDocument(data: data)
+    }
+
+    /// Oldest first, as a chat reads. The caller removes the registration.
+    func listenGroupReplies(storyId: String, _ onChange: @escaping ([GroupStoryReply]) -> Void) -> ListenerRegistration {
+        FirestoreHub.db.collection("stories").document(storyId).collection("replies")
+            .order(by: "createdAt").limit(toLast: 500)
+            .addSnapshotListener { snap, _ in
+                let rows = (snap?.documents ?? []).map { d -> GroupStoryReply in
+                    let x = d.data()
+                    return GroupStoryReply(id: d.documentID, uid: x["uid"] as? String ?? "",
+                                           text: x["text"] as? String ?? "", emoji: x["emoji"] as? String ?? "",
+                                           createdAt: (x["createdAt"] as? Timestamp)?.dateValue() ?? Date())
+                }
+                DispatchQueue.main.async { onChange(rows) }
+            }
+    }
+
+    func deleteGroupReply(storyId: String, replyId: String) async throws {
+        try await FirestoreHub.db.collection("stories").document(storyId)
+            .collection("replies").document(replyId).delete()
+    }
+
+    /// Who may delete `reply` in this group: its writer, or the group's owner or an admin.
+    @MainActor static func canDeleteGroupReply(_ reply: GroupStoryReply, groupId: String) -> Bool {
+        let me = AuthService.shared.uid ?? ""
+        if reply.uid == me { return true }
+        guard let c = ConversationsRepository.shared.conversations.first(where: { $0.id == groupId }) else { return false }
+        return c.isOwner(me) || c.isAdmin(me)
+    }
+}
+
 /// WHO MAY POST A GROUP STORY (owner 2026-10-23). The same test as firestore.rules `groupStoryOK`:
 /// the owner always, an admin while the owner leaves "Allow Admins to Add Story" on, nobody else.
 enum GroupStoryRights {
@@ -1416,13 +1472,15 @@ final class StoriesService {
 
     /// A GROUP STORY GOES TO THE GROUP'S MEMBERS AS THE SERVER HAS THEM, read fresh rather than from
     /// the chat list, so somebody removed a minute ago is not in it. Refused here when I may no longer
-    /// post, which the rules refuse anyway (`groupStoryOK`). Capped at the rules' 1000.
+    /// post, which the rules refuse anyway (`groupStoryOK`). EVERY member, however many (owner
+    /// 2026-10-23: "2,000 members, all 2,000"): the rules cap a group story by its group's size, not
+    /// 1000, and 2,000 tokens are ~130 KB of the document's 1 MB.
     func groupStoryAudience(me: String, groupId: String) async throws -> Set<String> {
         let snap = try await db.collection("conversations").document(groupId).getDocument(source: .server)
         guard let c = snap.data().map({ Conversation(id: snap.documentID, data: $0) }),
               GroupStoryRights.canPost(c, me) else { throw PostRefusal.groupNotAllowed }
         let blocked = await MainActor.run { Set(BlockList.snapshot.entries.keys) }
-        return Set(c.users.filter { $0 != me && !blocked.contains($0) }.prefix(1000))
+        return Set(c.users.filter { $0 != me && !blocked.contains($0) })
     }
 
     /// What a group story adds to its document: which group, and the name and photo its members' row
