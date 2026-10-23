@@ -1846,14 +1846,19 @@ final class StoriesService {
         // then reads a number lower than the truth. That direction is already the designed one: the
         // limit exists to stop a runaway loop, and it fails open everywhere else for the same reason.
         Task.detached { [weak self] in await self?.countStoryAgainstBudget() }
-        let storyId = fixedId ?? Self.newStoryId()
+        var postId = fixedId ?? Self.newStoryId()
         // ⛔ A RESUMED POST TAKES BACK ITS OWN HALF-WRITTEN STORY (outbox, 2026-10-12). The id was
         // fixed when the ticket was made, so a post the app died in the middle of may already have
         // its document here with an empty `mediaUrl`. Deleting it first (the author may delete
-        // their own story) means the write below is a clean CREATE, and no orphan is left behind.
+        // their own story) leaves no orphan behind.
+        // ⚠️ AND THE NEW POST TAKES A NEW ID (audit H2, 2026-10-23). Under the same id the server's
+        // onStoryDeleted for the old doc ran late and deleted `stories/<id>/photo.jpg`, which by then
+        // was the NEW upload: a story broken for 24 hours. The outbox tracks its slot, not this id.
         if replaceExisting {
-            try? await db.collection("stories").document(storyId).delete()
+            try? await db.collection("stories").document(postId).delete()
+            postId = Self.newStoryId()
         }
+        let storyId = postId
         let path = "stories/\(storyId)/photo.jpg"   // {storyId}/ segment so Storage rules can audience-scope reads
 
         // THE PHOTO STARTS MOVING FIRST. Everything below used to be strictly serial — resolve the
@@ -2222,6 +2227,9 @@ final class StoriesService {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
+                    // A refusal stays a refusal (audit 06 F4): no retries, and the real error goes up
+                    // so the outbox forgets the post instead of re-sending it on every launch.
+                    if Self.isPermanentPostFailure(error) { throw error }
                     lastError = error
                     if attempt < 2 { try? await Task.sleep(nanoseconds: UInt64(1_500_000_000 * (attempt + 1))) }
                 }
@@ -2291,9 +2299,14 @@ final class StoriesService {
         try Task.checkCancellation()
 
         Task.detached { [weak self] in await self?.countStoryAgainstBudget() }   // never in front of the post
-        let storyId = fixedId ?? Self.newStoryId()
-        // A resumed or retried part takes back its own half-written story first (see the photo path).
-        if replaceExisting { try? await db.collection("stories").document(storyId).delete() }
+        var postId = fixedId ?? Self.newStoryId()
+        // A resumed or retried part takes back its own half-written story first, and posts under a
+        // NEW id (audit H2; see the photo path).
+        if replaceExisting {
+            try? await db.collection("stories").document(postId).delete()
+            postId = Self.newStoryId()
+        }
+        let storyId = postId
         let videoPath = "stories/\(storyId)/video.mp4"
         let thumbPath = "stories/\(storyId)/thumb.jpg"
         let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included,

@@ -141,14 +141,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         let callId = d["callId"] as? String ?? ""
         // 2026-09-24 audit: no call id means no call document to ring for (an empty id is not a
         // valid Firestore path). Still reported to CallKit, as iOS requires, then ended at once.
-        guard !callId.isEmpty else { CallKitManager.shared.reportAndDiscard(completion: completion); return }
+        guard !callId.isEmpty else { CallKitManager.shared.reportGroupDiscard(completion: completion); return }
         // Audit M-004, 2026-10-07: the caller hung up before an answer (server cancel push). The
         // ring for that call stops here; a late ring push for it is not rung at all. PushKit still
         // gets its report, like every other push.
         // The server's payload: {callId, kind: "callcancel", cancel: true, ...} (F6).
         if d["kind"] as? String == "callcancel" || Self.isCancelPush(d) {
             Self.noteCancelled(callId)
-            CallKitManager.shared.reportAndDiscard(completion: completion)
+            // Recents off, ended as answered elsewhere (audit 05 F1): the plain discard added a
+            // "Call" row to the Phone app's Recents for every ring the caller gave up on.
+            CallKitManager.shared.reportGroupDiscard(completion: completion)
             // Round 2 (V3 N2): the server's reason, so a ring settled on my other phone is not
             // reported to iOS as missed.
             CallKitManager.shared.endCancelledRing(callId: callId, endReason: d["endReason"] as? String)
@@ -164,7 +166,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // land). The ghost-call guard reads the call doc, which a signed-out phone cannot do, so it
         // rang anyway. Reported, as iOS requires, and ended at once.
         guard Auth.auth().currentUser != nil, !Self.wasCancelled(callId) else {
-            CallKitManager.shared.reportAndDiscard(completion: completion)
+            CallKitManager.shared.reportGroupDiscard(completion: completion)
             return
         }
         let uid = d["callerUid"] as? String ?? ""

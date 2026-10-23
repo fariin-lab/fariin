@@ -1785,7 +1785,8 @@ final class CallService: NSObject {
         let format = formats.min(by: { rank($0) < rank($1) })
         guard let format else { giveUp(); return }
         let fps = min(caps.fps, Int(format.videoSupportedFrameRateRanges.map { $0.maxFrameRate }.max() ?? 30))
-        appliedThermalFps = caps.fps
+        // Observed state, set on main like the thermal observer that reads it (audit 05 F6).
+        DispatchQueue.main.async { [weak self] in self?.appliedThermalFps = caps.fps }
         allowBackgroundCamera(on: capturer.captureSession)
         capturer.startCapture(with: device, format: format, fps: fps) { [weak self] _ in
             // 1:1 audit #12 (owner, 2026-10-08): set it again now that the session HAS its camera
@@ -5599,8 +5600,9 @@ final class CallService: NSObject {
             sendBackToRoom(docId: docId, roomId: back.roomId, name: back.name)
             return true
         }
-        db.collection("calls").document(docId)
-            .updateData(["status": "ended", "endReason": EndReason.busy.rawValue])
+        // Transactional, like decline and timeout (audit 05 F2): a blind write queued offline ended
+        // the call my other device had already answered.
+        endRingIfUnclaimed(docId, fields: ["status": "ended", "endReason": EndReason.busy.rawValue])
         // A busy call left NO trace on this phone: the caller got a Missed row, I got
         // nothing and never learned they tried. Log it here (same deterministic doc id
         // the caller uses, same "missed" outcome, so the two writes agree).
@@ -6004,7 +6006,7 @@ final class CallService: NSObject {
                         self.sendBackToRoom(docId: callId, roomId: back.roomId, name: back.name)
                         return
                     }
-                    ref.updateData(["status": "ended", "endReason": EndReason.busy.rawValue])
+                    self.endRingIfUnclaimed(callId, fields: ["status": "ended", "endReason": EndReason.busy.rawValue])
                 }
             }
             // The same call the open app is already ringing (its listener beat the push): the

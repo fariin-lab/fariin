@@ -192,11 +192,11 @@ final class AudioRecorder {
         guard recorder == nil else { return }
         AVAudioApplication.requestRecordPermission { [weak self] granted in
             guard let self, granted else { return }
+            // ⛔ THE SESSION IS NOT TOUCHED HERE (audit 06 F5, 2026-10-23). This runs on every chat
+            // open, and activating a ducking record session here turned the person's music down the
+            // moment they opened any chat, and it never came back. Only the recorder object is built;
+            // the hold itself configures and activates the session (`requestAndStart`).
             DispatchQueue.global(qos: .userInitiated).async {
-                let session = AVAudioSession.sharedInstance()
-                try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .duckOthers])
-                try? session.setActive(true)
-                Self.allowHapticsWhileRecording(session)
                 let url = FileManager.default.temporaryDirectory
                     .appendingPathComponent("voice-\(UUID().uuidString).m4a")
                 guard let r = try? AVAudioRecorder(url: url, settings: self.settings) else { return }
@@ -220,8 +220,9 @@ final class AudioRecorder {
             // instantly. (First record right after playing a voice note still reconfigures.)
             if s.category != .playAndRecord {
                 try? s.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .duckOthers])
-                try? s.setActive(true)
             }
+            // Active for the recording only; `reset` gives it back after (audit 06 F5).
+            try? s.setActive(true)
             // OUTSIDE the guard on purpose: the warm path skips the configuration above, and a
             // session configured on some other path does not carry this flag for this one.
             Self.allowHapticsWhileRecording(s)
@@ -444,8 +445,9 @@ final class AudioRecorder {
             let s = AVAudioSession.sharedInstance()
             if s.category != .playAndRecord {
                 try? s.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .duckOthers])
-                try? s.setActive(true)
             }
+            // Active for the recording only; `reset` gives it back after (audit 06 F5).
+            try? s.setActive(true)
             // OUTSIDE the guard on purpose: the warm path skips the configuration above, and a
             // session configured on some other path does not carry this flag for this one.
             Self.allowHapticsWhileRecording(s)
@@ -716,10 +718,13 @@ final class AudioRecorder {
         levels = []
         liveWindow = []
         allLevels = []
-        // Do NOT setActive(false) here: prepare() below immediately setActive(true)s again, so the
-        // deactivate→reactivate churn only made the next hold-to-record re-activate the session from
-        // cold (the "long sluggish delay before recording starts"). Keeping the session warm lets
-        // requestAndStart's record() fire instantly on touch-down.
-        prepare()   // re-warm the recorder so the NEXT hold-to-record is instant too
+        // The recording is over: give the session back so other apps' music comes up again (audit
+        // 06 F5), unless a voice note is playing on it. prepare() no longer re-activates it, so this
+        // is no deactivate/reactivate churn; the next hold activates it once, on touch-down.
+        Task { @MainActor in
+            guard !VoiceNotePlayer.shared.playing, !self.isRecording else { return }
+            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        }
+        prepare()   // re-build the recorder so the NEXT hold-to-record is quick too
     }
 }
