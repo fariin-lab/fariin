@@ -192,7 +192,11 @@ struct GroupInfoView: View {
             .navigationDestination(isPresented: $showMemberLink) {
                 if let link = inviteLink { GroupLinkShareView(title: title, photo: conv?.avatarUrl, link: link) }
             }
-            .navigationDestination(isPresented: $mentionSelf) { MyProfileView() }
+            // owner 2026-10-23, third report ("my own @name opens nothing"): the push to My Profile
+            // from here never showed; it rises as its own page instead, as Open Profile does.
+            .sheet(isPresented: $mentionSelf) {
+                NavigationStack { MyProfileView() }.presentationDetents([.large])
+            }
             .navigationDestination(item: $mentionChat) { t in
                 ThreadView(cid: t.id, title: t.name, photoUrl: t.photo).id(t.id)
             }
