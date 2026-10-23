@@ -462,6 +462,17 @@ struct NewGroupView: View {
                         await MainActor.run { ToastNotice.show("The group photo was not saved. Set it in Edit.") }
                     }
                 }
+                // The invite link is made with the group (owner 2026-10-23: it was only made when the
+                // Invite Links page first opened, so that page waited on it). Behind the chat, once
+                // more after a moment if the group was not on the server yet; the link list is then
+                // cached so the page opens filled. If both fail the page still makes one as before.
+                Task.detached(priority: .utility) {
+                    if (try? await GroupInviteService.createPrimaryLink(cid: cid)) == nil {
+                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        guard (try? await GroupInviteService.createPrimaryLink(cid: cid)) != nil else { return }
+                    }
+                    _ = try? await GroupInviteService.listLinks(cid: cid)
+                }
                 await MainActor.run {
                     creating = false
                     onOpen(ChatTarget(id: cid, name: name, photo: nil))
