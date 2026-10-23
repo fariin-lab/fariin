@@ -640,6 +640,11 @@ final class MessageRowView: UIView {
         [senderLabel, verifiedView, roleChipView, forwardedLabel, forwardedIcon]
             .compactMap { $0 }.filter { !$0.isHidden && $0.alpha > 0.01 }
     }
+    /// What a reply swipe moves with the bubble: the overlays above plus the sender's photo
+    /// (owner 2026-10-23: the bubble slid over a photo that stayed put).
+    var swipeRiders: [UIView] {
+        liftOverlays + [avatarView].compactMap { $0 }.filter { !$0.isHidden }
+    }
     private var albumView: AlbumBubbleView?
     private var fileView: FileBubbleView?
     private var locationView: LocationBubbleView?
@@ -1976,7 +1981,7 @@ final class MessageRowView: UIView {
         callView?.transform = .identity
         // 2026-10-23: the name, mark, role tag and forwarded line now ride a reply swipe with the
         // bubble, so they are put back too (a recycled row must not start shifted).
-        [senderLabel, verifiedView, roleChipView, forwardedLabel, forwardedIcon].forEach { $0?.transform = .identity }
+        [senderLabel, verifiedView, roleChipView, forwardedLabel, forwardedIcon, avatarView].forEach { $0?.transform = .identity }
         // Owner audit 2026-10-06 chat #78: the reset above covers the box, not its children. A
         // reaction's animations on the fill, chips, body and the chrome above the box kept running
         // for up to 0.4s on the next row drawn here, morphing it from the old row's geometry.

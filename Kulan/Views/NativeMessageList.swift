@@ -5649,7 +5649,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // The sender's name, mark, role tag and forwarded line are drawn by the row beside the
             // bubble, not inside it, so they ride the same shift (owner 2026-10-23: "name and tag
             // are not following the bubble").
-            (cell as? MessageRowCell)?.liftOverlays.forEach { $0.transform = shift }
+            (cell as? MessageRowCell)?.swipeRiders.forEach { $0.transform = shift }
             let progress = min(1, eased / Self.swipeThreshold)
             swipeArrow?.alpha = progress
             swipeArrow?.transform = CGAffineTransform(scaleX: 0.6 + 0.4 * progress, y: 0.6 + 0.4 * progress)
@@ -5705,7 +5705,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // is also reached from `didEndDisplaying`, inside a layout pass.
         DispatchQueue.main.async { [weak self] in self?.releaseParkedNewestJump() }
         let bubble = (cell as? MessageRowCell)?.previewBubble
-        let riders = (cell as? MessageRowCell)?.liftOverlays ?? []
+        let riders = (cell as? MessageRowCell)?.swipeRiders ?? []
         let reset = { bubble?.transform = .identity; riders.forEach { $0.transform = .identity }; arrow?.alpha = 0 }
         if animated {
             // ⛔ A PLAIN 0.2s EASE, NO SPRING AND NO VELOCITY HAND-OFF. Theirs is exactly:

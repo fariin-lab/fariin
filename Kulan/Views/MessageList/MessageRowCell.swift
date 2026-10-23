@@ -57,6 +57,7 @@ final class MessageRowCell: UICollectionViewCell {
     var previewBubble: UIView { rowView.liftTarget }
     var stickerView: RowStickerView? { rowView.stickerView }
     var liftOverlays: [UIView] { rowView.liftOverlays }
+    var swipeRiders: [UIView] { rowView.swipeRiders }
 
     /// Is this point (in `view`'s coordinates) on a media bubble's caption? See
     /// `MessageRowView.hitsMediaCaption`.
