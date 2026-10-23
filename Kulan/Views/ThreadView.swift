@@ -4216,6 +4216,11 @@ struct ThreadView: View {
         if Flags.groupsEnabled, case .name(let name)? = KulanApp.route(from: url) {
             inputFocused = false
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            // Looked up when the card was drawn (`GroupDirectory.prewarm(name:)`): opens at once.
+            if let cid = GroupDirectory.cachedCid(name: name) {
+                GroupDirectory.open(cid: cid, name: name, push: true)
+                return true
+            }
             Task { @MainActor in
                 if case .group(let cid) = await GroupDirectory.resolve(name) {
                     GroupDirectory.open(cid: cid, name: name, push: true)

@@ -223,12 +223,35 @@ enum GroupNameCheck: Equatable {
 
     static func resolve(_ name: String) async -> Resolved {
         guard KulanApp.safeSegment(name) else { return .none }
+        if let cid = await MainActor.run(body: { cachedCid(name: name) }) { return .group(cid) }
         guard let res = try? await fns.httpsCallable("resolveUsername").call(["username": name, "groups": true]),
               let d = res.data as? [String: Any], d["found"] as? Bool == true else { return .none }
         if (d["kind"] as? String) == "group", let cid = d["cid"] as? String, KulanApp.safeSegment(cid) {
+            await MainActor.run { nameToCid[name.lowercased()] = cid }
             return .group(cid)
         }
         return .person
+    }
+
+    /// A group's @name already looked up (by `resolve` or a preview), so a link opens with no call.
+    @MainActor private static var nameToCid: [String: String] = [:]
+    @MainActor static func cachedCid(name: String) -> String? {
+        let n = name.lowercased()
+        return nameToCid[n] ?? previews["n:" + n]?.cid
+    }
+
+    /// ⛔ A NAME LINK'S CARD LOOKS ITS GROUP UP WHEN IT IS DRAWN (owner 2026-10-23: "View Group"
+    /// waited a long time: two server calls one after the other, the name, then the group, both
+    /// after the tap). The tap then has nothing left to ask; the card also shows today's count.
+    @MainActor private static var naming = Set<String>()
+    @MainActor static func prewarm(name: String) {
+        let n = name.lowercased()
+        if let cid = cachedCid(name: n) { warm(cid: cid); return }
+        guard naming.insert(n).inserted else { return }
+        Task {
+            if case .group(let cid) = await resolve(n) { await MainActor.run { warm(cid: cid) } }
+            await MainActor.run { _ = naming.remove(n) }
+        }
     }
 
     // MARK: - The join page
@@ -347,6 +370,12 @@ enum GroupNameCheck: Equatable {
         if let cid, let mine = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }),
            mine.users.contains(AuthService.shared.uid ?? "") {
             openChat(cid, title: mine.title, photo: mine.avatarUrl, push: push)
+            return
+        }
+        // A group I am in that the loaded part of my chat list does not hold yet (the list is paged):
+        // the warmed preview knows, so its chat opens at once instead of a visitor page first.
+        if let cid, let p = cachedPreview(name: name, cid: cid), p.isMember {
+            openChat(cid, title: p.title, photo: p.photoUrl, push: push)
             return
         }
         AppRouter.shared.pendingPublicGroup = PublicGroupTarget(cid: cid, name: name)

@@ -640,9 +640,14 @@ enum MessageRowModelBuilder {
         // The tap goes through `openGroupLink`, which opens the group page in the app.
         if let u = URL(string: p.url), case .name(let name)? = KulanApp.route(from: u),
            p.desc.range(of: #"^[0-9]+ members?$"#, options: .regularExpression) != nil {
+            // Looked up now so the tap opens at once, and today's count wins over the one the
+            // sender's phone saw (owner 2026-10-23: the card said 8 members, Juni has 11).
+            GroupDirectory.prewarm(name: name)
+            let live = GroupDirectory.cachedCid(name: name).flatMap { GroupDirectory.cachedPreview(name: name, cid: $0) }
             return BubbleBody.LinkPreview(
-                shape: .group(code: name, member: false),
-                url: p.url, title: p.title, desc: p.desc, host: p.host,
+                shape: .group(code: name, member: live?.isMember ?? false),
+                url: p.url, title: live?.title ?? p.title,
+                desc: live.map { GroupDirectory.membersLine($0.memberCount) } ?? p.desc, host: p.host,
                 imageUrl: p.imageUrl, imageEnc: p.imageEnc)
         }
         let shape: BubbleBody.LinkPreview.Shape
