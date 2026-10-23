@@ -1,6 +1,5 @@
 import UIKit
 import ImageIO
-import Lottie
 
 // ⛔ A STICKER IN THE CHAT LIST — owner 2026-10-17. Drawn on a plain CALayer, no SwiftUI: a SwiftUI
 // repeatForever animation near the text field deadlocked on iOS 26 (BUILD 959), so every moving
@@ -14,9 +13,10 @@ import Lottie
 //     fariin.com (cached on disk like any picture);
 //   • a sticker I made is a sealed PNG: decrypted like a photo, kept in `DiskImageCache` as PNG so
 //     the alpha survives, and the same bytes serve "Save to Favorites".
-//   • ⛔ an animated .tgs (owner 2026-10-21) is not a picture: its bytes are unzipped and decoded off
-//     the main thread (`TGSSticker`) and a `LottieAnimationView` draws it as vectors, playing on the
-//     same terms (on screen, in a window, not hidden).
+//   • ⛔ an animated .tgs (owner 2026-10-21) is not a picture: `TGSEngine` draws it with rlottie off
+//     the main thread into a `TGSPlayer` layer (owner 2026-10-23 lag report: at most 384 px, the
+//     file's own frame rate, the reference app's chat sticker), on the same terms (on screen, in a
+//     window, not hidden).
 final class RowStickerView: UIView {
     private let art = CALayer()
     private var key: String?            // what is on screen (or loading)
@@ -25,9 +25,9 @@ final class RowStickerView: UIView {
     private var onScreen = true
     private var playing = false
     private var generation = 0          // bumped on every change; a stale load or animator stops
-    /// A .tgs sticker (owner 2026-10-21): the decoded animation and its view.
-    private var tgs: LottieAnimation?
-    private var lottie: LottieAnimationView?
+    /// A .tgs sticker (owner 2026-10-21, engine 2026-10-23): the layer the engine draws into.
+    private var isTGS = false
+    private let player = TGSPlayer()
     /// Owner 2026-10-18: a sticker still downloading or decoding was an empty gap in the chat. The
     /// shimmer holds its place until the first frame is up; a sticker already seen never shows it.
     private let skeleton = SkeletonShimmerView()
@@ -39,7 +39,19 @@ final class RowStickerView: UIView {
         art.contentsGravity = .resizeAspect
         art.masksToBounds = false
         layer.addSublayer(art)
+        layer.addSublayer(player)
         addSubview(skeleton)
+        // The first real frame replaces the placeholder, and is kept as this sticker's first frame
+        // so the next row showing it starts with a picture instead of a blank beat.
+        player.onFirstFrame = { [weak self] in
+            guard let self else { return }
+            if let k = self.key, let c = self.player.contents, CFGetTypeID(c as CFTypeRef) == CGImage.typeID {
+                Self.firstCache.setObject(c as! CGImage, forKey: k as NSString)
+            }
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            self.art.contents = nil
+            CATransaction.commit()
+        }
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -48,8 +60,8 @@ final class RowStickerView: UIView {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         art.frame = bounds
         art.contentsScale = window?.screen.scale ?? UIScreen.main.scale
+        player.frame = bounds
         CATransaction.commit()
-        lottie?.frame = bounds
         skeleton.frame = bounds.insetBy(dx: 4, dy: 4)
         skeleton.layer.cornerRadius = min(16, skeleton.bounds.width * 0.18)
     }
@@ -63,7 +75,7 @@ final class RowStickerView: UIView {
         let k = "\(s.id)|\(url ?? "")"
         guard k != key else { updatePlayback(); return }
         // The same .tgs sticker, now uploaded: keep the playing view (see the note just below).
-        if let old = key, old.hasPrefix("\(s.id)|"), tgs != nil {
+        if let old = key, old.hasPrefix("\(s.id)|"), isTGS {
             key = k
             updatePlayback()
             return
@@ -96,9 +108,10 @@ final class RowStickerView: UIView {
         let bare = "\(s.id)|" as NSString
         // A .tgs already decoded (owner 2026-10-21): on the first frame too.
         let tgsKey = "row:\(s.id)"
-        if let anim = TGSSticker.cached(tgsKey) {
-            bytes = (Self.bytesCache.object(forKey: k as NSString) ?? Self.bytesCache.object(forKey: bare)).map { $0 as Data }
-            showTGS(anim)
+        if let data = (Self.bytesCache.object(forKey: k as NSString) ?? Self.bytesCache.object(forKey: bare)).map({ $0 as Data }),
+           TGSSticker.isTGS(data) {
+            bytes = data
+            showTGS(data, key: tgsKey, rowKey: k, bare: bare)
             return
         }
         if let first = Self.firstCache.object(forKey: k as NSString) ?? Self.firstCache.object(forKey: bare),
@@ -115,7 +128,7 @@ final class RowStickerView: UIView {
         // loads in a moment, but the shimmer went up at once and faded over it. Only a load that is
         // still running after a short wait shows the shimmer; a fast one never does.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-            guard let self, self.generation == gen, self.art.contents == nil, self.tgs == nil else { return }
+            guard let self, self.generation == gen, self.art.contents == nil, !self.player.hasFrame else { return }
             self.skeleton.setActive(true)
         }
         Task { @MainActor [weak self] in
@@ -125,13 +138,11 @@ final class RowStickerView: UIView {
                 return
             }
             if TGSSticker.isTGS(data) {
-                // Decoded into TGSSticker's cache off the main thread; only a yes/no crosses back.
-                let ok = await Task.detached(priority: .userInitiated) { TGSSticker.animation(data: data, key: tgsKey) != nil }.value
+                // Parsed and drawn by the engine, off the main thread.
                 Self.bytesCache.setObject(data as NSData, forKey: k as NSString, cost: data.count)
                 guard let self, self.generation == gen else { return }
-                guard ok, let anim = TGSSticker.cached(tgsKey) else { self.skeleton.setActive(false); return }
                 self.bytes = data
-                self.showTGS(anim)
+                self.showTGS(data, key: tgsKey, rowKey: k, bare: bare)
                 return
             }
             let first = await Task.detached(priority: .userInitiated) { Self.firstFrame(data, maxPixel: px) }.value
@@ -147,24 +158,22 @@ final class RowStickerView: UIView {
         }
     }
 
-    /// Puts a decoded .tgs up and lets `updatePlayback` start it.
-    private func showTGS(_ anim: LottieAnimation) {
-        tgs = anim
-        let v: LottieAnimationView
-        if let have = lottie {
-            v = have
-            v.animation = anim
-        } else {
-            v = TGSSticker.makeView(anim)
-            insertSubview(v, belowSubview: skeleton)
-            lottie = v
+    /// Hands a .tgs to the engine and lets `updatePlayback` start it. The first frame seen before
+    /// (if any) holds the place until the engine's first one is up.
+    private func showTGS(_ data: Data, key tgsKey: String, rowKey: String, bare: NSString) {
+        isTGS = true
+        if let first = Self.firstCache.object(forKey: rowKey as NSString) ?? Self.firstCache.object(forKey: bare) {
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            art.contents = first
+            CATransaction.commit()
         }
-        v.frame = bounds
-        v.isHidden = false
-        v.currentProgress = 0
+        player.set(key: tgsKey, source: .bytes(data), pixelBox: Self.tgsPixels, step: 1)
         skeleton.fadeOut()
         updatePlayback()
     }
+
+    /// The reference app's chat box: 384 px on the longest side, whatever the screen.
+    static let tgsPixels = 384
 
     /// First frames and bytes of stickers already shown (see `configure`). Bounded: ~30MB of bytes.
     private static let firstCache: NSCache<NSString, CGImage> = { let c = NSCache<NSString, CGImage>(); c.countLimit = 120; return c }()
@@ -184,12 +193,8 @@ final class RowStickerView: UIView {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         art.contents = nil
         CATransaction.commit()
-        tgs = nil
-        if let v = lottie {
-            v.stop()
-            v.animation = nil
-            v.isHidden = true
-        }
+        isTGS = false
+        player.clear()
         skeleton.setActive(false)
     }
 
@@ -201,11 +206,15 @@ final class RowStickerView: UIView {
     /// this hands back a second, live player of the same art, started where this one is, to lay over
     /// the snapshot. Nil for a still sticker.
     func liveCopy() -> UIView? {
-        if let anim = tgs {
-            let v = TGSSticker.makeView(anim)
-            v.frame = bounds
-            v.currentProgress = lottie?.realtimeAnimationProgress ?? 0
-            v.play()
+        if isTGS, let data = bytes {
+            let v = UIView(frame: bounds)
+            v.isUserInteractionEnabled = false
+            let copy = TGSPlayer()
+            copy.frame = v.bounds
+            copy.contents = player.contents   // the frame on screen now, until the copy's own arrives
+            copy.set(key: player.key, source: .bytes(data), pixelBox: Self.tgsPixels, step: 1)
+            v.layer.addSublayer(copy)
+            copy.play()
             return v
         }
         guard animated, let data = bytes else { return nil }
@@ -228,13 +237,8 @@ final class RowStickerView: UIView {
     }
 
     private func updatePlayback() {
-        if let v = lottie, tgs != nil {
-            let want = onScreen && window != nil && !isHidden
-            if want {
-                if !v.isAnimationPlaying { v.play() }
-            } else if v.isAnimationPlaying {
-                v.pause()
-            }
+        if isTGS {
+            if onScreen && window != nil && !isHidden { player.play() } else { player.pause() }
             return
         }
         let want = animated && onScreen && window != nil && bytes != nil && !isHidden

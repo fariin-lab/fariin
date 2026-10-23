@@ -1,6 +1,5 @@
 import UIKit
 import ImageIO
-import Lottie
 
 // ⛔ ONE STICKER, STILL OR MOVING — 2026-10-17, the sticker keyboard. A plain UIKit view: frames are
 // decoded OFF the main thread, DOWNSAMPLED to the pixel size the tile is drawn at (ImageIO thumbnail
@@ -9,9 +8,9 @@ import Lottie
 // `contents`. No display link, no timer, and ⛔ never SwiftUI repeatForever (the iOS 26 deadlock).
 // Plays only when told to (visible cells), and never in Low Power Mode.
 //
-// ⛔ A .TGS PLAYS AS VECTORS — owner 2026-10-21: an animated .tgs (gzipped Lottie) is decoded off the
-// main thread by `TGSSticker` and drawn by a `LottieAnimationView` over the same tile, under the same
-// rules: plays only while told to and in a window, paused in Low Power Mode. Never turned into frames.
+// ⛔ A .TGS — owner 2026-10-21 (played natively), 2026-10-23 (lag): drawn by `TGSEngine` (rlottie, off
+// the main thread) into a `TGSPlayer` layer at 2x the tile at most and half the file's frame rate,
+// the reference app's panel. Plays while told to and in a window, scrolling included.
 
 final class StickerFrames {
     let images: [CGImage]
@@ -86,22 +85,16 @@ enum StickerFrameCache {
 final class StickerPlayerView: UIView {
     private let art = CALayer()
     private var frames: StickerFrames?
-    /// A .tgs sticker (owner 2026-10-21): the decoded animation and the view that draws it.
-    private var tgs: LottieAnimation?
-    private var lottie: LottieAnimationView?
+    private var isTGS = false
+    private let player = TGSPlayer()
     private var token = 0
     private(set) var url: URL?
-    /// What the owner asked for; Low Power Mode and a missing window can still hold it back.
     private var wantsPlay = false
-    /// The tile's side in points, for a .tgs still drawn at the size it shows.
     private var tilePoints: CGFloat = 80
     private static let animKey = "sticker.frames"
 
-    // ⛔ NO LIVE .tgs WHILE THE PANEL SCROLLS — owner 2026-10-21: "the sticker keyboard lags when I
-    // scroll". Every tile built a whole Lottie layer tree on the main thread as it came on screen.
-    // Now a moving panel shows each animated sticker's saved still (`TGSSticker.stillAsync`); live
-    // animations start once the grid stops, one tile per run-loop turn, and a tile that leaves the
-    // screen lets its animation go.
+    /// The panel says when it scrolls. .tgs tiles no longer stop for it (the reference app's keep
+    /// playing); kept because the panel still posts it.
     static let scrollChanged = Notification.Name("StickerPanel.scrollChanged")
     @MainActor static private(set) var panelScrolling = false
     @MainActor static func setPanelScrolling(_ on: Bool) {
@@ -109,25 +102,6 @@ final class StickerPlayerView: UIView {
         panelScrolling = on
         NotificationCenter.default.post(name: scrollChanged, object: nil)
     }
-    @MainActor private static var startJobs: [() -> Void] = []
-    @MainActor private static var starting = false
-    @MainActor private static func enqueueStart(_ job: @escaping () -> Void) {
-        startJobs.append(job)
-        drainStarts()
-    }
-    @MainActor private static func drainStarts() {
-        guard !starting, !startJobs.isEmpty else { return }
-        starting = true
-        let job = startJobs.removeFirst()
-        DispatchQueue.main.async { job(); starting = false; drainStarts() }
-    }
-    private var startPending = false
-    /// At most this many live animations at once (owner 2026-10-21, panel lag): a stopped grid with
-    /// thirty animated tiles started thirty Lottie trees; past the cap a tile keeps its still.
-    @MainActor private static var liveCount = 0
-    private static let liveCap = 12
-    /// Owner 2026-10-18: a tile still decoding showed nothing. The shimmer stands in until its
-    /// first frame is up; a cache hit never shows it.
     private let skeleton = SkeletonShimmerView()
 
     override init(frame: CGRect) {
@@ -135,11 +109,11 @@ final class StickerPlayerView: UIView {
         isUserInteractionEnabled = false
         art.contentsGravity = .resizeAspect
         layer.addSublayer(art)
+        layer.addSublayer(player)
         addSubview(skeleton)
+        player.onFirstFrame = { [weak self] in self?.art.isHidden = true }
         NotificationCenter.default.addObserver(self, selector: #selector(powerChanged),
                                                name: .NSProcessInfoPowerStateDidChange, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(powerChanged),
-                                               name: Self.scrollChanged, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -150,23 +124,23 @@ final class StickerPlayerView: UIView {
         CATransaction.setDisableActions(true)
         art.frame = bounds
         art.contentsScale = window?.screen.scale ?? UIScreen.main.scale
+        player.frame = bounds
         CATransaction.commit()
-        lottie?.frame = bounds
         skeleton.frame = bounds.insetBy(dx: 2, dy: 2)
         skeleton.layer.cornerRadius = min(16, skeleton.bounds.width * 0.18)
     }
 
-    /// Shows a sticker. `pixelSize` is the longest side the tile is drawn at, in pixels.
     func setSticker(url: URL?, pixelSize: Int) {
-        guard url != self.url || (frames == nil && tgs == nil) else { return }
+        guard url != self.url || (frames == nil && !isTGS) else { return }
         token += 1
         tilePoints = CGFloat(pixelSize) / max(1, UIScreen.main.scale)
         self.url = url
         frames = nil
         art.removeAnimation(forKey: Self.animKey)
         art.contents = nil
-        tgs = nil
-        dropLottie()
+        art.isHidden = false
+        isTGS = false
+        player.clear()
         guard let url else { skeleton.setActive(false); return }
         if TGSSticker.isTGS(url) { loadTGS(url); return }
         let key = StickerFrameCache.key(url, pixelSize)
@@ -179,7 +153,6 @@ final class StickerPlayerView: UIView {
         let mine = token
         StickerFrameCache.queue.addOperation {
             guard let f = StickerFrameCache.decode(url, maxPixel: pixelSize) else {
-                // A file that will not decode: no shimmer forever over nothing.
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.token == mine else { return }
                     self.skeleton.setActive(false)
@@ -204,49 +177,24 @@ final class StickerPlayerView: UIView {
         apply()
     }
 
-    /// The .tgs path: a cache hit shows at once; otherwise decoded on the sticker queue.
+    /// The still first (shipped `_still.png`, off main), then the engine takes over on play.
+    /// Drawn at 2x the tile at most and every other frame, as the reference app's panel does.
     private func loadTGS(_ url: URL) {
-        if let hit = TGSSticker.cached(url.path) {
-            skeleton.setActive(false)
-            showTGS(hit)
-            return
-        }
+        isTGS = true
+        let scale = min(UIScreen.main.scale, 2)
+        player.set(key: url.path, source: .file(url),
+                   pixelBox: Int((max(tilePoints, bounds.width) * scale).rounded(.up)), step: 2)
         skeleton.setActive(true)
-        let mine = token
-        StickerFrameCache.queue.addOperation {
-            let anim = TGSSticker.animation(url: url)
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.token == mine else { return }
-                guard let anim else { self.skeleton.setActive(false); return }
-                self.showTGS(anim)
-            }
-        }
-    }
-
-    private func showTGS(_ anim: LottieAnimation) {
-        tgs = anim
-        guard let url else { return }
         let mine = token
         TGSSticker.stillAsync(url: url, side: tilePoints) { [weak self] img in
             guard let self, self.token == mine else { return }
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            self.art.contents = img?.cgImage
+            if !self.player.hasFrame { self.art.contents = img?.cgImage }
             CATransaction.commit()
             self.skeleton.fadeOut()
-            self.apply()
         }
-    }
-
-    /// The live view goes entirely when not playing, so a scrolled-past tile holds no layer tree.
-    private func dropLottie() {
-        startPending = false
-        guard let v = lottie else { return }
-        v.stop()
-        v.removeFromSuperview()
-        lottie = nil
-        Self.liveCount = max(0, Self.liveCount - 1)
-        art.isHidden = false
+        apply()
     }
 
     func play() { wantsPlay = true; apply() }
@@ -262,34 +210,9 @@ final class StickerPlayerView: UIView {
     }
 
     private func apply() {
-        if let anim = tgs {
-            let should = wantsPlay && window != nil && !ProcessInfo.processInfo.isLowPowerModeEnabled
-                && !Self.panelScrolling
-            guard should else { dropLottie(); return }
-            if let v = lottie {
-                if !v.isAnimationPlaying { v.play() }
-                return
-            }
-            guard !startPending else { return }
-            startPending = true
-            let mine = token
-            Self.enqueueStart { [weak self] in
-                guard let self, self.token == mine, self.startPending, self.tgs === anim,
-                      self.wantsPlay, self.window != nil, !Self.panelScrolling,
-                      Self.liveCount < Self.liveCap else {
-                    self?.startPending = false
-                    return
-                }
-                Self.liveCount += 1
-                self.startPending = false
-                let v = TGSSticker.makeView(anim)
-                v.frame = self.bounds
-                self.insertSubview(v, belowSubview: self.skeleton)
-                self.lottie = v
-                v.currentProgress = 0
-                self.art.isHidden = true
-                v.play()
-            }
+        if isTGS {
+            // Low Power Mode halves the rate inside the engine rather than freezing the tile.
+            if wantsPlay && window != nil { player.play() } else { player.pause() }
             return
         }
         let running = art.animation(forKey: Self.animKey) != nil

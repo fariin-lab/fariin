@@ -436,14 +436,20 @@ final class StickerStore {
         save()
     }
 
+    /// Written on a serial queue (owner 2026-10-23 sticker lag: a send wrote this twice on the main
+    /// thread). Serial, so the last list written is the last list made.
+    private static let saveQueue = DispatchQueue(label: "StickerStore.save", qos: .utility)
     private func save() {
         let saved = Saved(favorites: favorites, recents: recents)
-        do {
-            try FileManager.default.createDirectory(at: Self.rootDir, withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(saved)
-            try data.write(to: Self.indexURL, options: .atomic)
-        } catch {
-            // Best effort: the lists in memory are still right for this run.
+        let dir = Self.rootDir, url = Self.indexURL
+        Self.saveQueue.async {
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let data = try JSONEncoder().encode(saved)
+                try data.write(to: url, options: .atomic)
+            } catch {
+                // Best effort: the lists in memory are still right for this run.
+            }
         }
     }
 
