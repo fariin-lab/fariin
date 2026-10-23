@@ -74,7 +74,16 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: SMOOTH STICKERS, GROUP STORIES, PUBLIC GROUP LINKS, GROUP CALL SCREEN.
+            THIS BUILD: CRASH FIX, FASTER SPEAKER, GROUP STORY RULES, PUBLIC GROUP PAGE, FAST JOIN REQUESTS.
+            Crash: the crash on builds 1010 and 1011 (closing a chat) is fixed.
+            Calls: Speaker turns on at once in a normal call. Link calls: Add people rings them; declined people get a bell reminder; screen sharing works in group and link calls (other session's work).
+            Group stories: only groups with 50+ members (panel-controlled, per country too); app admins any group. A group story stays out of My Story; posting from the group page turns a ring round the group photo. Posting as Fariin closes at once and rings Fariin's picture.
+            Public groups: a link or search opens the group's chat; tapping the header opens the group's page; Join only from the chat.
+            Join Requests: Approve / Decline takes the card away at once.
+            Also: the first message after reopening the app slides in; sticker pack sheet 5 a row and sharp; your own @name in a group bio opens your profile; + and Edit are two buttons; Calls tab starts with Create a Call Link.
+            PLEASE TEST: open and close chats a lot (crash); a call with Speaker; post a group story from a 50+ group; approve several join requests quickly.
+
+            EARLIER (1011): SMOOTH STICKERS, GROUP STORIES, PUBLIC GROUP LINKS, GROUP CALL SCREEN.
             Stickers: a new player draws animated stickers off the main thread (the reference app's way). Sending or scrolling stickers should no longer lag.
             Group stories: "New Group Story" in + New (Share Story sheet and Settings > Stories) and a + on the group page; the last sheet says "Post story as <group>". Members see one ring for the group. Replies go to the group's thread on the story: the poster sees Views and Replies in the viewers sheet, members get a Replies button. Owner switch: Group Settings > Permissions > "Allow Admins to Add Story". (Server rules not deployed yet, so replies and 1000+ member groups wait for the deploy.)
             Public group link: opens the group's chat with a Join Group pill at the bottom; a group you are in slides in from the right. Old groups still show "join to view" until their encryption is switched off.
