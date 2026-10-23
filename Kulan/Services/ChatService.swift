@@ -1234,6 +1234,11 @@ enum ChatService {
             convSeed["accepted"] = false
         }
         if stampReqOff { convSeed["reqOff"] = true }
+        // A chat already in this phone's list with both of us in it exists on the server: the seed
+        // would only cost a round trip before the message and a second chat-list write (audit 04 F3).
+        let seedNeeded = isNewConv || stampReqOff
+            || !(localConv.map { $0.users.contains(uid) && $0.users.contains(other) } ?? false)
+        if seedNeeded {
         do {
             do {
                 try await convRef.setData(convSeed, merge: true)
@@ -1248,6 +1253,7 @@ enum ChatService {
             // Owner, 2026-10-08: a refused seed write is a refused send; wake the recovery net.
             await MainActor.run { SessionRecovery.noteRefusal(error, "send") }
             throw error
+        }
         }
         // ...and that first message is a knock, which the check above could not see (no document yet).
         if isNewConv && knocking == nil { await MessageRequests.countKnock(clientId: clientId) }

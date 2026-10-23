@@ -79,9 +79,17 @@ enum ChatSearch {
         guard !norm.isEmpty else { return [] }
         var terms = Set<String>()
         let wordsOnly = String(norm.map { $0.isNumber ? " " : $0 })
-        for t in wordsOnly.split(separator: " ") where !t.isEmpty { terms.insert(String(t)) }
-        let digits = norm.filter { $0.isNumber }
-        if !digits.isEmpty { terms.insert(String(digits)) }
+        let words = wordsOnly.split(separator: " ").filter { !$0.isEmpty }
+        for t in words { terms.insert(String(t)) }
+        // Numbers alone ("555 123") stay one term, a number typed in pieces. Numbers between words
+        // ("room 5 floor 2") are each their own term: joined, "52" matched nothing (audit 04 F6).
+        if words.isEmpty {
+            let digits = norm.filter { $0.isNumber }
+            if !digits.isEmpty { terms.insert(String(digits)) }
+        } else {
+            let runs = String(norm.map { $0.isNumber ? $0 : " " }).split(separator: " ")
+            for r in runs where !r.isEmpty { terms.insert(String(r)) }
+        }
         return Array(terms)
     }
 

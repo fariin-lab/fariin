@@ -118,6 +118,8 @@ final class ThreadRepository {
     private var outboxObserver: NSObjectProtocol?
     private var outboxAddObserver: NSObjectProtocol?
     private var hiddenObserver: NSObjectProtocol?
+    /// A peer's fresh key arrived after this window was decrypted (audit 04 F2).
+    private var keyObserver: NSObjectProtocol?
     private var blockObserver: NSObjectProtocol?
     /// 2026-10-07: back to the front → burn what fell due while the app was asleep, at once.
     private var foregroundObserver: NSObjectProtocol?
@@ -724,6 +726,20 @@ final class ThreadRepository {
                 forName: .hiddenMessagesChanged, object: nil, queue: .main) { [weak self] n in
                     guard let self, let id = n.object as? String, self.byId[id] != nil else { return }
                     self.refreshItems()
+                }
+        }
+        // ⛔ A KEY THAT LANDS AFTER THE WINDOW WAS DECRYPTED HEALS IT (audit 04 F2, 2026-10-23). A
+        // decrypt against a stale key gave a lock bubble and fetched the new key, but nothing here
+        // re-decrypted, so the lock stayed for the rest of the visit. The same replay the key preload
+        // does, for the other person of a 1:1 or any author in this window.
+        if keyObserver == nil {
+            keyObserver = NotificationCenter.default.addObserver(
+                forName: .peerKeyChanged, object: nil, queue: .main) { [weak self] n in
+                    guard let self, let who = n.object as? String, !self.lastDocs.isEmpty,
+                          who == self.otherUid || self.byId.values.contains(where: { $0.authorId == who })
+                    else { return }
+                    self.rawReactions.removeAll()
+                    self.applyLiveSnapshot(self.lastDocs, fromCache: self.lastDocsFromCache, redecrypt: true)
                 }
         }
         guard let uid = Auth.auth().currentUser?.uid else { return }
@@ -1402,7 +1418,14 @@ final class ThreadRepository {
         let grace: TimeInterval = NetworkState.shared.isOnline ? 120 : 5
         let cutoff = Date().addingTimeInterval(-grace)
         var changed = false
-        for i in pending.indices where pending[i].sendState == .sending && pending[i].createdAt < cutoff {
+        // A media send this process is still uploading is not stuck (audit 04 F4): it was shown as
+        // failed while its bytes kept going, and Retry did nothing. Its own throw marks a real failure.
+        let uploading: (String?) -> Bool = { id in
+            guard let id, Thread.isMainThread else { return false }
+            return MainActor.assumeIsolated { MediaSend.shared.isInFlight(id) }
+        }
+        for i in pending.indices where pending[i].sendState == .sending && pending[i].createdAt < cutoff
+            && !uploading(pending[i].clientId) {
             pending[i].sendState = .failed
             changed = true
         }
@@ -1864,6 +1887,8 @@ final class ThreadRepository {
         outboxAddObserver = nil
         if let hiddenObserver { NotificationCenter.default.removeObserver(hiddenObserver) }
         hiddenObserver = nil
+        if let keyObserver { NotificationCenter.default.removeObserver(keyObserver) }
+        keyObserver = nil
         if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
         foregroundObserver = nil
         if let blockObserver { NotificationCenter.default.removeObserver(blockObserver) }
