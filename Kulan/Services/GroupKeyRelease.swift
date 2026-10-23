@@ -272,7 +272,8 @@ actor GroupKeyRelease {
             sent += batch.count
             let again = try await call(cid, batch)
             // Skipped for a reason that can pass (the call's file budget, a busy document): once more.
-            if !again.isEmpty, retries < 3 { retries += 1; rest += again }
+            // Bounded, so a server that keeps skipping cannot hold the pass forever.
+            if !again.isEmpty, retries < 20 { retries += 1; rest += again }
             queue = rest
             if !queue.isEmpty { try? await Task.sleep(nanoseconds: Self.pauseBetweenCalls) }
         }
