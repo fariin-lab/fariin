@@ -944,7 +944,9 @@ enum ChatService {
             data["restrictedUntil.\(promoted)"] = FieldValue.delete()
         }
         try await convRef.updateData(data)
-        try? await writeSystemMessage(cid: cid, text: "\(myName()) made \(name) an admin")
+        // Owner 2026-10-23: making someone an admin is not news for the whole group, as in the
+        // reference app. No line in the chat; only the person who did it is told, on their phone.
+        await MainActor.run { ToastNotice.show("\(name) is now an admin") }
     }
 
     /// Demote an admin back to a regular member (the owner, or the admin who promoted them) + system
@@ -958,7 +960,8 @@ enum ChatService {
             "adminEdit": ["uid": demoted, "by": uid],
             "updatedAt": FieldValue.serverTimestamp(),
         ])
-        try? await writeSystemMessage(cid: cid, text: "\(myName()) removed \(name) as admin")
+        // Owner 2026-10-23: as with a promotion, no line for the group; only I am told.
+        await MainActor.run { ToastNotice.show("\(name) is no longer an admin") }
     }
 
     /// Set an admin's granted per-flag rights (the owner, or the admin who promoted them). `rights`
