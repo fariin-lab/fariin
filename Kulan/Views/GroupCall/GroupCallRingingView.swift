@@ -22,7 +22,6 @@ struct GroupCallRingingView: View {
     let overVideo: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var pulsing = false
 
     private var size: CGFloat { overVideo ? 120 : 160 }
 
@@ -51,22 +50,26 @@ struct GroupCallRingingView: View {
         }
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
-        .onAppear { pulsing = true }
     }
 
     private var photo: some View {
         ZStack {
             if !reduceMotion {
-                ForEach(0..<2, id: \.self) { i in
-                    Circle()
-                        .stroke(.white.opacity(0.35), lineWidth: 1.5)
-                        .frame(width: size, height: size)
-                        .scaleEffect(pulsing ? 1.5 : 1)
-                        .opacity(pulsing ? 0 : 0.9)
-                        .animation(.easeOut(duration: 2.4)
-                                    .repeatForever(autoreverses: false)
-                                    .delay(Double(i) * 1.2),
-                                   value: pulsing)
+                // Audit H3 (2026-10-23): driven by a timeline, not `.repeatForever` (the iOS 26
+                // deadlock pattern of build 959). Two rings 1.2 s apart, each 2.4 s, ease-out.
+                TimelineView(.animation) { ctx in
+                    let t = ctx.date.timeIntervalSinceReferenceDate
+                    ZStack {
+                        ForEach(0..<2, id: \.self) { i in
+                            let p = (t + Double(i) * 1.2).truncatingRemainder(dividingBy: 2.4) / 2.4
+                            let e = 1 - (1 - p) * (1 - p)   // ease-out
+                            Circle()
+                                .stroke(.white.opacity(0.35), lineWidth: 1.5)
+                                .frame(width: size, height: size)
+                                .scaleEffect(1 + 0.5 * e)
+                                .opacity(0.9 * (1 - e))
+                        }
+                    }
                 }
             }
             AvatarView(name: people.first?.name ?? "", photoUrl: people.first?.photoUrl, size: size)

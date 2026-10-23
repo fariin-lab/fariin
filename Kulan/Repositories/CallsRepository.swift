@@ -164,9 +164,29 @@ final class CallsRepository {
     /// next person, and the 30s TTL then blocked the correcting reload (audit).
     private var generation = 0
 
+    /// One chat's call rows as last read, with the chat's `updatedAt` at that read (05-calls F3).
+    struct ChatCalls {
+        let updatedAtMillis: Double
+        let entries: [CallEntry]
+        let readAt: Date
+    }
+    @ObservationIgnored private var chatCache: [String: ChatCalls] = [:]
+    @ObservationIgnored private var lastFullAt: Date?
+
+    /// A chat's calls are read again when the chat moved since (a new call record bumps `updatedAt`),
+    /// when one of its calls may still close (ringing / ongoing: the close does not bump the chat),
+    /// or when it had a call in the last two hours (the server closes a record late, after a sweep).
+    static func needsRead(_ hit: ChatCalls, updatedAtMillis: Double) -> Bool {
+        if updatedAtMillis != hit.updatedAtMillis { return true }
+        let recent = Date().addingTimeInterval(-2 * 3600)
+        return hit.entries.contains { $0.outcome == "ongoing" || $0.outcome == "ringing" || $0.date > recent }
+    }
+
     /// Sign-out/delete: drop the previous account's call log.
     func reset() {
         generation &+= 1
+        chatCache = [:]
+        lastFullAt = nil
         calls = []
         hasLoaded = false
         loading = false
@@ -230,8 +250,25 @@ final class CallsRepository {
         var all: [CallEntry] = []
         // audit M-090: the chats whose query failed keep the rows already on screen (below).
         var failedCids: Set<String> = []
-        await withTaskGroup(of: (String, [CallEntry]?).self) { group in
-            for c in convs {
+        // Full audit 05-calls F3 (2026-10-23): every foreground re-downloaded every call row of every
+        // chat. Now a chat is read again only when it can have changed (see `needsRead`); the rest
+        // reuse what the last read of that chat found. Every 10 minutes the whole log is read anyway.
+        let (cache, fullDue) = await MainActor.run { () -> ([String: ChatCalls], Bool) in
+            (self.chatCache, self.lastFullAt.map { Date().timeIntervalSince($0) > 600 } ?? true)
+        }
+        var reused: [String: ChatCalls] = [:]
+        var toRead: [Conversation] = []
+        for c in convs {
+            if !fullDue, let hit = cache[c.id], !Self.needsRead(hit, updatedAtMillis: c.updatedAtMillis) {
+                reused[c.id] = hit
+                all.append(contentsOf: hit.entries)
+            } else {
+                toRead.append(c)
+            }
+        }
+        var freshCache: [String: ChatCalls] = reused
+        await withTaskGroup(of: (String, Double, [CallEntry]?).self) { group in
+            for c in toRead {
                 group.addTask {
                     let group = c.isGroup
                     let other = group ? "" : c.otherUid(me)
@@ -239,15 +276,22 @@ final class CallsRepository {
                     let photo = group ? c.avatarUrl : c.photoUrl(for: me)
                     guard let snap = try? await database.collection("conversations").document(c.id)
                         .collection("messages").whereField("type", isEqualTo: "call").getDocuments()
-                    else { return (c.id, nil) }
-                    return (c.id, Self.entries(snap.documents, cid: c.id, name: name, photo: photo, other: other,
-                                               group: group))
+                    else { return (c.id, c.updatedAtMillis, nil) }
+                    return (c.id, c.updatedAtMillis,
+                            Self.entries(snap.documents, cid: c.id, name: name, photo: photo, other: other,
+                                         group: group))
                 }
             }
-            for await (cid, chunk) in group {
-                if let chunk { all.append(contentsOf: chunk) } else { failedCids.insert(cid) }
+            for await (cid, updated, chunk) in group {
+                if let chunk {
+                    all.append(contentsOf: chunk)
+                    freshCache[cid] = ChatCalls(updatedAtMillis: updated, entries: chunk, readAt: Date())
+                } else {
+                    failedCids.insert(cid)
+                }
             }
         }
+        let newCache = freshCache, wasFull = fullDue
         let adhocResult = try? await adhocSnap
         let adhocInfos = (adhocResult?.documents ?? [])
             .compactMap { AdhocCallInfo(id: $0.documentID, data: $0.data(with: .estimate)) }
@@ -269,8 +313,12 @@ final class CallsRepository {
             merged.removeAll { HiddenCalls.isHidden($0.id) }   // locally deleted entries stay gone
             merged.sort { $0.date > $1.date }
             self.calls = merged; self.loading = false; self.hasLoaded = true
+            self.chatCache = newCache   // chats gone from my list drop out with it
             // A partial read is not a fresh list: leave the TTL open so the next visit tries again.
-            if failed.isEmpty, !adhocFailed { self.lastLoadedAt = Date() }
+            if failed.isEmpty, !adhocFailed {
+                self.lastLoadedAt = Date()
+                if wasFull { self.lastFullAt = Date() }
+            }
             defer { self.reloadRequested = false }
             return self.reloadRequested
         }
