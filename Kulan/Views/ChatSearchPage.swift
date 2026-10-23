@@ -553,6 +553,14 @@ struct ChatSearchPage: View {
             // The join page (or the chat, when I joined meanwhile), presented by the Chats tab.
             guard let g = m.groups[row.key] else { return }
             recents.record(group: g)
+            // A group I am in opens the way a chat row does (owner 2026-10-23: a Recent group
+            // dropped him on a blank list with no tab bar). The router door pushed the chat a turn
+            // later, while the search was closing, and the stack came out half pushed.
+            if let c = repo.conversations.first(where: { $0.id == g.cid }), c.users.contains(me) {
+                onOpenChat(c)
+                dismissSearch()
+                return
+            }
             GroupDirectory.open(cid: g.cid, name: g.handle)
             dismissSearch()
         case .recentPerson:
