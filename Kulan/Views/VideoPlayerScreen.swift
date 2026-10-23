@@ -284,9 +284,14 @@ struct VideoPlayerScreen: View {
         } else if unavailable {
             VStack(spacing: 10) {
                 Image(systemName: "video.slash").font(.system(size: 34))
-                Text("Video no longer available").font(.system(size: 15, weight: .medium))
-                Text("It was delivered and removed from the server.")
+                // Owner 2026-10-23 ("what happened, server?"): the old line said "delivered and removed
+                // from the server" for every case, but only a delivered 1:1 clip is removed. A group
+                // clip whose key was sealed for the members of the day, without me, was never removed;
+                // it cannot be opened here. Each case now says what is true.
+                Text(unavailableWords.title).font(.system(size: 15, weight: .medium))
+                Text(unavailableWords.detail)
                     .font(.system(size: 13)).foregroundStyle(.white.opacity(0.7))
+                    .multilineTextAlignment(.center).padding(.horizontal, 32)
             }
             .foregroundStyle(.white)
         } else if loadFailed {
@@ -337,6 +342,20 @@ struct VideoPlayerScreen: View {
     }
 
     // MARK: - The mid-screen play button
+
+    /// Why a clip cannot be played, in true words (owner 2026-10-23). 1:1 ids are "uidA_uidB".
+    private var unavailableWords: (title: String, detail: String) {
+        if MediaFetch.sealedWithoutMe(message.enc) {
+            return ("Video can't be opened", "It was sent before you joined this group.")
+        }
+        if message.videoUrl?.isEmpty ?? true || message.enc == nil {
+            return ("Video no longer available", "This video's file is missing.")
+        }
+        if cid.contains("_") {
+            return ("Video no longer available", "It was delivered and removed from the server.")
+        }
+        return ("Video no longer available", "Its file was removed from the server.")
+    }
 
     private var centerPlayButton: some View {
         Button { togglePlay() } label: {
