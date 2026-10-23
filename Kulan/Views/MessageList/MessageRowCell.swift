@@ -69,6 +69,36 @@ final class MessageRowCell: UICollectionViewCell {
         rowView.hitsCallJoin(view.convert(point, to: rowView))
     }
 
+    /// Does a single tap at this point (in `view`'s coordinates) DO something — open, jump, vote,
+    /// show a list? Then a double tap there is two single taps, never a reaction. The reference
+    /// app's bubble asks the same question per point: a link, a mention, the reply header, the
+    /// name, the reactions and every button fire at once and take no double tap; only the plain
+    /// body of the message waits for a second tap. Mirrors `handleTap` below, zone for zone.
+    func hasTapAction(at point: CGPoint, in view: UIView) -> Bool {
+        guard let m = model else { return false }
+        let p = view.convert(point, to: rowView)
+        switch m.content {
+        case .call, .notice: return true
+        case .bubble(let b):
+            if b.showsFailedBadge, rowView.hitsFailBadge(p) { return true }
+            if rowView.hitsReactions(p) { return true }
+            if b.sender != nil, rowView.hitsSenderName(p) || rowView.hitsAvatar(p) { return true }
+            if rowView.hitsPill(p) {
+                if case .pill(let pill) = b.body { return pill.opens }
+                return true
+            }
+            if rowView.hitsUploadRing(p) || rowView.uploadRingTileIndex(at: p) != nil { return true }
+            if rowView.hitsMedia(p) || rowView.albumTileIndex(at: p) != nil { return true }
+            if rowView.hitsStoryReply(p) || rowView.hitsCallJoin(p) { return true }
+            if rowView.hitsLinkButton(p) || rowView.hitsLinkCard(p) { return true }
+            if rowView.hitsPollResults(p) || rowView.pollOptionIndex(at: p) != nil { return true }
+            if rowView.hitsFile(p) || rowView.hitsLocation(p) { return true }
+            if rowView.hitsContactButton(p) || rowView.hitsContactCard(p) { return true }
+            if rowView.hitsQuote(p), b.quote != nil { return true }
+            return rowView.link(at: p) != nil
+        }
+    }
+
     /// How much this row's bubble just grew (or shrank, negative) from a reaction, read once. The list
     /// uses it to move the rest of the conversation along with the bubble.
     func takeReactionGrowth() -> CGFloat { rowView.takeReactionGrowth() }

@@ -929,14 +929,28 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard g.state == .ended else { return }
         let loc = g.location(in: collectionView)
         guard let ip = collectionView.indexPathForItem(at: loc) else { return }
+        let id = dataSource.itemIdentifier(for: ip)
         if let cell = collectionView.cellForItem(at: ip) as? MessageRowCell {
             let p = collectionView.convert(loc, to: cell.previewBubble)
-            if cell.previewBubble.bounds.contains(p) { MessageBubbleTouch.last = Date() }
-        } else if let id = dataSource.itemIdentifier(for: ip), let rect = CMBubbleRects.rect(id),
+            if cell.previewBubble.bounds.contains(p) {
+                MessageBubbleTouch.last = Date()
+                if let id { lastBubbleTapUp = (id, CACurrentMediaTime()) }
+            }
+        } else if let id, let rect = CMBubbleRects.rect(id),
                   rect.contains(g.location(in: nil)) {
             MessageBubbleTouch.last = Date()   // a hosted SwiftUI row, by its published rect
+            lastBubbleTapUp = (id, CACurrentMediaTime())
         }
     }
+    /// The last single tap that lifted off a bubble, and when. A finger that comes down on the SAME
+    /// row within the double-tap window is the second half of a double tap, not a long press: the
+    /// menu's 0.2s press must not ripen on it (see `gestureRecognizerShouldBegin`).
+    private var lastBubbleTapUp: (id: String, at: CFTimeInterval)?
+    /// When the finger the long press is tracking went down (`shouldReceive`).
+    private var pressDownAt: CFTimeInterval = 0
+    /// How close the second touch-down must follow the first lift to count as a double tap. The
+    /// system's own tap counter allows about this much; the reference app waits 0.3s.
+    private static let doubleTapWindow: CFTimeInterval = 0.35
     private var holdPress: UILongPressGestureRecognizer!     // passive: marks the context-menu lift window
     private var interactionHoldUntil = Date.distantPast      // lands defer while a long-press is in flight
     private var contextMenuVisible = false                   // UIKit says a context menu is on screen
@@ -5436,9 +5450,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             let loc = g.location(in: collectionView)
             guard let ip = collectionView.indexPathForItem(at: loc),
                   let id = dataSource.itemIdentifier(for: ip) else { return false }
+            // No reaction under an open menu, and none in selection mode: there a tap ticks the
+            // row, so a double tap is tick-untick, never a heart (it reacted as well, before).
+            if activeMenu != nil || CMOverlay.current != nil || isSelecting {
+                DiagLog.add("REACT# skip menu-or-selecting")
+                return false
+            }
             // A SwiftUI row the screen opted in: ON its bubble only, the same rule as a UIKit one.
             if rowModels[id] == nil {
-                guard !isSelecting, hostedDoubleTap(id), let rect = CMBubbleRects.rect(id) else { return false }
+                guard hostedDoubleTap(id), let rect = CMBubbleRects.rect(id) else { return false }
                 return rect.contains(g.location(in: nil))
             }
             // The BUBBLE only, not the full-width row: double-tapping the empty area beside a uikit bubble
@@ -5454,12 +5474,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // opens, and a double tap that BOTH opened the viewer and toggled a reaction.
             // …except ON THE CAPTION of a photo or album (owner, 2026-09-29): the caption is text,
             // opens nothing, and reacts on a double tap like every other text message.
-            if case .bubble(let row)? = rowModels[id]?.content, row.opensOnTap {
-                return cell.hitsMediaCaption(loc, in: collectionView)
+            if case .bubble(let row)? = rowModels[id]?.content, row.opensOnTap,
+               !cell.hitsMediaCaption(loc, in: collectionView) {
+                DiagLog.add("REACT# skip media-opens")
+                return false
             }
-            // A call card's Join button is a button: a double tap on it joins (once, debounced)
-            // and never reacts. Anywhere else on the bubble, the card included, still reacts.
-            if cell.hitsCallJoin(loc, in: collectionView) { return false }
+            // ⛔ A SPOT THAT ANSWERS A SINGLE TAP TAKES NO DOUBLE TAP — the reference app's per-point
+            // rule (its bubble returns "single tap" for a link, mention, reply header, name, button
+            // or media, and "wait for a double tap" only for the plain body). Here the first tap
+            // already fired its action: a quote jump scrolled the list so the second tap landed on
+            // another row, a link put up its sheet, a poll voted twice, the reactions opened their
+            // list — and the heart came or did not depending on which. The call card's Join button
+            // and the link card's body are among these zones.
+            if cell.hasTapAction(at: loc, in: collectionView) {
+                DiagLog.add("REACT# skip tap-zone")
+                return false
+            }
             let p = collectionView.convert(loc, to: cell.previewBubble)
             return cell.previewBubble.bounds.contains(p)
         }
@@ -5473,6 +5503,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                   let id = dataSource.itemIdentifier(for: ip),
                   id == pressDownId,   // the row the finger went DOWN on — see `pressDownId`
                   !customMenuActions(id).isEmpty else { return false }
+            // ⛔ THE SECOND TAP OF A DOUBLE TAP IS NOT A LONG PRESS (owner, 2026-10-23: "double react
+            // sometimes works, sometimes not"). This press ripens at 0.2s and, once it begins, UIKit
+            // fails every tap recogniser still waiting on the touch, the double tap included. A
+            // second tap pressed a little firmly (0.2s is an ordinary tap for many people) lost
+            // the heart and squeezed the bubble instead. The reference app's double tap cancels its
+            // menu gesture; this refuses the press when the finger came down on the row it just
+            // lifted from, inside the double-tap window.
+            if let up = lastBubbleTapUp, up.id == id, pressDownAt - up.at < Self.doubleTapWindow,
+               pressDownAt >= up.at {
+                return false
+            }
             if let native = collectionView.cellForItem(at: ip) as? MessageRowCell {
                 let p = collectionView.convert(loc, to: native.previewBubble)
                 return native.previewBubble.bounds.contains(p)
@@ -5511,6 +5552,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // "you feel scroll jump") — exclusivity makes UIKit prevent the pan the moment the press
         // recognizes, which is exactly the reference app's behaviour.
         if g === customPress || other === customPress {
+            // …and with the double tap. A FIRST tap held past 0.2s begins this press; exclusive,
+            // that beginning failed the double tap, so the second tap that followed reacted to
+            // nothing. The reference app's menu gesture stays pending through its squeeze and runs
+            // alongside the tap recogniser. If the menu does open, the double tap is refused in
+            // `gestureRecognizerShouldBegin` (`activeMenu`), so the two never both act.
+            if g === doubleTapGesture || other === doubleTapGesture { return true }
             return g === holdPress || other === holdPress
         }
         return g === swipePan || g === holdPress
@@ -5528,6 +5575,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if g === customPress {
             pressDownId = collectionView.indexPathForItem(at: touch.location(in: collectionView))
                 .flatMap { dataSource.itemIdentifier(for: $0) }
+            pressDownAt = CACurrentMediaTime()
         }
         return true   // stamps only; never refuses a touch
     }
@@ -5702,12 +5750,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let loc = g.location(in: collectionView)
         guard let ip = collectionView.indexPathForItem(at: loc),
               let id = dataSource.itemIdentifier(for: ip),
-              rowModels[id] != nil || hostedDoubleTap(id) else { return }
+              rowModels[id] != nil || hostedDoubleTap(id) else {
+            DiagLog.add("REACT# skip no-row")
+            return
+        }
         // A tap meant for Play, Pause, the scrubber or the speed pill is not a reaction. See
         // `VoiceBubbleView.controlTookTouchRecently` — the control stamps itself in `hitTest`, which
         // happens while the touch is being delivered and therefore strictly before this recogniser
         // can fire on it.
-        guard !VoiceBubbleView.controlTookTouchRecently() else { return }
+        guard !VoiceBubbleView.controlTookTouchRecently() else {
+            DiagLog.add("REACT# skip voice-control")
+            return
+        }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         onUikitDoubleTap(id)
     }

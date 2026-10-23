@@ -4150,7 +4150,13 @@ struct ThreadView: View {
         guard let idx = repo.indexById[rowId], idx < repo.items.count else { return }
         let m = repo.items[idx]
         // 2026-09-24 feature-audit: the same `canReact` as the quick bar (was "not sending" only).
-        guard canReact(m) else { return }
+        guard canReact(m) else {
+            // Which rule said no, so a "the double tap did nothing" report can be read off the log.
+            DiagLog.add("REACT# refused guest=\(guest != nil) sending=\(m.sendState != nil) muted=\(iAmMuted) "
+                        + "call=\(m.isCall) system=\(m.isSystem) deleted=\(m.deleted) pin=\(m.pinNotice != nil) "
+                        + "story=\(m.isStoryReaction)")
+            return
+        }
         // The user's chosen quick reaction, not a hard-coded heart (Settings > Appearance).
         let quick = QuickReaction.current
         let emoji: String? = Self.sameEmoji(m.reactions[me], quick) ? nil : quick
@@ -7821,6 +7827,7 @@ struct ThreadView: View {
                                                    toAuthor: toAuthor, group: members,
                                                    targetText: target, targetImages: thumbs)
             if !ok {
+                DiagLog.add("REACT# write refused cid=\(cid) remove=\(emoji == nil)")
                 await MainActor.run {
                     repo.revertMyReaction(messageId, uid: me, to: previous)
                     showJumpToast("Couldn't update the reaction")
