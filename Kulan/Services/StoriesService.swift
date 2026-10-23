@@ -266,14 +266,20 @@ struct GroupStoryReply: Identifiable, Equatable {
 
 extension StoriesService {
     func sendGroupReply(_ story: Story, text: String = "", emoji: String = "") async throws {
+        guard story.groupId != nil else { return }
+        try await sendGroupReply(storyId: story.id, text: text, emoji: emoji)
+    }
+
+    /// The same, from the Replies tab's composer, which knows the story by id alone.
+    func sendGroupReply(storyId: String, text: String = "", emoji: String = "") async throws {
         let me = AuthService.shared.uid ?? ""
-        guard !me.isEmpty, story.groupId != nil else { return }
+        guard !me.isEmpty, !storyId.isEmpty else { return }
         var data: [String: Any] = ["uid": me, "createdAt": FieldValue.serverTimestamp()]
         let t = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1000))
         if !t.isEmpty { data["text"] = t }
         if !emoji.isEmpty { data["emoji"] = String(emoji.prefix(16)) }
         guard data["text"] != nil || data["emoji"] != nil else { return }
-        try await FirestoreHub.db.collection("stories").document(story.id)
+        try await FirestoreHub.db.collection("stories").document(storyId)
             .collection("replies").addDocument(data: data)
     }
 
@@ -302,6 +308,19 @@ extension StoriesService {
         let me = AuthService.shared.uid ?? ""
         if reply.uid == me { return true }
         guard let c = ConversationsRepository.shared.conversations.first(where: { $0.id == groupId }) else { return false }
+        return c.isOwner(me) || c.isAdmin(me)
+    }
+}
+
+extension GroupStoryRights {
+    /// WHO SEES A GROUP STORY'S VIEWS (owner 2026-10-23): its poster, and the group's owner and
+    /// admins, whoever of them posted it. Members never do. firestore.rules `storyViewsReader`.
+    @MainActor static func canSeeViews(_ s: Story) -> Bool {
+        let me = AuthService.shared.uid ?? ""
+        guard !me.isEmpty else { return false }
+        if s.authorUid == me { return true }
+        guard let gid = s.groupId,
+              let c = ConversationsRepository.shared.conversations.first(where: { $0.id == gid }) else { return false }
         return c.isOwner(me) || c.isAdmin(me)
     }
 }

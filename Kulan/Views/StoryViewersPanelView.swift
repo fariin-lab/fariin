@@ -114,6 +114,35 @@ final class StoryViewersPanelView: UIView {
         didSet { if repliesOnly != oldValue { applyAudienceTabs() } }
     }
 
+    /// An admin who did not post it sees the Views tab without the row's "…" (owner 2026-10-23).
+    var viewersReadOnly = false
+
+    /// The composer at the foot of the Replies tab (owner 2026-10-23 mockup). Its "Reply" link on a
+    /// row prefills "@name " here.
+    private let composerModel = GroupReplyComposerModel()
+    private lazy var composerHost: UIHostingController<GroupStoryReplyComposer> = {
+        let h = UIHostingController(rootView: GroupStoryReplyComposer(
+            model: composerModel,
+            onSend: { [weak self] text, emoji in self?.sendReply(text: text, emoji: emoji) },
+            onFocus: { [weak self] on in if on { self?.onSearchActive?(true) } },
+            onResize: { [weak self] in self?.setNeedsLayout() }))
+        h.safeAreaRegions = []   // laid out by frame; the keyboard lift is ours (`keyboardWillChange`)
+        h.view.backgroundColor = .clear
+        return h
+    }()
+    private var composerVisible: Bool { isGroupStory && showingReplies }
+    /// How far the keyboard covers the panel's foot while the composer is being typed in.
+    private var composerLift: CGFloat = 0
+    private var lastReplyCount = 0
+
+    private func sendReply(text: String, emoji: String) {
+        let sid = storyId
+        Task {
+            do { try await StoriesService.shared.sendGroupReply(storyId: sid, text: text, emoji: emoji) }
+            catch { await MainActor.run { UINotificationFeedbackGenerator().notificationOccurred(.error) } }
+        }
+    }
+
     private var replies: [GroupStoryReply] = [] {
         didSet {
             // The reference app opens on Replies when there are any. Once, and never over a tab
@@ -278,6 +307,9 @@ final class StoryViewersPanelView: UIView {
         emptyLabel.textAlignment = .center
         emptyLabel.isHidden = true
         addSubview(emptyLabel)
+
+        composerHost.view.isHidden = true
+        addSubview(composerHost.view)
     }
 
     // MARK: Tabs
@@ -285,7 +317,7 @@ final class StoryViewersPanelView: UIView {
     /// THE FIRST TAB IS ALWAYS THE AUDIENCE'S OWN NAME, which makes the whole rule one sentence: the
     /// first tab names who this story went to, and the second exists only when that was Everyone.
     /// A group story's tabs are "Views" and "Replies" (owner 2026-10-23), whatever its audience.
-    private var allTabTitle: String { isGroupStory ? "Views" : audience.title }
+    private var allTabTitle: String { isGroupStory ? "All Viewers" : audience.title }
     private var secondTabTitle: String { isGroupStory ? "Replies" : "Friends" }
     /// Members see only Replies, so the second tab is the one shown and the first is gone.
     private var membersRepliesOnly: Bool { isGroupStory && repliesOnly }
@@ -351,8 +383,18 @@ final class StoryViewersPanelView: UIView {
 
         search.frame = CGRect(x: 16, y: underline.frame.maxY + 12, width: w - 32, height: 38)
         let top = search.frame.maxY + 10
-        table.frame = CGRect(x: 0, y: top, width: w, height: max(0, bounds.height - top))
-        loadingView.frame = CGRect(x: 0, y: top, width: w, height: max(0, bounds.height - top))
+        // The Replies tab's composer sits at the foot, above the home bar or the keyboard.
+        var listBottom = bounds.height
+        composerHost.view.isHidden = !composerVisible
+        if composerVisible {
+            let safe = window?.safeAreaInsets.bottom ?? 0
+            let ch = ceil(composerHost.sizeThatFits(in: CGSize(width: w, height: .greatestFiniteMagnitude)).height)
+            let bottom = bounds.height - max(safe, composerLift)
+            composerHost.view.frame = CGRect(x: 0, y: bottom - ch, width: w, height: ch)
+            listBottom = bottom - ch
+        }
+        table.frame = CGRect(x: 0, y: top, width: w, height: max(0, listBottom - top))
+        loadingView.frame = CGRect(x: 0, y: top, width: w, height: max(0, listBottom - top))
         // Two lines and a title when receipts are off (2026-10-17), one line otherwise.
         let emptyH = showingViewsOff
             ? ceil(emptyLabel.sizeThatFits(CGSize(width: w - 48, height: .greatestFiniteMagnitude)).height)
@@ -383,6 +425,22 @@ final class StoryViewersPanelView: UIView {
         // A hide notification still carries a frame, and on some paths it is still the on-screen
         // one, so the hide case is answered with a flat zero rather than by measuring anything.
         let hiding = note.name == UIResponder.keyboardWillHideNotification
+        // The Replies composer: the whole bar rides up on the keyboard instead of the list insetting.
+        let lift: CGFloat
+        if hiding || !composerVisible || search.isFirstResponder || window == nil {
+            lift = 0
+        } else {
+            lift = max(0, bounds.height - convert(end, from: nil).minY)
+        }
+        if abs(lift - composerLift) > 0.5 {
+            composerLift = lift
+            let d = info[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+            let c = info[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int ?? 7
+            UIView.animate(withDuration: d, delay: 0,
+                           options: [UIView.AnimationOptions(rawValue: UInt(c) << 16), .beginFromCurrentState]) {
+                self.setNeedsLayout(); self.layoutIfNeeded()
+            } completion: { _ in self.scrollRepliesToEnd(animated: true) }
+        }
         let overlap: CGFloat
         if hiding || !search.isFirstResponder {
             overlap = 0
@@ -423,11 +481,23 @@ final class StoryViewersPanelView: UIView {
         if showingReplies {
             let q = (search.text ?? "").trimmingCharacters(in: .whitespaces)
             filteredReplies = q.isEmpty ? replies
-                : replies.filter { replyPerson($0.uid).name.localizedCaseInsensitiveContains(q) }
+                : replies.filter { replyPerson($0.uid).name.localizedCaseInsensitiveContains(q)
+                    || $0.text.localizedCaseInsensitiveContains(q) }
             table.reloadData()
             updateEmptyState()
+            setNeedsLayout()
+            // Oldest at the top, newest at the foot by the composer: land on the newest when the
+            // thread opens and whenever a reply arrives.
+            if filteredReplies.count != lastReplyCount {
+                let first = lastReplyCount == 0
+                lastReplyCount = filteredReplies.count
+                layoutIfNeeded()
+                scrollRepliesToEnd(animated: !first)
+            }
             return
         }
+        lastReplyCount = 0
+        setNeedsLayout()
         if tab == 1 && friendUids.isEmpty {
             friendUids = Set(ConversationsRepository.shared.conversations
                 .filter { !$0.isGroup }.map { $0.otherUid(me) }.filter { !$0.isEmpty })
@@ -445,6 +515,12 @@ final class StoryViewersPanelView: UIView {
         }
         table.reloadData()
         updateEmptyState()
+    }
+
+    private func scrollRepliesToEnd(animated: Bool) {
+        guard showingReplies, !filteredReplies.isEmpty, frozenOffsetY == nil,
+              table.numberOfRows(inSection: 0) == filteredReplies.count else { return }
+        table.scrollToRow(at: IndexPath(row: filteredReplies.count - 1, section: 0), at: .bottom, animated: animated)
     }
 
     private func updateEmptyState() {
@@ -559,7 +635,8 @@ extension StoryViewersPanelView: UITableViewDataSource, UITableViewDelegate {
                     self.table.reloadRows(at: [IndexPath(row: row, section: 0)], with: .none)
                 },
                 onBlock: { [weak self] in self?.onBlock?(v) },
-                isHidden: StoryAudienceStore.shared.isHidden(v.id))
+                isHidden: StoryAudienceStore.shared.isHidden(v.id),
+                readOnly: viewersReadOnly)
         }
         .margins(.horizontal, 16)
         .margins(.vertical, 9)
@@ -586,6 +663,12 @@ extension StoryViewersPanelView: UITableViewDataSource, UITableViewDelegate {
                     // Off the list at once; the listener confirms it, or brings it back on a refusal.
                     self?.replies.removeAll { $0.id == r.id }
                     Task { try? await StoriesService.shared.deleteGroupReply(storyId: sid, replyId: r.id) }
+                },
+                onReply: { [weak self] in
+                    // "Reply" under a comment starts an answer to its writer (owner 2026-10-23 mockup).
+                    guard let self, !isMe else { return }
+                    self.composerModel.text = "@\(who.name) "
+                    self.composerModel.focusTick &+= 1
                 })
         }
         .margins(.horizontal, 16)
@@ -647,9 +730,11 @@ struct StoryViewerSkeleton: View {
     }
 }
 
-/// ONE REPLY IN A GROUP STORY'S THREAD (owner 2026-10-23, group stories v2). The viewer row's face
-/// and name, with the reply under the name (or "Reacted" and the emoji) and how long ago at the end.
-/// Delete sits behind a long press, only for the writer and the group's owner or admins.
+/// ONE REPLY IN A GROUP STORY'S THREAD, AS A COMMENT (owner 2026-10-23 mockup): the face on the
+/// left, the name in bold, the reply under it in white, and a small "Reply" link that starts an
+/// answer to this person. No bubble or card; rows are kept apart by space alone. A reaction reads
+/// "Reacted to the story" with the emoji large at the end, as the reference app draws one.
+/// Long press: Copy for text, Delete for the writer and the group's owner or admins.
 struct GroupStoryReplyRowContent: View {
     let reply: GroupStoryReply
     let name: String
@@ -657,8 +742,7 @@ struct GroupStoryReplyRowContent: View {
     let canDelete: Bool
     var onOpenProfile: () -> Void = {}
     var onDelete: () -> Void = {}
-
-    private var line: String { reply.isReaction ? "Reacted \(reply.emoji)" : reply.text }
+    var onReply: () -> Void = {}
 
     /// Number and one letter, as the story header writes its own age ("12s", "5m", "3h").
     private var ago: String {
@@ -669,47 +753,233 @@ struct GroupStoryReplyRowContent: View {
         return "\(s / 86_400)d"
     }
 
+    private var isMe: Bool { reply.uid == (AuthService.shared.uid ?? "") }
+
     private var row: some View {
         HStack(alignment: .top, spacing: 12) {
-            AvatarView(name: name, photoUrl: photoUrl, size: 46)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(name).font(.body.weight(.semibold)).foregroundStyle(.white)
-                Text(line).font(.subheadline).foregroundStyle(.white.opacity(0.85))
-                    .fixedSize(horizontal: false, vertical: true)
+            AvatarView(name: name, photoUrl: photoUrl, size: 40)
+                .onTapGesture { onOpenProfile() }
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(name).font(.subheadline.weight(.bold)).foregroundStyle(.white).lineLimit(1)
+                    Text(ago).font(.caption).foregroundStyle(.white.opacity(0.45))
+                }
+                .onTapGesture { onOpenProfile() }
+                if reply.isReaction {
+                    Text("Reacted to the story").font(.body).foregroundStyle(.white.opacity(0.7))
+                } else {
+                    Text(reply.text).font(.body).foregroundStyle(.white)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !isMe {
+                    Button(action: onReply) {
+                        Text("Reply").font(.footnote.weight(.semibold))
+                            .foregroundStyle(Color(red: 0.55, green: 0.66, blue: 0.80))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 2)
+                }
             }
             Spacer(minLength: 8)
-            Text(ago).font(.caption).foregroundStyle(.white.opacity(0.5))
-                .padding(.top, 3)
+            if reply.isReaction {
+                Text(reply.emoji).font(.system(size: 30))
+            }
         }
         .contentShape(Rectangle())
-        .onTapGesture { onOpenProfile() }
     }
 
     var body: some View {
-        if canDelete {
-            row.contextMenu {
+        row.contextMenu {
+            if !reply.isReaction {
+                Button { UIPasteboard.general.string = reply.text } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+            }
+            if canDelete {
                 Button(role: .destructive, action: onDelete) {
                     Label("Delete", systemImage: "trash")
                 }
             }
-        } else {
-            row
         }
     }
 }
 
-/// THE MEMBERS' DOOR (owner 2026-10-23): a member who did not post a group story opens its replies
-/// in the same panel the poster's viewers sheet uses, with only the Replies tab.
+/// What the composer holds, shared with the panel so a row's "Reply" can prefill it.
+final class GroupReplyComposerModel: ObservableObject {
+    @Published var text = ""
+    @Published var focusTick = 0
+}
+
+/// THE FOOT OF THE REPLIES TAB (owner 2026-10-23): a row of quick reactions over a growing text
+/// field with its send button, the reference app's group reply bar in the app's own dark look.
+/// A reaction is sent on tap; text is sent with the arrow.
+struct GroupStoryReplyComposer: View {
+    @ObservedObject var model: GroupReplyComposerModel
+    var onSend: (_ text: String, _ emoji: String) -> Void
+    var onFocus: (Bool) -> Void
+    var onResize: () -> Void
+    @FocusState private var focused: Bool
+
+    /// The same quick reactions the reply bar offers on a 1:1 story.
+    static let emojis = ["😭", "😍", "🤣", "❤️", "😄", "🔥", "❤️‍🔥"]
+
+    private var trimmed: String { model.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 0) {
+                ForEach(Self.emojis, id: \.self) { e in
+                    Button {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        onSend("", e)
+                    } label: {
+                        Text(e).font(.system(size: 26))
+                            .frame(maxWidth: .infinity, minHeight: 40)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            HStack(alignment: .bottom, spacing: 10) {
+                TextField("", text: $model.text,
+                          prompt: Text("Write a reply…").foregroundStyle(.white.opacity(0.45)),
+                          axis: .vertical)
+                    .lineLimit(1...5)
+                    .focused($focused)
+                    .font(.system(size: 17))
+                    .foregroundStyle(.white)
+                    .tint(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Color(white: 0.17)))
+                if !trimmed.isEmpty {
+                    Button {
+                        let t = trimmed
+                        model.text = ""
+                        onSend(t, "")
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.black, .white)
+                            .font(.system(size: 36))
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.scale.combined(with: .opacity))
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
+        .background(Color(white: 0.10))
+        .environment(\.colorScheme, .dark)
+        .animation(.easeOut(duration: 0.15), value: trimmed.isEmpty)
+        .onChange(of: focused) { _, on in onFocus(on) }
+        .onChange(of: model.text) { _, _ in onResize() }
+        .onChange(of: model.focusTick) { _, _ in focused = true }
+    }
+}
+
+/// A GROUP STORY'S SHEET FOR ITS GROUP'S OWNER AND ADMINS (owner 2026-10-23), from the story's
+/// footer when the ring is not all their own posts: All Viewers (read-only, no "…" on a row) and
+/// Replies with the composer. Members never open it; their replies are for the admins.
 struct GroupStoryRepliesPanel: UIViewRepresentable {
     let storyId: String
     let groupId: String
 
     func makeUIView(context: Context) -> StoryViewersPanelView {
         let p = StoryViewersPanelView(storyId: storyId)
-        p.repliesOnly = true
+        p.viewersReadOnly = true
         p.groupId = groupId
+        p.isLoading = true
+        let id = storyId
+        Task { @MainActor [weak p] in
+            let v = await StoriesService.shared.fetchViewers(storyId: id)
+            p?.viewers = v ?? []
+            p?.isLoading = false
+        }
         return p
     }
 
     func updateUIView(_ p: StoryViewersPanelView, context: Context) {}
+}
+
+/// WHAT AN OWNER OR ADMIN SEES AT THE FOOT OF A GROUP STORY (owner 2026-10-23), in place of the
+/// reply field: the eye and the view count, and a Replies button; both open the sheet. Members keep
+/// the ordinary reply field and see neither. Drawn by StoryUI through `StoryFooterAccessory`
+/// (installed with the official one in `OfficialStoryViews.installPill`). A ring of only my own
+/// posts has the owner bar instead and is never registered here.
+@MainActor
+enum GroupStoryFooter {
+    static let openNote = Notification.Name("groupStoryRepliesOpen")
+    /// The group stories the viewer is fed now, by id. Rebuilt with the viewer's models.
+    static var known: [String: Story] = [:]
+
+    static func register(_ groups: [StoryGroup]) {
+        var k: [String: Story] = [:]
+        for g in groups where g.groupConvId != nil && !g.isMine {
+            for s in g.stories where s.groupId != nil && GroupStoryRights.canSeeViews(s) { k[s.id] = s }
+        }
+        known = k
+    }
+
+    static func view(_ storyId: String) -> AnyView? {
+        guard let s = known[storyId] else { return nil }
+        guard GroupStoryRights.canSeeViews(s) else { return nil }
+        return AnyView(GroupStoryFooterBar(story: s))
+    }
+}
+
+struct GroupStoryFooterBar: View {
+    let story: Story
+    @State private var views: Int?
+    @State private var replies: Int?
+
+    private func open() {
+        NotificationCenter.default.post(name: GroupStoryFooter.openNote, object: story.id)
+    }
+
+    private var replyTitle: String {
+        guard let n = replies, n > 0 else { return "Replies" }
+        return n == 1 ? "1 reply" : "\(n) replies"
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: open) {
+                HStack(spacing: 8) {
+                    Image(systemName: "eye").font(.subheadline)
+                    Text(views.map { "\($0) View\($0 == 1 ? "" : "s")" } ?? "Views")
+                        .font(.subheadline.weight(.medium)).lineLimit(1)
+                }
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.35), radius: 4, y: 1)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+            Button(action: open) {
+                HStack(spacing: 8) {
+                    Image(systemName: "bubble.left.and.bubble.right").font(.system(size: 15, weight: .semibold))
+                    Text(replyTitle).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 52)
+                .background(Capsule().fill(Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255)))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .task(id: story.id) {
+            // One aggregate read for the count, not the thread itself.
+            let q = FirestoreHub.db.collection("stories").document(story.id).collection("replies")
+            if let n = try? await q.count.getAggregation(source: .server).count { replies = n.intValue }
+            if let v = await StoriesService.shared.fetchViewSummary(storyId: story.id) {
+                views = v.count
+            }
+        }
+    }
 }

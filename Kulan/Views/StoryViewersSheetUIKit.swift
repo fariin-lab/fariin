@@ -1126,6 +1126,8 @@ struct StoryViewerRowContent: View {
     var onToggleHidden: () -> Void = {}
     var onBlock: () -> Void = {}
     var isHidden: Bool = false
+    /// A group story's admin who did not post it (owner 2026-10-23): the list only, no "…" menu.
+    var readOnly: Bool = false
 
     private var doubleCheck: some View {
         ZStack(alignment: .leading) {
@@ -1169,11 +1171,13 @@ struct StoryViewerRowContent: View {
                     .font(.caption).foregroundStyle(.white.opacity(0.5))
             }
             Spacer()
-            Menu {
-                rowActions
-            } label: {
-                Image(systemName: "ellipsis").font(.body).foregroundStyle(.white.opacity(0.55))
-                    .frame(width: 38, height: 38).contentShape(Rectangle())
+            if !readOnly {
+                Menu {
+                    rowActions
+                } label: {
+                    Image(systemName: "ellipsis").font(.body).foregroundStyle(.white.opacity(0.55))
+                        .frame(width: 38, height: 38).contentShape(Rectangle())
+                }
             }
         }
         // ONE TAP ANYWHERE ON THE ROW OPENS THE PROFILE, and the contentShape is what makes the gaps

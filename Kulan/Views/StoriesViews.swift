@@ -1796,7 +1796,8 @@ struct StoryViewer: View {
     private var reconcileSignature: [String] { groups.flatMap { [$0.id] + $0.stories.map(\.id) } }
 
     private var models: [StoryUIModel] {
-        groups.map { g in
+        GroupStoryFooter.register(groups)
+        return groups.map { g in
             StoryUIModel(
                 id: g.authorUid,
                 // The tick travels as a plain answer — see `StoryUIUser.isVerified`. Asked from the
@@ -1825,7 +1826,11 @@ struct StoryViewer: View {
                     let canPassOn = !OfficialChannel.isOfficial(g.authorUid) && StoryShareRights.allows(s)
                     // Fariin: no reply bar and no heart, like my own (owner 2026-10-16). Hoisted for the
                     // same type-checker reason as `canPassOn`.
+                    // A group story for its owner and admins: no reply field, its footer
+                    // (`GroupStoryFooter`) opens Views and Replies (owner 2026-10-23). A member keeps
+                    // the reply field, whose text goes to the thread only those admins read.
                     let plainOnly = g.isMine || OfficialChannel.isOfficial(g.authorUid)
+                        || (s.groupId != nil && GroupStoryRights.canSeeViews(s))
                     // ⛔ THE LOCKED LINE RIDES IN THE CARD (owner 2026-10-16: it stayed still while
                     // the cube turned). Same rule `replyLockReason` had for the overlay: somebody
                     // else's story with no reply bar — a stranger, replies off, or Fariin.
@@ -1994,7 +1999,6 @@ struct StoryViewer: View {
             // zoom by interpolating its FRAME with a StoryImage(fitCanvas:) = image + canvas. No
             // scaleEffect on the live story anywhere (that top-anchor scale was the break-out bug).
             storyLayer
-            groupRepliesDoor
             if showViewers { viewersBackdrop }
             // The viewers sheet is a SIBLING layer, NOT a system .sheet: a system sheet lives in
             // its own presentation layer and cannot drive a continuous transform on the story
@@ -2008,37 +2012,22 @@ struct StoryViewer: View {
         }
     }
 
-    /// A MEMBER'S VIEW OF A GROUP STORY'S REPLIES (owner 2026-10-23, group stories v2). The same panel
-    /// the poster's viewers sheet holds, in its replies-only mode. Its own function so the chains
-    /// below stay inside the type checker's limit.
+    /// A GROUP STORY'S VIEWS AND REPLIES FOR ITS GROUP'S OWNER AND ADMINS (owner 2026-10-23), when the
+    /// ring is not all their own posts (that ring has the poster's sheet). Members never get it.
+    /// Opened by the story's footer (`GroupStoryFooter`) or a swipe up. Its own function so the
+    /// chains below stay inside the type checker's limit.
     private func groupRepliesSheet(_ v: some View) -> some View {
         v.sheet(item: $groupRepliesStory) { s in
             GroupStoryRepliesPanel(storyId: s.id, groupId: s.groupId ?? "")
-                .ignoresSafeArea(edges: .bottom)
+                .ignoresSafeArea()
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.hidden)
                 .presentationBackground(Color(white: 0.10))
         }
-    }
-
-    /// The member's door to those replies: a small capsule in the story's bottom area, over the
-    /// library's reply row, for a group story somebody else posted.
-    @ViewBuilder private var groupRepliesDoor: some View {
-        if let s = currentStory, s.groupId != nil, s.authorUid != (AuthService.shared.uid ?? ""),
-           !showViewers, dragDown == 0 {
-            Button { groupRepliesStory = s } label: {
-                Label("Replies", systemImage: "bubble.left.and.bubble.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Capsule().fill(Color.black.opacity(0.45)))
-            }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-            .padding(.trailing, 16)
-            .padding(.bottom, max(10, bottomInset) + 66)
-            .ignoresSafeArea()
+        .onReceive(NotificationCenter.default.publisher(for: GroupStoryFooter.openNote)) { note in
+            guard let id = note.object as? String, groupRepliesStory == nil else { return }
+            let s = currentStory?.id == id ? currentStory : GroupStoryFooter.known[id]
+            if let s, s.groupId != nil, GroupStoryRights.canSeeViews(s) { groupRepliesStory = s }
         }
     }
 
@@ -2993,6 +2982,11 @@ struct StoryViewer: View {
                     // ⛔ NOT ON FARIIN'S STORIES — owner 2026-10-17: a swipe up on an official story
                     // (no reply bar, only its button) opened the keyboard for a hidden field.
                     if let a = currentStory?.authorUid, OfficialChannel.isOfficial(a) { return }
+                    // An owner's or admin's group story has no reply field; the swipe opens its sheet.
+                    if let s = currentStory, s.groupId != nil, GroupStoryRights.canSeeViews(s) {
+                        if translation > 40 || velocity > 300 { groupRepliesStory = s }
+                        return
+                    }
                     if translation > 40 || velocity > 300 {
                         NotificationCenter.default.post(name: .init("focusStoryReply"), object: nil)
                     }
