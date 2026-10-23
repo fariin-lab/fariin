@@ -1644,7 +1644,7 @@ struct StoriesTabView: View {
     private func storyCid(_ other: String) -> String {
         // A group's ring (owner 2026-10-23) opens the group chat itself.
         if other.hasPrefix(StoryGroup.groupKeyPrefix) { return String(other.dropFirst(StoryGroup.groupKeyPrefix.count)) }
-        [AuthService.shared.uid ?? "", other].sorted().joined(separator: "_")
+        return [AuthService.shared.uid ?? "", other].sorted().joined(separator: "_")
     }
 
     private func openStoryChat(_ g: StoryGroup) {

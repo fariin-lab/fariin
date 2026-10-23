@@ -1707,7 +1707,7 @@ struct ChatsView: View {
     private func storyCid(_ other: String) -> String {
         // A group's ring (owner 2026-10-23) opens the group chat itself.
         if other.hasPrefix(StoryGroup.groupKeyPrefix) { return String(other.dropFirst(StoryGroup.groupKeyPrefix.count)) }
-        [AuthService.shared.uid ?? "", other].sorted().joined(separator: "_")
+        return [AuthService.shared.uid ?? "", other].sorted().joined(separator: "_")
     }
     private func openStoryChat(_ g: StoryGroup) {
         path.append(ChatTarget(id: storyCid(g.authorUid), name: g.name, photo: g.photoUrl))
@@ -3658,7 +3658,7 @@ struct ArchivedChatsView: View {
     private func storyCid(_ other: String) -> String {
         // A group's ring (owner 2026-10-23) opens the group chat itself.
         if other.hasPrefix(StoryGroup.groupKeyPrefix) { return String(other.dropFirst(StoryGroup.groupKeyPrefix.count)) }
-        [me, other].sorted().joined(separator: "_")
+        return [me, other].sorted().joined(separator: "_")
     }
 
     /// Send Message, from a story card's long press. Routed exactly like an archived chat ROW is:
