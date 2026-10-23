@@ -739,22 +739,32 @@ final class Crypto {
     /// Reverse of encryptBytes. Returns nil if keys are missing or auth fails.
     func decryptBytes(_ cid: String, cipher: Data, meta: EncMeta) async -> Data? {
         // 2026-10-19 groups v2: a file a group stored in the clear (EncMeta.plain) is the file.
-        if meta.isPlain { return cipher }
+        // ⛔ GROUPS ONLY (owner 2026-10-23). A 1:1 file is always sealed; a "plain" meta in a 1:1 is
+        // a file nobody sealed, and showing it would pass it off as end-to-end. Refused.
+        if meta.isPlain { return Self.isGroupCid(cid) ? cipher : nil }
         // Group media (meta.w present): unwrap MY copy of the file key with the AUTHOR's key.
         if let wraps = meta.w, let author = meta.a {
+            // A key released to the group (see "Released group keys") opens it without a wrap of mine.
+            func openReleased() -> Data? {
+                guard Self.isGroupCid(cid), let key = releasedKey(meta.n),
+                      let dataNonce = Data(base64Encoded: meta.n),
+                      let opened = sodium.secretBox.open(authenticatedCipherText: Bytes(cipher),
+                                                         secretKey: key, nonce: Bytes(dataNonce)) else { return nil }
+                return Data(opened)
+            }
             do { try await ensureReady(); _ = await preloadKey(author) } catch {}
             guard let sk = mySecretKey, let me = currentUid(),
                   let myWrap = wraps[me],
-                  let authorPub = lock.withLock({ pubCache[author] }) else { return nil }
+                  let authorPub = lock.withLock({ pubCache[author] }) else { return openReleased() }
             let wp = myWrap.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
             guard wp.count == 2,
                   let wrappedKey = Data(base64Encoded: wp[0]),
                   let keyNonce = Data(base64Encoded: wp[1]),
-                  let dataNonce = Data(base64Encoded: meta.n) else { return nil }
+                  let dataNonce = Data(base64Encoded: meta.n) else { return openReleased() }
             guard let fileKey = openFrom(author, current: authorPub, box: Bytes(wrappedKey),
-                                         nonce: Bytes(keyNonce), sk: sk) else { return nil }
+                                         nonce: Bytes(keyNonce), sk: sk) else { return openReleased() }
             guard let opened = sodium.secretBox.open(authenticatedCipherText: Bytes(cipher),
-                                                     secretKey: fileKey, nonce: Bytes(dataNonce)) else { return nil }
+                                                     secretKey: fileKey, nonce: Bytes(dataNonce)) else { return openReleased() }
             return Data(opened)
         }
         do {
@@ -834,43 +844,136 @@ final class Crypto {
     /// A sealed group message (an old end-to-end group, "encg1:") that was never sealed for me: I
     /// was not a member when it was sent, so no key on this phone can ever open it. Only a
     /// readable envelope with no entry for me counts; a damaged one is not this.
-    func groupEnvelopeSkipsMe(_ raw: String) -> Bool {
+    /// A key released to the group (see "Released group keys") counts as mine: such a message is
+    /// readable, so it is not "skipped".
+    func groupEnvelopeSkipsMe(_ raw: String, cid: String) -> Bool {
         guard raw.hasPrefix("encg1:"), let me = currentUid() else { return false }
         guard let data = Data(base64Encoded: String(raw.dropFirst("encg1:".count))),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let wraps = obj["w"] as? [String: String] else { return false }
-        return wraps[me] == nil
+        if wraps[me] != nil { return false }
+        if Self.isGroupCid(cid), let n = obj["n"] as? String, releasedKey(n) != nil { return false }
+        return true
     }
 
-    func decryptGroup(_ raw: String, authorId: String) -> String {
+    func decryptGroup(_ raw: String, authorId: String, cid: String = "") -> String {
         guard raw.hasPrefix("encg1:") else { return raw }
         warmIfNeeded()
-        guard let sk = mySecretKey, let me = currentUid() else { return "…" }
-        guard let authorPub = lock.withLock({ pubCache[authorId] }) else { return "…" }
         let b64 = String(raw.dropFirst("encg1:".count))
         guard let jsonData = Data(base64Encoded: b64),
               let obj = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
               let nB64 = obj["n"] as? String, let cB64 = obj["c"] as? String,
               let wraps = obj["w"] as? [String: String],
-              let myWrap = wraps[me],
               let dataNonce = Data(base64Encoded: nB64),
               let ct = Data(base64Encoded: cB64) else { return "🔒" }
+        // The released key, when my own wrap is missing or will not open (groups only).
+        func openReleased() -> String? {
+            guard Self.isGroupCid(cid), let key = releasedKey(nB64),
+                  let opened = sodium.secretBox.open(authenticatedCipherText: Bytes(ct),
+                                                     secretKey: key, nonce: Bytes(dataNonce)) else { return nil }
+            return String(bytes: opened, encoding: .utf8)
+        }
+        guard let sk = mySecretKey, let me = currentUid() else { return openReleased() ?? "…" }
+        guard let authorPub = lock.withLock({ pubCache[authorId] }) else { return openReleased() ?? "…" }
+        guard let myWrap = wraps[me] else { return openReleased() ?? "🔒" }
         let wp = myWrap.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
         guard wp.count == 2,
               let wrappedKey = Data(base64Encoded: wp[0]),
-              let keyNonce = Data(base64Encoded: wp[1]) else { return "🔒" }
+              let keyNonce = Data(base64Encoded: wp[1]) else { return openReleased() ?? "🔒" }
         guard let msgKey = openFrom(authorId, current: authorPub, box: Bytes(wrappedKey),
-                                    nonce: Bytes(keyNonce), sk: sk) else { Telemetry.event(.warning, component: "crypto", code: "decrypt_group_failed"); return "🔒" }   // owner 2026-10-21
+                                    nonce: Bytes(keyNonce), sk: sk) else {
+            if let t = openReleased() { return t }
+            Telemetry.event(.warning, component: "crypto", code: "decrypt_group_failed"); return "🔒"   // owner 2026-10-21
+        }
         guard let opened = sodium.secretBox.open(authenticatedCipherText: Bytes(ct),
                                                  secretKey: msgKey, nonce: Bytes(dataNonce)),
-              let text = String(bytes: opened, encoding: .utf8) else { return "🔒" }
+              let text = String(bytes: opened, encoding: .utf8) else { return openReleased() ?? "🔒" }
         return text
     }
 
     /// Routing decrypt: group envelopes need the author's key; 1:1 uses the cid pair.
     func decrypt(_ raw: String, cid: String, authorId: String) -> String {
-        if raw.hasPrefix("encg1:") { return decryptGroup(raw, authorId: authorId) }
+        if raw.hasPrefix("encg1:") { return decryptGroup(raw, authorId: authorId, cid: cid) }
         return decrypt(raw, cid: cid)
+    }
+
+    // MARK: - Released group keys (owner 2026-10-23: groups are not end-to-end encrypted)
+    //
+    // Every member of a group reads its whole history, the ones who joined later included, unless
+    // the admins hid it. Old group content was sealed ("encg1:", files with `EncMeta.w`) for the
+    // members of the day only. A member who holds a wrap sends the per-item key to the server
+    // (GroupKeyRelease, callable `releaseGroupKeys`), the server checks it really opens that item,
+    // and files it on the message under `rk`, keyed by the item's own data nonce. Here those keys
+    // are kept by nonce and tried when my own wrap is missing. GROUP CIDS ONLY: a 1:1 never feeds
+    // this store and never reads from it, so nothing here touches 1:1 end-to-end encryption.
+    // secretbox.open still authenticates every item, so a wrong key can only fail, never mislead.
+
+    /// A group id. 1:1 ids are "uidA_uidB"; group ids never contain "_".
+    static func isGroupCid(_ cid: String) -> Bool { !cid.isEmpty && !cid.contains("_") }
+
+    private var released: [Data: Bytes] = [:]   // data nonce -> 32-byte item key
+    private let releasedLock = NSLock()
+
+    /// Standard or URL-safe base64, padded or not.
+    static func looseBase64(_ s: String) -> Data? {
+        var t = s.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while t.count % 4 != 0 { t += "=" }
+        return Data(base64Encoded: t)
+    }
+
+    /// Takes a message's (or conversation's) `rk` map. Returns the nonces that were new here, so the
+    /// caller can retry media that was marked unreadable. Ignored outside groups.
+    @discardableResult
+    func noteReleased(cid: String, rk: Any?) -> Set<Data> {
+        guard Self.isGroupCid(cid), let map = rk as? [String: Any], !map.isEmpty else { return [] }
+        var fresh = Set<Data>()
+        releasedLock.withLock {
+            for (n, v) in map {
+                guard let s = v as? String, let nonce = Self.looseBase64(n), nonce.count == 24,
+                      let key = Self.looseBase64(s), key.count == 32, released[nonce] == nil else { continue }
+                if released.count > 20_000 { released.removeAll() }   // bounded; parsing refills
+                released[nonce] = Bytes(key)
+                fresh.insert(nonce)
+            }
+        }
+        return fresh
+    }
+
+    /// The released key for the item whose data nonce is `nonceB64`, if any.
+    func releasedKey(_ nonceB64: String) -> Bytes? {
+        guard let nonce = Self.looseBase64(nonceB64) else { return nil }
+        return releasedLock.withLock { released[nonce] }
+    }
+
+    /// For GroupKeyRelease: the key of a sealed group text that I can open with my own wrap, checked
+    /// against the ciphertext. Returns (data nonce, key) in base64. Never logged.
+    func ownGroupTextKey(_ raw: String, authorId: String) -> (n: String, k: String)? {
+        guard raw.hasPrefix("encg1:"), let sk = mySecretKey, let me = currentUid(),
+              let authorPub = lock.withLock({ pubCache[authorId] }),
+              let jsonData = Data(base64Encoded: String(raw.dropFirst("encg1:".count))),
+              let obj = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+              let nB64 = obj["n"] as? String, let cB64 = obj["c"] as? String,
+              let wraps = obj["w"] as? [String: String], let myWrap = wraps[me],
+              let dataNonce = Data(base64Encoded: nB64), let ct = Data(base64Encoded: cB64) else { return nil }
+        let wp = myWrap.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+        guard wp.count == 2, let wrappedKey = Data(base64Encoded: wp[0]), let keyNonce = Data(base64Encoded: wp[1]),
+              let key = openFrom(authorId, current: authorPub, box: Bytes(wrappedKey), nonce: Bytes(keyNonce), sk: sk),
+              sodium.secretBox.open(authenticatedCipherText: Bytes(ct), secretKey: key, nonce: Bytes(dataNonce)) != nil
+        else { return nil }
+        return (nB64, Data(key).base64EncodedString())
+    }
+
+    /// For GroupKeyRelease: the key of a sealed group FILE that my own wrap opens. Not checked against
+    /// the bytes (that needs the download); the server checks it. Never logged.
+    func ownGroupFileKey(_ meta: EncMeta) -> (n: String, k: String)? {
+        guard !meta.isPlain, let wraps = meta.w, let author = meta.a, !meta.n.isEmpty,
+              let sk = mySecretKey, let me = currentUid(), let myWrap = wraps[me],
+              let authorPub = lock.withLock({ pubCache[author] }) else { return nil }
+        let wp = myWrap.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+        guard wp.count == 2, let wrappedKey = Data(base64Encoded: wp[0]), let keyNonce = Data(base64Encoded: wp[1]),
+              let key = openFrom(author, current: authorPub, box: Bytes(wrappedKey), nonce: Bytes(keyNonce), sk: sk),
+              key.count == 32 else { return nil }
+        return (meta.n, Data(key).base64EncodedString())
     }
 
     // MARK: - Group seal, with or without end-to-end encryption (owner 2026-10-19)
@@ -895,6 +998,9 @@ final class Crypto {
 extension Notification.Name {
     /// This account's keypair is loaded (posted on main). Views holding "…" previews redraw.
     static let cryptoIdentityReady = Notification.Name("kulan.cryptoIdentityReady")
+    /// A group file's released key arrived (MediaDownloads.clearUnreadable); userInfo "url". Posted
+    /// on main. A view that drew it as unreadable tries again.
+    static let groupKeyReleased = Notification.Name("kulan.groupKeyReleased")
 }
 
 // MARK: - Minimal Keychain (replaces expo-secure-store)

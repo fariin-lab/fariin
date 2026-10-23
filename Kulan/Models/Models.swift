@@ -752,8 +752,11 @@ struct Message: Identifiable, Equatable, Codable {
     init(id: String, data: [String: Any], cid: String, crypto: Crypto) {
         self.id = id
         self.authorId = data["authorId"] as? String ?? ""
+        // Keys a member released to this group for its old sealed items (owner 2026-10-23, server-
+        // written `rk`). Taken FIRST, so every decrypt below can use them. Groups only (Crypto).
+        let freshKeys = crypto.noteReleased(cid: cid, rk: data["rk"])
         self.text = crypto.decrypt(data["text"] as? String ?? "", cid: cid, authorId: data["authorId"] as? String ?? "")
-        self.notForMe = crypto.groupEnvelopeSkipsMe(data["text"] as? String ?? "")
+        self.notForMe = crypto.groupEnvelopeSkipsMe(data["text"] as? String ?? "", cid: cid)
         self.type = data["type"] as? String
         self.imageUrl = data["imageUrl"] as? String
         self.audioUrl = data["audioUrl"] as? String
@@ -898,6 +901,29 @@ struct Message: Identifiable, Equatable, Codable {
         if let ts = data["expiresAt"] as? Timestamp { self.expiresAt = ts.dateValue() }
         if let ms = (data["clientTs"] as? NSNumber)?.doubleValue {
             self.clientTs = Date(timeIntervalSince1970: ms / 1000)
+        }
+        // A released key just arrived for one of this message's files: a photo or clip marked
+        // "sent before you joined" can open now, so its permanent failure is lifted.
+        if !freshKeys.isEmpty {
+            var media: [(url: String, enc: EncMeta?, itemId: String)] = [
+                (imageUrl ?? "", enc, id), (videoUrl ?? "", enc, id), (audioUrl ?? "", enc, id),
+                (fileUrl ?? "", enc, id), (thumbUrl ?? "", thumbEnc, id),
+                (linkPreview?.imageUrl ?? "", linkPreview?.imageEnc, id),
+            ]
+            for (i, it) in album.enumerated() {
+                media.append((it.imageUrl, it.enc, "\(id)-\(i)"))
+                if let v = it.videoUrl { media.append((v, it.videoEnc, "\(id)-\(i)")) }
+            }
+            let hits: [[String]] = media.compactMap { m in
+                guard !m.url.isEmpty, let n = m.enc?.n, let d = Crypto.looseBase64(n),
+                      freshKeys.contains(d) else { return nil }
+                return [m.url, m.itemId]
+            }
+            if !hits.isEmpty {
+                Task { @MainActor in
+                    for h in hits { MediaDownloads.shared.clearUnreadable(h[0], itemId: h[1]) }
+                }
+            }
         }
     }
 }
@@ -1286,6 +1312,12 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.adminsPostStories = data["adminsPostStories"] as? Bool ?? true
         self.e2eeOff = (data["type"] as? String) == "group" && (data["e2ee"] as? Bool) == false
         self.lastPlainTag = data["lastPlainTag"] as? String
+        // Released keys for the list's last line / reaction / thumbnails (owner 2026-10-23). Groups
+        // only; Crypto ignores anything else. The worker that releases them hears of the group here.
+        if self.e2eeOff {
+            Crypto.shared.noteReleased(cid: id, rk: data["rk"])
+            GroupKeyRelease.noteGroup(id)
+        }
         self.roles = self.convType == "group"
             ? (data["roles"] as? [String: Any] ?? [:]).compactMapValues { GroupRole($0) }
             : [:]

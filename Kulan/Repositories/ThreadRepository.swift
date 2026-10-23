@@ -1868,6 +1868,8 @@ final class ThreadRepository {
     func open() {
         holders += 1
         start()
+        // A group's old sealed items: release the keys this phone holds (2026-10-23; groups only).
+        GroupKeyRelease.chatOpened(cid)
     }
 
     /// A screen stops showing this chat. The last one out stops it and frees the slot, so the next

@@ -28,4 +28,10 @@ enum DeadMedia {
         if cache.count > 500 { cache = Set(cache.suffix(400)) }
         UserDefaults.standard.set(cache.joined(separator: " "), forKey: "deadMedia")
     }
+    /// A group clip sealed before I joined, whose key a member has since released (2026-10-23).
+    static func unmark(_ id: String) {
+        guard !id.isEmpty, cache.contains(id) else { return }
+        cache.remove(id)
+        UserDefaults.standard.set(cache.joined(separator: " "), forKey: "deadMedia")
+    }
 }
