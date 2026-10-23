@@ -393,7 +393,7 @@ struct PublicGroupHitRow: View {
 /// THE GROUP'S PAGE FOR SOMEBODY NOT IN IT (owner 2026-10-23: "I can't click the profile before
 /// joining"). The reference app opens the group's info page for a non-member too. This one reads
 /// only the public preview (the members' group document is theirs alone): photo, name, members,
-/// description, the public link, and Join at the foot. No listeners, no writes.
+/// description and the public link. No listeners, no writes.
 struct PublicGroupInfoView: View {
     let guest: PublicGroupGuest
     private var p: PublicGroupPreview { guest.preview }
@@ -433,8 +433,6 @@ struct PublicGroupInfoView: View {
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .safeAreaInset(edge: .bottom) {
-            if !guest.joined { PublicJoinBar(guest: guest) }
-        }
+        // No Join here: the reference app's info page has none (its only Join is the chat's foot).
     }
 }
