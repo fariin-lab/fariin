@@ -34,6 +34,14 @@ struct GroupCallView: View {
     private var layers: some View {
         ZStack {
             Color.black.ignoresSafeArea()
+            // The system broadcast picker, invisible: Share Screen presses its button
+            // (GroupCallService.toggleScreenShare -> ScreenSharePicker.show). It has to be in the
+            // window for its sheet to present (owner 2026-10-23, share did nothing).
+            ScreenSharePickerView()
+                .frame(width: 1, height: 1)
+                .opacity(0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             frontLayer
             hiddenChromeCatcher   // UNDER the chrome stack: see its note
             chromeStack

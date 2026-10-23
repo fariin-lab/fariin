@@ -1115,25 +1115,76 @@ final class GroupCallService: ObservableObject {
 
     /// Share Screen / Stop Sharing in the call's "..." menu. Never on a voice call link (the
     /// server's token cannot publish a screen there either).
+    ///
+    /// ⛔ OWNER 2026-10-23 "screen sharing is not working" in group and link calls. The broadcast
+    /// extension stopped speaking LiveKit's socket on 2026-10-08 (screen share v3: frames go through
+    /// shared memory in the App Group, `ScreenShareIPC`), so `setScreenShare(enabled:)` waited for a
+    /// socket that never opened and no frame ever reached the call. Now the group call reads the same
+    /// shared memory as the 1:1 call (`ScreenShareSession`) and feeds a LiveKit buffer track, published
+    /// once the broadcast has really started.
     func toggleScreenShare() {
         guard isActive, !cameraLocked, !shareBusy else { return }
-        let enable = !screenSharing
-        let gen = joinGeneration
-        if enable { shareAsked = true; lateShareWatch = nil }   // audit M-106: this share is wanted
+        if screenSharing || shareSession != nil { endScreenShare(); return }
+        shareAsked = true; lateShareWatch = nil   // audit M-106: this share is wanted
         shareBusy = true
+        let gen = joinGeneration
         Task { @MainActor in
             defer { shareBusy = false }
-            do {
-                // Enabling: the SDK shows the system broadcast sheet itself
-                // (BroadcastManager.requestActivation) and publishes once the extension starts.
-                try await room.localParticipant.setScreenShare(enabled: enable)
-            } catch {
-                if gen == joinGeneration {
-                    showToast(enable ? "Couldn't share your screen" : "Couldn't stop sharing")
-                }
+            let track = await LocalVideoTrack.createBufferTrack(
+                options: BufferCaptureOptions(dimensions: .h1080_169, fps: 15))
+            guard gen == joinGeneration, isActive else { return }
+            let capturer = track.capturer as? BufferCapturer
+            let session = ScreenShareSession { buffer, degrees in
+                capturer?.capture(buffer, rotation: VideoRotation(rawValue: degrees) ?? ._0)
             }
-            // Unpublishing does not end the system broadcast; the extension is told separately.
-            if !enable { BroadcastManager.shared.requestStop() }
+            session.onStarted = { [weak self] in self?.publishShare(gen: gen) }
+            session.onEnded = { [weak self] _ in self?.endScreenShare(requestStop: false) }
+            // The system sheet is pressed for the person (ScreenSharePickerView in GroupCallView).
+            guard session.start() else { showToast("Couldn't share your screen"); return }
+            guard ScreenSharePicker.show() else {
+                session.stop()
+                showToast("Couldn't share your screen")
+                return
+            }
+            shareTrack = track
+            shareSession = session
+            // The sheet closed without Start: nothing tells us, so a share that has not begun within
+            // a minute is dropped (the next tap starts afresh).
+            Task { @MainActor [weak self, weak session] in
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                guard let self, let session, self.shareSession === session, !session.hasStarted else { return }
+                self.endScreenShare()
+            }
+        }
+    }
+
+    private var shareSession: ScreenShareSession?
+    private var shareTrack: LocalVideoTrack?
+    private var sharePublication: LocalTrackPublication?
+
+    /// The broadcast is running: the buffer track goes up. `screenSharing` follows the publish event.
+    private func publishShare(gen: Int) {
+        guard let track = shareTrack, sharePublication == nil else { return }
+        Task { @MainActor in
+            guard gen == joinGeneration, isActive, shareTrack === track else { endScreenShare(); return }
+            do {
+                sharePublication = try await room.localParticipant.publish(videoTrack: track)
+            } catch {
+                showToast("Couldn't share your screen")
+                endScreenShare()
+            }
+        }
+    }
+
+    /// Stop Sharing, the extension ending (red pill, Control Center), or leaving the call.
+    /// `requestStop` false when the extension itself already ended.
+    private func endScreenShare(requestStop: Bool = true) {
+        let session = shareSession, publication = sharePublication, track = shareTrack
+        shareSession = nil; sharePublication = nil; shareTrack = nil
+        if requestStop { session?.stop() }
+        Task { @MainActor in
+            if let publication { try? await room.localParticipant.unpublish(publication: publication) }
+            try? await track?.stop()
         }
     }
 
@@ -1149,6 +1200,7 @@ final class GroupCallService: ObservableObject {
     /// Every way out of a room ends my share: the track goes with the room, and the extension is
     /// asked to finish so the red recording pill does not outlive the call.
     private func stopScreenShare() {
+        endScreenShare()   // 2026-10-23: the shared-memory share (the extension's stop flag + unpublish)
         if screenSharing || shareAsked { BroadcastManager.shared.requestStop() }
         // Audit M-106, 2026-10-07: a share asked for but never started (the system sheet still
         // open as the call ends) can still be started from that sheet afterwards, and nothing
