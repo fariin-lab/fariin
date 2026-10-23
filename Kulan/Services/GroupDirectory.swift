@@ -305,22 +305,25 @@ enum GroupNameCheck: Equatable {
 
     /// Opens the join page (`PublicGroupSheet`, presented by the Chats tab). A group I am already in
     /// opens its chat instead.
-    static func open(cid: String?, name: String?) {
+    /// `push`: slide the chat in from the right (a link tapped inside a chat). Off everywhere else:
+    /// from search the Chats tab must REPLACE its path while the search page closes (owner
+    /// 2026-10-23: pushing there left the chat list with no top buttons and no tab bar).
+    static func open(cid: String?, name: String?, push: Bool = false) {
         guard Flags.groupsEnabled else { return }
         if let cid, let mine = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }),
            mine.users.contains(AuthService.shared.uid ?? "") {
-            openChat(cid, title: mine.title, photo: mine.avatarUrl)
+            openChat(cid, title: mine.title, photo: mine.avatarUrl, push: push)
             return
         }
         AppRouter.shared.pendingPublicGroup = PublicGroupTarget(cid: cid, name: name)
     }
 
-    static func openChat(_ cid: String, title: String, photo: String?) {
+    static func openChat(_ cid: String, title: String, photo: String?, push: Bool = false) {
         let router = AppRouter.shared
         if router.activeChatId == cid { return }
         // owner 2026-10-23: a group link opened the chat with no slide. Without `pendingChatPush` the
         // Chats tab REPLACES its path; a user link sets it and pushes from the right (ProfileCardDoor).
-        router.pendingChatPush = true
+        router.pendingChatPush = push
         router.pendingChatName = title
         router.pendingChatPhoto = photo
         router.pendingChatId = cid

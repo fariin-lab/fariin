@@ -4212,7 +4212,7 @@ struct ThreadView: View {
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             Task { @MainActor in
                 if case .group(let cid) = await GroupDirectory.resolve(name) {
-                    GroupDirectory.open(cid: cid, name: name)
+                    GroupDirectory.open(cid: cid, name: name, push: true)
                 } else {
                     openProfileHandle(name)
                 }
