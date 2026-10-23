@@ -28,6 +28,9 @@ enum BubbleMetrics {
     static let avatarSize: CGFloat = 28
     static let avatarGap: CGFloat = 6
     static let senderNameGap: CGFloat = 3      // VStack spacing above the bubble
+    /// The verified mark beside a sender's name (owner 2026-10-23: 11pt "looks small"): the name's
+    /// own height, so mark and name read as one line.
+    static let verifiedSide: CGFloat = 15
     /// ⛔ THE GROUP SENDER'S NAME IS INSIDE THE FIRST BUBBLE OF A RUN — owner 2026-10-18, with a
     /// screenshot of "kream" sitting above the bubble: "make it like the reference apps". Their
     /// numbers, read from source (see `MessageRowLayout.nameInBubble`):

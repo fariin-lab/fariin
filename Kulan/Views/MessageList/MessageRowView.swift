@@ -1347,7 +1347,7 @@ final class MessageRowView: UIView {
             // sender's own colour: gold for a company's verification, blue for everyone else.
             var uid = ""
             if case .bubble(let row) = m.content, let s = row.sender { uid = s.uid }
-            let cfg = UIImage.SymbolConfiguration(pointSize: 11, weight: VerifiedMark.weight)
+            let cfg = UIImage.SymbolConfiguration(pointSize: BubbleMetrics.verifiedSide, weight: VerifiedMark.weight)
                 .applying(UIImage.SymbolConfiguration(paletteColors: [.white, VerifiedMark.color(for: uid)]))
             v.image = UIImage(systemName: "checkmark.seal.fill", withConfiguration: cfg)
             v.isHidden = false

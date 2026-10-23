@@ -509,7 +509,7 @@ enum MessageRowLayout {
             // The tick's room comes off the cap first, the reference app's own order (the name is
             // laid out against the width less `credibilityIconWidth`, :2888), so a long name
             // truncates instead of pushing the tick out of the bubble.
-            let tickRoom: CGFloat = s.verified ? 4 + 11 : 0
+            let tickRoom: CGFloat = s.verified ? 4 + BubbleMetrics.verifiedSide : 0
             senderNameSize = CGSize(width: max(0, min(oneLine.width, maxContent - tickRoom)),
                                     height: oneLine.height)
             // owner 2026-10-18: inside the bubble it pushes the CONTENT down, not the bubble. Only a
@@ -732,14 +732,14 @@ enum MessageRowLayout {
                 // Inside the bubble's top-left when named (see above), else above it as before.
                 let nameX = rect.minX + (named ? 14 : 12)
                 let nameY = named ? rect.minY + BubbleMetrics.nameTop : topSpacing
-                let tick: CGFloat = b.sender?.verified == true ? 4 + 11 : 0
+                let tick: CGFloat = b.sender?.verified == true ? 4 + BubbleMetrics.verifiedSide : 0
                 let nameW = named ? max(0, min(senderNameSize.width, bubbleW - 28 - tick)) : senderNameSize.width
                 plan.senderName = CGRect(x: nameX, y: nameY, width: nameW, height: senderNameSize.height)
                 plan.senderNameAttr = attr
                 if b.sender?.verified == true {
                     plan.verifiedMark = CGRect(x: nameX + nameW + 4,
-                                               y: nameY + (senderNameSize.height - 11) / 2,
-                                               width: 11, height: 11)
+                                               y: nameY + (senderNameSize.height - BubbleMetrics.verifiedSide) / 2,
+                                               width: BubbleMetrics.verifiedSide, height: BubbleMetrics.verifiedSide)
                 }
             }
             return BubbleResult(plan: plan, totalHeight: rect.maxY)
@@ -1216,14 +1216,14 @@ enum MessageRowLayout {
             // poll, voice) does not grow for the name; it truncates to fit instead.
             // A poll's own side inset (owner 2026-10-21 redesign: 16 or 14), so the name sits over the question.
             let inset: CGFloat = plan.pollPlan?.inset ?? (plan.contactPlan != nil ? 12 : BubbleMetrics.hPad)
-            let tick: CGFloat = b.sender?.verified == true ? 4 + 11 : 0
+            let tick: CGFloat = b.sender?.verified == true ? 4 + BubbleMetrics.verifiedSide : 0
             let nameW = max(0, min(senderNameSize.width, bubbleRect.width - inset * 2 - tick))
             let nameY = bubbleRect.minY + BubbleMetrics.nameTop
             plan.senderName = CGRect(x: bubbleRect.minX + inset, y: nameY,
                                      width: nameW, height: senderNameSize.height)
             if b.sender?.verified == true {
                 plan.verifiedMark = CGRect(x: bubbleRect.minX + inset + nameW + 4,
-                                           y: nameY + (senderNameSize.height - 11) / 2, width: 11, height: 11)
+                                           y: nameY + (senderNameSize.height - BubbleMetrics.verifiedSide) / 2, width: BubbleMetrics.verifiedSide, height: BubbleMetrics.verifiedSide)
             }
             // owner 2026-10-18 ROLE: the chip follows the name and the tick on the same line, in the
             // name's colour. It is the part that gives way: the name keeps its width, the role
@@ -1257,7 +1257,7 @@ enum MessageRowLayout {
                                     width: senderNameSize.width, height: senderNameSize.height)
             if b.sender?.verified == true {
                 plan.verifiedMark = CGRect(x: bubbleRect.minX + 12 + senderNameSize.width + 4,
-                                      y: tagY + (senderNameSize.height - 11) / 2, width: 11, height: 11)
+                                      y: tagY + (senderNameSize.height - BubbleMetrics.verifiedSide) / 2, width: BubbleMetrics.verifiedSide, height: BubbleMetrics.verifiedSide)
             }
             tagY += senderNameSize.height + BubbleMetrics.senderNameGap
         }
@@ -1307,12 +1307,12 @@ enum MessageRowLayout {
     }
 
     /// How wide the content column must be to hold the name band: the name, the reference app's 8pt
-    /// of slack, and the verified tick (4 + 11). 0 when the name is not inside.
+    /// of slack, and the verified tick (4 + BubbleMetrics.verifiedSide). 0 when the name is not inside.
     private static func nameHeaderWidth(_ b: BubbleRow, senderNameSize: CGSize,
                                         forwardedSize: CGSize) -> CGFloat {
         guard nameInBubble(b) else { return 0 }
         var w = senderNameSize.width + BubbleMetrics.nameSlack
-        if b.sender?.verified == true { w += 4 + 11 }
+        if b.sender?.verified == true { w += 4 + BubbleMetrics.verifiedSide }
         // owner 2026-10-18: a text bubble widens for the Role chip too (the caller caps the column
         // at the screen's width, so a long one truncates rather than overflowing).
         if let chip = roleChip(b) { w += BubbleMetrics.roleGap + chip.size.width }
