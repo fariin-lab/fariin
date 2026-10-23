@@ -3286,6 +3286,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             guard let self else { return }
             self.layout.pendingContentOffsetAdjustment = 0   // never let the fallback channel go stale
             self.reassertLandingIfHeld()   // the first live snapshot landing on a just-restored reader
+            self.scheduleStrayCellSweep("apply")
             self.reopenLog("apply done rows=\(self.currentIds.count) adjustment=\(adjustment) anchorsResolved=\(anchorsResolved) held=\(Date() < self.landingHoldUntil) y=\(String(format: "%.1f", self.collectionView.contentOffset.y))")
             self.lastStableOffset = self.collectionView.contentOffset.y
             if let target = scrollTarget {
@@ -3556,6 +3557,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // A restored position keeps the timed hold only, and the newest needs neither.
         pinUnreadLanding = landedUnreadId != nil
         unreadPinLogs = 0
+        strayCellLogs = 0
         let openNumber = (Self.opensThisRun[cid] ?? 0) + 1
         Self.opensThisRun[cid] = openNumber
         reopenLog("LAND open#\(openNumber) of this chat this run, rows=\(rowCount) seededHeights=\(seeded) estimated=\(estimatedIds.count) pagedHold=\(firstLandWasHeld) liveSettled=\(liveWindowSettled) id=\(initId) offset=\(initTop) savedTop=\(initialScrollTopInset.map { String(format: "%.1f", $0) } ?? "nil") top=\(String(format: "%.1f", collectionView.adjustedContentInset.top)) bottom=\(String(format: "%.1f", collectionView.adjustedContentInset.bottom)) y=\(String(format: "%.1f", collectionView.contentOffset.y)) appeared=\(isViewCompletelyAppeared)")
@@ -3702,8 +3704,50 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 unreadPinLogs += 1
                 DiagLog.add("UNREADPIN# relanded from \(caller) dy=\(Int(after - before)) t=\(Int(Date().timeIntervalSince(landedAt) * 1000))ms")
             }
+            scheduleStrayCellSweep(caller)
         }
         return true
+    }
+
+    /// ⛔ A CELL THE LIST NO LONGER OWNS MUST NOT STAY ON SCREEN — owner 2026-10-23, build 1014, 1:1
+    /// chat opened on unread: right under the "Unread Messages" divider the first unread bubble was
+    /// drawn over a second, narrower bubble 12pt higher, a cell left behind at an old frame. Every
+    /// cell UIKit is displaying is in `visibleCells`; a cell still in the list's view tree, not
+    /// hidden, inside the viewport and NOT among them (or one showing a row whose live cell is
+    /// another) is a stray, and nothing will ever lay it out or recycle it. It is hidden here (UIKit
+    /// un-hides a cell when it hands it out again) and named in the DiagLog, so the next device run
+    /// says which row it carried, where it sat against the live cell, and which pass ran before it.
+    private var strayCellSweepQueued = false
+    private var strayCellLogs = 0
+    private func scheduleStrayCellSweep(_ caller: String) {
+        guard !strayCellSweepQueued else { return }
+        strayCellSweepQueued = true
+        // After the pass that moved the list has finished laying out, never inside it.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.strayCellSweepQueued = false
+            self.sweepStrayCells(caller)
+        }
+    }
+    private func sweepStrayCells(_ caller: String) {
+        guard isViewLoaded, !isDisappearing, collectionView.window != nil else { return }
+        collectionView.layoutIfNeeded()
+        let visible = Set(collectionView.visibleCells.map(ObjectIdentifier.init))
+        let viewport = collectionView.bounds
+        for case let cell as MessageRowCell in collectionView.subviews
+        where !cell.isHidden && cell.alpha > 0.01 && cell.frame.intersects(viewport) {
+            let liveCell = cell.rowId
+                .flatMap { dataSource.indexPath(for: $0) }
+                .flatMap { collectionView.cellForItem(at: $0) }
+            let owned = visible.contains(ObjectIdentifier(cell))
+            guard !owned || (liveCell != nil && liveCell !== cell) else { continue }
+            cell.isHidden = true
+            if strayCellLogs < 5 {
+                strayCellLogs += 1
+                let dy = liveCell.map { "\(Int(cell.frame.minY - $0.frame.minY))" } ?? "none"
+                DiagLog.add("ROWDUP# stray cell hidden after \(caller) row=\(cell.rowId.map { String($0.suffix(5)) } ?? "nil") owned=\(owned) dyToLive=\(dy) pinned=\(pinUnreadLanding) held=\(Date() < landingHoldUntil) t=\(Int(Date().timeIntervalSince(landedAt) * 1000))ms")
+            }
+        }
     }
     /// The same `perform(.initialPosition)` the first land used, on the row and offset it landed with.
     private func reapplyLanding() {
