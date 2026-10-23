@@ -3605,35 +3605,26 @@ service cloud.firestore {
       // The author, or a moderator acting on a report. This is the ONE surface in Fariin where a
       // stranger's content is visible to anybody who finds it (an "Everyone" story is public), which
       // makes it the one place Apple could be shown somebody else's illegal post. Being able to take
-      // it down in seconds is the whole point - Telegram was pulled from the App Store on
-      // 2026-08-04 over a single user's post and restored the same day once they removed it.
+      // it down in seconds is the whole point.
       // ⛔ 2026-10-12: the moderator half moved to the adminApi function (storyRemove), which records
       // every takedown in the audit log. Here, only the author deletes their own story.
       allow delete: if signedIn() && request.auth.uid == resource.data.authorUid;
 
-      // THE VIEW COUNT, KEPT BY THE SERVER, READ BY THE AUTHOR ALONE.
-      //
-      // The footer used to fetch every document in `views` — full receipts, names resolved — to
-      // draw one number, for every one of your stories, every time the viewer opened. The reference
-      // app never does that: its story object carries the counts down with the story and the LIST is
-      // a separate request made only when you open it. `onStoryViewWritten` maintains this document;
-      // the client only reads it.
-      //
-      // ⚠️ A SUBCOLLECTION DOCUMENT RATHER THAN A FIELD ON THE STORY, AND THAT IS THE PRIVACY HALF.
-      // The story document is readable by every recipient, so a counter living on it would tell each
-      // of them how many other people had watched — which no comparable app shows, and which the
-      // `views` read rule below deliberately refuses today. Here it is the author's alone.
-      //
-      // NO CLIENT WRITE OF ANY KIND. A counter a viewer can write is a counter a viewer can invent,
-      // and the trigger runs with admin credentials, which these rules do not apply to.
+      // THE VIEW COUNT, kept by `onStoryViewWritten` (admin rights), never written by a client. A
+      // subcollection rather than a field on the story, which every recipient can read.
       match /meta/{docId} {
-        allow read: if signedIn() && request.auth.uid == storyData().authorUid;
+        allow read: if signedIn() && storyViewsReader();
+      }
+      // Views and meta: the author, and for a group story its owner and admins (owner 2026-10-23).
+      function storyViewsReader() {
+        let st = storyData();
+        return request.auth.uid == st.authorUid || (st.get('groupId', '') != ''
+          && groupAdminOf(get(/databases/$(database)/documents/conversations/$(st.groupId)).data));
       }
 
-      // A recipient records they viewed it; the author can read the viewer list.
-      // GROUP STORY REPLIES (owner 2026-10-23, the reference (signal) way): one shared thread per
-      // group story, read and written by everyone it reached until it expires; deleted by the writer
-      // or a group admin. onStoryDeleted removes them with the story.
+      // GROUP STORY REPLIES (owner 2026-10-23): everyone it reached may write their own until it
+      // expires; only the author and the group's owner and admins read them (2 reads); deleted by
+      // the writer or a group admin. onStoryDeleted removes them with the story.
       match /replies/{replyId} {
         function rReader() {
           let st = storyData();
@@ -3643,7 +3634,7 @@ service cloud.firestore {
         function rText(f, n) {
           return request.resource.data.get(f, '') is string && request.resource.data.get(f, '').size() <= n;
         }
-        allow read: if signedIn() && rReader();
+        allow read: if signedIn() && storyViewsReader();
         allow create: if signedIn() && rReader()
           && storyData().expiresAt > request.time
           && request.resource.data.uid == request.auth.uid
@@ -3660,10 +3651,7 @@ service cloud.firestore {
         return request.auth.uid == c.get('createdBy', '') || request.auth.uid in c.get('admins', []);
       }
       match /views/{viewerUid} {
-        allow read: if signedIn() && (
-          request.auth.uid == storyData().authorUid
-          || request.auth.uid == viewerUid
-        );
+        allow read: if signedIn() && (storyViewsReader() || request.auth.uid == viewerUid);
         // Only `viewedAt` + a short `reaction` string may be written — no injected fields, no
         // unbounded/junk reaction (the receipt-spoofing hole).
         // 2026-10-17: `firstAt` is the server's (onStoryViewWritten) time of the FIRST view, set
