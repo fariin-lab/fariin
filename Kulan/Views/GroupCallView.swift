@@ -755,7 +755,8 @@ struct GroupCallView: View {
     }
 
     private var micButton: some View {
-        ctrl(service.micOn ? "mic.fill" : "mic.slash.fill") { micTapped() }
+        // Muted = the solid white circle, as the 1:1 call's Mute (owner 2026-10-23).
+        ctrl(service.micOn ? "mic.fill" : "mic.slash.fill", active: !service.micOn) { micTapped() }
             .accessibilityLabel(service.micOn ? "Mute" : "Unmute")
     }
 
