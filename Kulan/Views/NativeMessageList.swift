@@ -2043,7 +2043,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                   let attr = collectionView.layoutAttributesForItem(at: ip) else { return nil }
             return Anchor(id: id, distanceFromOrigin: attr.frame.minY - collectionView.contentOffset.y)
         }
-        if didFirstLand, Date() < landingHoldUntil, landedTarget?.offset != nil,
+        // The unread landing is top-aligned exactly like a restored one, and is preferred the same
+        // way for as long as it is pinned (`pinUnreadLanding`).
+        if isLandingHeld, landedTarget?.offset != nil || pinUnreadLanding,
            let restored = landedTarget?.id,
            let i = anchors.firstIndex(where: { $0.id == restored }) {
             anchors.insert(anchors.remove(at: i), at: 0)
@@ -2153,6 +2155,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         switch intent {
         case .newest(let animated, let userInitiated):
             guard didFirstLand else { return }
+            pinUnreadLanding = false   // the reader is being moved on: the unread pin must not pull them back
             // A TAP IS NOT A DROP. The finger rule stands for AUTOMATIC jumps — nothing moves the
             // reader while they are touching the glass — and they wait for the lift rather than
             // being dropped (see scrollViewDidEndDragging), because the binding that carries them
@@ -2183,6 +2186,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // owner audit 2026-10-06 chat #8: the reader asked for a specific message, so an
             // automatic jump to the newest parked before it is stale and must not fire later.
             pendingNewestJump = nil
+            pinUnreadLanding = false   // a jump to a message ends the unread pin, as a finger does
             guard let ip = dataSource.indexPath(for: id),
                   let attr = collectionView.layoutAttributesForItem(at: ip) else { return }
             // The reference messenger's jump: the flash fires when the scroll animation ENDS, or at
@@ -3532,6 +3536,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // every pass and moves on with each arrival, so the re-pin must not follow it.
         awaitingInitialRepin = initialScrollId != nil
         landedUnreadId = initialScrollOffset == nil ? initialScrollId : nil
+        // The unread (or focus) row stays the anchor until the reader moves — see `pinUnreadLanding`.
+        // A restored position keeps the timed hold only, and the newest needs neither.
+        pinUnreadLanding = landedUnreadId != nil
+        unreadPinLogs = 0
         let openNumber = (Self.opensThisRun[cid] ?? 0) + 1
         Self.opensThisRun[cid] = openNumber
         reopenLog("LAND open#\(openNumber) of this chat this run, rows=\(rowCount) seededHeights=\(seeded) estimated=\(estimatedIds.count) pagedHold=\(firstLandWasHeld) liveSettled=\(liveWindowSettled) id=\(initId) offset=\(initTop) savedTop=\(initialScrollTopInset.map { String(format: "%.1f", $0) } ?? "nil") top=\(String(format: "%.1f", collectionView.adjustedContentInset.top)) bottom=\(String(format: "%.1f", collectionView.adjustedContentInset.bottom)) y=\(String(format: "%.1f", collectionView.contentOffset.y)) appeared=\(isViewCompletelyAppeared)")
@@ -3620,19 +3628,64 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         landingHoldUntil = Date().addingTimeInterval(liveWindowSettled ? 1.2 : 3.0)
         reopenLog("hold armed for \(liveWindowSettled ? 1200 : 3000)ms (liveSettled=\(liveWindowSettled))")
     }
-    private func endLandingHold() { landingHoldUntil = .distantPast }
+    private func endLandingHold() {
+        landingHoldUntil = .distantPast
+        pinUnreadLanding = false
+    }
+
+    /// ⛔ AN UNREAD LANDING IS HELD UNTIL THE READER MOVES, NOT FOR 1.2s — owner 2026-10-23, build
+    /// 1012, group "Juni": the chat opens on the "Unread Messages" divider, and a second or two later
+    /// the whole list jumps up and the last message ends under the composer. Only chats with unread.
+    ///
+    /// The timed hold above ends 1.2s after the land (0.4s after the server window). Every mover
+    /// after that is bottom-biased: `adoptHeight` (a row's real rendered height arriving — new
+    /// unread rows have never been rendered, so voice notes, names and avatars report theirs late),
+    /// `remeasureOffscreenChanged`, `settleEstimatedHeights`, and the composer-clearance lockstep in
+    /// `updateInsets`. A bottom-biased anchor holds the row at the BOTTOM edge of the viewport —
+    /// the one behind the composer — still, so every row above it that grows pushes the whole list
+    /// up past the divider. For a reader at the newest that is right; for a reader the open put on
+    /// the first unread row it is the jump. And the unread landing was not even preferred inside
+    /// the timed hold: `continuityAnchors` put the landed row first only for a restored position.
+    ///
+    /// The reference app lands the unread indicator with top alignment, and its row heights do not
+    /// change after the first layout, so nothing can move that row until the reader does. Ours do
+    /// change, so the rule is written out: from an unread (or focus) landing until the reader's first
+    /// drag, a jump, a glide or the keyboard coming up, the landed row is the continuity anchor for
+    /// every in-place change and every pass that would move the reader re-lands it instead
+    /// (`reassertLandingIfHeld`). A landed row that has left the window ends the pin rather than
+    /// sending the reader to the bottom.
+    private var pinUnreadLanding = false
+    /// How many times a pin re-land moved the reader after the timed hold, this open (DiagLog cap).
+    private var unreadPinLogs = 0
+    /// The timed hold or the unread pin.
+    private var isLandingHeld: Bool {
+        didFirstLand && (Date() < landingHoldUntil || pinUnreadLanding)
+    }
+
     /// Inside the hold and with nobody moving the list: land again, on the same row. False otherwise,
     /// so the caller does its ordinary work.
     @discardableResult
     private func reassertLandingIfHeld(caller: String = #function) -> Bool {
-        guard didFirstLand, Date() < landingHoldUntil, !isDisappearing,
+        guard isLandingHeld, !isDisappearing,
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
               !sendAnimating, !programmaticScrollAnimating else { return false }
+        let timed = Date() < landingHoldUntil
+        // Past the timed hold, only the pin is holding. Its row trimmed out of the window would make
+        // `perform(.initialPosition)` fall through to the newest: end the pin and do the ordinary work.
+        if !timed, let id = landedTarget?.id, dataSource.indexPath(for: id) == nil {
+            pinUnreadLanding = false
+            return false
+        }
         let before = collectionView.contentOffset.y
         reapplyLanding()
         let after = collectionView.contentOffset.y
         if abs(after - before) > 0.5 {
             reopenLog("hold re-landed from \(caller): y \(String(format: "%.1f", before)) -> \(String(format: "%.1f", after))")
+            // Evidence for the next device run: which mover the pin caught after the timed hold.
+            if !timed, unreadPinLogs < 5 {
+                unreadPinLogs += 1
+                DiagLog.add("UNREADPIN# relanded from \(caller) dy=\(Int(after - before)) t=\(Int(Date().timeIntervalSince(landedAt) * 1000))ms")
+            }
         }
         return true
     }
@@ -4181,6 +4234,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             if bar.gifSearchOpen { return }
             if !up, bar.holdsKeyboardForGifSearch { return }
         }
+        // The reader opened the keys: they have taken over, so the unread pin lets the list ride them
+        // (the lockstep in `updateInsets`) instead of holding the landed row under the keyboard.
+        if up { pinUnreadLanding = false }
         let announced = up ? overlap : restSafeBottom
         let d = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
         if d > 0 {
