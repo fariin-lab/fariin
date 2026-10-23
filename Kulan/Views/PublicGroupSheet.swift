@@ -223,7 +223,11 @@ struct PublicGroupSheet: View {
         // owner 2026-10-21 (a spinner page after tapping a searched group): what is already known
         // opens at once, the server corrects it behind (see `GroupDirectory.cachedPreview`).
         if preview == nil, let p = GroupDirectory.cachedPreview(name: target.name, cid: target.cid) {
-            if p.isMember { openChat(p); return }
+            // A cached "member" is only believed when the chat list agrees: the cache is not
+            // cleared on leave, and a redirect here lands while the push is still running.
+            let me = AuthService.shared.uid ?? ""
+            if p.isMember, ConversationsRepository.shared.conversations
+                .contains(where: { $0.id == p.cid && $0.users.contains(me) }) { openChat(p); return }
             if let known = GroupDirectory.cachedPeek(p.cid) { guest = PublicGroupGuest(p, readable: known) }
             preview = p
         }
@@ -248,9 +252,14 @@ struct PublicGroupSheet: View {
             if guest == nil { guest = PublicGroupGuest(p, readable: readable) }
             preview = p
         case .refused(let why):
-            if preview == nil { refusedText = why }
+            if preview == nil || guest == nil { refusedText = why }
         case .failed(let why):
             if preview == nil { failedText = why }
+            // Known from the cache but the server could not be reached (offline): the guest chat with
+            // Join at the foot rather than an empty page (review 2026-10-23).
+            else if guest == nil, let p = preview {
+                guest = PublicGroupGuest(p, readable: GroupDirectory.cachedPeek(p.cid) ?? false)
+            }
         }
     }
 
