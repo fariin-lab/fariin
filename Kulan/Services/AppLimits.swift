@@ -217,7 +217,16 @@ final class AppLimits {
     /// excepted. Panel row "Members a group needs for stories"; firestore.rules `groupPoster` reads the
     /// same key with the same fallback.
     var groupStoryMinMembers: Int {
-        number("group_story_min_members", 50)
+        groupStoryMinMembers(country: Locale.current.region?.identifier ?? "")
+    }
+
+    /// A country's own number from the panel (`group_story_countries`, "SO": 20), else the global one.
+    /// The country is the phone's region, the same one Fariin's country stories use; the rules read it
+    /// from the story's `posterCountry`.
+    func groupStoryMinMembers(country: String) -> Int {
+        if let byCountry = values["group_story_countries"] as? [String: Any],
+           let n = byCountry[country.uppercased()] as? Int, n > 0 { return n }
+        return number("group_story_min_members", 50)
     }
 
     /// How many groups one person may own at once (owner 2026-10-20: 10), from the panel's

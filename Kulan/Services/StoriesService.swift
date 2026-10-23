@@ -313,7 +313,8 @@ enum GroupStoryRights {
         guard c.isGroup, !uid.isEmpty, c.users.contains(uid) else { return false }
         // owner 2026-10-23: only a group of 50 or more (panel-set) has stories, except for app
         // admins (like @v), who may post to any group they run.
-        guard c.users.count >= AppLimits.shared.groupStoryMinMembers || AdminStore.shared.isAdmin else { return false }
+        guard c.users.count >= AppLimits.shared.groupStoryMinMembers || AdminStore.shared.isAdmin
+                || ProfileStore.shared.me?.groupStoryOpen == true else { return false }
         if c.isOwner(uid) { return true }
         return c.isAdmin(uid) && c.adminsPostStories
     }
@@ -1506,7 +1507,9 @@ final class StoriesService {
             let me = AuthService.shared.uid ?? ""
             return ConversationsRepository.shared.conversations.first { $0.id == gid }?.photoUrl(for: me) ?? ""
         }
-        return ["groupId": gid, "groupName": String(tag.name.prefix(128)), "groupPhoto": photo, "public": false]
+        // posterCountry: which country's group-story minimum applies (rules `groupStoryMin`).
+        return ["groupId": gid, "groupName": String(tag.name.prefix(128)), "groupPhoto": photo, "public": false,
+                "posterCountry": (Locale.current.region?.identifier ?? "").uppercased()]
     }
 
     /// `applyHiddenFrom` is TRUE only for an Everyone post. The hide list is Everyone's own — see

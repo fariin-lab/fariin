@@ -59,6 +59,9 @@ enum Flags {
 
 struct UserProfile: Identifiable, Equatable {
     let id: String            // uid
+    /// The admin panel opened group stories for this person in any group they run, whatever its size
+    /// (owner 2026-10-23). Server-only field (`serverOnlyUserFields`).
+    var groupStoryOpen = false
     var name: String
     var handle: String
     var about: String
@@ -119,6 +122,7 @@ struct UserProfile: Identifiable, Equatable {
         self.about = data["about"] as? String ?? ""
         if let ts = data["deletionScheduledFor"] as? Timestamp { self.deletionScheduledFor = ts.dateValue() }
         self.photoUrl = data["photoUrl"] as? String
+        self.groupStoryOpen = data["groupStoryOpen"] as? Bool ?? false
         self.posterUrl = data["posterUrl"] as? String
         self.photoThumb = data["photoThumb"] as? String
         self.publicKeyB64 = data["publicKey"] as? String

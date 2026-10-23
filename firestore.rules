@@ -325,7 +325,9 @@ service cloud.firestore {
                 // owner 2026-10-18: the admin panel's per-person Message Requests / Chat Key
                 // override (adminApi msgPolicyUserSet). A phone that could write it could switch
                 // its own requests off or another person's key requirement, so only the server does.
-                'msgPolicy'];
+                'msgPolicy',
+                // owner 2026-10-23: group stories opened for this person by the panel.
+                'groupStoryOpen'];
       }
 
       // ⛔ THE PROFILE'S LINKS ARE CAPPED HERE, NOT ONLY IN THE APP — owner's Links feature,
@@ -3342,9 +3344,17 @@ service cloud.firestore {
         return g == '' || (request.resource.data.get('public', false) == false
           && groupPoster(get(/databases/$(database)/documents/conversations/$(g)).data));
       }
+      // The members a group needs (owner 2026-10-23): the poster's country's own number from the panel
+      // (config/limits.group_story_countries, by the story's posterCountry), else the global one.
+      function groupStoryMin() {
+        let cc = request.resource.data.get('posterCountry', '');
+        let byCountry = limitsExist() ? limitsData().get('group_story_countries', {}) : {};
+        return cc is string && byCountry.get(cc, null) is int ? byCountry.get(cc, 0) : appLimit('group_story_min_members', 50);
+      }
       function groupPoster(c) {
         return c.get('type', '') == 'group' && request.auth.uid in c.get('users', [])
-          && (c.get('users', []).size() >= appLimit('group_story_min_members', 50) || isAdmin())
+          && (c.get('users', []).size() >= groupStoryMin() || isAdmin()
+              || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('groupStoryOpen', false) == true)
           && request.resource.data.recipientUids.size() <= c.get('users', []).size()
           && (request.auth.uid == c.get('createdBy', '')
               || (request.auth.uid in c.get('admins', []) && c.get('adminsPostStories', true) != false));

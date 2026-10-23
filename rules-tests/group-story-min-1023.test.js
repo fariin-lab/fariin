@@ -21,16 +21,17 @@ const group = (size, over = {}) => ({
   type: 'group', title: 'G', users: [OWNER, ADMIN, ...fill(size - 2)], admins: [OWNER, ADMIN], createdBy: OWNER,
   updatedAt: REQ_TIME, ...over,
 });
-const story = (author) => ({
+const story = (author, country = '') => ({
   authorUid: author, createdAt: REQ_TIME, expiresAt: EXPIRES, recipientUids: ['tokA'],
   mediaPath: `stories/${SID}/photo.jpg`, type: 'image', mediaUrl: '', caption: '', replyCount: 0,
   public: false, allowsReplies: true, oneTime: false, audienceLabel: 'group', groupId: CID,
+  ...(country ? { posterCountry: country } : {}),
 });
-const mocks = (uid, conv, { appAdmin = false, config = null } = {}) => [
+const mocks = (uid, conv, { appAdmin = false, config = null, open = false } = {}) => [
   { function: 'exists', args: [{ exactValue: `${D}/admins/${uid}` }], result: { value: appAdmin } },
   ...(appAdmin ? [{ function: 'get', args: [{ exactValue: `${D}/admins/${uid}` }], result: { value: { data: { role: 'owner' } } } }] : []),
   { function: 'exists', args: [{ exactValue: `${D}/users/${uid}` }], result: { value: true } },
-  { function: 'get', args: [{ exactValue: `${D}/users/${uid}` }], result: { value: { data: { banned: false } } } },
+  { function: 'get', args: [{ exactValue: `${D}/users/${uid}` }], result: { value: { data: { banned: false, ...(open ? { groupStoryOpen: true } : {}) } } } },
   { function: 'exists', args: [{ exactValue: `${D}/users/${uid}/limits/storiesActive` }], result: { value: false } },
   { function: 'exists', args: [{ exactValue: `${D}/users/${uid}/limits/stories` }], result: { value: false } },
   { function: 'exists', args: [{ exactValue: `${D}/users/${uid}/limits/storiesDaily` }], result: { value: false } },
@@ -40,7 +41,7 @@ const mocks = (uid, conv, { appAdmin = false, config = null } = {}) => [
   { function: 'exists', args: [{ exactValue: convPath }], result: { value: true } },
 ];
 
-// [name, before, after, uid, mocks]
+// [name, before, after, uid, mocks, country]
 const cases = [
   ['OK      the owner of a 50-member group', 'ALLOW', 'ALLOW', OWNER, mocks(OWNER, group(50))],
   ['OK      an admin of a 120-member group', 'ALLOW', 'ALLOW', ADMIN, mocks(ADMIN, group(120))],
@@ -50,12 +51,21 @@ const cases = [
   ['OK      the panel lowers it to 5: a 6-member group', 'ALLOW', 'ALLOW', OWNER, mocks(OWNER, group(6), { config: { group_story_min_members: 5 } })],
   ['FIX     the panel raises it to 200: a 120-member group', 'ALLOW', 'DENY', OWNER, mocks(OWNER, group(120), { config: { group_story_min_members: 200 } })],
   ['GUARD   an APP admin who is not in the group', 'DENY', 'DENY', 'uidStranger', mocks('uidStranger', group(3), { appAdmin: true })],
+  // Per country (config/limits.group_story_countries) and per person (users/{uid}.groupStoryOpen).
+  ['FIX     Somalia set to 5: a 6-member group from SO', 'DENY', 'ALLOW', OWNER,
+    mocks(OWNER, group(6), { config: { group_story_countries: { SO: 5 } } }), 'SO'],
+  ['GUARD   Somalia set to 5: the same group from KE', 'DENY', 'DENY', OWNER,
+    mocks(OWNER, group(6), { config: { group_story_countries: { SO: 5 } } }), 'KE'],
+  ['FIX     Somalia raised to 300: a 120-member group from SO', 'ALLOW', 'DENY', OWNER,
+    mocks(OWNER, group(120), { config: { group_story_countries: { SO: 300 } } }), 'SO'],
+  ['FIX     a person opened by the panel, 3-member group', 'DENY', 'ALLOW', OWNER, mocks(OWNER, group(3), { open: true })],
+  ['GUARD   a person opened by the panel, not in the group', 'DENY', 'DENY', 'uidStranger', mocks('uidStranger', group(3), { open: true })],
 ];
 
-async function run(t, source, [, , , uid, m], expectation) {
+async function run(t, source, [, , , uid, m, country], expectation) {
   const testCase = { expectation, functionMocks: [...m, { function: 'exists', args: [{ anyValue: {} }], result: { value: false } }],
     request: { auth: { uid, token: { firebase: { sign_in_provider: 'password' } } }, path: `${D}/stories/${SID}`, method: 'create',
-      time: REQ_TIME, resource: { data: story(uid) } } };
+      time: REQ_TIME, resource: { data: story(uid, country) } } };
   const r = await fetch('https://firebaserules.googleapis.com/v1/projects/kulan-2ef85:test', {
     method: 'POST', headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ source: { files: [{ name: 'firestore.rules', content: source }] }, testSuite: { testCases: [testCase] } }),
