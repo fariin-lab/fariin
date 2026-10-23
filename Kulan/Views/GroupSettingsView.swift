@@ -1079,6 +1079,10 @@ struct GroupRequestsView: View {
 
     @State private var joinReqs: [JoinRequest] = []
     @State private var busyReqs = Set<String>()   // one tap per person while it is answered
+    /// Answered on this screen: the row goes AT ONCE (owner 2026-10-23: "I need to approve 10 people
+    /// fast, each card gone in a second"), the server catches up behind; a failure brings it back.
+    @State private var answeredReqs = Set<String>()
+    private var shownReqs: [JoinRequest] { joinReqs.filter { !answeredReqs.contains($0.uid) } }
     @State private var reqListener: ListenerRegistration?
     @State private var showInvite = false
     @State private var actionError: String?
@@ -1152,7 +1156,7 @@ struct GroupRequestsView: View {
     // MARK: Requests
 
     @ViewBuilder private var requestsSections: some View {
-        if joinReqs.isEmpty {
+        if shownReqs.isEmpty {
             // ⛔ ONE QUIET CARD (owner 2026-10-20, with a screenshot): a line in the card, a note under.
             Section {
                 Text("No one is waiting to join.")
@@ -1164,7 +1168,7 @@ struct GroupRequestsView: View {
             }
         } else {
             Section("Waiting to join") {
-                ForEach(joinReqs) { r in
+                ForEach(shownReqs) { r in
                     HStack(spacing: 12) {
                         AvatarView(name: r.name, photoUrl: r.photo, size: 40)
                         Text(r.name).foregroundStyle(.primary).lineLimit(1)
@@ -1252,9 +1256,20 @@ struct GroupRequestsView: View {
     private func answer(_ uid: String, _ op: @escaping () async throws -> Void) {
         guard !busyReqs.contains(uid) else { return }
         busyReqs.insert(uid)
-        act {
-            defer { Task { @MainActor in busyReqs.remove(uid) } }
-            try await op()
+        withAnimation(.easeOut(duration: 0.2)) { _ = answeredReqs.insert(uid) }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Task {
+            do {
+                try await op()
+                await MainActor.run { _ = busyReqs.remove(uid) }
+            } catch {
+                let msg = error.localizedDescription
+                await MainActor.run {
+                    busyReqs.remove(uid)
+                    withAnimation { _ = answeredReqs.remove(uid) }   // it did not go through: back on the list
+                    actionError = msg
+                }
+            }
         }
     }
 }
