@@ -572,7 +572,8 @@ struct GroupCallView: View {
     private var remoteCount: Int { stage.tiles.reduce(0) { $1.isLocal ? $0 : $0 + 1 } }
     private var isAlone: Bool { service.joinState == .joined && remoteCount == 0 }
     // Audit M-026, 2026-10-07: the quick reconnect too (it never leaves `.connected`).
-    private var isReconnecting: Bool { stage.isReconnecting }
+    // Controls 7, 2026-10-23: and the service's one automatic rejoin after a lost connection.
+    private var isReconnecting: Bool { stage.isReconnecting || service.rejoining }
 
     // MARK: - The chrome's hide rule
 

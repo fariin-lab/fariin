@@ -85,6 +85,7 @@ struct GroupFloatingCallWindow: View {
     private var reconnecting: Bool {
         room.connectionState == .reconnecting
             || (room.connectionState != .disconnected && social.quickReconnecting)
+            || service.rejoining   // controls 7: the automatic rejoin after a lost connection
     }
 
     // MARK: - Drag

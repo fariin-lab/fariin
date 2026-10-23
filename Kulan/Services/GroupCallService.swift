@@ -978,7 +978,9 @@ final class GroupCallService: ObservableObject {
     private var cameraWanted: Bool { cameraOn && !cameraPausedByBackground && !cameraLocked }
 
     private func syncMic() {
-        guard micChain == nil, isActive, !leaving else { return }
+        // Controls 7: during the automatic rejoin there is no room to publish to; a tap only moves
+        // the wish, which the rejoin applies once the room is back.
+        guard micChain == nil, isActive, !leaving, !rejoining else { return }
         let gen = joinGeneration
         // Counted for the whole chain, the join's first publish too: a mute event while it runs is
         // mine, not an owner's (`localMicMuteChanged`).
@@ -1045,7 +1047,7 @@ final class GroupCallService: ObservableObject {
     }
 
     private func syncCamera() {
-        guard cameraChain == nil, isActive, !leaving else { return }
+        guard cameraChain == nil, isActive, !leaving, !rejoining else { return }   // controls 7, as syncMic
         let gen = joinGeneration
         cameraChainID &+= 1
         let id = cameraChainID
@@ -1294,7 +1296,20 @@ final class GroupCallService: ObservableObject {
     /// taps Start in the system's broadcast sheet (or never, if they cancel). Stopping from the red
     /// status pill or Control Center ends the extension, which ends the share here too.
     @Published private(set) var screenSharing = false {
-        didSet { updateGroupScreenBehavior() }   // audit M-096: a share is never blanked at the ear
+        didSet {
+            updateGroupScreenBehavior()   // audit M-096: a share is never blanked at the ear
+            // Controls 3 (app audio), 2026-10-23: the shared app's sound rides my mic while the
+            // share is up, and only then (`GroupShareAppAudio`).
+            if screenSharing != oldValue { setShareAppAudio(screenSharing && isActive) }
+        }
+    }
+
+    /// The shared app's sound into my microphone track, on or off, with its GC# line.
+    private func setShareAppAudio(_ on: Bool) {
+        let was = GroupShareAppAudio.shared.isMixing
+        let now = GroupShareAppAudio.shared.setMixing(on)
+        if now != was { GCLog.event("share_audio", room: logRoom, ["on": now ? "1" : "0"]) }
+        else if on, !now { GCLog.failure("share_audio", room: logRoom, ["on": "0", "why": "unavailable"]) }
     }
     /// Set once this call has asked for a share, so leaving knows to tell the extension to stop.
     /// A plain "is anything broadcasting" check could stop a share that belongs to a 1:1 call.
@@ -1315,7 +1330,7 @@ final class GroupCallService: ObservableObject {
     /// shared memory as the 1:1 call (`ScreenShareSession`) and feeds a LiveKit buffer track, published
     /// once the broadcast has really started.
     func toggleScreenShare() {
-        guard isActive, !cameraLocked, !shareBusy else { return }
+        guard isActive, !cameraLocked, !shareBusy, !rejoining else { return }   // controls 7: no room to share into
         // Controls 3-3, 2026-10-23: only a share that really began is stopped by this tap. A session
         // still waiting on a sheet that was closed without Start used to swallow the next tap (it
         // only tore that session down, and the sheet did not open until a third tap). It is dropped
@@ -1433,6 +1448,7 @@ final class GroupCallService: ObservableObject {
         let had = session != nil || track != nil
         shareSession = nil; sharePublication = nil; shareTrack = nil; shareRepeater = nil
         sharePending = false
+        setShareAppAudio(false)   // at once, not when the unpublish event comes back
         repeater?.stop()
         if requestStop { session?.stop() }
         if had { GCLog.event("share_end", room: logRoom, ["by": requestStop ? "app" : "extension"]) }
@@ -1496,7 +1512,7 @@ final class GroupCallService: ObservableObject {
     private func adoptOutsideShare() {
         // Not a share this call already has (the sheet's own Start lands here too), not while one
         // is being opened, and never while a 1:1 call is up (its share is its own).
-        guard isActive, !leaving, !cameraLocked, !shareBusy, shareSession == nil, !screenSharing,
+        guard isActive, !leaving, !rejoining, !cameraLocked, !shareBusy, shareSession == nil, !screenSharing,
               CallService.shared.state == .idle else { return }
         GCLog.event("share_adopt", room: logRoom)
         sharePending = true
@@ -1733,6 +1749,8 @@ final class GroupCallService: ObservableObject {
 
     func end() {
         GCLog.event("end", room: logRoom, ["live": isActive ? "1" : "0"])
+        // Controls 7: End during the automatic rejoin stops it; the leave below is the usual one.
+        if rejoining { GCLog.event("rejoin", room: logRoom, ["step": "done", "result": "cancelled"]) }
         // owner audit 2026-10-06 #4: bumped HERE, synchronously, so a join still connecting sees
         // it the moment it resumes, even if the disconnect below has not run yet.
         joinGeneration &+= 1
@@ -1779,19 +1797,35 @@ final class GroupCallService: ObservableObject {
     /// state check skip it.
     /// Group call permissions, 2026-10-06: `removed` = an owner or admin took me out of the call
     /// (LiveKit's participantRemoved); `deleted` = the owner ended it for everyone (roomDeleted).
-    /// Each is said once the screen has closed. Neither rejoins: nothing here ever reconnects, and the
-    /// server refuses a removed person a new join pass.
-    fileprivate func roomDropped(_ reason: RoomDropReason) {
-        guard isActive, !leaving, room.connectionState == .disconnected else { return }
+    /// Each is said once the screen has closed. Neither rejoins: the server refuses a removed person
+    /// a new join pass.
+    /// Controls 7 (rejoin), 2026-10-23: a LOST connection (the SDK's own resume and full reconnect
+    /// both gave up: a network change, a long tunnel, a server restart) gets one automatic rejoin
+    /// first (`beginRejoin`). Only when that fails does the call end as below.
+    fileprivate func roomDropped(_ reason: RoomDropReason, code: String = "") {
+        guard isActive, !leaving, !rejoining, !droppedEnding, room.connectionState == .disconnected else { return }
         let why: String
         switch reason {
         case .removed: why = "removed"
         case .deleted: why = "deleted"
         case .duplicate: why = "duplicate"
+        case .lost: why = "lost"
         case .other: why = "other"
         }
-        if reason == .other { GCLog.failure("drop", room: logRoom, ["why": why]) }
-        else { GCLog.event("drop", room: logRoom, ["why": why]) }
+        var fields = ["why": why]
+        if !code.isEmpty { fields["code"] = code }
+        if reason == .lost || reason == .other { GCLog.failure("drop", room: logRoom, fields) }
+        else { GCLog.event("drop", room: logRoom, fields) }
+        if reason == .lost, beginRejoin() { return }
+        endAfterDrop(reason)
+    }
+
+    /// The call is over after a drop: the room is closed and the reason said over the top screen.
+    private func endAfterDrop(_ reason: RoomDropReason) {
+        // Controls 7: once. A failed rejoin's connect reports its own "disconnected" a beat after the
+        // rejoin has already ended the call; that must not end it (and say so) a second time.
+        guard !droppedEnding else { return }
+        droppedEnding = true
         // owner 2026-10-06, reference study: every way a call ends says why. Only being removed and
         // "ended for everyone" did; a lost connection, a failed reconnect or a server fault closed
         // the screen without a word.
@@ -1805,7 +1839,7 @@ final class GroupCallService: ObservableObject {
             n = endingForAll ? nil : Notice(title: "The call was ended", message: nil)
         case .duplicate:
             n = Notice(title: "You joined this call on another device", message: nil)
-        case .other:
+        case .lost, .other:
             // Audit M-028, 2026-10-07: a dropped multi-person call has no Join bar to try again
             // from, so it no longer tells the user to; and the room is no longer remembered as
             // answered, so a new ring or invitation for it can reach me.
@@ -1824,6 +1858,170 @@ final class GroupCallService: ObservableObject {
             // minimized call has no screen), so its own alert could never show this.
             if let n { Self.presentOverTop(n) }
         }
+    }
+
+    // MARK: - Automatic rejoin after a lost connection
+
+    /// Controls 7 (rejoin), 2026-10-23: true while the one automatic rejoin after a lost connection
+    /// runs. The call stays "in progress" the whole time (`activeCid` is kept), so the call screen or
+    /// the floating card stays up, and the header says "Reconnecting…" as for the SDK's own retries.
+    @Published private(set) var rejoining = false
+    /// Set by `endAfterDrop`, cleared with the call (`cancelRejoin`).
+    private var droppedEnding = false
+    private var rejoinTask: Task<Void, Never>?
+    private var rejoinWatchdog: Task<Void, Never>?
+    /// Bumped by every rejoin and by every leave: a late result for an older one changes nothing.
+    private var rejoinID = 0
+    /// When the last rejoin began. A second drop soon after one is not retried: a network that keeps
+    /// failing ends the call instead of looping on "Reconnecting…".
+    private var lastRejoinAt: Date?
+    /// The whole rejoin, from the drop to the room being back: about what large apps give a call
+    /// before they say it ended.
+    private static let rejoinWindow: Double = 20
+    private static let rejoinCooldown: Double = 60
+
+    /// Decision (mature-app rule, 2026-10-23): after the SDK gives up on a lost connection, the call
+    /// rejoins once by itself, as large group-call apps do, with a fresh pass from our server and a
+    /// fresh connect to the same room. It does NOT count as a new join: nobody is rung, no doc or
+    /// chat record is written, and the call's record (`groupRecordId`, `someoneJoined`) is kept, so
+    /// the call bubble and Recents read one call. The mic and camera come back as the buttons say.
+    /// A screen share is ended first, cleanly (the extension is told to stop): restarting a
+    /// broadcast without a tap is not possible, and the person can share again from the menu.
+    /// Never for being removed, ended for everyone, joining elsewhere, or a refused pass (those are
+    /// other `RoomDropReason`s), never once the call is known to be over, and at most once per drop
+    /// (`rejoinCooldown`). End or leaving cancels it. Returns false when no rejoin was started.
+    private func beginRejoin() -> Bool {
+        guard !endingForAll, !leftGroupMidCall, let target = activeRoom, activeCid != nil,
+              !myUid.isEmpty, rejoinTask == nil else { return false }
+        if let last = lastRejoinAt, Date().timeIntervalSince(last) < Self.rejoinCooldown {
+            GCLog.event("rejoin", room: logRoom, ["step": "skip", "why": "recent"])
+            return false
+        }
+        lastRejoinAt = Date()
+        rejoinID &+= 1
+        let id = rejoinID
+        let gen = joinGeneration
+        let startedAt = Date()
+        let window = Self.rejoinWindow
+        let deadline = startedAt.addingTimeInterval(window)
+        rejoining = true
+        stopScreenShare()
+        GCLog.event("rejoin", room: logRoom, ["step": "start", "kind": isLink ? "link" : isAdhoc ? "adhoc" : "group"])
+        rejoinWatchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(window * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.finishRejoin(id: id, result: "timeout", startedAt: startedAt, role: nil)
+        }
+        rejoinTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let outcome = await self.runRejoin(target: target, id: id, gen: gen, deadline: deadline)
+            self.finishRejoin(id: id, result: outcome.0, startedAt: startedAt, role: outcome.1)
+        }
+        return true
+    }
+
+    /// The rejoin's steps. "ok" when the room is connected again; anything else ends the call.
+    private func runRejoin(target: GroupRoom, id: Int, gen: Int, deadline: Date) async -> (String, String?) {
+        func stale() -> Bool { id != rejoinID || gen != joinGeneration || !rejoining || leaving }
+        // 1. Is the call still on? Asked again while the network cannot answer, inside the window.
+        var alive: Bool?
+        while alive == nil {
+            alive = await rejoinCallIsLive(target)
+            if stale() { return ("cancelled", nil) }
+            if alive == nil {
+                guard deadline.timeIntervalSinceNow > 3 else { return ("offline", nil) }
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if stale() { return ("cancelled", nil) }
+            }
+        }
+        guard alive == true else { return ("ended", nil) }
+        // 2. A fresh pass for the same room. The token call rings nobody; ringing is the start path's.
+        let payload: [String: Any]
+        switch target {
+        case .group(let cid): payload = ["cid": cid]
+        case .adhoc(let roomId): payload = ["roomId": roomId]
+        case .link(let roomId, _): payload = ["roomId": roomId, "link": true]
+        }
+        let left = deadline.timeIntervalSinceNow
+        guard left > 2 else { return ("timeout", nil) }
+        let callable = functions.httpsCallable("groupCallToken")
+        callable.timeoutInterval = left
+        let d: [String: Any]?
+        do {
+            d = try await callable.call(payload).data as? [String: Any]
+        } catch {
+            return (stale() ? "cancelled" : "token_" + Telemetry.code(error), nil)
+        }
+        if stale() { return ("cancelled", nil) }
+        // A link that asks for approval again, or no pass at all: not this rejoin's to wait on.
+        guard d?["pending"] as? Bool != true, let token = d?["token"] as? String else { return ("refused", nil) }
+        // 3. The same room again. The watchdog ends the call if this outlives the window.
+        do {
+            try await room.connect(url: url, token: token)
+        } catch {
+            return (stale() ? "cancelled" : "connect_" + Telemetry.code(error), nil)
+        }
+        if stale() {
+            // Left (or timed out) while the connect was out, and nothing newer owns the room.
+            if !isActive, !connecting { await room.disconnect() }
+            return ("cancelled", nil)
+        }
+        guard room.connectionState == .connected else { return ("connect_state", nil) }
+        return ("ok", d?["role"] as? String)
+    }
+
+    /// Whether the call I dropped from is still on. nil = the server could not be asked.
+    private func rejoinCallIsLive(_ target: GroupRoom) async -> Bool? {
+        switch target {
+        case .group(let id), .adhoc(let id):
+            guard let snap = try? await db.collection("groupCalls").document(id).getDocument(source: .server) else {
+                return nil
+            }
+            guard let d = snap.data(), d["active"] as? Bool == true else { return false }
+            // A group's doc that now carries another call's record: mine is over.
+            if case .group = target, let mine = groupRecordId, let rec = d["recordId"] as? String, rec != mine {
+                return false
+            }
+            return true
+        case .link(let roomId, _):
+            guard let res = try? await functions.httpsCallable("peekCallLink").call(["roomId": roomId]),
+                  let d = res.data as? [String: Any] else { return nil }
+            return d["gone"] as? Bool != true
+        }
+    }
+
+    /// One end for each rejoin, whichever comes first: its own result or the watchdog.
+    private func finishRejoin(id: Int, result: String, startedAt: Date, role: String?) {
+        guard id == rejoinID, rejoining else { return }
+        rejoining = false
+        rejoinTask = nil
+        rejoinWatchdog?.cancel(); rejoinWatchdog = nil
+        let fields = ["step": "done", "result": result, "ms": String(Int(Date().timeIntervalSince(startedAt) * 1000))]
+        guard result == "ok" else {
+            GCLog.failure("rejoin", room: logRoom, fields)
+            guard isActive, !leaving else { return }
+            endAfterDrop(.lost)
+            return
+        }
+        GCLog.event("rejoin", room: logRoom, fields)
+        // Back in: the same pieces a join starts, minus everything that makes it a new call.
+        if let role { myRole = groupRole(of: myUid) ?? CallRole(attribute: role) }
+        GroupCallSocial.shared.attach(room: room, myUid: myUid, myName: ProfileStore.shared.me?.name ?? "")
+        syncMic()
+        syncCamera()
+        noteRoomPeople()
+        updateRingback()
+        updateGroupScreenBehavior()
+    }
+
+    /// Every leave: a rejoin still running is dropped.
+    private func cancelRejoin() {
+        rejoinID &+= 1
+        rejoinTask?.cancel(); rejoinTask = nil
+        rejoinWatchdog?.cancel(); rejoinWatchdog = nil
+        if rejoining { rejoining = false }
+        lastRejoinAt = nil
+        droppedEnding = false
     }
 
     /// Audit M-124, 2026-10-07: one leave at a time. "End for everyone" ran it twice (the room's
@@ -2646,6 +2844,7 @@ final class GroupCallService: ObservableObject {
     }
 
     private func resetRoomState() {
+        cancelRejoin()      // controls 7: a rejoin in flight goes with the call
         stopScreenShare()   // every leave path comes through here
         startMuted = false
         startCameraWish = nil    // round 2 (V2 N8), controls 2-B4
@@ -3195,7 +3394,27 @@ private final class OnceFlag: @unchecked Sendable {
 /// itself. A separate NSObject because RoomDelegate is an @objc protocol called off the main
 /// thread; the service decides on the main actor whether it was a drop or our own hang-up.
 /// Why the room closed without my asking, as the media server put it.
-enum RoomDropReason { case removed, deleted, duplicate, other }
+/// Controls 7, 2026-10-23: `other` = the server refused me (a join failure, a permission, a pass it
+/// would not take, a service it could not find), which a rejoin would only meet again. Everything
+/// else is `lost` and may get the one automatic rejoin: when the SDK's reconnect gives up it
+/// reports whatever its last step threw (a network error, a timeout, an "invalid state", a
+/// cancellation), so the list of what rejoins cannot be narrower than "not refused". Our own leave
+/// never gets this far (`leaving`).
+enum RoomDropReason {
+    case removed, deleted, duplicate, lost, other
+
+    init(_ type: LiveKitErrorType?) {
+        switch type {
+        case .participantRemoved?: self = .removed
+        case .roomDeleted?: self = .deleted
+        case .duplicateIdentity?: self = .duplicate
+        case .joinFailure?, .insufficientPermissions?, .validation?, .serviceNotFound?,
+             .failedToParseUrl?, .onlyForCloud?:
+            self = .other
+        default: self = .lost
+        }
+    }
+}
 
 private final class RoomDropObserver: NSObject, RoomDelegate, @unchecked Sendable {
     func room(_ room: Room, didUpdateConnectionState connectionState: ConnectionState,
@@ -3203,14 +3422,10 @@ private final class RoomDropObserver: NSObject, RoomDelegate, @unchecked Sendabl
         guard connectionState == .disconnected else { return }
         // Read here, on the delegate's own beat: the SDK sets the reason in the same state change
         // that reports `.disconnected`, and a later connect would replace it.
-        let why: RoomDropReason
-        switch room.disconnectError?.type {
-        case .participantRemoved?: why = .removed
-        case .roomDeleted?: why = .deleted
-        case .duplicateIdentity?: why = .duplicate
-        default: why = .other
-        }
-        Task { @MainActor in GroupCallService.shared.roomDropped(why) }
+        let type = room.disconnectError?.type
+        let why = RoomDropReason(type)
+        let code = type.map { String($0.rawValue) } ?? "none"
+        Task { @MainActor in GroupCallService.shared.roomDropped(why, code: code) }
     }
 
     func room(_ room: Room, participantDidConnect participant: RemoteParticipant) {
@@ -3336,5 +3551,114 @@ private final class GroupShareRepeater: @unchecked Sendable {
         let r = rotation
         lock.unlock()
         target.capture(buffer, rotation: r)
+    }
+}
+
+/// Controls 3 (app audio), 2026-10-23: the shared app's sound in a group, ad-hoc or link call while I
+/// share my screen. The broadcast extension already writes it to the App Group ring
+/// (`ScreenShareIPC.AudioRing`, 48 kHz mono Int16); the 1:1 call mixes that ring in its own audio
+/// device (`CallAudioDevice`), which LiveKit does not use. LiveKit 2.18 has the hook for it:
+/// `AudioManager.capturePostProcessingDelegate` (an `AudioCustomProcessingDelegate`) gets every 10 ms
+/// of recorded microphone audio after WebRTC's own processing and before it is encoded, as float
+/// samples on the Int16 scale, to change in place. So the app's sound is never taken for echo.
+///
+/// Decision: one track, as the 1:1 call does. The app's sound is mixed INTO my microphone track, so
+/// Mute silences both (a muted LiveKit track sends silence whatever this adds), and a call joined
+/// with the mic never turned on sends no app audio either. Large apps that send app audio while the
+/// mic is muted do it on a separate screen-share audio track; a second published audio track would
+/// be a bigger change than this gap needs, and "muted means nothing of mine is heard" is the safer
+/// reading for a person who mutes before playing something.
+///
+/// Attached only while my share is up and detached after, so a call without a share runs exactly as
+/// before. `ring`, `mixing` and `resetCursor` are set on the main thread, `ring` before `mixing`;
+/// the audio thread only reads them (no locks or allocation on it), as in `CallAudioDevice`.
+private final class GroupShareAppAudio: NSObject, AudioCustomProcessingDelegate, @unchecked Sendable {
+    static let shared = GroupShareAppAudio()
+
+    private static let appGain: Float = 0.9
+    private var ring: ScreenShareIPC.AudioRing?
+    private var mixing = false
+    private var resetCursor = true
+    // Audio thread only.
+    private var readPos: Double = -1
+    private let scratchCap = 16_384
+    private let scratch: UnsafeMutablePointer<Int16>
+
+    private override init() {
+        scratch = .allocate(capacity: 16_384)
+        scratch.initialize(repeating: 0, count: 16_384)
+        super.init()
+    }
+
+    var isMixing: Bool { mixing }
+
+    /// Returns whether the app's sound is now being mixed in. False when the ring cannot be opened,
+    /// or another processor already holds LiveKit's one capture hook (then it is left alone).
+    @MainActor
+    func setMixing(_ on: Bool) -> Bool {
+        let manager = AudioManager.shared
+        guard on else {
+            mixing = false
+            if manager.capturePostProcessingDelegate === self { manager.capturePostProcessingDelegate = nil }
+            return false
+        }
+        if ring == nil { ring = ScreenShareIPC.AudioRing() }
+        guard ring != nil else { mixing = false; return false }
+        if manager.capturePostProcessingDelegate == nil { manager.capturePostProcessingDelegate = self }
+        guard manager.capturePostProcessingDelegate === self else { mixing = false; return false }
+        if !mixing { resetCursor = true }
+        mixing = true
+        return true
+    }
+
+    // MARK: AudioCustomProcessingDelegate (the audio thread)
+
+    func audioProcessingInitialize(sampleRate sampleRateHz: Int, channels: Int) {
+        resetCursor = true
+    }
+
+    /// Adds the app's sound to one 10 ms chunk. Keeps ~80 ms behind the extension's writes, jumps
+    /// back to that when it drifts more than 250 ms, skips a chunk it cannot fill rather than wait,
+    /// and mixes nothing once the extension has been silent for half a second (`CallAudioDevice`'s
+    /// rules, so both calls sound the same).
+    func audioProcessingProcess(audioBuffer: LKAudioBuffer) {
+        guard mixing, let ring else { return }
+        if resetCursor { resetCursor = false; readPos = -1 }
+        let frames = audioBuffer.frames
+        let channels = audioBuffer.channels
+        guard frames > 0, channels > 0 else { return }
+        let now = ScreenShareIPC.nowNs()
+        let last = ring.lastWriteNs
+        guard last > 0, now <= last || now - last < 500_000_000 else { return }
+
+        // WebRTC hands over 10 ms at a time, so the chunk's own length gives its rate.
+        let rate = Double(frames * 100)
+        let srcRate = Double(ScreenShareIPC.Audio.sampleRate)
+        let step = srcRate / rate
+        let need = Int((Double(frames) * step).rounded(.up)) + 2
+        guard need <= scratchCap else { return }
+        let written = Double(ring.writeFrames)
+        let target = written - srcRate * 0.08
+        if readPos < 0 || abs(readPos - target) > srcRate * 0.25 { readPos = target }
+        guard readPos >= max(0, written - Double(ring.capacity) + 1),
+              readPos + Double(need) <= written else { return }
+        ring.read(into: scratch, from: UInt64(readPos), count: need)
+
+        for channel in 0..<channels {
+            let out = audioBuffer.rawBuffer(forChannel: channel)
+            var position = 0.0
+            for i in 0..<frames {
+                let j = Int(position)
+                let f = Float(position - Double(j))
+                let s = Float(scratch[j]) * (1 - f) + Float(scratch[j + 1]) * f
+                out[i] = max(-32768, min(32767, out[i] + s * Self.appGain))
+                position += step
+            }
+        }
+        readPos += Double(frames) * step
+    }
+
+    func audioProcessingRelease() {
+        resetCursor = true
     }
 }

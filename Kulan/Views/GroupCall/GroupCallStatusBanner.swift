@@ -69,7 +69,8 @@ struct GroupCallStatusBanner: View {
             // Lost only while the call is still on. My own hang-up, or the screen closing, also
             // ends in .disconnected: the service is then leaving, or already has no call.
             let service = GroupCallService.shared
-            guard wasConnected, service.isActive, !service.leaving else { return nil }
+            // Controls 7: not while the automatic rejoin runs (the header says "Reconnecting…").
+            guard wasConnected, service.isActive, !service.leaving, !service.rejoining else { return nil }
             return Item(text: "Connection lost", avatar: nil, wide: false)
         default:
             break
