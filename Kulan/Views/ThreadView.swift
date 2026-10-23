@@ -1353,8 +1353,8 @@ struct ThreadView: View {
         // draws avatar, name, icons and subtitle with the reference app's own metrics. Selection mode
         // hides it the same way as before: `isActive` hands the title area to the `.principal` item.
         .background(ChatNavigationItem(model: headerModel, bar: navigationBar, onTap: {
-            // A guest has no group page to open: it is the members' (owner 2026-10-21).
-            guard guest == nil else { return }
+            // A guest opens the group's public page (owner 2026-10-23, the reference app's way),
+            // not the members' one (see the destination below).
             // Close the keyboard before pushing the profile, else it stays up behind the pushed screen
             // and is still there when you swipe back (the reported bug).
             inputFocused = false
@@ -1429,7 +1429,9 @@ struct ThreadView: View {
             if recordLocked { parkRecordingDraft() }
         }
         .navigationDestination(isPresented: $showContactInfo) {
-            if isGroup {
+            if let guest {
+                PublicGroupInfoView(guest: guest)
+            } else if isGroup {
                 if Flags.groupsEnabled { GroupInfoView(cid: cid, onSearch: { searchFromInfoPage() }) }
             } else {
                 // The conversation already carries their tall crop, so the header can draw it on the

@@ -389,3 +389,52 @@ struct PublicGroupHitRow: View {
         .contentShape(Rectangle())
     }
 }
+
+/// THE GROUP'S PAGE FOR SOMEBODY NOT IN IT (owner 2026-10-23: "I can't click the profile before
+/// joining"). The reference app opens the group's info page for a non-member too. This one reads
+/// only the public preview (the members' group document is theirs alone): photo, name, members,
+/// description, the public link, and Join at the foot. No listeners, no writes.
+struct PublicGroupInfoView: View {
+    let guest: PublicGroupGuest
+    private var p: PublicGroupPreview { guest.preview }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                AvatarView(name: p.title, photoUrl: p.photoUrl, size: 132)
+                    .padding(.top, 12)
+                Text(p.title)
+                    .font(.system(size: 28, weight: .bold))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 14)
+                Text(GroupDirectory.membersLine(p.memberCount))
+                    .font(.system(size: 16)).foregroundStyle(Color(hex: 0x8E8E93))
+                    .padding(.top, 4)
+                if !p.description.isEmpty {
+                    Text(GroupInfoView.blueLinks(p.description))
+                        .font(.subheadline)
+                        .tint(Color(hex: 0x0A84FF))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 28)
+                        .padding(.top, 10)
+                }
+                if !p.username.isEmpty {
+                    GroupPublicLinkCard(name: p.username, title: p.title,
+                                        cardColor: Color(.secondarySystemGroupedBackground),
+                                        photo: p.photoUrl, memberCount: p.memberCount)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 24)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 24)
+        }
+        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom) {
+            if !guest.joined { PublicJoinBar(guest: guest) }
+        }
+    }
+}
