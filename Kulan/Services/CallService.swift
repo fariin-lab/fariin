@@ -3408,11 +3408,20 @@ final class CallService: NSObject {
         // 1:1 audit r2 D4, 2026-10-08: the mode IS the choice, as in the reference app. Inside
         // .videoChat the default route is the loudspeaker, so `.none` alone never left it (the
         // video-call ringback is .videoChat since #3). setMode keeps the category and its options.
-        let session = AVAudioSession.sharedInstance()
-        let wantMode: AVAudioSession.Mode = isSpeaker ? .videoChat : .voiceChat
-        if session.mode != wantMode { try? session.setMode(wantMode) }
-        try? session.overrideOutputAudioPort(isSpeaker ? .speaker : .none)
+        // ⛔ OFF THE MAIN THREAD (owner 2026-10-23: "Speaker has lag, it opens late"). setMode and
+        // the port override are synchronous and can take a few hundred ms while the call's audio
+        // unit reconfigures; on main they held the button's own redraw until they returned. The
+        // button flips at once (isSpeaker above); the route follows on a serial queue, in tap order.
+        let on = isSpeaker
+        Self.routeQueue.async {
+            let session = AVAudioSession.sharedInstance()
+            let wantMode: AVAudioSession.Mode = on ? .videoChat : .voiceChat
+            if session.mode != wantMode { try? session.setMode(wantMode) }
+            try? session.overrideOutputAudioPort(on ? .speaker : .none)
+        }
     }
+    /// Speaker taps' audio-session work, in order, off main (see toggleSpeaker).
+    private static let routeQueue = DispatchQueue(label: "CallService.speakerRoute", qos: .userInitiated)
 
     // MARK: - Audio route awareness (smart speaker button)
 
