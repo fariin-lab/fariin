@@ -19,8 +19,11 @@ struct GroupStoryTarget: Identifiable, Equatable {
     @MainActor init(_ c: Conversation) {
         let me = AuthService.shared.uid ?? ""
         id = c.id
-        name = c.name(for: me)
-        photoUrl = c.photoUrl(for: me)
+        // The GROUP's name and photo (displayName/displayPhoto). name(for:)/photoUrl(for:) are the
+        // 1:1 helpers: on a group they gave one member's name and face, so every group story went out
+        // named after a member (owner 2026-10-23: Juni's stories read "zaki ali").
+        name = c.displayName(me)
+        photoUrl = c.displayPhoto(me)
         memberCount = c.users.count
     }
 }
@@ -51,7 +54,7 @@ struct GroupStoryPicker: View {
     private var groups: [Conversation] {
         _ = repo.conversations   // observed, so a promotion or a new group shows up while open
         return GroupStoryRights.eligibleGroups()
-            .sorted { $0.name(for: me).localizedCaseInsensitiveCompare($1.name(for: me)) == .orderedAscending }
+            .sorted { $0.displayName(me).localizedCaseInsensitiveCompare($1.displayName(me)) == .orderedAscending }
     }
     private var me: String { AuthService.shared.uid ?? "" }
 
@@ -68,7 +71,7 @@ struct GroupStoryPicker: View {
                     Section {
                         ForEach(groups) { c in
                             Button { onPick(GroupStoryTarget(c)) } label: {
-                                GroupStoryRow(name: c.name(for: me), photoUrl: c.photoUrl(for: me),
+                                GroupStoryRow(name: c.displayName(me), photoUrl: c.displayPhoto(me),
                                               members: c.users.count)
                             }
                             .buttonStyle(.plain)

@@ -1505,7 +1505,7 @@ final class StoriesService {
         guard let gid = tag.groupId else { return [:] }
         let photo = await MainActor.run { () -> String in
             let me = AuthService.shared.uid ?? ""
-            return ConversationsRepository.shared.conversations.first { $0.id == gid }?.photoUrl(for: me) ?? ""
+            return ConversationsRepository.shared.conversations.first { $0.id == gid }?.displayPhoto(me) ?? ""
         }
         // posterCountry: which country's group-story minimum applies (rules `groupStoryMin`).
         return ["groupId": gid, "groupName": String(tag.name.prefix(128)), "groupPhoto": photo, "public": false,
@@ -3605,8 +3605,10 @@ final class StoriesRepository {
                 let gid = String(key.dropFirst(StoryGroup.groupKeyPrefix.count))
                 let conv = convs.first { $0.id == gid }
                 let last = sorted.last
-                let name = conv?.name(for: me) ?? last?.groupName ?? ""
-                let photo = conv?.photoUrl(for: me) ?? last?.groupPhoto
+                // The group's own name and photo; a story posted before 2026-10-23 may carry a
+                // member's name in groupName (the 1:1 helper), so the live group wins.
+                let name = conv?.displayName(me) ?? last?.groupName ?? ""
+                let photo = conv?.displayPhoto(me) ?? last?.groupPhoto
                 groups.append(StoryGroup(authorUid: key, name: name, photoUrl: photo,
                                          stories: sorted, lastViewedAt: nil,
                                          isMine: sorted.allSatisfy { $0.authorUid == me }))

@@ -215,6 +215,11 @@ enum StoryDoor {
                      onProfile: @escaping (StoryGroup) -> Void = { _ in },
                      onClosed: @escaping () -> Void = {}) {
         guard !StoryZoomPresenter.isActive else { return }   // one viewer at a time
+        // ⛔ EACH RING ONCE (owner 2026-10-23: a group story opened to an all-black page). My own group
+        // ring is `isMine` AND sits in `others`, so "[g] + others" carried it twice; two pages with one
+        // id is what the pager cannot draw. Duplicates are dropped here, for every door, first one wins.
+        var seen = Set<String>()
+        let siblings = siblings.filter { seen.insert($0.id).inserted }
         let req = Request(group: g, siblings: siblings, sourceKey: sourceKey, pinned: pinned,
                           deliveredToMe: deliveredToMe, startStoryId: startStoryId,
                           onProfile: onProfile, onClosed: onClosed)
