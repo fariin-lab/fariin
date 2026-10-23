@@ -12,10 +12,14 @@ struct GroupCallInfoView: View {
     private var cardColor: Color { Color(uiColor: .secondarySystemGroupedBackground) }
     private var pageBackground: Color { Color(uiColor: .systemGroupedBackground) }
 
+    /// Controls audit 4-B8 (2026-10-23): watched, so Voice / Video follow a call that starts or ends
+    /// while this page is open. (`CallService` is @Observable: reading it in the body is enough.)
+    @ObservedObject private var groupCalls = GroupCallService.shared
+
     /// Same gate as the calls list: no new call while one is already up.
     private var callsEnabled: Bool {
         let s = CallService.shared.state
-        return (s == .idle || s == .ended) && !GroupCallService.shared.isActive
+        return (s == .idle || s == .ended) && !groupCalls.isActive
     }
 
     var body: some View {

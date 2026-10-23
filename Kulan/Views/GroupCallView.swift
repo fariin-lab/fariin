@@ -355,13 +355,32 @@ struct GroupCallView: View {
                 set: { if !$0 { stage.removeCandidate = nil } })
     }
     /// The people sheet's words: on a link call a removed person may ask to join again.
+    /// Controls audit 4-B6 (2026-10-23): "is this a link call" asked the way the sheet asks it.
     private var removeMessage: String {
-        service.currentLink != nil ? "They can ask to join again." : "They won't be able to rejoin it."
+        service.isLink ? "They can ask to join again." : "They won't be able to rejoin it."
+    }
+    /// The link's owner on a link call: the sheet's "Remove and Block" is offered here too (4-B6).
+    /// The server checks the creator again.
+    private var canBlock: Bool {
+        service.isLink && service.currentLink != nil && (service.myRole == .owner || service.isLinkCreator)
     }
     @ViewBuilder
     private func removeButtons(_ t: CallTile) -> some View {
         Button("Remove", role: .destructive) { remove(t) }
+        if canBlock {
+            Button("Remove and Block", role: .destructive) { block(t) }
+        }
         Button("Cancel", role: .cancel) {}
+    }
+    /// Out of the call and refused by this link for good (`callAdmin` block, as the sheet does).
+    private func block(_ t: CallTile) {
+        stage.removeCandidate = nil
+        let uid = t.uid
+        let name = t.name
+        guard !uid.isEmpty else { return }
+        Task { @MainActor in
+            if !(await service.block(uid)) { service.showToast("Couldn't block \(name). Try again.") }
+        }
     }
     /// The same server call the people sheet makes (`callAdmin` remove); the server checks my role.
     private func remove(_ t: CallTile) {
@@ -779,13 +798,18 @@ struct GroupCallView: View {
 
     // Share Screen, moved out of the "..." panel into the bar (Kasim 2026-10-22). Same rule as
     // that row had: once the room is up, never on a voice call link. Solid white while sharing.
+    // Controls audit 4-B5 (2026-10-23): from the tap until the broadcast starts (the system sheet is
+    // up) the button said "Share Screen", and a second tap quietly ended the pending share. Now it
+    // shows the pending state, half lit, and says that a tap cancels.
     private var shareButton: some View {
         let can = service.isActive && !service.cameraLocked
-        return ctrl(service.screenSharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle",
-                    active: service.screenSharing) { service.toggleScreenShare() }
-            .disabled(!can && !service.screenSharing)
-            .opacity(can || service.screenSharing ? 1 : 0.35)
-            .accessibilityLabel(service.screenSharing ? "Stop Sharing" : "Share Screen")
+        let pending = service.sharePending && !service.screenSharing
+        let on = service.screenSharing || pending
+        return ctrl(on ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle",
+                    active: on) { service.toggleScreenShare() }
+            .disabled(!can && !on)
+            .opacity(pending ? 0.6 : (can || on ? 1 : 0.35))
+            .accessibilityLabel(service.screenSharing ? "Stop Sharing" : pending ? "Cancel Sharing" : "Share Screen")
     }
 
     // Owner, 2026-10-06: raise hand and flip camera live in its panel (`GroupCallMoreMenu`). They

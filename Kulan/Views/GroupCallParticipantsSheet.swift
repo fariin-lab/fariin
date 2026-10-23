@@ -33,6 +33,8 @@ struct GroupCallParticipantsSheet: View {
     @State private var makingLink = false
     @State private var copied = false
     @State private var actionError: String?
+    /// A "Mute all" request is on its way (4-B1): the button waits for it.
+    @State private var mutingAll = false
     /// Link calls (owner 2026-10-23): everyone Add people rang, live from the server's invite list.
     @StateObject private var linkInvites = LinkCallInvites()
     /// The bell's own wait, per person: one nudge a minute (the server holds the same line).
@@ -104,12 +106,35 @@ struct GroupCallParticipantsSheet: View {
     /// "Ringing…".
     private func invited(at now: Date) -> [Row] {
         let here = Set(stage.tiles.map(\.uid))
+        if case .group(let cid)? = service.activeRoom { return groupInvited(cid: cid, here: here, at: now) }
         let ringing = Set(service.ringingMembers(at: now).map(\.uid))
         return service.members
             .filter { !here.contains($0.uid) && $0.uid != service.myUid }
             .map { m in
                 Row(id: m.uid, name: m.name, photoUrl: m.photoUrl, subtitle: absentNote(m.uid, ringing: ringing))
             }
+    }
+
+    /// Controls audit 4-B2 (2026-10-23): a call started in a group chat has no member list of its
+    /// own (`service.members` is for ad-hoc calls), so the sheet showed nobody under Invited while the
+    /// header said "Ringing…". Now: the people the service is ringing (`ringingMembers`, the server's
+    /// `rung` list once it lands), then whoever declined or was busy. Names and photos come from the
+    /// group itself. Ringing someone again from here needs a server "ring again" (not built).
+    private func groupInvited(cid: String, here: Set<String>, at now: Date) -> [Row] {
+        let me = service.myUid
+        let ringing = service.ringingMembers(at: now).filter { !here.contains($0.uid) && $0.uid != me }
+        var rows = ringing.map { Row(id: $0.uid, name: $0.name, photoUrl: $0.photoUrl, subtitle: "Ringing…") }
+        let answered = service.declinedUids.union(service.busyUids)
+            .subtracting(here).subtracting(ringing.map(\.uid))
+        guard !answered.isEmpty else { return rows }
+        let conv = ConversationsRepository.shared.conversations.first { $0.id == cid }
+        for uid in answered.sorted() where uid != me {
+            let name = conv?.names[uid].flatMap { $0.isEmpty ? nil : $0 } ?? "Member"
+            let photo = conv?.photos[uid].flatMap { $0.isEmpty ? nil : $0 }
+            rows.append(Row(id: uid, name: name, photoUrl: photo,
+                            subtitle: service.declinedUids.contains(uid) ? "Declined" : "Busy"))
+        }
+        return rows
     }
 
     /// Why an invited person is not in the call right now.
@@ -275,9 +300,10 @@ struct GroupCallParticipantsSheet: View {
                 Text(" · \(stage.inCallCount)")
                 Spacer()
                 if mutable.count > 1 {
-                    Button("Mute all") { for t in mutable { run(.mute, target: t.uid) } }
+                    Button("Mute all") { muteAll() }
                         .font(.subheadline.weight(.semibold))
                         .textCase(nil)
+                        .disabled(mutingAll)
                 }
             }
             .textCase(nil)
@@ -409,7 +435,9 @@ struct GroupCallParticipantsSheet: View {
         .safeAreaInset(edge: .bottom, spacing: 0) { endBar }
         // Alone in the call, the sheet says what is happening, as the reference's does.
         .navigationTitle(sheetTitle)
-        .task {
+        // Controls audit 4-B3 (2026-10-23): keyed on ownsLink. Opened while still connecting, the
+        // creator's role was not known yet, the load never ran, and the switch spun for ever.
+        .task(id: ownsLink) {
             guard ownsLink, let link, approval == nil else { return }
             await loadApproval(link)
             if await CallLinkService.shared.isRevoked(link) == true { service.noteLinkRevoked() }
@@ -663,6 +691,35 @@ struct GroupCallParticipantsSheet: View {
     /// The access table: never myself (any of my devices), and only the roles my role reaches.
     private func canModerate(_ t: CallTile) -> Bool {
         !t.isLocal && !t.uid.isEmpty && t.uid != service.myUid && service.myRole.canModerate(role(of: t))
+    }
+
+    /// Controls audit 4-B1 (2026-10-23): one `muteAll` request instead of one mute per person at
+    /// the same moment (past 30 people the rate limit refused the rest, each refusal overwriting the
+    /// last alert). A server from before `muteAll` says "Bad action"; then one at a time, stopping
+    /// at the first "too many".
+    private func muteAll() {
+        guard !mutingAll else { return }
+        let fallback = mutable.map(\.uid)
+        mutingAll = true
+        Task { @MainActor in
+            defer { mutingAll = false }
+            do {
+                try await service.muteAllOthers()
+            } catch let e as NSError where e.domain == FunctionsErrorDomain
+                        && e.code == FunctionsErrorCode.invalidArgument.rawValue {
+                var lastError: Error?
+                for uid in fallback {
+                    do { try await service.admin(.mute, target: uid) } catch {
+                        lastError = error
+                        let n = error as NSError
+                        if n.domain == FunctionsErrorDomain && n.code == FunctionsErrorCode.resourceExhausted.rawValue { break }
+                    }
+                }
+                if let lastError { actionError = Self.errorText(lastError) }
+            } catch {
+                actionError = Self.errorText(error)
+            }
+        }
     }
 
     private func run(_ action: CallAdminAction, target uid: String? = nil) {
@@ -1041,5 +1098,25 @@ final class LinkCallInvites: ObservableObject {
                 self.people[uid] = CallMember(uid: uid, name: p.name.isEmpty ? "User" : p.name, photoUrl: p.photoUrl)
             }
         }
+    }
+}
+
+/// Controls audit 4-B1 (2026-10-23): the server's `callAdmin` "muteAll" (mutes everyone I may mute,
+/// never me, in one request). `CallAdminAction` lives in GroupCallService.swift (another change's
+/// file this round) and has no case for it yet, so the request is built here, naming the room the
+/// same way `admin(_:target:)` does. Fold into `admin` once `CallAdminAction` gains `muteAll`.
+private extension GroupCallService {
+    func muteAllOthers() async throws {
+        guard let r = activeRoom else {
+            throw NSError(domain: FunctionsErrorDomain, code: FunctionsErrorCode.notFound.rawValue)
+        }
+        let target: [String: String]
+        switch r {
+        case .group(let cid): target = ["kind": "group", "id": cid]
+        case .adhoc(let id): target = ["kind": "adhoc", "id": id]
+        case .link(let roomId, _): target = ["kind": "link", "id": currentLink?.roomId ?? roomId]
+        }
+        let payload: [String: Any] = ["room": target, "action": "muteAll"]
+        _ = try await Functions.functions(region: "me-central1").httpsCallable("callAdmin").call(payload)
     }
 }

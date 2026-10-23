@@ -66,7 +66,10 @@ struct CallLinkRequestStack: View {
         .sheet(item: $details) { person in
             CallLinkRequestDetailsSheet(person: person) { approve in
                 details = nil
-                answer(person.uid, approve)
+                // Controls audit 4-B7 (2026-10-23): the gap guards a double tap landing on the NEXT
+                // card. This sheet shows one named person, so its answer always counts; inside the
+                // gap it used to be dropped while the sheet closed as if it had been made.
+                answer(person.uid, approve, guarded: false)
             }
         }
         .sheet(isPresented: $showAll) { CallLinkBulkRequestsSheet() }
@@ -107,9 +110,9 @@ struct CallLinkRequestStack: View {
     /// The next person's card comes in under the same finger, so a double tap on the green check
     /// would let in someone the creator has not seen yet. An answer this soon after the last one
     /// is dropped; the card stays, and a tap that was meant is simply made again.
-    private func answer(_ uid: String, _ approve: Bool) {
+    private func answer(_ uid: String, _ approve: Bool, guarded: Bool = true) {
         let now = Date()
-        guard now.timeIntervalSince(answeredAt) >= CallLinkAnswerButtons.minGap else { return }
+        guard !guarded || now.timeIntervalSince(answeredAt) >= CallLinkAnswerButtons.minGap else { return }
         answeredAt = now
         Task { await service.answerRequest(uid: uid, approve: approve) }
     }

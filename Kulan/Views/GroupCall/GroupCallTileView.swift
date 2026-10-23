@@ -322,7 +322,10 @@ struct CallRaisedHandChip: View {
 /// The long-press menu on a remote tile (owner, 2026-10-06): the name as its title, Pin / Unpin,
 /// and for someone the people list would let me act on, Mute and Remove…. The lifted preview is the
 /// person's camera-off look, not the tile: a snapshot of a live video layer can come out black.
-private struct CallTileMenuModifier: ViewModifier {
+/// Controls audit 4-B4 (2026-10-23): no longer private, so the two-person screen (GroupCallDuoView,
+/// which has no long-press menu yet) can put the same menu on its big remote view with
+/// `.callTileMenu(tile, stage.tileMenu(for: tile))`.
+struct CallTileMenuModifier: ViewModifier {
     let tile: CallTile
     let menu: CallTileMenu?
 
@@ -337,6 +340,13 @@ private struct CallTileMenuModifier: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+extension View {
+    /// The remote tile's long-press menu (Pin / Mute / Remove…) on any view showing that person.
+    func callTileMenu(_ tile: CallTile, _ menu: CallTileMenu?) -> some View {
+        modifier(CallTileMenuModifier(tile: tile, menu: menu))
     }
 }
 
