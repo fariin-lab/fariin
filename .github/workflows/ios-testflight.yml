@@ -74,7 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: STICKER CRASH + CUT STICKERS, GROUP SEARCH BACK SWIPE, VOICE DRAFT.
+            THIS BUILD: SMOOTH STICKERS, GROUP STORIES, PUBLIC GROUP LINKS, GROUP CALL SCREEN.
+            Stickers: a new player draws animated stickers off the main thread (the reference app's way). Sending or scrolling stickers should no longer lag.
+            Group stories: "New Group Story" in + New (Share Story sheet and Settings > Stories) and a + on the group page; the last sheet says "Post story as <group>". Members see one ring for the group. Replies go to the group's thread on the story: the poster sees Views and Replies in the viewers sheet, members get a Replies button. Owner switch: Group Settings > Permissions > "Allow Admins to Add Story". (Server rules not deployed yet, so replies and 1000+ member groups wait for the deploy.)
+            Public group link: opens the group's chat with a Join Group pill at the bottom; a group you are in slides in from the right. Old groups still show "join to view" until their encryption is switched off.
+            Group call: the invitation is a new screen with faces in a circle, Mute, "X is ringing you", Ignore and Join.
+            Also: voice draft no longer closes when you drag the waveform; Next with several story pictures no longer flips through them; attach gallery month pill is glass and can be held and dragged to scroll (full sheet only); Chat Key bar no longer flashes the wrong text; bold sender name in group rows; "📹 X is sharing video. Tap to view." banner with sound; Post as Fariin can choose All users, New users or Countries (needs the server deploy).
+            PLEASE TEST: send and scroll stickers; post a group story and reply to it from another phone; tap a public group link; get added to a group call; record a voice note, pause, drag the waveform.
+
+            EARLIER (1010): STICKER CRASH + CUT STICKERS, GROUP SEARCH BACK SWIPE, VOICE DRAFT.
             Stickers: back to the older player. 1009 crashed and showed stickers cut to a corner; both gone. Scrolling may lag a little again until the new player lands.
             Group from search: the join page opens like a chat; swipe back returns to the list, no tab bar on it.
             Voice draft: Play starts at once after a pause; dragging the waveform seeks instead of closing the draft.
