@@ -162,6 +162,8 @@ final class ChatComposerView: UIView {
     private let fieldRow = UIView()
     private let textView = ComposerTextView()
     private let gifButton = IconButton(image: UIImage(named: "ic_gif"), size: CGSize(width: 24, height: 24))
+    /// Stickers are off for me here: the sticker slot is empty and the camera takes it.
+    private var stickerSlotEmpty = false
     /// ⛔ THE CAMERA LIVES IN THE FIELD — owner 2026-10-15: "remove Camera from the attach sheet,
     /// show the camera in the input bar". Beside the GIF, the same dimmed ink, shown when the GIF is.
     /// His own camera drawing (owner 2026-10-15, SVG), drawn like the GIF icon beside it.
@@ -838,6 +840,9 @@ final class ChatComposerView: UIView {
         let fieldIcons: CGFloat = (!s.recordingActive && !s.hasText && !s.textOnly) ? 1 : 0
         gifButton.alpha = s.stickersOff ? 0 : fieldIcons
         gifButton.isUserInteractionEnabled = !s.stickersOff
+        // Owner 2026-10-23: with stickers off the camera moves into the sticker's slot instead of
+        // leaving a hole at the end of the field. Laid out again only when that changes.
+        if stickerSlotEmpty != s.stickersOff { stickerSlotEmpty = s.stickersOff; setNeedsLayout() }
         // Gone while the sticker panel is up (owner 2026-10-18), back when it closes.
         cameraButton.alpha = stickerPanelUp ? 0 : fieldIcons
         // The mic sits ABOVE the pill now, so it must go when the locked strip takes the pill (the "1"
@@ -1190,8 +1195,8 @@ final class ChatComposerView: UIView {
         // The GIF is the pill's last slot now that the mic has left it.
         gifButton.frame = CGRect(x: pw - M.micTrailing - M.button, y: fh - M.button,
                                  width: M.button, height: M.button)
-        cameraButton.frame = CGRect(x: gifButton.frame.minX - M.fieldIconPitch, y: fh - M.button,
-                                    width: M.button, height: M.button)
+        cameraButton.frame = CGRect(x: stickerSlotEmpty ? gifButton.frame.minX : gifButton.frame.minX - M.fieldIconPitch,
+                                    y: fh - M.button, width: M.button, height: M.button)
         textView.frame = CGRect(x: 0, y: 0, width: max(0, tw), height: fh)
         let fit = ceil(textView.sizeThatFits(CGSize(width: max(1, tw), height: .greatestFiniteMagnitude)).height)
         // ⛔ A PASTE PAST THE LAST LINE — owner 2026-10-15: pasting a long link, the text ran off the
