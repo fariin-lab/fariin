@@ -1974,6 +1974,9 @@ final class MessageRowView: UIView {
         // (`liftTarget`), so its transform is put back here as well, not only the bubble box's.
         noticeView?.transform = .identity
         callView?.transform = .identity
+        // 2026-10-23: the name, mark, role tag and forwarded line now ride a reply swipe with the
+        // bubble, so they are put back too (a recycled row must not start shifted).
+        [senderLabel, verifiedView, roleChipView, forwardedLabel, forwardedIcon].forEach { $0?.transform = .identity }
         // Owner audit 2026-10-06 chat #78: the reset above covers the box, not its children. A
         // reaction's animations on the fill, chips, body and the chrome above the box kept running
         // for up to 0.4s on the next row drawn here, morphing it from the old row's geometry.

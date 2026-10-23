@@ -5644,7 +5644,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             let tx = -eased
             // Move the BUBBLE VIEW inside the cell, NOT the cell: the cell's frame never changes, so the
             // collection view has nothing to react to and the neighbours stay frozen.
-            (cell as? MessageRowCell)?.previewBubble.transform = CGAffineTransform(translationX: tx, y: 0)
+            let shift = CGAffineTransform(translationX: tx, y: 0)
+            (cell as? MessageRowCell)?.previewBubble.transform = shift
+            // The sender's name, mark, role tag and forwarded line are drawn by the row beside the
+            // bubble, not inside it, so they ride the same shift (owner 2026-10-23: "name and tag
+            // are not following the bubble").
+            (cell as? MessageRowCell)?.liftOverlays.forEach { $0.transform = shift }
             let progress = min(1, eased / Self.swipeThreshold)
             swipeArrow?.alpha = progress
             swipeArrow?.transform = CGAffineTransform(scaleX: 0.6 + 0.4 * progress, y: 0.6 + 0.4 * progress)
@@ -5700,7 +5705,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // is also reached from `didEndDisplaying`, inside a layout pass.
         DispatchQueue.main.async { [weak self] in self?.releaseParkedNewestJump() }
         let bubble = (cell as? MessageRowCell)?.previewBubble
-        let reset = { bubble?.transform = .identity; arrow?.alpha = 0 }
+        let riders = (cell as? MessageRowCell)?.liftOverlays ?? []
+        let reset = { bubble?.transform = .identity; riders.forEach { $0.transform = .identity }; arrow?.alpha = 0 }
         if animated {
             // ⛔ A PLAIN 0.2s EASE, NO SPRING AND NO VELOCITY HAND-OFF. Theirs is exactly:
             //
