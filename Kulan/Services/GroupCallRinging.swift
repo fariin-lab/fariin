@@ -344,7 +344,8 @@ final class GroupCallRinging {
 
     /// Join on the in-app invitation. The CallKit ring for the same room stops, and the call runs
     /// as every call joined inside the app does (no CallKit call, the SDK's own audio handling).
-    func acceptFromScreen(_ invite: AdhocInvite) {
+    func acceptFromScreen(_ invite: AdhocInvite, muted: Bool = false) {
+        if muted { GroupCallService.shared.prepareMutedJoin() }
         if let r = ring, r.roomId == invite.roomId, phase == .ringing {
             stopWatchingRoom()
             ring = nil

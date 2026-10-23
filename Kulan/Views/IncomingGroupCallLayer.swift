@@ -142,58 +142,115 @@ private struct LobbyCoverContent: View {
     }
 }
 
-/// The invitation itself: who is calling, and Decline / Join.
+/// The invitation itself — owner 2026-10-23, with the reference (whatsapp) group-call ring screen:
+/// the call's name and "Group call" at the top, the faces in one round cluster in the middle, a Mute
+/// pill (join with the mic off), and at the foot one card: "<starter> is ringing you" with the faces
+/// small beside it, then Ignore and a green Join.
 private struct IncomingGroupCallScreen: View {
     let invite: AdhocInvite
-    @ObservedObject private var service = GroupCallService.shared
+    @State private var muted = false
+
+    private var starter: CallMember? { invite.others.first }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            VStack(spacing: 14) {
-                Spacer()
-                avatars
-                Text(invite.title).font(.title2.weight(.semibold)).foregroundStyle(.white)
-                    .multilineTextAlignment(.center).lineLimit(2)
-                    .padding(.horizontal, 24)
-                Text(invite.video ? "Kulan video call" : "Kulan voice call")
-                    .font(.subheadline).foregroundStyle(.white.opacity(0.7))
-                Spacer()
-                HStack {
-                    // owner, 2026-10-06: both go through GroupCallRinging, so the system ring for the
-                    // same call stops with them and a decline reaches the caller.
-                    button("Decline", icon: "phone.down.fill", tint: Color(.systemRed)) {
-                        GroupCallRinging.shared.declineFromScreen(invite)
-                    }
-                    Spacer()
-                    button("Join", icon: invite.video ? "video.fill" : "phone.fill",
-                           tint: Color(.systemGreen)) { GroupCallRinging.shared.acceptFromScreen(invite) }
+            VStack(spacing: 0) {
+                VStack(spacing: 6) {
+                    Text(invite.title).font(.title3.weight(.semibold)).foregroundStyle(.white)
+                        .multilineTextAlignment(.center).lineLimit(2)
+                        .padding(.horizontal, 24)
+                    Label(invite.video ? "Group video call" : "Group call",
+                          systemImage: invite.video ? "video" : "phone")
+                        .font(.subheadline).foregroundStyle(.white.opacity(0.6))
                 }
-                .padding(.horizontal, 48).padding(.bottom, 40)
+                .padding(.top, 24)
+                Spacer()
+                FaceCluster(members: Array(invite.others.prefix(4)))
+                Spacer()
+                Button {
+                    muted.toggle()
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                } label: {
+                    Label("Mute", systemImage: muted ? "mic.slash.fill" : "mic.slash")
+                        .font(.headline).foregroundStyle(muted ? .black : .white)
+                        .padding(.horizontal, 20).frame(height: 48)
+                        .background(Capsule().fill(muted ? Color.white : Color.white.opacity(0.08)))
+                        .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 24)
+                ringingCard
+                    .padding(.horizontal, 16).padding(.bottom, 12)
             }
         }
         .environment(\.colorScheme, .dark)
     }
 
-    /// Up to three faces, overlapping, the starter in front.
-    private var avatars: some View {
-        let shown = Array(invite.others.prefix(3))
-        return HStack(spacing: -28) {
-            ForEach(Array(shown.enumerated()), id: \.element.uid) { i, m in
-                AvatarView(name: m.name, photoUrl: m.photoUrl, size: 96)
-                    .overlay(Circle().stroke(Color.black, lineWidth: 3))
-                    .zIndex(Double(shown.count - i))
+    private var ringingCard: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Circle().fill(Color(.systemGreen)).frame(width: 8, height: 8)
+                Text("\(starter?.name ?? "Someone") is ringing you")
+                    .font(.body).foregroundStyle(.white).lineLimit(1)
+                Spacer(minLength: 8)
+                HStack(spacing: -10) {
+                    ForEach(Array(invite.others.prefix(3).enumerated()), id: \.element.uid) { i, m in
+                        AvatarView(name: m.name, photoUrl: m.photoUrl, size: 30)
+                            .overlay(Circle().stroke(Color(white: 0.11), lineWidth: 2))
+                            .zIndex(Double(3 - i))
+                    }
+                }
+            }
+            .padding(.horizontal, 20).frame(height: 64)
+            Divider().overlay(Color.white.opacity(0.12))
+            HStack(spacing: 12) {
+                // owner, 2026-10-06: both go through GroupCallRinging, so the system ring for the
+                // same call stops with them and a decline reaches the caller.
+                Button { GroupCallRinging.shared.declineFromScreen(invite) } label: {
+                    Text("Ignore").font(.headline).foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).frame(height: 54)
+                        .background(Capsule().fill(Color.black))
+                        .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
+                }
+                Button { GroupCallRinging.shared.acceptFromScreen(invite, muted: muted) } label: {
+                    Text("Join").font(.headline).foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).frame(height: 54)
+                        .background(Capsule().fill(Color(.systemGreen)))
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(16)
+        }
+        .background(RoundedRectangle(cornerRadius: 30, style: .continuous).fill(Color(white: 0.11)))
+    }
+}
+
+/// Up to four faces packed in one round plate, the reference's layout: the starter large at the
+/// upper left, the rest smaller around it. One face alone fills the middle.
+private struct FaceCluster: View {
+    let members: [CallMember]
+    private let plate: CGFloat = 270
+
+    var body: some View {
+        ZStack {
+            Circle().fill(Color.white.opacity(0.08)).frame(width: plate, height: plate)
+            ForEach(Array(members.enumerated()), id: \.element.uid) { i, m in
+                let spot = Self.spots(members.count)[i]
+                AvatarView(name: m.name, photoUrl: m.photoUrl, size: spot.size)
+                    .offset(x: spot.x, y: spot.y)
             }
         }
+        .frame(width: plate, height: plate)
     }
 
-    private func button(_ label: String, icon: String, tint: Color, action: @escaping () -> Void) -> some View {
-        VStack(spacing: 8) {
-            Button(action: action) {
-                Image(systemName: icon).font(.system(size: 26, weight: .semibold)).foregroundStyle(.white)
-                    .frame(width: 72, height: 72).background(tint, in: Circle())
-            }
-            Text(label).font(.footnote).foregroundStyle(.white)
+    /// Centre offsets and sizes, inside a 270pt plate.
+    private static func spots(_ n: Int) -> [(x: CGFloat, y: CGFloat, size: CGFloat)] {
+        switch n {
+        case 1: return [(0, 0, 150)]
+        case 2: return [(-38, -20, 124), (62, 52, 92)]
+        case 3: return [(-38, -38, 124), (74, 0, 84), (-6, 82, 76)]
+        default: return [(-40, -40, 120), (66, -66, 52), (76, 22, 84), (-8, 86, 72)]
         }
     }
 }

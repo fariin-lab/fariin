@@ -2612,6 +2612,13 @@ final class GroupCallService: ObservableObject {
         incomingInvite = nil
     }
 
+    /// The invitation's Mute pill (owner 2026-10-23): the join goes out with the mic off, the same
+    /// wish a Mute tapped while connecting leaves (`startMuted`).
+    func prepareMutedJoin() {
+        startMuted = true
+        micOn = false
+    }
+
     func acceptInvite() {
         guard let i = incomingInvite else { return }
         incomingInvite = nil
