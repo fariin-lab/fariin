@@ -1295,6 +1295,12 @@ struct ThreadView: View {
             } else if let guest {
                 // owner 2026-10-21: a public group seen from outside, Join where the composer goes.
                 PublicJoinBar(guest: guest).transition(.opacity)
+                    // No composer reports a lift here, so the floating arrow sat where a composer
+                    // would be, far above the Join bar (owner 2026-10-23). The bar's own top is it.
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
+                        let h = UIScreen.main.bounds.height
+                        if top > 0, top < h { composerLift = h - top }
+                    }
             } else if selecting {
                 selectionActionBar.transition(.opacity)
             } else if searchActive {
@@ -4687,7 +4693,7 @@ struct ThreadView: View {
             // How far the composer stands above the keyboard and its side inset, measured where it
             // is placed. The floating overlays sit on those instead of on the bottom safe area,
             // which no longer contains the bar. See `onComposerGeometry` in the controller.
-            onComposerGeometry: { lift, side in composerLift = lift; composerSide = side },
+            onComposerGeometry: { lift, side in if guest == nil { composerLift = lift }; composerSide = side },
             onJumpButtonVisibility: { showJumpButton = $0 },
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,

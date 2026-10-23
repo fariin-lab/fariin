@@ -62,7 +62,14 @@ struct PublicGroupSheet: View {
            let readable = GroupDirectory.cachedPeek(p.cid) {
             _preview = State(initialValue: p)
             _guest = State(initialValue: PublicGroupGuest(p, readable: readable))
+            if readable { Self.prefetchMedia(p.cid) }
         }
+    }
+
+    /// The info page's media, fetched as the guest chat opens so the page has it on its first frame.
+    static func prefetchMedia(_ cid: String) {
+        guard ChatService.cachedSharedMedia(cid) == nil else { return }
+        Task { _ = await ChatService.sharedMedia(cid) }
     }
 
     // owner 2026-10-21: the chat itself when the group can be read from outside (see the top note),
@@ -274,7 +281,10 @@ struct PublicGroupSheet: View {
             if guest == nil {
                 await afterPush()
                 guard !Task.isCancelled else { return }
-                if guest == nil { guest = PublicGroupGuest(p, readable: readable) }
+                if guest == nil {
+                    guest = PublicGroupGuest(p, readable: readable)
+                    if readable { Self.prefetchMedia(p.cid) }
+                }
             }
             preview = p
         case .refused(let why):
@@ -452,8 +462,22 @@ struct PublicGroupInfoView: View {
     // ⛔ THE WHOLE PAGE FROM OUTSIDE (owner 2026-10-23, asked many times): a visitor sees what a
     // member sees, the members and the shared media, as the reference app shows a public group.
     // Only sending needs Join, at the chat's foot.
-    @State private var media: [Message] = []
+    @State private var media: [Message]
+    /// The media read has answered (an empty answer then hides the card).
+    @State private var mediaLoaded: Bool
     @State private var allMembers = false
+    /// "Join the group to …" for a circle a visitor cannot use yet.
+    @State private var joinNotice: String?
+
+    init(guest: PublicGroupGuest) {
+        self.guest = guest
+        // ⛔ ON THE FIRST FRAME (owner 2026-10-23: "the media bar comes late"). The guest chat
+        // fetches it when it opens (`PublicGroupSheet.prefetchMedia`), so it is usually here already;
+        // otherwise placeholder tiles hold its place so nothing moves when it lands.
+        let cached = ChatService.cachedSharedMedia(guest.preview.cid)
+        _media = State(initialValue: cached ?? [])
+        _mediaLoaded = State(initialValue: cached != nil)
+    }
     @State private var viewerImage: Message?
     @State private var viewerVideo: Message?
     @State private var profile: PublicGroupMember?
@@ -472,6 +496,7 @@ struct PublicGroupInfoView: View {
                 Text(GroupDirectory.membersLine(p.memberCount))
                     .font(.system(size: 16)).foregroundStyle(Color(hex: 0x8E8E93))
                     .padding(.top, 4)
+                actionsRow.padding(.top, 16)
                 if !p.description.isEmpty {
                     Text(GroupInfoView.blueLinks(p.description))
                         .font(.subheadline)
@@ -487,8 +512,8 @@ struct PublicGroupInfoView: View {
                         .padding(.horizontal, 16)
                         .padding(.top, 24)
                 }
-                if guest.readable, !media.isEmpty {
-                    ProfileMediaCard(cid: p.cid, media: media,
+                if guest.readable, !(mediaLoaded && media.isEmpty) {
+                    ProfileMediaCard(cid: p.cid, media: media, hint: mediaLoaded ? 0 : 4,
                                      onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
                                      onSeeAll: {})
                         .padding(.horizontal, 16)
@@ -503,7 +528,16 @@ struct PublicGroupInfoView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         // No Join here: the reference app's info page has none (its only Join is the chat's foot).
-        .task { if guest.readable, let m = await ChatService.sharedMedia(p.cid) { media = m } }
+        .task {
+            guard guest.readable else { return }
+            let m = await ChatService.sharedMedia(p.cid)
+            media = m ?? media
+            mediaLoaded = true
+        }
+        .alert(joinNotice ?? "", isPresented: Binding(get: { joinNotice != nil },
+                                                      set: { if !$0 { joinNotice = nil } })) {
+            Button("OK", role: .cancel) {}
+        }
         .fullScreenCover(item: $viewerImage) { msg in
             ImageViewerView(message: msg, cid: p.cid, rectScope: .profile)
         }
@@ -516,6 +550,36 @@ struct PublicGroupInfoView: View {
                                 photoUrl: m.photoUrl, source: .story)
             }
         }
+    }
+
+    /// The member page's circles, the same five in the same place (owner 2026-10-23: "the full group
+    /// profile"). What needs membership says so instead of being missing; Share works for anyone.
+    private var actionsRow: some View {
+        HStack(spacing: 0) {
+            Button { joinNotice = "Join the group to start a call." } label: { circle("phone.fill", "Voice") }
+                .opacity(0.45).accessibilityLabel("Voice Call")
+            Button { joinNotice = "Join the group to start a call." } label: { circle("video.fill", "Video") }
+                .opacity(0.45).accessibilityLabel("Video Call")
+            Button { joinNotice = "Join the group to get its notifications." } label: { circle("ic_bell_off", "Mute") }
+                .opacity(0.45).accessibilityLabel("Mute")
+            Button { joinNotice = "Join the group to search its messages." } label: { circle("magnifyingglass", "Search") }
+                .opacity(0.45).accessibilityLabel("Search")
+            Menu {
+                if !p.username.isEmpty, let url = URL(string: "https://fariin.com/\(p.username)") {
+                    ShareLink(item: url) { Label("Share Group", systemImage: "square.and.arrow.up") }
+                    Button { UIPasteboard.general.string = url.absoluteString } label: {
+                        Label("Copy Link", systemImage: "doc.on.doc")
+                    }
+                }
+            } label: { circle("ellipsis", "More") }
+                .accessibilityLabel("More")
+        }
+        .tint(.primary)
+        .padding(.horizontal, 12)
+    }
+
+    private func circle(_ icon: String, _ label: String) -> some View {
+        PosterActionIcon(icon: icon, onPhoto: false, label: label)
     }
 
     /// The members, owner and admins first, six shown and the rest behind Show All.
