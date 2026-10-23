@@ -1239,7 +1239,9 @@ struct ThreadView: View {
                                 .padding(.horizontal, 5).padding(.vertical, 1)
                                 // Fixed brand blue — Color.accentColor is WHITE in dark mode, so a white
                                 // number on it was invisible (the reported "can't see the count" bug).
-                                .background(Theme.defaultBubble(dark), in: Capsule())
+                                // Owner 2026-10-23: Liquid Glass, tinted with that same blue, like
+                                // the arrow it sits on (was a flat blue capsule).
+                                .liquidGlass(Capsule(), tint: Theme.defaultBubble(dark))
                                 .offset(y: -9)
                         }
                     }
