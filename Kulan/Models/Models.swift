@@ -755,7 +755,18 @@ struct Message: Identifiable, Equatable, Codable {
         // Keys a member released to this group for its old sealed items (owner 2026-10-23, server-
         // written `rk`). Taken FIRST, so every decrypt below can use them. Groups only (Crypto).
         let freshKeys = crypto.noteReleased(cid: cid, rk: data["rk"])
-        self.text = crypto.decrypt(data["text"] as? String ?? "", cid: cid, authorId: data["authorId"] as? String ?? "")
+        let rawText = data["text"] as? String ?? ""
+        let decrypted = crypto.decrypt(rawText, cid: cid, authorId: data["authorId"] as? String ?? "")
+        // 1:1 hardening (owner 2026-10-23): a person's message in a 1:1 is always sealed ("enc1:").
+        // One stored in the clear was shown as if it were end-to-end encrypted; it is not shown as
+        // such any more. System and call lines are plain on purpose and keep their text.
+        let personTypes: Set<String> = ["text", "image", "video", "audio", "file", "album", "gif"]
+        if cid.contains("_"), !rawText.isEmpty, !rawText.hasPrefix("enc1:"), !rawText.hasPrefix("enc:"),
+           personTypes.contains(data["type"] as? String ?? "text") {
+            self.text = "This message wasn't encrypted and can't be shown."
+        } else {
+            self.text = decrypted
+        }
         self.notForMe = crypto.groupEnvelopeSkipsMe(data["text"] as? String ?? "", cid: cid)
         self.type = data["type"] as? String
         self.imageUrl = data["imageUrl"] as? String

@@ -576,7 +576,9 @@ enum MediaFetch {
     /// Decrypt a downloaded file with the conversation's key (or pass legacy plaintext through).
     static func clearBytes(_ file: URL, enc: EncMeta?, cid: String) async -> Data? {
         guard let cipher = try? Data(contentsOf: file, options: .mappedIfSafe) else { return nil }
-        guard let enc else { return cipher }
+        // 1:1 hardening (owner 2026-10-23): a 1:1 file always carries its seal; one without `enc`
+        // would show as if it were end-to-end encrypted, so it is refused. Groups keep plain files.
+        guard let enc else { return cid.contains("_") ? nil : cipher }
         return await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: enc)
     }
 
