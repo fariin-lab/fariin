@@ -1316,7 +1316,11 @@ struct ThreadView: View {
             } else if requestStance == .awaitingReply && !keyAccepted {
                 awaitingReplyBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if cannotMessageThem && !keyAccepted {
-                cannotMessageBar.transition(.opacity.combined(with: .move(edge: .bottom)))
+                if otherKeyResolved || !MsgPolicy.shared.chatKeyVisible {
+                    cannotMessageBar.transition(.opacity.combined(with: .move(edge: .bottom)))
+                } else {
+                    EmptyView()
+                }
             } else if newPersonUnanswered {
                 newPersonComposer.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else {
@@ -2244,9 +2248,13 @@ struct ThreadView: View {
         // Owner decision 2026-10-10: ask the server once per chat whether they have a Chat Key (a
         // cached answer paints at once). 1:1 only; a group has no key.
         .task(id: cid) {
-            guard !isGroup, !otherUid.isEmpty else { otherKeyKnown = false; return }
-            otherKeyKnown = ChatPin.cachedKeyExists(uid: otherUid) ?? false
+            guard !isGroup, !otherUid.isEmpty else { otherKeyKnown = false; otherKeyResolved = true; return }
+            if let cached = ChatPin.cachedKeyExists(uid: otherUid) {
+                otherKeyKnown = cached
+                otherKeyResolved = true
+            }
             otherKeyKnown = await ChatPin.keyExists(uid: otherUid) ?? false
+            otherKeyResolved = true
         }
         .onChange(of: requestStance) { old, new in
             // ⛔ THE KEYBOARD GOES WITH THE COMPOSER — owner, 2026-09-25: after the first message the
@@ -3147,6 +3155,9 @@ struct ThreadView: View {
     /// Owner decision 2026-10-10: they HAVE a Chat Key (server `chatKeyExists`). Only then is "Use
     /// Chat Key" offered anywhere in this chat; false until the server says yes.
     @State private var otherKeyKnown = false
+    /// Whether the Chat Key answer is in (cache or server). Until it is, the can't-message bar
+    /// waits rather than showing the no-key words and then swapping (owner 2026-10-23).
+    @State private var otherKeyResolved = false
     /// owner 2026-10-18: and the admin panel has not hidden the Chat Key (MsgPolicy). Every "Use Chat
     /// Key" door in this chat reads this one value, so hiding the key closes all of them at once.
     private var otherHasKey: Bool { otherKeyKnown && MsgPolicy.shared.chatKeyVisible }

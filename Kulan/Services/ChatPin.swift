@@ -229,7 +229,12 @@ enum ChatPin {
     /// false from the server (`chatKeyExists`); nil when it could not answer (offline, old server),
     /// which callers treat as "no key", so the option never shows on a guess. Cached per person for
     /// this launch; a later true is never downgraded by a failed refresh.
-    @MainActor private static var keyExistsCache: [String: Bool] = [:]
+    /// Kept on the phone too (owner 2026-10-23: the first open of a chat showed the no-key bar, then
+    /// swapped to the Chat Key one), so a later open paints the right bar at once.
+    @MainActor private static var keyExistsCache: [String: Bool] =
+        UserDefaults.standard.dictionary(forKey: "chatKeyExists.v1") as? [String: Bool] ?? [:] {
+        didSet { UserDefaults.standard.set(keyExistsCache, forKey: "chatKeyExists.v1") }
+    }
 
     @MainActor
     static func cachedKeyExists(uid: String) -> Bool? { keyExistsCache[uid] }
