@@ -568,8 +568,11 @@ struct ChatEncryptionSheet: View {
               line: "Messages, photos and files travel over an encrypted connection to our servers."),
         .init(icon: "person.2.fill", title: "Kept for the members",
               line: "On our servers, access rules let only the people in this group read its messages."),
-        .init(icon: "clock.arrow.circlepath", title: "Older messages",
-              line: "Messages sent before this change stay end-to-end encrypted."),
+        // 2026-10-23 (owner): members read the group's history, the ones who join later too, as the
+        // reference app's cloud groups do. Old sealed messages open once a member who could read
+        // them has opened the group; one that nobody left in the group can open stays locked.
+        .init(icon: "clock.arrow.circlepath", title: "Group history",
+              line: "Members can see messages sent before they joined, unless the admins hid the history. Older encrypted messages open once someone who could read them opens the group."),
         .init(icon: "lock.fill", title: "Your one-to-one chats",
               line: "Still end-to-end encrypted. Only you and the other person can read them."),
         // No calls row and no stories row: neither is end-to-end encrypted (2026-10-18/19).
@@ -596,7 +599,7 @@ struct ChatEncryptionSheet: View {
                     .font(.system(size: 28, weight: .bold))
                     .multilineTextAlignment(.center)
                     .padding(.top, 22)
-                Text("Group messages are protected in transit and on our servers, but they are not end-to-end encrypted. That means Fariin's servers can read them.")
+                Text("Messages in this group are not end-to-end encrypted. They are protected in transit and on our servers, and Fariin's servers can read them.")
                     .font(.system(size: 17))
                     .foregroundStyle(.primary.opacity(0.78))
                     .multilineTextAlignment(.center)

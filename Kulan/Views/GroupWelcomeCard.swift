@@ -83,10 +83,8 @@ struct GroupWelcomeCard: View {
             }
 
             Button { if let u = URL(string: "https://fariin.com/safety") { WebLink.open(u) } } label: {
-                // 2026-10-19 groups v2: a group that switched is not end-to-end encrypted; say so.
-                ((conv.e2eeOff
-                 ? Text("\(Image(systemName: "shield.fill")) Group messages are protected in transit and on our servers. They are not end-to-end encrypted. ")
-                 : Text("\(Image(systemName: "lock.fill")) Only the people in this group can read its messages. "))
+                // Groups are not end-to-end encrypted (owner 2026-10-19 / 2026-10-23), switched or not yet.
+                (Text("\(Image(systemName: "shield.fill")) Messages in this group are not end-to-end encrypted. They are protected in transit and on our servers. ")
                  + Text("Learn more").foregroundStyle(Theme.defaultBubble(dark)))
                     .font(.caption).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
