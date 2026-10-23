@@ -23,6 +23,18 @@ import UIKit
         o.isNetworkAccessAllowed = true
         return o
     }()
+    /// While the month pill is held and dragged (owner 2026-10-23, "lag and grey tiles"): a tile asks
+    /// for one small picture, about its own size at 1x, in the fast format Photos keeps ready. It
+    /// is swapped for the normal thumbnail when the finger lets go. No network: a fling past a
+    /// thousand photos must never start a thousand iCloud downloads.
+    static let fastSize = CGSize(width: 128, height: 128)
+    static let fastOptions: PHImageRequestOptions = {
+        let o = PHImageRequestOptions()
+        o.deliveryMode = .fastFormat
+        o.resizeMode = .fast
+        o.isNetworkAccessAllowed = false
+        return o
+    }()
     /// ⛔ THE THUMBNAILS THIS SHEET HAS ALREADY DRAWN, kept in memory by asset id — owner, 2026-09-29,
     /// pulling the full sheet down: rows of the grid went blank-white and filled in again. Resizing the
     /// sheet makes SwiftUI rebuild the grid's cells, and a rebuilt `RecentThumb` starts with no image
@@ -473,7 +485,7 @@ struct AttachRecentsStrip: View {
                 }
                 .onScrollPhaseChange { _, phase in monthPill.scrolling(phase.isScrolling) }
                 .overlay(alignment: .topTrailing) {
-                    AttachMonthPill(model: monthPill, enabled: sheetFull) { y in gridPosition.scrollTo(y: y) }
+                    AttachMonthPill(model: monthPill, enabled: sheetFull) { y in jumpGrid(to: y) }
                 }
         }
     }
@@ -518,7 +530,7 @@ struct AttachRecentsStrip: View {
                         // Tap the PHOTO → single editor when nothing is selected; if a selection is active,
                         // open the multi-image approval (paging) of the selected set instead. Tap the
                         // CHECKBOX → (de)select. Separate, never conflict.
-                        RecentThumb(asset: a, selectionNumber: selectionIndex(a),
+                        RecentThumb(asset: a, pill: monthPill, selectionNumber: selectionIndex(a),
                                     // Always — see `RecentThumb.selectionActive`. He could not find
                                     // the checkbox when it only appeared after the first tick.
                                     selectionActive: true,
@@ -536,6 +548,8 @@ struct AttachRecentsStrip: View {
             }
             // ⛔ NO SIDE MARGIN AND NO TOP GAP — see `tileGap`. The photographs reach all four
             // edges of the sheet; the only curve is the one the presentation cuts for itself.
+            // The grid's own UIScrollView, so the pill drag can move it directly (see `jumpGrid`).
+            .background { AttachScrollFinder { monthPill.scrollView = $0 } }
         }
         // The region a tile may be drawn in while the editor flies out of it or back into it.
         .scrollPosition($gridPosition)
@@ -721,6 +735,57 @@ struct AttachRecentsStrip: View {
         guard let res = fetchResult, loadedCount < res.count, assets.count >= 30 else { return }
         let tail = assets.suffix(15)
         if tail.contains(where: { $0.localIdentifier == a.localIdentifier }) { appendNextPage() }
+    }
+
+    /// ⛔ THE PILL DRAG MOVES THE SCROLL VIEW ITSELF — owner 2026-10-23, build 1015: holding the
+    /// month pill and dragging fast lagged and left the tiles grey. Each finger move used to write
+    /// `gridPosition`, a `@State` of this whole sheet, so every touch event (up to 120 a second)
+    /// re-ran this body and the grid's ForEach before SwiftUI moved anything. The reference app
+    /// sets the grid's content offset directly, at most every 50 ms; so does this now
+    /// (`AttachMonthPillModel.scroll`). `gridPosition` stays only as the fallback if the scroll
+    /// view was not found.
+    ///
+    /// The drag maps onto the WHOLE library, but photos are paged in 200 at a time as the tail
+    /// appears, so a jump past the loaded rows used to land on the end of the loaded part and page
+    /// in one batch per frame on the way. Now the rows the jump needs are paged in at once, with a
+    /// page to spare, and the offset is applied after SwiftUI has grown the grid for them.
+    private func jumpGrid(to top: CGFloat) {
+        if ensureLoaded(throughTop: top) {
+            DispatchQueue.main.async { setGridTop(top) }
+        } else {
+            setGridTop(top)
+        }
+    }
+
+    private func setGridTop(_ top: CGFloat) {
+        if let sv = monthPill.scrollView {
+            sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: top - sv.adjustedContentInset.top),
+                                animated: false)
+        } else {
+            gridPosition.scrollTo(y: top)
+        }
+    }
+
+    /// Page in every photo down to the bottom of the screen at `top`, plus one page. One append,
+    /// no thumbnail precache (the pill drag asks for small fast thumbnails on its own).
+    /// Returns whether anything was added.
+    private func ensureLoaded(throughTop top: CGFloat) -> Bool {
+        guard let res = fetchResult, loadedCount < res.count else { return false }
+        let rowH = monthPill.rowH, visibleH = monthPill.visibleH
+        guard rowH > 1 else { return false }
+        let lastRow = Int(ceil(max(0, top + visibleH) / rowH))
+        let need = lastRow * 3
+        guard need > loadedCount - 30 else { return false }
+        let end = min(res.count, need + pageSize)
+        guard end > loadedCount else { return false }
+        var out: [PHAsset] = []
+        out.reserveCapacity(end - loadedCount)
+        res.enumerateObjects(at: IndexSet(integersIn: loadedCount..<end), options: []) { a, _, _ in
+            out.append(a)
+        }
+        assets.append(contentsOf: out)
+        loadedCount = end
+        return true
     }
 
     // Limited Photos access: let the user extend the shared selection in place (the manage flow),
@@ -1128,6 +1193,14 @@ struct AttachPillGeo: Equatable {
     @ObservationIgnored private var track: CGFloat = 1
     @ObservationIgnored private var dragStartTop: CGFloat = 0
     @ObservationIgnored private let tick = UISelectionFeedbackGenerator()
+    /// One row's height and the visible height, for paging in the rows a jump lands on.
+    @ObservationIgnored private(set) var rowH: CGFloat = 0
+    @ObservationIgnored private(set) var visibleH: CGFloat = 0
+    /// The grid's UIScrollView, found by `AttachScrollFinder`; the drag sets its offset directly.
+    @ObservationIgnored weak var scrollView: UIScrollView?
+    /// The throttle: the newest target not yet applied, and the 50 ms window that is open.
+    @ObservationIgnored private var pendingTop: CGFloat?
+    @ObservationIgnored private var throttle: Task<Void, Never>?
 
     @ObservationIgnored private var hideTask: Task<Void, Never>?
     @ObservationIgnored private var lastId = ""
@@ -1150,6 +1223,8 @@ struct AttachPillGeo: Equatable {
         if nowFits != fits { fits = nowFits }
         let scrollable = fullH - g.visibleH
         top = g.top
+        rowH = g.rowH
+        visibleH = g.visibleH
         self.scrollable = max(0, scrollable)
         track = max(1, g.visibleH - 6 - Self.height)
         let fraction = scrollable > 0 ? min(1, max(0, g.top / scrollable)) : 0
@@ -1186,7 +1261,35 @@ struct AttachPillGeo: Equatable {
         return min(scrollable, max(0, dragStartTop + dy * scrollable / track))
     }
 
-    func endDrag() {
+    /// THE THROTTLE — the reference app's `mapToThrottled` over its fast-scroll offset: the first
+    /// target goes through at once, then at most one every 50 ms, always the newest. Touch moves
+    /// come in at up to 120 a second; the grid moves 20 times a second, and each of those frames
+    /// has time to lay out its tiles.
+    func scroll(to y: CGFloat, _ apply: @escaping (CGFloat) -> Void) {
+        pendingTop = y
+        guard throttle == nil else { return }
+        flush(apply)
+        throttle = Task { [weak self] in
+            while true {
+                try? await Task.sleep(for: .milliseconds(50))
+                guard !Task.isCancelled, let model = self else { return }
+                guard model.pendingTop != nil else { model.throttle = nil; return }
+                model.flush(apply)
+            }
+        }
+    }
+
+    private func flush(_ apply: (CGFloat) -> Void) {
+        guard let y = pendingTop else { return }
+        pendingTop = nil
+        apply(y)
+    }
+
+    /// Lifting the finger lands exactly where it let go, without waiting out the window.
+    func endDrag(_ apply: (CGFloat) -> Void) {
+        throttle?.cancel()
+        throttle = nil
+        flush(apply)
         dragging = false
         slid = false
         scrolling(false)   // the usual 2s, then it fades
@@ -1228,8 +1331,8 @@ private struct AttachMonthPill: View {
             .contentShape(Capsule())
             .gesture(
                 DragGesture(minimumDistance: 0, coordinateSpace: .global)
-                    .onChanged { v in scrollTo(model.drag(v.translation.height)) }
-                    .onEnded { _ in model.endDrag() },
+                    .onChanged { v in model.scroll(to: model.drag(v.translation.height), scrollTo) }
+                    .onEnded { _ in model.endDrag(scrollTo) },
                 including: visible ? .all : .none)
             .padding(.trailing, 12)
             .offset(x: model.slid ? -80 : 0, y: model.y)
@@ -1238,6 +1341,47 @@ private struct AttachMonthPill: View {
             .opacity(visible ? 1 : 0)
             .animation(.easeInOut(duration: 0.2), value: visible)
             .allowsHitTesting(visible)
+    }
+}
+
+/// Hands over the UIScrollView SwiftUI's grid scrolls in. Mounted as a `.background` inside the
+/// scroll content, it climbs its superviews to the first scroll view, which is the grid's own.
+/// Draws nothing and takes no touches.
+private struct AttachScrollFinder: UIViewRepresentable {
+    let found: (UIScrollView) -> Void
+
+    func makeUIView(context: Context) -> Probe {
+        let p = Probe()
+        p.isUserInteractionEnabled = false
+        p.found = found
+        return p
+    }
+
+    func updateUIView(_ p: Probe, context: Context) {
+        p.found = found
+        p.report()
+    }
+
+    final class Probe: UIView {
+        var found: ((UIScrollView) -> Void)?
+        private weak var last: UIScrollView?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            report()
+        }
+
+        func report() {
+            guard window != nil else { return }
+            var v = superview
+            while let cur = v {
+                if let s = cur as? UIScrollView {
+                    if s !== last { last = s; found?(s) }
+                    return
+                }
+                v = cur.superview
+            }
+        }
     }
 }
 
@@ -1271,6 +1415,8 @@ private struct AlbumThumb: View {
 // square (Color.clear.aspectRatio keeps it 1:1 whatever the column width).
 private struct RecentThumb: View {
     let asset: PHAsset
+    /// Read for `dragging` only: while the month pill is held, tiles load small and fast.
+    let pill: AttachMonthPillModel
     var selectionNumber: Int? = nil
     /// ⛔ THE CIRCLES ARE BACK ON FROM THE FIRST FRAME — owner, 2026-09-02: "please show the select
     /// checkbox, users can't understand this, show it like before". He asked for the opposite
@@ -1285,6 +1431,15 @@ private struct RecentThumb: View {
     let onOpen: () -> Void      // tap the PHOTO → open it
     let onToggle: () -> Void    // tap the CHECKBOX → (de)select
     @State private var image: UIImage?
+    /// The normal thumbnail has arrived in full (not the degraded first pass, not the fast one).
+    @State private var sharp = false
+
+    /// What the tile's load task is keyed on: the photo, and whether it should ask for the fast
+    /// thumbnail. A tile that already has its sharp picture keeps it through a pill drag.
+    private struct LoadKey: Equatable {
+        let id: String
+        let fast: Bool
+    }
 
     private var durationLabel: String {
         let d = Int(asset.duration.rounded())
@@ -1293,6 +1448,7 @@ private struct RecentThumb: View {
     private var selected: Bool { selectionNumber != nil }
 
     var body: some View {
+        let key = LoadKey(id: asset.localIdentifier, fast: pill.dragging && !sharp)
         Color.clear
             .aspectRatio(1, contentMode: .fit)
             .overlay {
@@ -1373,18 +1529,47 @@ private struct RecentThumb: View {
             // Reports the tile's window rect for the editor's fly-out and fly-home, and hides the
             // whole tile (circle too, as the reference app hides the cell) while the copy covers it.
             .modifier(MediaRectReporter(id: asset.localIdentifier, scope: .attach, cornerRadius: 0))
-            .task(id: asset.localIdentifier) {
-            // Request through the CACHING manager with the exact precache params: pre-warmed thumbs
+            .task(id: key) { await loadThumb(fast: key.fast) }
+    }
+
+    /// ⛔ A TILE'S REQUEST LIVES EXACTLY AS LONG AS THE TILE — owner 2026-10-23, build 1015: a fast
+    /// pill drag left the tiles grey. Every tile that flew past asked Photos for its thumbnail and
+    /// nothing ever took the request back, so the tiles on screen when the finger stopped waited
+    /// in line behind hundreds of photos nobody would see. The reference app's cell cancels its
+    /// request the moment it is reused; here the task holds the request until SwiftUI cancels it
+    /// (the tile left the screen, or the key changed) and then cancels it with Photos.
+    ///
+    /// While the pill is held (`fast`) the tile asks for the small fast-format picture instead;
+    /// when the finger lifts the key changes and the normal thumbnail replaces it.
+    private func loadThumb(fast: Bool) async {
+        let cacheKey = asset.localIdentifier as NSString
+        // A tile that has drawn its real thumbnail before needs nothing smaller during a drag.
+        if fast, RecentsCache.drawn.object(forKey: cacheKey) != nil { return }
+        let request: PHImageRequestID
+        if fast {
+            request = RecentsCache.thumbs.requestImage(for: asset,
+                                                       targetSize: RecentsCache.fastSize,
+                                                       contentMode: .aspectFill,
+                                                       options: RecentsCache.fastOptions) { img, _ in
+                // Never over a better picture already on the tile.
+                if let img, image == nil { image = img }
+            }
+        } else {
+            // Through the CACHING manager with the exact precache params: pre-warmed thumbs
             // return instantly (the "images coming late" fix); anything not warmed loads as before.
-            RecentsCache.thumbs.requestImage(for: asset,
-                                             targetSize: RecentsCache.thumbSize,
-                                             contentMode: .aspectFill, options: RecentsCache.thumbOptions) { img, _ in
-                if let img {
-                    image = img
-                    RecentsCache.drawn.setObject(img, forKey: asset.localIdentifier as NSString)
-                }
+            request = RecentsCache.thumbs.requestImage(for: asset,
+                                                       targetSize: RecentsCache.thumbSize,
+                                                       contentMode: .aspectFill,
+                                                       options: RecentsCache.thumbOptions) { img, info in
+                guard let img else { return }
+                image = img
+                RecentsCache.drawn.setObject(img, forKey: cacheKey)
+                if (info?[PHImageResultIsDegradedKey] as? Bool) != true { sharp = true }
             }
         }
+        // Throws the moment the task is cancelled; the request goes with it.
+        try? await Task.sleep(for: .seconds(86_400))
+        RecentsCache.thumbs.cancelImageRequest(request)
     }
 }
 
