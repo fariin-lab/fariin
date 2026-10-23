@@ -3066,7 +3066,10 @@ final class CallService: NSObject {
     private func postVideoSharingNote() {
         let c = UNMutableNotificationContent()
         c.title = otherName
-        c.body = "Sharing video. Tap to view."
+        // owner 2026-10-23, with the reference's banner: the camera mark and the name in the line,
+        // and a SOUND, so the camera coming on is heard with the phone in a pocket.
+        c.body = "📹 \(otherName.isEmpty ? "They" : otherName) \(otherName.isEmpty ? "are" : "is") sharing video. Tap to view."
+        c.sound = .default
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: "call-video-sharing", content: c, trigger: nil))
     }
