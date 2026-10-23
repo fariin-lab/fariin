@@ -2089,6 +2089,10 @@ final class GroupCallService: ObservableObject {
         }
         var isLinkRoom = false
         if case .link(_, _) = r { isLinkRoom = true }
+        // JOIN# timing (owner 2026-10-23: "Join takes a long time"): where the seconds go, read
+        // back with read-diag.js. token = our server's pass, room = the media server's connect.
+        let t0 = Date()
+        var tokenSource = "server"
         do {
             var d: [String: Any]?
             var haveAnswer = false
@@ -2099,6 +2103,7 @@ final class GroupCallService: ObservableObject {
                     prefetchedLinkToken = nil
                     d = p.data   // fetched while the pre-join screen was up; see prefetchLinkToken
                     haveAnswer = true
+                    tokenSource = "prefetched"
                 } else if let p = prefetchingLinkToken, p.roomId == roomId, p.uid == uid {
                     // Audit M-062: taken out of the registry BEFORE the wait, so the prefetch's own
                     // landing cannot store this token again for a later join.
@@ -2107,6 +2112,7 @@ final class GroupCallService: ObservableObject {
                     if let ready = await p.task.value {
                         d = ready   // the ahead-of-time request was still out: its answer, not a second trip
                         haveAnswer = true
+                        tokenSource = "prefetching"
                     }
                 }
                 prefetchedLinkToken = nil   // never kept past a join, used or not
@@ -2133,7 +2139,10 @@ final class GroupCallService: ObservableObject {
             // Listening BEFORE the room is up: people already in the call send their raised hand
             // the moment they see me arrive, which can be before this line returns.
             GroupCallSocial.shared.attach(room: room, myUid: myUid, myName: ProfileStore.shared.me?.name ?? "")
+            let t1 = Date()
             try await room.connect(url: url, token: token)
+            DiagLog.add("JOIN# \(isLinkRoom ? "link" : "group") token=\(tokenSource) \(Int(t1.timeIntervalSince(t0) * 1000))ms room=\(Int(Date().timeIntervalSince(t1) * 1000))ms")
+            DiagLog.flagForUpload()
             // owner audit 2026-10-06 #4: hung up while this was connecting. Before this the room came
             // up anyway, mic on, with no screen and no card, and every other call was refused.
             guard gen == joinGeneration else { await abandonJoin(); return false }
