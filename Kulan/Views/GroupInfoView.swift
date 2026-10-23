@@ -115,12 +115,13 @@ struct GroupInfoView: View {
     // An admin with the matching right can; members can too when the group's permission is on.
     // A member an admin restricted from it may not, whatever the group's switch (2026-10-19 fix round).
     private var canEditInfo: Bool {
-        guard let c = conv else { return false }
+        // An ended group is closed: no edits and no new members (audit G1; the rules refuse them).
+        guard let c = conv, c.groupMod.state != "ended" else { return false }
         return c.adminCan(me, .changeInfo)
             || (c.membersCanEditInfo && !c.isRestricted(me, .changeInfo, now: Date().timeIntervalSince1970 * 1000))
     }
     private var canAdd: Bool {
-        guard let c = conv else { return false }
+        guard let c = conv, c.groupMod.state != "ended" else { return false }
         return c.adminCan(me, .inviteUsers)
             || (c.membersCanAdd && !c.isRestricted(me, .addMembers, now: Date().timeIntervalSince1970 * 1000))
     }
@@ -2522,7 +2523,7 @@ struct GroupMembersSheet: View {
     private var conv: Conversation? { live.start(cid); return live.conv ?? repo.conversations.first { $0.id == cid } }
     // A member an admin kept from adding sees no Add (audit 2026-10-20; the rules refuse it).
     private var canAdd: Bool {
-        guard let c = conv else { return false }
+        guard let c = conv, c.groupMod.state != "ended" else { return false }
         return c.adminCan(me, .inviteUsers)
             || (c.membersCanAdd && !c.isRestricted(me, .addMembers, now: Date().timeIntervalSince1970 * 1000))
     }

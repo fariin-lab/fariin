@@ -68,6 +68,7 @@ struct PDFViewerSheet: View {
                     .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true).contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Share")
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
     }

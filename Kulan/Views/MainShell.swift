@@ -1576,6 +1576,11 @@ struct ChatsView: View {
     /// (2026-09-25) it was the list's own placeholder, the reference app's design; he asked for the
     /// native one back because a field inside the list cannot fold away on scroll.
     @State private var chatSearch = ""
+    /// Whether the search page is up, so a door from outside can close it first (audit N2).
+    @State private var searchPresented = false
+    /// The Join sheet for an invite link, shown once nothing else covers the list (audit N2: a
+    /// sheet asked for over another one was dropped, and the same link could never bring it back).
+    @State private var inviteItem: InviteCodeItem?
     /// ⛔ THE CHAT LIST'S SEARCH REACHES PAST THE CHAT LIST — owner, 2026-09-02: "the search inside
     /// the chat list must work like global; when the user wants to search: chats, users, new users".
     ///
@@ -2205,6 +2210,7 @@ struct ChatsView: View {
                         .frame(width: 22, height: 22)
                 }
                     .tint(.primary).disabled(selection.isEmpty)
+                    .accessibilityLabel("Archive")
                 Spacer()
                 Button(readTitle) { markReadTargets() }.tint(.primary).disabled(readTargets.isEmpty)
                 Spacer()
@@ -2404,8 +2410,40 @@ struct ChatsView: View {
     }
 
     private var pendingInvite: Binding<InviteCodeItem?> {
-        Binding(get: { Flags.groupsEnabled ? router.pendingInviteCode.map { InviteCodeItem(code: $0) } : nil },
-                set: { router.pendingInviteCode = $0?.code })
+        Binding(get: { Flags.groupsEnabled ? inviteItem : nil },
+                set: { inviteItem = $0; if $0 == nil { router.pendingInviteCode = nil } })
+    }
+
+    /// An invite link asked for its Join sheet: it goes up once the list is uncovered.
+    private func openPendingInvite() {
+        guard Flags.groupsEnabled, let code = router.pendingInviteCode, inviteItem?.code != code else { return }
+        showNew = false
+        StoryCameraDoor.close()
+        StoryDoor.dismiss {
+            DispatchQueue.main.async {
+                clearCovers {
+                    guard router.pendingInviteCode == code else { return }
+                    inviteItem = InviteCodeItem(code: code)
+                }
+            }
+        }
+    }
+
+    /// ⛔ NOTHING MAY COVER THE LIST WHEN A DOOR CHANGES `path` (audit N1/N2, 2026-10-23). A path
+    /// replaced while a sheet was still sliding away, or under the search page, left a half-pushed
+    /// stack: the list on screen, blank toolbar, no tab bar (the 10-12, 10-22 and 10-23 reports).
+    /// The profile sheet and the story had their own waits; every other sheet (Join, member card,
+    /// Forward, QR, New Group) did not. This waits for, or closes, ANY presented controller over
+    /// the app window, then the search, and only then runs `then`.
+    private func clearCovers(then: @escaping () -> Void) {
+        PresentationGate.whenClear {
+            if searchPresented {
+                searchPresented = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: then)
+            } else {
+                then()
+            }
+        }
     }
 
     /// THE CHAT LIST, AND EVERYTHING THE SCREEN HAS TO HAND IT.
@@ -2941,6 +2979,7 @@ struct ChatsView: View {
         // time, because every path to it went through `await load(force:)`. See `seedRowFromDisk`.
         .onAppear {
             repo.start(); StoriesRepository.shared.seedRowFromDisk(); openPendingChat(); openPendingPublicGroup()
+            openPendingInvite()
             // The attach grid's recents and their first thumbnails, fetched now rather than when
             // the sheet opens (owner 2026-10-14: blank for seconds after a relaunch). No-op once warm.
             RecentsCache.prewarm()
@@ -2948,6 +2987,7 @@ struct ChatsView: View {
         .onChange(of: router.pendingChatId) { _, _ in openPendingChat() }
         .onChange(of: repo.conversations.count) { _, _ in openPendingChat() }   // retry once chats load
         .onChange(of: router.pendingPublicGroup) { _, _ in openPendingPublicGroup() }
+        .onChange(of: router.pendingInviteCode) { _, _ in openPendingInvite() }
     }
 
     /// A public group's page goes on `path` like a chat: the tab bar hides, Back and the edge swipe
@@ -2956,12 +2996,19 @@ struct ChatsView: View {
     /// intent is on screen before the path changes.
     private func openPendingPublicGroup() {
         guard Flags.groupsEnabled, let t = router.pendingPublicGroup else { return }
-        DispatchQueue.main.async {
-            guard router.pendingPublicGroup == t else { return }
-            router.pendingPublicGroup = nil
-            path.append(t)
-            // Same as a chat row: the search page closed itself, its text goes too.
-            chatSearch = ""
+        // Everything covering the list goes first, as for a chat (audit N2): the new-chat sheet,
+        // the camera, the story, any sheet, the search.
+        showNew = false
+        StoryCameraDoor.close()
+        StoryDoor.dismiss {
+            DispatchQueue.main.async {
+                clearCovers {
+                    guard router.pendingPublicGroup == t else { return }
+                    router.pendingPublicGroup = nil
+                    path.append(t)
+                    chatSearch = ""
+                }
+            }
         }
     }
 
@@ -3073,7 +3120,7 @@ struct ChatsView: View {
             // carries the two answers that existed for them — the reveal on arrival and the footer
             // hold while search opens and closes — and nothing else. If either comes back, the
             // history is in the memory notes; do not add an offset correction (see `ChatListCell`).
-            .searchable(text: $chatSearch, prompt: "Search")
+            .searchable(text: $chatSearch, isPresented: $searchPresented, prompt: "Search")
             // ⚠️ `.task(id:)` RATHER THAN `.onChange`. It cancels the previous lookup when the query
             // moves on, so a slow answer to an abandoned query cannot land after a fast answer to
             // the current one — which is the classic search-race and shows as the wrong person.
@@ -3321,7 +3368,7 @@ struct ChatsView: View {
         // after that, so the tab switch made for this same id (`tab = 2`, on the shell) is on
         // screen before the path changes under it. When nothing is up this is one hop, as before.
         StoryDoor.dismiss {
-            DispatchQueue.main.async { openPendingChatTarget(cid) }
+            DispatchQueue.main.async { clearCovers { openPendingChatTarget(cid) } }
         }
     }
 
@@ -4033,6 +4080,7 @@ struct ArchivedChatsView: View {
                                 .frame(width: 22, height: 22)
                         }
                             .tint(.primary).disabled(selection.isEmpty)
+                            .accessibilityLabel("Unarchive")
                         Spacer()
                         Button(readTitle) { markReadTargets() }.tint(.primary).disabled(readTargets.isEmpty)
                         Spacer()
@@ -5202,6 +5250,31 @@ private struct ChatPeekPreview: View {
             guard let fetched = await ChatService.galleryContent(cid, limit: 14) else { loaded = true; return }
             msgs = Array(fetched.reversed()).filter { !$0.isSystem }
             loaded = true
+        }
+    }
+}
+
+/// Waits until no sheet is over the app window (audit N1/N2, 2026-10-23). A sheet still sliding
+/// away is waited for; a sheet left up is closed first. A full-screen cover (the call screen, a
+/// photo) is never closed from here; the door then goes ahead as it always did.
+@MainActor enum PresentationGate {
+    static func whenClear(tries: Int = 40, then: @escaping () -> Void) {
+        let windows = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .filter { $0.windowLevel == .normal && !$0.isHidden && $0.rootViewController != nil }
+        guard let root = (windows.first(where: \.isKeyWindow) ?? windows.first)?.rootViewController,
+              let top = root.presentedViewController else { then(); return }
+        if top.isBeingDismissed || top.isBeingPresented {
+            guard tries > 0 else { then(); return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { whenClear(tries: tries - 1, then: then) }
+            return
+        }
+        switch top.modalPresentationStyle {
+        case .fullScreen, .overFullScreen, .custom:
+            then()
+        default:
+            root.dismiss(animated: true) { then() }
         }
     }
 }
