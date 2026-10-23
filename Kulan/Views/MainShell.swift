@@ -4353,7 +4353,9 @@ struct ChatRow: View, Equatable {
     private func senderStyled(_ text: String, tint: Color) -> Text {
         let p = lastSenderPrefix
         guard !p.isEmpty, text.hasPrefix(p) else { return Text(text).foregroundStyle(tint) }
-        return Text(p).foregroundStyle(.primary) + Text(String(text.dropFirst(p.count))).foregroundStyle(tint)
+        // owner 2026-10-23: and BOLD, as the reference (signal) chat list draws "Name: " (its
+        // groupSnippet prefix is StyleOnlyMessageBody style .bold); the colour stays his 10-19 choice.
+        return Text(p).bold().foregroundStyle(.primary) + Text(String(text.dropFirst(p.count))).foregroundStyle(tint)
     }
     /// The emoji shown as the row's trailing badge — the same fresh-reaction test the preview text
     /// uses, so the badge and the words always agree. Only when it was aimed at ME in a 1:1 (a badge
