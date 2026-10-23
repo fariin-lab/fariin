@@ -65,6 +65,8 @@ final class GroupCallRinging {
     private enum Phase { case ringing, joining, inCall }
 
     private var ring: Ring? { didSet { syncScreen() } }
+    /// For CallKitManager's GC# lines (it knows the CallKit call, not the room).
+    var ringRoomId: String? { ring?.roomId }
     private var phase: Phase = .ringing { didSet { syncScreen() } }
 
     /// The in-app invitation for a group chat's ring goes the moment that ring stops ringing, by
@@ -102,6 +104,7 @@ final class GroupCallRinging {
         guard !roomId.isEmpty, !roomId.contains("/"),
               (kind == "adhoc" && adhocId) || (kind == "group" && !adhocId)
                 || (kind == "link" && !adhocId && linkKey != nil) else {
+            GCLog.event("ring_discard", room: roomId.isEmpty ? nil : roomId, ["why": "bad_push", "kind": kind])
             CallKitManager.shared.reportGroupDiscard(completion: completion)
             return
         }
@@ -116,12 +119,20 @@ final class GroupCallRinging {
         // or the person I am in a 1:1 with carrying both of us into this room (`ringIsMine`); the
         // same push twice; a push older than the ring window; a ring already finished here; or
         // nobody signed in.
-        if service.ringIsMine(roomId: roomId, callerUid: callerUid)
-            || ring?.roomId == roomId || service.activeCid == roomId
-            || (linkKey != nil && service.activeCid == Self.joinRoomId(roomId, linkKey: linkKey))
-            || (sentAt.map { now - $0 > Self.ringWindow } ?? false)
-            || wasFinished(roomId, adhoc: adhocId, sentAt: sentAt)
-            || Auth.auth().currentUser == nil {
+        // Controls round 2 (2026-10-23): the same checks in the same order, each naming itself for
+        // the GC# line.
+        let notARing: String? = {
+            if service.ringIsMine(roomId: roomId, callerUid: callerUid) { return "mine" }
+            if ring?.roomId == roomId { return "repeat" }
+            if service.activeCid == roomId
+                || (linkKey != nil && service.activeCid == Self.joinRoomId(roomId, linkKey: linkKey)) { return "in_call" }
+            if sentAt.map({ now - $0 > Self.ringWindow }) ?? false { return "too_old" }
+            if wasFinished(roomId, adhoc: adhocId, sentAt: sentAt) { return "finished" }
+            if Auth.auth().currentUser == nil { return "signed_out" }
+            return nil
+        }()
+        if let notARing {
+            GCLog.event("ring_discard", room: roomId, ["why": notARing, "kind": kind])
             CallKitManager.shared.reportGroupDiscard(completion: completion)
             return
         }
@@ -131,6 +142,8 @@ final class GroupCallRinging {
         let oneToOneLive = [.outgoing, .incoming, .active, .reconnecting].contains(CallService.shared.state)
         if ring != nil || oneToOneLive
             || service.isActive || service.connecting || service.waitingForApproval {
+            GCLog.event("ring_discard", room: roomId,
+                        ["why": ring != nil ? "other_ring" : oneToOneLive ? "busy_1to1" : "busy", "kind": kind])
             CallKitManager.shared.reportGroupDiscard(completion: completion)
             // Audit M-094, 2026-10-07: two people who started a multi-person call to each other at
             // the same moment both answered the other "busy" and nobody connected. The service's
@@ -193,6 +206,7 @@ final class GroupCallRinging {
                 }
             }
         }
+        GCLog.event("ring", room: roomId, ["kind": kind, "video": video ? "1" : "0"])
         // The caller's name; for a group chat's call, the group's title.
         CallKitManager.shared.reportGroupRing(uuid: r.uuid, name: kind == "group" ? (title ?? callerName) : callerName,
                                               video: video, completion: completion)
@@ -237,6 +251,7 @@ final class GroupCallRinging {
     /// iOS refused to show the ring (Focus, its own block list): there is no CallKit call.
     func ringRefused(uuid: UUID) {
         guard let r = ring, r.uuid == uuid, phase == .ringing else { return }
+        GCLog.event("ck_ring_refused", room: r.roomId)
         stopWatchingRoom()
         ring = nil
     }
@@ -355,7 +370,11 @@ final class GroupCallRinging {
     /// False = that ring is no longer up here: the caller ends the CallKit call and puts the
     /// audio defaults back.
     func answeredFromCallKit(uuid: UUID) -> Bool {
-        guard let r = ring, r.uuid == uuid, phase == .ringing else { return false }
+        guard let r = ring, r.uuid == uuid, phase == .ringing else {
+            GCLog.event("ck_answer", room: ring?.roomId, ["result": "no_ring"])
+            return false
+        }
+        GCLog.event("ck_answer", room: r.roomId, ["kind": r.roomKind])
         stopWatchingRoom()
         remember(r.roomId)
         phase = .joining
@@ -382,6 +401,7 @@ final class GroupCallRinging {
                 if r.roomKind == "link" { self.reportLinkJoined(roomId: r.roomId, startedAtMs: r.startedAtMs) }
                 self.callJoined()
             } else {
+                GCLog.failure("ck_answer_join", room: r.roomId, ["result": "no_call"])
                 self.endCallKitCall(.failed)   // the join never became a call
             }
         }
@@ -392,6 +412,7 @@ final class GroupCallRinging {
     /// has already let go of the CallKit call and its audio.
     func endedFromCallKit(uuid: UUID) {
         guard let r = ring, r.uuid == uuid else { return }
+        GCLog.event("ck_end", room: r.roomId, ["phase": phase == .ringing ? "ringing" : "call"])
         if phase == .ringing {
             stopWatchingRoom()
             ring = nil
@@ -407,6 +428,7 @@ final class GroupCallRinging {
     /// CallKit dropped every call (its daemon restarted).
     func providerReset() {
         guard let r = ring else { return }
+        GCLog.event("ck_reset", room: r.roomId)
         stopWatchingRoom()
         watch.removeAll()
         let wasRinging = phase == .ringing
@@ -437,7 +459,14 @@ final class GroupCallRinging {
     /// Join on the in-app invitation. The CallKit ring for the same room stops, and the call runs
     /// as every call joined inside the app does (no CallKit call, the SDK's own audio handling).
     func acceptFromScreen(_ invite: AdhocInvite, muted: Bool = false) {
-        if muted { GroupCallService.shared.prepareMutedJoin() }
+        let service = GroupCallService.shared
+        // Controls audit 1-A5, 2026-10-23: the Mute pill is this join's wish only. With a call
+        // already up or joining, or a 1:1 live, the join below goes nowhere and the wish stayed
+        // behind: the live call's button read Muted with its mic still sending, or the next call
+        // started muted. A call link's join takes it as `mic:` instead (joinLink below).
+        let oneToOneLive = [.outgoing, .incoming, .active, .reconnecting].contains(CallService.shared.state)
+        let busy = service.isActive || service.connecting || service.waitingForApproval || oneToOneLive
+        if muted, invite.linkKey == nil, !busy { service.prepareMutedJoin() }
         if invite.fromNudge, GroupCallService.shared.groupRingScreen?.id == invite.id {
             GroupCallService.shared.groupRingScreen = nil   // no ring behind it to take it down
         }
@@ -447,7 +476,6 @@ final class GroupCallRinging {
             CallKitManager.shared.endGroupCall(uuid: r.uuid, reason: .answeredElsewhere)
         }
         remember(invite.roomId)
-        let service = GroupCallService.shared
         if let key = invite.linkKey {
             // A call link's ring (owner 2026-10-23): straight in, no approval wait (invited). The
             // Mute pill goes as the join's own mic wish (joinLink sets it from `mic`).
@@ -542,6 +570,7 @@ final class GroupCallRinging {
     /// CallKitManager: the system screen's mute changed while the CallKit-answered join runs.
     func callKitMuteBeforeJoin(uuid: UUID, muted: Bool) {
         guard let r = ring, r.uuid == uuid, phase != .inCall else { return }
+        GCLog.event("ck_mute", room: r.roomId, ["to": muted ? "off" : "on", "when": "joining"])
         muteOnJoin = (uuid, muted)
     }
 
@@ -564,6 +593,7 @@ final class GroupCallRinging {
         let service = GroupCallService.shared
         // `ringIsMine` with no caller: the room I am in or joining (or declined here).
         guard service.ringIsMine(roomId: r.roomId, callerUid: "") else { return false }
+        GCLog.event("ck_answer", room: r.roomId, ["result": "already_joining"])
         finishRing(.answeredElsewhere, settleInvite: false)
         return true
     }
@@ -739,8 +769,23 @@ enum GroupCallKitAudio {
 
     /// With automatic configuration off the SDK no longer moves the route, so the call screen's
     /// speaker button is applied here.
+    /// Controls audit 1-A3, 2026-10-23: the mode goes with it. `.videoChat` sends sound to the
+    /// loudspeaker by itself, so Speaker off (override `.none`) left a CallKit-answered call loud
+    /// while the button said off and the screen blanked at the ear. The 1:1 `updateAudioRoute`
+    /// switches the mode for the same reason.
     static func route(speaker: Bool) {
-        try? AVAudioSession.sharedInstance().overrideOutputAudioPort(speaker ? .speaker : .none)
+        let session = AVAudioSession.sharedInstance()
+        setMode(session, speaker: speaker)
+        try? session.overrideOutputAudioPort(speaker ? .speaker : .none)
+    }
+
+    /// `.videoChat` (echo cancelling tuned for the loudspeaker) when the speaker is on, `.voiceChat`
+    /// at the ear, with the options `activated` set. Written only when it changes.
+    private static func setMode(_ session: AVAudioSession, speaker: Bool) {
+        let mode: AVAudioSession.Mode = speaker ? .videoChat : .voiceChat
+        guard session.category != .playAndRecord || session.mode != mode else { return }
+        try? session.setCategory(.playAndRecord, mode: mode,
+                                 options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP])
     }
 
     /// The call is over: back to what every in-app group call expects.

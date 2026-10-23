@@ -321,15 +321,23 @@ final class CallKitManager: NSObject {
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: "Call")
         Self.limitControls(update)
+        // Controls audit 5-10, 2026-10-23: never while a 1:1 call is up (or rings). The swap and the
+        // reset after it went by the phone-wide setting, so a 1:1 call with a Chat PIN chat (kept out
+        // of Recents, `showsInRecents`) was switched back into Recents mid-call by any group ring or
+        // "stop ringing" push. That call's own configuration stays exactly as its report set it.
+        let oneToOneLive = activeUUID != nil
         let current = provider.configuration
         let ringtone = current.ringtoneSound
-        if current.includesCallsInRecents {
+        if !oneToOneLive, current.includesCallsInRecents {
             provider.configuration = Self.makeConfig(ringtone: ringtone, inRecents: false)
         }
         provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] _ in
             guard let self else { completion(); return }
             self.provider.reportCall(with: uuid, endedAt: nil, reason: .answeredElsewhere)
-            self.applyConfig(ringtone: ringtone, peerUid: nil)
+            // A 1:1 call reported meanwhile set its own configuration; it is left alone too.
+            if !oneToOneLive, self.activeUUID == nil {
+                self.applyConfig(ringtone: ringtone, peerUid: nil)
+            }
             completion()
         }
     }
@@ -384,6 +392,7 @@ final class CallKitManager: NSObject {
     func reportGroupRing(uuid: UUID, name: String, video: Bool, completion: @escaping () -> Void) {
         applyRingtone(callerUid: nil)   // the phone-wide Call Sound; a group ring has no chat of its own
         groupUUID = uuid
+        resetGroupMuteEchoes()   // 1-A1: a new system call starts unmuted, with nothing in flight
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: name)
         update.hasVideo = video
@@ -409,15 +418,42 @@ final class CallKitManager: NSObject {
 
     /// Puts the SDK's audio defaults back, once, when a CallKit-answered group call ends.
     private func endGroupAudio() {
+        resetGroupMuteEchoes()   // 1-A1: nothing more comes back for a call that is over
         guard groupAudioUnderCallKit else { return }
         groupAudioUnderCallKit = false
         GroupCallKitAudio.restoreDefaults()
     }
 
     /// The in-app mic button, mirrored into the system call screen (CallKit-answered calls only).
+    /// Controls audit 1-A1, 2026-10-23: every request sent here comes back as a
+    /// `CXSetMutedCallAction`. Each one is noted (`groupMuteEchoes`, in order) so the delegate lets it
+    /// pass without touching the mic; only actions the system call screen started change it. Without
+    /// this, two fast taps made each returning action toggle the mic again and queue another, forever.
+    /// A value CallKit already shows (`groupKitMuted`) is not asked for again.
     func setGroupMuted(_ muted: Bool) {
         guard let u = groupUUID, groupAudioUnderCallKit else { return }
-        controller.request(CXTransaction(action: CXSetMutedCallAction(call: u, muted: muted))) { _ in }
+        guard groupKitMuted != muted else { return }
+        groupKitMuted = muted
+        groupMuteEchoes.append(muted)
+        controller.request(CXTransaction(action: CXSetMutedCallAction(call: u, muted: muted))) { [weak self] error in
+            guard error != nil else { return }
+            // Refused: no action comes back for it, so it is no longer waited for.
+            DispatchQueue.main.async {
+                guard let self, let i = self.groupMuteEchoes.firstIndex(of: muted) else { return }
+                self.groupMuteEchoes.remove(at: i)
+                self.groupKitMuted = nil
+            }
+        }
+    }
+
+    /// 1-A1: the mute requests this phone sent for the group call and CallKit has not handed back,
+    /// oldest first, and the mute value CallKit was last told or reported (nil = not known).
+    private var groupMuteEchoes: [Bool] = []
+    private var groupKitMuted: Bool?
+
+    private func resetGroupMuteEchoes() {
+        groupMuteEchoes.removeAll()
+        groupKitMuted = nil
     }
 
     /// The in-app speaker button (CallKit-answered calls only; see `GroupCallKitAudio.route`).
@@ -590,9 +626,19 @@ extension CallKitManager: CXProviderDelegate {
     func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
         if let group = groupUUID, group == action.callUUID {   // owner, 2026-10-06: the group call's mic
             let muted = action.isMuted
+            // Controls audit 1-A1: our own request coming back (see `setGroupMuted`). Taken off
+            // the list and acknowledged; the mic already holds what the app asked for.
+            if groupMuteEchoes.first == muted {
+                groupMuteEchoes.removeFirst()
+                action.fulfill()
+                return
+            }
+            groupKitMuted = muted
             onMain {
                 let service = GroupCallService.shared
                 if service.isActive {
+                    GCLog.event("ck_mute", room: GroupCallRinging.shared.ringRoomId,
+                                ["to": muted ? "off" : "on", "when": "call"])
                     if service.micOn == muted { service.toggleMic() }
                 } else {
                     // Audit M-083, 2026-10-07: still joining. This was dropped, yet fulfilled, so
@@ -631,7 +677,11 @@ extension CallKitManager: CXProviderDelegate {
     func provider(_ provider: CXProvider, perform action: CXSetHeldCallAction) {
         // owner, 2026-10-06: a group call is not held by us; the audio session going away and
         // coming back (didDeactivate / didActivate below) is what stops and restarts its sound.
-        if let group = groupUUID, group == action.callUUID { action.fulfill(); return }
+        if let group = groupUUID, group == action.callUUID {
+            GCLog.event("ck_held", room: nil, ["to": action.isOnHold ? "on" : "off"])
+            action.fulfill()
+            return
+        }
         // Audit M-116, 2026-10-07: not our call (or no call of ours): refused, never applied.
         guard let live = activeUUID, live == action.callUUID else { action.fail(); return }
         CallService.shared.setHeld(action.isOnHold)
@@ -642,6 +692,7 @@ extension CallKitManager: CXProviderDelegate {
         // owner, 2026-10-06: a group call answered through CallKit. The LiveKit engine may start
         // only now; the 1:1 engine below is not touched.
         if groupAudioUnderCallKit {
+            GCLog.event("ck_audio", room: nil, ["to": "on", "speaker": groupSpeaker ? "1" : "0"])
             groupAudioSessionLive = true
             // Audit M-082, 2026-10-07: the copy kept by `noteGroupSpeaker`, on whatever thread
             // CallKit calls from (group calls start on the speaker; see GroupCallRinging).
@@ -679,6 +730,7 @@ extension CallKitManager: CXProviderDelegate {
         // owner, 2026-10-06: the group call's session going away (the call ended, or a phone call
         // took over). Once the call has ended the defaults are already back and stay.
         if groupAudioSessionLive {
+            GCLog.event("ck_audio", room: nil, ["to": "off"])
             groupAudioSessionLive = false
             if groupAudioUnderCallKit { GroupCallKitAudio.deactivated() }
             return

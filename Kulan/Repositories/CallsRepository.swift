@@ -44,16 +44,26 @@ struct CallEntry: Identifiable, Hashable {
 /// - I started it: answered if anybody else came, otherwise my unanswered call ("No answer").
 /// - I was in it on any device: answered, whatever else happened.
 /// - Rung and never in it: missed.
-/// - Never rung (muted group, a group too big to ring): the stored outcome, never a missed call.
+/// - Never rung (muted group, a group too big to ring) and never in it: `notJoined`, a plain call
+///   line with no length, neither missed nor answered (controls audit 5-5, 2026-10-23: it read
+///   "answered", an answered-call line for someone who was not in the call).
 /// A record without `joinedUids` (an older server, a call still going, any 1:1 call) keeps its
 /// stored outcome exactly as before.
+/// The server keeps at most `listCap` uids in each list (sorted, `functions/groupCallRecord.js`
+/// JOINED_MAX), so a full list may have left me out: a full `joinedUids` makes no claim (stored
+/// outcome), and a full `rungUids` counts as not known (rung).
 enum GroupCallOutcome {
+    static let listCap = 64
+    /// Neither missed nor answered; `CallEntry` rows drop the call's length for it.
+    static let notJoined = "notJoined"
+
     static func mine(stored: String?, callerUid: String?, joined: [String]?, rung: [String]?,
                      me: String) -> String? {
         guard let joined, !me.isEmpty, stored != "ongoing", stored != "ringing" else { return stored }
         if callerUid == me { return joined.contains(where: { $0 != me }) ? "answered" : "missed" }
         if joined.contains(me) { return "answered" }
-        if let rung, !rung.contains(me) { return stored == "missed" ? "answered" : stored }
+        if joined.count >= listCap { return stored }
+        if let rung, rung.count < listCap, !rung.contains(me) { return notJoined }
         return "missed"
     }
 }
@@ -290,7 +300,9 @@ final class CallsRepository {
                 callerUid: caller,
                 outcome: outcome,
                 video: data["callVideo"] as? Bool ?? false,
-                durationSec: (data["callDuration"] as? NSNumber)?.intValue ?? 0,
+                // 5-5: a call I was never in has no length for me.
+                durationSec: outcome == GroupCallOutcome.notJoined
+                    ? 0 : (data["callDuration"] as? NSNumber)?.intValue ?? 0,
                 date: ts?.dateValue() ?? Date(timeIntervalSince1970: 0))
             if group { e.groupCid = cid }
             return e
