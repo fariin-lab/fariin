@@ -175,28 +175,8 @@ struct GroupCallParticipantsSheet: View {
             Section {
                 // ⛔ THE APP'S OWN LINK LOOK (owner 2026-10-20: "follow my app, minimalist"): the link
                 // in one pill that copies on a tap, then the glass circles the Invite Links page uses.
+                // Owner 2026-10-23: no link pill here any more, the three circles only.
                 VStack(spacing: 16) {
-                    if !service.linkRevoked, let url = linkURL {
-                        Button { copy(url) } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: copied ? "checkmark" : "link")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(copied ? Color.green : Color.secondary)
-                                Text(url.absoluteString.replacingOccurrences(of: "https://", with: ""))
-                                    .font(.subheadline)
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
-                            .padding(.horizontal, 16).frame(height: 44)
-                            .frame(maxWidth: .infinity)
-                            .background(Capsule().fill(Color(.secondarySystemGroupedBackground)))
-                            .contentShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Call link. Copy")
-                        .animation(.easeInOut(duration: 0.2), value: copied)
-                    }
                     HStack(spacing: 0) {
                         // Owner, 2026-10-06: Add people on a link call too. It opens my chats and
                         // sends each person the link (a link call has no member list to add to).
@@ -236,19 +216,10 @@ struct GroupCallParticipantsSheet: View {
     /// joiners of the new link land here; the link above shows the new one as soon as it exists.
     @ViewBuilder private var hostSection: some View {
         if ownsLink, let link {
+            // Owner 2026-10-23: Revoke Link is no longer on this sheet (the link's own page keeps it).
+            // People rung with Add people come straight in; the switch is for everyone else.
             Section {
                 approvalRow(link)
-                Button(role: .destructive) { confirmRevoke = true } label: {
-                    HStack {
-                        Label("Revoke Link", systemImage: "arrow.triangle.2.circlepath")
-                            .foregroundStyle(.red)
-                        if makingLink { Spacer(); ProgressView() }
-                    }
-                }
-                .disabled(makingLink)
-                .accessibilityHint("The old link stops working and a new one is made for this call.")
-            } footer: {
-                Text("Revoke stops the old link and makes a new one at once.")
             }
         }
     }
@@ -378,15 +349,21 @@ struct GroupCallParticipantsSheet: View {
         .padding(.vertical, 2)
     }
 
-    @ViewBuilder private var endSection: some View {
+    @ViewBuilder private var endBar: some View {
         // The owner only: closes the call on the media server for everyone in it.
         if service.myRole == .owner && service.isActive {
-            Section {
-                Button(role: .destructive) { confirmEnd = true } label: {
-                    Text("End Call for Everyone")
-                        .frame(maxWidth: .infinity)
-                }
+            Button(role: .destructive) { confirmEnd = true } label: {
+                Text("End Call for Everyone")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color(.secondarySystemGroupedBackground)))
             }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 8)
+            .background(Color(.systemGroupedBackground))
         }
     }
 
@@ -423,9 +400,13 @@ struct GroupCallParticipantsSheet: View {
                 inCallSection
                 invitedSection(at: context.date)
                 notConnectedSection(at: context.date)
-                endSection
             }
+            .scrollContentBackground(.hidden)
+            .background(Color(.systemGroupedBackground))
         }
+        // Owner 2026-10-23: End Call for Everyone always in reach, pinned under the list (in a
+        // 100-person call it sat below everyone).
+        .safeAreaInset(edge: .bottom, spacing: 0) { endBar }
         // Alone in the call, the sheet says what is happening, as the reference's does.
         .navigationTitle(sheetTitle)
         .task {
@@ -482,6 +463,10 @@ struct GroupCallParticipantsSheet: View {
                     }
                 }
         }
+        // Owner 2026-10-23: the whole sheet dark, always, in the system's own greys.
+        .environment(\.colorScheme, .dark)
+        .preferredColorScheme(.dark)
+        .presentationBackground(Color(.systemGroupedBackground))
         // Owner, 2026-10-06: opens at half height, so the call stays in view; pull up for the rest.
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -530,7 +515,7 @@ struct GroupCallParticipantsSheet: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16).padding(.vertical, 10)
                 .background(Capsule().fill(Color.black.opacity(0.85)))
-                .padding(.bottom, 24)
+                .padding(.bottom, 84)   // clear of the pinned End Call bar
                 .transition(.opacity)
                 .allowsHitTesting(false)
         }
