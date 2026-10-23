@@ -1270,6 +1270,10 @@ struct ThreadView: View {
         // never hid it: `nil` state here is what takes it out (`hideComposer`). See `showsJumpButton`.
         !quiet && !selecting && !searchActive && !notAMember && !groupModBlocked && !cannotSendAnnouncement && !iAmMuted
             && !repo.iBlocked && requestStance != .incoming
+            // Owner 2026-10-23 (build 1016): a new person with requests off shows Delete / Accept
+            // only, drawn by SwiftUI; the controller's composer stayed up under it, so the list kept
+            // the composer's shorter clearance and the bar covered the last message.
+            && !newPersonUnanswered
             // ⛔ A CORRECT CHAT KEY OPENS THE COMPOSER AT ONCE — owner, 2026-10-04: "don't show Chat
             // Key accepted, open the text bar automatically". The server has already accepted the
             // key when `keyAccepted` goes up (it writes `accepted`); only this phone's snapshot of
