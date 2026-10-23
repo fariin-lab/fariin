@@ -1280,6 +1280,9 @@ struct StoryViewer: View {
     @State private var ownRepostGone = false            // the repost's original was mine and is gone
     @State private var profileSheet: StoryGroup?        // tap the header → profile sheet OVER the story (paused)
     @State private var myPostedUp = false                // tap MY header → my Posted Stories, over the story
+    /// A group story's replies, opened by a member who did not post it (owner 2026-10-23).
+    @State private var groupRepliesStory: Story?
+    private var groupRepliesUp: Bool { groupRepliesStory != nil }
     /// Fariin's header tapped (official stories, owner 2026-10-16): the channel's own info page.
     @State private var officialInfoUp = false
     @State private var toastText = "Sent"               // reused for "Sent" (reply) and "Saved"
@@ -1710,7 +1713,7 @@ struct StoryViewer: View {
     // the composer that was the whole "repost is frozen" report (see `StoryComposerPresenter`).
     private var sheetUp: Bool {
         shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || myPostedUp || officialInfoUp || editViewers != nil
-            || repostUp || repostLoading || shareURL != nil || ownRepostGone
+            || repostUp || repostLoading || shareURL != nil || ownRepostGone || groupRepliesUp
         // ⛔ `repostLoading` (owner, 2026-10-12: "I tap Repost on a video story and the original
         // keeps playing, I can hear it"). The story was held only once the composer was up, but the
         // clip is copied (or downloaded) and the poster and face fetched BEFORE that, and for those
@@ -1960,7 +1963,7 @@ struct StoryViewer: View {
     var body: some View {
         // The modifier chain outgrew the Swift type-checker (CI: "unable to type-check in
         // reasonable time") — body is now three separately-checked pieces. Purely structural.
-        lifecycleGlue(sheetsAndMenus(coreLayers))
+        lifecycleGlue(sheetsAndMenus(groupRepliesSheet(coreLayers)))
             // Here, not inside `lifecycleGlue`: one more modifier there put that chain past the
             // type checker's time limit (StoriesViews:2179, twice).
             .onChange(of: RepostAuthorPhotos.shared.urls) { _, _ in refeedRepostBuckets() }
@@ -1978,6 +1981,7 @@ struct StoryViewer: View {
             // zoom by interpolating its FRAME with a StoryImage(fitCanvas:) = image + canvas. No
             // scaleEffect on the live story anywhere (that top-anchor scale was the break-out bug).
             storyLayer
+            groupRepliesDoor
             if showViewers { viewersBackdrop }
             // The viewers sheet is a SIBLING layer, NOT a system .sheet: a system sheet lives in
             // its own presentation layer and cannot drive a continuous transform on the story
@@ -1988,6 +1992,40 @@ struct StoryViewer: View {
             // The first-time guide (owner 2026-10-20). Draws nothing once Got it was tapped. Its X
             // leaves the whole viewer by the viewer's own close (flight home, else plain close).
             StoryGuideHost(onExit: { if !beginHeroCloseFromRest() { isPresented = false } })
+        }
+    }
+
+    /// A MEMBER'S VIEW OF A GROUP STORY'S REPLIES (owner 2026-10-23, group stories v2). The same panel
+    /// the poster's viewers sheet holds, in its replies-only mode. Its own function so the chains
+    /// below stay inside the type checker's limit.
+    private func groupRepliesSheet(_ v: some View) -> some View {
+        v.sheet(item: $groupRepliesStory) { s in
+            GroupStoryRepliesPanel(storyId: s.id, groupId: s.groupId ?? "")
+                .ignoresSafeArea(edges: .bottom)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.hidden)
+                .presentationBackground(Color(white: 0.10))
+        }
+    }
+
+    /// The member's door to those replies: a small capsule in the story's bottom area, over the
+    /// library's reply row, for a group story somebody else posted.
+    @ViewBuilder private var groupRepliesDoor: some View {
+        if let s = currentStory, s.groupId != nil, s.authorUid != (AuthService.shared.uid ?? ""),
+           !showViewers, dragDown == 0 {
+            Button { groupRepliesStory = s } label: {
+                Label("Replies", systemImage: "bubble.left.and.bubble.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(Color.black.opacity(0.45)))
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            .padding(.trailing, 16)
+            .padding(.bottom, max(10, bottomInset) + 66)
+            .ignoresSafeArea()
         }
     }
 
@@ -4603,8 +4641,11 @@ struct StoryViewer: View {
             guard let s = arr.first(where: { $0.id == id }) else { return ("All Viewers", true) }
             return (storyAudienceTitle(for: s), storyAudienceHasBothTabs(s))
         }
+        // Group story (owner 2026-10-23): Views and Replies tabs. Typed out for the same reason.
+        let groupIdFor: (String) -> String? = { id in arr.first(where: { $0.id == id })?.groupId }
         return StoryViewersSheet(activeStoryId: sheetStoryId,
                           audienceFor: audienceFor,
+                          groupIdFor: groupIdFor,
                           progress: $viewersProgress,
                           carouselBand: carouselBandRect,
                           hasPrev: (idx ?? 0) > 0,
@@ -5236,6 +5277,18 @@ struct StoryViewer: View {
 
         let text = typed ?? emoji ?? ""
         guard !text.isEmpty else { return }
+        // GROUP STORY (owner 2026-10-23, group stories v2): a reply or a picked emoji goes into the
+        // story's shared thread that everyone it reached can read, not privately to the poster.
+        if s.groupId != nil {
+            let replyText = typed ?? ""
+            let replyEmoji = typed == nil ? (emoji ?? "") : ""
+            Task {
+                do { try await StoriesService.shared.sendGroupReply(s, text: replyText, emoji: replyEmoji) }
+                catch { await MainActor.run { flashSentToast("Couldn't send. Check your connection and try again.") } }
+            }
+            flashSentToast()
+            return
+        }
         let cid = [me, s.authorUid].sorted().joined(separator: "_")
         // Attach the status reference so the reply shows as a "Status" quote (thumbnail) in chat.
         // `isReaction`: the react bar (an emoji and no typed text) — drawn on the card's corner.

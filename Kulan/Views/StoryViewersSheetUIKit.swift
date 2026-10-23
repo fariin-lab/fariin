@@ -219,6 +219,11 @@ final class StoryViewersSheetView: UIView {
     func setAudience(title: String, bothTabs: Bool, for id: String) {
         panels[id]?.audience = (title, bothTabs)
     }
+    /// Group story (owner 2026-10-23): its tabs become Views and Replies. See the panel's `groupId`.
+    func setGroupId(_ gid: String?, for id: String) {
+        guard let p = panels[id], p.groupId != gid else { return }
+        p.groupId = gid
+    }
 
     /// Build the panel for a story if it is not up yet, and wire it to the sheet. Empty id = no
     /// neighbour that way, which is not an error and not a panel.
@@ -1220,6 +1225,8 @@ struct StoryViewersSheet: UIViewRepresentable {
     /// audience, so the neighbour arrives with the right tabs already on it instead of inheriting
     /// the tabs of the story you were reading. See `storyAudienceTitle` in StoriesViews.
     var audienceFor: (String) -> (title: String, bothTabs: Bool) = { _ in ("All Viewers", true) }
+    /// A story's group, by id (owner 2026-10-23): non-nil gives its panel Views and Replies tabs.
+    var groupIdFor: (String) -> String? = { _ in nil }
     @Binding var progress: CGFloat
     var carouselBand: CGRect = .zero
     var hasPrev: Bool = false
@@ -1310,6 +1317,7 @@ struct StoryViewersSheet: UIViewRepresentable {
         }
         context.coordinator.view = v
         context.coordinator.audienceFor = audienceFor
+        context.coordinator.groupIdFor = groupIdFor
         context.coordinator.sync(active: activeStoryId, prev: prevStoryId, next: nextStoryId,
                                  slide: slideBox?.takePendingSheetSlide())
         return v
@@ -1325,6 +1333,7 @@ struct StoryViewersSheet: UIViewRepresentable {
         // The closure is rebuilt on every render and closes over this pass's story array, so it is
         // replaced rather than kept — a stale one would answer for stories that have since moved.
         context.coordinator.audienceFor = audienceFor
+        context.coordinator.groupIdFor = groupIdFor
         context.coordinator.sync(active: activeStoryId, prev: prevStoryId, next: nextStoryId,
                                  slide: slideBox?.takePendingSheetSlide())
     }
@@ -1342,6 +1351,7 @@ struct StoryViewersSheet: UIViewRepresentable {
         weak var view: StoryViewersSheetView?
         var applying = false
         var audienceFor: (String) -> (title: String, bothTabs: Bool) = { _ in ("All Viewers", true) }
+        var groupIdFor: (String) -> String? = { _ in nil }
         private var activeId = ""
         private var prevId = ""
         private var nextId = ""
@@ -1358,6 +1368,7 @@ struct StoryViewersSheet: UIViewRepresentable {
             for id in [active, prev, next] where !id.isEmpty {
                 let a = audienceFor(id)
                 view?.setAudience(title: a.title, bothTabs: a.bothTabs, for: id)
+                view?.setGroupId(groupIdFor(id), for: id)
             }
             guard moved else { return }
             for id in [active, prev, next] where !id.isEmpty { fill(id) }

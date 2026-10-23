@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import FirebaseFirestore
 
 /// ONE STORY'S VIEWERS PANEL, AS A REAL VIEW THAT CAN EXIST MORE THAN ONCE.
 ///
@@ -89,6 +90,60 @@ final class StoryViewersPanelView: UIView {
         }
     }
 
+    /// GROUP STORY (owner 2026-10-23, group stories v2, the reference app's group-story replies):
+    /// non-nil turns the two tabs into "Views" and "Replies", and the second lists the story's
+    /// shared reply thread instead of friends. The listener lives as long as this panel does.
+    var groupId: String? {
+        didSet {
+            guard groupId != oldValue else { return }
+            replyBox.reg?.remove()
+            replyBox.reg = nil
+            replies = []
+            if groupId != nil {
+                replyBox.reg = StoriesService.shared.listenGroupReplies(storyId: storyId) { [weak self] rows in
+                    self?.replies = rows
+                }
+            }
+            applyAudienceTabs()
+        }
+    }
+
+    /// Members' door (owner 2026-10-23): only the Replies tab, no Views, for a group story that is
+    /// not mine. Set before `groupId`.
+    var repliesOnly = false {
+        didSet { if repliesOnly != oldValue { applyAudienceTabs() } }
+    }
+
+    private var replies: [GroupStoryReply] = [] {
+        didSet {
+            // The reference app opens on Replies when there are any. Once, and never over a tab
+            // the person picked themselves.
+            if !replies.isEmpty, !autoPickedReplies, !userPickedTab, isGroupStory, tab == 0 {
+                autoPickedReplies = true
+                tab = 1
+                configureTab(allTab, allTabTitle, selected: false)
+                configureTab(friendsTab, secondTabTitle, selected: true)
+                setNeedsLayout()
+            }
+            applyFilter()
+        }
+    }
+    private var filteredReplies: [GroupStoryReply] = []
+    /// Removed in `deinit` by the box itself, and on leaving the sheet in `willMove(toSuperview:)`.
+    private let replyBox = ListenerBox()
+    private var autoPickedReplies = false
+    private var userPickedTab = false
+    private var isGroupStory: Bool { groupId != nil }
+    private var showingReplies: Bool { isGroupStory && tab == 1 }
+
+    override func willMove(toSuperview newSuperview: UIView?) {
+        super.willMove(toSuperview: newSuperview)
+        if newSuperview == nil {
+            replyBox.reg?.remove()
+            replyBox.reg = nil
+        }
+    }
+
     // MARK: Views
 
     private let grabber = UIView()
@@ -156,7 +211,7 @@ final class StoryViewersPanelView: UIView {
         // Placeholder titles only: `audience` is written by the sheet the moment this is built and
         // `applyAudienceTabs` puts the real ones in.
         configureTab(allTab, allTabTitle, selected: true)
-        configureTab(friendsTab, "Friends", selected: false)
+        configureTab(friendsTab, secondTabTitle, selected: false)
         allTab.addTarget(self, action: #selector(pickAll), for: .touchUpInside)
         friendsTab.addTarget(self, action: #selector(pickFriends), for: .touchUpInside)
         underline.backgroundColor = .white
@@ -229,22 +284,32 @@ final class StoryViewersPanelView: UIView {
 
     /// THE FIRST TAB IS ALWAYS THE AUDIENCE'S OWN NAME, which makes the whole rule one sentence: the
     /// first tab names who this story went to, and the second exists only when that was Everyone.
-    private var allTabTitle: String { audience.title }
+    /// A group story's tabs are "Views" and "Replies" (owner 2026-10-23), whatever its audience.
+    private var allTabTitle: String { isGroupStory ? "Views" : audience.title }
+    private var secondTabTitle: String { isGroupStory ? "Replies" : "Friends" }
+    /// Members see only Replies, so the second tab is the one shown and the first is gone.
+    private var membersRepliesOnly: Bool { isGroupStory && repliesOnly }
+    private var showsBothTabs: Bool { isGroupStory ? !repliesOnly : audience.bothTabs }
 
     private func applyAudienceTabs() {
         // A HIDDEN FRIENDS TAB MUST NOT LEAVE ITS FILTER ON — a story whose audience has no second
         // tab would otherwise show its list still narrowed, under a tab that is not on screen to
         // say so.
-        if !audience.bothTabs, tab != 0 {
+        if membersRepliesOnly {
+            if tab != 1 { tab = 1; applyFilter() }
+        } else if !showsBothTabs, tab != 0 {
             tab = 0
             applyFilter()
         }
-        friendsTab.isHidden = !audience.bothTabs
+        allTab.isHidden = membersRepliesOnly
+        friendsTab.isHidden = !showsBothTabs && !membersRepliesOnly
         // Nothing to switch to, so it stops behaving like a button: no highlight, no touch feedback
         // on a tap that cannot change anything. It is a label with an underline at that point.
-        allTab.isUserInteractionEnabled = audience.bothTabs
+        allTab.isUserInteractionEnabled = showsBothTabs
+        friendsTab.isUserInteractionEnabled = showsBothTabs
         configureTab(allTab, allTabTitle, selected: tab == 0)
-        configureTab(friendsTab, "Friends", selected: tab == 1)
+        configureTab(friendsTab, secondTabTitle, selected: tab == 1)
+        applyFilter()
         setNeedsLayout()
     }
 
@@ -254,14 +319,14 @@ final class StoryViewersPanelView: UIView {
         b.setTitleColor(selected ? .white : UIColor.white.withAlphaComponent(0.5), for: .normal)
     }
 
-    @objc private func pickAll() { setTab(0) }
-    @objc private func pickFriends() { setTab(1) }
+    @objc private func pickAll() { userPickedTab = true; setTab(0) }
+    @objc private func pickFriends() { userPickedTab = true; setTab(1) }
 
     private func setTab(_ i: Int) {
         guard tab != i else { return }
         tab = i
         configureTab(allTab, allTabTitle, selected: i == 0)
-        configureTab(friendsTab, "Friends", selected: i == 1)
+        configureTab(friendsTab, secondTabTitle, selected: i == 1)
         applyFilter()
         UIView.animate(withDuration: 0.18) { self.setNeedsLayout(); self.layoutIfNeeded() }
     }
@@ -277,7 +342,9 @@ final class StoryViewersPanelView: UIView {
         allTab.sizeToFit()
         friendsTab.sizeToFit()
         allTab.frame = CGRect(x: 18, y: tabY, width: allTab.bounds.width, height: 26)
-        friendsTab.frame = CGRect(x: allTab.frame.maxX + 24, y: tabY, width: friendsTab.bounds.width, height: 26)
+        // Members' replies-only panel: the one tab stands where the first one would.
+        let secondX = membersRepliesOnly ? 18 : allTab.frame.maxX + 24
+        friendsTab.frame = CGRect(x: secondX, y: tabY, width: friendsTab.bounds.width, height: 26)
         let active = tab == 0 ? allTab : friendsTab
         underline.frame = CGRect(x: active.frame.minX, y: allTab.frame.maxY + 4,
                                  width: active.bounds.width, height: 2)
@@ -352,6 +419,15 @@ final class StoryViewersPanelView: UIView {
 
     private func applyFilter() {
         let me = AuthService.shared.uid ?? ""
+        // A group story's second tab is its reply thread, oldest first as it arrives.
+        if showingReplies {
+            let q = (search.text ?? "").trimmingCharacters(in: .whitespaces)
+            filteredReplies = q.isEmpty ? replies
+                : replies.filter { replyPerson($0.uid).name.localizedCaseInsensitiveContains(q) }
+            table.reloadData()
+            updateEmptyState()
+            return
+        }
         if tab == 1 && friendUids.isEmpty {
             friendUids = Set(ConversationsRepository.shared.conversations
                 .filter { !$0.isGroup }.map { $0.otherUid(me) }.filter { !$0.isEmpty })
@@ -374,7 +450,7 @@ final class StoryViewersPanelView: UIView {
     private func updateEmptyState() {
         // 2026-10-17 (owner): receipts off and nobody had watched before I turned them off, so the
         // list is empty because of my setting, not because nobody watched. Say so.
-        let off = viewers.isEmpty && !StoryPrefs.viewReceiptsOn
+        let off = !showingReplies && viewers.isEmpty && !StoryPrefs.viewReceiptsOn
         if off != showingViewsOff {
             showingViewsOff = off
             if off {
@@ -400,7 +476,28 @@ final class StoryViewersPanelView: UIView {
             }
             setNeedsLayout()
         }
-        emptyLabel.isHidden = isLoading || !filtered.isEmpty
+        // Group story replies (owner 2026-10-23): their own empty line, and the viewers' skeleton
+        // never stands over the thread.
+        if !showingViewsOff { emptyLabel.text = showingReplies ? "No replies yet" : "No views yet" }
+        loadingView.isHidden = !isLoading || showingReplies
+        emptyLabel.isHidden = showingReplies ? !filteredReplies.isEmpty : (isLoading || !filtered.isEmpty)
+    }
+
+    /// The name and photo for a reply's writer: me, then the group's own member maps, then a 1:1
+    /// chat, the same conversation-backed lookup the viewers list makes (`fetchViewers`).
+    fileprivate func replyPerson(_ uid: String) -> (name: String, photo: String?) {
+        let me = AuthService.shared.uid ?? ""
+        if uid == me { return ("You", ProfileStore.shared.me?.photoUrl) }
+        let convs = ConversationsRepository.shared.conversations
+        if let gid = groupId, let g = convs.first(where: { $0.id == gid }),
+           let n = g.names[uid], !n.isEmpty {
+            let p = g.photos[uid] ?? ""
+            return (n, p.isEmpty ? nil : p)
+        }
+        if let c = convs.first(where: { !$0.isGroup && $0.otherUid(me) == uid }) {
+            return (c.name(for: me), c.photoUrl(for: me))
+        }
+        return ("Someone", nil)
     }
 }
 
@@ -426,13 +523,18 @@ extension StoryViewersPanelView: UITextFieldDelegate {
 // MARK: - Table
 
 extension StoryViewersPanelView: UITableViewDataSource, UITableViewDelegate {
-    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { filtered.count }
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        showingReplies ? filteredReplies.count : filtered.count
+    }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "viewer", for: indexPath)
-        let v = filtered[indexPath.row]
         cell.backgroundColor = .clear
         cell.selectionStyle = .none
+        if showingReplies {
+            return replyCell(cell, filteredReplies[indexPath.row])
+        }
+        let v = filtered[indexPath.row]
         // SwiftUI for the row's CONTENTS only. The avatar, its hashed letter fallback and the
         // reaction badge already exist and already look right; rebuilding them in UIKit would only
         // be a chance for the two to drift apart.
@@ -458,6 +560,33 @@ extension StoryViewersPanelView: UITableViewDataSource, UITableViewDelegate {
                 },
                 onBlock: { [weak self] in self?.onBlock?(v) },
                 isHidden: StoryAudienceStore.shared.isHidden(v.id))
+        }
+        .margins(.horizontal, 16)
+        .margins(.vertical, 9)
+        return cell
+    }
+
+    /// One reply in a group story's thread (owner 2026-10-23). Same hosting and margins as a viewer
+    /// row, so the two tabs read as one list.
+    private func replyCell(_ cell: UITableViewCell, _ r: GroupStoryReply) -> UITableViewCell {
+        let who = replyPerson(r.uid)
+        let canDelete = groupId.map { StoriesService.canDeleteGroupReply(r, groupId: $0) } ?? false
+        let sid = storyId
+        let info = StoryViewerInfo(id: r.uid, name: who.name, photoUrl: who.photo,
+                                   viewedAt: r.createdAt, reaction: nil)
+        let isMe = r.uid == (AuthService.shared.uid ?? "")
+        cell.contentConfiguration = UIHostingConfiguration {
+            GroupStoryReplyRowContent(
+                reply: r, name: who.name, photoUrl: who.photo, canDelete: canDelete,
+                onOpenProfile: { [weak self] in
+                    guard !isMe else { return }
+                    self?.onOpenProfile?(info)
+                },
+                onDelete: { [weak self] in
+                    // Off the list at once; the listener confirms it, or brings it back on a refusal.
+                    self?.replies.removeAll { $0.id == r.id }
+                    Task { try? await StoriesService.shared.deleteGroupReply(storyId: sid, replyId: r.id) }
+                })
         }
         .margins(.horizontal, 16)
         .margins(.vertical, 9)
@@ -516,4 +645,71 @@ struct StoryViewerSkeleton: View {
         }
         .environment(\.colorScheme, .dark)
     }
+}
+
+/// ONE REPLY IN A GROUP STORY'S THREAD (owner 2026-10-23, group stories v2). The viewer row's face
+/// and name, with the reply under the name (or "Reacted" and the emoji) and how long ago at the end.
+/// Delete sits behind a long press, only for the writer and the group's owner or admins.
+struct GroupStoryReplyRowContent: View {
+    let reply: GroupStoryReply
+    let name: String
+    let photoUrl: String?
+    let canDelete: Bool
+    var onOpenProfile: () -> Void = {}
+    var onDelete: () -> Void = {}
+
+    private var line: String { reply.isReaction ? "Reacted \(reply.emoji)" : reply.text }
+
+    /// Number and one letter, as the story header writes its own age ("12s", "5m", "3h").
+    private var ago: String {
+        let s = max(0, Int(Date().timeIntervalSince(reply.createdAt)))
+        if s < 60 { return "\(s)s" }
+        if s < 3600 { return "\(s / 60)m" }
+        if s < 86_400 { return "\(s / 3600)h" }
+        return "\(s / 86_400)d"
+    }
+
+    private var row: some View {
+        HStack(alignment: .top, spacing: 12) {
+            AvatarView(name: name, photoUrl: photoUrl, size: 46)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name).font(.body.weight(.semibold)).foregroundStyle(.white)
+                Text(line).font(.subheadline).foregroundStyle(.white.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Text(ago).font(.caption).foregroundStyle(.white.opacity(0.5))
+                .padding(.top, 3)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onOpenProfile() }
+    }
+
+    var body: some View {
+        if canDelete {
+            row.contextMenu {
+                Button(role: .destructive, action: onDelete) {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+        } else {
+            row
+        }
+    }
+}
+
+/// THE MEMBERS' DOOR (owner 2026-10-23): a member who did not post a group story opens its replies
+/// in the same panel the poster's viewers sheet uses, with only the Replies tab.
+struct GroupStoryRepliesPanel: UIViewRepresentable {
+    let storyId: String
+    let groupId: String
+
+    func makeUIView(context: Context) -> StoryViewersPanelView {
+        let p = StoryViewersPanelView(storyId: storyId)
+        p.repliesOnly = true
+        p.groupId = groupId
+        return p
+    }
+
+    func updateUIView(_ p: StoryViewersPanelView, context: Context) {}
 }
