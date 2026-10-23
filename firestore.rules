@@ -3137,6 +3137,12 @@ service cloud.firestore {
         allow delete: if signedIn() && request.auth.uid == uid && resource.data.status == 'pending';
         allow create, update: if false;
       }
+      // 2026-10-23: who was rung into this link's call and how they answered (linkCallInvite,
+      // groupRingAnswer). Same reach as the link: the call's Not connected list reads it. Server only.
+      match /invites/{uid} {
+        allow get, list: if signedIn();
+        allow write: if false;
+      }
     }
 
     // Calls: ephemeral WebRTC signaling (offer/answer + ICE candidates). Scoped to the
