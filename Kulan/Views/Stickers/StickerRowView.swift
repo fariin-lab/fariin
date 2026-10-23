@@ -51,6 +51,9 @@ final class RowStickerView: UIView {
             CATransaction.begin(); CATransaction.setDisableActions(true)
             self.art.contents = nil
             CATransaction.commit()
+            // Owner 2026-10-23 (build 1014): the shimmer sat on top of a sticker already playing.
+            // The engine's first frame is the moment the picture is real, so it always clears it.
+            self.skeleton.fadeOut()
         }
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -128,7 +131,11 @@ final class RowStickerView: UIView {
         // loads in a moment, but the shimmer went up at once and faded over it. Only a load that is
         // still running after a short wait shows the shimmer; a fast one never does.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-            guard let self, self.generation == gen, self.art.contents == nil, !self.player.hasFrame else { return }
+            // Not once the engine has the sticker (`isTGS`): its first frame is on the way and clears
+            // the shimmer itself. The 0.35 s check fired after `showTGS` but before that first frame
+            // and put the shimmer back over the playing sticker, with nothing left to take it away.
+            guard let self, self.generation == gen, self.art.contents == nil, !self.player.hasFrame,
+                  !self.isTGS else { return }
             self.skeleton.setActive(true)
         }
         Task { @MainActor [weak self] in

@@ -111,7 +111,9 @@ final class StickerPlayerView: UIView {
         layer.addSublayer(art)
         layer.addSublayer(player)
         addSubview(skeleton)
-        player.onFirstFrame = { [weak self] in self?.art.isHidden = true }
+        // The engine's first frame replaces both the still and the shimmer (owner 2026-10-23: the
+        // shimmer could stay over a playing sticker when no still arrived first).
+        player.onFirstFrame = { [weak self] in self?.art.isHidden = true; self?.skeleton.fadeOut() }
         NotificationCenter.default.addObserver(self, selector: #selector(powerChanged),
                                                name: .NSProcessInfoPowerStateDidChange, object: nil)
     }
