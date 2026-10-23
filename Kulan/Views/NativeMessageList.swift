@@ -3572,6 +3572,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         pinUnreadLanding = landedUnreadId != nil
         unreadPinLogs = 0
         strayCellLogs = 0
+        rowHeightLogs = 0
+        // The rows after the open has settled, and again once the late heights are in (ROWH#).
+        for delay in [1.5, 4.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.scheduleStrayCellSweep("settle")
+            }
+        }
         let openNumber = (Self.opensThisRun[cid] ?? 0) + 1
         Self.opensThisRun[cid] = openNumber
         reopenLog("LAND open#\(openNumber) of this chat this run, rows=\(rowCount) seededHeights=\(seeded) estimated=\(estimatedIds.count) pagedHold=\(firstLandWasHeld) liveSettled=\(liveWindowSettled) id=\(initId) offset=\(initTop) savedTop=\(initialScrollTopInset.map { String(format: "%.1f", $0) } ?? "nil") top=\(String(format: "%.1f", collectionView.adjustedContentInset.top)) bottom=\(String(format: "%.1f", collectionView.adjustedContentInset.bottom)) y=\(String(format: "%.1f", collectionView.contentOffset.y)) appeared=\(isViewCompletelyAppeared)")
@@ -3743,6 +3750,32 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             self.sweepStrayCells(caller)
         }
     }
+    /// ⛔ A ROW'S FRAME IS ITS PLAN'S HEIGHT — owner 2026-10-23, build 1017, group "Juni" opened on
+    /// unread: the next bubble rode half over the first unread one, and that row's Role tag floated
+    /// on the divider line. A live cell whose frame (the layout's `heights`) is not the height of the
+    /// plan its row view was drawn from overflows into the next row, or leaves a gap. ROWH# names
+    /// the row, both numbers, the cached one and whether it is the pinned unread row; the cached
+    /// height is then corrected through `adoptHeight`, the one path that changes a row's height and
+    /// holds the reader. ROWGEO# names any part of the row drawn off its own plan.
+    private var rowHeightLogs = 0
+    private func checkRowHeight(_ cell: MessageRowCell, caller: String) {
+        guard let id = cell.rowId, let planH = cell.planHeight else { return }
+        let frameH = cell.frame.height
+        let cached = heights[id]
+        let landed = landedTarget?.id == id
+        if abs(frameH - planH) > 0.5 || abs((cached ?? planH) - planH) > 0.5 {
+            if rowHeightLogs < 8 {
+                rowHeightLogs += 1
+                DiagLog.add("ROWH# row=\(id.suffix(5)) plan=\(Int(planH)) frame=\(Int(frameH)) cached=\(cached.map { "\(Int($0))" } ?? "nil") landed=\(landed) pinned=\(pinUnreadLanding) after=\(caller) t=\(Int(Date().timeIntervalSince(landedAt) * 1000))ms")
+            }
+            if let cached, abs(cached - planH) > 0.5 { adoptHeight(planH, for: id) }
+        }
+        if let drift = cell.planDrift(), rowHeightLogs < 8 {
+            rowHeightLogs += 1
+            DiagLog.add("ROWGEO# row=\(id.suffix(5)) \(drift) landed=\(landed) pinned=\(pinUnreadLanding) after=\(caller)")
+        }
+    }
+
     private func sweepStrayCells(_ caller: String) {
         guard isViewLoaded, !isDisappearing, collectionView.window != nil else { return }
         collectionView.layoutIfNeeded()
@@ -3754,6 +3787,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 .flatMap { dataSource.indexPath(for: $0) }
                 .flatMap { collectionView.cellForItem(at: $0) }
             let owned = visible.contains(ObjectIdentifier(cell))
+            if owned, liveCell === cell { checkRowHeight(cell, caller: caller); continue }
             guard !owned || (liveCell != nil && liveCell !== cell) else { continue }
             cell.isHidden = true
             if strayCellLogs < 5 {

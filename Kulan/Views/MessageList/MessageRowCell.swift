@@ -58,6 +58,10 @@ final class MessageRowCell: UICollectionViewCell {
     var stickerView: RowStickerView? { rowView.stickerView }
     var liftOverlays: [UIView] { rowView.liftOverlays }
     var swipeRiders: [UIView] { rowView.swipeRiders }
+    /// The plan height this cell's row view was laid out from (diagnostics, ROWH#).
+    var planHeight: CGFloat? { rowView.plan?.height }
+    /// See `MessageRowView.planDrift` (diagnostics, ROWGEO#).
+    func planDrift() -> String? { rowView.planDrift() }
 
     /// Is this point (in `view`'s coordinates) on a media bubble's caption? See
     /// `MessageRowView.hitsMediaCaption`.

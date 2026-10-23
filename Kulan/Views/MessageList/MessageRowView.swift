@@ -640,6 +640,31 @@ final class MessageRowView: UIView {
         [senderLabel, verifiedView, roleChipView, forwardedLabel, forwardedIcon]
             .compactMap { $0 }.filter { !$0.isHidden && $0.alpha > 0.01 }
     }
+    /// Diagnostics only (ROWGEO#, owner 2026-10-23 overlap report): every drawn part that sits
+    /// more than a point off the rect its plan gave it, as "part=dx,dy" in points, plus the view's
+    /// height against the plan's and a role chip shown that the plan does not have. Nil when the
+    /// row is drawn exactly as planned. Measured through `convert`, so a stranded transform counts.
+    func planDrift() -> String? {
+        guard let p = plan else { return nil }
+        var parts: [String] = []
+        func check(_ name: String, _ v: UIView?, _ want: CGRect?) {
+            guard let v, !v.isHidden, let want else { return }
+            let have = v.convert(v.bounds, to: self)
+            let dx = have.minX - want.minX, dy = have.minY - want.minY
+            if abs(dx) > 1 || abs(dy) > 1 { parts.append("\(name)=\(Int(dx)),\(Int(dy))") }
+        }
+        if abs(bounds.height - p.height) > 0.5 { parts.append("viewH=\(Int(bounds.height))/\(Int(p.height))") }
+        check("div", dividerLabel, p.divider?.label)
+        if case .bubble(let b) = p.body {
+            check("box", bubbleBox, b.bubble)
+            check("name", senderLabel, b.senderName)
+            check("role", roleChipView, b.roleChip)
+            check("face", avatarView, b.avatar)
+            if let c = roleChipView, !c.isHidden, b.roleChip == nil { parts.append("role=unplanned") }
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
     /// What a reply swipe moves with the bubble: the overlays above plus the sender's photo
     /// (owner 2026-10-23: the bubble slid over a photo that stayed put).
     var swipeRiders: [UIView] {
