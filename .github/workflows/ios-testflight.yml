@@ -74,7 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: CRASH FIX, FASTER SPEAKER, GROUP STORY RULES, PUBLIC GROUP PAGE, FAST JOIN REQUESTS.
+            THIS BUILD: STORY EDITOR FREEZE FIX, PASSWORD STRENGTH BAR, SIGN-IN SPINNER, GROUP INVITES, PROFILE GROUPS.
+            Story editor: tapping the emoji key while writing a caption no longer freezes the app; moving a caption or sticker no longer asks "Discard this story?".
+            Sign-up: one strength bar (Too short to Strong) replaces the four-line checklist; name, username and password hints are easier to read. Apple and Google: the button you used spins, and only after Face ID or picking your Google account.
+            Groups: Join Group stays blue and spins; the group photo on the welcome card is no longer faded; an invite card shows the group's current photo even if it was added after the link was sent.
+            Stories: the viewers list says "Couldn't load viewers" instead of loading forever; Fariin's welcome stories show no time.
+            Profile: Groups in Common shows 5 and "See All", which opens the full list on its own page.
+            PLEASE TEST: write a story caption and tap the emoji key; drag a caption around; create an account with Google and with Apple; join a group from an invite link; open a profile you share many groups with.
+
+            EARLIER: CRASH FIX, FASTER SPEAKER, GROUP STORY RULES, PUBLIC GROUP PAGE, FAST JOIN REQUESTS.
             Crash: the crash on builds 1010 and 1011 (closing a chat) is fixed.
             Calls: Speaker turns on at once in a normal call. Link calls: Add people rings them; declined people get a bell reminder; screen sharing works in group and link calls (other session's work).
             Group stories: only groups with 50+ members (panel-controlled, per country too); app admins any group. A group story stays out of My Story; posting from the group page turns a ring round the group photo. Posting as Fariin closes at once and rings Fariin's picture.
