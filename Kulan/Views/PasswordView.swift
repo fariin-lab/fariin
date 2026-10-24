@@ -701,10 +701,9 @@ private struct FocusIf: ViewModifier {
     }
 }
 
-/// The four rules a new password must meet — owner, 2026-09-25, with the reference page's checklist.
-/// ⛔ A CHECKLIST, NOT A RED/YELLOW/GREEN STRENGTH METER. His question, my call: a meter guesses at
-/// strength and people argue with it ("why is mine only yellow?"); a checklist says exactly what is
-/// needed and ticks each part off as it happens, which is what the large apps do on this screen.
+/// The rules a new password must meet (owner, 2026-09-25): 8+ characters, a letter, a number, and
+/// the two entries matching. `allMet` is still the ONLY gate on the button; the meter below grades
+/// above that line but never moves it.
 struct PasswordRules {
     let password: String
     let confirm: String
@@ -714,34 +713,86 @@ struct PasswordRules {
     var hasNumber: Bool { password.contains { $0.isNumber } }
     var matches: Bool { !confirm.isEmpty && confirm == password }
     var allMet: Bool { longEnough && hasLetter && hasNumber && matches }
+
+    /// 0 Too short, 1 Weak (8+ but no letter or no number), 2 Fair (the minimum), 3 Good (12+),
+    /// 4 Strong (12+ with a symbol or mixed case).
+    var level: Int {
+        guard longEnough else { return 0 }
+        guard hasLetter, hasNumber else { return 1 }
+        guard password.count >= 12 else { return 2 }
+        let mixed = password.contains { $0.isLowercase } && password.contains { $0.isUppercase }
+        let symbol = password.contains { !$0.isLetter && !$0.isNumber }
+        return mixed || symbol ? 4 : 3
+    }
 }
 
-/// Grey until a rule is met, then a green tick and full-strength text. Nothing is ever red: an
-/// unfinished password is not an error, it is a password still being typed.
+/// ⛔ ONE LINE NOW, NOT FOUR (owner 2026-10-24, reverses the 2026-09-25 checklist: "that takes the
+/// space of Create account, make it one line"). Four segments that fill and colour with the level,
+/// the word on the right, and on the left the ONE thing that matters next: what is missing, then
+/// whether the two entries match. He picked this from three drawn options (artifact "Password
+/// Strength Options", option A). The name stays so the three password screens need no change.
 struct PasswordChecklist: View {
     let rules: PasswordRules
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            row("At least 8 characters", rules.longEnough)
-            row("At least 1 letter", rules.hasLetter)
-            row("At least 1 number", rules.hasNumber)
-            row("Passwords match", rules.matches)
-        }
-        .font(.subheadline)
-        .animation(.easeOut(duration: 0.15), value: rules.allMet)
+    private var empty: Bool { rules.password.isEmpty }
+
+    private var word: String {
+        if empty { return "" }
+        return ["Too short", "Weak", "Fair", "Good", "Strong"][rules.level]
     }
 
-    private func row(_ text: String, _ met: Bool) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "checkmark")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(met ? Color.green : Color.secondary)
-                .frame(width: 16)
-            Text(text)
-                .foregroundStyle(met ? Color.primary : Color.secondary)
+    private var color: Color {
+        switch rules.level {
+        case 1: return Color(hex: 0xE5484D)
+        case 2: return Color(hex: 0xF5A524)
+        case 3: return Color(hex: 0x0A84FF)
+        case 4: return Color(hex: 0x30A46C)
+        default: return .secondary
         }
+    }
+
+    /// Left side: what is missing first, then the match, else nothing.
+    private var hint: (text: String, ok: Bool)? {
+        if empty { return nil }
+        if !rules.longEnough {
+            let n = 8 - rules.password.count
+            return ("\(n) more \(n == 1 ? "character" : "characters")", false)
+        }
+        if !rules.hasNumber { return ("Add a number", false) }
+        if !rules.hasLetter { return ("Add a letter", false) }
+        if rules.confirm.isEmpty { return nil }
+        return rules.matches ? ("Passwords match", true) : ("Passwords don't match", false)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 5) {
+                ForEach(0..<4, id: \.self) { i in
+                    Capsule()
+                        .fill(!empty && rules.level > 0 && i < rules.level ? color : Color(.tertiarySystemFill))
+                        .frame(height: 4)
+                }
+            }
+            HStack(spacing: 8) {
+                if let hint {
+                    HStack(spacing: 5) {
+                        if hint.ok {
+                            Image(systemName: "checkmark").font(.footnote.weight(.semibold))
+                                .foregroundStyle(Color(hex: 0x30A46C))
+                        }
+                        Text(hint.text).foregroundStyle(hint.ok ? Color.primary : Color.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+                Text(word).fontWeight(.semibold).foregroundStyle(color)
+            }
+            .font(.footnote)
+            .frame(minHeight: 18)
+        }
+        .animation(.easeOut(duration: 0.2), value: rules.level)
+        .animation(.easeOut(duration: 0.15), value: rules.matches)
         .accessibilityElement(children: .combine)
-        .accessibilityValue(met ? "Done" : "Not yet")
+        .accessibilityLabel(empty ? "Password strength" : "Password strength, \(word)")
+        .accessibilityValue(hint?.text ?? "")
     }
 }
