@@ -1,6 +1,7 @@
 import Foundation
 import CallKit
 import AVFoundation
+import AudioToolbox
 import WebRTC
 
 // Bridges our WebRTC calls to the native iOS call UI (CallKit): the green status
@@ -8,6 +9,38 @@ import WebRTC
 // lock-screen ringing. Handles the audio-session hand-off WebRTC needs under CallKit.
 //
 // NOTE: untested from CI — CallKit + live audio need two real devices.
+/// ⛔ THE PHONE BUZZES WHILE A CALL RINGS, OURS AND NOT iOS'S (owner 2026-10-24: the reference app vibrates
+/// for an incoming call even on silent, Fariin did not). iOS is meant to vibrate a CallKit ring by
+/// itself, but on his phone it did not, so the app does it, started the instant iOS shows the ring
+/// (no Firestore, no listener: the stuck connection cannot stop it) and stopped by every way a ring
+/// ends. A 60 s cap is the safety net if one of those is ever missed.
+enum RingVibration {
+    private static var timer: Timer?
+    private static var cap: DispatchWorkItem?
+
+    static func start() {
+        DispatchQueue.main.async {
+            stop()
+            buzz()
+            let t = Timer(timeInterval: 1.6, repeats: true) { _ in buzz() }
+            RunLoop.main.add(t, forMode: .common)
+            timer = t
+            let w = DispatchWorkItem { stop() }
+            cap = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + 60, execute: w)
+        }
+    }
+
+    static func stop() {
+        DispatchQueue.main.async {
+            timer?.invalidate(); timer = nil
+            cap?.cancel(); cap = nil
+        }
+    }
+
+    private static func buzz() { AudioServicesPlaySystemSound(kSystemSoundID_Vibrate) }
+}
+
 final class CallKitManager: NSObject {
     static let shared = CallKitManager()
 
@@ -279,6 +312,7 @@ final class CallKitManager: NSObject {
                                                       kitError: (error as NSError?)?.code)
                 }
             } else {
+                RingVibration.start()   // owner 2026-10-24
                 // Owner, 2026-10-10: the ring is up; the caller may now hear "Ringing...".
                 DispatchQueue.main.async { CallService.shared.ringShown(callId: callId) }
             }
@@ -411,6 +445,7 @@ final class CallKitManager: NSObject {
         update.supportsHolding = false
         Self.limitControls(update)
         provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
+            if error == nil { RingVibration.start() }   // owner 2026-10-24
             // Refused by iOS (Focus, its block list): no ring and no system call. Let go of it.
             if error != nil {
                 DispatchQueue.main.async {
@@ -424,6 +459,7 @@ final class CallKitManager: NSObject {
 
     /// The ring stopped, or the answered group call is over, without a tap in CallKit.
     func endGroupCall(uuid: UUID, reason: CXCallEndedReason) {
+        RingVibration.stop()   // owner 2026-10-24
         provider.reportCall(with: uuid, endedAt: nil, reason: reason)
         if groupUUID == uuid { groupUUID = nil; endGroupAudio() }
     }
@@ -514,6 +550,7 @@ final class CallKitManager: NSObject {
 
     /// Remote hung up / call failed — clear the system UI without a user action.
     func reportEnded(_ kind: EndKind = .remote) {
+        RingVibration.stop()   // the caller gave up, or another phone answered (owner 2026-10-24)
         let reason: CXCallEndedReason
         switch kind {
         case .remote:            reason = .remoteEnded
@@ -575,6 +612,7 @@ extension CallKitManager: CXProviderDelegate {
     func provider(_ provider: CXProvider, perform action: CXSetGroupCallAction) { action.fulfill() }
 
     func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
+        RingVibration.stop()   // answered: the buzzing ends here (owner 2026-10-24)
         // owner, 2026-10-06: a group ring answered in CallKit. Audio per the SDK's CallKit recipe,
         // set up BEFORE the room connects; the join itself runs on the main actor.
         if let group = groupUUID, group == action.callUUID {
@@ -622,6 +660,7 @@ extension CallKitManager: CXProviderDelegate {
         action.fulfill()
     }
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+        RingVibration.stop()   // declined or hung up (owner 2026-10-24)
         // owner, 2026-10-06: End on a group ring declines it; on an answered group call it hangs up.
         if let group = groupUUID, group == action.callUUID {
             groupUUID = nil
