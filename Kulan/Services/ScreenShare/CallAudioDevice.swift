@@ -108,6 +108,7 @@ final class CallAudioDevice: NSObject, RTCAudioDevice, RTCAudioSessionDelegate {
             stopUnit(); disposeUnit()
             playoutOn = false; recordingOn = false
             playoutReady = false; recordingReady = false
+            interrupted = false   // never carried into the next call (owner 2026-10-24)
             if ready { RTCAudioSession.sharedInstance().remove(self) }
             ready = false
             delegate = nil; deliver = nil; getPlayout = nil
@@ -125,7 +126,30 @@ final class CallAudioDevice: NSObject, RTCAudioDevice, RTCAudioSessionDelegate {
     // MARK: RTCAudioSessionDelegate — the same switches the built-in device listens to
 
     func audioSession(_ session: RTCAudioSession, didChangeCanPlayOrRecord canPlayOrRecord: Bool) {
-        queue.async { self.update() }
+        queue.async {
+            // ⛔ A STALE "INTERRUPTED" KILLED EVERY LATER CALL (owner 2026-10-24, @v): another app's
+            // call took the mic during ours, iOS sent "interruption began" and never "ended" (it is
+            // not promised to), so this stayed true for the life of the process and every later call
+            // started with the unit off: 0 bytes out, nothing heard, until the app was restarted.
+            // Audio being switched on for a call is the session being ours again, so it clears here.
+            if canPlayOrRecord { self.interrupted = false }
+            self.update()
+        }
+    }
+
+    func audioSession(_ session: RTCAudioSession, didSetActive active: Bool) {
+        guard active else { return }
+        queue.async { self.interrupted = false; self.update() }
+    }
+
+    /// A call that has sent no sound at all while not muted (CallService's 5 s check): forget any
+    /// interruption, rebuild the unit and start it again. A short blip at most.
+    func kick() {
+        queue.async {
+            self.interrupted = false
+            self.stopUnit(); self.disposeUnit()
+            self.update()
+        }
     }
 
     func audioSessionDidBeginInterruption(_ session: RTCAudioSession) {

@@ -3845,6 +3845,21 @@ final class CallService: NSObject {
                         "audio5s": ["txBytes": tx, "rxBytes": rx, "unitOn": unitOn, "sessionUp": sessionUp,
                                     "muted": self.isMuted],
                     ]], merge: true)
+                    // ⛔ NOTHING WENT OUT AT ALL while not muted (owner 2026-10-24, @v: 0 bytes after
+                    // another app's call took the mic; only a restart brought it back). Rebuild the
+                    // audio now instead of leaving a silent call; logged so we know how often.
+                    if tx == 0, !self.isMuted, !self.isHeld, self.callId == id {
+                        DiagLog.add("CALLAUDIO# no sound sent in 5s (rx \(Int(rx))): rebuilding the audio")
+                        Telemetry.event(.error, component: "calls", code: "mic_silent", detail: ["reason": role])
+                        if ScreenShareAudioMixer.useCallAudioDevice {
+                            CallAudioDevice.shared.kick()
+                        } else {
+                            let rtc = RTCAudioSession.sharedInstance()
+                            rtc.isAudioEnabled = false
+                            rtc.isAudioEnabled = true
+                        }
+                        self.db.collection("callTiming").document(id).setData([role: ["audioKick": true]], merge: true)
+                    }
                 }
             }
         }
