@@ -54,7 +54,9 @@ struct GroupWelcomeCard: View {
                         }
                 }
                 .buttonStyle(.plain)
-                .disabled(!canEdit)
+                // ⚠️ NOT `.disabled`: a disabled button draws its label dimmed, so every member who
+                // cannot edit saw the group photo washed out (owner 2026-10-24). Untappable, not faded.
+                .allowsHitTesting(canEdit)
                 .accessibilityLabel(canEdit ? "Edit Group" : conv.title)
 
                 VStack(spacing: 3) {
