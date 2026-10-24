@@ -198,6 +198,10 @@ struct ContactInfoView: View {
     @State private var noteExpanded = false
     @State private var noteWidth: CGFloat = 0   // real rendered width; drives the More test
     @State private var showAddGroup = false
+    /// Groups in Common shows `groupsShown` until this is on (owner 2026-10-24: 40 shared groups
+    /// meant scrolling past all of them to reach Block and Report).
+    @State private var allGroupsShown = false
+    private let groupsShown = 5
     @State private var openGroup: Conversation?
     @State private var showProfilePhoto = false   // tap the hero avatar → in-place photo morph
     /// ⛔ THE CHROME'S OWN FLAG, AND IT IS NOT `showProfilePhoto`. That one has to stay true until the
@@ -1614,7 +1618,7 @@ struct ContactInfoView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            ForEach(groups) { g in
+            ForEach(allGroupsShown ? groups : Array(groups.prefix(groupsShown))) { g in
                 rowDivider
                 Button { openGroup = g } label: {
                     HStack(spacing: 12) {
@@ -1627,6 +1631,24 @@ struct ContactInfoView: View {
                         Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
                     }
                     .padding(.horizontal, 16).padding(.vertical, 9)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            if groups.count > groupsShown {
+                rowDivider
+                Button {
+                    withAnimation(.easeInOut(duration: 0.25)) { allGroupsShown.toggle() }
+                } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: allGroupsShown ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 14, weight: .semibold)).foregroundStyle(.secondary)
+                            .frame(width: 26)
+                        Text(allGroupsShown ? "Show Less" : "Show All \(groups.count) Groups")
+                            .foregroundStyle(.primary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 14)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
