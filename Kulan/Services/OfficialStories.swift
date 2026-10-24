@@ -159,6 +159,7 @@ final class OfficialStories {
             s.buttonText = t; s.buttonUrl = u
         }
         s.audienceLabel = "everyone"
+        s.welcomeFlag = (r["welcome"] as? Bool) == true ? true : nil
         return s
     }
 

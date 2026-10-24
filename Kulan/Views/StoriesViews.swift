@@ -1873,7 +1873,7 @@ struct StoryViewer: View {
                                                         // `StoryTapTarget.aspect`.
                                                         aspect: t.aspect)
                         },
-                        date: timeAgo(s.createdAt),
+                        date: s.isWelcome ? "" : timeAgo(s.createdAt),
                         isLiked: StoryPrefs.isStoryLiked(s.id),   // heart stays red on reopen
                         // This flag decides WHERE THE VIEWER OPENS. The rule that reads it lives in
                         // the library now (`StoryDetailView.resumeIndex`): where the person was left

@@ -983,7 +983,7 @@ struct StoriesTabView: View {
             StoryListRow(thumbUrl: g.stories.last.map { $0.thumbUrl.isEmpty ? $0.mediaUrl : $0.thumbUrl } ?? "",
                          blurThumb: g.stories.last?.blurThumb ?? "",
                          title: g.name,
-                         subtitle: g.stories.last.map { StoryListRow.ago($0.createdAt) } ?? "",
+                         subtitle: g.stories.last.map { StoryListRow.ago($0) } ?? "",
                          authorName: g.name,
                          authorPhoto: g.photoUrl,
                          badgeUid: g.authorUid,
@@ -1020,14 +1020,14 @@ struct StoriesTabView: View {
         }
         for g in visibleFriends {
             if let t = listLift(row: g.id, title: g.name,
-                                subtitle: g.stories.last.map { StoryListRow.ago($0.createdAt) } ?? "",
+                                subtitle: g.stories.last.map { StoryListRow.ago($0) } ?? "",
                                 badge: false, badgeUid: g.authorUid, at: p, actions: friendActions(g)) { return t }
         }
         // Hidden Stories rows: the menu the archive page's strip had, which is where unhiding lived
         // until that strip went (owner, 2026-10-11) — the friend menu with Unhide in Hide's place.
         for g in hiddenFriends {
             if let t = listLift(row: g.id, title: g.name,
-                                subtitle: g.stories.last.map { StoryListRow.ago($0.createdAt) } ?? "",
+                                subtitle: g.stories.last.map { StoryListRow.ago($0) } ?? "",
                                 badge: false, badgeUid: g.authorUid, at: p, actions: [
                 CMAction(title: "Send Message", icon: "ic_menu_chat") { openStoryChat(g) },
                 CMAction(title: "View Profile", icon: "ic_account") { profileGroup = g },

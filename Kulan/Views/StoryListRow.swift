@@ -289,6 +289,9 @@ struct StoryListRow: View {
         }
     }
 
+    /// The row's time line for a story: none for Fariin's welcome stories (owner 2026-10-24).
+    static func ago(_ s: Story) -> String { s.isWelcome ? "" : ago(s.createdAt) }
+
     /// "10h ago" — the wording on his screenshot.
     static func ago(_ d: Date) -> String {
         let s = max(0, Int(Date().timeIntervalSince(d)))

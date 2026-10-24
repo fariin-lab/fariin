@@ -145,6 +145,11 @@ struct Story: Identifiable, Hashable, Codable {
     var preloadPrefix: Int64 = 0
     /// The audience LABEL this story was posted with. See `StoryAudienceTag`.
     var audienceLabel: String = "friends"
+    /// One of Fariin's welcome stories for new accounts (the feed's `welcome`). Shown WITHOUT a time
+    /// anywhere (owner 2026-10-24: people should not see when we posted it).
+    /// Optional on disk: a cached copy from before the field existed must still decode.
+    var welcomeFlag: Bool? = nil
+    var isWelcome: Bool { welcomeFlag == true }
     /// Each recipient may open it exactly once. Enforced on the server by removing them from
     /// `recipientUids` the moment they do — see `StoryPrefs.consumeOneTime` and `onStoryConsumed`.
     var oneTime: Bool = false

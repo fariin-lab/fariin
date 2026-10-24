@@ -220,12 +220,16 @@ struct UserView: View {
                                 .lineLimit(1)
                             verifiedTick
                         }
+                        // No time at all for a story that has none (Fariin's welcome stories,
+                        // owner 2026-10-24), rather than an empty second line.
+                        if !date.isEmpty {
                         Text(date)
                             // 13, up from 12 (owner 2026-08-09: "too small… but not too much") —
                             // one point under the name so the hierarchy still reads name-first.
                             .font(.system(size: 13, weight: .regular))
                             .foregroundColor(.white.opacity(0.7))
                             .lineLimit(1)
+                        }
                     } else {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             HStack(spacing: 4) {
