@@ -1321,7 +1321,8 @@ struct RevealablePasswordField: UIViewRepresentable {
     }
 
     private static func placeholder(_ s: String) -> NSAttributedString {
-        NSAttributedString(string: s, attributes: [.foregroundColor: UIColor.tertiaryLabel])
+        // secondaryLabel, not tertiary (owner 2026-10-24: the sign-up hints were too faint to read).
+        NSAttributedString(string: s, attributes: [.foregroundColor: UIColor.secondaryLabel])
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }

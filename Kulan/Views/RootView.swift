@@ -1110,7 +1110,7 @@ struct OnboardingView: View {
                     VStack(spacing: 14) {
                         field(icon: "person", focused: focus == .name) {
                             TextField("", text: $name,
-                                      prompt: Text("Your name").foregroundStyle(.tertiary))
+                                      prompt: Text("Your name").foregroundStyle(.secondary))
                                 .textInputAutocapitalization(.words)
                                 .focused($focus, equals: .name)
                                 .submitLabel(.next)
@@ -1140,7 +1140,7 @@ struct OnboardingView: View {
                         }) {
                             HStack(spacing: 2) {
                                 TextField("", text: $handle,
-                                          prompt: Text("username").foregroundStyle(.tertiary))
+                                          prompt: Text("username").foregroundStyle(.secondary))
                                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                                     .focused($focus, equals: .handle)
                                     .submitLabel(.done)
