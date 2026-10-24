@@ -2556,12 +2556,22 @@ struct StoryEditorView: View {
         // remembered whenever no blink is on; during one (`KeyboardWatcher.inBlink`) the bar is
         // offset back to that spot, in the same pass the layout moved it, so nothing visibly moves.
         // Outside a blink the offset is zero and SwiftUI's own keyboard avoidance is untouched.
-        .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).maxY }) { y in
-            guard !Self.renderSkip.contains("caption") else { return }
-            captionLayoutY = y
-            if !(captionFocused && keyboard.inBlink) { captionRestY = y }
-        }
+        //
+        // ⛔ MEASURED UNDER THE OFFSET, NEVER THROUGH IT (owner 2026-10-23: tapping the emoji key while
+        // typing a caption froze the app until iOS killed it, 0x8BADF00D, main thread in the glass
+        // layout). The probe used to sit INSIDE the offset, and a global frame includes an ancestor's
+        // offset, so it read back its own correction: offset = rest - measured, measured = raw +
+        // offset, and the two flipped between `raw` and `rest` every pass for as long as the blink
+        // lasted. Switching keyboards is a blink. A background added AFTER `.offset` is laid out on the
+        // un-offset frame, so it reports where layout put the bar and the hold is computed once.
         .offset(y: captionFocused && keyboard.inBlink ? captionRestY - captionLayoutY : 0)
+        .background {
+            Color.clear.onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).maxY }) { y in
+                guard !Self.renderSkip.contains("caption") else { return }
+                captionLayoutY = y
+                if !(captionFocused && keyboard.inBlink) { captionRestY = y }
+            }
+        }
         // The layout moves on the keyboard's curve, so the hold moves on the same curve and the two
         // cancel frame by frame instead of only at the end.
         .animation(keyboard.inBlink ? keyboard.systemAnimation : nil, value: captionLayoutY)
