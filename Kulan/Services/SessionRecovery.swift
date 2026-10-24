@@ -265,6 +265,8 @@ enum SessionRecovery {
         guard Auth.auth().currentUser != nil, isActive, !stallRunning else { return }
         // No route off the phone: an outage, not a stuck stream. Nothing to reset until it is back.
         guard ConnectionStatus.shared.routeUp else { return }
+        // Watched accounts: what Firebase itself said in the minutes before (owner 2026-10-24).
+        ConnectionDiag.captureFirebaseLog("stall \(from)")
         // ⛔ A SLOW KEY FETCH IS NOT A STUCK CONNECTION (owner, 2026-10-20, 9th "dead until refresh"
         // report). Crypto's 10s key read is one server read; slow App Check or a slow line pushes it
         // past 10s on a healthy client. His log at 11:05: STALL key, cache read 4ms, pending writes
@@ -359,12 +361,18 @@ enum SessionRecovery {
         // that cannot be done (no user, swap limit spent, sign-in on the fresh app silent) does the
         // old net below stay armed: a fresh process the next time he leaves the app.
         DiagLog.add("WEDGED (\(why)): swapping to a fresh client")
+        // Counted for EVERY phone (owner 2026-10-24: "so we know how often it happens"); the
+        // detailed Firebase log only for the watched accounts.
+        Telemetry.event(.error, component: "firestore", code: "wedged", detail: ["reason": why])
+        ConnectionDiag.captureFirebaseLog("wedged \(why)")
         Task { @MainActor in
             guard await FirestoreHub.swap(why) else {
                 DiagLog.add("  no swap: fresh start when the app leaves the screen")
+                Telemetry.event(.error, component: "firestore", code: "swap_failed", detail: ["reason": why])
                 armEndProcess()
                 return
             }
+            Telemetry.event(.info, component: "firestore", code: "swap_done", detail: ["reason": why])
             wedged = false
             stallStep = 0
             stallEpisodeRecovered = false

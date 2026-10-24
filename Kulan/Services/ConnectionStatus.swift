@@ -326,6 +326,7 @@ final class ConnectionStatus {
         probeGen += 1
         guard let uid else { return }
         DiagLog.uploadIfPending(uid: uid)
+        ConnectionDiag.start(uid: uid)   // the most active accounts only (owner 2026-10-24)
         let gen = probeGen
         probe = FirestoreHub.db.collection("users").document(uid)
             .addSnapshotListener(includeMetadataChanges: true) { [weak self] snap, error in
