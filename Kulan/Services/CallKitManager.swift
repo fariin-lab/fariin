@@ -16,6 +16,18 @@ final class CallKitManager: NSObject {
     private(set) var activeUUID: UUID?
     private(set) var activeCallId: String?   // maps the system call UUID to our callId
 
+    /// A call in ANOTHER app (or the phone's own) that is live and not on hold, i.e. holding the
+    /// microphone. The system's call list includes ours, so `excluding` names it. Owner 2026-10-24:
+    /// Fariin does not start or answer a call while one of those is going.
+    static func otherCallActive(excluding mine: UUID?) -> Bool {
+        CXCallObserver().calls.contains { c in
+            !c.hasEnded && !c.isOnHold && c.uuid != mine && (c.hasConnected || c.isOutgoing)
+        }
+    }
+    static let otherCallNotice = GroupCallService.Notice(
+        title: "You're in Another Call",
+        message: "End your other call first, then call on Fariin.")
+
     // owner, 2026-10-06: a group ring (GroupCallRinging) has its OWN CallKit call, never
     // `activeUUID`, so every 1:1 path above and below runs exactly as before. Each delegate method
     // looks at the action's UUID first and hands a group one to the group side.
@@ -590,6 +602,14 @@ extension CallKitManager: CXProviderDelegate {
         // Audit M-116, 2026-10-07: an answer for a call that is not ours (a transient busy report
         // answered in the instant it shows) used to answer whatever 1:1 call was current.
         guard let live = activeUUID, live == action.callUUID else { action.fail(); return }
+        // ⛔ ANOTHER APP'S CALL STILL HAS THE MICROPHONE (owner 2026-10-24: he answered ours while
+        // still in a call in another app; ours connected and sent only silence, because iOS gives the
+        // mic to one call). Answering is refused until that call is ended or put on hold.
+        if Self.otherCallActive(excluding: live) {
+            action.fail()
+            Task { @MainActor in GroupCallService.presentOverTop(Self.otherCallNotice) }
+            return
+        }
         configureAudio()
         // 1:1 audit #23 (owner, 2026-10-08): the service has no call left to answer (it ended in
         // the tone window, or never had one). Fulfilling left a "connected" system call with

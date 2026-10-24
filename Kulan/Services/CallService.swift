@@ -4647,6 +4647,11 @@ final class CallService: NSObject {
             return true
         }
         if inGroupCall { return }
+        // A call in another app still has the microphone (owner 2026-10-24): refused with a notice.
+        if CallKitManager.otherCallActive(excluding: CallKitManager.shared.activeUUID) {
+            MainActor.assumeIsolated { GroupCallService.presentOverTop(CallKitManager.otherCallNotice) }
+            return
+        }
         // ONE central block gate (audit). The profile's call tiles learned to hide while blocked, but
         // every other dial site — the Calls tab row button, its long-press menu, New Call, Calls
         // search — still rang a person the user had blocked. Gating here covers all of them at once
