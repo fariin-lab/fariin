@@ -1942,6 +1942,7 @@ struct StoryEditorView: View {
                     onTapChip: { cycleChipColour(s.id) },
                     onDragChange: { live in
                         draggingID = s.id
+                        Self.lastOverlayDrag = Date()
                         // ⛔ THE HINT GOES THE MOMENT ANYTHING IS DRAGGED (owner 2026-08-22, with the
                         // words stranded in mid-air beside a badge he had moved). It is drawn from
                         // the sticker's COMMITTED centre, which does not move until the finger lifts,
@@ -2013,6 +2014,7 @@ struct StoryEditorView: View {
                     onTap: { selectedID = o.id; editingID = o.id },
                     onDragChange: { live in
                         draggingID = o.id
+                        Self.lastOverlayDrag = Date()
                         let hot = isOverTrash(live)
                         if hot != trashHot { trashHot = hot; if hot { UIImpactFeedbackGenerator(style: .medium).impactOccurred() } }
                     },
@@ -4144,11 +4146,25 @@ struct StoryEditorView: View {
         guard arrival.landed, !posting, editingID == nil, draggingID == nil, !isDrawing,
               !strokeInFlight, !showTrim, !showCrop, !showStickers, !anyKeyboardUp else { return false }
         if hasWork && !flyDiscarded {
-            DispatchQueue.main.async { showDiscard = true }
+            // ⛔ ASKED A BEAT LATER, AND NOT AT ALL IF THE FINGER WAS ON A CAPTION OR STICKER (his
+            // 2026-10-23 report: moving "Worth every step" brought up "Discard this story?"). This
+            // pan and the caption's drag start on the same touch, in either order; when this one asks
+            // first, `draggingID` is still nil and a move read as a close. By 0.15s the caption's drag
+            // has said so, through `draggingID` or, for a quick flick already let go, the stamp.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                guard draggingID == nil,
+                      Date().timeIntervalSince(Self.lastOverlayDrag) > 0.3 else { return }
+                showDiscard = true
+            }
             return false
         }
         return true
     }
+
+    /// When a caption or sticker last moved under a finger. Static rather than `@State` because it is
+    /// written on every drag frame and nothing draws from it; a state write per frame would rebuild
+    /// the whole editor for a value only `flyCanClose` reads. One editor is on screen at a time.
+    private static var lastOverlayDrag = Date.distantPast
 
     /// The copy IS the animation, so the cover goes without its own slide.
     private func flyInstantDismiss() {
