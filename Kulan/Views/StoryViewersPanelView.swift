@@ -69,6 +69,16 @@ final class StoryViewersPanelView: UIView {
         }
     }
 
+    /// Reads kept failing (owner 2026-10-24: skeleton rows forever under a story reading 0). The
+    /// skeleton gives way to a line that says so; the sheet keeps asking, and a list replaces it.
+    var loadFailed = false {
+        didSet {
+            guard loadFailed != oldValue, !showingViewsOff else { return }
+            emptyLabel.text = loadFailed ? "Couldn't load viewers. Trying again…" : "No views yet"
+            setNeedsLayout()
+        }
+    }
+
     /// WHAT THIS STORY'S AUDIENCE WAS, AND WHETHER A SECOND TAB SAYS ANYTHING.
     ///
     /// The owner's 2026-08-08 rule, in his words: Everyone shows Everyone plus Friends; My Friends

@@ -214,8 +214,16 @@ final class StoryViewersSheetView: UIView {
         ensurePanel(next, slot: 1)
     }
 
-    func setViewers(_ v: [StoryViewerInfo], for id: String) { panels[id]?.viewers = v }
+    func setViewers(_ v: [StoryViewerInfo], for id: String) {
+        panels[id]?.loadFailed = false
+        panels[id]?.viewers = v
+    }
     func setLoading(_ l: Bool, for id: String) { panels[id]?.isLoading = l }
+    /// Repeated failed reads: the skeleton goes and the panel says so (see `loadFailed`).
+    func setLoadFailed(for id: String) {
+        panels[id]?.isLoading = false
+        panels[id]?.loadFailed = true
+    }
     func setAudience(title: String, bothTabs: Bool, for id: String) {
         panels[id]?.audience = (title, bothTabs)
     }
@@ -1362,6 +1370,8 @@ struct StoryViewersSheet: UIViewRepresentable {
         /// One fetch per story at a time. Scrubbing the carousel walks `activeId` across every card,
         /// and without this each pass would start the same three reads again.
         private var tasks: [String: Task<Void, Never>] = [:]
+        /// Failed reads in a row, per story. The second one ends the skeleton (`setLoadFailed`).
+        private var failures: [String: Int] = [:]
 
         func sync(active: String, prev: String, next: String, slide: Int? = nil) {
             let moved = active != activeId || prev != prevId || next != nextId
@@ -1417,9 +1427,15 @@ struct StoryViewersSheet: UIViewRepresentable {
                     // A failed read with nothing held is NOT "No views yet": keep the spinner and
                     // ask again shortly, for as long as this story is one of the three on screen.
                     if people == nil, StoryViewerListCache.get(id) == nil {
+                        // …but not as a skeleton FOREVER (owner 2026-10-24): after two misses the
+                        // panel says it could not load, and the retries carry on behind that line.
+                        let n = (self.failures[id] ?? 0) + 1
+                        self.failures[id] = n
+                        if n >= 2 { self.view?.setLoadFailed(for: id) }
                         self.retryLater(id)
                         return
                     }
+                    if people != nil { self.failures[id] = nil }
                     self.view?.setLoading(false, for: id)
                     // ⚠️ A FAILED READ IS NEVER REMEMBERED, AND THAT IS HIS "No views yet" UNDER A
                     // CARD READING ONE VIEW.
