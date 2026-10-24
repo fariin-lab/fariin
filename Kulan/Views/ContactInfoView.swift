@@ -198,9 +198,10 @@ struct ContactInfoView: View {
     @State private var noteExpanded = false
     @State private var noteWidth: CGFloat = 0   // real rendered width; drives the More test
     @State private var showAddGroup = false
-    /// Groups in Common shows `groupsShown` until this is on (owner 2026-10-24: 40 shared groups
-    /// meant scrolling past all of them to reach Block and Report).
-    @State private var allGroupsShown = false
+    /// Groups in Common shows at most `groupsShown` here; "See All" pushes the whole list on its own
+    /// page, so the profile never grows (owner 2026-10-24: 40 shared groups meant scrolling past all
+    /// of them to reach Block and Report, and coming back must not leave it long).
+    @State private var showAllGroups = false
     private let groupsShown = 5
     @State private var openGroup: Conversation?
     @State private var showProfilePhoto = false   // tap the hero avatar → in-place photo morph
@@ -1205,6 +1206,9 @@ struct ContactInfoView: View {
                 let me = AuthService.shared.uid ?? ""
                 ThreadView(cid: g.id, title: g.displayName(me), photoUrl: g.displayPhoto(me))
             }
+            .navigationDestination(isPresented: $showAllGroups) {
+                GroupsInCommonPage(groups: sharedGroups)
+            }
             .navigationDestination(isPresented: $openChat) {
                 ThreadView(cid: cid, title: name, photoUrl: photoUrl)
                     // Only in the sheet over a story: pulling the header down closes the sheet.
@@ -1618,7 +1622,7 @@ struct ContactInfoView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            ForEach(allGroupsShown ? groups : Array(groups.prefix(groupsShown))) { g in
+            ForEach(Array(groups.prefix(groupsShown))) { g in
                 rowDivider
                 Button { openGroup = g } label: {
                     HStack(spacing: 12) {
@@ -1637,16 +1641,11 @@ struct ContactInfoView: View {
             }
             if groups.count > groupsShown {
                 rowDivider
-                Button {
-                    withAnimation(.easeInOut(duration: 0.25)) { allGroupsShown.toggle() }
-                } label: {
+                Button { showAllGroups = true } label: {
                     HStack(spacing: 14) {
-                        Image(systemName: allGroupsShown ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 14, weight: .semibold)).foregroundStyle(.secondary)
-                            .frame(width: 26)
-                        Text(allGroupsShown ? "Show Less" : "Show All \(groups.count) Groups")
-                            .foregroundStyle(.primary)
+                        Text("See All \(groups.count) Groups").foregroundStyle(.primary)
                         Spacer()
+                        Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
                     }
                     .padding(.horizontal, 16).padding(.vertical, 14)
                     .contentShape(Rectangle())
@@ -2807,5 +2806,32 @@ private struct SlideUpPage<Content: View>: View {
                     }
                 }
         }
+    }
+}
+
+/// Every group I share with this person, on its own page (owner 2026-10-24): the profile shows five
+/// and "See All", and coming back here leaves the profile as short as it was.
+struct GroupsInCommonPage: View {
+    let groups: [Conversation]
+
+    var body: some View {
+        let me = AuthService.shared.uid ?? ""
+        List(groups) { g in
+            NavigationLink {
+                ThreadView(cid: g.id, title: g.displayName(me), photoUrl: g.displayPhoto(me))
+            } label: {
+                HStack(spacing: 12) {
+                    AvatarView(name: g.displayName(me), photoUrl: g.displayPhoto(me), size: 40)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(g.displayName(me)).foregroundStyle(.primary)
+                        Text(g.memberCountLabel).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("\(groups.count) Groups in Common")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
