@@ -123,7 +123,7 @@ struct LinkPreviewCard: View {
     /// owner 2026-10-18: the SwiftUI copy of the list's group card (`MessageRowLayout`, `.group`):
     /// photo, name, "N members", View Group or Open Group. Tapping opens `GroupLinkDoor`.
     @ViewBuilder private func groupCard(_ code: String) -> some View {
-        let live = GroupLinkDoor.cached(code)
+        let live = GroupLinkDoor.lastFound(code)
         let fromServer = preview.desc.range(of: #"^[0-9]+ members?$"#, options: .regularExpression) != nil
         let name = live?.title ?? (fromServer ? preview.title : "Group invite")
         let line = live?.membersLine ?? (fromServer ? preview.desc : "Fariin group")

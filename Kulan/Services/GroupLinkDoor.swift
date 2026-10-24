@@ -89,7 +89,11 @@ private let memberCodes = OSAllocatedUnfairLock(initialState: [String: String]()
     private static let trust: TimeInterval = 120
     private static var known: [String: Known] = [:]
     private static var inFlight: [String: Task<Outcome, Never>] = [:]
-    private static var requestedCodes = Set<String>()
+    /// When a card last asked for `code`. ⛔ NOT ONCE PER LAUNCH ANY MORE (owner 2026-10-24: a photo
+    /// added to the group after the link was sent never reached the card). `cached` stops trusting
+    /// an answer after `trust`, and the card then fell back to the copy the message carried, with no
+    /// second ask. Now a card on screen asks again once its answer is stale, at most every 30s.
+    private static var askedAt: [String: Date] = [:]
     private static var fns: Functions { Functions.functions(region: "me-central1") }
 
     // MARK: - My groups by code
@@ -118,6 +122,14 @@ private let memberCodes = OSAllocatedUnfairLock(initialState: [String: String]()
         return nil
     }
 
+    /// The newest answer for `code`, however old: what a card DRAWS. A stale one is still newer than
+    /// the copy the message carried, so a card never falls back to that after `trust` runs out
+    /// (owner 2026-10-24). `cached` stays the gate for acting on an answer and for asking again.
+    static func lastFound(_ code: String) -> GroupLinkPreview? {
+        if case .found(let p)? = known[code]?.outcome { return p }
+        return nil
+    }
+
     /// The server's refusal for `code` ("This link is no longer valid."), if that was the last answer.
     static func refusal(_ code: String) -> String? {
         if case .refused(let why)? = fresh(code)?.outcome { return why }
@@ -132,9 +144,11 @@ private let memberCodes = OSAllocatedUnfairLock(initialState: [String: String]()
     // MARK: - Lookups
 
     /// Called when a group card is laid out (`MessageRowModelBuilder`, main actor). Returns at once;
-    /// the lookup runs behind it, once per code until it fails.
+    /// the lookup runs behind it whenever the held answer is stale, at most every 30s per code.
     static func prewarm(_ code: String) {
-        guard KulanApp.safeSegment(code), requestedCodes.insert(code).inserted else { return }
+        guard KulanApp.safeSegment(code), fresh(code) == nil, inFlight[code] == nil else { return }
+        if let at = askedAt[code], Date().timeIntervalSince(at) < 30 { return }
+        askedAt[code] = Date()
         Task { @MainActor in _ = await load(code) }
     }
 
@@ -166,7 +180,7 @@ private let memberCodes = OSAllocatedUnfairLock(initialState: [String: String]()
         inFlight[key] = nil
         switch out {
         case .failed:
-            requestedCodes.remove(code)   // a later card may try again
+            break   // nothing remembered; the next card asks again after `askedAt`'s 30s
         default:
             // A lite answer never replaces a full one that is still trusted.
             if !(lite && (fresh(code)?.full ?? false)) {

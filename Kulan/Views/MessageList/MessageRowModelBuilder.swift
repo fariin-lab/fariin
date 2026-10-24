@@ -682,7 +682,7 @@ enum MessageRowModelBuilder {
         var desc = fromServer ? p.desc : "Fariin group"
         var image = fromServer ? p.imageUrl : nil
         var enc = fromServer ? p.imageEnc : nil
-        if let live = GroupLinkDoor.cached(code) {
+        if let live = GroupLinkDoor.lastFound(code) {
             title = live.title
             desc = live.membersLine
             image = live.photoUrl
