@@ -74,7 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: STORY EDITOR FREEZE FIX, PASSWORD STRENGTH BAR, SIGN-IN SPINNER, GROUP INVITES, PROFILE GROUPS.
+            THIS BUILD: CALL SOUND FIX, ANOTHER-CALL BLOCK, CONNECTION LOGGING.
+            Calls: after another app's call (WhatsApp, a phone call) took the microphone, every later Fariin call could be silent in both directions until you restarted the app. Fixed: each call starts fresh, and a call that sends no sound in its first 5 seconds rebuilds its audio by itself.
+            Calls: you can no longer start or answer a Fariin call while a call in another app is live; it says "You're in Another Call. End your other call first."
+            Behind the scenes: extra connection logging on two accounts, and a count of "app got stuck" episodes from every phone, to find why the app sometimes stops sending until restarted.
+            PLEASE TEST: be in a WhatsApp call, then end it and call on Fariin (both should hear each other); try to call on Fariin DURING a WhatsApp call (should be refused with the message); a normal Fariin call.
+
+            EARLIER: STORY EDITOR FREEZE FIX, PASSWORD STRENGTH BAR, SIGN-IN SPINNER, GROUP INVITES, PROFILE GROUPS.
             Story editor: tapping the emoji key while writing a caption no longer freezes the app; moving a caption or sticker no longer asks "Discard this story?".
             Sign-up: one strength bar (Too short to Strong) replaces the four-line checklist; name, username and password hints are easier to read. Apple and Google: the button you used spins, and only after Face ID or picking your Google account.
             Groups: Join Group stays blue and spins; the group photo on the welcome card is no longer faded; an invite card shows the group's current photo even if it was added after the link was sent.
