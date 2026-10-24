@@ -185,15 +185,19 @@ final class AuthService: NSObject {
 
     private var webSession: ASWebAuthenticationSession?
 
-    func signInWithGoogle(requireExistingAccount: Bool = false, requireNewAccount: Bool = false) async throws {
-        try await authenticate(with: obtainGoogleCredential(),
+    /// `onPicked`: called once Google's own page has closed with an account chosen, before the token
+    /// exchange and the sign-in itself. The front door starts its spinner there, not on the tap
+    /// (owner 2026-10-24: "after confirm, not when it tap").
+    func signInWithGoogle(requireExistingAccount: Bool = false, requireNewAccount: Bool = false,
+                          onPicked: (@MainActor () -> Void)? = nil) async throws {
+        try await authenticate(with: obtainGoogleCredential(onPicked: onPicked),
                                requireExistingAccount: requireExistingAccount,
                                requireNewAccount: requireNewAccount)
     }
 
     /// Run the Google web flow and return the Firebase credential. Shared by sign-in and by
     /// "Connect Google" in Account settings.
-    private func obtainGoogleCredential() async throws -> AuthCredential {
+    private func obtainGoogleCredential(onPicked: (@MainActor () -> Void)? = nil) async throws -> AuthCredential {
         guard let clientID = FirebaseApp.app()?.options.clientID else { throw AuthFlowError.googleFailed }
         // Reversed client id = the registered redirect scheme for this iOS OAuth client.
         let scheme = clientID.split(separator: ".").reversed().joined(separator: ".")
@@ -231,6 +235,7 @@ final class AuthService: NSObject {
             .queryItems?.first(where: { $0.name == "code" })?.value else {
             throw AuthFlowError.googleFailed
         }
+        if let onPicked { await MainActor.run { onPicked() } }
 
         // Exchange the code for tokens (iOS clients use PKCE, no client secret).
         var req = URLRequest(url: URL(string: "https://oauth2.googleapis.com/token")!)

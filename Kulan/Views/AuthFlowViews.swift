@@ -348,6 +348,9 @@ struct AuthMethodView: View {
     @State private var busy = false
     /// The saved account being signed back into: its own row shows the spinner (see `savedAccountRow`).
     @State private var resumingUid: String?
+    /// The door whose button spins (owner 2026-10-24): set only once Apple's Face ID or Google's
+    /// account pick has said yes, never on the tap; cleared when the sign-in ends either way.
+    @State private var spinningDoor: AuthService.SignInMethod?
     @State private var error: String?
     /// The accounts this phone has used (see `LastAccount`), Log In only, newest first.
     @State private var saved: [LastAccount.Info] = LastAccount.all()
@@ -398,10 +401,16 @@ struct AuthMethodView: View {
                 VStack(spacing: 14) {
                     appleButton
                     Button {
-                        run { try await AuthService.shared.signInWithGoogle(requireExistingAccount: mode == .login,
-                                                                            requireNewAccount: mode == .create) }
+                        run { try await AuthService.shared.signInWithGoogle(
+                            requireExistingAccount: mode == .login, requireNewAccount: mode == .create,
+                            onPicked: { spinningDoor = .google }) }
                     } label: {
-                        Label(title: { Text("Continue with Google") }, icon: { GoogleGIcon(size: 20) })
+                        ZStack {
+                            Label(title: { Text("Continue with Google") }, icon: { GoogleGIcon(size: 20) })
+                                .opacity(spinningDoor == .google ? 0 : 1)
+                            if spinningDoor == .google { BusyArc(size: 20, lineWidth: 2.2, color: .secondary) }
+                        }
+                            .animation(.easeInOut(duration: 0.2), value: spinningDoor)
                             .authRaisedPill()
                             .lastUsedBadge(lastDoor == .google)
                     }
@@ -445,11 +454,8 @@ struct AuthMethodView: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 24)
-                .overlay(alignment: .top) {
-                    // Not for a saved-account tap: that one spins in its own row (owner 2026-10-13,
-                    // "loading appearing wrong position").
-                    BusyArc(size: 18, lineWidth: 2, color: .secondary).opacity(busy && resumingUid == nil ? 1 : 0).allowsHitTesting(false)
-                }
+                // (The shared spinner that sat above "Sign up" is gone, owner 2026-10-24: the button
+                // that was used spins instead, see `spinningDoor`.)
 
                 Spacer()
                 // Sign up only (owner, 2026-09-27): making an account is the moment consent matters,
@@ -482,6 +488,8 @@ struct AuthMethodView: View {
         } onCompletion: { result in
             switch result {
             case .success(let auth):
+                // Face ID has said yes: only now does the button spin.
+                if NetworkState.shared.isOnline, !busy { spinningDoor = .apple }
                 run { try await AuthService.shared.completeApple(authorization: auth,
                                                                  requireExistingAccount: mode == .login,
                                                                  requireNewAccount: mode == .create) }
@@ -492,6 +500,16 @@ struct AuthMethodView: View {
         .signInWithAppleButtonStyle(scheme == .dark ? .white : .black)
         .id(scheme)
         .frame(height: 50)   // Apple's standard button height (owner, 2026-09-25)
+        // Apple's button draws its own words, so the spinner covers them with the button's own fill.
+        .overlay {
+            if spinningDoor == .apple {
+                Capsule().fill(scheme == .dark ? Color.white : Color.black)
+                    .overlay(BusyArc(size: 20, lineWidth: 2.2, color: scheme == .dark ? .black : .white))
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: spinningDoor)
         .clipShape(Capsule())
         .lastUsedBadge(lastDoor == .apple)
         .disabled(busy)
@@ -702,7 +720,7 @@ struct AuthMethodView: View {
                     }
                 }
             }
-            await MainActor.run { busy = false; resumingUid = nil }
+            await MainActor.run { busy = false; resumingUid = nil; spinningDoor = nil }
         }
     }
 }
