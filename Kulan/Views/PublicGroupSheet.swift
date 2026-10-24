@@ -123,7 +123,7 @@ struct PublicGroupSheet: View {
         if let p = preview {
             VStack(spacing: 8) {
                 statusLine(p)
-                capsuleButton(buttonTitle(p), enabled: !joining && !(requestSent || p.requested)) { join(p) }
+                capsuleButton(buttonTitle(p), enabled: !joining && !(requestSent || p.requested), loading: joining) { join(p) }
             }
             .padding(.bottom, 8)
         }
@@ -216,14 +216,19 @@ struct PublicGroupSheet: View {
         return p.needsApproval ? "Request to Join" : "Join Group"
     }
 
-    private func capsuleButton(_ title: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+    /// `loading`: blue stays, a white spinner replaces the words. Same as the invite sheet's button.
+    private func capsuleButton(_ title: String, enabled: Bool, loading: Bool = false,
+                               action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title)
+            ZStack {
+                Text(title).opacity(loading ? 0 : 1)
+                if loading { ProgressView().tint(.white) }
+            }
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(enabled ? Color.white : Color.secondary)
+                .foregroundStyle(enabled || loading ? Color.white : Color.secondary)
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
-                .background(Capsule().fill(enabled ? Self.blue : Color(.tertiarySystemFill)))
+                .background(Capsule().fill(enabled || loading ? Self.blue : Color(.tertiarySystemFill)))
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -378,14 +383,18 @@ struct PublicJoinBar: View {
             // The reference app's join panel: ONE centred accent glass pill (min 166 wide, 19pt side
             // inset, medium 17), "Join Group" / "Apply to Join Group" (owner 2026-10-23).
             Button(action: join) {
-                Text(title)
+                // Joining keeps the blue and spins, like the sheets' button (owner 2026-10-24).
+                ZStack {
+                    Text(title).opacity(joining ? 0 : 1)
+                    if joining { ProgressView().tint(.white) }
+                }
                     .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(enabled ? Color.white : Color.secondary)
+                    .foregroundStyle(enabled || joining ? Color.white : Color.secondary)
                     .padding(.horizontal, 19)
                     .frame(minWidth: 166)
                     .frame(height: 44)
                     .liquidGlass(Capsule(), interactive: true,
-                                 tint: enabled ? PublicGroupSheet.blue : nil)
+                                 tint: enabled || joining ? PublicGroupSheet.blue : nil)
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)

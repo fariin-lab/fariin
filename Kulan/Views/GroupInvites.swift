@@ -385,7 +385,7 @@ struct JoinGroupSheet: View {
                     .padding(.top, 16)
             }
 
-            capsuleButton(buttonTitle(p), enabled: !joining && !(requestSent || p.requested)) { join(p) }
+            capsuleButton(buttonTitle(p), enabled: !joining && !(requestSent || p.requested), loading: joining) { join(p) }
                 .padding(.top, 24)
         }
     }
@@ -421,14 +421,21 @@ struct JoinGroupSheet: View {
         return "\(first.name) and \(others) \(others == 1 ? "other" : "others") already joined this group"
     }
 
-    private func capsuleButton(_ title: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+    /// `loading`: the button KEEPS ITS BLUE and shows a white spinner in place of the words (owner
+    /// 2026-10-24: tapping Join turned it grey with "Joining…", the reference keeps the colour and
+    /// spins). Still not tappable while it spins.
+    private func capsuleButton(_ title: String, enabled: Bool, loading: Bool = false,
+                               action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title)
+            ZStack {
+                Text(title).opacity(loading ? 0 : 1)
+                if loading { ProgressView().tint(.white) }
+            }
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(enabled ? Color.white : Color.secondary)
+                .foregroundStyle(enabled || loading ? Color.white : Color.secondary)
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
-                .background(Capsule().fill(enabled ? Self.blue : Color(.tertiarySystemFill)))
+                .background(Capsule().fill(enabled || loading ? Self.blue : Color(.tertiarySystemFill)))
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
