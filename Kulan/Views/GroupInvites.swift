@@ -429,7 +429,7 @@ struct JoinGroupSheet: View {
         Button(action: action) {
             ZStack {
                 Text(title).opacity(loading ? 0 : 1)
-                if loading { ProgressView().tint(.white) }
+                if loading { BusyArc.small(.white) }
             }
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(enabled || loading ? Color.white : Color.secondary)
@@ -439,7 +439,9 @@ struct JoinGroupSheet: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .disabled(!enabled)
+        // Busy is not disabled: a disabled button is drawn faded (owner 2026-10-26). Taps stop instead.
+        .disabled(!enabled && !loading)
+        .allowsHitTesting(!loading)
         .padding(.horizontal, 20)
         .padding(.bottom, 12)
     }

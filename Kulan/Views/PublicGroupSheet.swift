@@ -222,7 +222,7 @@ struct PublicGroupSheet: View {
         Button(action: action) {
             ZStack {
                 Text(title).opacity(loading ? 0 : 1)
-                if loading { ProgressView().tint(.white) }
+                if loading { BusyArc.small(.white) }
             }
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(enabled || loading ? Color.white : Color.secondary)
@@ -232,7 +232,9 @@ struct PublicGroupSheet: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .disabled(!enabled)
+        // Busy is not disabled: a disabled button is drawn faded (owner 2026-10-26). Taps stop instead.
+        .disabled(!enabled && !loading)
+        .allowsHitTesting(!loading)
         .padding(.horizontal, 20)
         .padding(.bottom, 12)
     }
@@ -386,7 +388,7 @@ struct PublicJoinBar: View {
                 // Joining keeps the blue and spins, like the sheets' button (owner 2026-10-24).
                 ZStack {
                     Text(title).opacity(joining ? 0 : 1)
-                    if joining { ProgressView().tint(.white) }
+                    if joining { BusyArc.small(.white) }
                 }
                     .font(.system(size: 17, weight: .medium))
                     .foregroundStyle(enabled || joining ? Color.white : Color.secondary)
@@ -398,7 +400,8 @@ struct PublicJoinBar: View {
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            .disabled(!enabled)
+            .disabled(!enabled && !joining)
+            .allowsHitTesting(!joining)
         }
         .frame(maxWidth: .infinity)
         .systemBarChrome()
@@ -471,7 +474,7 @@ struct RejoinGroupBar: View {
             Button(action: join) {
                 ZStack {
                     Text(requestSent ? "Request Sent" : "Join Group").opacity(joining ? 0 : 1)
-                    if joining { ProgressView().tint(.white) }
+                    if joining { BusyArc.small(.white) }
                 }
                     .font(.system(size: 17, weight: .medium))
                     .foregroundStyle(requestSent ? Color.secondary : Color.white)
@@ -482,7 +485,8 @@ struct RejoinGroupBar: View {
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            .disabled(joining || requestSent)
+            .disabled(requestSent)
+            .allowsHitTesting(!joining)
             }
         }
         .frame(maxWidth: .infinity)
