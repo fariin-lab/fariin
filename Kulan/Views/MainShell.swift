@@ -2044,6 +2044,9 @@ struct ChatsView: View {
         var out = repo.conversations + [officialChannel.listEntry].compactMap { $0 }
         out = out.filter { !$0.isCleared(me) && !$0.isArchived(me) }
         out = out.filter { Flags.groupsEnabled || !$0.isGroup }
+        // A group I just left stays out of the list while its Undo bar is up (owner 2026-10-25).
+        let leaving = LeaveGroupUndo.shared.hiddenIds
+        if !leaving.isEmpty { out = out.filter { !leaving.contains($0.id) } }
         // ⛔ A PENDING REQUEST IS NOT A CHAT — owner, 2026-09-11, on the new spec (§11): "A pending
         // request must NOT appear as a normal conversation in the Main Chat List." This reverses
         // his 08-04 placement, on his word. Somebody's unanswered request to me lives on the
@@ -2872,6 +2875,7 @@ struct ChatsView: View {
                         // its own so this chain stays inside the type-checker's budget.
                         .overlay(alignment: .topTrailing) { firstChatCueLayer }
                         .overlay(alignment: .bottom) { getStartedLayer }
+                        .overlay(alignment: .bottom) { leaveUndoBar }
                         // owner 2026-10-19: the cards no longer end at the first chat; an X takes a
                         // card away. Five real chats end them (the reference's own number): by then
                         // the list reaches the panel, which would sit over the chats.
@@ -2934,6 +2938,37 @@ struct ChatsView: View {
         guard getStartedContext, profile.me != nil else { return [] }
         return getStarted.cards(me, hasPhoto: profile.me?.photoUrl?.isEmpty == false,
                                 groups: Flags.groupCreateEnabled)
+    }
+
+    /// "You left the group. Undo" (owner 2026-10-25), for the 5 s before the leave really runs; and a
+    /// failed leave says so, so it is never silent. One glass bar, above the tab bar. See `LeaveGroupUndo`.
+    @ViewBuilder private var leaveUndoBar: some View {
+        let leave = LeaveGroupUndo.shared
+        VStack(spacing: 8) {
+            if leave.barTitle != nil {
+                Button { withAnimation(.smooth(duration: 0.3)) { leave.undo() } } label: {
+                    HStack(spacing: 14) {
+                        Text("You left the group.").foregroundStyle(.primary)
+                        Text("Undo").fontWeight(.semibold).foregroundStyle(Color.accentColor)
+                    }
+                    .font(.subheadline)
+                    .padding(.horizontal, 18).padding(.vertical, 12)
+                    .liquidGlass(Capsule())
+                }
+                .buttonStyle(.plain)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+            if let failure = leave.failure {
+                Text(failure)
+                    .font(.footnote).foregroundStyle(.red)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .liquidGlass(Capsule())
+                    .onTapGesture { leave.failure = nil }
+                    .transition(.opacity)
+            }
+        }
+        .padding(.bottom, 96)   // clear of the tab bar
+        .animation(.smooth(duration: 0.3), value: leave.barTitle)
     }
 
     @ViewBuilder private var getStartedLayer: some View {

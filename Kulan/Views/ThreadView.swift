@@ -2245,6 +2245,10 @@ struct ThreadView: View {
         }
         .fullScreenCover(isPresented: $showGroupCall) { GroupCallView() }
         .task(id: groupCallActive && !notAMember && !preview) { await followGroupCallPeople() }
+        // A group I just chose to leave closes this chat too, not only the info page (owner 2026-10-25).
+        .onChange(of: LeaveGroupUndo.shared.hiddenIds.contains(cid)) { _, hidden in
+            if hidden { dismiss() }
+        }
         .modifier(MessageActionDialogs(cid: cid, title: title, me: me,
                                        pendingDelete: $pendingDelete,
                                        onDeleteForMe: { m in deleteForMe(m) },
