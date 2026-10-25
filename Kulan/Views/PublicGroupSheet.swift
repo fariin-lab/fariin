@@ -448,10 +448,16 @@ struct RejoinGroupBar: View {
     @State private var joining = false
     @State private var requestSent = false
     @State private var joinError: String?
+    @State private var removed = false
 
     var body: some View {
         VStack(spacing: 8) {
-            if let joinError {
+            if removed {
+                Text("You were removed from this group")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .frame(height: 44)
+            } else if let joinError {
                 Text(joinError)
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
@@ -461,6 +467,7 @@ struct RejoinGroupBar: View {
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
             }
+            if !removed {
             Button(action: join) {
                 ZStack {
                     Text(requestSent ? "Request Sent" : "Join Group").opacity(joining ? 0 : 1)
@@ -476,6 +483,7 @@ struct RejoinGroupBar: View {
             }
             .buttonStyle(.plain)
             .disabled(joining || requestSent)
+            }
         }
         .frame(maxWidth: .infinity)
         .systemBarChrome()
@@ -498,7 +506,10 @@ struct RejoinGroupBar: View {
                     Haptics.notify(.success)
                 }
             } catch {
-                joinError = error.localizedDescription
+                // Removed by an admin: that sticks, so no button to tap again (audit 2026-10-25).
+                let words = error.localizedDescription
+                if words.localizedCaseInsensitiveContains("banned") { removed = true }
+                joinError = words
             }
             joining = false
         }

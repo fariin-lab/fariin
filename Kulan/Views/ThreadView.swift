@@ -1313,7 +1313,7 @@ struct ThreadView: View {
                 searchNavBar.transition(.opacity)
             } else if notAMember {
                 // A public group I left can be joined again from here (owner 2026-10-25).
-                if conversation?.isPublic == true {
+                if conversation?.isPublic == true, !(conversation?.bannedUids.contains(me) ?? false) {
                     RejoinGroupBar(cid: cid).transition(.opacity)
                 } else {
                     removedBar.transition(.opacity.combined(with: .move(edge: .bottom)))

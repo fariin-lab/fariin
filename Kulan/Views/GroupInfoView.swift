@@ -1709,7 +1709,9 @@ private struct GroupInfoExits: ViewModifier {
                 Button("Leave", role: .destructive) { leaveNow() }
             } message: { Text(leaveMessage) }
             .sheet(isPresented: $pickOwner, onDismiss: {
-                if handedOver { handedOver = false; leaveNow() }
+                // No Undo after a hand-over (audit 2026-10-25): the transfer is already done, so an
+                // Undo would leave the old owner in the group as a plain admin. The leave runs now.
+                if handedOver { handedOver = false; leaveNow(); LeaveGroupUndo.shared.commit() }
             }) {
                 NavigationStack {
                     ChooseNewOwnerSheet(cid: cid, members: otherMembers) {
