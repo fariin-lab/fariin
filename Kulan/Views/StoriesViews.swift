@@ -6366,7 +6366,8 @@ struct MyStoriesCarousel: View {
         // remembering what it already knows instead of asking twice.
         for st in stories where counts[st.id] == nil {
             if let v = StoryCountCache.summary(for: st.id) {
-                counts[st.id] = StoryRowCounts(views: v.count, likes: v.reactionCount, reposts: v.repostCount)
+                counts[st.id] = StoryRowCounts(views: v.count, likes: v.reactionCount, reposts: v.repostCount,
+                                               replies: Self.replyCounts[st.id] ?? 0)
             }
         }
         // The owner bar stays as the fallback for the CURRENT story, and it is not redundant: on the
@@ -6376,28 +6377,45 @@ struct MyStoriesCarousel: View {
         guard !id.isEmpty, counts[id] == nil else { return }
         let m = StoryOwnerBarModel.shared
         guard m.count > 0 || m.reactions > 0 else { return }
-        counts[id] = StoryRowCounts(views: m.count, likes: m.reactions)
+        counts[id] = StoryRowCounts(views: m.count, likes: m.reactions, replies: Self.replyCounts[id] ?? 0)
     }
 
     private func loadAll() async {
         await MainActor.run { seedKnownCounts() }
+        async let replies: Void = loadReplyCounts()
         await withTaskGroup(of: (String, StoryViewSummary?).self) { group in
             for s in stories { group.addTask { (s.id, await StoryViewer.viewSummaryPublic(storyId: s.id)) } }
             // Reduced to numbers HERE, once per fetch, rather than in `body` once per frame.
             for await (id, answer) in group {
                 guard let v = answer else { continue }
                 counts[id] = StoryRowCounts(views: v.count, likes: v.reactionCount, reposts: v.repostCount,
-                                            replies: counts[id]?.replies ?? 0)
+                                            replies: counts[id]?.replies ?? Self.replyCounts[id] ?? 0)
             }
         }
-        // A group story's replies (owner 2026-10-25: "add the replies icon and count"): one count
-        // read each, not the thread itself, as the group story footer reads it.
-        for s in stories where s.groupId != nil {
-            let q = FirestoreHub.db.collection("stories").document(s.id).collection("replies")
-            guard let n = try? await q.count.getAggregation(source: .server).count.intValue else { continue }
-            await MainActor.run {
-                if counts[s.id] != nil { counts[s.id]?.replies = n }
-                else { counts[s.id] = StoryRowCounts(views: 0, likes: 0, replies: n) }
+        await replies
+    }
+
+    /// A group story's replies, remembered for the session so the next open shows them at once.
+    private static var replyCounts: [String: Int] = [:]
+
+    /// A group story's replies (owner 2026-10-25: "add the replies icon and count"): one count read
+    /// each, not the thread itself. Owner 2026-10-25 "reply count is appearing late": these ran one
+    /// by one AFTER every view summary, so they now run side by side, alongside the summaries.
+    private func loadReplyCounts() async {
+        let ids = stories.filter { $0.groupId != nil }.map(\.id)
+        await withTaskGroup(of: (String, Int?).self) { group in
+            for id in ids {
+                group.addTask {
+                    let q = FirestoreHub.db.collection("stories").document(id).collection("replies")
+                    return (id, try? await q.count.getAggregation(source: .server).count.intValue)
+                }
+            }
+            for await (id, answer) in group {
+                guard let n = answer else { continue }
+                await MainActor.run {
+                    Self.replyCounts[id] = n
+                    if counts[id] != nil { counts[id]?.replies = n }
+                }
             }
         }
     }
