@@ -1793,12 +1793,11 @@ service cloud.firestore {
         // functions-username setGroupUsername, which claims the name in `usernames` in the same step.
         // `joinApproval` (a public group files join requests instead of adding) is server-only too.
         && !request.resource.data.keys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval'])
-        // 2026-10-19 groups v2 (owner): groups are not end-to-end encrypted. A new group may say so
-        // itself (`e2ee: false`, written by the app's createGroup), and nothing else: `e2ee` is
-        // false-only and groups-only, and the switch time `e2eeOffAt` is the server's alone.
-        && (!('e2ee' in request.resource.data)
-            || (request.resource.data.get('type', '') == 'group' && request.resource.data.e2ee == false))
-        && !('e2eeOffAt' in request.resource.data)
+        // owner 2026-10-25: EVERY group is end-to-end encrypted, so a new conversation is born without
+        // an `e2ee` field (absent = encrypted); `e2ee: false` is for legacy groups the server switched
+        // and is refused at create. The switch times `e2eeOffAt` / `e2eeOnAt` are the server's alone.
+        && !('e2ee' in request.resource.data)
+        && !request.resource.data.keys().hasAny(['e2eeOffAt', 'e2eeOnAt'])
         && !('wallpaper' in request.resource.data)      // owner 2026-10-18: set later, by update only
         // owner 2026-10-21: `reqOff` only true, 1:1, while requests are off for the other.
         && (!('reqOff' in request.resource.data)
@@ -1818,6 +1817,7 @@ service cloud.firestore {
             && request.resource.data.users.size() >= 1
             // 2026-10-19: the cap is config/limits.group_members_max (admin panel, 2..500), not 30.
             && request.resource.data.users.size() <= appLimit('group_members_max', 30)
+            && request.resource.data.users.size() <= 100   // owner 2026-10-25: Limits.e2eeGroupMax
             && request.auth.uid in request.resource.data.admins
             && addsBlockFree(request.resource.data.users, 0)   // audit F4
             // 2026-10-19 group fix round S8: the owner is the creator. `createdBy` holds every right
@@ -2018,8 +2018,12 @@ service cloud.firestore {
       // the same moment each saw the other still listed and both removed themselves. The last member
       // leaving (users empty) and a group that already had no admins are exempt.
       function groupFloorsKept() {
+        // owner 2026-10-25: and never past 100 in an encrypted group (Limits.e2eeGroupMax); a legacy
+        // `e2ee == false` group keeps only the configured cap.
         return (request.resource.data.users.size() <= resource.data.users.size()
-                || request.resource.data.users.size() <= appLimit('group_members_max', 30))
+                || (request.resource.data.users.size() <= appLimit('group_members_max', 30)
+                    && (request.resource.data.users.size() <= 100
+                        || resource.data.get('e2ee', true) == false)))
           && (resource.data.get('admins', []).size() == 0
               || request.resource.data.get('admins', []).size() > 0
               || request.resource.data.users.size() == 0);
@@ -2152,7 +2156,7 @@ service cloud.firestore {
         // `e2eeOffAt`) is the server's to change (the groupsE2eeOff migration). In the same list, not
         // a line of its own: a second diff here pushed a busy admin write past the rules engine's
         // 1,000-expression ceiling (rules-tests/role-1018).
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt', 'memberSince', 'endedAt'])
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt', 'e2eeOnAt', 'memberSince', 'endedAt'])
         && groupModWriteOK()
         && groupAddOK()   // audit F4: no adding someone with a block either way
         // owner 2026-10-18: the group wallpaper, groups only and a known shape (groupWallpaperOK).
@@ -2504,9 +2508,11 @@ service cloud.firestore {
           let t = d.get('text', '');
           return convData().get('type', '') != 'group'
             || !(t is string) || t.size() == 0
-            || t.matches('encg?1:.*')
+            || t.matches('encg1:.*')
             || (convData().get('e2ee', true) == false && t.size() <= 65536)
-            || (convData().get('e2ee', true) != false && 'type' in d);
+            // owner 2026-10-25: in an encrypted group the only words in the clear are a typed notice.
+            // Every other typed message (photo, poll, sticker...) seals its caption like a text.
+            || (convData().get('e2ee', true) != false && d.get('type', '') == 'system');
         }
         // 2026-09-24 decision D-composer-3: a media address is a string, https (or the app's own
         // `sticker://` for a built-in sticker, see BuiltInStickers.scheme), and a sane length. Storage
@@ -2647,7 +2653,8 @@ service cloud.firestore {
         // ⛔ A PUBLIC GROUP'S MESSAGES, READ FROM OUTSIDE — owner 2026-10-21 (messages before
         // joining): tapping a public group I am not in opens its real chat with Join at the bottom.
         // Only when every one of these holds: a group, public (`isPublic`, server-written), switched
-        // (`e2ee == false`; owner 2026-10-23: its WHOLE history, released keys `rk` too), history not
+        // (`e2ee == false`, LEGACY plain groups only; owner 2026-10-25: an encrypted group, which is
+        // every new one, is never readable from outside), history not
         // hidden from newcomers (`hideHistoryAt` absent or 0: hidden history
         // means no preview), not ended by its owner (`endedAt` absent or 0), not suspended or
         // disabled by Fariin, and the reader not banned from it. READ ONLY, and only the messages:
