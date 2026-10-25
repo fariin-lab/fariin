@@ -2245,12 +2245,12 @@ struct GroupMemberSheet: View {
             }
             // owner 2026-10-25: the password page is the confirm (it names what happens). Closed after
             // a transfer, the card closes with it: I am no longer the owner it was drawn for.
-            .sheet(isPresented: $showTransferPassword, onDismiss: { if transferred { dismiss() } }) {
-                NavigationStack {
-                    TransferOwnershipSheet(cid: cid, heir: member.id, name: member.name) { transferred = true }
-                }
-                .presentationDetents([.medium, .large])
-            }
+            // owner 2026-10-25: a centred password dialog, not a page.
+            .modifier(TransferPasswordAlert(isPresented: $showTransferPassword, cid: cid,
+                                            heir: member.id, name: member.name) {
+                transferred = true
+                dismiss()
+            })
             .darkAlert("Create a Password First", message: noPasswordMessage,
                        isPresented: $noPasswordAlert, actions: noPasswordActions)
             // The same page Settings opens for a first password.
@@ -2877,9 +2877,6 @@ struct TagColourRow: View {
     }
 }
 
-/// owner 2026-10-25: TRANSFER OWNERSHIP ASKS FOR MY PASSWORD. Firebase Auth checks it (it never
-/// reaches our server and is never stored or logged here), then the server makes the hand-off
-/// (`ChatService.transferGroupOwnership`) and says in words why when it refuses.
 /// The owner's "Choose Another Owner" from the Leave alert (owner 2026-10-25, the reference app's
 /// "Appoint Another Owner"): pick a member, the server checks the transfer can happen, the password
 /// page hands the group over, then `onTransferred` leaves.
@@ -2926,13 +2923,8 @@ struct ChooseNewOwnerSheet: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
         }
-        .navigationDestination(isPresented: $showPassword) {
-            if let picked {
-                TransferOwnershipSheet(cid: cid, heir: picked.id, name: picked.name, leaving: true) {
-                    onTransferred()
-                }
-            }
-        }
+        .modifier(TransferPasswordAlert(isPresented: $showPassword, cid: cid, heir: picked?.id ?? "",
+                                        name: picked?.name ?? "", leaving: true) { onTransferred() })
     }
 
     private func check(_ id: String, _ name: String) {
@@ -2956,63 +2948,59 @@ struct ChooseNewOwnerSheet: View {
     }
 }
 
-struct TransferOwnershipSheet: View {
+/// The password for Transfer Ownership, in a centred dialog (owner 2026-10-25, his picture: "Enter
+/// Password", a field, Cancel and Confirm). Firebase Auth checks it (it never reaches our server and
+/// is never stored or logged here), then the server makes the hand-off and says why when it refuses.
+struct TransferPasswordAlert: ViewModifier {
+    @Binding var isPresented: Bool
     let cid: String
     let heir: String
     let name: String
     var leaving = false
     var onDone: () -> Void
-    @Environment(\.dismiss) private var dismiss
     @State private var password = ""
     @State private var busy = false
     @State private var failure: String?
-    @FocusState private var focused: Bool
 
-    var body: some View {
-        Form {
-            Section {
+    private var message: String {
+        leaving ? "Enter your password to finish this. \(name) will become the owner, then you leave the group."
+            : "Enter your password to finish this. \(name) will have full control of this group, including over you."
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Enter Password", isPresented: $isPresented) {
                 SecureField("Password", text: $password)
                     .textContentType(.password)
-                    .focused($focused)
-                    .submitLabel(.done)
-                    .onSubmit { transfer() }
-                    .disabled(busy)
-            } header: {
-                Text("Enter your password")
-            } footer: {
-                Text(leaving ? "\(name) will become the owner, then you leave the group."
-                     : "\(name) will have full control of this group, including over you. You will stay an admin.")
+                Button("Cancel", role: .cancel) { password = "" }
+                Button("Confirm") { transfer() }
+                    .disabled(password.isEmpty)
+            } message: {
+                Text(message)
             }
-            if let failure {
-                Section { Text(failure).foregroundStyle(.red) }
+            .alert("Couldn't Transfer", isPresented: Binding(get: { failure != nil },
+                                                              set: { if !$0 { failure = nil } })) {
+                Button("Try Again") { isPresented = true }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(failure ?? "")
             }
-        }
-        .navigationTitle("Transfer Ownership")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { password = ""; dismiss() }
-                    .disabled(busy)
-            }
-            ToolbarItem(placement: .confirmationAction) {
+            .overlay {
                 if busy {
                     ProgressView()
-                } else {
-                    Button("Transfer") { transfer() }
-                        .fontWeight(.semibold)
-                        .disabled(password.isEmpty)
+                        .controlSize(.large)
+                        .padding(24)
+                        .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: false)
                 }
             }
-        }
-        .interactiveDismissDisabled(busy)
-        .onAppear { focused = true }
+            .allowsHitTesting(!busy)
     }
 
     private func transfer() {
-        guard !busy, !password.isEmpty else { return }
+        guard !busy, !password.isEmpty, !heir.isEmpty else { return }
         busy = true
-        failure = nil
         let typed = password
+        password = ""
         let cid = cid, heir = heir, name = name
         Task {
             // The password proves it is me now: the fresh sign-in the server asks for.
@@ -3028,9 +3016,7 @@ struct TransferOwnershipSheet: View {
                 try await ChatService.transferGroupOwnership(cid: cid, to: heir)
                 await MainActor.run {
                     busy = false
-                    password = ""
                     onDone()
-                    dismiss()
                     ToastNotice.show("\(name) is now the owner")
                 }
             } catch {
