@@ -103,11 +103,6 @@ struct SecureImageView: View {
         }
         .allowsHitTesting(waitingTap || failed)   // transparent to taps unless held or failed
         .task(id: imageUrl) { await load() }
-        // A group photo sealed before I joined, whose key a member has just released (2026-10-23).
-        .onReceive(NotificationCenter.default.publisher(for: .groupKeyReleased)) { note in
-            guard failed, note.userInfo?["url"] as? String == imageUrl else { return }
-            Task { await load() }
-        }
     }
 
     /// The reference's four states, chosen in their order of precedence: an affordance beats a

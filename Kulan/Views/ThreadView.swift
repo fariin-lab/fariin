@@ -2567,7 +2567,7 @@ struct ThreadView: View {
         if let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) { return c }
         if let c = FormerGroups.removed[cid] { return c }   // a group I was removed from earlier this session
         guard let g = guest?.preview else { return nil }
-        var data: [String: Any] = ["type": "group", "title": g.title, "e2ee": false]
+        var data: [String: Any] = ["type": "group", "title": g.title]
         if let p = g.photoUrl { data["avatarUrl"] = p }
         return Conversation(id: cid, data: data)
     }

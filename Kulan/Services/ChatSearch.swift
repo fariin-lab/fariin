@@ -4,9 +4,7 @@ import Foundation
 // prefix-match AND queries), reimplemented as our own code over Fariin's in-memory decrypted corpus.
 // E2EE means the server can never search messages; the only possible index is client-side, built from
 // text we've already decrypted, and never persisted as plaintext.
-// TODO(groups v2, 2026-10-19): groups that switched off end-to-end encryption (`e2ee == false`) store
-// new messages as plain text on the server, so their search could later run server-side over the whole
-// history. Not built; group search is still this local one, over what this phone has loaded.
+// owner 2026-10-25: every group is end-to-end encrypted too, so group search stays this local one.
 //
 // Semantics replicated exactly:
 //  • Normalization: NFC compose, case-fold, diacritic-fold (café ≡ cafe), width-fold (CJK), then strip

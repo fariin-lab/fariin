@@ -217,21 +217,6 @@ final class MediaDownloads {
         resumeWaiters(job, false)
     }
 
-    /// The other way (owner 2026-10-23, groups are not end-to-end encrypted): a member released the
-    /// key of a file sealed before I joined, so it can open now. A permanent failure on it, from
-    /// `markUnreadable` or a failed decrypt, is forgotten, `itemId` leaves DeadMedia, and the views
-    /// showing it are told to try again (`.groupKeyReleased`). A job running or done is left alone.
-    func clearUnreadable(_ url: String, itemId: String) {
-        guard !url.isEmpty else { return }
-        DeadMedia.unmark(itemId)
-        if let job = jobs[url] {
-            guard case .failed = job.state, job.task == nil else { return }
-            jobs[url] = nil
-            for handler in (observers[url] ?? [:]).values { handler(.none) }
-        }
-        NotificationCenter.default.post(name: .groupKeyReleased, object: nil, userInfo: ["url": url])
-    }
-
     func request(_ url: String, priority: Priority, autoAllowed: Bool = true,
                  autoLimit: Int64? = nil, finish: @escaping Finisher) {
         guard !url.isEmpty else { return }
@@ -616,12 +601,10 @@ enum MediaFetch {
     /// `gated`: the chat bubble's photos obey Settings › Storage and Data and the automatic ceiling;
     /// other callers (the viewer, a reply thumbnail) are the user asking for it directly.
     /// A group file whose key was wrapped for the members of the day, without me (see
-    /// `MediaDownloads.markUnreadable`).
-    /// Not so once a member released its key to the group (owner 2026-10-23; Crypto keeps released
-    /// keys for group ids only, so a key found here is a group's).
+    /// `MediaDownloads.markUnreadable`). No history for later members (owner 2026-10-25).
     @MainActor static func sealedWithoutMe(_ enc: EncMeta?) -> Bool {
         guard let enc, let w = enc.w, let me = AuthService.shared.uid else { return false }
-        return w[me] == nil && Crypto.shared.releasedKey(enc.n) == nil
+        return w[me] == nil
     }
 
     @MainActor

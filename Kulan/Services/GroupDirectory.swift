@@ -13,10 +13,9 @@ import FirebaseFunctions
 //   resolveUsername { groups: true }        a bare fariin.com/<name> link: a person or a group
 //   publicGroupPreview / joinPublicGroup    functions-groups, the join page
 //
-// MESSAGES BEFORE JOINING (owner 2026-10-21): an outsider reads a public group's messages in the
-// real chat screen when firestore.rules allow it (public, `e2ee == false`, history not hidden, not
-// ended, not banned). `canPeek` asks; the group document itself stays members-only, so the header
-// comes from `publicGroupPreview`. See PublicGroupSheet.
+// NO MESSAGES BEFORE JOINING (owner 2026-10-25): every group is end-to-end encrypted, so an outsider
+// gets metadata only (`publicGroupPreview`: name, photo, member count, description). The group
+// document itself stays members-only. See PublicGroupSheet.
 
 /// One public group from global search. Only what the join page shows anybody.
 struct PublicGroupHit: Identifiable, Equatable {
@@ -268,14 +267,12 @@ enum GroupNameCheck: Equatable {
     // (by cid and by @name), search warms the first few public hits, and the page asks both
     // questions at once.
     @MainActor private static var previews: [String: PublicGroupPreview] = [:]
-    @MainActor private static var peeks: [String: Bool] = [:]
 
     @MainActor static func cachedPreview(name: String?, cid: String?) -> PublicGroupPreview? {
         if let cid, let p = previews["c:" + cid] { return p }
         if let name, let p = previews["n:" + name.lowercased()] { return p }
         return nil
     }
-    @MainActor static func cachedPeek(_ cid: String) -> Bool? { peeks[cid] }
 
     @MainActor fileprivate static func remember(_ p: PublicGroupPreview) {
         previews["c:" + p.cid] = p
@@ -285,13 +282,9 @@ enum GroupNameCheck: Equatable {
     /// Fetched ahead (search results, Recent), so a tap opens with nothing left to wait for.
     @MainActor private static var warming = Set<String>()
     @MainActor static func warm(cid: String) {
-        // Skipped only when BOTH answers are kept: a peek lost to the network was never asked again,
-        // so a tap missed the first-frame chat (review 2026-10-23).
-        guard previews["c:" + cid] == nil || peeks[cid] == nil, warming.insert(cid).inserted else { return }
+        guard previews["c:" + cid] == nil, warming.insert(cid).inserted else { return }
         Task {
-            async let a = preview(name: nil, cid: cid)
-            async let b = canPeek(cid: cid)
-            _ = await (a, b)
+            _ = await preview(name: nil, cid: cid)
             await MainActor.run { _ = warming.remove(cid) }
         }
     }
@@ -316,26 +309,6 @@ enum GroupNameCheck: Equatable {
                 return .refused(ns.localizedDescription)
             }
             return .failed(NetworkState.shared.isOnline ? "Couldn't connect" : "No internet connection. Try again.")
-        }
-    }
-
-    /// May this phone read the group's messages from outside? One message asked of the server; any
-    /// refusal or failure means no (an old encrypted group, history hidden from newcomers, ended,
-    /// banned, rules not deployed yet, offline), and the join page shows as before. Never routed to
-    /// SessionRecovery: a refusal here is an answer, not a broken session. owner 2026-10-21.
-    static func canPeek(cid: String) async -> Bool {
-        guard KulanApp.safeSegment(cid) else { return false }
-        do {
-            _ = try await FirestoreHub.db.collection("conversations").document(cid).collection("messages")
-                .order(by: "createdAt", descending: true).limit(to: 1)
-                .getDocuments(source: .server)
-            await MainActor.run { peeks[cid] = true }
-            return true
-        } catch {
-            // Offline is not an answer to keep; a refusal is.
-            let ns = error as NSError
-            if ns.code == FirestoreErrorCode.permissionDenied.rawValue { await MainActor.run { peeks[cid] = false } }
-            return false
         }
     }
 

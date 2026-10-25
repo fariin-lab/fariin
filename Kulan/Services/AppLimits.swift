@@ -199,7 +199,8 @@ final class AppLimits {
     /// (group create and add) and functions-groups (invite join, request approve) read the same key
     /// with the same fallback of 30.
     var groupMembersMax: Int {
-        number("group_members_max", Fallback.groupMembersMax)
+        // Never above Limits.e2eeGroupMax: every group is end-to-end encrypted (owner 2026-10-25).
+        min(number("group_members_max", Fallback.groupMembersMax), Limits.e2eeGroupMax)
     }
 
     /// How many chats one person may pin (owner 2026-10-19: 3), from the panel's `pinned_chats_max`.

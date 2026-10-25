@@ -21,6 +21,10 @@ enum Limits {
     /// the same day.
     static let messageMaxChars = 65_536
     static let pinnedMessagesPerChat = 3
+    /// Most people in an end-to-end encrypted group (owner 2026-10-25: every group is encrypted, each
+    /// message key is boxed to every member). The server and firestore.rules use the same 100.
+    static let e2eeGroupMax = 100
+    static let e2eeGroupMaxMessage = "Groups are limited to 100 people so they stay end-to-end encrypted."
     /// Photos or videos in one album message. Picking more starts another album rather than hiding the
     /// remainder behind a "+N" badge — 12 pictures ship as 10 + 2. Matches the ceiling the mosaic layout
     /// draws, so a sent album is always fully visible.

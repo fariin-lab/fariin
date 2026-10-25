@@ -6,13 +6,11 @@ import Observation
 // member count, description, and Join (or Request to Join when the group approves each person).
 // A member never sees it: the chat opens instead. Laid out like the invite link's join sheet.
 //
-// ⛔ MESSAGES BEFORE JOINING — owner 2026-10-21, with a screenshot: a public group I am not in opens
-// as the REAL chat (ThreadView, `guest`): its messages, photo, name and "N members", with a blue Join
-// Group bar where the composer goes (`PublicJoinBar`). Joining turns this same screen into the
-// normal chat, no navigation away. The rules decide who gets that: a public group sent in the
-// clear (`e2ee == false`), history not hidden from newcomers, not ended, me not banned. So the page
-// first asks for one message (`GroupDirectory.canPeek`); refused (an old encrypted group, hidden
-// history, rules not yet deployed), it stays this page with photo, name, description and Join.
+// ⛔ NO MESSAGES BEFORE JOINING — owner 2026-10-25 (supersedes 2026-10-21): every group is end-to-end
+// encrypted, so an outsider is shown metadata only: photo, name, @name, member count, description,
+// and a blue Join Group bar (Request to Join when admins approve each person) where the composer
+// goes (`PublicJoinBar`). The chat shell opens with "join to see the messages" and starts no
+// message listener (`lockedGuest`). Joining turns this same screen into the normal chat.
 
 /// A public group opened by someone not in it, handed to ThreadView by reference (ThreadView sits at
 /// the stack limit, so it holds one pointer, never the preview struct). `joined` flips once the join
@@ -20,11 +18,10 @@ import Observation
 @Observable final class PublicGroupGuest {
     let preview: PublicGroupPreview
     var joined = false
-    /// Whether the rules let me read its messages from outside. When they do not (an older, still
-    /// encrypted group, or history hidden from new members) the chat still opens, as the reference
-    /// app's does, with "join to see the messages" in place of them (owner 2026-10-23).
-    let readable: Bool
-    init(_ preview: PublicGroupPreview, readable: Bool = true) { self.preview = preview; self.readable = readable }
+    /// Always false (owner 2026-10-25): an outsider never reads a group's messages, they are sealed
+    /// for the members. Kept as a field because ThreadView and the overlay below test it.
+    let readable = false
+    init(_ preview: PublicGroupPreview) { self.preview = preview }
 }
 
 struct PublicGroupSheet: View {
@@ -58,18 +55,10 @@ struct PublicGroupSheet: View {
         self.target = target
         self.pushed = pushed
         // Only for a group I am NOT in: a member's page swaps itself for the chat (`openChat`).
-        if let p = GroupDirectory.cachedPreview(name: target.name, cid: target.cid), !p.isMember,
-           let readable = GroupDirectory.cachedPeek(p.cid) {
+        if let p = GroupDirectory.cachedPreview(name: target.name, cid: target.cid), !p.isMember {
             _preview = State(initialValue: p)
-            _guest = State(initialValue: PublicGroupGuest(p, readable: readable))
-            if readable { Self.prefetchMedia(p.cid) }
+            _guest = State(initialValue: PublicGroupGuest(p))
         }
-    }
-
-    /// The info page's media, fetched as the guest chat opens so the page has it on its first frame.
-    static func prefetchMedia(_ cid: String) {
-        guard ChatService.cachedSharedMedia(cid) == nil else { return }
-        Task { _ = await ChatService.sharedMedia(cid) }
     }
 
     // owner 2026-10-21: the chat itself when the group can be read from outside (see the top note),
@@ -260,24 +249,15 @@ struct PublicGroupSheet: View {
             let me = AuthService.shared.uid ?? ""
             if p.isMember, ConversationsRepository.shared.conversations
                 .contains(where: { $0.id == p.cid && $0.users.contains(me) }) { openChat(p); return }
-            if let known = GroupDirectory.cachedPeek(p.cid) { guest = PublicGroupGuest(p, readable: known) }
+            guest = PublicGroupGuest(p)
             preview = p
         }
-        // Both questions at once when the group is known by id (a search row); by @name the
-        // second needs the first's answer.
-        async let answerTask = GroupDirectory.preview(name: target.name, cid: target.cid)
-        async let earlyPeek = Self.peek(target.cid)
-        let answer = await answerTask
+        let answer = await GroupDirectory.preview(name: target.name, cid: target.cid)
         // Closed while it loaded: nothing opens behind the user's back (audit 2026-10-20).
         guard !Task.isCancelled else { return }
         switch answer {
         case .found(let p):
             if p.isMember { openChat(p); return }
-            // owner 2026-10-21: the real chat when the rules let me read it from outside.
-            let early = await earlyPeek
-            let readable: Bool
-            if let early { readable = early } else { readable = await GroupDirectory.canPeek(cid: p.cid) }
-            guard !Task.isCancelled else { return }
             // ⛔ THE CHAT, ALWAYS (owner 2026-10-23, the reference app read by five agents): a public
             // group's link pushes its chat with Join at the foot, readable or not. The info page is
             // left for a group that could not be found or loaded. An open guest chat stays as it is.
@@ -287,8 +267,7 @@ struct PublicGroupSheet: View {
                 await afterPush()
                 guard !Task.isCancelled else { return }
                 if guest == nil {
-                    guest = PublicGroupGuest(p, readable: readable)
-                    if readable { Self.prefetchMedia(p.cid) }
+                    guest = PublicGroupGuest(p)
                 }
             }
             preview = p
@@ -299,14 +278,9 @@ struct PublicGroupSheet: View {
             // Known from the cache but the server could not be reached (offline): the guest chat with
             // Join at the foot rather than an empty page (review 2026-10-23).
             else if guest == nil, let p = preview {
-                guest = PublicGroupGuest(p, readable: GroupDirectory.cachedPeek(p.cid) ?? false)
+                guest = PublicGroupGuest(p)
             }
         }
-    }
-
-    private static func peek(_ cid: String?) async -> Bool? {
-        guard let cid else { return nil }
-        return await GroupDirectory.canPeek(cid: cid)
     }
 
     /// Until the push that brought this page in has finished, nothing here changes `path`.
@@ -481,8 +455,8 @@ struct PublicGroupInfoView: View {
     init(guest: PublicGroupGuest) {
         self.guest = guest
         // ⛔ ON THE FIRST FRAME (owner 2026-10-23: "the media bar comes late"). The guest chat
-        // fetches it when it opens (`PublicGroupSheet.prefetchMedia`), so it is usually here already;
-        // otherwise placeholder tiles hold its place so nothing moves when it lands.
+        // owner 2026-10-25: a visitor gets no shared media (it is sealed), so this stays empty and
+        // the card below is not drawn.
         let cached = ChatService.cachedSharedMedia(guest.preview.cid)
         _media = State(initialValue: cached ?? [])
         _mediaLoaded = State(initialValue: cached != nil)

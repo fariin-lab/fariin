@@ -126,9 +126,9 @@ enum DataExport {
         }
         out += "\n"
 
-        // 2026-10-19 groups v2: group messages are no longer end-to-end encrypted; the line says which are.
-        out += "Messages are not in this file. One-to-one messages are end-to-end encrypted and only "
-        out += "your phones can read them. To save a conversation, open the chat, tap the name at the "
+        // owner 2026-10-25: every group is end-to-end encrypted again (older groups switched off in the clear).
+        out += "Messages are not in this file. Chats and groups are end-to-end encrypted and only "
+        out += "the phones in them can read them. To save a conversation, open the chat, tap the name at the "
         out += "top, and choose Export Chat.\n"
 
         return try write(out, name: "Fariin-Account-Information.txt")

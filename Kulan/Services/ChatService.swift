@@ -229,11 +229,12 @@ enum ChatService {
         if let avatarUrl, !avatarUrl.isEmpty { data["avatarUrl"] = avatarUrl }
         // The member switches picked on the New Group page, in the group from its first write.
         for (k, v) in permissions where k != "e2ee" { data[k] = v }
-        // 2026-10-19 groups v2 (owner): a new group is not end-to-end encrypted from its first write
-        // (the rules take `false` and nothing else here). Known locally at once, so the first message,
-        // sent before the server has answered, goes in the clear too (groupIsPlain).
-        data["e2ee"] = false
-        sealMembersLock.withLock { _ = plainGroups.insert(ref.documentID) }
+        // owner 2026-10-25: every new group is end-to-end encrypted. No `e2ee` field is written (absent
+        // means encrypted); the rules refuse `e2ee: false` at create. Beyond the cap it is refused here.
+        if users.count > Limits.e2eeGroupMax {
+            throw NSError(domain: "ChatService", code: 31,
+                          userInfo: [NSLocalizedDescriptionKey: Limits.e2eeGroupMaxMessage])
+        }
         // Not awaited: the write is on this phone now and the listener sees it; the server's answer
         // comes behind (a refusal is logged; the chat then simply does not stay).
         // Refused: said, not only logged (audit 2026-10-20: the chat opened and then went away).
@@ -620,8 +621,9 @@ enum ChatService {
             currentCount = ((try? await convRef.getDocument())?.data()?["users"] as? [String])?.count ?? 0
         }
         if currentCount + newOnes.count > maxMembers {
-            throw NSError(domain: "ChatService", code: 30,
-                          userInfo: [NSLocalizedDescriptionKey: "A group can have at most \(maxMembers) members."])
+            let why = maxMembers >= Limits.e2eeGroupMax ? Limits.e2eeGroupMaxMessage
+                                                        : "A group can have at most \(maxMembers) members."
+            throw NSError(domain: "ChatService", code: 30, userInfo: [NSLocalizedDescriptionKey: why])
         }
         var update: [String: Any] = [
             "users": FieldValue.arrayUnion(newOnes),
@@ -1373,27 +1375,32 @@ enum ChatService {
         let plain = (snap.data()?["e2ee"] as? Bool) == false
         sealMembersLock.withLock {
             sealMembersConfirmed[cid] = (users, Date())
-            if plain { plainGroups.insert(cid) }
+            // Both ways (owner 2026-10-25): the server may flip a legacy plain group to encrypted.
+            if plain { plainGroups.insert(cid) } else { plainGroups.remove(cid) }
         }
         return users
     }
 
-    /// 2026-10-19 groups v2 (owner): GROUPS ARE NO LONGER END-TO-END ENCRYPTED for new messages.
-    /// A group whose document says `e2ee == false` (written by the server's groupsE2eeOff step, or
-    /// by createGroup for a new group) sends text and files in the clear; the database rules refuse
-    /// plain text in a group that has not switched, so anything unsure seals as before. The answer
-    /// comes from the server read `freshGroupMembers` makes before every group send, else from the
-    /// chat list's copy. The switch only ever goes one way, so a remembered "plain" never goes stale.
-    /// A 1:1 cid ("uidA_uidB") is never plain.
+    /// A legacy group (created or switched since 2026-10-19) whose document says `e2ee == false` still
+    /// sends text and files in the clear; the database rules refuse plain text in any other group.
+    /// owner 2026-10-25: every other group, new or old, private or public, is sealed. Absent `e2ee`
+    /// means sealed, so anything unsure seals. The server may flip a plain group to encrypted
+    /// (`e2eeOnAt`), so the answer is NOT remembered for good: the chat list's live copy of the
+    /// document wins when it has one, else the answer of the server read `freshGroupMembers` makes
+    /// before every group send. A 1:1 cid ("uidA_uidB") is never plain.
     private static var plainGroups: Set<String> = []
     static func groupIsPlain(_ cid: String) async -> Bool {
         guard !cid.contains("_") else { return false }
-        if sealMembersLock.withLock({ plainGroups.contains(cid) }) { return true }
-        let listed = await MainActor.run {
-            ConversationsRepository.shared.conversations.first { $0.id == cid }?.e2eeOff ?? false
+        let listed: Bool? = await MainActor.run {
+            ConversationsRepository.shared.conversations.first { $0.id == cid }?.e2eeOff
         }
-        if listed { sealMembersLock.withLock { _ = plainGroups.insert(cid) } }
-        return listed
+        if let listed {
+            sealMembersLock.withLock {
+                if listed { _ = plainGroups.insert(cid) } else { _ = plainGroups.remove(cid) }
+            }
+            return listed
+        }
+        return sealMembersLock.withLock { plainGroups.contains(cid) }
     }
 
     /// Drop the reused list when this device changes membership itself.
