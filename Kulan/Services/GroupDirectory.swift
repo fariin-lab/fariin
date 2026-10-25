@@ -282,6 +282,15 @@ enum GroupNameCheck: Equatable {
         if !p.username.isEmpty { previews["n:" + p.username.lowercased()] = p }
     }
 
+    /// After I leave (owner 2026-10-25: "when I leave I can't join again"): the kept preview still
+    /// said member, so search and the @name link opened the chat I had left instead of the Join page.
+    /// Forgotten here; the next look asks the server, which answers not a member.
+    @MainActor static func noteLeft(cid: String) {
+        if let p = previews["c:" + cid], !p.username.isEmpty { previews["n:" + p.username.lowercased()] = nil }
+        previews["c:" + cid] = nil
+        peeks[cid] = nil
+    }
+
     /// Fetched ahead (search results, Recent), so a tap opens with nothing left to wait for.
     @MainActor private static var warming = Set<String>()
     @MainActor static func warm(cid: String) {

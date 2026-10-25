@@ -201,6 +201,19 @@ private let memberCodes = OSAllocatedUnfairLock(initialState: [String: String]()
         }
     }
 
+    /// After I leave (owner 2026-10-25: "when I leave I can't join again"): the group's link stops
+    /// counting me as a member, so its card says View Group and a tap opens the join sheet, not the
+    /// chat I am no longer in. The next lookup asks the server afresh.
+    static func noteLeft(cid: String) {
+        memberCodes.withLock { $0 = $0.filter { $0.value != cid } }
+        for (code, k) in known {
+            if case .found(let p) = k.outcome, p.cid == cid {
+                known[code] = nil
+                askedAt[code] = nil
+            }
+        }
+    }
+
     static func noteRequested(_ code: String) {
         if var p = cached(code) {
             p.requested = true

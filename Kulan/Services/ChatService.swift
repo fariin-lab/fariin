@@ -815,6 +815,11 @@ enum ChatService {
                 if let error { cont.resume(throwing: error) } else { cont.resume() }
             })
         }
+        // Out: the link card and search forget I was in it, so they offer Join again (owner 2026-10-25).
+        await MainActor.run {
+            GroupDirectory.noteLeft(cid: cid)
+            GroupLinkDoor.noteLeft(cid: cid)
+        }
     }
 
     /// Announcement mode (admin): when true, only admins may send. Enforced in the message
