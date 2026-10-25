@@ -3486,9 +3486,16 @@ enum ChatService {
     /// The summary fields for whatever message is newest right now. Split out of
     /// `clearSummaryIfNewest` on 2026-09-24 (audit) so the guarded writer can recompute it.
     private static func summaryOfNewest(_ convRef: DocumentReference) async -> [String: Any] {
+        // ⛔ A GROUP SKIPS ITS DELETED ONES (owner 2026-10-26): a group shows no "deleted" line in
+        // the chat, so the chat list must not either; its preview is the newest message still there.
+        // A 1:1 keeps the tombstone line, as before.
+        let group = !convRef.documentID.contains("_")
         let newest = try? await convRef.collection("messages")
-            .order(by: "createdAt", descending: true).limit(to: 1).getDocuments()
-        guard let doc = newest?.documents.first else {
+            .order(by: "createdAt", descending: true).limit(to: group ? 25 : 1).getDocuments()
+        let pick = group
+            ? newest?.documents.first(where: { ($0.data()["deleted"] as? Bool) != true })
+            : newest?.documents.first
+        guard let doc = pick else {
             // Nothing left at all.
             return [
                 "lastMessage": "", "lastSender": "",
