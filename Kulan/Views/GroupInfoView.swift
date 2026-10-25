@@ -411,7 +411,49 @@ struct GroupInfoView: View {
     @Environment(\.colorScheme) private var scheme
     private static let scrollSpace = "groupInfoScroll"
 
+    /// The description in its own card under the actions, left-aligned, every line shown (owner
+    /// 2026-10-26: it was centred text under the count). A small grey label names it.
+    private var descriptionCard: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Description").font(.subheadline).foregroundStyle(.secondary)
+            Text(Self.blueLinks(desc)).font(.body).foregroundStyle(.primary)
+                .tint(Color(hex: 0x0A84FF))
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .environment(\.openURL, descLinkAction)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .profileSurface(plain: cardColor)
+    }
+
+    /// Links and @usernames in the description (owner 2026-10-21): a web link in the in-app browser,
+    /// an @name opens that person's chat on top of this page.
+    private var descLinkAction: OpenURLAction {
+        OpenURLAction { url in
+            switch url.scheme?.lowercased() {
+            case "http", "https": WebLink.open(url)
+            case "kulan":
+                let handle = url.lastPathComponent
+                // ⛔ MY OWN @name DOES NOTHING (owner 2026-10-23: "that's my profile, don't open it").
+                if handle == (ProfileStore.shared.me?.handle ?? "").lowercased() { return .handled }
+                Task { @MainActor in
+                    guard let u = await ChatService.findByHandle(handle, allowSelf: true) else { return }
+                    if u.id == me { return }
+                    mentionChat = ChatTarget(id: ChatService.convId(me, u.id),
+                                             name: u.name.isEmpty ? u.handle : u.name, photo: u.photoUrl)
+                    // The chat document is written behind the open, as the card door does.
+                    Task { _ = try? await ChatService.openConversation(other: u) }
+                }
+            default: return .discarded
+            }
+            return .handled
+        }
+    }
+
     @ViewBuilder private var cards: some View {
+        if !desc.isEmpty { descriptionCard }
         // 2026-10-19 groups v2: a public group's own link, for every member (copy, share, QR).
         if let name = conv?.publicName, !name.isEmpty {
             GroupPublicLinkCard(name: name, title: title, cardColor: cardColor, photo: conv?.avatarUrl, memberCount: conv?.users.count)
@@ -544,43 +586,8 @@ struct GroupInfoView: View {
                 // The reference app's subtitle (owner 2026-10-20): 16 pt regular, its grey.
                 Text(memberCountText).font(.system(size: 16)).foregroundStyle(Color(hex: 0x8E8E93))
             }
-            if !desc.isEmpty {
-                // The description reads as text, the count as a label (owner 2026-10-20: the two
-                // looked the same): full ink and the body size, a little more room above it.
-                // Soft, not full white (owner 2026-10-20): above the count's grey, below the name.
-                // 15pt, not the 17pt body (owner 2026-10-20: "looks big", "don't make too much small").
-                // Links and @usernames blue and tappable (owner 2026-10-21): the About card's own
-                // linker and doors (web link in the in-app browser, @name on that profile).
-                Text(Self.blueLinks(desc)).font(.subheadline).foregroundStyle(ink.opacity(0.68))
-                    .tint(Color(hex: 0x0A84FF))
-                    .lineLimit(3).multilineTextAlignment(.center)
-                    .padding(.top, 6)
-                    .environment(\.openURL, OpenURLAction { url in
-                        switch url.scheme?.lowercased() {
-                        case "http", "https": WebLink.open(url)
-                        // An @name opens that person's chat ON TOP of this page, with the system's
-                        // slide (owner 2026-10-21: the tap did nothing). The card door, as invites.
-                        case "kulan":
-                            let handle = url.lastPathComponent
-                            // ⛔ MY OWN @name DOES NOTHING (owner 2026-10-23: "that's my profile, don't
-                            // open it"). Reverses 2026-10-22, when it opened My Profile.
-                            if handle == (ProfileStore.shared.me?.handle ?? "").lowercased() {
-                                return .handled
-                            }
-                            Task { @MainActor in
-                                // allowSelf: my own name is a real person too, and opens my profile.
-                                guard let u = await ChatService.findByHandle(handle, allowSelf: true) else { return }
-                                if u.id == me { return }   // my own name: nothing (see above)
-                                mentionChat = ChatTarget(id: ChatService.convId(me, u.id),
-                                                         name: u.name.isEmpty ? u.handle : u.name, photo: u.photoUrl)
-                                // The chat document is written behind the open, as the card door does.
-                                Task { _ = try? await ChatService.openConversation(other: u) }
-                            }
-                        default: return .discarded
-                        }
-                        return .handled
-                    })
-            } else if canEditInfo {
+            // The description itself is a card under the actions now (owner 2026-10-26).
+            if desc.isEmpty, canEditInfo {
                 // No description yet: whoever may edit is offered one, the reference app's line
                 // (owner 2026-10-19). It opens Edit Group, as the Edit button does.
                 Button { editAtDescription = true; showEdit = true } label: {
