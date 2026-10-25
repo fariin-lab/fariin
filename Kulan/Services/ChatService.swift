@@ -666,7 +666,11 @@ enum ChatService {
         let canNotice = conv?.canSend(uid, now: Date().timeIntervalSince1970 * 1000) ?? true
         let batch = db.batch()
         if canNotice, !addedNames.isEmpty {
-            let text = "\(myName()) added \(addedNames.joined(separator: ", "))"
+            // owner 2026-10-25 ("make the text short"): two names, then how many more.
+            let who = addedNames.count <= 3
+                ? addedNames.joined(separator: ", ")
+                : "\(addedNames.prefix(2).joined(separator: ", ")) and \(addedNames.count - 2) others"
+            let text = "\(myName()) added \(who)"
             batch.setData(["text": text, "authorId": uid, "type": "system",
                            "createdAt": FieldValue.serverTimestamp()],
                           forDocument: convRef.collection("messages").document())

@@ -402,6 +402,9 @@ enum MessageRowLayout {
             // in a row from the same person touched. It always keeps a gap above it.
             var top = m.topSpacing
             if case .media(let mb) = b.body, mb.kind == .sticker { top = max(top, 8) }
+            // 2026-10-25 (owner, "no space between images, just slightly"): two photos or videos in
+            // a row read as one block at the 2 pt grouped gap. A little more, not a sticker's 8.
+            else if case .media = b.body { top = max(top, 5) }
             // 2026-10-21 (owner, "spaces between polls are small"): two big poll cards from the same
             // person read as one block at the 2 pt grouped gap. A poll keeps 10 above it.
             if case .poll = b.body { top = max(top, 10) }
@@ -411,9 +414,12 @@ enum MessageRowLayout {
             p.plan.offsetVertically(by: y)
             body = .bubble(p.plan)
         case .notice(let n):
-            var p = notice(n, width: width)
+            // owner 2026-10-25: in select mode a long line ("You added a, b, c, ...") ran under the
+            // circles. It is laid out in the width right of the selection lane, and centred there.
+            var p = notice(n, width: width - shift)
             p.capsule.origin.y += y + 6
-            for i in p.buttons.indices { p.buttons[i].rect.origin.y += y + 6 }
+            p.capsule.origin.x += shift
+            for i in p.buttons.indices { p.buttons[i].rect.origin.y += y + 6; p.buttons[i].rect.origin.x += shift }
             // The buttons hang under the pill, so the row is as tall as the lowest of them.
             // A story card holds its button inside, so the card itself can be the lowest thing.
             let bottom = max(p.capsule.maxY, p.buttons.map(\.rect.maxY).max() ?? 0)
@@ -3120,6 +3126,9 @@ extension BubblePlan {
         avatar?.origin.y += dy
         senderName?.origin.y += dy
         verifiedMark?.origin.y += dy
+        // owner 2026-10-25: the tag chip was missing here, so under the unread line or a date pill
+        // it stayed at the row's top, over the divider, while the name it sits beside moved down.
+        roleChip?.origin.y += dy
         forwarded?.origin.y += dy
         forwardedIcon?.origin.y += dy
         failBadge?.origin.y += dy
