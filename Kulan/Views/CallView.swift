@@ -1292,45 +1292,71 @@ struct CallView: View {
 
     // ⛔ ONE ROW, ONE CAPSULE: SHARE, VIDEO, SPEAKER, MUTE, END — Kasim 2026-10-22, with the other
     // big app's in-call bar as the model (and reversing the named two-size panel of an hour before):
-    // big circles in one capsule, no names, Share Screen where that app keeps its "..." (it was a
+    // big circles in one bar (names under them since owner 2026-10-26), Share Screen where that app keeps its "..." (it was a
     // header button), Mute next to End under the right thumb. Flip joins only while my camera shows.
     // On a 375 pt phone: 5 x 56 + 4 x 10 + 2 x 12 (capsule) + 2 x 12 (gutters) = 368; with Flip,
     // 6 x 46 + 5 x 8 + 48 = 364.
     /// The control bar's height: the circle + 12 above and below. Everything that clears the bar
     /// reads this (it was a bare 76, the old 52 pt row + 2 x 12).
-    static let barHeight: CGFloat = 80
+    /// owner 2026-10-26: a name under each circle (6 + a 15 pt line), so 80 + 21.
+    static let barHeight: CGFloat = 101
     private var controlCount: Int { (call.cameraOn && !myScreenOnCamera) ? 6 : 5 }
     private var circleSize: CGFloat { controlCount >= 6 ? 46 : 56 }
 
     private var controlBar: some View {
         HStack(spacing: controlCount >= 6 ? 8 : 10) {
-            shareCircle
+            named(call.screenSharePhase != .off ? "Stop" : "Share") { shareCircle }
             // MY camera — turn it on/off freely (the other side just sees it, no
             // permission). When it can be pressed: see `cameraButtonEnabled` (M-052).
-            callCircle(call.cameraOn ? "video.fill" : "video.slash.fill", active: !call.cameraOn,
-                       label: call.cameraOn ? "Turn camera off" : "Turn camera on") { call.toggleCamera() }
-                // Dimmed while my screen is shared too: the share owns my video until it stops, and
-                // stopping brings the camera back exactly as it was.
-                .disabled(!cameraButtonEnabled)
-                .opacity(cameraButtonEnabled ? 1 : 0.4)
+            named("Video") {
+                callCircle(call.cameraOn ? "video.fill" : "video.slash.fill", active: !call.cameraOn,
+                           label: call.cameraOn ? "Turn camera off" : "Turn camera on") { call.toggleCamera() }
+                    // Dimmed while my screen is shared too: the share owns my video until it stops, and
+                    // stopping brings the camera back exactly as it was.
+                    .disabled(!cameraButtonEnabled)
+                    .opacity(cameraButtonEnabled ? 1 : 0.4)
+            }
             // Flip front/back only while my camera is on (and actually showing, not a shared screen).
             if call.cameraOn && !myScreenOnCamera {
-                callCircle("arrow.triangle.2.circlepath", active: false, label: "Flip camera") { flipCamera() }
+                named("Flip") {
+                    callCircle("arrow.triangle.2.circlepath", active: false, label: "Flip camera") { flipCamera() }
+                }
             }
-            speakerCircle
+            named(call.externalAudioAvailable ? "Audio" : "Speaker") { speakerCircle }
             // Labels: owner audit 2026-10-06 #19 — icon-only buttons read as "button" or the raw
             // symbol name under VoiceOver. Each says what a tap does now.
-            callCircle(call.isMuted ? "mic.slash.fill" : "mic.fill", active: call.isMuted,
-                       label: call.isMuted ? "Unmute" : "Mute") { call.toggleMute() }
-            endCircle
+            named(call.isMuted ? "Unmute" : "Mute") {
+                callCircle(call.isMuted ? "mic.slash.fill" : "mic.fill", active: call.isMuted,
+                           label: call.isMuted ? "Unmute" : "Mute") { call.toggleMute() }
+            }
+            named("End") { endCircle }
         }
         .padding(12)
+        // A rounded box now the names sit under the circles (owner 2026-10-26); a capsule this tall
+        // would round its ends into the outer buttons.
         .background {
-            Capsule().fill(.ultraThinMaterial).environment(\.colorScheme, .dark)
-                .overlay(Capsule().fill(Color.black.opacity(0.25)))
-                .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 1))
+            let box = RoundedRectangle(cornerRadius: 32, style: .continuous)
+            box.fill(.ultraThinMaterial).environment(\.colorScheme, .dark)
+                .overlay(box.fill(Color.black.opacity(0.25)))
+                .overlay(box.stroke(.white.opacity(0.12), lineWidth: 1))
         }
         .padding(.horizontal, 12)
+    }
+
+    /// A circle with its name under it (owner 2026-10-26: "ours doesn't have names"): 12 pt, soft
+    /// white, one line, about as wide as the circle. VoiceOver already reads each circle's own label.
+    private func named<C: View>(_ name: String, @ViewBuilder _ circle: () -> C) -> some View {
+        VStack(spacing: 6) {
+            circle()
+            Text(name)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.85))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                // The circle's own width: any wider and five no longer fit a 375 pt phone.
+                .frame(width: circleSize)
+                .accessibilityHidden(true)
+        }
     }
 
     /// Share Screen, moved down from the header (Kasim 2026-10-22). Its rules are the header
