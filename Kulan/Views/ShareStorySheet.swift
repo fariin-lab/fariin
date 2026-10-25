@@ -750,7 +750,9 @@ struct ShareStorySheet: View {
                 }
             }
         }
-        .presentationDetents([.height(groupSheetHeight), .large])
+        // One height only (owner 2026-10-25, "don't open this sheet full"): picked from the audience
+        // list, the old height went away and the sheet jumped to the large detent with empty room.
+        .presentationDetents([.height(groupSheetHeight)])
         .presentationDragIndicator(.visible)
         .presentationBackground(Color(.systemGroupedBackground))
     }
