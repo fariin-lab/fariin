@@ -1857,6 +1857,8 @@ struct StoryViewer: View {
                         : (OfficialChannel.isOfficial(g.authorUid) || !canMessage) ? Self.replyLocked : nil
                     // A repost cannot be reposted again (owner, 2026-10-12: "Ali reposts Abdi, Ahmed cannot repost that, but can repost Ali's own story"). Share and Copy Link are unchanged.
                     let canRepost = canPassOn && s.repostOf == nil
+                    // My own story's Share entry: Everyone, or a public group's story (owner 2026-10-25).
+                    let isPublic = (s.audienceLabel == "everyone" && !s.oneTime) || (s.groupId != nil && canPassOn)
                     // Fariin's own button (owner 2026-10-16: "Learn more" set in the admin panel)
                     // takes the locked line's place. Hoisted with the rest, same type-checker reason.
                     let actionURL = OfficialChannel.isOfficial(g.authorUid) ? s.buttonUrl.flatMap(URL.init(string:)) : nil
@@ -1930,7 +1932,7 @@ struct StoryViewer: View {
                         // WAS IT POSTED TO EVERYONE. Only the Share entry reads it, and only on my
                         // own story — see `Story.isPublicStory`. A one-time story is never public
                         // whatever its label says, so it is excluded here rather than in the menu.
-                        isPublicStory: s.audienceLabel == "everyone" && !s.oneTime,
+                        isPublicStory: isPublic,
                         // The one answer behind Share Story, Copy Story Link and Repost Story — see
                         // `StoryShareRights`. Repost needs a still, so it is refused for a clip;
                         // the other two are fine on either, and the menu shows all three together
@@ -2295,8 +2297,12 @@ struct StoryViewer: View {
         // reasoning Edit viewers above carries. (Repost left this menu on 2026-09-24 — it was on the
         // footer as well, and he saw it twice; the footer's mark is the one repost button.)
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionShareLink"))) { _ in
+            // A group story's link names the public group, not me (owner 2026-10-25).
+            let groupName = currentStory?.groupId.flatMap { gid in
+                ConversationsRepository.shared.conversations.first(where: { $0.id == gid })?.publicName
+            }
             guard let s = currentStory, StoryShareRights.allows(s),
-                  let url = URL(string: KulanApp.storyLink(id: s.id)) else { return }
+                  let url = URL(string: KulanApp.storyLink(id: s.id, handle: groupName)) else { return }
             shareURL = StoryLinkPayload(url: url)
         }
         // A caption @mention (owner 2026-10-16): the person's profile OVER the story, the same sheet
@@ -4957,8 +4963,13 @@ struct StoryViewer: View {
         // who reposted it, not the person whose picture it is.
         let creditUid = story.repostOf?.authorUid ?? story.authorUid
         let creditStoryId = story.repostOf?.storyId ?? story.id
+        // A group story's ring is the group's, so its poster's name comes from the group's member
+        // names (owner 2026-10-25: repost from a public group, credited like any story).
         let authorName = story.repostOf?.authorName
-            ?? groups.first(where: { $0.authorUid == story.authorUid })?.name ?? ""
+            ?? groups.first(where: { $0.authorUid == story.authorUid })?.name
+            ?? story.groupId.flatMap { gid in
+                ConversationsRepository.shared.conversations.first(where: { $0.id == gid })?.names[story.authorUid]
+            } ?? ""
         if story.isVideo { beginVideoRepost(story, authorName: authorName, creditUid: creditUid, creditStoryId: creditStoryId); return }
         repostLoading = true
         Task {

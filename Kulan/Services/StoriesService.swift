@@ -397,8 +397,22 @@ enum StoryShareRights {
         return c.isBlockedByMe(authorUid)
     }
 
+    /// A public group: it has an @name and is switched public (`Conversation.isPublic`). Only a
+    /// group in my chat list can answer; anything else reads as private.
+    static func groupIsPublic(_ groupId: String) -> Bool {
+        ConversationsRepository.shared.conversations.first(where: { $0.id == groupId })?.isPublic == true
+    }
+
     /// The one question. True = Share, Copy Story Link and Repost may all be offered.
     static func allows(_ s: Story) -> Bool {
+        // ⛔ A GROUP STORY IS PASSED ON ONLY FROM A PUBLIC GROUP (owner 2026-10-25: "public groups:
+        // repost and share link"). Anybody can already find and open a public group; a private
+        // group's story stays inside it. The same two "do not copy this" flags apply, and the
+        // poster's block on me, as for any story.
+        if let gid = s.groupId, !gid.isEmpty {
+            guard groupIsPublic(gid), !s.oneTime, !s.captureProtected else { return false }
+            return !authorHasBlockedMe(s.authorUid)
+        }
         // The author's own copy, and the two flags that say "not this one" even then. A one-time
         // story I posted is still one-time for the people who got it, and passing it on would hand
         // it to somebody who is not in that count at all.
@@ -3263,58 +3277,75 @@ final class StoriesRepository {
                           stories: stories, lastViewedAt: nil, isMine: false)
     }
 
+    /// A GROUP STORY OPENED FROM ITS LINK by somebody it was not sent to (owner 2026-10-25: a public
+    /// group's story may be shared). Read straight from `stories/{id}`, which the rules grant for a
+    /// story of a public group (see the report of 2026-10-25 for that clause); until they do, the
+    /// read is refused and this is nil. One story, in its group's ring.
+    func linkedGroupStory(_ storyId: String) async -> StoryGroup? {
+        guard !storyId.isEmpty, !storyId.contains("/"),
+              let snap = try? await db.collection("stories").document(storyId).getDocument(source: .server),
+              let data = snap.data(),
+              let story = parse(id: snap.documentID, data: data, me: Auth.auth().currentUser?.uid ?? ""),
+              let gid = story.groupId, story.expiresAt > ServerClock.now else { return nil }
+        return StoryGroup(authorUid: StoryGroup.groupKeyPrefix + gid, name: story.groupName ?? "",
+                          photoUrl: story.groupPhoto, stories: [story], lastViewedAt: nil,
+                          isMine: story.authorUid == (Auth.auth().currentUser?.uid ?? ""))
+    }
+
     private func parse(_ docs: [QueryDocumentSnapshot]?) -> [Story] {
         // WHOSE PHONE THIS IS, read once. `uid` is StoriesService's own private property and this is
         // StoriesRepository, which is what the compiler caught; asking Auth inside the loop would
         // also be one lookup per story rather than one per query.
         let me = Auth.auth().currentUser?.uid ?? ""
-        return (docs ?? []).compactMap { d in
-            let data = d.data()
-            guard let author = data["authorUid"] as? String,
-                  let url = data["mediaUrl"] as? String, !url.isEmpty,   // skip the pre-upload window (empty URL froze the viewer)
-                  let exp = (data["expiresAt"] as? Timestamp)?.dateValue() else { return nil }
-            // A ONE-TIME STORY I HAVE ALREADY OPENED IS GONE, and it goes here because this is the
-            // one place every story list is built. The server is removing me from its recipients as
-            // this runs; this is what makes "immediately" true on the tap rather than a beat later.
-            // Never applied to my OWN stories — the author keeps theirs until it expires.
-            if (data["oneTime"] as? Bool ?? false), author != me, StoryPrefs.isOneTimeUsed(d.documentID) {
-                return nil
-            }
-            let created = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
-            return Story(id: d.documentID, authorUid: author, createdAt: created,
-                         expiresAt: exp, mediaUrl: url,
-                         allowsReplies: data["allowsReplies"] as? Bool ?? true,
-                         caption: data["caption"] as? String ?? "",
-                         isVideo: data["type"] as? String == "video",
-                         duration: data["duration"] as? Double ?? 0,
-                         thumbUrl: data["thumbUrl"] as? String ?? "",
-                         blurThumb: data["blurThumb"] as? String ?? "",
-                         // Absent on everything posted before stickers existed, which reads as none.
-                         stickers: (data["stickers"] as? [[String: Any]] ?? []).compactMap(StoryTapTarget.from),
-                         // Written by the uploader since 2026-08-12; absent on everything older,
-                         // which reads as zero and lets the lookahead use its own default.
-                         preloadPrefix: (data["preloadPrefix"] as? NSNumber)?.int64Value ?? 0,
-                         // Stories posted before this field existed fall back to "friends", which is
-                         // what they were: the audience list is newer than the story collection, and
-                         // a public story is caught by the `public` flag below it.
-                         audienceLabel: data["audienceLabel"] as? String
-                            ?? ((data["public"] as? Bool ?? false) ? "everyone" : "friends"),
-                         oneTime: data["oneTime"] as? Bool ?? false,
-                         // Absent on everything posted before the option existed, which reads as off.
-                         // The public MIRROR carries the same key, so a stranger reaching an
-                         // "Everyone" story from a profile gets the protection too.
-                         captureProtected: data["captureProtected"] as? Bool ?? false,
-                         // Only my own story hands this over — see the property.
-                         recipientsLeft: author == me
-                            ? ((data["recipientUids"] as? [String])?.count ?? -1)
-                            : -1,
-                         // Absent on every story that is not a repost, which is nearly all of them.
-                         repostOf: StoryRepost.from(data["repostOf"]),
-                         recipientTokens: author == me ? data["recipientUids"] as? [String] : nil,
-                         groupId: (data["groupId"] as? String).flatMap { $0.isEmpty ? nil : $0 },
-                         groupName: data["groupName"] as? String,
-                         groupPhoto: data["groupPhoto"] as? String)
+        return (docs ?? []).compactMap { d in parse(id: d.documentID, data: d.data(), me: me) }
+    }
+
+    /// One story document, from a query or a single read. Nil for one that cannot be shown.
+    private func parse(id docId: String, data: [String: Any], me: String) -> Story? {
+        guard let author = data["authorUid"] as? String,
+              let url = data["mediaUrl"] as? String, !url.isEmpty,   // skip the pre-upload window (empty URL froze the viewer)
+              let exp = (data["expiresAt"] as? Timestamp)?.dateValue() else { return nil }
+        // A ONE-TIME STORY I HAVE ALREADY OPENED IS GONE, and it goes here because this is the
+        // one place every story list is built. The server is removing me from its recipients as
+        // this runs; this is what makes "immediately" true on the tap rather than a beat later.
+        // Never applied to my OWN stories — the author keeps theirs until it expires.
+        if (data["oneTime"] as? Bool ?? false), author != me, StoryPrefs.isOneTimeUsed(docId) {
+            return nil
         }
+        let created = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+        return Story(id: docId, authorUid: author, createdAt: created,
+                     expiresAt: exp, mediaUrl: url,
+                     allowsReplies: data["allowsReplies"] as? Bool ?? true,
+                     caption: data["caption"] as? String ?? "",
+                     isVideo: data["type"] as? String == "video",
+                     duration: data["duration"] as? Double ?? 0,
+                     thumbUrl: data["thumbUrl"] as? String ?? "",
+                     blurThumb: data["blurThumb"] as? String ?? "",
+                     // Absent on everything posted before stickers existed, which reads as none.
+                     stickers: (data["stickers"] as? [[String: Any]] ?? []).compactMap(StoryTapTarget.from),
+                     // Written by the uploader since 2026-08-12; absent on everything older,
+                     // which reads as zero and lets the lookahead use its own default.
+                     preloadPrefix: (data["preloadPrefix"] as? NSNumber)?.int64Value ?? 0,
+                     // Stories posted before this field existed fall back to "friends", which is
+                     // what they were: the audience list is newer than the story collection, and
+                     // a public story is caught by the `public` flag below it.
+                     audienceLabel: data["audienceLabel"] as? String
+                        ?? ((data["public"] as? Bool ?? false) ? "everyone" : "friends"),
+                     oneTime: data["oneTime"] as? Bool ?? false,
+                     // Absent on everything posted before the option existed, which reads as off.
+                     // The public MIRROR carries the same key, so a stranger reaching an
+                     // "Everyone" story from a profile gets the protection too.
+                     captureProtected: data["captureProtected"] as? Bool ?? false,
+                     // Only my own story hands this over — see the property.
+                     recipientsLeft: author == me
+                        ? ((data["recipientUids"] as? [String])?.count ?? -1)
+                        : -1,
+                     // Absent on every story that is not a repost, which is nearly all of them.
+                     repostOf: StoryRepost.from(data["repostOf"]),
+                     recipientTokens: author == me ? data["recipientUids"] as? [String] : nil,
+                     groupId: (data["groupId"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                     groupName: data["groupName"] as? String,
+                     groupPhoto: data["groupPhoto"] as? String)
     }
 
     // Optimistically advance my LOCAL per-author watermark to the story just shown, so the

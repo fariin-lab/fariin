@@ -259,9 +259,10 @@ enum StoryDoor {
     /// A STORY LINK, OPENED IN THE APP (owner, 2026-10-11: tapping one in a chat asked "Open link?").
     ///
     /// First among the stories this phone already holds, which covers my own and everything sent to
-    /// me. Then, when the link names its author, that author's public stories, which is the only
-    /// other way a link can exist: Share is offered on Everyone stories alone. False means it has
-    /// expired, was deleted, or was never mine to see, and the caller says so.
+    /// me. Then a public group's story, read by its id (owner 2026-10-25: Share on a public group's
+    /// story; its link names the group). Then, when the link names its author, that author's public
+    /// stories. False means it has expired, was deleted, or was never mine to see, and the caller
+    /// says so.
     ///
     /// `sourceKey`: the link card's picture (`LinkPreviewBubbleView.storySourceId`), so the story
     /// grows out of it and the pull-down lands back on it. Empty (a link tapped in the text) opens
@@ -273,6 +274,11 @@ enum StoryDoor {
             .first(where: { $0.stories.contains { $0.id == storyId } }) {
             group.stories = group.stories.filter { $0.id == storyId }
             open(group, from: sourceKey, deliveredToMe: !group.isMine)
+            return true
+        }
+        // Not mine and not sent to me, so not a member: no reply field (replies are the members').
+        if let group = await repo.linkedGroupStory(storyId) {
+            open(group, from: sourceKey)
             return true
         }
         guard let handle, !handle.isEmpty,
