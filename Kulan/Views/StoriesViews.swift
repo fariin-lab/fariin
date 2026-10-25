@@ -6371,7 +6371,18 @@ struct MyStoriesCarousel: View {
             // Reduced to numbers HERE, once per fetch, rather than in `body` once per frame.
             for await (id, answer) in group {
                 guard let v = answer else { continue }
-                counts[id] = StoryRowCounts(views: v.count, likes: v.reactionCount, reposts: v.repostCount)
+                counts[id] = StoryRowCounts(views: v.count, likes: v.reactionCount, reposts: v.repostCount,
+                                            replies: counts[id]?.replies ?? 0)
+            }
+        }
+        // A group story's replies (owner 2026-10-25: "add the replies icon and count"): one count
+        // read each, not the thread itself, as the group story footer reads it.
+        for s in stories where s.groupId != nil {
+            let q = FirestoreHub.db.collection("stories").document(s.id).collection("replies")
+            guard let n = try? await q.count.getAggregation(source: .server).count.intValue else { continue }
+            await MainActor.run {
+                if counts[s.id] != nil { counts[s.id]?.replies = n }
+                else { counts[s.id] = StoryRowCounts(views: 0, likes: 0, replies: n) }
             }
         }
     }
