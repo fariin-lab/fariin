@@ -203,6 +203,12 @@ final class AppLimits {
         min(number("group_members_max", Fallback.groupMembersMax), Limits.e2eeGroupMax)
     }
 
+    /// The member cap of ONE group: the 100 only binds a group that is end-to-end encrypted. A legacy
+    /// plain group (`e2ee == false`) keeps the admin panel's own number, as the rules and the server do.
+    func groupMembersMax(legacyPlain: Bool) -> Int {
+        legacyPlain ? number("group_members_max", Fallback.groupMembersMax) : groupMembersMax
+    }
+
     /// How many chats one person may pin (owner 2026-10-19: 3), from the panel's `pinned_chats_max`.
     var pinnedChatsMax: Int {
         number("pinned_chats_max", Fallback.pinnedChatsMax)

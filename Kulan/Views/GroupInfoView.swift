@@ -206,7 +206,7 @@ struct GroupInfoView: View {
                                 photoUrl: conv?.photos[m.id], source: .calls)
             }
             .sheet(isPresented: $showAllMembers) { GroupMembersSheet(cid: cid) }
-            .sheet(isPresented: $showEncryption) { ChatEncryptionSheet() }
+            .sheet(isPresented: $showEncryption) { ChatEncryptionSheet(plain: conv?.e2eeOff == true) }
             .sheet(isPresented: $showQR) {
                 if let link = inviteLink {
                     GroupLinkQRSheet(title: title, link: link, photo: conv?.avatarUrl, memberCount: conv?.users.count)

@@ -90,7 +90,7 @@ struct AddToGroupView: View {
         let allowed = g.adminCan(me, .inviteUsers)
             || (g.membersCanAdd && !g.isRestricted(me, .addMembers, now: now))
         if !allowed { return "Only admins can add members" }
-        if g.users.count >= AppLimits.shared.groupMembersMax { return "Group is full" }
+        if g.users.count >= AppLimits.shared.groupMembersMax(legacyPlain: g.e2eeOff) { return "Group is full" }
         return nil
     }
 

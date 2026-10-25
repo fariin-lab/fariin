@@ -1145,8 +1145,14 @@ struct ThreadView: View {
             // Groups are NOT end-to-end encrypted (owner 2026-10-19, and 2026-10-23: every group, the
             // ones the migration has not reached yet too), so a group never wears the lock line.
             // 1:1 chats keep it word for word.
-            let line: Text = isGroup
+            // Encrypted again (owner 2026-10-25): only a LEGACY plain group (e2ee == false) still says
+            // it is not. Group calls are not end-to-end yet, so the group line speaks of messages only.
+            let groupLegacy = conversation?.e2eeOff == true
+            let groupLine: Text = groupLegacy
                 ? Text("\(Image(systemName: "shield.fill")) Messages in this group are not end-to-end encrypted. They are protected in transit and on our servers.")
+                : Text("\(Image(systemName: "lock.fill")) Messages in this group are end-to-end encrypted. Only people in this group can read them.")
+            let line: Text = isGroup
+                ? groupLine
                 : Text("\(Image(systemName: "lock.fill")) Messages and calls are end-to-end encrypted. Only people in this chat can read or listen to them.")
             // ⛔ LEARN MORE OPENS fariin.com/safety — owner 2026-10-15: the safety page sat where
             // nobody looks; every new chat shows this line, the way the reference app's notice

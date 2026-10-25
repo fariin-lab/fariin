@@ -556,6 +556,9 @@ extension AutoSaveToPhotos.ChatChoice {
 /// the one-to-one chats. A group the migration has not reached yet is told the same: saying less
 /// than the truth for a moment is the safe direction, claiming encryption that is gone is not.
 struct ChatEncryptionSheet: View {
+    /// A LEGACY plain group (`e2ee == false`) keeps the old wording; every other group is encrypted
+    /// again (owner 2026-10-25) and says so. Group calls are not end-to-end yet and the sheet says that.
+    var plain: Bool = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
 
@@ -563,19 +566,26 @@ struct ChatEncryptionSheet: View {
     private static let blue = Color(hex: 0x2C6BED)
 
     private struct Covered { let icon: String; let title: String; let line: String }
-    private let items: [Covered] = [
+    private var items: [Covered] { plain ? Self.plainItems : Self.lockedItems }
+
+    private static let lockedItems: [Covered] = [
+        .init(icon: "lock.fill", title: "Locked on your phone",
+              line: "Messages, photos and files are locked before they leave your phone. Only the people in this group can open them, not even Fariin."),
+        .init(icon: "clock.arrow.circlepath", title: "From the day you join",
+              line: "People who join later can't read what was said before they joined."),
+        .init(icon: "phone.fill", title: "Group calls",
+              line: "Protected on the way, but not end-to-end encrypted yet. We are working on it."),
+        .init(icon: "lock.fill", title: "Your one-to-one chats",
+              line: "End-to-end encrypted. Only you and the other person can read them."),
+    ]
+
+    private static let plainItems: [Covered] = [
         .init(icon: "network.badge.shield.half.filled", title: "Protected on the way",
               line: "Messages, photos and files travel over an encrypted connection to our servers."),
         .init(icon: "person.2.fill", title: "Kept for the members",
               line: "On our servers, access rules let only the people in this group read its messages."),
-        // 2026-10-23 (owner): members read the group's history, the ones who join later too, as the
-        // reference app's cloud groups do. Old sealed messages open once a member who could read
-        // them has opened the group; one that nobody left in the group can open stays locked.
-        .init(icon: "clock.arrow.circlepath", title: "Group history",
-              line: "Members can see messages sent before they joined, unless the admins hid the history. Older encrypted messages open once someone who could read them opens the group."),
         .init(icon: "lock.fill", title: "Your one-to-one chats",
               line: "Still end-to-end encrypted. Only you and the other person can read them."),
-        // No calls row and no stories row: neither is end-to-end encrypted (2026-10-18/19).
     ]
 
     var body: some View {
@@ -599,7 +609,9 @@ struct ChatEncryptionSheet: View {
                     .font(.system(size: 28, weight: .bold))
                     .multilineTextAlignment(.center)
                     .padding(.top, 22)
-                Text("Messages in this group are not end-to-end encrypted. They are protected in transit and on our servers, and Fariin's servers can read them.")
+                Text(plain
+                     ? "Messages in this group are not end-to-end encrypted. They are protected in transit and on our servers, and Fariin's servers can read them."
+                     : "Messages in this group are end-to-end encrypted. Only the people in the group can read them.")
                     .font(.system(size: 17))
                     .foregroundStyle(.primary.opacity(0.78))
                     .multilineTextAlignment(.center)

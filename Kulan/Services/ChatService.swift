@@ -615,13 +615,14 @@ enum ChatService {
         let convRef = db.collection("conversations").document(cid)
         // The member cap on growth: config/limits.group_members_max (admin panel), fallback 30. The
         // rules hold the same number on every add; this check only gives a clear message first.
-        let maxMembers = AppLimits.shared.groupMembersMax
+        let legacyPlain = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.e2eeOff == true
+        let maxMembers = AppLimits.shared.groupMembersMax(legacyPlain: legacyPlain)
         var currentCount = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.users.count ?? 0
         if currentCount == 0 {
             currentCount = ((try? await convRef.getDocument())?.data()?["users"] as? [String])?.count ?? 0
         }
         if currentCount + newOnes.count > maxMembers {
-            let why = maxMembers >= Limits.e2eeGroupMax ? Limits.e2eeGroupMaxMessage
+            let why = (!legacyPlain && maxMembers >= Limits.e2eeGroupMax) ? Limits.e2eeGroupMaxMessage
                                                         : "A group can have at most \(maxMembers) members."
             throw NSError(domain: "ChatService", code: 30, userInfo: [NSLocalizedDescriptionKey: why])
         }

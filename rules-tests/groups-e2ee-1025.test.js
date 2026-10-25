@@ -76,9 +76,8 @@ const cases = [
   ['GUARD   outsider reads an encrypted public group (e2ee absent)', 'DENY', 'DENY', OUT, msgPath, 'get', null, msg(encg1), convMocks(PUB({}))],
   ['GUARD   outsider lists an encrypted public group (e2ee true)', 'DENY', 'DENY', OUT, msgPath, 'list', null, msg(encg1), convMocks(PUB({ e2ee: true }))],
   ['GUARD   outsider reads an encrypted PRIVATE group', 'DENY', 'DENY', OUT, msgPath, 'get', null, msg(encg1), convMocks(ENC)],
-  // Documented, not wanted long term: a LEGACY plain public group is still readable from outside by the
-  // rules (the app no longer asks). Closing it is a one-line change in publicPreviewRead.
-  ['NOTE    outsider reads a LEGACY plain public group', 'ALLOW', 'ALLOW', OUT, msgPath, 'get', null, msg('hello'), convMocks(PUB({ e2ee: false }))],
+  // Closed too (owner 2026-10-25): a LEGACY plain public group is not readable from outside either.
+  ['FIX     outsider reads a LEGACY plain public group', 'ALLOW', 'DENY', OUT, msgPath, 'get', null, msg('hello'), convMocks(PUB({ e2ee: false }))],
 ];
 
 async function run(t, source, [, , , uid, p, method, after, before, mocks], expectation) {
