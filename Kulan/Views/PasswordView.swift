@@ -657,7 +657,18 @@ struct PasswordResetCodeView: View {
             done = true
             SavePasswordOffer.offer(password: password)
         } catch {
-            self.error = error.localizedDescription
+            let words = error.localizedDescription
+            // owner 2026-10-26: the code ran out while the password was being chosen, and the page
+            // only said "ask for a new one" with no way to. Back to the code boxes with a new code
+            // already sent; the password typed stays for when the new code is in.
+            if words.contains("Ask for a new one") {
+                step = .code
+                await resend()
+                if self.error == nil { self.error = "That code expired. We sent you a new one." }
+                codeFocused = true
+                return
+            }
+            self.error = words
         }
     }
 }
