@@ -3339,11 +3339,21 @@ service cloud.firestore {
       // write that can fail or lag). On `get` ONLY: the check reads `resource.data.authorUid`, which
       // a tray QUERY cannot prove, so putting it on `list` would refuse every tray query. The tray
       // is covered by the audience revoke taking them out of `recipientUids`.
-      allow get: if storyReadable()
+      allow get: if (storyReadable() || publicGroupStory())
         && (request.auth.uid == resource.data.authorUid
             || adminCan('moderate')
             || !isBlockedByUser(resource.data.authorUid));
       allow list: if storyReadable();
+      // A PUBLIC GROUP'S STORY (owner 2026-10-25) opens from its shared link for anyone signed in, as
+      // the group itself does; not once the group is ended. recipientUids are hashed tokens.
+      function publicGroupStory() {
+        let g = resource.data.get('groupId', '');
+        return g != '' && publicGroupDoc(get(/databases/$(database)/documents/conversations/$(g)).data);
+      }
+      function publicGroupDoc(c) {
+        return c.get('type', '') == 'group' && c.get('isPublic', false) == true
+          && c.get('username', '') != '' && c.get('endedAt', null) == null;
+      }
       function storyReadable() { return signedIn() && (
         request.auth.uid == resource.data.authorUid
         || audienceToken(request.auth.uid) in resource.data.recipientUids

@@ -61,7 +61,9 @@ const storyMocks = (uid, conv = group()) => [...authorMocks(uid), ...convMocks(c
 
 const withRight = group({ adminRights: { [ADMIN]: ['pinMessages', 'postStories'] } });
 const without = group({ adminRights: { [ADMIN]: ['pinMessages'] } });
-const switchOffWithRight = group({ adminsPostStories: false, adminRights: { [ADMIN]: ['postStories'] } });
+const OUTSIDER = 'uidOutside';
+const pub = group({ isPublic: true, username: 'plans' });
+const switchOffWithRight =group({ adminsPostStories: false, adminRights: { [ADMIN]: ['postStories'] } });
 // [name, before, after, uid, path, method, newData, oldData, mocks]
 const cases = [
   ['CANARY  an ordinary story', 'ALLOW', 'ALLOW', MEMBER, storyPath, 'create', story(MEMBER), null, storyMocks(MEMBER)],
@@ -74,6 +76,15 @@ const cases = [
   ['GUARD   a plain member', 'DENY', 'DENY', MEMBER, storyPath, 'create', gs(MEMBER), null, storyMocks(MEMBER, withRight)],
   ['GUARD   a member named in adminRights but not an admin', 'DENY', 'DENY', MEMBER, storyPath, 'create', gs(MEMBER), null,
     storyMocks(MEMBER, group({ adminRights: { [MEMBER]: ['postStories'] } }))],
+  // 2026-10-25: a public group's story opens from its link for anyone signed in.
+  ['CHANGE  an outsider opens a public group story by link', 'DENY', 'ALLOW', OUTSIDER, storyPath, 'get', null, gs(OWNER),
+    [...authorMocks(OUTSIDER), ...convMocks(convPath, pub)]],
+  ['GUARD   an outsider opens a private group story', 'DENY', 'DENY', OUTSIDER, storyPath, 'get', null, gs(OWNER),
+    [...authorMocks(OUTSIDER), ...convMocks(convPath, group())]],
+  ['GUARD   an outsider opens an ended public group story', 'DENY', 'DENY', OUTSIDER, storyPath, 'get', null, gs(OWNER),
+    [...authorMocks(OUTSIDER), ...convMocks(convPath, group({ isPublic: true, username: 'plans', endedAt: REQ_TIME }))]],
+  ['GUARD   an outsider opens an ordinary friends story', 'DENY', 'DENY', OUTSIDER, storyPath, 'get', null, story(OWNER),
+    authorMocks(OUTSIDER)],
 ];
 
 async function run(t, source, [, , , uid, p, method, after, before, mocks], expectation) {
