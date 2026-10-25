@@ -1778,13 +1778,28 @@ struct ChatsView: View {
 
     private var me: String { AuthService.shared.uid ?? "" }
     private var dark: Bool { scheme == .dark }
-    // Per-segment seen flags for the 1:1 peer's stories (empty = no active story → no ring).
+    /// The ring a chat row wears: the 1:1 peer's stories, or a group's own ring (owner 2026-10-25:
+    /// "after a group story is posted the group's row shows no ring"). A group's ring is keyed
+    /// "g:" + its id in `others`, my own posts included; a group story of mine that sits in My Story
+    /// instead (an upload in flight) is gathered into a ring of the same key, so either way the
+    /// viewer opens it as the group's.
+    private func storyRing(_ conv: Conversation) -> StoryGroup? {
+        guard !UserDefaults.standard.bool(forKey: "storiesOptedOut") else { return nil }   // opted out: no rings anywhere
+        guard conv.isGroup else {
+            guard !StoryPrefs.isHidden(conv.otherUid(me)) else { return nil }   // hidden author: no ring on the chat-list avatar
+            return storiesRepo.others.first(where: { $0.authorUid == conv.otherUid(me) })
+        }
+        let key = StoryGroup.groupKeyPrefix + conv.id
+        guard !StoryPrefs.isHidden(key) else { return nil }   // "…" → Hide on the group's ring
+        if let g = storiesRepo.others.first(where: { $0.authorUid == key }), !g.stories.isEmpty { return g }
+        let mine = storiesRepo.mine?.stories.filter { $0.groupId == conv.id } ?? []
+        guard !mine.isEmpty else { return nil }
+        return StoryGroup(authorUid: key, name: conv.displayName(me), photoUrl: conv.displayPhoto(me),
+                          stories: mine, lastViewedAt: nil, isMine: true)
+    }
+    // Per-segment seen flags for the row's ring (empty = no active story → no ring).
     private func storySeen(_ conv: Conversation) -> [Bool] {
-        guard !conv.isGroup,
-              !UserDefaults.standard.bool(forKey: "storiesOptedOut"),   // opted out: no rings anywhere
-              !StoryPrefs.isHidden(conv.otherUid(me)),   // hidden author: no ring on the chat-list avatar
-              let g = storiesRepo.others.first(where: { $0.authorUid == conv.otherUid(me) })
-        else { return [] }
+        guard let g = storyRing(conv) else { return [] }
         // upTo watermark = same split-brain guard as the stories row (server lastViewedAt
         // covers views from other devices / reinstalls, not just local flags).
         return StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt)
@@ -2509,9 +2524,7 @@ struct ChatsView: View {
                 // mean "tick this row" — opening a story from a list you are selecting in is not
                 // what the finger meant.
                 if selecting { toggleSelection(conv.id); return }
-                if let g = storiesRepo.others.first(where: { $0.authorUid == conv.otherUid(me) }) {
-                    openStoryFromRing(conv, g)
-                }
+                if let g = storyRing(conv) { openStoryFromRing(conv, g) }
             },
             storySeen: { storySeen($0) },
             onCall: { $0.id == liveCallCid },
