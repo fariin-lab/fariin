@@ -973,6 +973,17 @@ final class AuthService: NSObject {
         try await reauthenticate(with: EmailAuthProvider.credential(withEmail: email, password: password))
     }
 
+    /// owner 2026-10-25 (Transfer Ownership): proves the account's PASSWORD, on the address that
+    /// password is actually on (an Apple or Google account may carry it on another address than
+    /// `user.email`). The fresh ID token then says `sign_in_provider: password`, which is what
+    /// groups:transferGroupOwnership checks. The password goes to Firebase Auth only.
+    func reauthPassword(_ password: String) async throws {
+        guard let user = Auth.auth().currentUser else { throw AuthFlowError.notSignedIn }
+        let onPassword = user.providerData.first(where: { $0.providerID == "password" })?.email
+        guard let email = onPassword ?? user.email, !email.isEmpty else { throw AuthFlowError.notSignedIn }
+        try await reauthenticate(with: EmailAuthProvider.credential(withEmail: email, password: password))
+    }
+
     /// Did the person simply back out? Then there is nothing to report and nothing went wrong.
     ///
     /// Every door closes differently and none of them are Firebase errors, which is why the shared

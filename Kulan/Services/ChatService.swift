@@ -993,32 +993,44 @@ enum ChatService {
         ])
     }
 
-    /// owner 2026-10-18: TRANSFER OWNERSHIP (owner only; firestore.rules `ownerHandOffOK`). The new
-    /// owner must be a member; they become an admin if they were not. I stay in the group as an admin
-    /// with every right, "Add new admins" included, the way the reference app leaves its old owner.
-    static func transferGroupOwnership(cid: String, to heir: String, name: String) async throws {
-        let convRef = db.collection("conversations").document(cid)
-        let me = uid
-        let text = "\(name) is now the owner"
-        let batch = db.batch()
-        batch.setData(["text": text, "authorId": me, "type": "system",
-                       "createdAt": FieldValue.serverTimestamp()],
-                      forDocument: convRef.collection("messages").document())
-        batch.updateData([
-            "createdBy": heir,
-            "admins": FieldValue.arrayUnion([heir]),
-            // The owner holds every right; no entry, nobody's appointee.
-            "adminRights.\(heir)": FieldValue.delete(),
-            "adminBy.\(heir)": FieldValue.delete(),
-            "restrictedFlags.\(heir)": FieldValue.delete(),
-            "restrictedUntil.\(heir)": FieldValue.delete(),
-            "adminRights.\(me)": Conversation.Right.allCases.map(\.rawValue),
-            "adminBy.\(me)": heir,
-            "lastMessage": text,
-            "lastSender": me,
-            "updatedAt": FieldValue.serverTimestamp(),
-        ], forDocument: convRef)
-        try await batch.commit()
+    /// owner 2026-10-25: TRANSFER OWNERSHIP IS THE SERVER'S (groups:transferGroupOwnership). The
+    /// rules refuse a client write of `createdBy` now, except the owner's own leave. The server asks
+    /// for: me the owner, them a member, a password on my account that is older than 5 hours, and a
+    /// password sign-in in the last 5 minutes (`AuthService.reauthPassword` right before). It writes
+    /// the hand-off: they own it, I stay an admin with the usual rights (no "Add new admins").
+    struct OwnershipRefusal: LocalizedError {
+        /// The server's reason ("no-password", "password-created-recently", ...), "" when unknown.
+        let reason: String
+        let message: String
+        var errorDescription: String? { message }
+        var needsPassword: Bool { reason == "no-password" }
+    }
+
+    /// Everything but the password proof, so the page can say "create a password first" or "wait"
+    /// before it asks for one.
+    static func checkOwnershipTransfer(cid: String, to heir: String) async throws {
+        try await callOwnershipTransfer(["cid": cid, "to": heir, "check": true])
+    }
+
+    static func transferGroupOwnership(cid: String, to heir: String) async throws {
+        try await callOwnershipTransfer(["cid": cid, "to": heir])
+    }
+
+    private static func callOwnershipTransfer(_ payload: [String: Any]) async throws {
+        do {
+            _ = try await Functions.functions(region: "me-central1")
+                .httpsCallable("transferGroupOwnership").call(payload)
+        } catch {
+            let ns = error as NSError
+            // The literal "details" (see ChatPin.lockDeadline). A refusal carries its reason; its
+            // message is written for the person. Anything else (offline, not deployed) gets ours.
+            let details = ns.userInfo["details"] as? [String: Any]
+            let reason = details?["reason"] as? String ?? ""
+            if ns.domain == FunctionsErrorDomain, !reason.isEmpty {
+                throw OwnershipRefusal(reason: reason, message: ns.localizedDescription)
+            }
+            throw OwnershipRefusal(reason: "", message: "Could not transfer ownership. Check your connection and try again.")
+        }
     }
 
     /// Restrict a member with an auto-expiring timeout (the reference app bannedRights model). `flags` is a

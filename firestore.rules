@@ -2024,19 +2024,16 @@ service cloud.firestore {
               || request.resource.data.get('admins', []).size() > 0
               || request.resource.data.users.size() == 0);
       }
-      // 2026-09-24 decision D23: ownership moves only as the owner's own leave hands it on.
-      // `createdBy` may change in exactly one write: the owner leaving (out of `users`) names a
-      // member who stays, and that member is an admin after the write (ChatService.leaveGroup picks
-      // the longest-serving admin, else the longest-serving member and makes them admin too).
-      // Non-owners were already refused any `createdBy` change by nonOwnerAdminWriteOK.
-      // owner 2026-10-18: TRANSFER OWNERSHIP. The owner may also hand the group on while staying in
-      // it (ChatService.transferGroupOwnership), to someone already a member who is an admin after
-      // the write. Still only the owner: nobody else can ever write `createdBy`.
+      // 2026-09-24 decision D23: a client moves `createdBy` only as the owner's own leave hands it
+      // on (out of `users` in this write) to a member who stays and is an admin after it
+      // (ChatService.leaveGroup). owner 2026-10-25: Transfer Ownership while staying in the group
+      // is the server's alone (groups:transferGroupOwnership, password proven), never a client write.
       function ownerHandOffOK() {
         let o = resource.data;
         let n = request.resource.data;
         return n.get('createdBy', '') == o.get('createdBy', '')
           || (request.auth.uid == o.get('createdBy', '')
+              && !(request.auth.uid in n.users)
               && n.get('createdBy', '') in o.users
               && n.get('createdBy', '') in n.users
               && n.get('createdBy', '') in n.get('admins', []));

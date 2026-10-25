@@ -1896,7 +1896,13 @@ struct GroupMemberSheet: View {
     var canRestrict: Bool = false          // I hold the Restrict-members right → can remove/mute
     var currentRights: [String]? = nil      // this admin's granted rights (nil = the defaults/legacy)
     var grantable: [String] = []            // owner 2026-10-18: the rights I may hand out (all, for the owner)
-    @State private var confirmTransfer = false
+    // owner 2026-10-25: Transfer Ownership asks the server first, then for my password.
+    @State private var showTransferPassword = false
+    @State private var transferred = false
+    @State private var noPasswordAlert = false
+    @State private var showCreatePassword = false
+    @State private var transferRefused: String?
+    @State private var showMyRights = false
     var mutedUntil: Double = 0              // ms; > now = currently restricted
     var role: GroupRole? = nil              // their Role (owner 2026-10-18), nil = none
     var canEditRole: Bool = false           // Conversation.canSetRole: admins only, never the owner's by an admin
@@ -1944,6 +1950,72 @@ struct GroupMemberSheet: View {
             } catch {
                 let msg = error.localizedDescription
                 await MainActor.run { busy = false; actionError = msg }
+            }
+        }
+    }
+
+    /// owner 2026-10-25: Transfer Ownership. The server says first whether it can happen at all (no
+    /// password on my account, or one made or changed in the last 5 hours), so nobody types a
+    /// password for a transfer that will be refused. Then the password page.
+    private func startTransfer() {
+        guard !busy else { return }
+        busy = true
+        let cid = cid, heir = member.id
+        Task {
+            do {
+                try await ChatService.checkOwnershipTransfer(cid: cid, to: heir)
+                await MainActor.run { busy = false; showTransferPassword = true }
+            } catch let refusal as ChatService.OwnershipRefusal where refusal.needsPassword {
+                await MainActor.run { busy = false; noPasswordAlert = true }
+            } catch {
+                let msg = error.localizedDescription
+                await MainActor.run { busy = false; transferRefused = msg }
+            }
+        }
+    }
+
+    /// No password on my account. The Create Password button only where Settings would offer the
+    /// page too (`passwordAddress`, a proven address the person can type).
+    private var noPasswordMessage: String {
+        AuthService.shared.passwordAddress == nil
+            ? "To transfer group ownership, your account needs a password. Add one in Settings, then try again after 5 hours."
+            : "To transfer group ownership, your account needs a password. You can transfer ownership 5 hours after you create it."
+    }
+    private var noPasswordActions: [DarkAlertAction] {
+        if AuthService.shared.passwordAddress == nil { return [DarkAlertAction.cancel("OK")] }
+        return [DarkAlertAction.cancel(), DarkAlertAction.confirm("Create Password") { showCreatePassword = true }]
+    }
+
+    /// My own admin rights, read only, in the edit page's rows with the switches off to the touch.
+    /// The owner holds them all.
+    private var myRightsPage: some View {
+        let held = Set(currentRights ?? Conversation.Right.defaults.map(\.rawValue))
+        return Form {
+            if iAmOwner {
+                Section {
+                    Label("All rights", systemImage: "crown.fill")
+                } footer: {
+                    Text("You are the owner of this group, so you can do everything in it, including adding admins and transferring ownership.")
+                }
+            } else {
+                Section {
+                    ForEach(Conversation.Right.allCases) { r in
+                        Toggle(r.shortLabel, isOn: .constant(held.contains(r.rawValue)))
+                            .disabled(true)
+                    }
+                } header: {
+                    Text("What you can do")
+                } footer: {
+                    Text("Only the owner, or the admin who made you an admin, can change these.")
+                }
+            }
+        }
+        .navigationTitle("My Admin Rights")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { showMyRights = false } label: { Image(systemName: "xmark") }
+                    .accessibilityLabel("Close")
             }
         }
     }
@@ -2108,14 +2180,31 @@ struct GroupMemberSheet: View {
                 Button("Dismiss Admin", role: .destructive) { commit(demote: true) }
                 Button("Cancel", role: .cancel) {}
             }
-            .alert("Make \(member.name) the owner?",
-                                isPresented: $confirmTransfer) {
-                Button("Transfer Ownership", role: .destructive) {
-                    run { try await ChatService.transferGroupOwnership(cid: cid, to: member.id, name: member.name) }
+            // owner 2026-10-25: the password page is the confirm (it names what happens). Closed after
+            // a transfer, the card closes with it: I am no longer the owner it was drawn for.
+            .sheet(isPresented: $showTransferPassword, onDismiss: { if transferred { dismiss() } }) {
+                NavigationStack {
+                    TransferOwnershipSheet(cid: cid, heir: member.id, name: member.name) { transferred = true }
                 }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("\(member.name) will have full control of this group, including over you. You will stay an admin.")
+                .presentationDetents([.medium, .large])
+            }
+            .darkAlert("Create a Password First", message: noPasswordMessage,
+                       isPresented: $noPasswordAlert, actions: noPasswordActions)
+            // The same page Settings opens for a first password.
+            .sheet(isPresented: $showCreatePassword) {
+                NavigationStack {
+                    PasswordView(address: AuthService.shared.passwordAddress ?? "", isFirstPassword: true)
+                }
+            }
+            .darkAlert("Can't Transfer Ownership",
+                       message: transferRefused,
+                       isPresented: Binding(get: { transferRefused != nil },
+                                            set: { if !$0 { transferRefused = nil } }),
+                       actions: [DarkAlertAction.cancel("OK")])
+            // My own rights, to read (owner 2026-10-25: my row showed only Edit My Tag).
+            .sheet(isPresented: $showMyRights) {
+                NavigationStack { myRightsPage }
+                    .presentationDetents([.medium, .large])
             }
             // ⛔ A REMOVAL IS A BAN (owner 2026-10-20, as the reference app): out of the group, and
             // until an admin unbans them they cannot rejoin, find it in search or open its page.
@@ -2421,8 +2510,12 @@ struct GroupMemberSheet: View {
         if member.id == me && canEditRole {
             rows.append(AnyView(iconRow("tag", role == nil ? "Add My Tag" : "Edit My Tag") { showEdit = true }))
         }
+        // My own rights, read only (owner 2026-10-25), for the owner and for an admin.
+        if member.id == me && (iAmOwner || member.isAdmin) {
+            rows.append(AnyView(iconRow("checkmark.shield", "My Admin Rights") { showMyRights = true }))
+        }
         if canTransfer {
-            rows.append(AnyView(iconRow("crown", "Transfer Ownership") { confirmTransfer = true }))
+            rows.append(AnyView(iconRow("crown", "Transfer Ownership") { startTransfer() }))
         }
         if member.id != me {
             rows.append(AnyView(iconRow("person.crop.circle", "Open Profile") { openProfile() }))
@@ -2718,5 +2811,91 @@ struct TagColourRow: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// owner 2026-10-25: TRANSFER OWNERSHIP ASKS FOR MY PASSWORD. Firebase Auth checks it (it never
+/// reaches our server and is never stored or logged here), then the server makes the hand-off
+/// (`ChatService.transferGroupOwnership`) and says in words why when it refuses.
+struct TransferOwnershipSheet: View {
+    let cid: String
+    let heir: String
+    let name: String
+    var onDone: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var password = ""
+    @State private var busy = false
+    @State private var failure: String?
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Form {
+            Section {
+                SecureField("Password", text: $password)
+                    .textContentType(.password)
+                    .focused($focused)
+                    .submitLabel(.done)
+                    .onSubmit { transfer() }
+                    .disabled(busy)
+            } header: {
+                Text("Enter your password")
+            } footer: {
+                Text("\(name) will have full control of this group, including over you. You will stay an admin.")
+            }
+            if let failure {
+                Section { Text(failure).foregroundStyle(.red) }
+            }
+        }
+        .navigationTitle("Transfer Ownership")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { password = ""; dismiss() }
+                    .disabled(busy)
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                if busy {
+                    ProgressView()
+                } else {
+                    Button("Transfer") { transfer() }
+                        .fontWeight(.semibold)
+                        .disabled(password.isEmpty)
+                }
+            }
+        }
+        .interactiveDismissDisabled(busy)
+        .onAppear { focused = true }
+    }
+
+    private func transfer() {
+        guard !busy, !password.isEmpty else { return }
+        busy = true
+        failure = nil
+        let typed = password
+        let cid = cid, heir = heir, name = name
+        Task {
+            // The password proves it is me now: the fresh sign-in the server asks for.
+            do {
+                try await AuthService.shared.reauthPassword(typed)
+            } catch {
+                let words = AuthService.plainMessage(error, credentialHint: "That password is not right.")
+                    ?? "Could not verify that. Try again."
+                await MainActor.run { busy = false; failure = words }
+                return
+            }
+            do {
+                try await ChatService.transferGroupOwnership(cid: cid, to: heir)
+                await MainActor.run {
+                    busy = false
+                    password = ""
+                    onDone()
+                    dismiss()
+                    ToastNotice.show("\(name) is now the owner")
+                }
+            } catch {
+                let words = error.localizedDescription
+                await MainActor.run { busy = false; failure = words }
+            }
+        }
     }
 }

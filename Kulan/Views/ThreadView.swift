@@ -2567,7 +2567,13 @@ struct ThreadView: View {
                     || fresh.restrictedUntil != old.restrictedUntil
                     || fresh.groupMod.blocksSending() != old.groupMod.blocksSending()
                     || fresh.hideHistoryAt != old.hideHistoryAt || fresh.memberSince != old.memberSince
-                if changed { cachedConv = fresh; noteHistoryStart() }
+                // owner 2026-10-25: who owns the group and each admin's rights, too. A transfer to
+                // someone already an admin changes neither `admins` nor `users`, so the member card
+                // opened from this chat still drew me as the owner (Transfer Ownership, Add admins).
+                // Its own line: one long `||` chain is slow for the type checker.
+                let ownerOrRightsChanged: Bool = fresh.createdBy != old.createdBy
+                    || fresh.adminRights != old.adminRights || fresh.adminBy != old.adminBy
+                if changed || ownerOrRightsChanged { cachedConv = fresh; noteHistoryStart() }
             }
     }
 
@@ -2652,6 +2658,7 @@ struct ThreadView: View {
             r.onlyAdminsSend = c.onlyAdminsSend; r.admins = c.admins; r.users = c.users
             r.restrictedFlags = c.restrictedFlags; r.restrictedUntil = c.restrictedUntil
             r.groupMod = c.groupMod; r.hideHistoryAt = c.hideHistoryAt; r.memberSince = c.memberSince
+            r.createdBy = c.createdBy; r.adminRights = c.adminRights; r.adminBy = c.adminBy   // owner 2026-10-25
             if r != c { cachedConv = r }
         } else if resolved != cachedConv { cachedConv = resolved }
         // A chat opened before its group was in the list starts the group's own doc now (audit).
