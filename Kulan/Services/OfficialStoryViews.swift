@@ -107,8 +107,8 @@ enum OfficialStoryViews {
     @MainActor
     static func installPill() {
         StoryFooterAccessory.view = { storyId in
-            // Not an official story: a group story's footer, or nothing (owner 2026-10-23).
-            guard let raw = rawId(storyId) else { return GroupStoryFooter.view(storyId) }
+            // Not an official story: nothing (a group's owner and admins have the poster's bar, 2026-10-25).
+            guard let raw = rawId(storyId) else { return nil }
             let canSee = AdminStore.shared.can(.send), canDelete = AdminStore.shared.can(.remove)
             guard canSee || canDelete else { return nil }
             // ⛔ THE ADMIN'S FOOTER (owner 2026-10-18): views on the left, Delete on the right, and no

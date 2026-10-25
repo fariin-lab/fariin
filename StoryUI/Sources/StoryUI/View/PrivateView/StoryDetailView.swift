@@ -486,7 +486,7 @@ struct StoryDetailView: View {
                     // ⚠️ AND MY OWN BAR ASKS FOR ROOM THE SAME WAY A REPLY BAR DOES. It is the one
                     // line that makes the card shorter by exactly what the bar takes, so the two
                     // cannot overlap and the card the morph is told about is the card that is drawn.
-                    let ownFooter: CGFloat = (ownerBar != nil && model.isMine) ? ownerBarHeight : 0
+                    let ownFooter: CGFloat = (ownerBar != nil && (model.isMine || model.hasOwnerBar)) ? ownerBarHeight : 0
                     let footerH: CGFloat = isReplyBar
                         ? Constant.MessageView.height + 32 + winInsets.bottom
                         : ownFooter
@@ -684,7 +684,7 @@ struct StoryDetailView: View {
                         Spacer(minLength: 0)
                         // MY OWN BAR, IN THE PAGE. It travels with the card through the cube for
                         // the same reason a friend's reply bar always did: both are the page.
-                        if let ownerBar, model.isMine, ownerBarHeight > 0 {
+                        if let ownerBar, model.isMine || model.hasOwnerBar, ownerBarHeight > 0 {
                             ownerBar(model.id)
                                 .frame(height: ownerBarHeight)
                                 // ⚠️ AND IT LEAVES ON THE FLIGHT, EXACTLY LIKE A FRIEND'S REPLY BAR
@@ -1173,7 +1173,7 @@ private extension StoryDetailView {
                       // with nothing cached had only the grey shimmer to fall back to, and that is
                       // the black card between one item and the next. See `ImageView.blurThumb`.
                       blurThumb: story.blurThumb,
-                      cardCornerRadius: (story.config.storyType != .plain() || model.isMine) ? cardRadius : 0,
+                      cardCornerRadius: (story.config.storyType != .plain() || model.isMine || model.hasOwnerBar) ? cardRadius : 0,
                       isCaptureProtected: story.isCaptureProtected) {
                 start(index: index)
             }

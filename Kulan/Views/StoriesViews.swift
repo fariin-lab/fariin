@@ -1280,9 +1280,6 @@ struct StoryViewer: View {
     @State private var ownRepostGone = false            // the repost's original was mine and is gone
     @State private var profileSheet: StoryGroup?        // tap the header → profile sheet OVER the story (paused)
     @State private var myPostedUp = false                // tap MY header → my Posted Stories, over the story
-    /// A group story's replies, opened by a member who did not post it (owner 2026-10-23).
-    @State private var groupRepliesStory: Story?
-    private var groupRepliesUp: Bool { groupRepliesStory != nil }
     /// Fariin's header tapped (official stories, owner 2026-10-16): the channel's own info page.
     @State private var officialInfoUp = false
     /// The group page over a group story (owner 2026-10-25), opened from its header.
@@ -1618,6 +1615,25 @@ struct StoryViewer: View {
     private var showingMine: Bool {
         currentIsMine || (currentBucketUid.isEmpty && (StoryDoorState.shared.openGroup?.isMine ?? false))
     }
+    /// ⛔ THE POSTER'S VIEW FOR THE GROUP'S OWNER AND ADMINS TOO (owner 2026-10-25: "same views and
+    /// replies as the owner"). A group's ring they may read the views of wears my own story's bar and
+    /// opens my own story's sheet (preview cards, Views | Replies). Only the bar and the sheet: the
+    /// "…" menu, Save, Edit viewers and Delete stay on `currentIsMine`, since only the author may
+    /// delete a story (firestore.rules stories `allow delete`).
+    @MainActor private static func hasOwnerBar(_ g: StoryGroup) -> Bool {
+        if g.isMine { return true }
+        guard g.groupConvId != nil, !g.stories.isEmpty else { return false }
+        return g.stories.allSatisfy { $0.groupId != nil && GroupStoryRights.canSeeViews($0) }
+    }
+    /// `currentIsMine`'s twin for the bar and the sheet. See `hasOwnerBar`.
+    private var currentHasOwnerBar: Bool {
+        groups.first { $0.authorUid == currentBucketUid }.map { Self.hasOwnerBar($0) } ?? false
+    }
+    /// `showingMine`'s twin, with the same first-frame fallback to the ring the door opened.
+    private var showingOwnerBar: Bool {
+        currentHasOwnerBar
+            || (currentBucketUid.isEmpty && (StoryDoorState.shared.openGroup.map { Self.hasOwnerBar($0) } ?? false))
+    }
     @State private var sheetStoryId = ""   // which of MY stories the carousel + viewers list target
     @State private var uploadSvc = StoriesService.shared   // observed → the "Uploading…" bar tracks the upload
     // The current item is the still-uploading synthetic placeholder → show the "Uploading…" bar (both
@@ -1728,7 +1744,7 @@ struct StoryViewer: View {
     // the composer that was the whole "repost is frozen" report (see `StoryComposerPresenter`).
     private var sheetUp: Bool {
         shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || myPostedUp || officialInfoUp || editViewers != nil
-            || repostUp || repostLoading || shareURL != nil || ownRepostGone || groupRepliesUp
+            || repostUp || repostLoading || shareURL != nil || ownRepostGone
         // ⛔ `repostLoading` (owner, 2026-10-12: "I tap Repost on a video story and the original
         // keeps playing, I can hear it"). The story was held only once the composer was up, but the
         // clip is copied (or downloaded) and the poster and face fetched BEFORE that, and for those
@@ -1798,8 +1814,7 @@ struct StoryViewer: View {
     private var reconcileSignature: [String] { groups.flatMap { [$0.id] + $0.stories.map(\.id) } }
 
     private var models: [StoryUIModel] {
-        GroupStoryFooter.register(groups)
-        return groups.map { g in
+        groups.map { g in
             StoryUIModel(
                 id: g.authorUid,
                 // The tick travels as a plain answer — see `StoryUIUser.isVerified`. Asked from the
@@ -1815,6 +1830,7 @@ struct StoryViewer: View {
                                       ? OfficialConfig.shared.badge == .gold
                                       : VerificationIndex.of(g.authorUid)?.kind?.isGold == true),
                 isMine: g.isMine,   // drives the "…" menu: my story shows Delete, others show Hide Stories
+                hasOwnerBar: Self.hasOwnerBar(g),   // owner and admins of a group (owner 2026-10-25)
                 stories: g.stories.map { s in
                     // ⚠️ HOISTED OUT OF THE CALL BELOW, and it is not a tidy-up. That initialiser
                     // takes twenty-odd arguments and already sits at the type-checker's limit —
@@ -1828,9 +1844,9 @@ struct StoryViewer: View {
                     let canPassOn = !OfficialChannel.isOfficial(g.authorUid) && StoryShareRights.allows(s)
                     // Fariin: no reply bar and no heart, like my own (owner 2026-10-16). Hoisted for the
                     // same type-checker reason as `canPassOn`.
-                    // A group story for its owner and admins: no reply field, its footer
-                    // (`GroupStoryFooter`) opens Views and Replies (owner 2026-10-23). A member keeps
-                    // the reply field, whose text goes to the thread only those admins read.
+                    // A group story for its owner and admins: no reply field, the poster's bar opens
+                    // Views and Replies (owner 2026-10-25). A member keeps the reply field, whose
+                    // text goes to the thread only those admins read.
                     let plainOnly = g.isMine || OfficialChannel.isOfficial(g.authorUid)
                         || (s.groupId != nil && GroupStoryRights.canSeeViews(s))
                     // ⛔ THE LOCKED LINE RIDES IN THE CARD (owner 2026-10-16: it stayed still while
@@ -1983,7 +1999,7 @@ struct StoryViewer: View {
     var body: some View {
         // The modifier chain outgrew the Swift type-checker (CI: "unable to type-check in
         // reasonable time") — body is now three separately-checked pieces. Purely structural.
-        lifecycleGlue(sheetsAndMenus(groupRepliesSheet(coreLayers)))
+        lifecycleGlue(sheetsAndMenus(coreLayers))
             // Here, not inside `lifecycleGlue`: one more modifier there put that chain past the
             // type checker's time limit (StoriesViews:2179, twice).
             .onChange(of: RepostAuthorPhotos.shared.urls) { _, _ in refeedRepostBuckets() }
@@ -2011,25 +2027,6 @@ struct StoryViewer: View {
             // The first-time guide (owner 2026-10-20). Draws nothing once Got it was tapped. Its X
             // leaves the whole viewer by the viewer's own close (flight home, else plain close).
             StoryGuideHost(onExit: { if !beginHeroCloseFromRest() { isPresented = false } })
-        }
-    }
-
-    /// A GROUP STORY'S VIEWS AND REPLIES FOR ITS GROUP'S OWNER AND ADMINS (owner 2026-10-23), when the
-    /// ring is not all their own posts (that ring has the poster's sheet). Members never get it.
-    /// Opened by the story's footer (`GroupStoryFooter`) or a swipe up. Its own function so the
-    /// chains below stay inside the type checker's limit.
-    private func groupRepliesSheet(_ v: some View) -> some View {
-        v.sheet(item: $groupRepliesStory) { s in
-            GroupStoryRepliesPanel(storyId: s.id, groupId: s.groupId ?? "")
-                .ignoresSafeArea()
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.hidden)
-                .presentationBackground(Color(white: 0.10))
-        }
-        .onReceive(NotificationCenter.default.publisher(for: GroupStoryFooter.openNote)) { note in
-            guard let id = note.object as? String, groupRepliesStory == nil else { return }
-            let s = currentStory?.id == id ? currentStory : GroupStoryFooter.known[id]
-            if let s, s.groupId != nil, GroupStoryRights.canSeeViews(s) { groupRepliesStory = s }
         }
     }
 
@@ -2625,7 +2622,7 @@ struct StoryViewer: View {
             // `currentIsMine`: the viewers sheet only exists over MY OWN story, so a freeze
             // asserted while a friend's story is up can only ever be leaked state — it is what
             // kept re-pausing his freshly opened stories half a second in (2026-08-09).
-            if showViewers && currentIsMine && viewersProgress > 0.01 {
+            if showViewers && currentHasOwnerBar && viewersProgress > 0.01 {
                 NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
             }
         }
@@ -2675,7 +2672,7 @@ struct StoryViewer: View {
             // (Was `currentIsMine || mineOnly`. `mineOnly` stopped being true for my own story the
             // moment my bucket joined the paged set, so it had to become the first-frame fallback
             // rather than a second reading of the same thing — see `showingMine`.)
-            guard showViewers, showingMine, !id.isEmpty else { return }
+            guard showViewers, showingOwnerBar, !id.isEmpty else { return }
             // Same deferral as the first handler — a crossing mid-movement is not a destination.
             guard pageDragBox.rowLink?.isRowMoving != true else { return }
             NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: id)
@@ -2805,7 +2802,7 @@ struct StoryViewer: View {
                 // zero opacity, which paints exactly what their page painted before: nothing.
                 // Deciding it with a second copy of `storyContent` is what cost the whole
                 // viewer its identity — see the note above this stack.
-                .background(Color.black.opacity(currentIsMine && !heroFlying ? 1 : 0))
+                .background(Color.black.opacity(currentHasOwnerBar && !heroFlying ? 1 : 0))
             // ⚠️ EMPTY NOW, AND ON PURPOSE. The owner's bar used to be drawn here, as a sibling of
             // the pager, which is exactly why it could not travel with the story: the cube turns
             // PAGES. It is passed to the library instead and drawn inside my own page, beneath the
@@ -2968,7 +2965,7 @@ struct StoryViewer: View {
                 // block the whole swipe-up, or worse, drop through to the friend's-story branch below
                 // and open the REPLY KEYBOARD on my own story. `mineOnly` used to cover that window
                 // and cannot any more: my bucket is one page among several now.
-                guard showingMine else { return }
+                guard showingOwnerBar else { return }
                 // Same gate as `openViewers`: an uploading placeholder has no viewers to show.
                 guard !isUploadingItem else { return }
                 sheetAnimator.cancel()   // the finger owns progress; kill any in-flight snap
@@ -2992,18 +2989,13 @@ struct StoryViewer: View {
             onSwipeUpEnded: { translation, velocity in
                 // The other half of the guard above: a pull that never engaged has nothing to settle.
                 if sheetUp && !showViewers { openDragging = false; return }
-                guard showingMine else {
+                guard showingOwnerBar else {
                     // Friend's story: a swipe UP opens the reply keyboard (like tapping the reply
                     // pill). StoryUI's MessageView focuses its TextField on this notification.
                     openDragging = false
                     // ⛔ NOT ON FARIIN'S STORIES — owner 2026-10-17: a swipe up on an official story
                     // (no reply bar, only its button) opened the keyboard for a hidden field.
                     if let a = currentStory?.authorUid, OfficialChannel.isOfficial(a) { return }
-                    // An owner's or admin's group story has no reply field; the swipe opens its sheet.
-                    if let s = currentStory, s.groupId != nil, GroupStoryRights.canSeeViews(s) {
-                        if translation > 40 || velocity > 300 { groupRepliesStory = s }
-                        return
-                    }
                     if translation > 40 || velocity > 300 {
                         NotificationCenter.default.post(name: .init("focusStoryReply"), object: nil)
                     }
@@ -3203,7 +3195,7 @@ struct StoryViewer: View {
     private var estimatedContentHeight: CGFloat {
         let scr = UIScreen.main.bounds
         return min(ceil(scr.width * 1.77778),
-                   scr.height - topInset - max(currentIsMine ? Self.ownerFooterHeight : 0,
+                   scr.height - topInset - max(currentHasOwnerBar ? Self.ownerFooterHeight : 0,
                                                bottomInset + 1))
     }
 
@@ -4833,7 +4825,7 @@ struct StoryViewer: View {
         // Re-open allowed even while the previous close is still unmounting: animating progress back
         // to 1 cancels the close animator (and with it the unmount completion) — no more
         // "swipe up does nothing for 0.42s after closing".
-        guard currentIsMine else { return }
+        guard currentHasOwnerBar else { return }
         // NOT ON A STORY THAT DOES NOT EXIST YET. The item on screen while a post is uploading is a
         // synthetic placeholder with no document behind it, so the viewers sheet would come up over
         // it asking the server who has seen a story id that has never been written — an empty list
@@ -5461,7 +5453,9 @@ struct StoryViewer: View {
         m.uploading = isUploadingItem
         m.bottomInset = bottomInset
         m.onViews = { openViewers() }
-        m.onDelete = { confirmDelete = true }
+        // Only the author deletes (rules); a group's ring the owner or an admin reads has no trash.
+        m.canDelete = currentIsMine
+        m.onDelete = { if currentIsMine { confirmDelete = true } }
         let uploadingId = currentStoryId   // the X cancels THIS story's upload, not every one
         m.onCancelUpload = { uploadSvc.cancelUpload(id: uploadingId); onClose() }
     }
@@ -5533,7 +5527,7 @@ struct StoryViewer: View {
         // trip, then dropped to 0. It leaked the other way too: leave your own bucket for a friend's
         // and come back, and the footer painted with the old bucket's viewers for the first frames.
         // An empty footer for a moment is honest; somebody else's numbers are not.
-        guard currentIsMine, !currentStoryId.isEmpty else {
+        guard currentHasOwnerBar, !currentStoryId.isEmpty else {
             if barViewers != nil { barViewers = nil }
             // ⚠️ AND THE LATCH GOES WITH IT. `lastBarViewersStoryId` says "the footer on screen was
             // already seeded for this story", which is exactly what this branch has just stopped
@@ -5916,6 +5910,8 @@ struct UploadingStoryHandoff: View {
     var oneTimeFull = false
     /// The still-uploading placeholder wears the cancel bar instead of the Views bar.
     var uploading = false
+    /// False on a group story somebody else posted (owner 2026-10-25): no trash.
+    var canDelete = true
     var bottomInset: CGFloat = 0
     var onViews: () -> Void = {}
     var onDelete: () -> Void = {}
@@ -5965,10 +5961,12 @@ struct StoryOwnerBarView: View {
                     }
                     .buttonStyle(.plain)
                     Spacer()
-                    Button { m.onDelete() } label: {
-                        Image(systemName: "trash").font(.title3).foregroundStyle(.white)
+                    if m.canDelete {
+                        Button { m.onDelete() } label: {
+                            Image(systemName: "trash").font(.title3).foregroundStyle(.white)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }

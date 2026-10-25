@@ -12,13 +12,18 @@ public struct StoryUIModel: Identifiable, Hashable {
     public var user: StoryUIUser
     public var isSeen: Bool = false
     public var isMine: Bool = false        // my own story → "…" menu shows Delete, not Hide Stories
+    /// The owner's bar and card in place of the reply bar, without the rest of `isMine` (owner
+    /// 2026-10-25: a group's owner and admins see a group story the way its poster does).
+    public var hasOwnerBar: Bool = false
     public var stories: [Story]
 
-    public init(id: String = UUID().uuidString, user: StoryUIUser, isSeen: Bool = false, isMine: Bool = false, stories: [Story]) {
+    public init(id: String = UUID().uuidString, user: StoryUIUser, isSeen: Bool = false, isMine: Bool = false,
+                hasOwnerBar: Bool = false, stories: [Story]) {
         self.id = id
         self.user = user
         self.isSeen = isSeen
         self.isMine = isMine
+        self.hasOwnerBar = hasOwnerBar
         self.stories = stories
     }
 }
