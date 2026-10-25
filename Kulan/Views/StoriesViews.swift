@@ -2033,7 +2033,7 @@ struct StoryViewer: View {
     }
 
     private func sheetsAndMenus(_ v: some View) -> some View {
-        storyActions(sheetsOnly(v))
+        storyActionsMore(storyActions(sheetsOnly(v)))
     }
 
     /// ⛔ SPLIT IN TWO — 2026-09-11, and for the reason the note on `body` already records: this
@@ -2305,6 +2305,12 @@ struct StoryViewer: View {
                   let url = URL(string: KulanApp.storyLink(id: s.id, handle: groupName)) else { return }
             shareURL = StoryLinkPayload(url: url)
         }
+    }
+
+    /// The rest of `storyActions`, split off when the public-group share made that one chain too long
+    /// for the type checker (compile 40175744719, 2026-10-25).
+    private func storyActionsMore(_ v: some View) -> some View {
+        v
         // A caption @mention (owner 2026-10-16): the person's profile OVER the story, the same sheet
         // a tap on the header opens, found by username the way a profile link is.
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionMention"))) { note in
