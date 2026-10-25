@@ -331,7 +331,7 @@ extension GroupStoryRights {
 }
 
 /// WHO MAY POST A GROUP STORY (owner 2026-10-23). The same test as firestore.rules `groupStoryOK`:
-/// the owner always, an admin while the owner leaves "Allow Admins to Add Story" on, nobody else.
+/// the owner always, an admin who holds the Add story right (owner 2026-10-25), nobody else.
 enum GroupStoryRights {
     static func canPost(_ c: Conversation, _ uid: String) -> Bool {
         guard c.isGroup, !uid.isEmpty, c.users.contains(uid) else { return false }
@@ -340,7 +340,7 @@ enum GroupStoryRights {
         guard c.users.count >= AppLimits.shared.groupStoryMinMembers || AdminStore.shared.isAdmin
                 || ProfileStore.shared.me?.groupStoryOpen == true else { return false }
         if c.isOwner(uid) { return true }
-        return c.isAdmin(uid) && c.adminsPostStories
+        return c.adminCan(uid, .postStories)
     }
     /// The groups the New Group Story list offers, from the live chat list.
     @MainActor static func eligibleGroups() -> [Conversation] {

@@ -2231,24 +2231,7 @@ struct GroupMemberSheet: View {
                         Text("\(roleText.utf16.count)/\(GroupRole.maxText)")
                             .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
                     }
-                    // The tag's colour (owner 2026-10-20): eight dots, the chosen one ringed.
-                    HStack(spacing: 0) {
-                        ForEach(GroupRole.colors, id: \.name) { c in
-                            let on = (roleColor ?? "grey") == c.name
-                            Button { roleColor = c.name == "grey" ? nil : c.name } label: {
-                                Circle().fill(Color(hex: c.rgb))
-                                    .frame(width: 26, height: 26)
-                                    .padding(3)
-                                    .overlay(Circle().stroke(on ? Color(hex: c.rgb) : .clear, lineWidth: 2))
-                                    .frame(maxWidth: .infinity, minHeight: 44)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(c.name.capitalized)
-                            .accessibilityAddTraits(on ? .isSelected : [])
-                        }
-                    }
-                    .padding(.vertical, 4)
+                    TagColourRow(color: $roleColor)
                     .disabled(busy)
                     .id("tagColours")
                 } header: {
@@ -2695,7 +2678,7 @@ struct GroupMembersSheet: View {
 /// The tag field with its OWN focus (owner 2026-10-20: the keyboard did not come up). The edit page
 /// is a sheet over the member card, and focus held by the card does not reach a field in the sheet,
 /// so the field keeps it here and asks for the keyboard once the sheet has risen.
-private struct TagTextField: View {
+struct TagTextField: View {
     @Binding var text: String
     let autoFocus: Bool
     @FocusState private var focused: Bool
@@ -2709,5 +2692,31 @@ private struct TagTextField: View {
                 try? await Task.sleep(nanoseconds: 550_000_000)
                 focused = true
             }
+    }
+}
+
+/// The tag's colour (owner 2026-10-20): eight dots, the chosen one ringed. nil = grey. Shared by the
+/// member card's edit page and Add Admin (owner 2026-10-25: one design for both).
+struct TagColourRow: View {
+    @Binding var color: String?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(GroupRole.colors, id: \.name) { c in
+                let on = (color ?? "grey") == c.name
+                Button { color = c.name == "grey" ? nil : c.name } label: {
+                    Circle().fill(Color(hex: c.rgb))
+                        .frame(width: 26, height: 26)
+                        .padding(3)
+                        .overlay(Circle().stroke(on ? Color(hex: c.rgb) : .clear, lineWidth: 2))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(c.name.capitalized)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(.vertical, 4)
     }
 }

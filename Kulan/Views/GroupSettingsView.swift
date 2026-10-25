@@ -306,7 +306,6 @@ struct GroupSettingsView: View {
                 Text("Turned off, only admins can do it.")
             }
             if AppFeatures.slowMode { slowModeSection }
-            adminStoriesSection
             privacySection
         }
         .animation(.snappy(duration: 0.25), value: mediaExpanded)
@@ -502,22 +501,8 @@ struct GroupSettingsView: View {
             .disabled(!canEdit)
     }
 
-    // MARK: Admins (owner 2026-10-23)
-
-    /// Whether admins may post group stories. The owner's alone to change, here and in the rules
-    /// (the key is outside every admin's writable list); admins see it greyed.
-    private var adminStoriesSection: some View {
-        Section {
-            Toggle("Allow Admins to Add Story",
-                   isOn: bool(get: { $0.adminsPostStories },
-                              set: { v in try await ChatService.setGroupPermission(cid: cid, key: "adminsPostStories", v) }))
-                .disabled(!(conv?.isOwner(me) ?? false))
-        } header: {
-            Text("Admins")
-        } footer: {
-            Text("Only the owner can change this. The owner can always post group stories.")
-        }
-    }
+    // ⛔ NO ADMINS SECTION HERE (owner 2026-10-25: "this page is only members"). Who may post group
+    // stories is each admin's Add story right, on their own page.
 
     // MARK: Privacy
 
@@ -682,6 +667,7 @@ extension Conversation.Right {
         case .inviteUsers:    return "Add members"
         case .pinMessages:    return "Pin messages"
         case .manageCalls:    return "Video chats"
+        case .postStories:    return "Add story"
         case .addAdmins:      return "Add admins"
         }
     }
@@ -704,6 +690,7 @@ struct AddAdminPage: View {
     @State private var rights: Set<String> = []
     @State private var loaded = false
     @State private var tag = ""
+    @State private var tagColor: String?
     @State private var busy = false
     @State private var actionError: String?
     @State private var promoted = false
@@ -718,18 +705,36 @@ struct AddAdminPage: View {
     }
     private var mayTag: Bool { conv?.adminCan(me, .changeInfo) ?? false }
 
+    // ⛔ THE MEMBER CARD'S EDIT PAGE DESIGN (owner 2026-10-25: "this page is using old design"):
+    // centred photo, name and the Admin badge they are about to get, "What this admin can do", the
+    // tag field with its count and colours, and the blue Add in the top bar like that page's Done.
     var body: some View {
-        List {
+        Form {
             Section {
-                HStack(spacing: 14) {
-                    AvatarView(name: name, photoUrl: conv?.photos[uid], size: 56)
+                VStack(spacing: 8) {
+                    AvatarView(name: name, photoUrl: conv?.photos[uid], size: 80)
                     HStack(spacing: 6) {
                         Text(name).font(.title3.weight(.semibold)).lineLimit(1)
                         VerifiedMark(uid: uid, size: 15)
                     }
-                    Spacer(minLength: 0)
+                    HStack(spacing: 6) {
+                        Label("Admin", systemImage: "checkmark.shield.fill")
+                            .labelStyle(.titleAndIcon)
+                            .font(.subheadline)
+                            .lineLimit(1)
+                            .padding(.horizontal, 10).padding(.vertical, 3)
+                            .background(Capsule().fill(Color(uiColor: .tertiarySystemFill)))
+                            .foregroundStyle(Color.primary)
+                        let words = GroupRole.clean(tag)
+                        if mayTag && !words.isEmpty {
+                            RoleChip(role: GroupRole(text: words, emoji: nil, color: tagColor))
+                        }
+                    }
+                    .animation(.snappy(duration: 0.2), value: tag)
                 }
+                .frame(maxWidth: .infinity)
                 .padding(.vertical, 4)
+                .listRowBackground(Color.clear)
             }
             Section {
                 ForEach(grantable, id: \.id) { r in
@@ -739,7 +744,7 @@ struct AddAdminPage: View {
                     .disabled(busy)
                 }
             } header: {
-                Text("What they can do")
+                Text("What this admin can do")
             } footer: {
                 if grantable.contains(.addAdmins) && !rights.contains(Conversation.Right.addAdmins.rawValue) {
                     Text("They won't be able to make other members admins.")
@@ -747,29 +752,38 @@ struct AddAdminPage: View {
             }
             if mayTag {
                 Section {
-                    TextField("None", text: $tag).disabled(busy)
+                    HStack(spacing: 12) {
+                        Image(systemName: "tag").foregroundStyle(.secondary)
+                        TagTextField(text: $tag, autoFocus: false)
+                            .disabled(busy)
+                        Text("\(tag.utf16.count)/\(GroupRole.maxText)")
+                            .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                    TagColourRow(color: $tagColor)
+                        .disabled(busy)
                 } header: {
                     Text("Tag")
                 } footer: {
-                    Text("A short word shown next to \(name)'s name in the group.")
+                    Text("A short word next to the name in this group, like Host or Teacher. Everyone in the group sees it.")
                 }
             }
         }
-        .listStyle(.insetGrouped)
+        .scrollDismissesKeyboard(.interactively)
+        .contentMargins(.top, 0, for: .scrollContent)
+        .listSectionSpacing(.compact)
         .navigationTitle("Add Admin")
         .navigationBarTitleDisplayMode(.inline)
-        .safeAreaInset(edge: .bottom) {
-            Button { add() } label: {
-                Group {
-                    if busy { ProgressView().tint(.white) } else { Text("Add Admin").fontWeight(.semibold) }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if busy {
+                    ProgressView()
+                } else {
+                    Button("Add") { add() }
+                        .fontWeight(.semibold)
+                        .buttonStyle(.glassProminent)
+                        .tint(Color(hex: 0x2392FE))
                 }
-                .frame(maxWidth: .infinity, minHeight: 50)
-                .foregroundStyle(.white)
-                .background(Color.accentColor, in: Capsule())
             }
-            .buttonStyle(.plain)
-            .disabled(busy)
-            .padding(.horizontal, 20).padding(.bottom, 8)
         }
         .onAppear {
             guard !loaded else { return }
@@ -793,6 +807,7 @@ struct AddAdminPage: View {
         let cid = cid, uid = uid, name = name
         let list = Conversation.Right.allCases.map(\.rawValue).filter { rights.contains($0) }
         let words = mayTag ? GroupRole.clean(tag) : ""
+        let tint = tagColor
         let already = promoted
         Task {
             do {
@@ -802,7 +817,7 @@ struct AddAdminPage: View {
                     try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: list)
                     await MainActor.run { promoted = true }
                 }
-                if !words.isEmpty { try await ChatService.setRole(cid: cid, uid: uid, text: words, emoji: nil) }
+                if !words.isEmpty { try await ChatService.setRole(cid: cid, uid: uid, text: words, emoji: nil, color: tint) }
                 await MainActor.run { busy = false; onDone() }
             } catch {
                 let msg = error.localizedDescription

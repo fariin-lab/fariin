@@ -3387,7 +3387,7 @@ service cloud.firestore {
         return get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/storiesDaily);
       }
       // GROUP STORY (owner 2026-10-23): `groupId` names a group I own, or one I am an admin of
-      // while its owner leaves adminsPostStories on. Never public. App: GroupStoryRights.
+      // holding postStories (2026-10-25; no adminRights entry = legacy, has it). App: GroupStoryRights.
       function groupStoryOK() {
         let g = request.resource.data.get('groupId', '');
         return g == '' || (request.resource.data.get('public', false) == false
@@ -3404,7 +3404,8 @@ service cloud.firestore {
               || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('groupStoryOpen', false) == true)
           && request.resource.data.recipientUids.size() <= c.get('users', []).size()
           && (request.auth.uid == c.get('createdBy', '')
-              || (request.auth.uid in c.get('admins', []) && c.get('adminsPostStories', true) != false));
+              || (request.auth.uid in c.get('admins', [])
+                  && 'postStories' in c.get('adminRights', {}).get(request.auth.uid, ['postStories'])));
       }
       allow create: if signedIn()
         && request.auth.uid == request.resource.data.authorUid

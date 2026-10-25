@@ -1148,7 +1148,6 @@ struct Conversation: Identifiable, Equatable, Hashable {
         return Date(timeIntervalSince1970: since / 1000)
     }
     var membersCanShareLink = false    // group: non-admins see Share and the QR of the invite link (owner 2026-10-19)
-    var adminsPostStories = true       // group: admins may post group stories; owner-only switch (owner 2026-10-23)
     /// 2026-10-19 groups v2 (owner): the group's document says `e2ee == false`, so its new messages
     /// are NOT end-to-end encrypted (ChatService.groupIsPlain). Server-written; false for every 1:1.
     var e2eeOff = false
@@ -1320,7 +1319,6 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.hideHistoryAt = ms(data["hideHistoryAt"])
         self.memberSince = (data["memberSince"] as? [String: Any] ?? [:]).mapValues { ms($0) }
         self.membersCanShareLink = false
-        self.adminsPostStories = data["adminsPostStories"] as? Bool ?? true
         self.e2eeOff = (data["type"] as? String) == "group" && (data["e2ee"] as? Bool) == false
         self.lastPlainTag = data["lastPlainTag"] as? String
         // Released keys for the list's last line / reaction / thumbnails (owner 2026-10-23). Groups
@@ -1426,7 +1424,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     // owner may hand part of it on with `addAdmins`, which lets that admin promote members with at
     // most their own rights and manage only the admins they promoted (`adminBy`). See canManageAdmin.
     enum Right: String, CaseIterable, Identifiable {
-        case changeInfo, deleteMessages, banUsers, inviteUsers, pinMessages, manageCalls, addAdmins
+        // postStories (owner 2026-10-25): group stories are a right of each admin, set on their own
+        // page, instead of one group-wide "Allow Admins to Add Story" switch.
+        case changeInfo, deleteMessages, banUsers, inviteUsers, pinMessages, manageCalls, postStories, addAdmins
         var id: String { rawValue }
         var label: String {
             switch self {
@@ -1436,6 +1436,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
             case .inviteUsers:    return "Add members"
             case .pinMessages:    return "Pin messages"
             case .manageCalls:    return "Manage video chats"
+            case .postStories:    return "Post group stories"
             case .addAdmins:      return "Add new admins"
             }
         }
