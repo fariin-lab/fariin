@@ -512,9 +512,15 @@ final class StoryRowItemView: UIView {
         //
         // It still rides the card's own transform, so a side card's count is smaller than the centre
         // one's in the same proportion its picture is — which is what the design shows.
-        count.frame = CGRect(x: (bounds.width - size.width) / 2,
-                             y: bounds.height + Self.countGap,
-                             width: size.width, height: size.height)
+        //
+        // ⛔ NEVER WIDER THAN THE CARD (owner 2026-10-25: with views, loves, replies and reposts all
+        // showing, the row ran out past the card's edges). A row that does not fit is zoomed down as
+        // one piece, so the icons and numbers shrink together and keep their spacing; a row that fits
+        // is untouched. Bounds and centre, not frame, because the frame of a scaled view is not its size.
+        let s = min(1, bounds.width / max(1, size.width))
+        count.bounds = CGRect(origin: .zero, size: size)
+        count.center = CGPoint(x: bounds.width / 2, y: bounds.height + Self.countGap + size.height * s / 2)
+        count.transform = s < 1 ? CGAffineTransform(scaleX: s, y: s) : .identity
     }
 }
 
