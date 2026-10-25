@@ -2275,9 +2275,14 @@ struct ChatsView: View {
             // items to opacity 0 the instant a chat is pushed and brings them back on return.
             // (The deployment target is iOS 26, so there is no pre-26 branch to keep here.)
             ToolbarItem(placement: .topBarLeading) { editButton.modifier(SwipeFade(on: showHeaderIcons)) }
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                avatarMenu.modifier(SwipeFade(on: showHeaderIcons))
-                composeButton.modifier(SwipeFade(on: showHeaderIcons))
+            // Two buttons, not one shared capsule (owner 2026-10-25): a fixed spacer splits the glass.
+            ToolbarItem(placement: .topBarTrailing) {
+                avatarMenu.tint(.primary).modifier(SwipeFade(on: showHeaderIcons))
+            }
+            ToolbarSpacer(.fixed, placement: .topBarTrailing)
+            ToolbarItem(placement: .topBarTrailing) {
+                // Black in light mode, white in dark (owner 2026-10-25).
+                composeButton.tint(.primary).foregroundStyle(.primary).modifier(SwipeFade(on: showHeaderIcons))
             }
         }
     }
