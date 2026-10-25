@@ -364,9 +364,10 @@ struct ChatSearchPage: View {
                 // one closure — see `SearchResultsTable.content`.
                 content: { row in AnyView(content(row, model)) },
                 onSelect: { row in select(row, model) },
-                onClearRecent: { recents.clear() })
+                onClearRecent: { recents.clear() },
+                header: peers.isEmpty ? nil : AnyView(TopPeersRow(peers: peers, me: me, onOpen: openPeer)))
 
-            if model.isEmpty { emptyState }
+            if model.isEmpty && peers.isEmpty { emptyState }
             // 2026-09-24 feature-audit: older chats are still being fetched for this search, so
             // more matches may come. Under the results, out of the way of the rows.
             if !model.isEmpty, !query.isEmpty, repo.loadingWholeList {
@@ -398,6 +399,25 @@ struct ChatSearchPage: View {
 
     private func buildModel() -> PageModel {
         query.isEmpty ? recentModel() : resultsModel()
+    }
+
+    /// The top people row (owner 2026-10-25, the reference app's row above Recent): the people I
+    /// chat with, most recent first, 1:1 chats only, up to 20. Theirs ranks by a server-side rating
+    /// of who you write to; the chat list's own order is ours. Only on an empty query.
+    private var peers: [Conversation] {
+        guard query.isEmpty else { return [] }
+        let hidden = TopPeersHidden.shared.ids
+        let list = repo.conversations.filter { c in
+            !c.isGroup && c.id.contains("_") && !hidden.contains(c.id)
+                && !c.otherUid(me).isEmpty && c.otherUid(me) != me
+                && MessageRequests.stance(c, myUid: me) != .incoming && !c.isCleared(me) && !c.isArchived(me)
+        }
+        return Array(list.sorted { $0.updatedAtMillis > $1.updatedAtMillis }.prefix(20))
+    }
+
+    private func openPeer(_ c: Conversation) {
+        recents.record(chat: c, me: me)
+        onOpenChat(c)
     }
 
     private func recentModel() -> PageModel {
@@ -760,6 +780,89 @@ private struct RecentPersonRow: View {
 /// carry over is everything that exists there for the pin animation — the render state, the
 /// `beginUpdates`/`endUpdates` diff, the in-place `refreshVisibleContent`, the select mode and the
 /// swipe actions. Nothing on a search page moves between sections; a new query is a new list.
+/// People taken off the top row by a long press, per account, on this phone (theirs resets the
+/// server rating; ours has none, so the choice is remembered here).
+@Observable final class TopPeersHidden {
+    static let shared = TopPeersHidden()
+    private(set) var ids: Set<String> = []
+    private var account = ""
+
+    private static func key(_ uid: String) -> String { "topPeersHidden.v1.\(uid)" }
+
+    private init() { sync() }
+
+    private func sync() {
+        let uid = AuthService.shared.uid ?? ""
+        guard uid != account else { return }
+        account = uid
+        ids = Set(UserDefaults.standard.stringArray(forKey: Self.key(uid)) ?? [])
+    }
+
+    func hide(_ cid: String) {
+        sync()
+        ids.insert(cid)
+        UserDefaults.standard.set(Array(ids), forKey: Self.key(account))
+    }
+}
+
+/// The reference app's top people row: 60pt faces, the name under each in 11pt on one line, an
+/// unread count at the face's top right (grey when muted). Tap opens the chat; a long press offers
+/// Remove. 86pt tall, scrolling sideways.
+struct TopPeersRow: View {
+    static let height: CGFloat = 92
+    let peers: [Conversation]
+    let me: String
+    var onOpen: (Conversation) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(spacing: 0) {
+                ForEach(peers) { c in
+                    Button { onOpen(c) } label: { item(c) }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                withAnimation(.easeInOut(duration: 0.2)) { TopPeersHidden.shared.hide(c.id) }
+                            } label: { Label("Remove", systemImage: "trash") }
+                        }
+                }
+            }
+            .padding(.horizontal, 6)
+        }
+        .frame(height: Self.height)
+    }
+
+    private func item(_ c: Conversation) -> some View {
+        let name = c.displayName(me)
+        let first = name.split(separator: " ").first.map(String.init) ?? name
+        let unread = c.unread(me)
+        let muted = c.isMuted(me, now: Date().timeIntervalSince1970 * 1000)
+        return VStack(spacing: 4) {
+            AvatarView(name: name, photoUrl: c.displayPhoto(me), size: 60)
+                .overlay(alignment: .topTrailing) {
+                    if unread > 0 {
+                        Text(unread > 99 ? "99+" : "\(unread)")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .frame(minWidth: 20, minHeight: 20)
+                            .background(Capsule().fill(muted ? Color(.systemGray) : Color.accentColor))
+                            .overlay(Capsule().stroke(Color(.systemBackground), lineWidth: 2))
+                            .offset(x: 4, y: -2)
+                    }
+                }
+            Text(first)
+                .font(.system(size: 11))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .frame(maxWidth: 64)
+        }
+        .padding(.top, 4)
+        .frame(width: 72)
+        .contentShape(Rectangle())
+    }
+}
+
 struct SearchResultsTable: UIViewControllerRepresentable {
     var sections: [SearchPageSection]
     /// The row's view, built on demand. `AnyView` because this table draws four different row types
@@ -769,6 +872,8 @@ struct SearchResultsTable: UIViewControllerRepresentable {
     var content: (SearchPageRow) -> AnyView
     var onSelect: (SearchPageRow) -> Void
     var onClearRecent: () -> Void
+    /// The top people row above Recent (owner 2026-10-25), scrolling with the list. Nil: none.
+    var header: AnyView? = nil
 
     func makeUIViewController(context: Context) -> SearchResultsTableController {
         let vc = SearchResultsTableController()
@@ -779,6 +884,7 @@ struct SearchResultsTable: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: SearchResultsTableController, context: Context) {
         context.coordinator.parent = self
         vc.apply(sections: sections)
+        vc.apply(header: header)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -857,6 +963,29 @@ final class SearchResultsTableController: UIViewController, UITableViewDataSourc
         guard sig != signature else { return }
         signature = sig
         tableView.reloadData()
+    }
+
+    private var headerHost: UIHostingController<AnyView>?
+
+    /// The table's header view: added, updated in place, or taken away.
+    func apply(header: AnyView?) {
+        guard let header else {
+            if tableView.tableHeaderView != nil { tableView.tableHeaderView = nil }
+            return
+        }
+        if let host = headerHost {
+            host.rootView = header
+        } else {
+            let host = UIHostingController(rootView: header)
+            host.view.backgroundColor = .clear
+            if #available(iOS 16.4, *) { host.safeAreaRegions = [] }
+            addChild(host)
+            host.didMove(toParent: self)
+            headerHost = host
+        }
+        guard let v = headerHost?.view, tableView.tableHeaderView !== v else { return }
+        v.frame = CGRect(x: 0, y: 0, width: tableView.bounds.width, height: TopPeersRow.height)
+        tableView.tableHeaderView = v
     }
 
     private static func signature(of sections: [SearchPageSection]) -> String {
