@@ -1319,6 +1319,7 @@ private extension StoryDetailView {
                 isPublicStory: isPublicStory,
                 canPassOn: canPassOn,
                 userId: model.user.id,
+                videoStoryId: getStoryOrNil(with: index).flatMap { $0.config.mediaType == .video ? $0.id : nil },
                 isPresented: $isPresented
             )
         }

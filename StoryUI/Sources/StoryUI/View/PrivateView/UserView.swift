@@ -32,6 +32,10 @@ struct UserView: View {
     var canPassOn: Bool = false
     /// The author, for "Get notifications" (`StoryNotifySeam`).
     var userId: String = ""
+    /// The current story's id when it is a video; its speaker shows once the clip is known to carry
+    /// sound (`StorySound`). Nil for a photo.
+    var videoStoryId: String? = nil
+    @ObservedObject private var sound = StorySound.shared
 
     @Binding var isPresented: Bool
 
@@ -258,6 +262,21 @@ struct UserView: View {
             .buttonStyle(StoryPressStyle())
 
             Spacer()
+
+            // THE SOUND SWITCH (owner 2026-10-26, the reference app's header): a video with sound
+            // gets a speaker left of "more"; one tap mutes every story until it is tapped again.
+            if let id = videoStoryId, sound.withSound.contains(id) {
+                Image(systemName: sound.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 32, height: 32)
+                    .storyHeaderIconShadow()
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+                    .onTapGesture { sound.muted.toggle() }
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel(sound.muted ? "Turn sound on" : "Mute")
+            }
 
             // The "more" button sits directly left of the X, same row, so they auto-align (no
             // guessed padding).

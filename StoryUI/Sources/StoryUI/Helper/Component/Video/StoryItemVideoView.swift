@@ -30,6 +30,7 @@
 
 import UIKit
 import AVFoundation
+import Combine
 
 /// ⚠️ NO EXPLICIT `@MainActor` HERE, AND THAT IS NOT AN OVERSIGHT.
 ///
@@ -94,6 +95,7 @@ final class StoryItemVideoView: UIView {
 
     /// Nil until this item is asked to play. See `initializeVideoIfReady`.
     private var player: AVPlayer?
+    private var soundSwitch: AnyCancellable?
     private var playerLayer: AVPlayerLayer?
     /// The asset this item is streaming through, when it is. AVFoundation holds a resource loader's
     /// delegate WEAKLY, so the reader is kept alive against the asset and has to be let go with it —
@@ -515,6 +517,14 @@ final class StoryItemVideoView: UIView {
         }
         if streamed != nil, Self.experimentNoWaitOnStream { p.currentItem?.preferredForwardBufferDuration = 1 }
         player = p
+        // The viewer's sound switch (`StorySound`), and whether this clip has sound to switch at all.
+        p.isMuted = StorySound.shared.muted
+        soundSwitch = StorySound.shared.$muted.sink { [weak self] m in self?.player?.isMuted = m }
+        let soundId = storyId
+        Task {
+            let tracks = (try? await item.asset.loadTracks(withMediaType: .audio)) ?? []
+            await MainActor.run { StorySound.shared.noteAudio(storyId: soundId, has: !tracks.isEmpty) }
+        }
         trace("player built: streamed=\(streamed != nil) file=\(file.isFileURL) waits=\(p.automaticallyWaitsToMinimizeStalling) mode=\(mode) prepared=\(prepared)")
 
         let pl = AVPlayerLayer(player: p)
