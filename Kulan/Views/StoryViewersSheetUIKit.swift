@@ -599,6 +599,7 @@ final class StoryViewersSheetView: UIView {
             dragStartExpand = expand
             panBaselineY = translation
             dragOwnsSheet = shouldSheetTakeDrag(velocity: velocity)
+            holdListIfScrolled()
         case .changed:
             if dragSpentOnSearch { return }
             if !dragOwnsSheet {
@@ -612,6 +613,7 @@ final class StoryViewersSheetView: UIView {
                     dragStartExpand = expand
                     g.setTranslation(.zero, in: self)
                     panBaselineY = 0
+                    holdListIfScrolled()
                 }
                 return
             }
@@ -631,6 +633,8 @@ final class StoryViewersSheetView: UIView {
                 return
             }
             onDragActive?(false)
+            heldPanel?.freezeScroll(false)
+            heldPanel = nil
             guard dragOwnsSheet else { return }
             dragOwnsSheet = false
             // ⚠️ THE EXPAND ZONE HAS ITS OWN RELEASE RULE, AND IT IS NOT THE HOST'S.
@@ -975,9 +979,26 @@ final class StoryViewersSheetView: UIView {
         return super.gestureRecognizerShouldBegin(gestureRecognizer)
     }
 
+    /// A sheet drag that took over from a list scrolled away from its top holds that list where it
+    /// is, rather than zeroing it the way `pinScrollToTop` does for a pull down from the top: the
+    /// Replies list sits at its newest reply, and jumping it to the oldest under the finger would be
+    /// the wrong list. The panel lowers the held offset as it grows, so the last row stays down.
+    private var heldPanel: StoryViewersPanelView?
+    private func holdListIfScrolled() {
+        guard dragOwnsSheet, heldPanel == nil, let c = centerPanel, c.scrollOffsetY > 0.5 else { return }
+        c.freezeScroll(true)
+        heldPanel = c
+    }
+
     /// The one question the list hand-off turns on.
     private func shouldSheetTakeDrag(velocity: CGFloat) -> Bool {
         if progress < 0.999 { return true }               // not fully open → the sheet is the thing moving
+        // ⚠️ AT HALF AND PUSHING UP, THE SHEET GROWS WHEREVER THE LIST IS (owner 2026-10-25: "reply
+        // sheet sometimes scroll up is not working"). The Replies tab opens scrolled to the newest
+        // reply, so its list is never at its top; asking the offset first sent the push to a list
+        // already at its end, and nothing moved. The list is held where it is while the sheet grows
+        // — see `holdListIfScrolled`.
+        if velocity < 0 && expand < 0.999 { return true }
         // The list on screen — a neighbour's scroll position is nothing to do with this drag.
         if (centerPanel?.scrollOffsetY ?? 0) > 0.5 { return false }   // let it scroll
         if velocity > 0 { return true }                   // at the top and pulling down → collapse

@@ -270,7 +270,11 @@ final class StoryRowCountView: UIView {
         repost.tintColor = .white
         repost.isHidden = true
         reposts.isHidden = true
-        reply.image = UIImage(systemName: "bubble.left.fill", withConfiguration: symbol)
+        reply.image = UIImage(named: "ic_story_comment").map { img in
+            UIGraphicsImageRenderer(size: CGSize(width: 18, height: 18)).image { _ in
+                img.draw(in: CGRect(x: 0, y: 0, width: 18, height: 18))
+            }.withRenderingMode(.alwaysTemplate)
+        } ?? UIImage(systemName: "bubble.left.fill", withConfiguration: symbol)
         reply.tintColor = .white
         reply.isHidden = true
         replies.isHidden = true

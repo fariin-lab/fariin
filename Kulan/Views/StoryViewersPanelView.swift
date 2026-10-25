@@ -212,7 +212,7 @@ final class StoryViewersPanelView: UIView {
     /// How far the list is scrolled. The sheet's vertical drag hands movement to the list once this
     /// is off zero, and takes it back when the list has come home.
     var scrollOffsetY: CGFloat { table.contentOffset.y }
-    func pinScrollToTop() { table.contentOffset.y = 0 }
+    func pinScrollToTop() { if frozenOffsetY == nil { table.contentOffset.y = 0 } }
     var isSearchFocused: Bool { search.isFirstResponder }
     func endSearchEditing() { search.resignFirstResponder() }
 
@@ -407,6 +407,13 @@ final class StoryViewersPanelView: UIView {
             listBottom = bottom - ch
         }
         table.frame = CGRect(x: 0, y: top, width: w, height: max(0, listBottom - top))
+        // A list scrolled to its end stays at its end as the sheet grows: the extra room opens above
+        // the rows, not as a blank gap under the last one. A held offset is lowered with it.
+        let maxY = max(0, table.contentSize.height + table.contentInset.bottom - table.bounds.height)
+        if table.contentOffset.y > maxY + 0.5, frozenOffsetY != nil || !table.isDragging {
+            if frozenOffsetY != nil { frozenOffsetY = maxY }
+            table.contentOffset.y = maxY
+        }
         loadingView.frame = CGRect(x: 0, y: top, width: w, height: max(0, listBottom - top))
         // Two lines and a title when receipts are off (2026-10-17), one line otherwise.
         let emptyH = showingViewsOff
