@@ -1285,6 +1285,8 @@ struct StoryViewer: View {
     private var groupRepliesUp: Bool { groupRepliesStory != nil }
     /// Fariin's header tapped (official stories, owner 2026-10-16): the channel's own info page.
     @State private var officialInfoUp = false
+    /// The group page over a group story (owner 2026-10-25), opened from its header.
+    @State private var groupPage: StoryGroupPage?
     @State private var toastText = "Sent"               // reused for "Sent" (reply) and "Saved"
     @State private var dragDown: CGFloat = 0            // swipe-down amount → fade my overlays with the card
     // ⚠️ `carouselInteracting` IS DELETED. It said "a swipe is in flight, so stand the real story
@@ -2083,6 +2085,20 @@ struct StoryViewer: View {
         .sheet(item: $editViewers) { s in
             ShareStorySheet(editing: s, onPosted: { flashSentToast("Viewers updated") })
         }
+        .sheet(item: $groupPage) { p in
+            NavigationStack {
+                GroupInfoView(cid: p.id)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button { groupPage = nil } label: {
+                                Image(systemName: "chevron.backward").font(.system(size: 17, weight: .semibold))
+                            }
+                            .accessibilityLabel("Back")
+                        }
+                    }
+            }
+            .presentationDetents([.large])
+        }
         .sheet(isPresented: $officialInfoUp) {
             NavigationStack {
                 OfficialChatInfoView()
@@ -2862,12 +2878,13 @@ struct StoryViewer: View {
                 // on screen at that moment, not the one the viewer was opened with.
                 // owner 2026-10-22 (reverses 08-07's do-nothing): my own header opens my Posted
                 // Stories, the page the Stories tab's My Story leads to, over the story (paused).
+                // A GROUP STORY'S HEADER IS THE GROUP (owner 2026-10-25: "tap the name, open the group
+                // profile"): a group's ring, or my own group story inside My Story, opens its page.
+                if let gid = groupIdOnScreen(user.id) { groupPage = StoryGroupPage(id: gid); return }
                 guard user.id != AuthService.shared.uid else { myPostedUp = true; return }
                 // Fariin is not an account: its "profile" is the official chat's own info page,
                 // over the story like anybody's (owner 2026-10-16: "click profile, show profile").
                 if OfficialChannel.isOfficial(user.id) { officialInfoUp = true; return }
-                // A group's ring (owner 2026-10-23) is not a person: there is no profile to open.
-                if user.id.hasPrefix(StoryGroup.groupKeyPrefix) { return }
                 // Open the profile OVER the story (paused) — do NOT close the viewer.
                 if let g = groups.first(where: { $0.authorUid == user.id }) { profileSheet = g }
             },
@@ -3324,6 +3341,14 @@ struct StoryViewer: View {
     /// screen ("do not use the profile picture as the audience icon, use the dedicated Everyone
     /// icon"). The audience row in the share sheet does wear it, and that is a different question:
     /// there it is a picture of who you are posting AS, here it is a statement of who can see it.
+    /// The group behind the story on screen for this header: a group's ring names it in its key; my
+    /// own group story sits in My Story under my uid, so the story itself says which group.
+    private func groupIdOnScreen(_ bucketId: String) -> String? {
+        guard let g = groups.first(where: { $0.authorUid == bucketId }) else { return nil }
+        if let gid = g.groupConvId { return gid }
+        return g.stories.first(where: { $0.id == currentStoryId })?.groupId
+    }
+
     private func audienceBadge(for s: Story, isMine: Bool) -> StoryAudienceBadge? {
         // NOBODY BUT THE AUTHOR SEES THIS LINE AT ALL (owner, 2026-08-07: "only owner story can see
         // that label… when I want to see other people story don't show that label, show only name
@@ -3374,7 +3399,9 @@ struct StoryViewer: View {
         case "everyone": return StoryAudienceBadge(systemImage: "globe", text: text)
         // Glow's own mark, so the pill on the story says the same thing as the row in the sheet.
         case "glowers": return StoryAudienceBadge(systemImage: "sparkles", text: text)
-        case "group": return StoryAudienceBadge(systemImage: "person.3.fill", text: text)
+        // The header's name is already the group's (owner 2026-10-25: "the group name appears twice"),
+        // so the line under it says what kind of story it is instead.
+        case "group": return StoryAudienceBadge(systemImage: "person.3.fill", text: "Group story")
         case "custom":
             // The owner's own folder drawing (2026-08-07). OUTLINE here: this pill is a thin line of
             // white over a photograph, next to a light-weight name, and the filled version reads as a
@@ -6622,3 +6649,6 @@ struct StoryViewsOffIcon: View {
             .foregroundStyle(.white)
     }
 }
+
+/// The group a story header opens (owner 2026-10-25), for `.sheet(item:)`.
+struct StoryGroupPage: Identifiable { let id: String }

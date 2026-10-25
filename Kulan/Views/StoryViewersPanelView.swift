@@ -140,7 +140,10 @@ final class StoryViewersPanelView: UIView {
         h.view.backgroundColor = .clear
         return h
     }()
-    private var composerVisible: Bool { isGroupStory && showingReplies }
+    /// ⛔ THE OWNER AND ADMINS READ, THEY DO NOT ANSWER HERE (owner 2026-10-25: "they can see the
+    /// comments but can't reply, don't show react and reply bar"). Only the members' door writes.
+    private var canReplyHere: Bool { repliesOnly }
+    private var composerVisible: Bool { isGroupStory && showingReplies && canReplyHere }
     /// How far the keyboard covers the panel's foot while the composer is being typed in.
     private var composerLift: CGFloat = 0
     private var lastReplyCount = 0
@@ -646,7 +649,8 @@ extension StoryViewersPanelView: UITableViewDataSource, UITableViewDelegate {
                 },
                 onBlock: { [weak self] in self?.onBlock?(v) },
                 isHidden: StoryAudienceStore.shared.isHidden(v.id),
-                readOnly: viewersReadOnly)
+                // owner 2026-10-25: no "…" on a group story's viewers, the poster's own included.
+                readOnly: viewersReadOnly || isGroupStory)
         }
         .margins(.horizontal, 16)
         .margins(.vertical, 9)
@@ -664,7 +668,7 @@ extension StoryViewersPanelView: UITableViewDataSource, UITableViewDelegate {
         let isMe = r.uid == (AuthService.shared.uid ?? "")
         cell.contentConfiguration = UIHostingConfiguration {
             GroupStoryReplyRowContent(
-                reply: r, name: who.name, photoUrl: who.photo, canDelete: canDelete,
+                reply: r, name: who.name, photoUrl: who.photo, canDelete: canDelete, canReply: canReplyHere,
                 onOpenProfile: { [weak self] in
                     guard !isMe else { return }
                     self?.onOpenProfile?(info)
@@ -750,6 +754,8 @@ struct GroupStoryReplyRowContent: View {
     let name: String
     let photoUrl: String?
     let canDelete: Bool
+    /// The "Reply" link (owner 2026-10-25: none for the owner and admins).
+    var canReply = true
     var onOpenProfile: () -> Void = {}
     var onDelete: () -> Void = {}
     var onReply: () -> Void = {}
@@ -781,7 +787,7 @@ struct GroupStoryReplyRowContent: View {
                     Text(reply.text).font(.body).foregroundStyle(.white)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if !isMe {
+                if canReply && !isMe {
                     Button(action: onReply) {
                         Text("Reply").font(.footnote.weight(.semibold))
                             .foregroundStyle(Color(red: 0.55, green: 0.66, blue: 0.80))
