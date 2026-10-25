@@ -116,8 +116,8 @@ struct DeleteAccountView: View {
                 Button { Task { await finishSignOut() } } label: {
                     Text("Done").fontWeight(.semibold)
                         .frame(maxWidth: .infinity).frame(height: 52)
-                        .foregroundStyle(Color(.systemBackground))
-                        .background(Color.primary, in: Capsule())
+                        .foregroundStyle(.white)
+                        .background(Color.fariinBlue, in: Capsule())   // one action colour
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 20)

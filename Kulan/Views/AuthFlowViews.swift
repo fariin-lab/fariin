@@ -162,12 +162,13 @@ enum AuthPalette {
 // Not private: the onboarding screen in RootView is the last step of this same flow
 // and must wear the same two buttons.
 extension View {
-    /// The main action: black pill, white text.
+    /// The main action: a Fariin-blue pill, white text (owner 2026-10-26: one action colour, see
+    /// `Color.fariinBlue`; it was black, which turned white in dark mode).
     func authPrimaryPill() -> some View {
         self.font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(AuthPalette.page)          // always the inverse of the fill
+            .foregroundStyle(.white)
             .frame(maxWidth: .infinity).frame(height: 50)
-            .background(Color.primary, in: Capsule())
+            .background(Color.fariinBlue, in: Capsule())
     }
 
     /// One of the sign-in doors. Always the opposite of the page: white with dark text on
@@ -240,10 +241,11 @@ extension View {
     /// It was a grey pill with grey text, which on a white page read as no button at all (owner,
     /// 2026-10-16, side by side with a large app's sign-up).
     func authActionPill(enabled: Bool) -> some View {
+        // Fariin blue, softened until it can go (owner 2026-10-26: one action colour).
         self.font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(AuthPalette.page)
+            .foregroundStyle(.white.opacity(enabled ? 1 : 0.85))
             .frame(maxWidth: .infinity).frame(height: 54)
-            .background(Color.primary.opacity(enabled ? 1 : 0.3), in: Capsule())
+            .background(Color.fariinBlue.opacity(enabled ? 1 : 0.35), in: Capsule())
     }
 
     /// A field box on the email pages: its glyph inside, no label above, a hairline at rest, dark
@@ -941,7 +943,7 @@ struct EmailAuthView: View {
                     } label: {
                         Group {
                             if busy {
-                                BusyArc.small(AuthPalette.page)
+                                BusyArc.small(.white)
                             } else if onEmailStep {
                                 Text("Continue")
                             } else {

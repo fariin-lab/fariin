@@ -2281,8 +2281,9 @@ struct ChatsView: View {
             }
             ToolbarSpacer(.fixed, placement: .topBarTrailing)
             ToolbarItem(placement: .topBarTrailing) {
-                // Black in light mode, white in dark (owner 2026-10-25).
-                composeButton.tint(.primary).foregroundStyle(.primary).modifier(SwipeFade(on: showHeaderIcons))
+                // Fariin blue, the one action colour, in both modes (owner 2026-10-26; was black/white).
+                composeButton.tint(Color.fariinBlue).foregroundStyle(Color.fariinBlue)
+                    .modifier(SwipeFade(on: showHeaderIcons))
             }
         }
     }

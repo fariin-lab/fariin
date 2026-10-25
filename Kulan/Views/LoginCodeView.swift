@@ -378,7 +378,7 @@ struct LoginCodeView: View {
     private func primaryButton(_ title: String, enabled: Bool, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Group {
-                if busy { BusyArc.small(AuthPalette.page) } else { Text(title) }
+                if busy { BusyArc.small(.white) } else { Text(title) }
             }
             // The email page's button, so a disabled one is a softened black pill, not grey on grey.
             .authActionPill(enabled: enabled || busy)

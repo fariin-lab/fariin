@@ -867,9 +867,9 @@ struct StoryLibraryPicker: View {
                     // change that only took something off, which is what "Done" says.
                     Text(freshPicks.isEmpty ? "Done" : "Add \(freshPicks.count)")
                         .font(.callout.weight(.semibold))
-                        .foregroundStyle(Color(.systemBackground))
+                        .foregroundStyle(.white)
                         .padding(.horizontal, 18).padding(.vertical, 10)
-                        .background(Color.primary, in: Capsule())
+                        .background(Color.fariinBlue, in: Capsule())   // one action colour
                 }
                 .disabled(resolving)
             }

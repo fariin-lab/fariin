@@ -318,10 +318,10 @@ struct AddPeopleSheet: View {
             } else {
                 Text(actionTitle)
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Color(uiColor: .systemBackground))
+                    .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .frame(height: 52)
-                    .background(Capsule().fill(Color.primary.opacity(ready ? 1 : 0.35)))
+                    .background(Capsule().fill(Color.fariinBlue.opacity(ready ? 1 : 0.35)))   // one action colour
             }
         }
         .buttonStyle(.plain)

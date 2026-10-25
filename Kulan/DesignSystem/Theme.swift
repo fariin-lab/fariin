@@ -12,6 +12,13 @@ extension Color {
             opacity: 1
         )
     }
+
+    /// ⛔ THE ONE ACTION COLOUR (owner 2026-10-26, "black somewhere, blue somewhere is confusing").
+    /// Fariin blue for anything tapped to ACT: main buttons (Save, Continue, Join, Send), links, the
+    /// compose pen. Black/white (`.primary`) is for text and plain icons only; red for danger;
+    /// green for the system switches. Apple's and Google's sign-in buttons keep their own black/white
+    /// (their brand rules). The same blue as the logo and the Join buttons.
+    static let fariinBlue = Color(hex: 0x2392FE)
 }
 
 // App-wide appearance override (persisted in UserDefaults via @AppStorage).

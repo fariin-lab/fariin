@@ -1083,9 +1083,9 @@ struct OnboardingView: View {
                         .overlay(alignment: .bottomTrailing) {
                             Image(systemName: pickedAvatar == nil ? "camera.fill" : "pencil")
                                 .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(AuthPalette.page)
+                                .foregroundStyle(.white)
                                 .frame(width: 30, height: 30)
-                                .background(Color.primary, in: Circle())
+                                .background(Color.fariinBlue, in: Circle())   // one action colour
                                 .overlay(Circle().strokeBorder(AuthPalette.page, lineWidth: 2.5))
                                 .offset(x: 2, y: 2)
                         }
@@ -1229,7 +1229,7 @@ struct OnboardingView: View {
                     } label: {
                         Group {
                             if saving {
-                                ProgressView().tint(AuthPalette.page)   // spinner reads on the filled pill
+                                BusyArc.small(.white)   // the app's own arc, white on the blue pill
                             } else {
                                 Text("Continue")
                             }

@@ -567,7 +567,7 @@ struct PasswordResetCodeView: View {
     private func pill(_ title: String, enabled: Bool, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Group {
-                if working { BusyArc.small(AuthPalette.page) } else { Text(title) }
+                if working { BusyArc.small(.white) } else { Text(title) }
             }
             .authActionPill(enabled: enabled || working)
         }

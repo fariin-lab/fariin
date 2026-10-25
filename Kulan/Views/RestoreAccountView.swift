@@ -79,11 +79,11 @@ struct RestoreAccountView: View {
                     act { try await ProfileStore.shared.restoreAccount(); onRestored() }
                 } label: {
                     Group {
-                        if working { ProgressView().tint(AuthPalette.page) }
+                        if working { BusyArc.small(.white) }
                         // owner 2026-10-18: named for what it does to the deletion.
                         else { Text("Cancel Deletion") }
                     }
-                    .authDoorPill()
+                    .authPrimaryPill()   // the main action is blue (owner 2026-10-26)
                 }
                 .buttonStyle(.plain)
                 .disabled(working)
