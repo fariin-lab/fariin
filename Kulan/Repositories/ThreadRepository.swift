@@ -551,9 +551,13 @@ final class ThreadRepository {
         // Deleted "for me"; or sealed without me and sent BEFORE I came in (audit 2026-10-20: one
         // sealed by a phone that had not seen me join yet is shown as the lock, not dropped).
         let cuts = Self.cuts(cid)
+        // ⛔ A GROUP SHOWS NO "deleted" LINE (owner 2026-10-26): a message deleted for everyone just
+        // goes, for its author and for every member. The 1:1 keeps its line. A group id has no "_".
+        let group = !cid.contains("_")
         merged.removeAll { m in
             HiddenMessages.isHidden(m.id)
                 || (m.notForMe && (cuts.joined.map { m.createdAt < $0.addingTimeInterval(5) } ?? true))
+                || (group && m.deleted && !m.isCall)
         }
         // Chat history hidden from new members, and I came in after that: the chat starts at my
         // join (2 s early, so the "joined" line written with it stays).

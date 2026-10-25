@@ -2041,7 +2041,9 @@ struct ThreadView: View {
             if selectionHasMine {
                 Button("Delete for Everyone", role: .destructive) { bulkDelete(everyone: true) }
             }
-            Button("Delete for Me", role: .destructive) { bulkDelete(everyone: false) }
+            if !isGroup {
+                Button("Delete for Me", role: .destructive) { bulkDelete(everyone: false) }
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
             // 2026-09-24 feature-audit (delete-message): a MIXED selection says what each button does
@@ -2049,7 +2051,9 @@ struct ThreadView: View {
             // everyone; the rest are removed from my side, and the dialog said nothing about that.
             let split = selectionDeleteSplit
             if selectionHasMine && split.onlyMe > 0 {
-                Text("Delete for Everyone removes \(split.everyone) of these for everyone. The other \(split.onlyMe) will only be removed from your side.")
+                Text(isGroup
+                     ? "Delete for Everyone removes \(split.everyone) of these for everyone. You can't delete the other \(split.onlyMe)."
+                     : "Delete for Everyone removes \(split.everyone) of these for everyone. The other \(split.onlyMe) will only be removed from your side.")
             }
         }
         // The header's Delete All. Theirs is a separate sheet with its own body text, because it is a
@@ -3963,7 +3967,7 @@ struct ThreadView: View {
         // Both sides get Delete instead, and the dialog offers "Delete for Me" for someone else's message.
         let destructive = UIAction(title: "Delete", image: UIImage(systemName: "trash"),
                                    attributes: .destructive) { _ in pendingDelete = m }
-        items.append(UIMenu(options: .displayInline, children: [destructive]))   // the divider + Delete
+        if canDeleteHere(m) { items.append(UIMenu(options: .displayInline, children: [destructive])) }   // the divider + Delete
         return UIMenu(children: items)
     }
 
@@ -3996,7 +4000,7 @@ struct ThreadView: View {
             // (owner order): the message is already deleted for everyone, so the one thing left is
             // clearing the marker from your own side. The dialog enforces this — its Delete for
             // Everyone button is gated on !deleted.
-            out.append(CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = m })
+            if canDeleteHere(m) { out.append(CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = m }) }
             out.append(CMAction(title: "Select", icon: "checkmark.circle") {
                 setUIMode(.selection); selectedIds = [m.id]   // their order: mode first, then add the item
             })
@@ -4040,7 +4044,7 @@ struct ThreadView: View {
             out.append(CMAction(title: "Select", icon: "checkmark.circle") {
                 setUIMode(.selection); selectedIds = [m.id]   // their order: mode first, then add the item
             })
-            out.append(CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = m })
+            if canDeleteHere(m) { out.append(CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = m }) }
             return out
         }
 
@@ -4128,7 +4132,7 @@ struct ThreadView: View {
                 togglePin(m)
             })
         }
-        out.append(CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = m })
+        if canDeleteHere(m) { out.append(CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = m }) }
         return out
     }
 
@@ -5006,6 +5010,14 @@ struct ThreadView: View {
     /// (the owner always; a limited admin never the owner's). Mirrors `adminDeletesMessage` in
     /// firestore.rules. Never a pending send, a tombstone, a call record, or a synthetic album child
     /// ("<parent>-<n>": removing one album item is an author-only edit of the parent).
+    /// Whether the long-press menu offers Delete at all (owner 2026-10-26): a group deletes only for
+    /// everyone, so someone else's message I may not remove for all has no Delete there. An unsent
+    /// message of mine can always go. A 1:1 always has it (Delete for Me).
+    private func canDeleteHere(_ m: Message) -> Bool {
+        guard isGroup else { return true }
+        return m.sendState != nil || canDeleteForEveryone(m)
+    }
+
     private func canDeleteForEveryone(_ m: Message) -> Bool {
         guard m.sendState == nil, !m.deleted, !m.isCall else { return false }
         if m.authorId == me { return true }
@@ -5117,7 +5129,8 @@ struct ThreadView: View {
             guard let m = repo.items.first(where: { $0.id == id }) else { continue }
             if everyone && canDeleteForEveryone(m) {
                 serverIds.append(id)
-            } else {
+            } else if !isGroup || m.sendState != nil {
+                // A group has no Delete for Me (owner 2026-10-26): what I may not delete for all stays.
                 deleteForMe(m)   // also cancels unsent messages properly
             }
         }
@@ -12575,6 +12588,9 @@ private struct MessageActionDialogs: ViewModifier {
                     // side only, which is what the phone's own call log does.
                     // 2026-09-24 feature-audit: the same four refusals, plus the admin right, now
                     // live in ThreadView.canDeleteForEveryone (shared with the selection bar).
+                    // ⛔ A GROUP OFFERS ONLY "for Everyone" (owner 2026-10-26): a group is not two
+                    // people, so a delete there removes it for all. An unsent one is only mine.
+                    let inGroup = conversation?.isGroup ?? !cid.contains("_")
                     if canDeleteForEveryone(m) {
                         Button("Delete for Everyone", role: .destructive) {
                             // The bubble becomes a tombstone NOW, and the server work runs behind it.
@@ -12594,8 +12610,14 @@ private struct MessageActionDialogs: ViewModifier {
                             pendingDelete = nil
                         }
                     }
-                    Button("Delete for Me", role: .destructive) {
-                        onDeleteForMe(m); pendingDelete = nil
+                    if !inGroup {
+                        Button("Delete for Me", role: .destructive) {
+                            onDeleteForMe(m); pendingDelete = nil
+                        }
+                    } else if m.sendState != nil {
+                        Button("Delete", role: .destructive) {
+                            onDeleteForMe(m); pendingDelete = nil
+                        }
                     }
                 }
                 Button("Cancel", role: .cancel) { pendingDelete = nil }
