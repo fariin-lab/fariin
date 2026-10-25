@@ -1165,8 +1165,13 @@ struct StoryViewerRowContent: View {
         .font(.system(size: 9, weight: .bold))
     }
 
+    /// How long ago, not the date (owner 2026-10-25: "only show like 26m ago, 1h ago").
     private func dateFmt(_ d: Date) -> String {
-        let f = DateFormatter(); f.dateFormat = "dd/MM/yy 'at' h:mm a"; return f.string(from: d)
+        let s = max(0, Int(Date().timeIntervalSince(d)))
+        if s < 60 { return "just now" }
+        if s < 3600 { return "\(s / 60)m ago" }
+        if s < 86_400 { return "\(s / 3600)h ago" }
+        return "\(s / 86_400)d ago"
     }
 
     var body: some View {
