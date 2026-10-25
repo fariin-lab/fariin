@@ -440,6 +440,71 @@ struct PublicJoinBar: View {
     }
 }
 
+/// A public group I LEFT, open in its chat (owner 2026-10-25, "make leave work like the reference
+/// app"): leaving is never a ban there, so where the composer was, the same Join pill as above.
+/// The chat list brings the group back once the server adds me, and the chat follows it.
+struct RejoinGroupBar: View {
+    let cid: String
+    @State private var joining = false
+    @State private var requestSent = false
+    @State private var joinError: String?
+
+    var body: some View {
+        VStack(spacing: 8) {
+            if let joinError {
+                Text(joinError)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            } else if requestSent {
+                Text("Your request is waiting for an admin.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+            }
+            Button(action: join) {
+                ZStack {
+                    Text(requestSent ? "Request Sent" : "Join Group").opacity(joining ? 0 : 1)
+                    if joining { ProgressView().tint(.white) }
+                }
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(requestSent ? Color.secondary : Color.white)
+                    .padding(.horizontal, 19)
+                    .frame(minWidth: 166)
+                    .frame(height: 44)
+                    .liquidGlass(Capsule(), interactive: true, tint: requestSent ? nil : PublicGroupSheet.blue)
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(joining || requestSent)
+        }
+        .frame(maxWidth: .infinity)
+        .systemBarChrome()
+    }
+
+    private func join() {
+        guard !joining, !requestSent else { return }
+        guard NetworkState.shared.isOnline else { joinError = "No internet connection. Try again."; return }
+        joining = true
+        joinError = nil
+        Task {
+            do {
+                switch try await GroupDirectory.join(cid: cid) {
+                case .joined, .already:
+                    FormerGroups.removed[cid] = nil
+                    Haptics.notify(.success)
+                    return   // stays spinning until the chat list brings the group back
+                case .requested:
+                    requestSent = true
+                    Haptics.notify(.success)
+                }
+            } catch {
+                joinError = error.localizedDescription
+            }
+            joining = false
+        }
+    }
+}
+
 /// A public group in global search: photo, name, "@name · N members". Laid out like the stranger
 /// row above it (56pt photo, headline and subheadline), so the Global Search section reads as one.
 /// A table cell: the table's own selection handles the tap (no Button inside).

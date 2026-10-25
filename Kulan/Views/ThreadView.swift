@@ -1312,7 +1312,12 @@ struct ThreadView: View {
             } else if searchActive {
                 searchNavBar.transition(.opacity)
             } else if notAMember {
-                removedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
+                // A public group I left can be joined again from here (owner 2026-10-25).
+                if conversation?.isPublic == true {
+                    RejoinGroupBar(cid: cid).transition(.opacity)
+                } else {
+                    removedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
             } else if groupModHidesChat {
                 EmptyView()   // nothing to write into: the reason is in the middle of the chat
             } else if groupModBlocked {

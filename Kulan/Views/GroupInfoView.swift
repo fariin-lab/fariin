@@ -46,6 +46,7 @@ struct GroupInfoView: View {
     /// My own @name tapped (owner 2026-10-21, "@v does nothing"): My Profile, pushed the same way.
     @State private var mentionSelf = false
     @State private var confirmLeave = false
+    @State private var rejoining = false
     @State private var confirmEnd = false
     @State private var confirmClear = false
     @State private var confirmReport = false
@@ -107,9 +108,32 @@ struct GroupInfoView: View {
     /// The group's own document first (owner 2026-10-20: a role given or taken showed only after a
     /// refresh), the chat list's copy until it answers.
     @State private var live = LiveGroupDoc()
-    private var conv: Conversation? { live.conv ?? repo.conversations.first { $0.id == cid } }
+    // A group I left this session last (owner 2026-10-25): its info page draws me out of it.
+    private var conv: Conversation? { live.conv ?? repo.conversations.first { $0.id == cid } ?? FormerGroups.removed[cid] }
     private var iAmAdmin: Bool { conv?.isAdmin(me) ?? false }
     private var iAmOwner: Bool { conv?.createdBy == me && !(conv?.createdBy.isEmpty ?? true) }
+    /// Not known yet counts as a member, so the page never flashes the left-group rows.
+    private var iAmMember: Bool { conv.map { $0.users.contains(me) } ?? true }
+
+    /// Join a public group I left again (owner 2026-10-25). A request when it needs approval.
+    private func rejoin() {
+        guard !rejoining else { return }
+        rejoining = true
+        Task {
+            do {
+                switch try await GroupDirectory.join(cid: cid) {
+                case .joined, .already:
+                    FormerGroups.removed[cid] = nil
+                    flashNotice("You joined the group.")
+                case .requested:
+                    flashNotice("Your request is waiting for an admin.")
+                }
+            } catch {
+                actionError = error.localizedDescription
+            }
+            rejoining = false
+        }
+    }
     // Per-flag admin right check (owner = all; legacy admin with no adminRights entry = all).
     private func can(_ r: Conversation.Right) -> Bool { conv?.adminCan(me, r) ?? false }
     // An admin with the matching right can; members can too when the group's permission is on.
@@ -780,6 +804,16 @@ struct GroupInfoView: View {
     /// owner. Red words and red icons, the rows the rest of the page uses.
     private var exitCard: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if !iAmMember {
+                // A group I left (owner 2026-10-25, "make leave work like the reference app"): no
+                // Leave, Report, End or Delete for a group I am not in. A public one can be joined
+                // again; leaving is never a ban.
+                if conv?.isPublic == true {
+                    ProfileInfoRow(title: rejoining ? "Joining…" : "Join Group", icon: "person.badge.plus",
+                                   chevron: false) { rejoin() }
+                        .profileSurface(plain: cardColor)
+                }
+            } else {
             VStack(spacing: 0) {
                 ProfileInfoRow(title: "Leave Group", icon: "rectangle.portrait.and.arrow.right",
                                tint: Self.exitRed, chevron: false) { confirmLeave = true }
@@ -804,6 +838,7 @@ struct GroupInfoView: View {
                 }
                 .profileSurface(plain: cardColor)
                 .padding(.top, 10)
+            }
             }
             if let line = createdLine {
                 Text(line).font(.footnote).foregroundStyle(.secondary)
@@ -1598,6 +1633,23 @@ private struct GroupInfoExits: ViewModifier {
     let onGone: () -> Void
     /// The page's own notice after a report (owner 2026-10-19: it was silent).
     var onReported: () -> Void = {}
+    /// The owner's "Choose Another Owner" (owner 2026-10-25), and whether it handed the group over.
+    @State private var pickOwner = false
+    @State private var handedOver = false
+
+    private var iOwnIt: Bool { conv.map { !$0.createdBy.isEmpty && $0.createdBy == me } ?? false }
+
+    private var otherMembers: [(id: String, name: String, photo: String?)] {
+        guard let conv else { return [] }
+        return conv.users.filter { $0 != me }.map { uid in
+            (uid, conv.names[uid].flatMap { $0.isEmpty ? nil : $0 } ?? "Member", conv.photos[uid])
+        }
+    }
+
+    private func leaveNow() {
+        LeaveGroupUndo.shared.start(cid: cid, title: conv?.displayName(me) ?? "the group")
+        onGone()
+    }
 
     /// The owner leaving hands the group on (`ChatService.leaveGroup`: the longest-serving admin who
     /// is still a member, else the longest-serving member). Kasim 2026-10-21: say who, before it
@@ -1650,11 +1702,22 @@ private struct GroupInfoExits: ViewModifier {
                 Button("Cancel", role: .cancel) {}
                 // Out of the list and the screen at once, with an Undo bar; the real leave runs after
                 // 5 s (owner 2026-10-25). See `LeaveGroupUndo`.
-                Button("Leave", role: .destructive) {
-                    LeaveGroupUndo.shared.start(cid: cid, title: conv?.displayName(me) ?? "the group")
-                    onGone()
+                // The owner may pick the next owner instead (the reference app's "Appoint Another Owner").
+                if iOwnIt && !otherMembers.isEmpty {
+                    Button("Choose Another Owner") { pickOwner = true }
                 }
+                Button("Leave", role: .destructive) { leaveNow() }
             } message: { Text(leaveMessage) }
+            .sheet(isPresented: $pickOwner, onDismiss: {
+                if handedOver { handedOver = false; leaveNow() }
+            }) {
+                NavigationStack {
+                    ChooseNewOwnerSheet(cid: cid, members: otherMembers) {
+                        handedOver = true
+                        pickOwner = false
+                    }
+                }
+            }
             .alert("End This Group?", isPresented: $confirmEnd) {
                 Button("Cancel", role: .cancel) {}
                 Button("End Group", role: .destructive) {
@@ -2815,10 +2878,87 @@ struct TagColourRow: View {
 /// owner 2026-10-25: TRANSFER OWNERSHIP ASKS FOR MY PASSWORD. Firebase Auth checks it (it never
 /// reaches our server and is never stored or logged here), then the server makes the hand-off
 /// (`ChatService.transferGroupOwnership`) and says in words why when it refuses.
+/// The owner's "Choose Another Owner" from the Leave alert (owner 2026-10-25, the reference app's
+/// "Appoint Another Owner"): pick a member, the server checks the transfer can happen, the password
+/// page hands the group over, then `onTransferred` leaves.
+struct ChooseNewOwnerSheet: View {
+    let cid: String
+    let members: [(id: String, name: String, photo: String?)]
+    var onTransferred: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var picked: (id: String, name: String)?
+    @State private var showPassword = false
+    @State private var checking: String?
+    @State private var failure: String?
+    @State private var search = ""
+
+    private var shown: [(id: String, name: String, photo: String?)] {
+        let q = search.trimmingCharacters(in: .whitespaces)
+        return q.isEmpty ? members : members.filter { $0.name.localizedCaseInsensitiveContains(q) }
+    }
+
+    var body: some View {
+        List {
+            if let failure {
+                Section { Text(failure).foregroundStyle(.red) }
+            }
+            Section {
+                ForEach(shown, id: \.id) { m in
+                    Button { check(m.id, m.name) } label: {
+                        HStack(spacing: 12) {
+                            AvatarView(name: m.name, photoUrl: m.photo, size: 40)
+                            Text(m.name).foregroundStyle(.primary).lineLimit(1)
+                            Spacer(minLength: 0)
+                            if checking == m.id { ProgressView() }
+                        }
+                    }
+                    .disabled(checking != nil)
+                }
+            } footer: {
+                Text("The person you choose becomes the owner, then you leave the group.")
+            }
+        }
+        .searchable(text: $search)
+        .navigationTitle("Choose New Owner")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+        }
+        .navigationDestination(isPresented: $showPassword) {
+            if let picked {
+                TransferOwnershipSheet(cid: cid, heir: picked.id, name: picked.name, leaving: true) {
+                    onTransferred()
+                }
+            }
+        }
+    }
+
+    private func check(_ id: String, _ name: String) {
+        guard checking == nil else { return }
+        checking = id
+        failure = nil
+        Task {
+            do {
+                try await ChatService.checkOwnershipTransfer(cid: cid, to: id)
+                await MainActor.run { checking = nil; picked = (id, name); showPassword = true }
+            } catch let refusal as ChatService.OwnershipRefusal where refusal.needsPassword {
+                await MainActor.run {
+                    checking = nil
+                    failure = "Create a password in Settings first, then try again."
+                }
+            } catch {
+                let msg = error.localizedDescription
+                await MainActor.run { checking = nil; failure = msg }
+            }
+        }
+    }
+}
+
 struct TransferOwnershipSheet: View {
     let cid: String
     let heir: String
     let name: String
+    var leaving = false
     var onDone: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var password = ""
@@ -2838,7 +2978,8 @@ struct TransferOwnershipSheet: View {
             } header: {
                 Text("Enter your password")
             } footer: {
-                Text("\(name) will have full control of this group, including over you. You will stay an admin.")
+                Text(leaving ? "\(name) will become the owner, then you leave the group."
+                     : "\(name) will have full control of this group, including over you. You will stay an admin.")
             }
             if let failure {
                 Section { Text(failure).foregroundStyle(.red) }
