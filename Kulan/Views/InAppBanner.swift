@@ -27,8 +27,21 @@ final class InAppBannerCenter {
         var nudge: LinkNudge? = nil
     }
 
-    private(set) var item: Item?
+    /// ⛔ UP TO TWO CARDS AT ONCE (owner 2026-10-25, the reference app's 13.1 motion): a second
+    /// message sends the first card away on its exit springs WHILE the new one drops in, so for that
+    /// moment both are on screen. A leaving card stays mounted until its springs have settled.
+    struct Entry: Identifiable, Equatable {
+        let item: Item
+        var leaving = false
+        var id: UUID { item.id }
+    }
+    private(set) var entries: [Entry] = []
+    /// The card on screen and not leaving.
+    var item: Item? { entries.last(where: { !$0.leaving })?.item }
     private var hideTask: DispatchWorkItem?
+    /// Long enough for the slowest exit spring to settle (response 0.728, damping 0.698 is about
+    /// 1.15s to a thousandth); by then the card is above the screen, shrunk and blurred anyway.
+    private static let exitSettle: TimeInterval = 1.2
     /// ⛔ 5.0, THEIR NUMBER — owner, 2026-09-11, "make it exactly like [theirs]". Ours was 4.5.
     ///
     /// ⚠️ AND IT IS 5.0 IN EVERY BUILD OF THEIRS, which is worth writing down because their source
@@ -37,17 +50,22 @@ final class InAppBannerCenter {
     /// behaviour would have given us a number their app has never actually used.
     private static let visibleFor: TimeInterval = 5.0
 
-    /// ⛔ POSITION, 0.4s, EASE-IN-EASE-OUT — NOT A SPRING. Theirs animates one property, the layer's
-    /// position, over the card's own height with the default timing function; there is no spring
-    /// anywhere in that path and no fade. Ours used two different springs for in and out, which is
-    /// where the bounce on arrival came from.
-    ///
-    /// ⛔ 2026-10-16, REVERSED ON HIS WORD: "use Apple's native iOS 26 notification animation". The
-    /// system banner drops in on a spring with a small settle and goes back up without one. Apple
-    /// gives no API for its own banner's curve, so these are SwiftUI's system springs, not numbers
-    /// read off a recording: in with a light bounce, out with none.
-    static let slide: Animation = .spring(duration: 0.5, bounce: 0.18)
-    static let slideOut: Animation = .spring(duration: 0.4, bounce: 0)
+    /// Puts `next` on screen; anything already there leaves at the same moment (their `enqueue`).
+    @MainActor private func present(_ next: Item) {
+        leaveAll()
+        entries.append(Entry(item: next))
+    }
+
+    /// Marks every card as leaving (the card runs its exit springs) and unmounts each once settled.
+    @MainActor private func leaveAll() {
+        for i in entries.indices where !entries[i].leaving {
+            entries[i].leaving = true
+            let id = entries[i].id
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.exitSettle) { [weak self] in
+                self?.entries.removeAll { $0.id == id && $0.leaving }
+            }
+        }
+    }
 
     @MainActor
     func show(cid: String?, title: String, body: String) {
@@ -61,12 +79,12 @@ final class InAppBannerCenter {
             let head = title.trimmingCharacters(in: .whitespacesAndNewlines)
             let words = head.isEmpty || head == OfficialChannel.name ? body : "\(head): \(body)"
             let next = Item(cid: cid, title: OfficialChannel.name, body: words, photoUrl: nil)
-            withAnimation(Self.slide) { item = next }
+            present(next)
             armHide()
             return
         }
         let next = Item(cid: cid, title: title, body: body, photoUrl: cid.flatMap(Self.photo(forCid:)))
-        withAnimation(Self.slide) { item = next }
+        present(next)
         armHide()
     }
 
@@ -76,7 +94,7 @@ final class InAppBannerCenter {
     @MainActor
     func showNudge(_ n: LinkNudge) {
         let next = Item(cid: nil, title: n.callerName, body: "wants to talk", photoUrl: n.photoUrl, nudge: n)
-        withAnimation(Self.slide) { item = next }
+        present(next)
         armHide()
     }
 
@@ -99,7 +117,7 @@ final class InAppBannerCenter {
     @MainActor
     func dismiss() {
         hideTask?.cancel(); hideTask = nil
-        withAnimation(Self.slideOut) { item = nil }
+        leaveAll()
     }
 
     /// The sender's photo out of the chat list we already hold: the group's photo for a group, the
@@ -157,6 +175,11 @@ final class InAppBannerCenter {
 ///    like theirs" cannot keep it. The swipe still works and is now easier to trigger than it was.
 struct InAppBannerCard: View {
     let item: InAppBannerCenter.Item
+    /// Set by the centre when a newer card replaces this one or it is dismissed: the exit springs run.
+    var leaving = false
+    /// False for the first frame, so the card is drawn at its starting pose and springs in from it.
+    @State private var arrived = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The finger's own translation, rubber-banded downward — see `rubberBanded`.
     @State private var dragY: CGFloat = 0
     /// The pull-down haptic fires ONCE per gesture, at the point their card fires it.
@@ -228,7 +251,47 @@ struct InAppBannerCard: View {
         // "older phone" 37, and that 37 was added under the status bar. Ignoring the top edge puts
         // the reader at the screen's top and gives it the real safe area to measure.
         .ignoresSafeArea(.container, edges: .top)
-        .allowsHitTesting(true)
+        .allowsHitTesting(!leaving)
+        .onAppear { arrived = true }
+    }
+
+    // MARK: - The 13.1 motion
+
+    /// ⛔ THE REFERENCE APP'S 13.1 BANNER MOTION (owner 2026-10-25: "copy both animations", read from
+    /// their `NotificationItemContainerNode`). Replaces the 2026-10-16 slide-and-grow.
+    ///
+    /// The card drops in from just above the screen while it grows from 19% and comes into focus,
+    /// and leaves the same way backwards. Three springs, one per property, each theirs as (damping
+    /// ratio, response): scale x (0.69762, 0.728), scale y (0.62275, 0.48669), centre y (0.63333,
+    /// 0.62832). SwiftUI's `.spring(response:dampingFraction:)` is the same spring theirs builds
+    /// (stiffness (2π/response)², damping 2ζω), and like theirs a spring caught mid-flight carries on
+    /// from where it is and how fast it is going, so an exit during the entry has no jump. The blur
+    /// is 18 to 0 over 0.3s ease-in-out, theirs.
+    ///
+    /// Where the centre goes, from their numbers: it STARTS half a card above the screen's top edge
+    /// (the card just out of sight), rests at the card's frame, and ENDS a whole card above the top.
+    /// The x and y scales settle at different speeds, which is the slight stretch on arrival.
+    private enum Phase: Equatable { case start, shown, gone }
+    private var phase: Phase { leaving ? .gone : (arrived ? .shown : .start) }
+
+    private func motion<V: View>(_ card: V, top: CGFloat) -> some View {
+        let h = Self.cardHeight
+        let rest = top + h / 2
+        let p = phase
+        let scale: CGFloat = p == .shown ? 1 : 0.19
+        let centreY: CGFloat = p == .shown ? rest : (p == .start ? -h / 2 : -h)
+        func spring(_ zeta: Double, _ response: Double) -> Animation? {
+            reduceMotion ? nil : .spring(response: response, dampingFraction: zeta)
+        }
+        return card
+            .scaleEffect(x: scale, y: 1)
+            .animation(spring(0.69762, 0.728), value: p)
+            .scaleEffect(x: 1, y: scale)
+            .animation(spring(0.62275, 0.48669), value: p)
+            .offset(y: centreY - rest)
+            .animation(spring(0.63333, 0.62832), value: p)
+            .blur(radius: p == .shown ? 0 : 18)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: p)
     }
 
     @ViewBuilder private func card(safeTop: CGFloat) -> some View {
@@ -241,7 +304,8 @@ struct InAppBannerCard: View {
 
     /// The nudge capsule: dark in both themes, as his reference draws it.
     private func nudgeCard(_ n: LinkNudge, safeTop: CGFloat) -> some View {
-        HStack(spacing: 10) {
+        let top = topInset(safeTop: safeTop)
+        return motion(HStack(spacing: 10) {
             AvatarView(name: n.callerName, photoUrl: n.photoUrl, size: 40)
             Text("👋 \(n.callerName) wants to talk")
                 .font(.system(size: 15, weight: .semibold))
@@ -268,8 +332,8 @@ struct InAppBannerCard: View {
         .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.3), radius: 14, y: 4)
         .environment(\.colorScheme, .dark)
-        .padding(.horizontal, Self.sideInset)
-        .padding(.top, topInset(safeTop: safeTop))
+        .padding(.horizontal, Self.sideInset), top: top)
+        .padding(.top, top)
         .offset(y: rubberBanded(dragY))
         .contentShape(Capsule())
         .gesture(dragGesture)
@@ -277,8 +341,9 @@ struct InAppBannerCard: View {
         .accessibilityElement(children: .contain)
     }
 
-    @ViewBuilder private func messageCard(safeTop: CGFloat) -> some View {
-        HStack(spacing: Self.avatarToText) {
+    private func messageCard(safeTop: CGFloat) -> some View {
+        let top = topInset(safeTop: safeTop)
+        return motion(HStack(spacing: Self.avatarToText) {
             if let cid = item.cid, OfficialChannel.isOfficial(cid) {
                 OfficialAvatar(size: Self.avatar)
             } else {
@@ -317,14 +382,12 @@ struct InAppBannerCard: View {
         // the system's own touch response, the light that follows the finger and the flex under a
         // press, which the plain regular glass does not draw. Taps and the drag are unchanged.
         .liquidGlass(RoundedRectangle(cornerRadius: Self.corner, style: .continuous), interactive: true)
-        .padding(.horizontal, Self.sideInset)
-        .padding(.top, topInset(safeTop: safeTop))
+        .padding(.horizontal, Self.sideInset), top: top)
+        .padding(.top, top)
         .offset(y: rubberBanded(dragY))
         .contentShape(RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
         .gesture(dragGesture)
         .onTapGesture { open() }
-        // The slide is NOT here — see `inAppBanner()`. A transition only runs on the view that is
-        // inserted or removed, and this card sits inside the GeometryReader that is.
     }
 
     // MARK: - The two gestures
@@ -357,15 +420,15 @@ struct InAppBannerCard: View {
                 feltExpand = false
                 // ⛔ DOWN OPENS THE CHAT — the gesture ours did not have at all. 20 points of
                 // rubber-banded travel, or a downward throw, and the banner behaves like a tap.
+                // The card is NOT put back first: like theirs (`freezeGestureBounds`), the exit
+                // springs leave from wherever the finger let go, with no jump home.
                 if rubberBanded(travel) > 20 || velocity > 300 {
-                    dragY = 0
                     open()
                     return
                 }
                 // ⛔ UP DISMISSES AT FIVE POINTS. Theirs commits on 5pt of travel or 200pt/s, where
                 // ours asked for 28 — which is why swiping ours away felt like it needed a shove.
                 if travel < -5 || velocity < -200 {
-                    dragY = 0
                     center.dismiss()
                     return
                 }
@@ -390,17 +453,14 @@ extension View {
     /// Mount once, at the root, above everything the app normally shows.
     func inAppBanner() -> some View {
         overlay(alignment: .top) {
-            if let item = InAppBannerCenter.shared.item {
-                InAppBannerCard(item: item)
-                    .id(item.id)   // a new message re-runs the slide-in instead of swapping text in place
-                    // ⛔ ON THE INSERTED VIEW — owner 2026-10-16: "the banner appears without an
-                    // animation". This used to sit on the card INSIDE `InAppBannerCard`'s
-                    // GeometryReader, which is not the view the `if` inserts, so SwiftUI never ran
-                    // it and the card just appeared and vanished. The reader is 144pt tall from the
-                    // screen's top, so a move by its own height takes the card fully off screen.
-                    // 2026-10-18 (owner): the system banner also GROWS a little as it drops, from
-                    // its top edge; a slide alone read flat. Same springs as before.
-                    .transition(.move(edge: .top).combined(with: .scale(scale: 0.9, anchor: .top)))
+            // Every card still on screen, the leaving one under the arriving one. The motion lives in
+            // the card (`InAppBannerCard.motion`), so mounting and unmounting are not animated here:
+            // a card is mounted at its starting pose and unmounted only once its exit has settled.
+            ZStack(alignment: .top) {
+                ForEach(InAppBannerCenter.shared.entries) { e in
+                    InAppBannerCard(item: e.item, leaving: e.leaving)
+                        .transition(.identity)
+                }
             }
         }
     }

@@ -268,6 +268,15 @@ final class ChatComposerView: UIView {
 
     private var holdStart: CGPoint?
     private var pillIsCapsule = false
+    /// The pill's rect in window coordinates at the moment of the last text send, and when. The list
+    /// takes it once (`takeTextSendSource`) to fly the new bubble out of the field.
+    private var lastTextSend: (rect: CGRect, at: CFTimeInterval)?
+    /// The last text send's source rect, if it was sent within the last second. One use only.
+    func takeTextSendSource() -> CGRect? {
+        defer { lastTextSend = nil }
+        guard let s = lastTextSend, CACurrentMediaTime() - s.at < 1.0 else { return nil }
+        return s.rect
+    }
     private var displayLink: CADisplayLink?
 
     // MARK: - Init
@@ -381,7 +390,14 @@ final class ChatComposerView: UIView {
         trashButton.addAction(UIAction { [weak self] _ in self?.actions.cancelRecording() }, for: .touchUpInside)
         sendButton.addAction(UIAction { [weak self] _ in
             guard let self else { return }
-            if self.shown.recordLocked { self.actions.sendRecording() } else { self.actions.send() }
+            if self.shown.recordLocked { self.actions.sendRecording() } else {
+                // Where the text left from, for the list's send transition — measured before the
+                // send clears the field and shrinks the pill. Not for an edit, which moves no bubble.
+                if !self.shown.editing, !self.textView.text.isEmpty {
+                    self.lastTextSend = (self.pill.convert(self.pill.bounds, to: nil), CACurrentMediaTime())
+                }
+                self.actions.send()
+            }
         }, for: .touchUpInside)
         // The field row: text and GIF. ⛔ THE MIC IS NOT INSIDE THE PILL'S GLASS — owner, 2026-08-25,
         // build 681: sliding up to lock, "the blur is following me". Interactive Liquid Glass tracks

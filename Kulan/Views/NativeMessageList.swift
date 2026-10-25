@@ -2262,7 +2262,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
-    private func scrollToOffset(_ y: CGFloat, animated: Bool) {
+    private func scrollToOffset(_ y: CGFloat, animated: Bool, sendCurve: Bool = false) {
+        stopSendGlideLink()   // any new move replaces a send glide in flight
         let target = clampOffset(y)
         guard abs(collectionView.contentOffset.y - target) > 0.5 else { return }
         lastStableOffset = target
@@ -2304,15 +2305,19 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // off, so an end callback that belongs to the glide it just replaced can be told apart.
             glideTarget = target
             glideStartedAt = CACurrentMediaTime()
-            startingGlide = true
-            collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: true)
-            startingGlide = false
             // AND THEN CHECK THAT IT ACTUALLY HAPPENED. Everything above is a chain of things that
             // each have to hold; this asks the only question that matters — am I there? — and puts
             // the reader there if not. Skipped the moment the reader takes over or a newer move
             // supersedes this one, so it can never fight a hand on the glass.
             glideSeq &+= 1
             let seq = glideSeq
+            if sendCurve {
+                startSendGlide(from: collectionView.contentOffset.y, to: target, seq: seq)
+            } else {
+                startingGlide = true
+                collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: true)
+                startingGlide = false
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 self?.checkGlideArrival(seq: seq, target: target, lastY: nil)
             }
@@ -2455,8 +2460,117 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
+    // MARK: - The send transition (the reference app's 13.1, owner 2026-10-25)
+    //
+    // Read from their `ChatMessageTransitionNode` at release-13.1. The shipped preset is `.bezier`:
+    // 0.3s, the bubble's bottom travels from the input field's bottom on a custom vertical curve,
+    // its leading edge from the field's leading edge on an ease-out horizontal curve, and the list
+    // scrolls on the SAME vertical curve and duration so the bubbles above rise with it. (Their
+    // spring "squash and pop" preset sits behind a debug flag that defaults to off; it is not what
+    // the app ships, so it is not copied.)
+    //
+    // What ours does not copy: theirs lifts the bubble into an overlay above the input panel and
+    // morphs the field's own background into it. Ours keeps the bubble in the list, so for its first
+    // few points it rises from behind the composer's glass rather than over it.
+
+    static let sendDuration: CFTimeInterval = 0.3
+    static let sendVerticalCurve = CAMediaTimingFunction(controlPoints: 0.19919472913616398, 0.010644531250000006,
+                                                          0.27920937042459737, 0.91025390625)
+    static let sendHorizontalCurve = CAMediaTimingFunction(controlPoints: 0.23, 1.0, 0.32, 1.0)
+
+    private var sendGlideLink: CADisplayLink?
+    private var sendGlide: (from: CGFloat, to: CGFloat, start: CFTimeInterval, seq: Int)?
+
+    /// The field the newest row's text left from, when that row is a text bubble this phone just
+    /// sent. Taken once from the composer, so a later land cannot fly the same send twice.
+    private func textSendSource(for id: String?) -> CGRect? {
+        guard let id, case .bubble(let b)? = rowModels[id]?.content, b.isMe else { return nil }
+        switch b.body {
+        case .text, .jumbomoji: break
+        default: return nil
+        }
+        return (composerBar as? ChatComposerView)?.takeTextSendSource()
+    }
+
+    /// The list scrolls to the newest on the send curve, and the new bubble rides two additive moves
+    /// from the field to its place. Both run on one clock, so the bubble's path is a straight blend of
+    /// the field and its slot: the scroll carries the cell up, and the additive offset closes the gap
+    /// from where the cell started to where the field was.
+    private func flyOwnSendIntoPlace(id: String, source: CGRect) {
+        pinUnreadLanding = false
+        pendingNewestJump = nil
+        guard let ip = dataSource.indexPath(for: id),
+              let attr = collectionView.layoutAttributesForItem(at: ip) else {
+            perform(.newest(animated: true)); return
+        }
+        // Where the cell sits on screen NOW, before the scroll moves it.
+        let before = collectionView.convert(attr.frame, to: nil)
+        scrollToOffset(maxContentOffsetY, animated: true, sendCurve: true)
+        collectionView.layoutIfNeeded()
+        guard let cell = collectionView.cellForItem(at: ip) as? MessageRowCell else { return }
+        let cellNow = collectionView.convert(cell.frame, to: nil)
+        // The bubble, at its final place, and where it was before the scroll began.
+        let bubble = cell.liftFrameInWindow
+        let bubbleBottomBefore = bubble.maxY + (before.minY - cellNow.minY)
+        // Theirs: bottoms aligned for the vertical, leading edges aligned for the horizontal.
+        let dy = source.maxY - bubbleBottomBefore
+        let dx = source.minX - bubble.minX
+        let now = CACurrentMediaTime()
+        func move(_ key: String, _ from: CGFloat, _ curve: CAMediaTimingFunction) {
+            guard abs(from) > 0.5 else { return }
+            let a = CABasicAnimation(keyPath: key)
+            a.fromValue = from
+            a.toValue = 0
+            a.isAdditive = true
+            a.duration = Self.sendDuration
+            a.beginTime = now
+            a.timingFunction = curve
+            a.fillMode = .backwards
+            cell.layer.add(a, forKey: "send.\(key)")
+        }
+        move("position.y", dy, Self.sendVerticalCurve)
+        move("position.x", dx, Self.sendHorizontalCurve)
+    }
+
+    /// The scroll half: the offset written every frame on the vertical curve, so the list and the
+    /// bubble share it exactly. A display link rather than a UIView animation because every frame has
+    /// to reach `scrollViewDidScroll` (the wallpaper slices, the header blur and the cell sweep all
+    /// read the offset there), as UIKit's own animated scroll does.
+    private func startSendGlide(from: CGFloat, to: CGFloat, seq: Int) {
+        sendGlide = (from, to, CACurrentMediaTime(), seq)
+        let link = CADisplayLink(target: self, selector: #selector(sendGlideTick(_:)))
+        if #available(iOS 15.0, *) {
+            let fps = Float(UIScreen.main.maximumFramesPerSecond)
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: fps, preferred: fps)
+        }
+        link.add(to: .main, forMode: .common)
+        sendGlideLink = link
+    }
+
+    @objc private func sendGlideTick(_ link: CADisplayLink) {
+        guard let g = sendGlide, g.seq == glideSeq, programmaticScrollAnimating else {
+            stopSendGlideLink(); return
+        }
+        let t = min(1, max(0, (link.targetTimestamp - g.start) / Self.sendDuration))
+        // Re-clamped every frame: the composer shrinking after a long send moves the bound mid-flight.
+        let to = clampOffset(g.to)
+        let y = g.from + (to - g.from) * CGFloat(Self.sendVerticalCurve.value(at: t))
+        collectionView.setContentOffset(CGPoint(x: 0, y: t >= 1 ? to : y), animated: false)
+        guard t >= 1 else { return }
+        stopSendGlideLink()
+        sendAnimating = false
+        scrollingAnimationDidComplete()
+    }
+
+    private func stopSendGlideLink() {
+        sendGlideLink?.invalidate()
+        sendGlideLink = nil
+        sendGlide = nil
+    }
+
     /// owner audit 2026-10-06 chat #6: clear the glide's gates without touching the reader's place.
     private func endGlideQuietly() {
+        stopSendGlideLink()
         scrollAnimationWatchdog?.invalidate()
         scrollAnimationWatchdog = nil
         programmaticScrollAnimating = false
@@ -3283,10 +3397,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             self.endLandingHold()
             self.revealNow()
             self.collectionView.layoutIfNeeded()
+            // ⛔ MY TEXT LEAVES THE FIELD AND FLIES INTO PLACE (owner 2026-10-25, the reference app's
+            // 13.1 send transition). Only for a text bubble of mine that this phone just sent from the
+            // field; everything else glides exactly as before.
+            if ownSendLanded, let source = self.textSendSource(for: ids.last) {
+                self.flyOwnSendIntoPlace(id: ids.last ?? "", source: source)
+            } else {
             // ⚠️ TEMPORARY: one of three places can animate a reader to the newest message, and
             // his 717 log shows one of them doing it 2.3s after every re-entry. Naming them is
             // the whole remaining question.
             self.perform(.newest(animated: true))
+            }
             // ⛔ THIS BACKSTOP NEEDS THE SEQUENCE NUMBER ITS SIBLING HAS. `scrollToOffset`'s 0.5s
             // arrival check refuses when a newer move has superseded it; this one only asked whether
             // `sendAnimating` was set — and it is set again by the NEXT send. Two sends 0.3s apart and
@@ -7067,4 +7188,42 @@ struct FailedMessageActions {
     var message: String?
     var resend: () -> Void
     var delete: () -> Void
+}
+
+extension CAMediaTimingFunction {
+    /// The curve's progress at time `t` (0...1): x(s) = t solved for s by Newton steps with a
+    /// bisection fallback, then y(s). For the send glide, which writes the scroll offset itself.
+    func value(at t: Double) -> Double {
+        guard t > 0 else { return 0 }
+        guard t < 1 else { return 1 }
+        var c1: [Float] = [0, 0], c2: [Float] = [0, 0]
+        getControlPoint(at: 1, values: &c1)
+        getControlPoint(at: 2, values: &c2)
+        let x1 = Double(c1[0]), y1 = Double(c1[1]), x2 = Double(c2[0]), y2 = Double(c2[1])
+        func bez(_ s: Double, _ a: Double, _ b: Double) -> Double {
+            let u = 1 - s
+            return 3 * u * u * s * a + 3 * u * s * s * b + s * s * s
+        }
+        func dBez(_ s: Double, _ a: Double, _ b: Double) -> Double {
+            let u = 1 - s
+            return 3 * u * u * a + 6 * u * s * (b - a) + 3 * s * s * (1 - b)
+        }
+        var s = t
+        for _ in 0..<8 {
+            let err = bez(s, x1, x2) - t
+            if abs(err) < 1e-6 { return bez(s, y1, y2) }
+            let d = dBez(s, x1, x2)
+            if abs(d) < 1e-6 { break }
+            s -= err / d
+        }
+        var lo = 0.0, hi = 1.0
+        s = t
+        for _ in 0..<30 {
+            let x = bez(s, x1, x2)
+            if abs(x - t) < 1e-6 { break }
+            if x < t { lo = s } else { hi = s }
+            s = (lo + hi) / 2
+        }
+        return bez(s, y1, y2)
+    }
 }
