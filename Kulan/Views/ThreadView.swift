@@ -2543,12 +2543,24 @@ struct ThreadView: View {
     private func startOwnGroupDoc() {
         // A guest may not read the group's document (owner 2026-10-21); a refused listener would
         // only count as a refusal in SessionRecovery.
-        guard ownGroupDoc.reg == nil, guest == nil, cachedConv?.isGroup ?? false else { return }
+        // ⛔ NOT KNOWN YET IS NOT "A 1:1" (owner 2026-10-25, a major bug: "the group became like a user
+        // profile and sending did not work"). A group the chat list had not loaded (just joined, opened
+        // from a link, below the list's window) opened with no conversation at all, so `isGroup` read
+        // false: no sender names, the person profile, sends down the 1:1 path. Its own doc is read now
+        // and fills the conversation in. A 1:1 chat's id is "uidA_uidB"; a group's never has "_".
+        let unknownGroup = cachedConv == nil && !cid.contains("_")
+        guard ownGroupDoc.reg == nil, guest == nil, (cachedConv?.isGroup ?? false) || unknownGroup else { return }
         ownGroupDoc.reg = FirestoreHub.db.collection("conversations").document(cid)
             .addSnapshotListener { snap, _ in
                 guard let snap, snap.exists, let data = snap.data() else { return }
                 let fresh = Conversation(id: snap.documentID, data: data)
-                guard let old = cachedConv, fresh.isGroup else { return }
+                guard fresh.isGroup else { return }
+                // Nothing yet, or the join page's stand-in (it has no `updatedAt`): the real one wins.
+                guard let old = cachedConv, old.updatedAtMillis > 0 else {
+                    cachedConv = fresh
+                    noteHistoryStart()
+                    return
+                }
                 let changed = fresh.memberSend != old.memberSend || fresh.slowModeSeconds != old.slowModeSeconds
                     || fresh.onlyAdminsSend != old.onlyAdminsSend || fresh.admins != old.admins
                     || fresh.users != old.users || fresh.restrictedFlags != old.restrictedFlags
@@ -2570,6 +2582,25 @@ struct ThreadView: View {
     private func openingConversation() -> Conversation? {
         if let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) { return c }
         if let c = FormerGroups.removed[cid] { return c }   // a group I was removed from earlier this session
+        // ⛔ JUST JOINED (owner 2026-10-25: "after Join the avatars disappear and the messages move
+        // left"). The member's chat replaces the guest one before the chat list has the group, so it
+        // opened with no conversation and drew as a 1:1. The join page's preview (its members, names
+        // and photos) stands in, with me in it, until the group's own doc lands (`startOwnGroupDoc`
+        // takes the real one over any stand-in: no `updatedAt`).
+        if guest == nil, !cid.contains("_"), let p = GroupDirectory.cachedPreview(name: nil, cid: cid) {
+            var users = p.members.map(\.uid)
+            if !users.contains(me) { users.append(me) }
+            var data: [String: Any] = [
+                "type": "group", "title": p.title, "e2ee": false, "users": users,
+                "admins": p.members.filter { $0.role != "member" }.map(\.uid),
+                "createdBy": p.members.first(where: { $0.role == "owner" })?.uid ?? "",
+                "names": Dictionary(p.members.map { ($0.uid, $0.name) }, uniquingKeysWith: { a, _ in a }),
+                "photos": Dictionary(p.members.compactMap { m in m.photoUrl.map { (m.uid, $0) } },
+                                     uniquingKeysWith: { a, _ in a }),
+            ]
+            if let photo = p.photoUrl { data["avatarUrl"] = photo }
+            return Conversation(id: cid, data: data)
+        }
         guard let g = guest?.preview else { return nil }
         var data: [String: Any] = ["type": "group", "title": g.title, "e2ee": false]
         if let p = g.photoUrl { data["avatarUrl"] = p }
