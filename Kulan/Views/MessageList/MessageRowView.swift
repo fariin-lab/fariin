@@ -762,7 +762,9 @@ final class MessageRowView: UIView {
         // skipped its read (a moving list, or the main apply path), the old number waited here and
         // a later, unrelated height change on this cell handed it out, sliding the whole screen.
         pendingGrowth = 0
-        if model?.id == m.id, let oldKeys, let newKeys, oldKeys != newKeys,
+        // owner 2026-10-25: any change to the pills, not only a new or gone emoji. A count or a face
+        // arriving can resize a pill and the bubble with it, and that used to snap to the new size.
+        if model?.id == m.id, let oldKeys, let newKeys, Self.reactionChips(model) != Self.reactionChips(m),
            !UIAccessibility.isReduceMotionEnabled, case .bubble(let ob)? = plan?.body {
             before = captureBefore(ob, oldKeys: oldKeys, newKeys: newKeys)
         }
@@ -1533,23 +1535,48 @@ final class MessageRowView: UIView {
         return row.reactions.map(\.emoji)
     }
 
+    private static func reactionChips(_ m: MessageRowModel?) -> [ReactionChip]? {
+        guard let m, case .bubble(let row) = m.content else { return nil }
+        return row.reactions
+    }
+
+    /// ⛔ WHERE A VIEW IS DRAWN, NOT WHERE IT WILL END. Owner, 2026-10-25: a group reaction grew,
+    /// shrank and grew again. A second pass can land while the first growth is still running (the
+    /// listener's echo, a face resolving, a second tap), and capturing the MODEL frame there meant
+    /// the new animation started from the previous animation's end: everything jumped there, then
+    /// eased back. The reference app starts every transition from the current presented value.
+    /// Bounds and position, never `frame`, so a pill's arrival scale or a swipe's translation is
+    /// not read as a size.
+    private static func drawnFrame(_ v: UIView) -> CGRect {
+        guard let keys = v.layer.animationKeys(), keys.contains(where: { $0.hasPrefix("reaction") }),
+              let p = v.layer.presentation() else { return v.frame }
+        let s = p.bounds.size, c = p.position
+        return CGRect(x: c.x - s.width * v.layer.anchorPoint.x, y: c.y - s.height * v.layer.anchorPoint.y,
+                      width: s.width, height: s.height)
+    }
+
     private func captureBefore(_ ob: BubblePlan, oldKeys: [String], newKeys: [String]) -> ReactionBefore {
         var frames: [ObjectIdentifier: CGRect] = [:]
         let chipSet = Set(reactionViews.map(ObjectIdentifier.init))
         for v in bubbleBox.subviews where !v.isHidden && !chipSet.contains(ObjectIdentifier(v)) {
-            frames[ObjectIdentifier(v)] = v.frame
+            frames[ObjectIdentifier(v)] = Self.drawnFrame(v)
         }
         var chipFrames: [String: CGRect] = [:]
         var leaving: [(UIView, CGRect)] = []
         for (k, v) in zip(chipKeys, reactionViews) where !k.isEmpty && !v.isHidden {
             if newKeys.contains(k) {
-                chipFrames[k] = v.frame
+                chipFrames[k] = Self.drawnFrame(v)
             } else if let snap = v.snapshotView(afterScreenUpdates: false) {
                 leaving.append((snap, v.frame))
             }
         }
-        return ReactionBefore(bubble: ob.bubble, rowHeight: plan?.height ?? 0,
-                              fillPath: fill.path, rimPath: rim.shape.path,
+        // The bubble and its outline as drawn: mid-growth, the in-flight shape (see `drawnFrame`).
+        let midFlight = bubbleBox.layer.animation(forKey: "reaction.bounds.size") != nil
+        let shownBubble = midFlight ? Self.drawnFrame(bubbleBox) : ob.bubble
+        let rimPath: CGPath? = rim.shape.animation(forKey: "reaction.path") != nil
+            ? (rim.shape.presentation()?.path ?? rim.shape.path) : rim.shape.path
+        return ReactionBefore(bubble: shownBubble, rowHeight: plan?.height ?? 0,
+                              fillPath: fill.shownPath, rimPath: rimPath,
                               frames: frames, chipFrames: chipFrames, leaving: leaving,
                               arriving: Set(newKeys).subtracting(oldKeys))
     }
@@ -1595,10 +1622,26 @@ final class MessageRowView: UIView {
         // bottom, the list has moved this whole row by `grow`, so the date pill, divider and sender
         // name above the box jumped at once while the box was still easing from its old top. They
         // ride the same curve from where they were.
-        if growsFromBottom, abs(grow) > 0.5 {
-            for v in subviews where v !== bubbleBox && !v.isHidden && v.frame.maxY <= nb.bubble.minY + 1 {
-                add(v.layer, "transform.translation.y", grow)
+        //
+        // ⛔ AND THE NAME INSIDE THE BUBBLE'S TOP. Owner, 2026-10-25, a frozen frame of a group
+        // reaction: the sender's name already above and outside the bubble, an empty gap where it had
+        // been. The name, mark, role tag and forwarded line live on the ROW, not in `bubbleBox`
+        // (`liftOverlays`), and they sit inside the bubble's top, so the old "above the box" test
+        // never picked them: they took their final place at once while the box eased. They move with
+        // the bubble's TOP edge, the sender's photo with its BOTTOM edge, all on the box's own curve,
+        // the way the reference app moves its name node inside the bubble's one transition.
+        let topDY = oldRect.minY - nb.bubble.minY, bottomDY = oldRect.maxY - nb.bubble.maxY
+        let riders = liftOverlays
+        for v in subviews where v !== bubbleBox && !v.isHidden {
+            let dy: CGFloat
+            if riders.contains(where: { $0 === v }) || v.frame.maxY <= nb.bubble.minY + 1 {
+                dy = topDY
+            } else if v === avatarView {
+                dy = bottomDY
+            } else {
+                continue
             }
+            if abs(dy) > 0.5 { add(v.layer, "transform.translation.y", dy) }
         }
         // Everything else in the bubble (text, time, ticks, media) glides from where it was.
         for v in bubbleBox.subviews where !v.isHidden {

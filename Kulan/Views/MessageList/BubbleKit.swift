@@ -595,6 +595,16 @@ final class BubbleFillView: UIView {
 
     private(set) var path = UIBezierPath()
 
+    /// The outline as it is drawn right now: mid-way through a reaction growth that is the shape's
+    /// in-flight path, not the final one `path` holds. A second change landing during the growth
+    /// starts from here, so the bubble carries on from where it is instead of jumping back to the
+    /// old final shape first (owner 2026-10-25, grow, shrink and grow again on a group reaction).
+    var shownPath: UIBezierPath {
+        guard shape.animation(forKey: "reactionGrow.path") != nil,
+              let p = shape.presentation()?.path else { return path }
+        return UIBezierPath(cgPath: p)
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
@@ -668,13 +678,23 @@ final class BubbleFillView: UIView {
                 return bv
             }()
             v.isHidden = false
-            // A growth still being followed belongs to the previous geometry (a reused row, or a
-            // second reaction): stop it before writing this one, or it would write its old final
-            // frame over this one when it ends. `animateGeometry` starts a new one when it animates.
-            BlurFollower.cancel(v)
-            v.frame = CGRect(origin: .zero, size: b.size)
-            blurMask.frame = CGRect(origin: .zero, size: b.size)
-            blurMask.path = p.cgPath
+            // ⛔ A REPEAT PASS WITH THE SAME GEOMETRY LEAVES A RUNNING GROWTH ALONE. Owner,
+            // 2026-10-25, a frozen frame of a group reaction: a bubble of the old height with the
+            // text in it, and a bigger one behind it reaching further down. The row is configured
+            // again while its growth runs (the listener's echo of my own reaction, a reactor's face
+            // resolving), and this used to cancel the follower and put the blur at its final shape
+            // at once while the rim, the text and the box were still small. When the follower is
+            // already heading to exactly this frame and path, it writes them itself when it ends.
+            let finalFrame = CGRect(origin: .zero, size: b.size)
+            if !BlurFollower.isFollowing(v, to: finalFrame, path: p.cgPath) {
+                // A growth still being followed belongs to the previous geometry (a reused row, or a
+                // second reaction): stop it before writing this one, or it would write its old final
+                // frame over this one when it ends. `animateGeometry` starts a new one when it animates.
+                BlurFollower.cancel(v)
+                v.frame = finalFrame
+                blurMask.frame = finalFrame
+                blurMask.path = p.cgPath
+            }
         case .wallpaperSlice(let state):
             // The fill goes to CLEAR, not left underneath: the slice is opaque and would cover it,
             // but a fill that is still there is a fill somebody will one day see at an edge.
@@ -746,6 +766,12 @@ private final class BlurFollower: NSObject {
     private static var live: [ObjectIdentifier: BlurFollower] = [:]
 
     static func cancel(_ blur: UIView) { live[ObjectIdentifier(blur)]?.stop() }
+
+    /// True while a follower is moving this blur towards exactly `frame` and `path`.
+    static func isFollowing(_ blur: UIView, to frame: CGRect, path: CGPath) -> Bool {
+        guard let f = live[ObjectIdentifier(blur)], f.link != nil else { return false }
+        return f.finalFrame == frame && f.finalPath == path
+    }
 
     static func start(shape: CAShapeLayer, blur: UIView, mask: CAShapeLayer, duration: CFTimeInterval) {
         let key = ObjectIdentifier(blur)

@@ -382,7 +382,8 @@ final class MessageRowCell: UICollectionViewCell {
         model = nil
         // Owner audit 2026-10-06 chat #78: the slide the list adds to a reacted row's neighbours
         // rides the cell's own layer; a recycled cell must not carry it into the next row.
-        layer.removeAnimation(forKey: "reaction.neighbour")
+        // owner 2026-10-25: one key per slide now (they add up), so every one of them goes.
+        for k in layer.animationKeys() ?? [] where k.hasPrefix("reaction.neighbour") { layer.removeAnimation(forKey: k) }
         rowView.prepareForReuse()
     }
 

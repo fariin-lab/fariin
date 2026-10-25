@@ -2892,12 +2892,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         for cell in collectionView.visibleCells where cell !== source {
             let isAbove = cell.frame.minY < source.frame.minY
             guard up ? isAbove : !isAbove else { continue }
+            // ⛔ ADDITIVE, ONE KEY PER SLIDE. Owner, 2026-10-25: a second change landing while a
+            // slide ran replaced it under the one shared key, so the neighbours jumped to the new
+            // slide's start. Additive slides add up instead: the one already running finishes its
+            // own distance and the new one adds its own, from wherever the row is drawn now.
             let a = CABasicAnimation(keyPath: "transform.translation.y")
             a.fromValue = up ? g : -g
             a.toValue = 0
+            a.isAdditive = true
             a.duration = MessageRowView.reactionDuration
             a.timingFunction = MessageRowView.reactionCurve
-            cell.layer.add(a, forKey: "reaction.neighbour")
+            cell.layer.add(a, forKey: "reaction.neighbour.\(UUID().uuidString)")
         }
     }
 
