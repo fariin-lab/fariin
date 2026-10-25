@@ -74,9 +74,12 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: RINGING VIBRATION.
-            Calls: the phone now buzzes while a Fariin call is ringing (1:1 and group), even on silent, and stops when you answer, decline or the caller hangs up.
-            PLEASE TEST: put the phone on silent and have someone call you on Fariin; it should buzz until you answer or decline. Tell us if it buzzes twice as fast as it should.
+            THIS BUILD: GROUPS ARE END-TO-END ENCRYPTED.
+            Groups: new groups (public and private) are now end-to-end encrypted, like one to one chats. Only the people in the group can read the messages, not even Fariin. People who join later can't read what was said before they joined. Groups are limited to 100 people. Groups made before this build stay as they were until they are switched over.
+            Public groups: there is no preview of the messages any more. The join page shows the name, photo and number of people.
+            Group calls are NOT end-to-end encrypted yet (protected on the way only).
+            Also: leaving a group has an Undo bar, and the group disappears at once.
+            PLEASE TEST: make a new group with a friend and send messages, photos and a voice note both ways; add a third person and check they only see messages from after they joined; open a public group link (you should see the name and a Join button, no messages); open an OLD group and check it still works.
 
             EARLIER: CALL SOUND FIX, ANOTHER-CALL BLOCK, CONNECTION LOGGING.
             Calls: after another app's call (WhatsApp, a phone call) took the microphone, every later Fariin call could be silent in both directions until you restarted the app. Fixed: each call starts fresh, and a call that sends no sound in its first 5 seconds rebuilds its audio by itself.
