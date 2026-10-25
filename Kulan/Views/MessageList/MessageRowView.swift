@@ -659,7 +659,7 @@ final class MessageRowView: UIView {
             check("box", bubbleBox, b.bubble)
             check("name", senderLabel, b.senderName)
             check("role", roleChipView, b.roleChip)
-            check("face", avatarView, b.avatar)
+            if avatarLift < 0.5 { check("face", avatarView, b.avatar) }   // a pinned photo is lifted on purpose
             if let c = roleChipView, !c.isHidden, b.roleChip == nil { parts.append("role=unplanned") }
         }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
@@ -1343,6 +1343,23 @@ final class MessageRowView: UIView {
         v.apply(inner)
     }
 
+    /// How far the sender's photo is lifted above its planned place to stay in view (see
+    /// `MessageRowCell.pinAvatar`); 0 = where the plan put it.
+    private(set) var avatarLift: CGFloat = 0
+
+    /// `visibleBottom`: the list's lowest visible line, in this view's coordinates; nil = the plan's
+    /// place. The photo never rises above the bubble's top nor sinks below its planned spot. Moved by
+    /// its center, so a reply-swipe transform on it is left alone.
+    func pinAvatar(visibleBottom: CGFloat?) {
+        guard let v = avatarView, !v.isHidden, let p = plan, case .bubble(let b) = p.body,
+              let a = b.avatar else { avatarLift = 0; return }
+        var top = a.minY
+        if let y = visibleBottom { top = min(a.minY, max(b.bubble.minY, y - a.height)) }
+        avatarLift = a.minY - top
+        let mid = top + a.height / 2
+        if abs(v.center.y - mid) > 0.25 { v.center.y = mid }
+    }
+
     private func applySender(_ b: BubblePlan, model m: MessageRowModel) {
         if let rect = b.avatar, case .bubble(let row) = m.content, let s = row.sender {
             let v = avatarView ?? {
@@ -1350,6 +1367,7 @@ final class MessageRowView: UIView {
             }()
             v.isHidden = false
             v.frame = rect
+            avatarLift = 0   // back at the planned place; the cell re-pins it (pinAvatar)
             v.configure(name: s.name, photoUrl: s.avatarUrl)
         } else {
             avatarView?.isHidden = true
@@ -1948,7 +1966,8 @@ final class MessageRowView: UIView {
 
     func hitsAvatar(_ point: CGPoint) -> Bool {
         guard let p = plan, case .bubble(let b) = p.body, let a = b.avatar else { return false }
-        return a.contains(point)
+        // Where the photo is drawn now, which is higher than planned while it is pinned in view.
+        return a.offsetBy(dx: 0, dy: -avatarLift).contains(point)
     }
 
     func hitsSenderName(_ point: CGPoint) -> Bool {

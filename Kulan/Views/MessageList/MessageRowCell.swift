@@ -115,6 +115,18 @@ final class MessageRowCell: UICollectionViewCell {
     /// plays only while its row is on screen.
     func setOnScreen(_ on: Bool) { rowView.setMediaOnScreen(on) }
 
+    /// ⛔ THE SENDER'S PHOTO STAYS IN VIEW BESIDE A TALL BUBBLE (owner 2026-10-26, from the reference
+    /// app): a group message taller than the screen keeps its sender's photo at the bottom of the
+    /// visible list (above the composer) while the bubble's bottom is below it, and the photo rides up
+    /// with the bubble once the bottom comes into view. Read from the list itself, so a configure or
+    /// a scroll tick (NativeMessageList.scrollViewDidScroll) both land it in the right place.
+    func pinAvatar() {
+        guard let cv = superview as? UICollectionView else { rowView.pinAvatar(visibleBottom: nil); return }
+        let edge = cv.contentOffset.y + cv.bounds.height - cv.adjustedContentInset.bottom
+        let y = rowView.convert(CGPoint(x: 0, y: edge), from: cv).y
+        rowView.pinAvatar(visibleBottom: y)
+    }
+
     /// A loaded sticker's bytes (Save to Favorites of one somebody else made).
     var stickerBytes: Data? { rowView.stickerBytes }
 
@@ -199,6 +211,7 @@ final class MessageRowCell: UICollectionViewCell {
         // row: a recycled one would slide from the previous row's geometry, which is motion out of
         // nowhere mid-scroll. The circle's own slide is a layer animation and is safe either way.
         let sameRow = previous?.id == m.id
+        defer { pinAvatar() }
         guard entering || leaving else {
             rowView.apply(m, plan: plan, cid: cid)
             return
@@ -237,6 +250,7 @@ final class MessageRowCell: UICollectionViewCell {
         } else {
             rowView.apply(m, plan: plan, cid: cid)
         }
+        pinAvatar()   // apply put the photo back at its planned place
         rowView.animateDecorations(fromSelected: old.selected, fromHighlighted: old.highlighted)
     }
 

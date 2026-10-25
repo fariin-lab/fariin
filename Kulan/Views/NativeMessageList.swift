@@ -5896,6 +5896,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell,
                         forItemAt indexPath: IndexPath) {
         (cell as? MessageRowCell)?.setOnScreen(true)
+        (cell as? MessageRowCell)?.pinAvatar()   // configured before it was in the list; place it now
     }
 
     // The swiped cell scrolled off and is being RECYCLED for another row: kill the swipe immediately â€”
@@ -6369,6 +6370,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // still move the bubbles across the picture.
         WallpaperBlurSliceView.repositionAll()
         BubbleFillView.repositionGradients()   // a gradient chat colour is cut from the screen, like the slices
+        // A tall group bubble keeps its sender's photo in view (owner 2026-10-26, MessageRowCell.pinAvatar).
+        // Only group rows have a photo; for the rest it returns at once.
+        for case let cell as MessageRowCell in collectionView.visibleCells { cell.pinAvatar() }
         guard !ignoringScrollEvents else { return }   // ditto: a stop is not a scroll
         // A finger dragging the keyboard down moves the guide, and the bar with it, on this event.
         followKeyboardUnderFinger()
