@@ -384,7 +384,8 @@ struct LoginCodeView: View {
             .authActionPill(enabled: enabled || busy)
         }
         .buttonStyle(.plain)
-        .disabled(busy || !enabled)
+        .disabled(!enabled && !busy)
+        .allowsHitTesting(!busy)   // busy is not disabled: disabled draws faded (owner 2026-10-26)
     }
 
     private func labelled<C: View>(_ label: String, @ViewBuilder content: () -> C) -> some View {

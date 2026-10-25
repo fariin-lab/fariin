@@ -572,7 +572,8 @@ struct PasswordResetCodeView: View {
             .authActionPill(enabled: enabled || working)
         }
         .buttonStyle(.plain)
-        .disabled(working || !enabled)
+        .disabled(!enabled && !working)
+        .allowsHitTesting(!working)   // busy is not disabled: disabled draws faded (owner 2026-10-26)
     }
 
     /// The sign-up page's password box: lock, UIKit field, eye.

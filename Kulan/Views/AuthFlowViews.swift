@@ -951,7 +951,8 @@ struct EmailAuthView: View {
                         .authActionPill(enabled: primaryEnabled || busy)
                     }
                     .buttonStyle(.plain)
-                    .disabled(busy || !primaryEnabled)
+                    .disabled(!primaryEnabled && !busy)
+                    .allowsHitTesting(!busy)   // busy is not disabled: disabled draws faded (owner 2026-10-26)
                     .animation(.easeInOut(duration: 0.15), value: primaryEnabled)
                     .padding(.top, 4)
                     .id("primaryButton")

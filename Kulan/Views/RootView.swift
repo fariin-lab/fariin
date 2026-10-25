@@ -1238,7 +1238,8 @@ struct OnboardingView: View {
                         .authActionPill(enabled: canContinue || saving)
                     }
                     .buttonStyle(.plain)
-                    .disabled(!canContinue)
+                    .disabled(!canContinue && !saving)
+                    .allowsHitTesting(!saving)   // busy is not disabled: disabled draws faded (owner 2026-10-26)
                     .animation(.easeOut(duration: 0.15), value: canContinue)
 
                     // App Store Guideline 1.2: users must agree to the terms (which
