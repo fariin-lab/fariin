@@ -1852,7 +1852,11 @@ struct StoryViewer: View {
                     // ⛔ THE LOCKED LINE RIDES IN THE CARD (owner 2026-10-16: it stayed still while
                     // the cube turned). Same rule `replyLockReason` had for the overlay: somebody
                     // else's story with no reply bar — a stranger, replies off, or Fariin.
-                    let canMessage = (deliveredToMe || StoryContact.isFriend(s.authorUid)) && s.allowsReplies
+                    // A group story takes replies only from the people it reached, its members (audit
+                    // 2026-10-25): an outsider opening a public group's story by link was offered a
+                    // field whose reply the rules refuse, friend of the poster or not.
+                    let canMessage = (deliveredToMe || (s.groupId == nil && StoryContact.isFriend(s.authorUid)))
+                        && s.allowsReplies
                     let locked: String? = g.isMine ? nil
                         : (OfficialChannel.isOfficial(g.authorUid) || !canMessage) ? Self.replyLocked : nil
                     // A repost cannot be reposted again (owner, 2026-10-12: "Ali reposts Abdi, Ahmed cannot repost that, but can repost Ali's own story"). Share and Copy Link are unchanged.

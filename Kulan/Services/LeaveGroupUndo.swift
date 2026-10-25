@@ -30,6 +30,40 @@ final class LeaveGroupUndo {
             forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.commit() }
         }
+        resumeLeftover()
+    }
+
+    // ⛔ A LEAVE IS NEVER LOST (audit 2026-10-25): the waiting leave is written down on the phone, so a
+    // crash or a force-quit inside the 5 s runs it at the next launch, for the same account.
+    private static let savedKey = "leaveGroupPending.v1"
+
+    private func save(_ p: (cid: String, title: String)?) {
+        if let p, let uid = AuthService.shared.uid {
+            UserDefaults.standard.set(["uid": uid, "cid": p.cid, "title": p.title], forKey: Self.savedKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.savedKey)
+        }
+    }
+
+    private func resumeLeftover() {
+        guard let d = UserDefaults.standard.dictionary(forKey: Self.savedKey) as? [String: String],
+              let uid = d["uid"], let cid = d["cid"] else { return }
+        let title = d["title"] ?? "the group"
+        hiddenIds.insert(cid)
+        Task { @MainActor [weak self] in
+            // Signed in as that account first (up to 30 s); another account never runs it.
+            for _ in 0..<60 where AuthService.shared.uid == nil {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            guard let self else { return }
+            guard AuthService.shared.uid == uid else {
+                self.hiddenIds.remove(cid)
+                if AuthService.shared.uid != nil { self.save(nil) }
+                return
+            }
+            self.pending = (cid, title)
+            self.commit()
+        }
     }
 
     /// Hide the group now; leave for real in 5 s unless `undo()` comes first. A second leave while one
@@ -37,6 +71,7 @@ final class LeaveGroupUndo {
     func start(cid: String, title: String) {
         if pending != nil { commit() }
         pending = (cid, title)
+        save(pending)
         hiddenIds.insert(cid)
         barTitle = title
         timer?.cancel()
@@ -52,6 +87,7 @@ final class LeaveGroupUndo {
         timer?.cancel(); timer = nil
         if let p = pending { hiddenIds.remove(p.cid) }
         pending = nil
+        save(nil)
         barTitle = nil
     }
 
@@ -61,16 +97,39 @@ final class LeaveGroupUndo {
         guard let p = pending else { return }
         pending = nil
         barTitle = nil
+        // Time to finish when this runs because the app is going away (audit 2026-10-25).
+        let bg = BackgroundTime(name: "group-leave")
         Task { @MainActor [weak self] in
+            defer { bg.end() }
             do {
                 try await ChatService.leaveGroup(cid: p.cid)
+                self?.save(nil)
                 // Leave it hidden a moment longer: the list drops it when the server's copy arrives.
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 self?.hiddenIds.remove(p.cid)
             } catch {
+                // Shown and given back; not retried at every launch.
+                self?.save(nil)
                 self?.hiddenIds.remove(p.cid)
                 self?.failure = "Couldn't leave \"\(p.title)\". \(error.localizedDescription)"
             }
         }
+    }
+}
+
+/// One stretch of background time, ended once whichever comes first: the work or the system's limit.
+@MainActor private final class BackgroundTime {
+    private var id = UIBackgroundTaskIdentifier.invalid
+
+    init(name: String) {
+        id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+            MainActor.assumeIsolated { self?.end() }
+        }
+    }
+
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
     }
 }
