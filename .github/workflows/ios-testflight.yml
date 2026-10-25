@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: CALL SOUND FIX, ANOTHER-CALL BLOCK, CONNECTION LOGGING.
+            THIS BUILD: RINGING VIBRATION.
+            Calls: the phone now buzzes while a Fariin call is ringing (1:1 and group), even on silent, and stops when you answer, decline or the caller hangs up.
+            PLEASE TEST: put the phone on silent and have someone call you on Fariin; it should buzz until you answer or decline. Tell us if it buzzes twice as fast as it should.
+
+            EARLIER: CALL SOUND FIX, ANOTHER-CALL BLOCK, CONNECTION LOGGING.
             Calls: after another app's call (WhatsApp, a phone call) took the microphone, every later Fariin call could be silent in both directions until you restarted the app. Fixed: each call starts fresh, and a call that sends no sound in its first 5 seconds rebuilds its audio by itself.
             Calls: you can no longer start or answer a Fariin call while a call in another app is live; it says "You're in Another Call. End your other call first."
             Behind the scenes: extra connection logging on two accounts, and a count of "app got stuck" episodes from every phone, to find why the app sometimes stops sending until restarted.

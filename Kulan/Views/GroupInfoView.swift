@@ -1650,7 +1650,12 @@ private struct GroupInfoExits: ViewModifier {
             // owner 2026-10-18: Leave, Report and Delete ask in Apple's centred alert, not a sheet.
             .alert("Leave Group?", isPresented: $confirmLeave) {
                 Button("Cancel", role: .cancel) {}
-                Button("Leave", role: .destructive) { run { try await ChatService.leaveGroup(cid: cid) } }
+                // Out of the list and the screen at once, with an Undo bar; the real leave runs after
+                // 5 s (owner 2026-10-25). See `LeaveGroupUndo`.
+                Button("Leave", role: .destructive) {
+                    LeaveGroupUndo.shared.start(cid: cid, title: conv?.displayName(me) ?? "the group")
+                    onGone()
+                }
             } message: { Text(leaveMessage) }
             .alert("End This Group?", isPresented: $confirmEnd) {
                 Button("Cancel", role: .cancel) {}
