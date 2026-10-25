@@ -198,11 +198,13 @@ struct ContactInfoView: View {
     @State private var noteExpanded = false
     @State private var noteWidth: CGFloat = 0   // real rendered width; drives the More test
     @State private var showAddGroup = false
-    /// Groups in Common shows at most `groupsShown` here; "See All" pushes the whole list on its own
-    /// page, so the profile never grows (owner 2026-10-24: 40 shared groups meant scrolling past all
-    /// of them to reach Block and Report, and coming back must not leave it long).
+    /// Groups in Common shows at most `groupsShown` rows here; "See All" opens the whole list in a
+    /// sheet, the way the group page's Members See All does, so the profile never grows (owner
+    /// 2026-10-24: 40 shared groups meant scrolling past all of them to reach Block and Report).
     @State private var showAllGroups = false
-    private let groupsShown = 5
+    private let groupsShown = 6
+    /// A group picked in the sheet, opened once the sheet has gone.
+    @State private var pendingGroup: Conversation?
     @State private var openGroup: Conversation?
     @State private var showProfilePhoto = false   // tap the hero avatar → in-place photo morph
     /// ⛔ THE CHROME'S OWN FLAG, AND IT IS NOT `showProfilePhoto`. That one has to stay true until the
@@ -551,8 +553,11 @@ struct ContactInfoView: View {
             mediaCard.padding(.top, 8)
         }
         if !isSelf && Flags.groupsEnabled {
-            VStack(alignment: .leading, spacing: 10) {
-                sectionHeader(groupsHeaderText)
+            // ⛔ THE GROUP PAGE'S MEMBERS SECTION, PIECE FOR PIECE (owner 2026-10-25: "use exactly the
+            // one members card is using"): grey "N Groups in Common >" header that opens the list, the
+            // card tight under it, 36pt rows, See All in a circle.
+            VStack(alignment: .leading, spacing: 1) {
+                groupsHeader
                 groupsInCommonCard
             }
             .padding(.top, 12)
@@ -1206,8 +1211,13 @@ struct ContactInfoView: View {
                 let me = AuthService.shared.uid ?? ""
                 ThreadView(cid: g.id, title: g.displayName(me), photoUrl: g.displayPhoto(me))
             }
-            .navigationDestination(isPresented: $showAllGroups) {
-                GroupsInCommonPage(groups: sharedGroups)
+            .sheet(isPresented: $showAllGroups, onDismiss: {
+                if let g = pendingGroup { pendingGroup = nil; openGroup = g }
+            }) {
+                GroupsInCommonSheet(groups: sharedGroups) { g in
+                    pendingGroup = g
+                    showAllGroups = false
+                }
             }
             .navigationDestination(isPresented: $openChat) {
                 ThreadView(cid: cid, title: name, photoUrl: photoUrl)
@@ -1598,63 +1608,59 @@ struct ContactInfoView: View {
             .sorted { $0.displayName(me).lowercased() < $1.displayName(me).lowercased() }
     }
 
+    /// The group page's "N Members >" header: headline in the secondary grey, a chevron, and the
+    /// whole line opens the full list. With no groups there is no list, so no chevron and no tap.
+    private var groupsHeader: some View {
+        let hasGroups = !sharedGroups.isEmpty
+        return Button { showAllGroups = true } label: {
+            HStack(spacing: 4) {
+                Text(groupsHeaderText).font(.headline)
+                if hasGroups { Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)) }
+                Spacer(minLength: 8)
+            }
+            .foregroundStyle(.secondary)
+            .frame(minHeight: 44)
+            .padding(.leading, 16)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!hasGroups)
+        .accessibilityLabel(hasGroups ? "\(groupsHeaderText), See All" : groupsHeaderText)
+    }
+
     private var groupsInCommonCard: some View {
         let me = AuthService.shared.uid ?? ""
         let groups = sharedGroups
+        // The members card's rule: up to six rows; past six, the first five and See All.
+        let hasMore = groups.count > groupsShown
+        let shown = hasMore ? Array(groups.prefix(groupsShown - 1)) : groups
         return VStack(alignment: .leading, spacing: 0) {
-            // Bigger "+" in a grey circle (matches the group-avatar rows below), not a tiny glyph.
-            Button { showAddGroup = true } label: {
-                // ⛔ THE BLOCK ROW'S COLUMNS (owner 2026-10-18): the circle centred on the 26 pt icon column
-                // the rows below use (`ProfileInfoRow`), the words starting where theirs do (16 + 26 + 14),
-                // and the same ~58 pt row height.
-                HStack(spacing: 14) {
-                    // 2026-10-18 (owner): GLASS, not a fixed grey. Every profile tints its page from the
-                    // photo, and one grey circle sat on all of them; glass takes each page's colour.
-                    Image(systemName: "plus")
-                        .font(.system(size: 16, weight: .medium)).foregroundStyle(.primary)
-                        .frame(width: 30, height: 30)
-                        .liquidGlass(Circle(), interactive: false)
-                        .frame(width: 26)
-                    Text("Add to a Group").foregroundStyle(.primary)
-                    Spacer()
-                }
-                .padding(.horizontal, 16).padding(.vertical, 14)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            ForEach(Array(groups.prefix(groupsShown))) { g in
-                rowDivider
+            MemberCircleRow(icon: "plus", title: "Add to a Group") { showAddGroup = true }
+            ForEach(shown) { g in
+                groupDivider
                 Button { openGroup = g } label: {
+                    // A member row's shape: 36pt photo, the name, and the count where the rank goes.
                     HStack(spacing: 12) {
-                        AvatarView(name: g.displayName(me), photoUrl: g.displayPhoto(me), size: 34)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(g.displayName(me)).foregroundStyle(.primary)
-                            Text(g.memberCountLabel).font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+                        AvatarView(name: g.displayName(me), photoUrl: g.displayPhoto(me), size: 36)
+                        Text(g.displayName(me)).font(.body).foregroundStyle(.primary).lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(g.memberCountLabel).font(.subheadline).foregroundStyle(MemberCircleRow.accessoryGrey)
                     }
-                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .padding(.horizontal, 16).padding(.vertical, 7)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
-            if groups.count > groupsShown {
-                rowDivider
-                Button { showAllGroups = true } label: {
-                    HStack(spacing: 14) {
-                        Text("See All \(groups.count) Groups").foregroundStyle(.primary)
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
-                    }
-                    .padding(.horizontal, 16).padding(.vertical, 14)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+            if hasMore {
+                groupDivider
+                MemberCircleRow(icon: "chevron.down", title: "See All") { showAllGroups = true }
             }
         }
         .profileSurface(plain: cardColor)
     }
+
+    /// The members card's separator, starting at the text: 16 in + the 36pt photo + 12.
+    private var groupDivider: some View { Divider().padding(.leading, 64) }
 
     private func setMuted(_ until: Double) {
         muted = true; mutedUntil = until
@@ -2809,29 +2815,69 @@ private struct SlideUpPage<Content: View>: View {
     }
 }
 
-/// Every group I share with this person, on its own page (owner 2026-10-24): the profile shows five
-/// and "See All", and coming back here leaves the profile as short as it was.
-struct GroupsInCommonPage: View {
+/// Every group I share with this person (owner 2026-10-25: "use exactly the one the members card is
+/// using"). The group page's Members sheet in its shape: a sheet rising from the bottom, X at the
+/// leading edge, the title inline, the rows under A–Z headers with the letter index down the side,
+/// search at the bottom. A row closes the sheet and the profile opens that group.
+struct GroupsInCommonSheet: View {
     let groups: [Conversation]
+    let onOpen: (Conversation) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var searching = false
+    private var me: String { AuthService.shared.uid ?? "" }
+
+    private func letter(_ name: String) -> String {
+        guard let c = name.folding(options: .diacriticInsensitive, locale: .current).first,
+              c.isLetter, c.isASCII else { return "#" }
+        return String(c).uppercased()
+    }
+    private var sections: [(String, [Conversation])] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        var out: [(String, [Conversation])] = []
+        for g in groups where q.isEmpty || g.displayName(me).lowercased().contains(q) {
+            let l = letter(g.displayName(me))
+            if let i = out.firstIndex(where: { $0.0 == l }) { out[i].1.append(g) } else { out.append((l, [g])) }
+        }
+        return out.sorted { a, b in a.0 == "#" ? false : (b.0 == "#" ? true : a.0 < b.0) }
+    }
 
     var body: some View {
-        let me = AuthService.shared.uid ?? ""
-        List(groups) { g in
-            NavigationLink {
-                ThreadView(cid: g.id, title: g.displayName(me), photoUrl: g.displayPhoto(me))
-            } label: {
-                HStack(spacing: 12) {
-                    AvatarView(name: g.displayName(me), photoUrl: g.displayPhoto(me), size: 40)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(g.displayName(me)).foregroundStyle(.primary)
-                        Text(g.memberCountLabel).font(.caption).foregroundStyle(.secondary)
+        NavigationStack {
+            List {
+                ForEach(sections, id: \.0) { sec in
+                    Section {
+                        ForEach(sec.1) { g in
+                            // The members sheet's row: 40pt photo, the name, the count where the rank goes.
+                            Button { onOpen(g) } label: {
+                                HStack(spacing: 12) {
+                                    AvatarView(name: g.displayName(me), photoUrl: g.displayPhoto(me), size: 40)
+                                    Text(g.displayName(me)).foregroundStyle(.primary).lineLimit(1)
+                                    Spacer(minLength: 8)
+                                    Text(g.memberCountLabel).font(.subheadline).foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 16).padding(.vertical, 9)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .listRowInsets(EdgeInsets())
+                        }
+                    } header: {
+                        Text(sec.0)
                     }
+                    .sectionIndexLabel(Text(sec.0))
                 }
-                .padding(.vertical, 2)
+            }
+            .listStyle(.insetGrouped)
+            .listSectionIndexVisibility(.visible)
+            .searchable(text: $query, isPresented: $searching, prompt: "Search")
+            .navigationTitle("Groups in Common")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
+                }
             }
         }
-        .listStyle(.insetGrouped)
-        .navigationTitle("\(groups.count) Groups in Common")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }

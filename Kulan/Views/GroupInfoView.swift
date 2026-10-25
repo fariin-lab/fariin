@@ -1367,15 +1367,11 @@ private struct MemberLabelPill: View {
 }
 
 /// Add Members and See All: a glyph in a pale circle the size of a member's photo, then the title.
-private struct MemberCircleRow: View {
+struct MemberCircleRow: View {
     let icon: String
     let title: String
     let onTap: () -> Void
 
-    /// The reference's circle fill (its gray02 by day, gray65 at night).
-    static let circleFill = Color(uiColor: UIColor { t in
-        t.userInterfaceStyle == .dark ? UIColor(white: 0x4A / 255.0, alpha: 1) : UIColor(white: 0xF6 / 255.0, alpha: 1)
-    })
     /// The reference's trailing-label grey (gray45 by day, gray25 at night).
     static let accessoryGrey = Color(uiColor: UIColor { t in
         t.userInterfaceStyle == .dark ? UIColor(white: 0xB9 / 255.0, alpha: 1) : UIColor(white: 0x84 / 255.0, alpha: 1)
@@ -1395,13 +1391,15 @@ private struct MemberCircleRow: View {
     }
 
     /// A bold glyph in the reference's 20pt box, centred in the 36pt circle.
+    /// GLASS, not the reference's flat grey (owner 2026-10-25: "+ button make it liquid glass"). It
+    /// also takes the colour of a contact's photo-tinted profile, where this row is used too.
     private var glyph: some View {
         Image(systemName: icon)
             .font(.system(size: 16, weight: .bold))
             .foregroundStyle(.primary)
             .frame(width: 20, height: 20)
             .frame(width: 36, height: 36)
-            .background(Circle().fill(Self.circleFill))
+            .liquidGlass(Circle(), interactive: false)
     }
 }
 
