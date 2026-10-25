@@ -72,8 +72,16 @@ final class ConversationsRepository {
             GroupLinkDoor.noteConversations(conversations)
             // owner 2026-10-18 readable banners: names + photo URLs for the notification extension.
             NotifShare.noteConversations(conversations)
+            // owner 2026-10-26: a group still showing an old "deleted" preview (written before groups
+            // dropped that line) is re-pointed at its newest real message, once per group per launch.
+            for c in conversations where c.isGroup && c.lastMessageCipher == "This message was deleted"
+                && repairedPreviews.insert(c.id).inserted {
+                let cid = c.id
+                Task { await ChatService.repairGroupDeletedPreview(cid: cid) }
+            }
         }
     }
+    @ObservationIgnored private var repairedPreviews = Set<String>()
     var hasLoaded = false   // false until the first real snapshot -> drives the skeleton
     /// 2026-09-24 audit: the listener ended in an error and no snapshot has arrived since. A failed
     /// listener used to print and nothing else, and the 3s safety net below then flipped `hasLoaded`,

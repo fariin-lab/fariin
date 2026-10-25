@@ -3476,6 +3476,15 @@ enum ChatService {
 
     /// After the newest message is deleted, re-point the conversation summary at whatever is now
     /// newest (or clear it when nothing is left). Best-effort: a failure here never fails the delete.
+    /// A group whose chat-list preview still says "This message was deleted" (written before groups
+    /// stopped showing that line, owner 2026-10-26): the same guarded rewrite a delete does, which
+    /// now skips deleted messages in a group. Best effort.
+    static func repairGroupDeletedPreview(cid: String) async {
+        guard !cid.contains("_") else { return }
+        let convRef = db.collection("conversations").document(cid)
+        await rewriteSummaryGuarded(convRef) { await summaryOfNewest(convRef) }
+    }
+
     private static func clearSummaryIfNewest(cid: String, deletedId: String) async {
         let convRef = db.collection("conversations").document(cid)
         // 2026-09-24 audit: through `rewriteSummaryGuarded`, so a message sent while this was
