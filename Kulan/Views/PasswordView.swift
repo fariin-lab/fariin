@@ -703,8 +703,8 @@ private struct FocusIf: ViewModifier {
 }
 
 /// The rules a new password must meet (owner, 2026-09-25): 8+ characters, a letter, a number, and
-/// the two entries matching. `allMet` is still the ONLY gate on the button; the meter below grades
-/// above that line but never moves it.
+/// the two entries matching, and (owner 2026-10-26) not easy to guess. `allMet` is the ONLY gate on
+/// the button; the meter grades above that line.
 struct PasswordRules {
     let password: String
     let confirm: String
@@ -713,13 +713,46 @@ struct PasswordRules {
     var hasLetter: Bool { password.contains { $0.isLetter } }
     var hasNumber: Bool { password.contains { $0.isNumber } }
     var matches: Bool { !confirm.isEmpty && confirm == password }
-    var allMet: Bool { longEnough && hasLetter && hasNumber && matches }
+    /// owner 2026-10-26 ("12345567a is poor, ours says Fair"): an easy guess is refused too, the way
+    /// big apps refuse "too easy to guess" rather than only counting rules.
+    var allMet: Bool { longEnough && hasLetter && hasNumber && !guessable && matches }
 
-    /// 0 Too short, 1 Weak (8+ but no letter or no number), 2 Fair (the minimum), 3 Good (12+),
-    /// 4 Strong (12+ with a symbol or mixed case).
+    /// Easy to guess: one of the passwords people use most, or built mostly from runs and repeats
+    /// (1234, abcd, 5555, 4321), or only one to three different characters. Checked on this phone.
+    var guessable: Bool {
+        let p = password.lowercased()
+        guard !p.isEmpty else { return false }
+        if Set(p).count <= 3 { return true }
+        // The common words with their usual dressing (digits and symbols around them) taken off.
+        let core = p.trimmingCharacters(in: CharacterSet.letters.inverted)
+        if Self.common.contains(core) || Self.common.contains(p) { return true }
+        if Self.keyboardRuns.contains(where: { p.contains($0) }) && core.count <= 8 { return true }
+        // Runs and repeats: neighbours of the same kind one step apart or equal (1-2, b-c, 7-7).
+        let chars = Array(p.unicodeScalars)
+        guard chars.count > 1 else { return false }
+        var predictable = 0
+        for i in 1..<chars.count {
+            let a = chars[i - 1], b = chars[i]
+            let sameKind = (CharacterSet.decimalDigits.contains(a) && CharacterSet.decimalDigits.contains(b))
+                || (CharacterSet.letters.contains(a) && CharacterSet.letters.contains(b))
+            if sameKind && abs(Int(b.value) - Int(a.value)) <= 1 { predictable += 1 }
+        }
+        return Double(predictable) >= Double(chars.count - 1) * 0.6
+    }
+
+    private static let common: Set<String> = [
+        "password", "passw", "passwd", "passwor", "qwerty", "qwertyuiop", "asdfgh", "asdfghjkl", "letmein",
+        "welcome", "admin", "iloveyou", "monkey", "dragon", "football", "baseball", "soccer", "sunshine",
+        "princess", "master", "shadow", "superman", "batman", "trustno", "hello", "freedom", "whatever",
+        "secret", "login", "abc", "abcd", "fariin", "somalia", "somali", "allah", "bismillah", "love",
+    ]
+    private static let keyboardRuns = ["qwert", "asdfg", "zxcvb", "qazwsx", "1qaz", "zaq1"]
+
+    /// 0 Too short, 1 Weak (8+ but no letter or no number, or easy to guess), 2 Fair (the minimum),
+    /// 3 Good (12+), 4 Strong (12+ with a symbol or mixed case).
     var level: Int {
         guard longEnough else { return 0 }
-        guard hasLetter, hasNumber else { return 1 }
+        guard hasLetter, hasNumber, !guessable else { return 1 }
         guard password.count >= 12 else { return 2 }
         let mixed = password.contains { $0.isLowercase } && password.contains { $0.isUppercase }
         let symbol = password.contains { !$0.isLetter && !$0.isNumber }
@@ -752,17 +785,19 @@ struct PasswordChecklist: View {
         }
     }
 
-    /// Left side: what is missing first, then the match, else nothing.
-    private var hint: (text: String, ok: Bool)? {
+    /// Left side: what is missing first, then the match, else nothing. `bad` (owner 2026-10-26:
+    /// "don't match should be red"): a problem that stops Save is red; a step still to type is grey.
+    private var hint: (text: String, ok: Bool, bad: Bool)? {
         if empty { return nil }
         if !rules.longEnough {
             let n = 8 - rules.password.count
-            return ("\(n) more \(n == 1 ? "character" : "characters")", false)
+            return ("\(n) more \(n == 1 ? "character" : "characters")", false, false)
         }
-        if !rules.hasNumber { return ("Add a number", false) }
-        if !rules.hasLetter { return ("Add a letter", false) }
+        if !rules.hasNumber { return ("Add a number", false, false) }
+        if !rules.hasLetter { return ("Add a letter", false, false) }
+        if rules.guessable { return ("Too easy to guess", false, true) }
         if rules.confirm.isEmpty { return nil }
-        return rules.matches ? ("Passwords match", true) : ("Passwords don't match", false)
+        return rules.matches ? ("Passwords match", true, false) : ("Passwords don't match", false, true)
     }
 
     var body: some View {
@@ -781,7 +816,8 @@ struct PasswordChecklist: View {
                             Image(systemName: "checkmark").font(.footnote.weight(.semibold))
                                 .foregroundStyle(Color(hex: 0x30A46C))
                         }
-                        Text(hint.text).foregroundStyle(hint.ok ? Color.primary : Color.secondary)
+                        Text(hint.text).foregroundStyle(hint.ok ? Color.primary
+                                                        : hint.bad ? Color(hex: 0xE5484D) : Color.secondary)
                     }
                 }
                 Spacer(minLength: 0)
