@@ -2224,8 +2224,9 @@ struct ChatsView: View {
     // and no font size forced on them, so the bar draws them at its own glyph size.
     private var composeButton: some View {
         // The pencil's tip juts out top right, so the glyph's box sits the square low and left in
-        // the circle; nudged so the square is what is centred (owner 2026-10-26).
-        Button { showNew = true } label: { Image(systemName: "square.and.pencil").offset(x: 1.5, y: -1.5) }
+        // the circle; nudged so the square is what is centred (owner 2026-10-26). Up only: measured on
+        // his screenshot, x 1.5 put the square 1.5 pt right of centre, so the sideways nudge is gone.
+        Button { showNew = true } label: { Image(systemName: "square.and.pencil").offset(y: -1.5) }
             // Where the first-chat tip points (owner 2026-10-18).
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).midX } action: { composeMidX = $0 }
     }
