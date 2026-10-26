@@ -24,6 +24,9 @@ import Observation
     /// encrypted group, or history hidden from new members) the chat still opens, as the reference
     /// app's does, with "join to see the messages" in place of them (owner 2026-10-23).
     let readable: Bool
+    /// The server's no, in its own words ("You're banned from this group."), once the preview or a
+    /// join was refused (audit 2026-10-26 item 19). The Join bar then goes grey and says it.
+    var refusal: String?
     init(_ preview: PublicGroupPreview, readable: Bool = true) { self.preview = preview; self.readable = readable }
 }
 
@@ -123,7 +126,8 @@ struct PublicGroupSheet: View {
         if let p = preview {
             VStack(spacing: 8) {
                 statusLine(p)
-                capsuleButton(buttonTitle(p), enabled: !joining && !(requestSent || p.requested), loading: joining) { join(p) }
+                capsuleButton(buttonTitle(p), enabled: refusedText == nil && !joining && !(requestSent || p.requested),
+                              loading: joining) { join(p) }
             }
             .padding(.bottom, 8)
         }
@@ -198,8 +202,9 @@ struct PublicGroupSheet: View {
     }
 
     @ViewBuilder private func statusLine(_ p: PublicGroupPreview) -> some View {
-        if let joinError {
-            Text(joinError)
+        // A refusal (banned, closed) first: it is why Join is grey (audit 2026-10-26 item 19).
+        if let why = refusedText ?? joinError {
+            Text(why)
                 .font(.system(size: 14))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -298,7 +303,11 @@ struct PublicGroupSheet: View {
             }
             preview = p
         case .refused(let why):
-            if preview == nil || guest == nil { refusedText = why }
+            // Known from the cache, the server now says no (banned, closed): the page or the guest
+            // chat's Join bar goes grey with its words, as the invite link's page does (audit
+            // 2026-10-26 item 19: Join stayed live and only failed).
+            refusedText = why
+            guest?.refusal = why
         case .failed(let why):
             if preview == nil { failedText = why }
             // Known from the cache but the server could not be reached (offline): the guest chat with
@@ -352,7 +361,9 @@ struct PublicGroupSheet: View {
                 case .requested: requestSent = true
                 }
             } catch {
-                joinError = error.localizedDescription
+                // Banned sticks: Join goes grey with the server's words (audit 2026-10-26 item 19).
+                let words = error.localizedDescription
+                if words.localizedCaseInsensitiveContains("banned") { refusedText = words } else { joinError = words }
             }
             joining = false
         }
@@ -375,8 +386,8 @@ struct PublicJoinBar: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            if let joinError {
-                Text(joinError)
+            if let why = guest.refusal ?? joinError {
+                Text(why)
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -410,7 +421,7 @@ struct PublicJoinBar: View {
         .systemBarChrome()
     }
 
-    private var enabled: Bool { !joining && !waiting }
+    private var enabled: Bool { !joining && !waiting && guest.refusal == nil }
 
     private var title: String {
         if waiting { return "Request Sent" }
@@ -419,7 +430,7 @@ struct PublicJoinBar: View {
     }
 
     private func join() {
-        guard !joining, !waiting else { return }
+        guard !joining, !waiting, guest.refusal == nil else { return }
         guard NetworkState.shared.isOnline else { joinError = "No internet connection. Try again."; return }
         joining = true
         joinError = nil
@@ -439,7 +450,9 @@ struct PublicJoinBar: View {
                     Haptics.notify(.success)
                 }
             } catch {
-                joinError = error.localizedDescription
+                // Banned sticks: Join goes grey with the server's words (audit 2026-10-26 item 19).
+                let words = error.localizedDescription
+                if words.localizedCaseInsensitiveContains("banned") { guest.refusal = words } else { joinError = words }
             }
             joining = false
         }
@@ -507,7 +520,15 @@ struct RejoinGroupBar: View {
                 case .joined, .already:
                     FormerGroups.removed[cid] = nil
                     Haptics.notify(.success)
-                    return   // stays spinning until the chat list brings the group back
+                    // Spins until the chat list brings the group back, and no longer than 15 s
+                    // (audit 2026-10-26 item 18: a list that never picked it up spun for ever).
+                    // Then the bar's own line and Join again, as for any failed join.
+                    try? await Task.sleep(nanoseconds: 15_000_000_000)
+                    if joining {
+                        joining = false
+                        joinError = "The group didn't open. Try again."
+                    }
+                    return
                 case .requested:
                     requestSent = true
                     Haptics.notify(.success)

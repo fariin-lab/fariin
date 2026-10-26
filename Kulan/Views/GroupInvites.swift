@@ -371,8 +371,9 @@ struct JoinGroupSheet: View {
                 mutualsRow(p).padding(.top, 16).padding(.horizontal, 24)
             }
 
-            if let joinError {
-                Text(joinError)
+            // A refusal (banned, link off) first: it is why Join is grey (audit 2026-10-26 item 19).
+            if let why = refusedText ?? joinError {
+                Text(why)
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -385,7 +386,8 @@ struct JoinGroupSheet: View {
                     .padding(.top, 16)
             }
 
-            capsuleButton(buttonTitle(p), enabled: !joining && !(requestSent || p.requested), loading: joining) { join(p) }
+            capsuleButton(buttonTitle(p), enabled: refusedText == nil && !joining && !(requestSent || p.requested),
+                          loading: joining) { join(p) }
                 .padding(.top, 24)
         }
     }
@@ -474,7 +476,9 @@ struct JoinGroupSheet: View {
             if openIfMember(p) { return }
             preview = p
         case .refused(let why):
-            if preview == nil { refusedText = why }
+            // With a cached card on screen too: Join goes grey with the server's words (audit
+            // 2026-10-26 item 19). Without one, the "Can't join with this link" page as before.
+            refusedText = why
         case .failed(let why):
             if preview == nil { failedText = why }
         }
@@ -521,7 +525,9 @@ struct JoinGroupSheet: View {
                     joinError = "Couldn't join. The link may be invalid."
                 }
             } catch {
-                joinError = (error as NSError).localizedDescription
+                // Banned sticks: Join goes grey with the server's words (audit 2026-10-26 item 19).
+                let words = (error as NSError).localizedDescription
+                if words.localizedCaseInsensitiveContains("banned") { refusedText = words } else { joinError = words }
             }
             joining = false
         }
