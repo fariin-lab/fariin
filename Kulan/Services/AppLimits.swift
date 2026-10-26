@@ -214,7 +214,7 @@ final class AppLimits {
     }
 
     /// Smallest group whose owner/admins see Statistics (owner 2026-10-26), panel `group_stats_min_members`.
-    var groupStatsMinMembers: Int { number("group_stats_min_members", 150) }
+    var groupStatsMinMembers: Int { number("group_stats_min_members", 200) }
 
     /// GROUP STORIES NEED A REAL GROUP (owner 2026-10-23): at least this many members, app admins
     /// excepted. Panel row "Members a group needs for stories"; firestore.rules `groupPoster` reads the
