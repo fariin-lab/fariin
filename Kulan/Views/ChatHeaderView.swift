@@ -273,7 +273,7 @@ final class ChatHeaderView: UIView {
         facesView.set(model.subtitleIsLive ? [] : model.subtitleFaces)
         // Typing is the one state that colours the line; everything else is their full-opacity label.
         // `.tintColor` is UIKit's `Color.accentColor`, which is what the SwiftUI line used for typing.
-        subtitleLabel.textColor = model.subtitleIsLive ? .tintColor : Self.subtitleColor
+        subtitleLabel.textColor = model.subtitleIsLive ? .tintColor : model.subtitleIsStrong ? .label : Self.subtitleColor
         titleIcon = model.titleIcon
         secondaryTitleIcon = model.secondaryIcon
         // The measured answer is only the SEED for the first frame; once the glass probe has
@@ -326,6 +326,8 @@ struct ChatHeaderModel: Equatable {
     var subtitle: String?
     /// True while the line is "typing…", which is the one state drawn in the accent.
     var subtitleIsLive = false
+    /// Drawn in the name's own colour, not the dimmer grey: a group's member count (owner 2026-10-26).
+    var subtitleIsStrong = false
     /// Their `titleIcon` slot: the verified mark, when there is one.
     var titleIcon: UIImage?
     /// The disappearing-messages timer. See the file comment for why it is a second slot.
@@ -382,7 +384,7 @@ struct ChatHeaderModel: Equatable {
 
     static func == (a: ChatHeaderModel, b: ChatHeaderModel) -> Bool {
         a.name == b.name && a.photoUrl == b.photoUrl && a.subtitle == b.subtitle
-            && a.subtitleIsLive == b.subtitleIsLive && a.backdrop == b.backdrop
+            && a.subtitleIsLive == b.subtitleIsLive && a.subtitleIsStrong == b.subtitleIsStrong && a.backdrop == b.backdrop
             && (a.titleIcon == nil) == (b.titleIcon == nil)
             && (a.secondaryIcon == nil) == (b.secondaryIcon == nil)
             && (a.avatarAsset == nil) == (b.avatarAsset == nil)

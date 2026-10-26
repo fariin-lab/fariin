@@ -6359,6 +6359,7 @@ struct ThreadView: View {
     private var headerModel: ChatHeaderModel {
         var m = ChatHeaderModel(name: liveTitle, photoUrl: livePhotoUrl)
         m.subtitle = presenceSubtitle
+        m.subtitleIsStrong = isGroup
         // A group's first faces before its member count (owner 2026-10-26), members with a photo.
         if isGroup, guest == nil, let conv = conversation {
             m.subtitleFaces = Array(conv.users.compactMap { u -> String? in
