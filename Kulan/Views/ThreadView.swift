@@ -5561,7 +5561,8 @@ struct ThreadView: View {
     }
 
     /// Slow mode (owner 2026-10-20): a member waits `slowModeSeconds` after their own last message.
-    /// Admins are never slowed. ⚠️ App-side only for now: the server does not count yet.
+    /// Admins are never slowed. The server's per-message trigger holds the same line (audit
+    /// 2026-10-26 item 12); this says so before the send instead of after.
     private func slowModeHeldBack() -> Bool {
         guard AppFeatures.slowMode, isGroup, let conv = conversation, conv.slowModeSeconds > 0,
               !conv.isAdmin(me), !conv.isOwner(me),

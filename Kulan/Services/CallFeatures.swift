@@ -47,7 +47,9 @@ enum AppFeatures {
     static let stickerPanelGrow = false
     /// Slow mode for groups (owner 2026-10-21: "hide completely now", he will use it later). Off =
     /// no Slow mode section on the Permissions page and no hold on sending. Code kept.
-    static let slowMode = false
+    /// On again (audit 2026-10-26 item 12): the composer holds a member back with the Slow mode
+    /// alert and the server's per-message trigger counts too. Owner and admins are never slowed.
+    static let slowMode = true
     /// The My Profile card under the header in Settings (owner 2026-10-11: hidden). The page it
     /// opens is kept; this is only its door in Settings.
     static var myProfileCard: Bool { RemoteFeatures.value("myProfileCard", default: false) }
