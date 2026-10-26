@@ -305,6 +305,7 @@ enum MessageRowModelBuilder {
                 colorSeed: msg.authorId,
                 showsName: first && !bareMedia,
                 showsAvatar: last,
+                startsRun: first,
                 avatarUrl: ctx.avatarFor(msg.authorId),
                 verified: VerificationIndex.of(msg.authorId)?.showsBadge == true,
                 role: ctx.roleFor(msg.authorId))

@@ -41,6 +41,7 @@ struct SenderChrome: Equatable {
     var colorSeed: String        // the uid the palette hashes; kept separate so a rename never moves the colour
     var showsName: Bool          // first bubble of the cluster
     var showsAvatar: Bool        // last bubble of the cluster — the avatar sits on the baseline
+    var startsRun: Bool = false  // first bubble of the cluster (showsName is off on bare media)
     var avatarUrl: String?
     var verified: Bool
     /// owner 2026-10-18: their Role in this group ("🎨 Designer", `GroupRole.display`), drawn as a

@@ -5896,7 +5896,43 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell,
                         forItemAt indexPath: IndexPath) {
         (cell as? MessageRowCell)?.setOnScreen(true)
-        (cell as? MessageRowCell)?.pinAvatar()   // configured before it was in the list; place it now
+        pinRunAvatars(extra: cell)   // configured before it was in the list; place it now
+    }
+
+    /// ⛔ ONE PHOTO PER RUN, RIDING THE VISIBLE BOTTOM (owner 2026-10-26, from the reference app). A
+    /// run of one person's messages in a group shows that person's photo once, beside the run, at the
+    /// lowest visible line (above the composer) while the run goes on below it. It rides up with the
+    /// run's last bubble once that is in view, and never rises above the run's first bubble, so the
+    /// next run's photo pushes it away. Drawn by the run's lowest on-screen row, because the row that
+    /// owns it (the last) may not exist yet. Before, the photo only moved inside its own bubble, so on
+    /// a run of short messages it sat at the end and the rest of the run had none.
+    func pinRunAvatars(extra: UICollectionViewCell? = nil, excluding gone: UICollectionViewCell? = nil) {
+        let cv: UIView = collectionView
+        var cells = collectionView.visibleCells.compactMap { $0 as? MessageRowCell }
+        if let e = extra as? MessageRowCell, !cells.contains(where: { $0 === e }) { cells.append(e) }
+        if let g = gone { cells.removeAll { $0 === g } }
+        cells.sort { $0.frame.minY < $1.frame.minY }
+        let visibleBottom = collectionView.contentOffset.y + collectionView.bounds.height
+            - collectionView.adjustedContentInset.bottom
+        typealias Slot = (uid: String, first: Bool, last: Bool, top: CGFloat, bottom: CGFloat)
+        var run: [(cell: MessageRowCell, slot: Slot)] = []
+        func close() {
+            guard let head = run.first, let host = run.last else { return }
+            let top = head.slot.first ? head.slot.top : -.greatestFiniteMagnitude
+            let limit = host.slot.last ? host.slot.bottom : .greatestFiniteMagnitude
+            let y = max(top, min(visibleBottom, limit) - BubbleMetrics.avatarSize)
+            for r in run { r.cell.placeRunAvatar(r.cell === host.cell ? y : nil, in: cv) }
+            run = []
+        }
+        for c in cells {
+            guard let s = c.runSlot(in: cv) else { close(); continue }
+            if let prev = run.last?.slot, prev.uid == s.uid, !prev.last, !s.first {
+                run.append((c, s))
+            } else {
+                close(); run = [(c, s)]
+            }
+        }
+        close()
     }
 
     // The swiped cell scrolled off and is being RECYCLED for another row: kill the swipe immediately â€”
@@ -5904,6 +5940,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell,
                         forItemAt indexPath: IndexPath) {
         (cell as? MessageRowCell)?.setOnScreen(false)   // 2026-10-17: animated stickers stop off screen
+        pinRunAvatars(excluding: cell)   // the run's photo moves to the run's next lowest row
         guard cell === swipingCell else { return }
         resetSwipe(animated: false)
         swipePan.isEnabled = false; swipePan.isEnabled = true   // cancel the in-flight pan
@@ -6370,9 +6407,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // still move the bubbles across the picture.
         WallpaperBlurSliceView.repositionAll()
         BubbleFillView.repositionGradients()   // a gradient chat colour is cut from the screen, like the slices
-        // A tall group bubble keeps its sender's photo in view (owner 2026-10-26, MessageRowCell.pinAvatar).
-        // Only group rows have a photo; for the rest it returns at once.
-        for case let cell as MessageRowCell in collectionView.visibleCells { cell.pinAvatar() }
+        // A group sender's photo follows their run of messages (owner 2026-10-26, pinRunAvatars).
+        pinRunAvatars()
         guard !ignoringScrollEvents else { return }   // ditto: a stop is not a scroll
         // A finger dragging the keyboard down moves the guide, and the bar with it, on this event.
         followKeyboardUnderFinger()

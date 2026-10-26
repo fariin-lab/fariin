@@ -115,16 +115,24 @@ final class MessageRowCell: UICollectionViewCell {
     /// plays only while its row is on screen.
     func setOnScreen(_ on: Bool) { rowView.setMediaOnScreen(on) }
 
-    /// ⛔ THE SENDER'S PHOTO STAYS IN VIEW BESIDE A TALL BUBBLE (owner 2026-10-26, from the reference
-    /// app): a group message taller than the screen keeps its sender's photo at the bottom of the
-    /// visible list (above the composer) while the bubble's bottom is below it, and the photo rides up
-    /// with the bubble once the bottom comes into view. Read from the list itself, so a configure or
-    /// a scroll tick (NativeMessageList.scrollViewDidScroll) both land it in the right place.
+    /// The group sender's photo follows the whole run of their messages; the list places it
+    /// (`MessageListController.pinRunAvatars`). Called after a configure put it back at its plan.
     func pinAvatar() {
-        guard let cv = superview as? UICollectionView else { rowView.pinAvatar(visibleBottom: nil); return }
-        let edge = cv.contentOffset.y + cv.bounds.height - cv.adjustedContentInset.bottom
-        let y = rowView.convert(CGPoint(x: 0, y: edge), from: cv).y
-        rowView.pinAvatar(visibleBottom: y)
+        guard let cv = superview as? UICollectionView else { return }
+        (cv.delegate as? MessageListController)?.pinRunAvatars(extra: self)
+    }
+
+    /// This row's run span in `cv`'s coordinates (see `MessageRowView.runSlot`).
+    func runSlot(in cv: UIView) -> (uid: String, first: Bool, last: Bool, top: CGFloat, bottom: CGFloat)? {
+        guard let s = rowView.runSlot else { return nil }
+        let top = rowView.convert(CGPoint(x: 0, y: s.top), to: cv).y
+        let bottom = rowView.convert(CGPoint(x: 0, y: s.bottom), to: cv).y
+        return (s.uid, s.first, s.last, top, bottom)
+    }
+
+    /// The run's photo with its top at `y` in `cv`'s coordinates; nil = this row does not carry it.
+    func placeRunAvatar(_ y: CGFloat?, in cv: UIView) {
+        rowView.placeRunAvatar(minY: y.map { rowView.convert(CGPoint(x: 0, y: $0), from: cv).y })
     }
 
     /// A loaded sticker's bytes (Save to Favorites of one somebody else made).

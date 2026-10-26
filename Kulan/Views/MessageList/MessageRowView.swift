@@ -1368,32 +1368,51 @@ final class MessageRowView: UIView {
         v.apply(inner)
     }
 
-    /// How far the sender's photo is lifted above its planned place to stay in view (see
-    /// `MessageRowCell.pinAvatar`); 0 = where the plan put it.
+    /// How far the sender's photo is away from its planned place (see
+    /// `MessageListController.pinRunAvatars`); 0 = where the plan put it.
     private(set) var avatarLift: CGFloat = 0
+    /// The group sender of this bubble, for the run's photo; nil = not someone else's group bubble.
+    private var runSender: SenderChrome?
+    private var runPhotoKey: String?
 
-    /// `visibleBottom`: the list's lowest visible line, in this view's coordinates; nil = the plan's
-    /// place. The photo never rises above the bubble's top nor sinks below its planned spot. Moved by
-    /// its center, so a reply-swipe transform on it is left alone.
-    func pinAvatar(visibleBottom: CGFloat?) {
-        guard let v = avatarView, !v.isHidden, let p = plan, case .bubble(let b) = p.body,
-              let a = b.avatar else { avatarLift = 0; return }
-        var top = a.minY
-        if let y = visibleBottom { top = min(a.minY, max(b.bubble.minY, y - a.height)) }
-        avatarLift = a.minY - top
-        let mid = top + a.height / 2
-        if abs(v.center.y - mid) > 0.25 { v.center.y = mid }
+    /// This row's part of a run of one person's messages: who, whether it opens / closes the run,
+    /// and the span the run's photo may use here (bubble top to the planned photo's bottom).
+    var runSlot: (uid: String, first: Bool, last: Bool, top: CGFloat, bottom: CGFloat)? {
+        guard let s = runSender, let p = plan, case .bubble(let b) = p.body else { return nil }
+        return (s.uid, s.startsRun, s.showsAvatar, b.bubble.minY, b.avatar?.maxY ?? b.bubble.maxY)
+    }
+
+    /// The run's photo with its top at `minY` (this view's coordinates), or nil = this row does
+    /// not carry it. Placed by bounds and center, so a reply-swipe transform on it is left alone.
+    func placeRunAvatar(minY: CGFloat?) {
+        guard let s = runSender, let p = plan, case .bubble(let b) = p.body else { return }
+        guard let y = minY else { avatarView?.isHidden = true; avatarLift = 0; return }
+        let size = BubbleMetrics.avatarSize
+        let x = b.avatar?.minX ?? (b.bubble.minX - BubbleMetrics.avatarGap - size)
+        let v = avatarView ?? {
+            let v = RowAvatarView(); addSubview(v); avatarView = v; return v
+        }()
+        let key = s.uid + "|" + (s.avatarUrl ?? "")
+        if runPhotoKey != key { runPhotoKey = key; v.configure(name: s.name, photoUrl: s.avatarUrl) }
+        v.isHidden = false
+        v.bounds = CGRect(x: 0, y: 0, width: size, height: size)
+        let mid = CGPoint(x: x + size / 2, y: y + size / 2)
+        if abs(v.center.y - mid.y) > 0.25 || abs(v.center.x - mid.x) > 0.25 { v.center = mid }
+        avatarLift = b.avatar.map { $0.minY - y } ?? 1
     }
 
     private func applySender(_ b: BubblePlan, model m: MessageRowModel) {
+        if case .bubble(let row) = m.content { runSender = row.sender } else { runSender = nil }
+        runPhotoKey = nil
         if let rect = b.avatar, case .bubble(let row) = m.content, let s = row.sender {
             let v = avatarView ?? {
                 let v = RowAvatarView(); addSubview(v); avatarView = v; return v
             }()
             v.isHidden = false
             v.frame = rect
-            avatarLift = 0   // back at the planned place; the cell re-pins it (pinAvatar)
+            avatarLift = 0   // back at the planned place; the list re-pins it (pinRunAvatars)
             v.configure(name: s.name, photoUrl: s.avatarUrl)
+            runPhotoKey = s.uid + "|" + (s.avatarUrl ?? "")
         } else {
             avatarView?.isHidden = true
         }
@@ -1990,9 +2009,9 @@ final class MessageRowView: UIView {
     }
 
     func hitsAvatar(_ point: CGPoint) -> Bool {
-        guard let p = plan, case .bubble(let b) = p.body, let a = b.avatar else { return false }
-        // Where the photo is drawn now, which is higher than planned while it is pinned in view.
-        return a.offsetBy(dx: 0, dy: -avatarLift).contains(point)
+        guard let p = plan, case .bubble = p.body, let v = avatarView, !v.isHidden else { return false }
+        // Where the photo is drawn now: the run's photo can sit beside any bubble of the run.
+        return v.frame.contains(point)
     }
 
     func hitsSenderName(_ point: CGPoint) -> Bool {
