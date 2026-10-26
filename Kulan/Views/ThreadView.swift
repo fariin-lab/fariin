@@ -109,6 +109,9 @@ struct ThreadView: View {
     @State private var groupCallMicOn: Set<String> = []
     @State private var groupCallListener: ListenerRegistration?
     @State private var tappedMember: GroupInfoView.MemberAction?
+    /// Open Profile on a member's card: the card closes, then their profile slides in on this
+    /// chat's stack (owner 2026-10-26: "a full page, not a sheet").
+    @State private var memberProfile: GroupInfoView.MemberAction?
     /// The poll whose results page is open (2026-10-19: the footer of a poll bubble).
     /// ⛔ ITS ID ONLY, NEVER A `Message` (build 990 crash, 2026-10-20): a `@State` holds its value
     /// inside this view, and a Message is huge. SwiftUI copies ThreadView many times on the main
@@ -2249,8 +2252,19 @@ struct ThreadView: View {
                              mutedUntil: conversation?.restrictedUntil[m.id] ?? 0,
                              role: conversation?.roles[m.id],
                              canEditRole: conversation?.canSetRole(me, m.id) ?? false,
+                             onInfo: { uid in
+                                 let name = conversation?.names[uid] ?? m.name
+                                 // After the card has gone, so the page slides in over the chat.
+                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                     memberProfile = GroupInfoView.MemberAction(id: uid, name: name, isAdmin: false)
+                                 }
+                             },
                              onRemoved: { name in showJumpToast("\(name) was removed from \(title).") },
                              photoHint: conversation?.photos[m.id])
+        }
+        .navigationDestination(item: $memberProfile) { m in
+            ContactInfoView(cid: ChatService.convId(me, m.id), name: m.name,
+                            photoUrl: conversation?.photos[m.id], source: .calls)
         }
         .fullScreenCover(isPresented: $showGroupCall) { GroupCallView() }
         .task(id: groupCallActive && !notAMember && !preview) { await followGroupCallPeople() }
