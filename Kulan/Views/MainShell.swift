@@ -2281,8 +2281,9 @@ struct ChatsView: View {
             }
             ToolbarSpacer(.fixed, placement: .topBarTrailing)
             ToolbarItem(placement: .topBarTrailing) {
-                // Fariin blue, the one action colour, in both modes (owner 2026-10-26; was black/white).
-                composeButton.tint(Color.fariinBlue).foregroundStyle(Color.fariinBlue)
+                // A filled Fariin-blue circle with a white pen, the screen's main action (owner
+                // 2026-10-26: the whole button blue, not just the pen; was a glass circle).
+                composeButton.buttonStyle(.glassProminent).tint(Color.fariinBlue)
                     .modifier(SwipeFade(on: showHeaderIcons))
             }
         }
