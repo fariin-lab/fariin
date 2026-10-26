@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import FirebaseFirestore
 
 // ⛔ THE CHAT LIST'S SEARCH IS ITS OWN PAGE NOW — owner, 2026-09-09, with a screenshot of ours:
 // "When I click search button, Chatlist page and search page they are different, because search page
@@ -542,7 +543,19 @@ struct ChatSearchPage: View {
     /// show, so a hundred remembered names cost a handful of SwiftUI views.
     @ViewBuilder private func content(_ row: SearchPageRow, _ m: PageModel) -> some View {
         switch row.kind {
-        case .chat, .group, .recentChat:
+        case .recentChat:
+            // ⛔ RECENT IS WHO, NOT WHAT WAS SAID (owner 2026-10-26, the reference app's Recent): a
+            // person's face, name and last seen; a group's face, name and member count. No last
+            // message, no time, no ticks.
+            if let c = m.chats[row.key] {
+                if c.isGroup {
+                    RecentRow(name: c.displayName(me), photo: c.displayPhoto(me), uid: nil,
+                              line: c.memberCountLabel)
+                } else {
+                    RecentRow(name: c.displayName(me), photo: c.displayPhoto(me), uid: c.otherUid(me), line: nil)
+                }
+            }
+        case .chat, .group:
             if let c = m.chats[row.key] {
                 // The app's own chat row, unchanged. A chat in the search results has to be the same
                 // object it is in the list, or the page is a different app.
@@ -747,24 +760,84 @@ private struct RecentPersonRow: View {
     let handle: String
 
     var body: some View {
+        RecentRow(name: title.isEmpty ? handle : title, photo: photo, uid: uid, line: nil)
+    }
+
+    private var photo: String? {
+        ProfilePhotoIndex.header(uid: uid, fallbackPhoto: nil, fallbackPoster: nil,
+                                 iAmContact: PrivacyPrefs.mayViewPhotoOf(uid)).photoUrl
+    }
+}
+
+/// One Recent row: face, name, and one grey line under it. A group passes its member count; a
+/// person passes `uid` and the line is their last seen, read once (`RecentLastSeen`).
+private struct RecentRow: View {
+    let name: String
+    let photo: String?
+    let uid: String?
+    let line: String?
+    @State private var seen: RecentLastSeen.Line?
+
+    var body: some View {
         HStack(spacing: 12) {
-            AvatarView(name: title.isEmpty ? handle : title, photoUrl: photo, size: 56)
+            AvatarView(name: name, photoUrl: photo, size: 56)
                 .padding(.vertical, 12)
             VStack(alignment: .leading, spacing: 1) {
-                Text(title.isEmpty ? handle : title).font(.headline).foregroundStyle(.primary)
-                if !handle.isEmpty {
-                    Text("@\(handle)").font(.subheadline).foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text(name).font(.headline).foregroundStyle(.primary).lineLimit(1)
+                    if let uid { VerifiedMark(uid: uid, size: 14) }
+                }
+                if let text = line ?? seen?.text {
+                    Text(text).font(.subheadline)
+                        .foregroundStyle(seen?.online == true && line == nil ? Color.fariinBlue : .secondary)
+                        .lineLimit(1)
                 }
             }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
         .contentShape(Rectangle())
+        .task(id: uid) {
+            guard let uid, line == nil else { return }
+            seen = RecentLastSeen.cached(uid)
+            if let fresh = await RecentLastSeen.load(uid) { seen = fresh }
+        }
     }
+}
 
-    private var photo: String? {
-        ProfilePhotoIndex.header(uid: uid, fallbackPhoto: nil, fallbackPoster: nil,
-                                 iAmContact: PrivacyPrefs.mayViewPhotoOf(uid)).photoUrl
+/// Last seen for a Recent row, the chat header's rules: my own last seen hidden from everyone (or
+/// shared off) means I see nobody's; theirs must allow me; a refused or missing answer reads
+/// "last seen recently", as the reference app says it. One read per person, kept for the session.
+@MainActor enum RecentLastSeen {
+    struct Line: Equatable { let text: String; let online: Bool }
+    private static var memo: [String: Line] = [:]
+
+    static func cached(_ uid: String) -> Line? { memo[uid] }
+
+    static func load(_ uid: String) async -> Line? {
+        let hidden = Line(text: "last seen recently", online: false)
+        let shareMine = UserDefaults.standard.object(forKey: "shareLastSeen") as? Bool ?? true
+        guard PrivacyPrefs.mine("lastSeen") != .nobody, shareMine else { memo[uid] = hidden; return hidden }
+        let db = FirestoreHub.db
+        let privacy = ((try? await db.collection("users").document(uid).getDocument())?
+            .data()?["privacy"] as? [String: String]) ?? [:]
+        guard PrivacyPrefs.allows(privacy, "lastSeen", contactOfMine: PrivacyPrefs.isContact(uid)),
+              let d = (try? await db.collection("users").document(uid)
+                        .collection("presence").document("state").getDocument())?.data() else {
+            memo[uid] = hidden
+            return hidden
+        }
+        let out: Line
+        if d["online"] as? Bool == true {
+            out = Line(text: "online", online: true)
+        } else if let la = (d["lastActive"] as? Timestamp)?.dateValue() {
+            let f = RelativeDateTimeFormatter(); f.unitsStyle = .short
+            out = Line(text: "last seen " + f.localizedString(for: la, relativeTo: Date()), online: false)
+        } else {
+            out = hidden
+        }
+        memo[uid] = out
+        return out
     }
 }
 
