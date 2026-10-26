@@ -3766,25 +3766,13 @@ final class CallService: NSObject {
         armRingbackWatchdog()
     }
 
-    /// Which of the two waiting sounds is up. Kasim 2026-10-21, from the other big app: "Calling…"
-    /// has its own sound from the first second (the short ring, stop, ring we always had), and when
-    /// the other phone really rings it changes to a longer beep with a longer pause. The silent
-    /// "Calling…" made the caller think nothing was happening.
-    private var ringbackIsRinging = false
-    /// When the calling sound started this call (nil: it has not played). Reset in `stopRingback`.
-    private var callingToneSince: Date?
-
-    /// (Re)loads the player with the sound for where the call is now. The session is already set up
-    /// by `startRingback`; swapping only the sound needs no session change.
+    /// ⛔ ONE WAITING SOUND (owner 2026-10-26, replacing the 2026-10-21 two-sound version): the
+    /// calling sound plays from the dial to the pick-up, also once the other phone rings, like the
+    /// big messenger he uses. Swapping to a longer ringing sound on the ringing signal cut the
+    /// calling ring mid-sound and read as a bug. The screen still says Calling / Ringing.
     private func playRingbackTone() {
         ringbackPlayer?.stop()
-        // The first short ring is heard once per call: if "Calling..." already played one (its ring
-        // is 1.8s), ringing starts on the long rings; if it rings at once, it starts short.
-        let heardShortRing = callingToneSince.map { Date().timeIntervalSince($0) >= 1.8 } ?? false
-        ringbackIsRinging = calleeRinging
-        if !calleeRinging { callingToneSince = Date() }
-        ringbackPlayer = try? AVAudioPlayer(data: calleeRinging
-            ? RingbackTone.ringingData(shortFirst: !heardShortRing) : RingbackTone.wavData())
+        ringbackPlayer = try? AVAudioPlayer(data: RingbackTone.wavData())
         ringbackPlayer?.numberOfLoops = -1
         ringbackPlayer?.prepareToPlay()
         ringbackPlayer?.play()
@@ -3794,10 +3782,8 @@ final class CallService: NSObject {
         // A fallback armed by the ringing signal must die with the stop too, or an accept that lands
         // inside its 1.2s window is followed by a ring nothing is left to stop.
         ringbackFallback?.invalidate(); ringbackFallback = nil
-        ringbackSwitchWork?.cancel(); ringbackSwitchWork = nil   // a pending calling-to-ringing switch
         let wasPlaying = ringbackPlayer != nil
         ringbackPlayer?.stop(); ringbackPlayer = nil
-        callingToneSince = nil
         // HAND THE SESSION BACK TO THE CALL (owner audit 2026-10-06 #8). startRingback swapped the
         // options to include .mixWithOthers and nothing ever swapped them back, so the CALLER's whole
         // call stayed mixable: music in another app kept playing under it, while the callee's call
@@ -3928,8 +3914,7 @@ final class CallService: NSObject {
     // plays one short connecting cue and nothing more; its looped ringback starts on REMOTE RINGING.
     // The 2026-07-22 note that said the reference rings from the start was wrong.
     // ⚠️ REVERSED IN PART, Kasim 2026-10-21: a silent "Calling…" read as a broken call. The calling
-    // sound now starts here, at activation, and `ringingAt` (`calleeRinging`) swaps it for the
-    // longer ringing sound (see `ringbackIsRinging`).
+    // sound now starts here, at activation, and plays until the pick-up (one sound, 2026-10-26).
     func audioSessionActivated() {
         // 1:1 audit r2 C5, 2026-10-08: a late activation for a call already reset to idle must not
         // leave callAudioLive on for the next dial.
@@ -3946,36 +3931,11 @@ final class CallService: NSObject {
     /// `ringingAt`) while `state` is still `.outgoing`: the old code had a playing tone for
     /// `stopRingback` to stop at that point; this one would have started it for the first time.
     ///
-    /// Kasim 2026-10-21: no longer waits for `calleeRinging`. The calling sound plays from the dial,
-    /// and the ringing signal changes it to the ringing sound (`playRingbackTone`).
+    /// Kasim 2026-10-21: no longer waits for `calleeRinging`. The calling sound plays from the dial
+    /// and keeps playing when it rings (one sound, 2026-10-26).
     private func startRingbackIfDue() {
         guard state == .outgoing, !calleeAccepted else { return }
         if ringbackPlayer == nil { startRingback() }
-        else if ringbackIsRinging != calleeRinging { switchRingbackToneWhenDue() }
-    }
-
-    /// ⛔ THE CALLING SOUND IS NEVER CUT MID-RING (owner 2026-10-26: "it cuts the calling tone in
-    /// the middle and starts the long one, users will see it as a bug"). When the other phone starts
-    /// ringing during a calling ring (1.8 s on), that ring finishes, the usual ringing gap follows,
-    /// and only then the long ring starts. During the calling sound's quiet part, the long ring
-    /// starts once that gap has passed. A player not yet heard (session not live) switches at once.
-    private var ringbackSwitchWork: DispatchWorkItem?
-    private func switchRingbackToneWhenDue() {
-        guard ringbackSwitchWork == nil else { return }
-        guard !ringbackIsRinging, let p = ringbackPlayer, p.isPlaying else { playRingbackTone(); return }
-        let ring = 1.8, gap = 2.2   // RingbackTone.wavData's ring, ringingData's gap
-        let at = p.currentTime
-        let wait = at < ring ? (ring - at) + gap : max(0, gap - (at - ring))
-        let id = callId
-        let w = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.ringbackSwitchWork = nil
-            guard self.callId == id, self.state == .outgoing, !self.calleeAccepted,
-                  self.ringbackPlayer != nil, self.ringbackIsRinging != self.calleeRinging else { return }
-            self.playRingbackTone()
-        }
-        ringbackSwitchWork = w
-        DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: w)
     }
 
     /// Belt for the case CallKit never activates the session (activation failure, or a device that

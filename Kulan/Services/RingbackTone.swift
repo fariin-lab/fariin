@@ -41,31 +41,6 @@ enum RingbackTone {
         return wav(samples, sampleRate: sampleRate)
     }
 
-    // Kasim 2026-10-21, timed on the other big app: the caller's FIRST ring is always the ordinary
-    // short one, and every ring after it is a LONGER beep with a short pause ("a long beep with a
-    // long stop would be weird"). So when "Calling..." already played the short ring, ringing starts
-    // long (`shortFirst: false`); when it rings at once, its first ring is the short one. Same
-    // 440+480 Hz as the calling sound above. One file holds 90s of rings, past any ring timeout,
-    // because a looped file would start again with the short ring.
-    static let longRingSeconds = 6.0
-    static func ringingData(shortFirst: Bool, sampleRate: Int = 8000) -> Data {
-        let gap = 2.2   // Kasim 2026-10-22 timed the other big app at ~11s ring, ~4s quiet (73% sound); same share, shorter ring
-        var rings: [(start: Double, length: Double)] = shortFirst ? [(0, 1.8)] : []   // the short first ring
-        var t0 = shortFirst ? 1.8 + gap : 0
-        while t0 < 90 { rings.append((t0, longRingSeconds)); t0 += longRingSeconds + gap }
-        let total = Int(Double(sampleRate) * t0)
-        var samples = [Int16](repeating: 0, count: total)
-        for r in rings {
-            let from = Int(r.start * Double(sampleRate)), count = Int(r.length * Double(sampleRate))
-            for i in 0..<count where from + i < total {
-                let t = Double(i) / Double(sampleRate)
-                // 40 ms fades at both ends, so a ring does not click on or off.
-                samples[from + i] = Int16(max(-1, min(1, tone(t, 440, 480))) * level * fade(t, r.length, 0.04))
-            }
-        }
-        return wav(samples, sampleRate: sampleRate)
-    }
-
     // US-style busy / "declined" tone (480+620 Hz, 0.5s on / 0.5s off), one cycle —
     // the player loops it a few times. Tells the caller the other side rejected /
     // couldn't be reached.
