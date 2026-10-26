@@ -219,9 +219,11 @@ struct GroupSettingsView: View {
                              (conv?.hideHistoryAt ?? 0) > 0 ? "Hidden" : "Visible")
                 }
             }
-            if conv?.isAdmin(me) ?? false {
-                NavigationLink { GroupHistoryView(cid: cid) } label: {
-                    valueRow("clock.arrow.circlepath", "History", "")
+            // ONE HISTORY (owner 2026-10-26): Recent Actions, the server's admin log, lives here only.
+            // It replaced the History page built from notice lines and the row on the group page.
+            if (conv?.isAdmin(me) ?? false) || (conv?.isOwner(me) ?? false) {
+                NavigationLink { GroupRecentActionsView(cid: cid) } label: {
+                    valueRow("clock.arrow.circlepath", "Recent Actions", "")
                 }
             }
         }

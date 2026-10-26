@@ -73,7 +73,6 @@ struct GroupInfoView: View {
     @State private var showSounds = false
     @State private var showSettings = false
     @State private var showStats = false
-    @State private var showRecentActions = false
     /// People asking to join, for the admins' Join Requests row (owner 2026-10-20). A class box in
     /// @State, so the listener lives as long as the page.
     @State private var joinReqs: [JoinRequest] = []
@@ -88,7 +87,6 @@ struct GroupInfoView: View {
     @State private var artRect = GroupArtRect()
     /// The colour read out of the group's photo (the person profile's own reading, `ProfilePalette`).
     // 2026-10-18 upgrade.
-    @State private var showMemberChanges = false
     @State private var showEncryption = false
     @State private var showQR = false
     @State private var showSimilar = false
@@ -215,7 +213,6 @@ struct GroupInfoView: View {
                         .allowsHitTesting(false)
                 }
             }
-            .navigationDestination(isPresented: $showMemberChanges) { GroupHistoryView(cid: cid) }
             .navigationDestination(isPresented: $showMemberLink) {
                 if let link = inviteLink { GroupLinkShareView(title: title, photo: conv?.avatarUrl, link: link) }
             }
@@ -314,7 +311,6 @@ struct GroupInfoView: View {
             .navigationDestination(isPresented: $showSettings) { GroupSettingsView(cid: cid) }
             .navigationDestination(isPresented: $showJoinRequests) { GroupRequestsView(cid: cid) }
             .navigationDestination(isPresented: $showStats) { GroupStatsView(cid: cid, title: title) }
-            .navigationDestination(isPresented: $showRecentActions) { GroupRecentActionsView(cid: cid) }
             .fullScreenCover(isPresented: $showCall) { GroupCallView() }
             // Nobody to call (owner 2026-10-20): said in a centred alert.
             // One wording with the chat (A11, 2026-10-23): nothing failed, there is nobody to ring.
@@ -784,17 +780,6 @@ struct GroupInfoView: View {
         }
     }
 
-    @ViewBuilder private var menuMemberItems: some View {
-        // No Add Members, Media or Members here: the page has all three; the "N Members" heading
-        // opens the full list (owner 2026-10-19).
-        Section {
-            // Who joined, left, was removed or changed admin, newest first (owner 2026-10-18).
-            Button { showMemberChanges = true } label: {
-                Label("History", systemImage: "clock.arrow.circlepath")
-            }
-        }
-    }
-
     @ViewBuilder private var menuMediaItems: some View {
         Section {
             // This phone only (2026-10-18): follows Settings > Chats, or overrides it for this chat.
@@ -976,12 +961,6 @@ struct GroupInfoView: View {
             if showStatsRow {
                 rowDivider
                 ProfileInfoRow(title: "Statistics", icon: "ic_statistics") { showStats = true }   // his drawing
-            }
-            // Recent Actions (audit 2026-10-26 item 14): the owner and admins, as the server's
-            // `groupAdminLog` lets them read it.
-            if iAmOwner || iAmAdmin {
-                rowDivider
-                ProfileInfoRow(title: "Recent Actions", icon: "clock.arrow.circlepath") { showRecentActions = true }
             }
         }
         .profileSurface(plain: cardColor)
