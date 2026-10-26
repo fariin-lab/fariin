@@ -6343,6 +6343,13 @@ struct ThreadView: View {
     private var headerModel: ChatHeaderModel {
         var m = ChatHeaderModel(name: liveTitle, photoUrl: livePhotoUrl)
         m.subtitle = presenceSubtitle
+        // A group's first faces before its member count (owner 2026-10-26), members with a photo.
+        if isGroup, guest == nil, let conv = conversation {
+            m.subtitleFaces = Array(conv.users.compactMap { u -> String? in
+                guard let p = conv.photos[u], !p.isEmpty else { return nil }
+                return p
+            }.prefix(3))
+        }
         // ⛔ THE COLOUR IS AS MUCH A DISCLOSURE AS THE WORDS ARE.
         //
         // `presenceSubtitle` withholds "typing…" behind `typingPref`, `iBlocked` and, in a group, a

@@ -121,6 +121,15 @@ final class ChatHeaderView: UIView {
 
     /// Kept so the glass-tracking handler can reach it; see init.
     private let textRows = UIStackView()
+    /// A group's first faces in front of "N members" (owner 2026-10-26, as on the group page).
+    private let facesView = HeaderFacesView()
+    private lazy var subtitleRow: UIStackView = {
+        let row = UIStackView(arrangedSubviews: [facesView, subtitleLabel])
+        row.axis = .horizontal
+        row.alignment = .center
+        row.spacing = 5
+        return row
+    }()
     /// True once the glass probe (see init) has resolved a light/dark style. Until then `configure`
     /// seeds the measured answer from `WallpaperBlur.headerBackdrop` so the first frame reads
     /// right; from then on the probe alone decides, as in the reference app.
@@ -142,7 +151,7 @@ final class ChatHeaderView: UIView {
             greaterThanOrEqualToConstant: titleLabel.font.lineHeight.rounded(.up)).isActive = true
 
         textRows.addArrangedSubview(titleColumns)
-        textRows.addArrangedSubview(subtitleLabel)
+        textRows.addArrangedSubview(subtitleRow)
         textRows.axis = .vertical
         textRows.alignment = .leading
         // ⛔ `.fill`, NOT `.fillProportionally` — owner, 2026-08-26: "name and subtitle has bug
@@ -259,6 +268,9 @@ final class ChatHeaderView: UIView {
         titleLabel.text = model.name
         subtitleLabel.text = model.subtitle
         subtitleLabel.isHidden = model.subtitle == nil
+        subtitleRow.isHidden = model.subtitle == nil
+        // Not over "typing…": the faces belong to the member count.
+        facesView.set(model.subtitleIsLive ? [] : model.subtitleFaces)
         // Typing is the one state that colours the line; everything else is their full-opacity label.
         // `.tintColor` is UIKit's `Color.accentColor`, which is what the SwiftUI line used for typing.
         subtitleLabel.textColor = model.subtitleIsLive ? .tintColor : Self.subtitleColor
@@ -318,6 +330,8 @@ struct ChatHeaderModel: Equatable {
     var titleIcon: UIImage?
     /// The disappearing-messages timer. See the file comment for why it is a second slot.
     var secondaryIcon: UIImage?
+    /// A group's first member photos (up to three), drawn overlapping before the subtitle.
+    var subtitleFaces: [String] = []
     /// The measured interface style of the wallpaper band under the bar, from
     /// `WallpaperBlur.headerBackdrop`, or `.unspecified` when there is no wallpaper. The header uses
     /// it only to seed the first frame; its own glass probe decides from then on.
@@ -372,6 +386,62 @@ struct ChatHeaderModel: Equatable {
             && (a.titleIcon == nil) == (b.titleIcon == nil)
             && (a.secondaryIcon == nil) == (b.secondaryIcon == nil)
             && (a.avatarAsset == nil) == (b.avatarAsset == nil)
+            && a.subtitleFaces == b.subtitleFaces
+    }
+}
+
+/// Up to three small round photos, each overlapping the one before by a third, the group page's
+/// faces beside its member count. Photos come from the app's image cache; a face that has not
+/// loaded yet is a grey circle until it does.
+final class HeaderFacesView: UIView {
+    private static let side: CGFloat = 18
+    private static let step: CGFloat = 12
+    private var views: [UIImageView] = []
+    private var urls: [String] = []
+    private var width: NSLayoutConstraint!
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        translatesAutoresizingMaskIntoConstraints = false
+        width = widthAnchor.constraint(equalToConstant: 0)
+        width.isActive = true
+        heightAnchor.constraint(equalToConstant: Self.side).isActive = true
+        isHidden = true
+        isAccessibilityElement = false
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func set(_ new: [String]) {
+        let list = Array(new.prefix(3))
+        guard list != urls else { return }
+        urls = list
+        views.forEach { $0.removeFromSuperview() }
+        views = []
+        isHidden = list.isEmpty
+        width.constant = list.isEmpty ? 0 : Self.side + Self.step * CGFloat(list.count - 1)
+        for (i, url) in list.enumerated() {
+            let v = UIImageView(frame: CGRect(x: Self.step * CGFloat(i), y: 0, width: Self.side, height: Self.side))
+            v.contentMode = .scaleAspectFill
+            v.clipsToBounds = true
+            v.layer.cornerRadius = Self.side / 2
+            v.layer.borderWidth = 1
+            v.layer.borderColor = UIColor.systemBackground.withAlphaComponent(0.8).cgColor
+            v.backgroundColor = .systemGray4
+            // The first face on top, as on the group page.
+            insertSubview(v, at: 0)
+            views.append(v)
+            if let img = DiskImageCache.shared.memoryImage(url) {
+                v.image = img
+            } else {
+                Task { [weak self, weak v] in
+                    let img = await DiskImageCache.shared.image(for: url)
+                    await MainActor.run {
+                        guard let self, let v, self.urls.contains(url) else { return }
+                        v.image = img
+                    }
+                }
+            }
+        }
     }
 }
 
