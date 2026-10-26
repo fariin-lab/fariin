@@ -24,18 +24,18 @@ enum RingbackTone {
         max(0, min(1, t / edge, (length - t) / edge))
     }
 
-    // Ringback (440+480 Hz), reference-style cadence, user-tuned 2026-07-22: 1.8s ring / 3.4s quiet
-    // (5.2s cycle). The old 1.2s gap rang again too soon and sounded like one constant noise
-    // instead of a phone ringing. Looped forever by the player.
+    // Ringback (440+480 Hz) at the standard cadence for these two notes: 2s ring / 4s quiet (6s
+    // cycle). Owner 2026-10-26 timed the big messenger at ~1.9s / ~3.9s by hand, which is this
+    // cadence; the earlier 1.8 / 3.4 came back a little too soon. Looped forever by the player.
     static func wavData(sampleRate: Int = 8000) -> Data {
-        let cycle = 5.2
+        let cycle = 6.0
         let total = Int(Double(sampleRate) * cycle)   // one cadence cycle, looped by the player
         var samples = [Int16](repeating: 0, count: total)
         for i in 0..<total {
             let t = Double(i) / Double(sampleRate)
             let phase = t.truncatingRemainder(dividingBy: cycle)
-            if phase < 1.8 {   // 1.8s on, 3.4s off
-                samples[i] = Int16(max(-1, min(1, tone(t, 440, 480))) * level * fade(phase, 1.8))
+            if phase < 2.0 {   // 2s on, 4s off
+                samples[i] = Int16(max(-1, min(1, tone(t, 440, 480))) * level * fade(phase, 2.0))
             }
         }
         return wav(samples, sampleRate: sampleRate)
