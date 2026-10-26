@@ -1448,6 +1448,14 @@ service cloud.firestore {
             || (m.get('state', 'ok') == 'suspended'
                 && (m.get('until', null) == null || m.get('until', null) > request.time)));
     }
+    // 2026-10-26: suspended or disabled = unavailable, nobody reads (an ENDED group still does).
+    function groupFariinLocked(d) {
+      let m = d.get('mod', {});
+      return d.get('type', '') == 'group'
+        && (m.get('state', 'ok') == 'disabled'
+            || (m.get('state', 'ok') == 'suspended'
+                && (m.get('until', null) == null || m.get('until', null) > request.time)));
+    }
     function groupModClosed(d) {
       return groupModBlocked(d)
         || (d.get('type', '') == 'group' && d.get('mod', {}).get('state', 'ok') == 'limited');
@@ -2663,7 +2671,8 @@ service cloud.firestore {
             && !(gm.get('state', 'ok') == 'suspended'
                  && (gm.get('until', null) == null || gm.get('until', null) > request.time));
         }
-        allow read: if signedIn() && (request.auth.uid in convData().users || publicPreviewRead());
+        allow read: if signedIn()
+          && ((request.auth.uid in convData().users && !groupFariinLocked(convData())) || publicPreviewRead());
         allow create: if signedIn()
           && (request.auth.uid == request.resource.data.authorId || isCallRecordForMember())
           && request.auth.uid in convData().users
@@ -3610,13 +3619,18 @@ service cloud.firestore {
         && (resource.data.get('mediaUrl', '') == ''
             || (request.resource.data.get('mediaUrl', '') == resource.data.get('mediaUrl', '')
                 && request.resource.data.get('caption', '') == resource.data.get('caption', '')));
-      // The author, or a moderator acting on a report. This is the ONE surface in Fariin where a
-      // stranger's content is visible to anybody who finds it (an "Everyone" story is public), which
-      // makes it the one place Apple could be shown somebody else's illegal post. Being able to take
-      // it down in seconds is the whole point.
-      // ⛔ 2026-10-12: the moderator half moved to the adminApi function (storyRemove), which records
-      // every takedown in the audit log. Here, only the author deletes their own story.
-      allow delete: if signedIn() && request.auth.uid == resource.data.authorUid;
+      // The author deletes; Fariin's moderators take stories down through adminApi storyRemove
+      // (2026-10-12, audited).
+      allow delete: if signedIn() && (request.auth.uid == resource.data.authorUid || groupStoryModerator());
+      // 2026-10-26: the group's owner, or an admin with deleteMessages, takes down its stories.
+      function groupStoryModerator() {
+        let g = resource.data.get('groupId', '');
+        let c = g != '' ? get(/databases/$(database)/documents/conversations/$(g)).data : {};
+        return g != '' && c.get('type', '') == 'group' && request.auth.uid in c.get('users', [])
+          && (c.get('createdBy', '') == request.auth.uid
+              || (request.auth.uid in c.get('admins', [])
+                  && 'deleteMessages' in c.get('adminRights', {}).get(request.auth.uid, ['deleteMessages'])));
+      }
 
       // THE VIEW COUNT, kept by `onStoryViewWritten` (admin rights), never written by a client. A
       // subcollection rather than a field on the story, which every recipient can read.

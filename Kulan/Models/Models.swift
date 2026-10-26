@@ -1020,6 +1020,15 @@ struct GroupMod: Equatable, Hashable {
         notice = String((d["notice"] as? String ?? "").prefix(200))
     }
 
+    /// ⛔ UNAVAILABLE (owner 2026-10-26, the reference app's blocked group): suspended and not yet
+    /// over, or disabled, by Fariin. Nothing to read, send, call, edit or add; only Leave. A group its
+    /// owner ended is NOT this (its history stays).
+    func locksGroup(now: Date = Date()) -> Bool {
+        if state == "disabled" { return true }
+        guard state == "suspended" else { return false }
+        return untilMillis <= 0 || untilMillis > now.timeIntervalSince1970 * 1000
+    }
+
     /// Nobody may send here right now (suspended and not yet over, disabled, or ended by its owner).
     func blocksSending(now: Date = Date()) -> Bool {
         if state == "disabled" || state == "ended" { return true }
@@ -1242,6 +1251,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var groupVerified: Bool = false
     /// The badge as it is shown: verified and no Scam / Fake label.
     var showsGroupBadge: Bool { isGroup && groupVerified && groupMod.label.isEmpty }
+    /// Suspended or disabled by Fariin right now (see `GroupMod.locksGroup`).
+    var fariinLocked: Bool { isGroup && groupMod.locksGroup() }
 
     /// The label for a member whose account is gone. Same words the server writes into `names`.
     static let deletedAccountName = "Deleted Account"

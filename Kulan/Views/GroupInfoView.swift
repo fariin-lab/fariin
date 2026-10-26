@@ -140,12 +140,12 @@ struct GroupInfoView: View {
     // A member an admin restricted from it may not, whatever the group's switch (2026-10-19 fix round).
     private var canEditInfo: Bool {
         // An ended group is closed: no edits and no new members (audit G1; the rules refuse them).
-        guard let c = conv, c.groupMod.state != "ended" else { return false }
+        guard let c = conv, c.groupMod.state != "ended", !c.fariinLocked else { return false }
         return c.adminCan(me, .changeInfo)
             || (c.membersCanEditInfo && !c.isRestricted(me, .changeInfo, now: Date().timeIntervalSince1970 * 1000))
     }
     private var canAdd: Bool {
-        guard let c = conv, c.groupMod.state != "ended" else { return false }
+        guard let c = conv, c.groupMod.state != "ended", !c.fariinLocked else { return false }
         return c.adminCan(me, .inviteUsers)
             || (c.membersCanAdd && !c.isRestricted(me, .addMembers, now: Date().timeIntervalSince1970 * 1000))
     }
@@ -444,6 +444,22 @@ struct GroupInfoView: View {
     }
 
     @ViewBuilder private var cards: some View {
+        if conv?.fariinLocked == true {
+            // ⛔ UNAVAILABLE (owner 2026-10-26, the reference app's blocked group): why, and Leave.
+            // Nothing else: no settings, members, media or links while the hold lasts.
+            Text(conv?.groupMod.noticeText ?? "")
+                .font(.subheadline).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(16)
+                .profileSurface(plain: cardColor)
+            exitCard
+        } else {
+            unlockedCards
+        }
+    }
+
+    @ViewBuilder private var unlockedCards: some View {
         // The description and a public group's own link (copy, share, QR) share one card.
         aboutCard
         settingsCard
@@ -522,7 +538,7 @@ struct GroupInfoView: View {
             }
             .overlay { GroupStoryUploadRing(active: StoriesService.shared.uploadingGroups.contains(cid)) }
             headerCaption(.primary)
-            actionsRow.padding(.top, 2)
+            if conv?.fariinLocked != true { actionsRow.padding(.top, 2) }
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 8)
@@ -2690,7 +2706,7 @@ struct GroupMembersSheet: View {
     private var conv: Conversation? { live.start(cid); return live.conv ?? repo.conversations.first { $0.id == cid } }
     // A member an admin kept from adding sees no Add (audit 2026-10-20; the rules refuse it).
     private var canAdd: Bool {
-        guard let c = conv, c.groupMod.state != "ended" else { return false }
+        guard let c = conv, c.groupMod.state != "ended", !c.fariinLocked else { return false }
         return c.adminCan(me, .inviteUsers)
             || (c.membersCanAdd && !c.isRestricted(me, .addMembers, now: Date().timeIntervalSince1970 * 1000))
     }

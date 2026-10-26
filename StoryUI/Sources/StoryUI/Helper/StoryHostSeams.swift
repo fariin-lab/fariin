@@ -79,6 +79,12 @@ public enum StoryNotifySeam {
     public static var isOn: ((String) -> Bool?)?
 }
 
+/// Is the viewer the owner or an admin of the group whose ring this is (key "g:" + group id)? Then
+/// the menu has no Hide Stories or Report: it is their own group (owner 2026-10-26).
+public enum StoryGroupStaffSeam {
+    public static var isStaff: ((String) -> Bool)?
+}
+
 public enum StoryPosterSource {
     /// Must be synchronous and memory-only — it is called on the main thread on the frame a story
     /// opens, which is the whole point of it.

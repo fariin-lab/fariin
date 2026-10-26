@@ -597,15 +597,30 @@ struct ThreadView: View {
                 muteLiftTick += 1
             }
             .allowsHitTesting(!groupModHidesChat)
+            // The rules refuse a suspended group's messages (owner 2026-10-26); the hold lifted, the
+            // chat listens again.
+            .onChange(of: groupModHidesChat) { _, locked in
+                repo.moderationLocked = locked
+                if !locked { repo.start() }
+            }
             .overlay {
                 if groupModHidesChat {
-                    Text(conversation?.groupMod.noticeText ?? "")
-                        .multilineTextAlignment(.center)
-                        .modifier(ChatNoticePill(dark: dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur))
-                        .font(.subheadline)
-                        .padding(.horizontal, 48)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .transition(.opacity)
+                    // ⛔ AN OPAQUE PAGE (owner 2026-10-26): the hidden list left the chat see-through, so
+                    // the long-press preview showed the chat list behind it. The reference app's
+                    // unavailable group: a plain page, why in the middle.
+                    VStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.shield.fill")
+                            .font(.system(size: 40)).foregroundStyle(.secondary)
+                        Text("This group is unavailable")
+                            .font(.headline).foregroundStyle(.primary)
+                        Text(conversation?.groupMod.noticeText ?? "")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+                    .transition(.opacity)
                 }
             }
     }
@@ -2345,6 +2360,7 @@ struct ThreadView: View {
             noteHistoryStart()
             // A preview owns its repository; a real chat shares the live one (`forChat`), so it
             // counts itself in and out rather than stopping a run another screen may be using.
+            repo.moderationLocked = groupModHidesChat
             if quiet { repo.start() } else { repo.open() }
             // PAY THE GIF KEY'S ROUND TRIP NOW, quietly, instead of on the first tap of the button.
             // Opening a chat is the moment we learn a GIF might be sent, and it is a moment with
@@ -5479,7 +5495,7 @@ struct ThreadView: View {
                 callsEnabled: callsEnabled || liveWithThem)
         }
         // Group Settings "Start group call: Admins only": a member joins from the Join bar instead.
-        if isGroup && CallFeatures.groupCalls && !notAMember && (conversation?.canStartCall(me) ?? true) {
+        if isGroup && CallFeatures.groupCalls && !notAMember && !groupModHidesChat && (conversation?.canStartCall(me) ?? true) {
             return .conversation(audio: { startGroupCall(video: false) },
                                  video: { startGroupCall(video: true) },
                                  callsEnabled: callsEnabled,

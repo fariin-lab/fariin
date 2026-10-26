@@ -242,6 +242,10 @@ final class ThreadRepository {
     /// the messages are listened to: the rules let a non-member read those of a public group sent
     /// in the clear, never the group document. Set before `start()`.
     @ObservationIgnored var previewOnly = false
+    /// ⛔ SUSPENDED OR DISABLED BY FARIIN (owner 2026-10-26): the rules refuse this group's messages
+    /// while the hold lasts, so a refusal here is expected. It is neither reported nor retried; the
+    /// chat re-attaches when the hold ends (ThreadView `groupModHidesChat`).
+    @ObservationIgnored var moderationLocked = false
     /// A public group whose messages I may not read from outside (owner 2026-10-23): the chat opens
     /// with its header and Join, and no listener is started (it could only be refused).
     @ObservationIgnored var lockedGuest = false
@@ -1038,6 +1042,7 @@ final class ThreadRepository {
                     // the (empty) chat and re-attach after a beat.
                     self.didInitialLoad = true
                     self.listenerFailed = true
+                    if self.moderationLocked { return }
                     // Owner, 2026-10-08: never blank a chat because the server is refusing. Rows already
                     // in memory stay; if there are none, take the warm cache.
                     if self.messages.isEmpty, let c = ThreadMessageCache.shared.memoryMessages(for: self.cid), !c.isEmpty {

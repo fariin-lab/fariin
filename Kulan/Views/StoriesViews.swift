@@ -1570,7 +1570,11 @@ struct StoryViewer: View {
     private var me: String { AuthService.shared.uid ?? "" }
     private var currentIsMine: Bool { groups.first { $0.authorUid == currentBucketUid }?.isMine ?? false }
     /// I posted the story on screen: my own ring, or my post inside a group's ring.
-    private var currentIsAuthor: Bool { currentIsMine || (currentStory.map { $0.authorUid == me && !me.isEmpty } ?? false) }
+    private var currentIsAuthor: Bool {
+        currentIsMine || (currentStory.map { s in
+            (s.authorUid == me && !me.isEmpty) || (s.groupId.map { GroupStoryStaff.mayDelete(groupId: $0) } ?? false)
+        } ?? false)
+    }
     private var myStories: [Story] { groups.first { $0.isMine && $0.groupConvId == nil }?.stories ?? [] }
     /// THE STORIES THE VIEWERS SHEET PAGES THROUGH: the ring on screen. A group story's sheet used
     /// My Story's list, so its card was not in the carousel: swipes did nothing and the selected card

@@ -81,6 +81,9 @@ final class StoryNotifyStore {
                 return StoryNotifyStore.shared.isOn(author)
             }
         }
+        StoryGroupStaffSeam.isStaff = { key in
+            MainActor.assumeIsolated { GroupStoryStaff.isStaff(ringKey: key) }
+        }
     }
 }
 

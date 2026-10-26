@@ -186,14 +186,18 @@ struct UserView: View {
                 })
                 // No Copy Story Link (owner, 2026-10-11): Share's sheet has Copy Link.
             }
-            // His own drawings (owner 2026-10-17); the symbols stay as the fallback.
-            out.append(.init(title: "Hide Stories", systemImage: "eye.slash", assetImage: "ic_eye_off") {
-                NotificationCenter.default.post(name: .init("storyActionHide"), object: nil)
-            })
-            out.append(.init(title: "Report", systemImage: "exclamationmark.bubble", assetImage: "ic_report",
-                             destructive: true) {
-                NotificationCenter.default.post(name: .init("storyActionReport"), object: nil)
-            })
+            // My own group's ring (I own it or am an admin): nothing to hide or report (owner
+            // 2026-10-26: "I am the owner, why Report").
+            if StoryGroupStaffSeam.isStaff?(userId) != true {
+                // His own drawings (owner 2026-10-17); the symbols stay as the fallback.
+                out.append(.init(title: "Hide Stories", systemImage: "eye.slash", assetImage: "ic_eye_off") {
+                    NotificationCenter.default.post(name: .init("storyActionHide"), object: nil)
+                })
+                out.append(.init(title: "Report", systemImage: "exclamationmark.bubble", assetImage: "ic_report",
+                                 destructive: true) {
+                    NotificationCenter.default.post(name: .init("storyActionReport"), object: nil)
+                })
+            }
         }
         return out
     }

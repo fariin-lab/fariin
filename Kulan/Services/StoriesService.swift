@@ -264,6 +264,25 @@ struct StoryRepost: Equatable, Hashable, Codable {
     }
 }
 
+/// ⛔ A GROUP'S OWNER AND ITS ADMINS OVER ITS STORIES (owner 2026-10-26, as the reference app): the
+/// owner, or an admin holding Delete messages, may take down any story in the group's ring (the rules'
+/// `groupStoryModerator`), and neither is offered Hide Stories or Report on their own group.
+@MainActor enum GroupStoryStaff {
+    private static var me: String { AuthService.shared.uid ?? "" }
+    private static func conv(_ gid: String) -> Conversation? {
+        ConversationsRepository.shared.conversations.first { $0.id == gid && $0.isGroup }
+    }
+    static func isStaff(ringKey: String) -> Bool {
+        guard ringKey.hasPrefix(StoryGroup.groupKeyPrefix), let c = conv(String(ringKey.dropFirst(StoryGroup.groupKeyPrefix.count)))
+        else { return false }
+        return c.users.contains(me) && (c.createdBy == me || c.isAdmin(me))
+    }
+    static func mayDelete(groupId: String) -> Bool {
+        guard let c = conv(groupId), c.users.contains(me) else { return false }
+        return c.createdBy == me || (c.isAdmin(me) && c.adminCan(me, .deleteMessages))
+    }
+}
+
 /// ONE REPLY IN A GROUP STORY'S SHARED THREAD (owner 2026-10-23, group stories v2, the reference
 /// (signal) model): a reply to a group story goes to everyone the story reached, not privately to
 /// the poster. Text, or an emoji for a reaction. Stored at `stories/{id}/replies/{replyId}`; the rules
@@ -343,7 +362,7 @@ extension GroupStoryRights {
 /// the owner always, an admin who holds the Add story right (owner 2026-10-25), nobody else.
 enum GroupStoryRights {
     static func canPost(_ c: Conversation, _ uid: String) -> Bool {
-        guard c.isGroup, !uid.isEmpty, c.users.contains(uid) else { return false }
+        guard c.isGroup, !uid.isEmpty, c.users.contains(uid), !c.fariinLocked else { return false }
         // owner 2026-10-23: only a group of 50 or more (panel-set) has stories, except for app
         // admins (like @v), who may post to any group they run.
         guard c.users.count >= AppLimits.shared.groupStoryMinMembers || AdminStore.shared.isAdmin
@@ -2940,6 +2959,13 @@ final class StoriesService {
         // occupy are known from its id. Deleting a path that does not exist is a no-op, so asking for
         // all three costs one round trip each and cannot leave anything behind.
         let me = uid
+        if let author = data?["authorUid"] as? String, !author.isEmpty, author != me {
+            // A group admin's takedown (GroupStoryStaff): the files are the poster's, and the
+            // server's onStoryDeleted removes them with the document. A group story has no mirror.
+            do { try await db.collection("stories").document(id).delete() } catch { return false }
+            await StoriesRepository.shared.removeLocally(id)
+            return true
+        }
         let knownPaths = data.flatMap { $0["mediaPath"] as? String }.map { [$0] }
             ?? ["stories/\(id)/photo.jpg", "stories/\(id)/video.mp4"]
         // The public mirror goes with it, or a deleted story keeps playing on the author's profile
