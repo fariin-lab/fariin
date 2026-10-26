@@ -2223,7 +2223,9 @@ struct ChatsView: View {
     // bar images: no tint of their own (the tab root's `.tint(.primary)` already reaches this bar)
     // and no font size forced on them, so the bar draws them at its own glyph size.
     private var composeButton: some View {
-        Button { showNew = true } label: { Image(systemName: "square.and.pencil") }
+        // The pencil's tip juts out top right, so the glyph's box sits the square low and left in
+        // the circle; nudged so the square is what is centred (owner 2026-10-26).
+        Button { showNew = true } label: { Image(systemName: "square.and.pencil").offset(x: 1.5, y: -1.5) }
             // Where the first-chat tip points (owner 2026-10-18).
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).midX } action: { composeMidX = $0 }
     }
