@@ -72,6 +72,7 @@ struct GroupInfoView: View {
     @State private var showAllMembers = false   // the members header's search, and See All under the first five
     @State private var showSounds = false
     @State private var showSettings = false
+    @State private var showStats = false
     /// People asking to join, for the admins' Join Requests row (owner 2026-10-20). A class box in
     /// @State, so the listener lives as long as the page.
     @State private var joinReqs: [JoinRequest] = []
@@ -311,6 +312,7 @@ struct GroupInfoView: View {
             .navigationDestination(isPresented: $showSounds) { SoundsNotificationsView(cid: cid) }
             .navigationDestination(isPresented: $showSettings) { GroupSettingsView(cid: cid) }
             .navigationDestination(isPresented: $showJoinRequests) { GroupRequestsView(cid: cid) }
+            .navigationDestination(isPresented: $showStats) { GroupStatsView(cid: cid, title: title) }
             .fullScreenCover(isPresented: $showCall) { GroupCallView() }
             // Nobody to call (owner 2026-10-20): said in a centred alert.
             // One wording with the chat (A11, 2026-10-23): nothing failed, there is nobody to ring.
@@ -964,11 +966,23 @@ struct GroupInfoView: View {
                 rowDivider
                 groupSettingsRows
             }
+            // Statistics (owner 2026-10-26): owner/admins of a big enough group, last row.
+            if showStatsRow {
+                rowDivider
+                ProfileInfoRow(title: "Statistics", icon: "chart.bar.xaxis") { showStats = true }
+            }
         }
         .profileSurface(plain: cardColor)
         .onAppear { followJoinRequests() }
         // Made an admin while the page is open: the requests start then (audit 2026-10-20).
         .onChange(of: can(.inviteUsers)) { _, _ in followJoinRequests() }
+    }
+
+    /// Same gate as the server's `groupStats` (owner 2026-10-26). A Fariin admin sees it at any size.
+    private var showStatsRow: Bool {
+        guard Flags.groupStatsEnabled, let c = conv, !c.fariinLocked else { return false }
+        guard c.createdBy == me || c.isAdmin(me) else { return false }
+        return c.users.count >= AppLimits.shared.groupStatsMinMembers || AdminStore.shared.isAdmin
     }
 
     /// Invite links are an admin right (fix-all #226): that admin manages them; a member who may

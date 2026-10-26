@@ -73,6 +73,17 @@ final class ProfileStore {
         // 2026-09-29: photos uploaded before the audience label existed get it now (see
         // `photoAudienceTag`). "checked" until the block list has loaded; its load corrects it.
         Task { await self.syncPhotoAudienceTag() }
+        // Owner 2026-10-26: the phone's language for Group Statistics. Only off a fresh read, so a
+        // cached profile never causes a write.
+        if let fresh { Task { await self.syncMyLanguage(uid: uid, saved: fresh.lang) } }
+    }
+
+    /// Writes `users/{me}.lang` (2-letter ISO) once per launch, only when it differs from the saved one.
+    private func syncMyLanguage(uid: String, saved: String?) async {
+        guard let code = Locale.current.language.languageCode?.identifier.lowercased(),
+              code.count == 2, code != saved else { return }
+        guard Auth.auth().currentUser?.uid == uid else { return }
+        try? await db.collection("users").document(uid).setData(["lang": code], merge: true)
     }
 
     /// BRING MY OWN PRIVACY SETTINGS BACK WITH ME (owner 2026-08-04: "after I close the app and sign

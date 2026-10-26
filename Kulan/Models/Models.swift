@@ -18,6 +18,8 @@ enum Flags {
     /// "Create new groups" (owner 2026-10-18, admin panel): OFF hides every way to MAKE a group and
     /// the rules refuse one; groups that exist keep working. Live (`LiveFeatures`), on unless set.
     static var groupCreateEnabled: Bool { groupsEnabled && LiveFeatures.shared.values["groupCreate"] != false }
+    /// Group Statistics page (owner 2026-10-26, admin panel Features switch). Live; on unless set.
+    static var groupStatsEnabled: Bool { LiveFeatures.shared.values["groupStats"] != false }
     /// The "All Members" bubble cloud on a group's page (owner 2026-10-19): off, every group, or
     /// the groups the admin panel picks (config/features memberCloud). Live; off unless set.
     static func memberCloud(for cid: String) -> Bool { LiveFeatures.shared.memberCloud.isOn(for: cid) }
@@ -107,6 +109,9 @@ struct UserProfile: Identifiable, Equatable {
     /// the rules refuse a banned account's stories,
     /// and the app reads it only to say so before the picker opens (2026-10-13).
     var banned: Bool = false
+    /// The phone's language, 2-letter ISO (owner 2026-10-26, Group Statistics' Languages chart).
+    /// Written by my own phone at launch (`ProfileStore.syncMyLanguage`).
+    var lang: String?
 
     /// True while this account is inside its deletion grace period: hidden from search, contacts and
     /// stories, but not yet destroyed.
@@ -123,6 +128,7 @@ struct UserProfile: Identifiable, Equatable {
         if let ts = data["deletionScheduledFor"] as? Timestamp { self.deletionScheduledFor = ts.dateValue() }
         self.photoUrl = data["photoUrl"] as? String
         self.groupStoryOpen = data["groupStoryOpen"] as? Bool ?? false
+        self.lang = data["lang"] as? String
         self.posterUrl = data["posterUrl"] as? String
         self.photoThumb = data["photoThumb"] as? String
         self.publicKeyB64 = data["publicKey"] as? String
