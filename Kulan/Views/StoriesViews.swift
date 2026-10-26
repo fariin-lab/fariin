@@ -1569,6 +1569,8 @@ struct StoryViewer: View {
 
     private var me: String { AuthService.shared.uid ?? "" }
     private var currentIsMine: Bool { groups.first { $0.authorUid == currentBucketUid }?.isMine ?? false }
+    /// I posted the story on screen: my own ring, or my post inside a group's ring.
+    private var currentIsAuthor: Bool { currentIsMine || (currentStory.map { $0.authorUid == me && !me.isEmpty } ?? false) }
     private var myStories: [Story] { groups.first { $0.isMine && $0.groupConvId == nil }?.stories ?? [] }
     /// THE STORIES THE VIEWERS SHEET PAGES THROUGH: the ring on screen. A group story's sheet used
     /// My Story's list, so its card was not in the carousel: swipes did nothing and the selected card
@@ -2178,6 +2180,26 @@ struct StoryViewer: View {
             // sat open on a story that no longer exists. The bucket in hand already knows, and the
             // count cannot change under a modal viewer.
             let wasLast = (StoriesRepository.shared.mine?.stories.count ?? 0) <= 1
+            // ⛔ MY POST IN A GROUP'S RING (owner 2026-10-26: group stories could not be deleted).
+            // That ring is the group's, not My Story: forget the story now and, when it was the
+            // ring's last, close the usual way. The server delete below is the same.
+            if currentBucketUid.hasPrefix(StoryGroup.groupKeyPrefix) {
+                let ringLast = sheetStories.filter { $0.id != id }.isEmpty
+                StoriesRepository.shared.removeLocally(id)
+                if ringLast {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                        if !beginHeroCloseFromRest() { isPresented = false }
+                    }
+                } else {
+                    StoryDoor.refreshCover(of: heroKeyNow())
+                }
+                Task {
+                    let gone = await StoriesService.shared.deleteStory(id)
+                    await StoriesRepository.shared.load(force: true)
+                    if !gone { await MainActor.run { flashSentToast("Couldn't delete — check your connection") } }
+                }
+                return
+            }
             // ⛔ THE CLOSE'S PICTURE IS NOW A PICTURE OF SOMETHING DELETED — owner, 2026-08-23: after
             // deleting the story he was on, dragging down to close flashed the DELETED one on the
             // card before the row caught up.
@@ -2361,7 +2383,7 @@ struct StoryViewer: View {
         }
         // "…" → Delete Story (only shown on my own story) → same confirm + seamless delete as the trash button.
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionDelete"))) { _ in
-            if currentIsMine && !isUploadingItem { confirmDelete = true }   // no delete on the uploading item
+            if currentIsAuthor && !isUploadingItem { confirmDelete = true }   // no delete on the uploading item
         }
         .overlay(alignment: .bottom) {
             if sentToast {
@@ -5389,40 +5411,17 @@ struct StoryViewer: View {
         let oneTimeFull = (s?.oneTime ?? false) && s?.recipientsLeft == 0
         return HStack(spacing: 12) {
             Button { openViewers() } label: {
-                HStack(spacing: 8) {
-                    if !faces.isEmpty {
-                        HStack(spacing: -8) {
-                            ForEach(faces) { v in
-                                AvatarView(name: v.name, photoUrl: v.photoUrl, size: 26)
-                                    .overlay(Circle().stroke(.black, lineWidth: 1.5))
-                            }
-                        }
-                    } else if !oneTimeFull && !StoryPrefs.viewReceiptsOn {
-                        // 2026-10-17 (owner): his crossed eye while my receipts are off.
-                        StoryViewsOffIcon()
-                    } else {
-                        Image(systemName: oneTimeFull ? "1.circle" : "eye")
-                            .font(.subheadline).foregroundStyle(.white)
-                    }
-                    // The label carries the state rather than a second chip beside it: this row
-                    // already holds avatars, a count, hearts and the bin, and for a one-time story
-                    // "everybody has seen it" and "N views" are the same sentence twice.
-                    Text(oneTimeFull ? "Once viewer is full"
-                                     : "\(total) View\(total == 1 ? "" : "s")")
-                        .font(.subheadline.weight(.medium)).foregroundStyle(.white)
-                        .lineLimit(1)
-                    if reactions > 0 {
-                        Image(systemName: "heart.fill").font(.subheadline).foregroundStyle(.red)
-                        Text("\(reactions)").font(.subheadline).foregroundStyle(.white)
-                    }
-                }
+                StoryOwnerStats(faces: faces, count: total, oneTimeFull: oneTimeFull,
+                                reposts: barViewers?.repostCount ?? 0, reactions: reactions)
             }
             .buttonStyle(.plain)
             Spacer()
-            Button { confirmDelete = true } label: {
-                Image(systemName: "trash").font(.title3).foregroundStyle(.white)
+            if currentIsAuthor {
+                Button { confirmDelete = true } label: {
+                    Image(systemName: "trash").font(.title3).foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
     }
 
@@ -5469,14 +5468,17 @@ struct StoryViewer: View {
         m.faces = barViewers?.recent ?? []
         m.count = barViewers?.count ?? 0
         m.reactions = barViewers?.reactionCount ?? 0
+        m.reposts = barViewers?.repostCount ?? 0
         let s = currentStory
         m.oneTimeFull = (s?.oneTime ?? false) && s?.recipientsLeft == 0
         m.uploading = isUploadingItem
         m.bottomInset = bottomInset
         m.onViews = { openViewers() }
-        // Only the author deletes (rules); a group's ring the owner or an admin reads has no trash.
-        m.canDelete = currentIsMine
-        m.onDelete = { if currentIsMine { confirmDelete = true } }
+        // Only the author deletes (rules). ⛔ The story's author, not the ring's (owner 2026-10-26:
+        // "I can't delete my group story"): a group ring is keyed by the group, so `currentIsMine`
+        // was false on my own post there. An owner or admin reading another member's post: no trash.
+        m.canDelete = currentIsAuthor
+        m.onDelete = { if currentIsAuthor { confirmDelete = true } }
         let uploadingId = currentStoryId   // the X cancels THIS story's upload, not every one
         m.onCancelUpload = { uploadSvc.cancelUpload(id: uploadingId); onClose() }
     }
@@ -5928,6 +5930,7 @@ struct UploadingStoryHandoff: View {
     var faces: [StoryViewerInfo] = []
     var count = 0
     var reactions = 0
+    var reposts = 0
     var oneTimeFull = false
     /// The still-uploading placeholder wears the cancel bar instead of the Views bar.
     var uploading = false
@@ -5941,6 +5944,52 @@ struct UploadingStoryHandoff: View {
 
 /// The bar itself, drawn by the page. Everything it says comes from the model above, which is what
 /// keeps it current inside a page nobody rebuilds.
+/// ⛔ THE OWNER BAR'S NUMBERS, ONE LOOK FOR EVERY STORY (owner's mockup 2026-10-26, personal and
+/// group alike): viewer faces and "N Views", then the repost arrows and their count, then an outline
+/// heart and its count, all white. A number that is zero takes its icon away, so with no reposts the
+/// heart moves up into the repost's place.
+struct StoryOwnerStats: View {
+    let faces: [StoryViewerInfo]
+    let count: Int
+    let oneTimeFull: Bool
+    let reposts: Int
+    let reactions: Int
+
+    var body: some View {
+        HStack(spacing: 18) {
+            HStack(spacing: 8) {
+                if !faces.isEmpty {
+                    HStack(spacing: -8) {
+                        ForEach(faces) { v in
+                            AvatarView(name: v.name, photoUrl: v.photoUrl, size: 26)
+                                .overlay(Circle().stroke(.black, lineWidth: 1.5))
+                        }
+                    }
+                } else if !oneTimeFull && !StoryPrefs.viewReceiptsOn {
+                    StoryViewsOffIcon()   // 2026-10-17, receipts off (owner)
+                } else {
+                    Image(systemName: oneTimeFull ? "1.circle" : "eye")
+                        .font(.subheadline).foregroundStyle(.white)
+                }
+                // The label carries the one-time state rather than a second chip beside it.
+                Text(oneTimeFull ? "Once viewer is full" : "\(count) View\(count == 1 ? "" : "s")")
+                    .font(.subheadline.weight(.medium)).foregroundStyle(.white)
+                    .lineLimit(1)
+            }
+            if reposts > 0 { stat("arrow.2.squarepath", reposts) }
+            if reactions > 0 { stat("heart", reactions) }
+        }
+    }
+
+    private func stat(_ icon: String, _ n: Int) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon).font(.system(size: 19, weight: .regular))
+            Text("\(n)").font(.subheadline.weight(.medium)).monospacedDigit()
+        }
+        .foregroundStyle(.white)
+    }
+}
+
 struct StoryOwnerBarView: View {
     @State private var m = StoryOwnerBarModel.shared
 
@@ -5956,29 +6005,8 @@ struct StoryOwnerBarView: View {
             } else {
                 HStack(spacing: 12) {
                     Button { m.onViews() } label: {
-                        HStack(spacing: 8) {
-                            if !m.faces.isEmpty {
-                                HStack(spacing: -8) {
-                                    ForEach(m.faces) { v in
-                                        AvatarView(name: v.name, photoUrl: v.photoUrl, size: 26)
-                                            .overlay(Circle().stroke(.black, lineWidth: 1.5))
-                                    }
-                                }
-                            } else if !m.oneTimeFull && !StoryPrefs.viewReceiptsOn {
-                                StoryViewsOffIcon()   // 2026-10-17, receipts off (owner)
-                            } else {
-                                Image(systemName: m.oneTimeFull ? "1.circle" : "eye")
-                                    .font(.subheadline).foregroundStyle(.white)
-                            }
-                            Text(m.oneTimeFull ? "Once viewer is full"
-                                               : "\(m.count) View\(m.count == 1 ? "" : "s")")
-                                .font(.subheadline.weight(.medium)).foregroundStyle(.white)
-                                .lineLimit(1)
-                            if m.reactions > 0 {
-                                Image(systemName: "heart.fill").font(.subheadline).foregroundStyle(.red)
-                                Text("\(m.reactions)").font(.subheadline).foregroundStyle(.white)
-                            }
-                        }
+                        StoryOwnerStats(faces: m.faces, count: m.count, oneTimeFull: m.oneTimeFull,
+                                        reposts: m.reposts, reactions: m.reactions)
                     }
                     .buttonStyle(.plain)
                     Spacer()
