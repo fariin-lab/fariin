@@ -1060,7 +1060,7 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // ── GLOW ─────────────────────────────────────────────────────────────────────────────────
+    // ── GLOW ──
     //
     // One document per glow: /glows/{from}_{to}, exactly {from, to, createdAt}. A glow is the
     // relationship behind Glow Stories — two people who are not friends and have never chatted
@@ -1145,7 +1145,7 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // ── THE OFFICIAL CHANNEL ──────────────────────────────────────────────────────────────────
+    // ── THE OFFICIAL CHANNEL ──
     //
     // There is no @fariin account and there is not meant to be. The official chat is built by the
     // app itself around a fixed id, exactly the way Signal's release channel is, which is what makes
