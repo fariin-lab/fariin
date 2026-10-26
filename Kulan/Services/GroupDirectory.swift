@@ -26,6 +26,8 @@ struct PublicGroupHit: Identifiable, Equatable {
     let photoUrl: String?
     let memberCount: Int
     let isMember: Bool
+    /// The panel's badge, from the server (older servers send none: false).
+    var verified: Bool = false
     var id: String { cid }
 
     /// "@name · 12 members", the search row's second line.
@@ -48,6 +50,7 @@ struct PublicGroupHit: Identifiable, Equatable {
         self.photoUrl = p.isEmpty ? nil : p
         self.memberCount = (row["memberCount"] as? NSNumber)?.intValue ?? 0
         self.isMember = row["isMember"] as? Bool ?? false
+        self.verified = row["verified"] as? Bool ?? false
     }
 }
 
@@ -62,6 +65,8 @@ struct PublicGroupPreview: Equatable {
     var isMember: Bool
     var needsApproval: Bool
     var requested: Bool
+    /// The panel's badge, without a Scam / Fake label (the server's preview carries both).
+    var verified: Bool
     /// Who is in it, for a visitor's view of the group page (owner, admins, then the rest; at most
     /// 100, from `publicGroupPreview`). Empty from an older server.
     var members: [PublicGroupMember]
@@ -79,6 +84,8 @@ struct PublicGroupPreview: Equatable {
         self.isMember = data["isMember"] as? Bool ?? false
         self.needsApproval = data["needsApproval"] as? Bool ?? false
         self.requested = data["requested"] as? Bool ?? false
+        let label = data["label"] as? String ?? ""
+        self.verified = (data["verified"] as? Bool ?? false) && label.isEmpty
         self.members = (data["members"] as? [[String: Any]] ?? []).compactMap(PublicGroupMember.init)
     }
 }

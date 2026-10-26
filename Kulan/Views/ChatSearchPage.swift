@@ -550,7 +550,7 @@ struct ChatSearchPage: View {
             if let c = m.chats[row.key] {
                 if c.isGroup {
                     RecentRow(name: c.displayName(me), photo: c.displayPhoto(me), uid: nil,
-                              line: c.memberCountLabel)
+                              line: c.memberCountLabel, groupBadge: c.showsGroupBadge)
                 } else {
                     RecentRow(name: c.displayName(me), photo: c.displayPhoto(me), uid: c.otherUid(me), line: nil)
                 }
@@ -776,6 +776,7 @@ private struct RecentRow: View {
     let photo: String?
     let uid: String?
     let line: String?
+    var groupBadge = false
     @State private var seen: RecentLastSeen.Line?
 
     var body: some View {
@@ -785,7 +786,7 @@ private struct RecentRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
                     Text(name).font(.headline).foregroundStyle(.primary).lineLimit(1)
-                    if let uid { VerifiedMark(uid: uid, size: 14) }
+                    if let uid { VerifiedMark(uid: uid, size: 14) } else { GroupVerifiedMark(on: groupBadge, size: 14) }
                 }
                 if let text = line ?? seen?.text {
                     Text(text).font(.subheadline)

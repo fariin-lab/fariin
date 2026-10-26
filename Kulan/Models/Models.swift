@@ -1240,6 +1240,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var groupMod: GroupMod = GroupMod(data: nil)
     /// 2026-10-18: the group's verified badge (`verified`, admin panel only).
     var groupVerified: Bool = false
+    /// The badge as it is shown: verified and no Scam / Fake label.
+    var showsGroupBadge: Bool { isGroup && groupVerified && groupMod.label.isEmpty }
 
     /// The label for a member whose account is gone. Same words the server writes into `names`.
     static let deletedAccountName = "Deleted Account"

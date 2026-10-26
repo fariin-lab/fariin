@@ -168,12 +168,15 @@ struct PublicGroupSheet: View {
         VStack(spacing: 0) {
             AvatarView(name: p.title, photoUrl: p.photoUrl, size: 100)
                 .padding(.top, 2)
-            Text(p.title)
-                .font(.system(size: 22, weight: .semibold))
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .padding(.horizontal, 24)
-                .padding(.top, 14)
+            HStack(spacing: 6) {
+                Text(p.title)
+                    .font(.system(size: 22, weight: .semibold))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                GroupVerifiedMark(on: p.verified, size: 18)
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 14)
             Text(headline(p))
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)
@@ -525,13 +528,22 @@ struct RejoinGroupBar: View {
 /// A table cell: the table's own selection handles the tap (no Button inside).
 struct PublicGroupHitRow: View {
     let hit: PublicGroupHit
+    /// A group I am in knows its badge from the chat list (a Recent row rebuilt from what was saved
+    /// has no server answer).
+    private var badgeFromChats: Bool {
+        ConversationsRepository.shared.conversations.first { $0.id == hit.cid }?.showsGroupBadge == true
+            || GroupDirectory.cachedPreview(name: nil, cid: hit.cid)?.verified == true
+    }
 
     var body: some View {
         HStack(spacing: 12) {
             AvatarView(name: hit.title, photoUrl: hit.photoUrl, size: 56)
                 .padding(.vertical, 12)
             VStack(alignment: .leading, spacing: 1) {
-                Text(hit.title).font(.headline).foregroundStyle(.primary).lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(hit.title).font(.headline).foregroundStyle(.primary).lineLimit(1)
+                    GroupVerifiedMark(on: hit.verified || badgeFromChats, size: 14)
+                }
                 Text(hit.subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
@@ -577,11 +589,14 @@ struct PublicGroupInfoView: View {
             VStack(spacing: 0) {
                 AvatarView(name: p.title, photoUrl: p.photoUrl, size: 132)
                     .padding(.top, 12)
-                Text(p.title)
-                    .font(.system(size: 28, weight: .bold))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-                    .padding(.top, 14)
+                HStack(spacing: 6) {
+                    Text(p.title)
+                        .font(.system(size: 28, weight: .bold))
+                        .multilineTextAlignment(.center)
+                    GroupVerifiedMark(on: p.verified, size: 20)
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 14)
                 // The member page's line: the first faces in front of the count (owner 2026-10-26:
                 // a visitor saw no faces), people with a photo first.
                 HStack(spacing: 6) {

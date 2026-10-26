@@ -380,6 +380,24 @@ final class VerificationSignal {
 /// It draws NOTHING when the peer is not verified, so it can be placed unconditionally beside any
 /// name without the caller writing an `if`. That is deliberate: an `if` at a call site is a place for
 /// somebody to write a slightly different condition.
+/// ⛔ A GROUP'S BADGE (owner 2026-10-26: shown in the chat list, the group page, search and the join
+/// page, not only the chat header). Set by the admin panel's Verify on the group (`verified`); a
+/// Scam / Fake label outranks it, so callers pass `on` already false for a labelled group.
+/// The same picture as a person's tick.
+struct GroupVerifiedMark: View {
+    let on: Bool
+    var size: CGFloat = 15
+
+    var body: some View {
+        if on {
+            Image(uiImage: VerifiedMark.badge(size: size * VerifiedMark.scale, blue: VerifiedMark.blue,
+                                              weight: VerifiedMark.weight))
+                .frame(width: size, height: size)
+                .accessibilityLabel("Verified group")
+        }
+    }
+}
+
 struct VerifiedMark: View {
     let peer: PeerRef
     var size: CGFloat = 15

@@ -6381,7 +6381,7 @@ struct ThreadView: View {
                 if !m.subtitleIsLive {
                     m.subtitle = [word, m.subtitle].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
                 }
-            } else if conv.groupVerified {
+            } else if conv.groupVerified || guest?.preview.verified == true {
                 m.titleIcon = ChatHeaderModel.verifiedMark()
             }
         }

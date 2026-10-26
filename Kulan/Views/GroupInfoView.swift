@@ -556,8 +556,11 @@ struct GroupInfoView: View {
     /// Name, "N Members" and the description line, centred.
     private func headerCaption(_ ink: Color) -> some View {
         VStack(spacing: 4) {
-            Text(title).font(.title.weight(.bold)).foregroundStyle(ink)
-                .lineLimit(2).multilineTextAlignment(.center)
+            HStack(spacing: 6) {
+                Text(title).font(.title.weight(.bold)).foregroundStyle(ink)
+                    .lineLimit(2).multilineTextAlignment(.center)
+                GroupVerifiedMark(on: conv?.showsGroupBadge == true, size: 20)
+            }
             // The count stays under the name (owner 2026-10-20, reversing the same day's removal).
             // The first faces in front of the count (owner 2026-10-20), people with a photo first.
             HStack(spacing: 6) {
