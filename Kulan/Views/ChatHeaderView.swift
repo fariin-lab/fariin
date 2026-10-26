@@ -83,6 +83,12 @@ final class ChatHeaderView: UIView {
         traits.userInterfaceStyle == .dark ? UIColor(white: 0.82, alpha: 1) : UIColor(white: 0.32, alpha: 1)
     }
 
+    /// A group's member count: soft black / soft white, between the grey and the name (owner
+    /// 2026-10-26: "not too white or too black, not the same as the name"). Solid for the same reason.
+    static let subtitleStrongColor = UIColor { traits in
+        traits.userInterfaceStyle == .dark ? UIColor(white: 0.9, alpha: 1) : UIColor(white: 0.18, alpha: 1)
+    }
+
     let subtitleLabel: UILabel = {
         let label = UILabel()
         // Secondary, not their full-opacity label: owner, 2026-08-25, with the header on his phone.
@@ -273,7 +279,7 @@ final class ChatHeaderView: UIView {
         facesView.set(model.subtitleIsLive ? [] : model.subtitleFaces)
         // Typing is the one state that colours the line; everything else is their full-opacity label.
         // `.tintColor` is UIKit's `Color.accentColor`, which is what the SwiftUI line used for typing.
-        subtitleLabel.textColor = model.subtitleIsLive ? .tintColor : model.subtitleIsStrong ? .label : Self.subtitleColor
+        subtitleLabel.textColor = model.subtitleIsLive ? .tintColor : model.subtitleIsStrong ? Self.subtitleStrongColor : Self.subtitleColor
         titleIcon = model.titleIcon
         secondaryTitleIcon = model.secondaryIcon
         // The measured answer is only the SEED for the first frame; once the glass probe has
@@ -326,7 +332,7 @@ struct ChatHeaderModel: Equatable {
     var subtitle: String?
     /// True while the line is "typing…", which is the one state drawn in the accent.
     var subtitleIsLive = false
-    /// Drawn in the name's own colour, not the dimmer grey: a group's member count (owner 2026-10-26).
+    /// Drawn in `subtitleStrongColor`, not the dimmer grey: a group's member count (owner 2026-10-26).
     var subtitleIsStrong = false
     /// Their `titleIcon` slot: the verified mark, when there is one.
     var titleIcon: UIImage?
