@@ -79,3 +79,53 @@ private struct LinkCardSurface: ViewModifier {
         if on { content.profileSurface(plain: color) } else { content }
     }
 }
+
+/// ⛔ ONE CARD FOR ABOUT AND THE LINK (owner's mockup 2026-10-26): an "About" title with its icon,
+/// the description left-aligned with every line shown, a thin line, then the public link row.
+/// Either half alone when the group has only one of them. The member's group page and a visitor's
+/// both draw this one.
+struct GroupAboutCard: View {
+    let desc: String
+    let linkName: String
+    let title: String
+    let cardColor: Color
+    var photo: String? = nil
+    var memberCount: Int? = nil
+    var openURL: OpenURLAction? = nil
+
+    var body: some View {
+        if !desc.isEmpty || !linkName.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                if !desc.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "text.alignleft").font(.system(size: 17))
+                            Text("About").font(.body)
+                        }
+                        .foregroundStyle(.primary)
+                        descText
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
+                    .padding(.bottom, linkName.isEmpty ? 14 : 16)
+                }
+                if !linkName.isEmpty {
+                    // The line starts under the link text, as between the settings rows.
+                    if !desc.isEmpty { Divider().padding(.leading, 56) }
+                    GroupPublicLinkCard(name: linkName, title: title, cardColor: cardColor,
+                                        photo: photo, memberCount: memberCount, embedded: true)
+                }
+            }
+            .profileSurface(plain: cardColor)
+        }
+    }
+
+    @ViewBuilder private var descText: some View {
+        let t = Text(GroupInfoView.blueLinks(desc)).font(.body).foregroundStyle(.primary)
+            .tint(Color(hex: 0x0A84FF))
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+        if let openURL { t.environment(\.openURL, openURL) } else { t }
+    }
+}

@@ -582,25 +582,30 @@ struct PublicGroupInfoView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
                     .padding(.top, 14)
-                Text(GroupDirectory.membersLine(p.memberCount))
-                    .font(.system(size: 16)).foregroundStyle(Color(hex: 0x8E8E93))
-                    .padding(.top, 4)
+                // The member page's line: the first faces in front of the count (owner 2026-10-26:
+                // a visitor saw no faces), people with a photo first.
+                HStack(spacing: 6) {
+                    if !countFaces.isEmpty {
+                        HStack(spacing: -7) {
+                            ForEach(Array(countFaces.enumerated()), id: \.element.uid) { i, m in
+                                AvatarView(name: m.name, photoUrl: m.photoUrl, size: 22)
+                                    .overlay(Circle().stroke(Color(uiColor: .systemGroupedBackground), lineWidth: 1.5))
+                                    .zIndex(Double(3 - i))
+                            }
+                        }
+                        .accessibilityHidden(true)
+                    }
+                    Text(GroupDirectory.membersLine(p.memberCount))
+                        .font(.system(size: 16)).foregroundStyle(Color(hex: 0x8E8E93))
+                }
+                .padding(.top, 4)
                 actionsRow.padding(.top, 16)
-                if !p.description.isEmpty {
-                    Text(GroupInfoView.blueLinks(p.description))
-                        .font(.subheadline)
-                        .tint(Color(hex: 0x0A84FF))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 28)
-                        .padding(.top, 10)
-                }
-                if !p.username.isEmpty {
-                    GroupPublicLinkCard(name: p.username, title: p.title,
-                                        cardColor: Color(.secondarySystemGroupedBackground),
-                                        photo: p.photoUrl, memberCount: p.memberCount)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 24)
-                }
+                // About and the link in one card, as a member sees it (owner 2026-10-26).
+                GroupAboutCard(desc: p.description, linkName: p.username, title: p.title,
+                               cardColor: Color(.secondarySystemGroupedBackground),
+                               photo: p.photoUrl, memberCount: p.memberCount)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 24)
                 if guest.readable, !(mediaLoaded && media.isEmpty) {
                     ProfileMediaCard(cid: p.cid, media: media, hint: mediaLoaded ? 0 : 4,
                                      onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
@@ -639,6 +644,12 @@ struct PublicGroupInfoView: View {
                                 photoUrl: m.photoUrl, source: .story)
             }
         }
+    }
+
+    /// Up to three members for the faces beside the count, the ones with a photo first.
+    private var countFaces: [PublicGroupMember] {
+        let withPhoto = p.members.filter { !($0.photoUrl ?? "").isEmpty }
+        return Array((withPhoto + p.members.filter { ($0.photoUrl ?? "").isEmpty }).prefix(3))
     }
 
     /// The member page's circles, the same five in the same place (owner 2026-10-23: "the full group

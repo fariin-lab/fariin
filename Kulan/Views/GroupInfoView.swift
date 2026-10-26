@@ -414,37 +414,9 @@ struct GroupInfoView: View {
     /// ⛔ ONE CARD FOR ABOUT AND THE LINK (owner's mockup 2026-10-26): an "About" title with its
     /// icon, the description left-aligned with every line shown, a thin line, then the public link
     /// row. Either half alone when the group has only one of them.
-    @ViewBuilder private var aboutCard: some View {
-        let link = conv?.publicName ?? ""
-        if !desc.isEmpty || !link.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                if !desc.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 10) {
-                            Image(systemName: "text.alignleft").font(.system(size: 17))
-                            Text("About").font(.body)
-                        }
-                        .foregroundStyle(.primary)
-                        Text(Self.blueLinks(desc)).font(.body).foregroundStyle(.primary)
-                            .tint(Color(hex: 0x0A84FF))
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .environment(\.openURL, descLinkAction)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 14)
-                    .padding(.bottom, link.isEmpty ? 14 : 16)
-                }
-                if !link.isEmpty {
-                    // The line starts under the link text, as between the settings rows.
-                    if !desc.isEmpty { Divider().padding(.leading, 56) }
-                    GroupPublicLinkCard(name: link, title: title, cardColor: cardColor,
-                                        photo: conv?.avatarUrl, memberCount: conv?.users.count, embedded: true)
-                }
-            }
-            .profileSurface(plain: cardColor)
-        }
+    private var aboutCard: some View {
+        GroupAboutCard(desc: desc, linkName: conv?.publicName ?? "", title: title, cardColor: cardColor,
+                       photo: conv?.avatarUrl, memberCount: conv?.users.count, openURL: descLinkAction)
     }
 
     /// Links and @usernames in the description (owner 2026-10-21): a web link in the in-app browser,
