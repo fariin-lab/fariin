@@ -279,7 +279,8 @@ struct GroupStatsView: View {
         } else if let failure {
             errorView(failure)
         } else {
-            ProgressView()
+            // The page's own shape while it loads, not a spinner (owner 2026-10-26).
+            ScrollView { GroupStatsSkeleton() }.scrollDisabled(true)
         }
     }
 
@@ -394,6 +395,56 @@ struct GroupStatsView: View {
 // MARK: - Cards
 
 /// A rounded card with a title, the page's one container.
+/// The loading page: the overview card's four tiles, a chart card and a list card, in the real cards'
+/// frames, so nothing jumps when the figures land.
+struct GroupStatsSkeleton: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            card {
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 18) {
+                    GridRow { tile; tile }
+                    GridRow { tile; tile }
+                }
+            }
+            card { SkeletonBlock(height: 180, radius: 12) }
+            card {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(0..<4, id: \.self) { _ in
+                        HStack(spacing: 12) {
+                            SkeletonCircle(size: 32)
+                            SkeletonBlock(width: 140, height: 12)
+                            Spacer()
+                            SkeletonBlock(width: 36, height: 12)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .accessibilityLabel("Loading statistics")
+    }
+
+    private var tile: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SkeletonBlock(width: 64, height: 22)
+            SkeletonBlock(width: 96, height: 11)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func card<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SkeletonBlock(width: 110, height: 16)
+            content()
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(uiColor: .secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+}
+
 struct GroupStatsCard<Content: View>: View {
     let title: String
     var trailing: String? = nil
