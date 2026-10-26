@@ -191,6 +191,7 @@ final class CallService: NSObject {
                 // media exists. Both silent, both only visible on the SECOND call of a session.
                 preNegotiated = false; mediaReady = false
                 heldPreAnswer = nil   // 2026-09-24 fix-all #230: belongs to that call's connection
+                callerTakesEarlyAnswer = false; onlyRingingDevice = nil; earlyAnswerSent = false
                 // Belongs to the peer connection that just died. Held across calls it would be a
                 // closed channel the next call quietly tries to send its accept down — the accept
                 // would silently never arrive and the blink would come back, on some calls only,
@@ -337,6 +338,16 @@ final class CallService: NSObject {
     private var preNegotiated = false
     /// 2026-09-24 fix-all #230: the answer made during the ring, written only when THIS device accepts.
     private var heldPreAnswer: [String: Any]?
+    /// 2026-10-26 (owner: the wait on "Connecting…" after the tap): the held answer also goes out
+    /// DURING the ring, but only where the #230 hazard cannot happen: this account rings on one
+    /// phone only (`onlyRingingDevice`), and the caller's build applies an early answer without
+    /// reading it as a pick-up (`caps.<caller>` holds `earlyCap`). The path then comes up while it
+    /// rings; the accept still writes the answer again through the claim, and the caller ignores
+    /// that repeat (its remote description is already set).
+    private var callerTakesEarlyAnswer = false
+    private var onlyRingingDevice: Bool?
+    private var earlyAnswerSent = false
+    private static let earlyCap = "early1"
 
     /// Has this call actually been accepted by a person? The callee's own tap, or — on the caller —
     /// the callee's `acceptedAt` landing. Media being ready is not acceptance.
@@ -361,6 +372,7 @@ final class CallService: NSObject {
         stopRingback()
         noAnswerWork?.cancel()
         startAcceptedConnectTimeout()
+        promoteEarlyAnsweredCall()
         beginConnectedCallIfAccepted()
     }
 
@@ -1166,6 +1178,10 @@ final class CallService: NSObject {
         // the path in use dies (Wi-Fi drops while mobile data is up) a working pair is already proven
         // and the switch takes a moment instead of a fresh search. Costs a few tiny STUN packets.
         c.iceBackupCandidatePairPingInterval = 2000
+        // 2026-10-26, from the reference app's call library (network_skip_initial_ping): relay to
+        // relay, start sending at once instead of waiting for a first check to come back. Only
+        // applies when BOTH ends are relayed; ICE still checks and moves on if the pair is dead.
+        c.shouldPresumeWritableWhenFullyRelayed = true
         return c
     }
 
@@ -4828,7 +4844,7 @@ final class CallService: NSObject {
                         "type": self.cameraOn ? "video" : "voice",
                         "status": "ringing",
                         "cams": [self.me: self.cameraOn],   // seed my camera state (per-side)
-                        "caps": [self.me: [Self.screenCap]],   // screen share v3 capability
+                        "caps": [self.me: [Self.screenCap, Self.earlyCap]],   // screen share v3; early answer (2026-10-26)
                         "createdAt": FieldValue.serverTimestamp(),
                     ]
                     // Muted during "Calling..." (audit M-051, 2026-10-07): say so from the first doc,
@@ -5817,6 +5833,7 @@ final class CallService: NSObject {
             self.noteVideo()
             // cache → answer with no server round-trip. #27: opened here if sealed (`readOffer`).
             if let sdp = self.readOffer(d) { self.pendingOffer = ["sdp": sdp, "type": "offer"] }
+            self.noteCallerTakesEarlyAnswer(d, caller: caller)
             if let cams = d["cams"] as? [String: Bool], let on = cams[caller] { self.remoteCameraOn = on }
             if let screens = d["screen"] as? [String: Bool] { self.remoteScreenSharing = screens[caller] ?? false }
             self.state = .incoming
@@ -6223,6 +6240,7 @@ final class CallService: NSObject {
             if let d = snap?.data(), let offerSdp = self.readOffer(d) {
                 let offer = ["sdp": offerSdp, "type": "offer"]
                 self.pendingOffer = offer
+                self.noteCallerTakesEarlyAnswer(d, caller: self.otherUid)
                 self.mark("offerReady")   // if this lands before "answerTapped", the prefetch paid off
                 // Take the type and the camera state from the document too. The push payload is the
                 // caller's word for these; the document is the record.
@@ -6406,6 +6424,50 @@ final class CallService: NSObject {
         }
     }
 
+    /// The caller's build applies an answer that arrives before the pick-up without taking it for one.
+    private func noteCallerTakesEarlyAnswer(_ d: [String: Any], caller: String) {
+        guard let caps = d["caps"] as? [String: Any], let theirs = caps[caller] as? [String] else { return }
+        callerTakesEarlyAnswer = theirs.contains(Self.earlyCap)
+    }
+
+    /// Does this account ring on this phone alone? Every push token it has, on the private push doc
+    /// and on the old user-doc fields a not-yet-updated phone still uses. A stale token of a phone
+    /// long gone reads as a second phone: that only costs the early answer, never a call.
+    private func checkOnlyRingingDevice(_ callId: String) {
+        guard onlyRingingDevice == nil, !me.isEmpty else { return }
+        let user = db.collection("users").document(me)
+        user.collection("push").document("tokens").getDocument { [weak self] push, pushErr in
+            user.getDocument { [weak self] doc, docErr in
+                guard let self, self.callId == callId, self.onlyRingingDevice == nil else { return }
+                guard pushErr == nil, docErr == nil, let push, let doc else { self.onlyRingingDevice = false; return }
+                let a = push.data() ?? [:], b = doc.data() ?? [:]
+                let voip = Set((a["voipTokens"] as? [String] ?? []) + (b["voipTokens"] as? [String] ?? []))
+                let fcm = Set((a["fcmTokens"] as? [String] ?? []) + (b["fcmTokens"] as? [String] ?? []))
+                self.onlyRingingDevice = voip.count <= 1 && fcm.count <= 1
+                self.publishEarlyAnswerIfAllowed()
+            }
+        }
+    }
+
+    /// The held answer, out during the ring when nothing can go wrong with it (see `earlyCap`).
+    /// Best effort: no status, no claim; the accept writes the answer again either way.
+    private func publishEarlyAnswerIfAllowed() {
+        guard !earlyAnswerSent, !wasAccepted, state == .incoming, callerTakesEarlyAnswer,
+              onlyRingingDevice == true, let data = heldPreAnswer, let id = callId else { return }
+        earlyAnswerSent = true
+        mark("earlyAnswerSent")
+        db.collection("calls").document(id).updateData(data)
+    }
+
+    /// Caller: the callee picked up and its answer is already applied (it came during the ring), so
+    /// no answer write is coming to move this call out of .outgoing. Move it here.
+    private func promoteEarlyAnsweredCall() {
+        guard isCaller, state == .outgoing, pc?.remoteDescription != nil else { return }
+        acceptedConnectWork?.cancel()
+        state = .active
+        startAcceptedMediaTimeout()
+    }
+
     /// Build the answering connection DURING THE RING, so the accept has nothing left to do.
     ///
     /// Everything `buildAnswer` does, minus the one thing that must wait for a person: the
@@ -6415,6 +6477,7 @@ final class CallService: NSObject {
         guard !preNegotiated, !offerSdp.isEmpty, state == .incoming, self.callId == callId else { return }
         preNegotiated = true
         mark("preNegotiateStart")
+        checkOnlyRingingDevice(callId)
         Task { @MainActor in
             await self.awaitIceServers()
             await self.awaitPeerTrust()   // 2026-09-24 fix-all #231
@@ -6615,7 +6678,11 @@ final class CallService: NSObject {
                             var data: [String: Any] = ["answerEnc": enc]
                             data["cams.\(self.me)"] = self.camsSignal   // my camera state (per-side); r3 D2: what really goes out
                             data["caps.\(self.me)"] = [Self.screenCap]   // screen share v3 capability
-                            guard self.wasAccepted else { self.heldPreAnswer = data; return }
+                            guard self.wasAccepted else {
+                                self.heldPreAnswer = data
+                                self.publishEarlyAnswerIfAllowed()
+                                return
+                            }
                             data["status"] = "active"
                             self.writeAnswerWithRetry(ref: ref, data: data, attempt: 1)
                         }
@@ -6941,6 +7008,7 @@ final class CallService: NSObject {
                 self.stopRingback()
                 self.noAnswerWork?.cancel()
                 self.startAcceptedConnectTimeout()
+                self.promoteEarlyAnsweredCall()
                 // The path is very often ALREADY UP by now: the callee pre-negotiated during the
                 // ring, so ICE connected while the phone was still ringing and this accept is the
                 // second of the two events, not the first. Start the call here rather than waiting
@@ -6951,14 +7019,22 @@ final class CallService: NSObject {
             // #27: the sealed answer first; the plaintext one only on an unsealed call.
             if self.isCaller, self.pc?.remoteDescription == nil,
                let sdp = self.signalSdp(sealed: d["answerEnc"], plain: (d["answer"] as? [String: String])?["sdp"]) {
-                self.noAnswerWork?.cancel()
-                self.acceptedConnectWork?.cancel()
-                self.stopRingback()
+                // 2026-10-26: an answer sent during the ring (`earlyCap`) is not a pick-up. Applied
+                // so the path comes up while it rings; the ringback, the no-answer timer and
+                // .outgoing all stay until the accept (`promoteEarlyAnsweredCall`).
+                let early = d["acceptedAt"] == nil && (d["status"] as? String) != "active" && !self.calleeAccepted
                 self.pc?.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: sdp)) { _ in
                     self.flushPendingCandidates()
                 }
-                self.state = .active   // show the call screen; reportConnected fires on real ICE connect (H1)
-                self.startAcceptedMediaTimeout()   // audit M-008: both timers above are gone now
+                if early {
+                    self.mark("earlyAnswerApplied")
+                } else {
+                    self.noAnswerWork?.cancel()
+                    self.acceptedConnectWork?.cancel()
+                    self.stopRingback()
+                    self.state = .active   // show the call screen; reportConnected fires on real ICE connect (H1)
+                    self.startAcceptedMediaTimeout()   // audit M-008: both timers above are gone now
+                }
             }
             // Callee applies an ICE-restart OFFER (reconnection) and answers it.
             if !self.isCaller, let ro = d["restartOffer"] as? [String: Any],
@@ -7643,6 +7719,7 @@ final class CallService: NSObject {
         peerIsEstablishedContact = false   // never inherited by the next call
         peerTrustPending = false           // 2026-09-24 fix-all #231
         heldPreAnswer = nil                // 2026-09-24 fix-all #230
+        callerTakesEarlyAnswer = false; onlyRingingDevice = nil; earlyAnswerSent = false
         iceDroppedDuringRing = false       // owner audit 2026-10-06 #15: belongs to this call's path
         isCaller = false
 
