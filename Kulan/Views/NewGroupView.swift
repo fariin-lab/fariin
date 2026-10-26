@@ -355,8 +355,9 @@ struct NewGroupView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
+    /// Text only, no icon (owner 2026-10-26: "remove those icons").
     private func permLabel(_ title: String, _ icon: String) -> some View {
-        Label { Text(title) } icon: { Image(systemName: icon).foregroundStyle(.primary) }
+        Text(title)
     }
 
     private var groupAvatarThumb: some View {
