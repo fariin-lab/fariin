@@ -73,6 +73,7 @@ struct GroupInfoView: View {
     @State private var showSounds = false
     @State private var showSettings = false
     @State private var showStats = false
+    @State private var showRecentActions = false
     /// People asking to join, for the admins' Join Requests row (owner 2026-10-20). A class box in
     /// @State, so the listener lives as long as the page.
     @State private var joinReqs: [JoinRequest] = []
@@ -313,6 +314,7 @@ struct GroupInfoView: View {
             .navigationDestination(isPresented: $showSettings) { GroupSettingsView(cid: cid) }
             .navigationDestination(isPresented: $showJoinRequests) { GroupRequestsView(cid: cid) }
             .navigationDestination(isPresented: $showStats) { GroupStatsView(cid: cid, title: title) }
+            .navigationDestination(isPresented: $showRecentActions) { GroupRecentActionsView(cid: cid) }
             .fullScreenCover(isPresented: $showCall) { GroupCallView() }
             // Nobody to call (owner 2026-10-20): said in a centred alert.
             // One wording with the chat (A11, 2026-10-23): nothing failed, there is nobody to ring.
@@ -974,6 +976,12 @@ struct GroupInfoView: View {
             if showStatsRow {
                 rowDivider
                 ProfileInfoRow(title: "Statistics", icon: "chart.bar.xaxis") { showStats = true }
+            }
+            // Recent Actions (audit 2026-10-26 item 14): the owner and admins, as the server's
+            // `groupAdminLog` lets them read it.
+            if iAmOwner || iAmAdmin {
+                rowDivider
+                ProfileInfoRow(title: "Recent Actions", icon: "clock.arrow.circlepath") { showRecentActions = true }
             }
         }
         .profileSurface(plain: cardColor)
