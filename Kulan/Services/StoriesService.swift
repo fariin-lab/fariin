@@ -3647,11 +3647,14 @@ final class StoriesRepository {
         // 2026-09-26 block rebuild: and everybody on my account list, chat or no chat.
         let blockedAuthors = Set(convs.filter { $0.isBlockedByMe(me) }.map { $0.otherUid(me) })
             .union(BlockList.snapshot.entries.keys)
-            // ⛔ AND ANYONE WHOSE CHAT WITH ME IS STILL AN UNANSWERED REQUEST (owner 2026-10-12). The
-            // poster now leaves them out (`resolveAudience`), but stories already posted, and posts
-            // from older builds, still name me in `recipientUids`. Someone with no chat at all is not
-            // touched here (a glow reaches people who never chatted).
-            .union(convs.filter { MessageRequests.isUnansweredRequest($0) }.map { $0.otherUid(me) })
+        // ⛔ AND ANYONE WHOSE CHAT WITH ME IS STILL AN UNANSWERED REQUEST (owner 2026-10-12). The
+        // poster now leaves them out (`resolveAudience`), but stories already posted, and posts
+        // from older builds, still name me in `recipientUids`. Someone with no chat at all is not
+        // touched here (a glow reaches people who never chatted).
+        // ⛔ NOT FOR A GROUP STORY (owner 2026-10-26: members could not see his group story). Being in
+        // the group is the tie; an unanswered 1:1 request between the poster and me hid the whole
+        // group's post from me. Only a real block drops a group story.
+        let requestAuthors = Set(convs.filter { MessageRequests.isUnansweredRequest($0) }.map { $0.otherUid(me) })
 
         var myGroup: StoryGroup?
         var groups: [StoryGroup] = []
@@ -3663,6 +3666,7 @@ final class StoriesRepository {
         for s in all {
             let key = s.ringKey
             if key != s.authorUid && blockedAuthors.contains(s.authorUid) { continue }
+            if key == s.authorUid && requestAuthors.contains(s.authorUid) { continue }
             byRing[key, default: []].append(s)
         }
         for (key, list) in byRing {
