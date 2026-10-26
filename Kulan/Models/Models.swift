@@ -1548,6 +1548,19 @@ struct Conversation: Identifiable, Equatable, Hashable {
         activeRestrictions(uid, now: now).contains(Restrict.sendText.rawValue)
     }
 
+    /// Slow mode applies to `me` here: a member (owner and admins never), with the switch on. The
+    /// server's onNewMessage holds the same line, so a send it would remove is refused before it goes.
+    func slowsMember(_ me: String) -> Bool {
+        AppFeatures.slowMode && isGroup && slowModeSeconds > 0 && !isOwner(me) && !admins.contains(me)
+    }
+    /// Seconds `me` still waits, judged from the chat-list summary (my own message last). For screens
+    /// without the message list, such as Forward; the chat itself uses its loaded messages.
+    func slowWaitFromSummary(_ me: String, now: Double) -> Int {
+        guard slowsMember(me), lastSender == me else { return 0 }
+        let left = Double(slowModeSeconds) - (now - updatedAtMillis) / 1000
+        return left > 0 ? Int(left.rounded(.up)) : 0
+    }
+
     /// Group Settings "Start group call" (2026-10-18): with Admins only, a member may join a call
     /// that is going but not start one (the server's `groupCallToken` and the rules say the same).
     func canStartCall(_ me: String) -> Bool {

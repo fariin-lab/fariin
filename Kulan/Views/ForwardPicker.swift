@@ -272,6 +272,13 @@ struct ForwardPicker: View {
         if !c.canSend(me, now: now) || c.groupMod.blocksSending() {
             return "You can't send messages in \(c.displayName(me))."
         }
+        // Slow mode (groups audit review 2026-10-26): each forward is its own message, and the server
+        // removes a second one inside the wait, so it is refused here instead of vanishing later.
+        if c.slowsMember(me) {
+            if messages.count > 1 { return "Slow mode is on in \(c.displayName(me)). Forward one message at a time." }
+            let wait = c.slowWaitFromSummary(me, now: now)
+            if wait > 0 { return "Slow mode is on in \(c.displayName(me)). You can send your next message in \(wait) seconds." }
+        }
         guard !isShare else { return nil }
         for m in messages {
             guard let kind = Self.sendKind(of: m), !c.maySend(kind, me) else { continue }
@@ -307,6 +314,11 @@ struct ForwardPicker: View {
         guard isShare || !ChatRestrictions.isOn(.noForwarding, cid: sourceCid) else { return }
         let targets = selected
         let note = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A note is a second message: a slowed group would remove one of the two.
+        if !note.isEmpty, let slow = repo.conversations.first(where: { targets.contains($0.id) && $0.slowsMember(me) }) {
+            refusedNote = "Slow mode is on in \(slow.displayName(me)). Send without a comment, or send the comment later."
+            return
+        }
         // Oldest first so forwarded messages land in the same order they were sent.
         let ordered = messages.sorted { $0.createdAt < $1.createdAt }
         let src = sourceCid

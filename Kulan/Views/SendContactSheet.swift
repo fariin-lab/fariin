@@ -31,6 +31,7 @@ struct SendContactSheet: View {
     @State private var searching = false
     @State private var selected = Set<String>()
     @State private var sending = false
+    @State private var slowNote: String?
     @State private var showSystemShare = false
     /// The grid's own width, so the bottom button can line its edges up with the avatar circles
     /// rather than with the page margin. See `sideInset`.
@@ -129,6 +130,9 @@ struct SendContactSheet: View {
         // `sending` still guards the button and the drag-to-dismiss, so a double tap cannot send
         // twice; it simply no longer draws anything.
         .sheet(isPresented: $showSystemShare) { SystemShareSheet(items: [link]) }
+        .alert("Slow mode", isPresented: Binding(get: { slowNote != nil }, set: { if !$0 { slowNote = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(slowNote ?? "") }
     }
 
     // MARK: - Header
@@ -401,7 +405,15 @@ struct SendContactSheet: View {
         // somebody while searching would otherwise select them into a control you cannot see.
         // Tapping a face means you have found who you were looking for; the search is over.
         searchFocused = false
-        if selected.contains(id) { selected.remove(id) } else { selected.insert(id) }
+        if selected.contains(id) { selected.remove(id); return }
+        // Slow mode (groups audit review 2026-10-26): several forwards are several messages, and the
+        // server removes any inside the wait, so the group is refused here instead.
+        if let c = repo.conversations.first(where: { $0.id == id }), c.slowsMember(me) {
+            let wait = c.slowWaitFromSummary(me, now: Date().timeIntervalSince1970 * 1000)
+            if forwardMessages.count > 1 { slowNote = "Slow mode is on in \(c.displayName(me)). Forward one message at a time."; return }
+            if wait > 0 { slowNote = "Slow mode is on in \(c.displayName(me)). You can send your next message in \(wait) seconds."; return }
+        }
+        selected.insert(id)
     }
 
     private func sendAll() async {

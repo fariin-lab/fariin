@@ -5567,17 +5567,44 @@ struct ThreadView: View {
     /// Admins are never slowed. The server's per-message trigger holds the same line (audit
     /// 2026-10-26 item 12); this says so before the send instead of after.
     private func slowModeHeldBack() -> Bool {
-        guard AppFeatures.slowMode, isGroup, let conv = conversation, conv.slowModeSeconds > 0,
-              !conv.isAdmin(me), !conv.isOwner(me),
-              let last = repo.items.last(where: { $0.authorId == me && !$0.isSystem }) else { return false }
+        guard let text = slowModeWaitText() else { return false }
+        showSlowNotice(text)
+        return true
+    }
+
+    /// The slow-mode notice for a send now, or nil when it may go.
+    private func slowModeWaitText() -> String? {
+        guard isGroup, let conv = conversation, conv.slowsMember(me),
+              let last = repo.items.last(where: { $0.authorId == me && !$0.isSystem }) else { return nil }
         let left = Double(conv.slowModeSeconds) - Date().timeIntervalSince(last.createdAt)
-        guard left > 0 else { return false }
+        guard left > 0 else { return nil }
         // m:ss over a minute, seconds under it (audit: 61 to 119 s read "2 min").
         let n = Int(left.rounded(.up))
         let wait = n >= 60 ? String(format: "%d:%02d", n / 60, n % 60) : "\(n) seconds"
+        return "You can send your next message in \(wait)."
+    }
+
+    private func showSlowNotice(_ text: String) {
         restrictedNoticeTitle = "Slow mode"
-        restrictedNoticeText = "You can send your next message in \(wait)."
+        restrictedNoticeText = text
         voiceRestricted = true
+    }
+
+    /// Slow mode for a send from the "+" sheet (groups audit review 2026-10-26): the server removes a
+    /// member's message inside the wait, so a send that is too soon, or that becomes `parts` messages,
+    /// is refused before it goes. The sheet goes down first, then the notice.
+    private func slowHeldBackInSheet(parts: Int = 1) -> Bool {
+        guard isGroup, let conv = conversation, conv.slowsMember(me) else { return false }
+        let text: String
+        if parts > 1 {
+            text = "Send one message at a time: one video, or up to \(Limits.albumMaxItems) photos as one album."
+        } else if let wait = slowModeWaitText() {
+            text = wait
+        } else {
+            return false
+        }
+        attachAfterClose = { showSlowNotice(text) }
+        showAttachPanel = false
         return true
     }
 
@@ -5593,7 +5620,8 @@ struct ThreadView: View {
 
     /// Photos or videos picked in the "+" sheet while that kind is off for me: the sheet goes down
     /// first, then the notice, so the alert is not lost under the sheet.
-    private func mediaHeldBackInSheet(_ kinds: [Conversation.SendKind]) -> Bool {
+    private func mediaHeldBackInSheet(_ kinds: [Conversation.SendKind], parts: Int = 1) -> Bool {
+        if slowHeldBackInSheet(parts: parts) { return true }
         guard let kind = kinds.first(where: { heldBackText(.sendPhotos, $0) != nil }) else { return false }
         // Said once the sheet is really down (its onDismiss), not on a guessed delay (audit).
         attachAfterClose = { _ = sendHeldBack(.sendPhotos, kind) }
@@ -5697,7 +5725,7 @@ struct ThreadView: View {
                     openAttachVideo(poster: poster, assetId: assetId, load: load)
                 },
                 onSendVideos: { urls, caption in
-                    if mediaHeldBackInSheet([.videos]) { return }
+                    if mediaHeldBackInSheet([.videos], parts: urls.count) { return }
                     showAttachPanel = false
                     // SELECT + Send → send each selected video directly (no editor). The caption rides
                     // ONCE, on the first video (was duplicated onto every video in the batch).
@@ -5707,6 +5735,10 @@ struct ThreadView: View {
                     }
                 },
                 onSendAlbum: { imgs, caption, viewOnce in
+                    // It had no check at all (groups audit review 2026-10-26); an album over the cap
+                    // goes as several messages.
+                    let parts = (imgs.count + Limits.albumMaxItems - 1) / Limits.albumMaxItems
+                    if mediaHeldBackInSheet([.photos], parts: parts) { return }
                     showAttachPanel = false
                     // Selected via checkboxes + captioned inline: 1 photo → send as one (caption + optional
                     // view-once); 2+ → send as one album with the caption (view-once is single-photo only).
