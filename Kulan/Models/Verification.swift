@@ -387,6 +387,8 @@ final class VerificationSignal {
 struct GroupVerifiedMark: View {
     let on: Bool
     var size: CGFloat = 15
+    /// The badge's type (`Conversation.groupVerifiedType`): gold for a company, its words in the sheet.
+    var kind: Verification.Kind? = nil
     /// Tappable, opening the same sheet a person's tick opens (owner 2026-10-26). Only on the group
     /// page, for the reason `VerifiedMark.explains` gives.
     var explains: Bool = false
@@ -395,7 +397,7 @@ struct GroupVerifiedMark: View {
 
     var body: some View {
         if on {
-            Image(uiImage: VerifiedMark.badge(size: size * VerifiedMark.scale, blue: VerifiedMark.blue,
+            Image(uiImage: VerifiedMark.badge(size: size * VerifiedMark.scale, blue: VerifiedMark.color(for: kind),
                                               weight: VerifiedMark.weight))
                 .frame(width: size, height: size)
                 .accessibilityLabel("Verified group")
@@ -404,7 +406,7 @@ struct GroupVerifiedMark: View {
                 .onTapGesture { if explains { showingInfo = true } }
                 .allowsHitTesting(explains)
                 .sheet(isPresented: $showingInfo) {
-                    VerificationInfoSheet(record: nil, peer: .group(""))
+                    VerificationInfoSheet(record: nil, peer: .group(""), groupKind: kind)
                 }
         }
     }
@@ -462,6 +464,7 @@ struct VerifiedMark: View {
         record?.kind?.isGold == true ? gold : blue
     }
     static func color(for uid: String) -> UIColor { color(for: VerificationIndex.of(uid)) }
+    static func color(for kind: Verification.Kind?) -> UIColor { kind?.isGold == true ? gold : blue }
 
     /// ⛔ ONE BADGE FOR EVERYBODY, THE OFFICIAL CHANNEL INCLUDED — owner 2026-10-13: the Fariin tick
     /// and a person's tick sat side by side in the chat list at two sizes and two blues (official
@@ -494,6 +497,10 @@ struct VerificationInfoSheet: View {
     /// Nil for a group: its badge is a flag on the group, with no record behind it.
     let record: Verification?
     let peer: PeerRef
+    /// A group's badge type, standing in for the record a group does not have.
+    var groupKind: Verification.Kind? = nil
+
+    private var kind: Verification.Kind? { record?.kind ?? groupKind }
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -502,14 +509,14 @@ struct VerificationInfoSheet: View {
         VStack(spacing: 18) {
                 Image(systemName: "checkmark.seal.fill")
                     .font(.system(size: 56))
-                    .foregroundStyle(.white, Color(uiColor: VerifiedMark.color(for: record)))
+                    .foregroundStyle(.white, Color(uiColor: VerifiedMark.color(for: kind)))
                     .symbolRenderingMode(.palette)
                     .padding(.top, 28)
 
                 Text("Verified")
                     .font(.system(size: 22, weight: .semibold))
 
-                Text(record?.kind?.explanation ?? defaultExplanation)
+                Text(kind?.explanation ?? defaultExplanation)
                     .font(.system(size: 16))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

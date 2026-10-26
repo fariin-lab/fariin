@@ -578,7 +578,7 @@ struct GroupInfoView: View {
             HStack(spacing: 6) {
                 Text(title).font(.title.weight(.bold)).foregroundStyle(ink)
                     .lineLimit(2).multilineTextAlignment(.center)
-                GroupVerifiedMark(on: conv?.showsGroupBadge == true, size: 20, explains: true)
+                GroupVerifiedMark(on: conv?.showsGroupBadge == true, size: 20, kind: conv?.groupVerifiedType, explains: true)
             }
             // The count stays under the name (owner 2026-10-20, reversing the same day's removal).
             // The first faces in front of the count (owner 2026-10-20), people with a photo first.

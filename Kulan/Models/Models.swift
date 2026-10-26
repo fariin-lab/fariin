@@ -1255,6 +1255,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var groupMod: GroupMod = GroupMod(data: nil)
     /// 2026-10-18: the group's verified badge (`verified`, admin panel only).
     var groupVerified: Bool = false
+    /// The badge's type (`verifiedType`, admin panel, owner 2026-10-26): the person list, gold for
+    /// Business / Organization. Nil on an older badge or a type this build does not know: plain blue.
+    var groupVerifiedType: Verification.Kind?
     /// The badge as it is shown: verified and no Scam / Fake label.
     var showsGroupBadge: Bool { isGroup && groupVerified && groupMod.label.isEmpty }
     /// The admin panel hid Report on this group (owner 2026-10-26: Fariin's official groups).
@@ -1376,6 +1379,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         // group circle everywhere the app draws this group.
         if data["type"] as? String == "group", groupMod.locksGroup() { self.avatarUrl = nil }
         self.groupVerified = data["verified"] as? Bool ?? false
+        self.groupVerifiedType = (data["verifiedType"] as? String).flatMap(Verification.Kind.init(rawValue:))
         self.groupNoReport = data["noReport"] as? Bool ?? false
         self.restrictedFlags = stringArrayMap(data["restrictedFlags"])
         self.restrictedUntil = doubleMap(data["restrictedUntil"])

@@ -1796,7 +1796,7 @@ service cloud.firestore {
         && request.auth.uid in request.resource.data.users
         && unreadCreateOk()   // 2026-09-24 fix-all: others' badges are born at 0 (or 1 with a first send)
         && !('deletedUsers' in request.resource.data)   // 2026-10-18: the purge's marker, server-only
-        && !request.resource.data.keys().hasAny(['mod', 'verified', 'noReport'])   // server-only
+        && !request.resource.data.keys().hasAny(['mod', 'verified', 'verifiedType', 'noReport'])   // server-only
         // 2026-10-19 groups v2: the group type and its public @name are written only by
         // functions-username setGroupUsername, which claims the name in `usernames` in the same step.
         // `joinApproval` (a public group files join requests instead of adding) is server-only too.
@@ -2150,7 +2150,7 @@ service cloud.firestore {
         && !('deletedUsers' in request.resource.data.diff(resource.data).affectedKeys())
         // 2026-10-18 group moderation: `mod` and `verified` belong to the admin panel; no branch,
         // the owner's included, writes them. And what a restricted group still allows (groupModWriteOK).
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['mod', 'verified', 'noReport'])
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['mod', 'verified', 'verifiedType', 'noReport'])
         // 2026-10-19 groups v2: Public/Private and the group's @name are server-only (setGroupUsername),
         // on every branch, the owner's included: the name and the `usernames` record must move together.
         // 2026-10-19 groups v2 step 2B: and whether a group is end-to-end encrypted (`e2ee`,

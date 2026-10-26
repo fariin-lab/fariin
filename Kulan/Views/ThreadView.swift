@@ -6399,7 +6399,7 @@ struct ThreadView: View {
                     m.subtitle = [word, m.subtitle].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
                 }
             } else if conv.groupVerified || guest?.preview.verified == true {
-                m.titleIcon = ChatHeaderModel.verifiedMark()
+                m.titleIcon = ChatHeaderModel.verifiedMark(color: VerifiedMark.color(for: conv.groupVerifiedType))
             }
         }
         // Constant reminder that messages self-delete here — this timer being invisible is how a
