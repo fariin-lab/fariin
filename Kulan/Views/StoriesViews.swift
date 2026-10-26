@@ -1747,6 +1747,10 @@ struct StoryViewer: View {
     private var sheetUp: Bool {
         shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || myPostedUp || officialInfoUp || editViewers != nil
             || repostUp || repostLoading || shareURL != nil || ownRepostGone
+            // ⛔ The group page from the header (owner 2026-10-26: it closed by itself after a few
+            // seconds). It was not on this list, so the story ran on under it, reached its end and
+            // closed the viewer, taking the page with it.
+            || groupPage != nil
         // ⛔ `repostLoading` (owner, 2026-10-12: "I tap Repost on a video story and the original
         // keeps playing, I can hear it"). The story was held only once the composer was up, but the
         // clip is copied (or downloaded) and the poster and face fetched BEFORE that, and for those
