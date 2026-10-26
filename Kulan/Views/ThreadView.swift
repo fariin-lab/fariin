@@ -1148,7 +1148,7 @@ struct ThreadView: View {
     /// up to the start shows it. The empty chat keeps the centred card (`encryptionNotice`).
     private var groupHistoryCard: (view: AnyView, key: String)? {
         guard repo.didInitialLoad, isGroup, !notAMember, !preview, !repo.canLoadOlder,
-              let conv = conversation, repo.items.contains(where: { !$0.isSystem }) else { return nil }
+              let conv = conversation, !repo.items.isEmpty else { return nil }
         let key = [conv.id, conv.title, conv.avatarUrl ?? "", "\(conv.users.count)", "\(conv.admins.count)",
                    conv.createdBy, "\(dark)", "\(conv.hashValue)"].joined(separator: "|")
         return (AnyView(GroupWelcomeCard(conv: conv, me: me, dark: dark).padding(.vertical, 20)), key)
@@ -1156,9 +1156,11 @@ struct ThreadView: View {
 
     @ViewBuilder private var encryptionNotice: some View {
         // A group with only its own notices in it (the "created the group" line) shows the group's
-        // welcome card instead (owner 2026-10-19). Gone at the first real message.
+        // welcome card instead (owner 2026-10-19). Only while the chat is truly empty: once it holds
+        // even system lines the card is a row above them (`groupHistoryCard`), because centred over
+        // the list it covered them (owner 2026-10-26, "badges text is going under the card").
         if repo.didInitialLoad, isGroup, !notAMember, !preview, let conv = conversation,
-           !repo.items.contains(where: { !$0.isSystem }) {
+           repo.items.isEmpty {
             GroupWelcomeCard(conv: conv, me: me, dark: dark)
         } else if repo.didInitialLoad, repo.items.isEmpty, !notAMember {
             // Groups are NOT end-to-end encrypted (owner 2026-10-19, and 2026-10-23: every group, the
