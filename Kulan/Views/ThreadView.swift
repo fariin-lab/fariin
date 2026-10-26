@@ -4227,15 +4227,30 @@ struct ThreadView: View {
     }
 
     private func canReact(_ m: Message) -> Bool {
-        guest == nil && m.sendState == nil && !iAmMuted && !m.isCall && !m.isSystem
+        guest == nil && m.sendState == nil && !iAmMuted && !reactionsHeldBack && !m.isCall && !m.isSystem
             && !m.deleted && m.pinNotice == nil && !m.isUnsupportedFeature
             && !m.isStoryReaction   // a story react-bar emoji takes no reaction (see Message.isStoryReaction)
+    }
+
+    /// An admin turned reactions off for me (`sendReactions`, audit 2026-10-26 item 6). The rules
+    /// refuse my reaction then; the app offers none. Owner and admins are never restricted.
+    private var reactionsHeldBack: Bool {
+        _ = muteLiftTick   // re-read when a timed restriction runs out
+        guard isGroup, let conv = conversation else { return false }
+        return conv.isRestricted(me, .sendReactions, now: Date().timeIntervalSince1970 * 1000)
     }
 
     // Double-tap quick heart on a UIKit-routed row — mirrors the SwiftUI bubble's double-tap gesture.
     private func uikitQuickReact(_ rowId: String) {
         guard let idx = repo.indexById[rowId], idx < repo.items.count else { return }
         let m = repo.items[idx]
+        // Held back from reactions alone (not muted, which has its own bar): said, not a dead tap.
+        if reactionsHeldBack && !iAmMuted {
+            restrictedNoticeTitle = "You're restricted in this group"
+            restrictedNoticeText = "An admin has turned off reactions for you."
+            voiceRestricted = true
+            return
+        }
         // 2026-09-24 feature-audit: the same `canReact` as the quick bar (was "not sending" only).
         guard canReact(m) else {
             // Which rule said no, so a "the double tap did nothing" report can be read off the log.

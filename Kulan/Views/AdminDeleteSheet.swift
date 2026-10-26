@@ -319,7 +319,9 @@ struct AdminDeleteSheet: View {
                 }
             }
             switchRow(.addMembers)
-            switchRow(.pinMessages)
+            // No Pin Messages switch (audit 2026-10-26 item 6): members never pin in a Fariin group
+            // (firestore.rules, pinMessages is an admin right), so it was always grey and did nothing.
+            // A flag already written stays as it is (`flags(for:)` keeps a locked switch's value).
             switchRow(.changeInfo)
         } header: {
             Text(single ? "What can \(firstName) do?" : "What can these members do?")
