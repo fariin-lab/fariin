@@ -6415,9 +6415,12 @@ final class CallService: NSObject {
         callerTakesEarlyAnswer = theirs.contains(Self.earlyCap)
     }
 
-    /// Does this account ring on this phone alone? Every push token it has, on the private push doc
-    /// and on the old user-doc fields a not-yet-updated phone still uses. A stale token of a phone
-    /// long gone reads as a second phone: that only costs the early answer, never a call.
+    /// Does this account ring on this phone alone? Its VoIP tokens (the push that rings a 1:1 call),
+    /// on the private push doc and on the old user-doc field a not-yet-updated phone still uses. A
+    /// stale token of a phone long gone reads as a second phone: that only costs the early answer,
+    /// never a call. NOT the FCM tokens (owner's account, 2026-10-26: 1 VoIP, 4 FCM, one phone):
+    /// FCM rotates them on updates and reinstalls and the old ones stay, so they counted phones
+    /// that do not exist and kept the early answer off.
     private func checkOnlyRingingDevice(_ callId: String) {
         guard onlyRingingDevice == nil, !me.isEmpty else { return }
         let user = db.collection("users").document(me)
@@ -6427,8 +6430,7 @@ final class CallService: NSObject {
                 guard pushErr == nil, docErr == nil, let push, let doc else { self.onlyRingingDevice = false; return }
                 let a = push.data() ?? [:], b = doc.data() ?? [:]
                 let voip = Set((a["voipTokens"] as? [String] ?? []) + (b["voipTokens"] as? [String] ?? []))
-                let fcm = Set((a["fcmTokens"] as? [String] ?? []) + (b["fcmTokens"] as? [String] ?? []))
-                self.onlyRingingDevice = voip.count <= 1 && fcm.count <= 1
+                self.onlyRingingDevice = voip.count == 1
                 self.publishEarlyAnswerIfAllowed()
             }
         }
