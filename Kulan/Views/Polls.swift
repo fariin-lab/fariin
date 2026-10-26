@@ -115,7 +115,15 @@ private final class PollVotesHub {
 private final class PollVotesHandle: NSObject, ListenerRegistration {
     private var onRemove: (() -> Void)?
     init(_ onRemove: @escaping () -> Void) { self.onRemove = onRemove }
-    func remove() { onRemove?(); onRemove = nil }
+    /// ⛔ ON THE MAIN THREAD, WHOEVER CALLS IT (crash, build 1036, 2026-10-26): the hub is main-only,
+    /// but a poll card's deinit hands this handle to `FirestoreHub.drop`, which removes off the main
+    /// thread, and `release` then changed `entries` under the main thread's feet (EXC_BAD_ACCESS in
+    /// swift_isUniquelyReferenced, PollVotesHub.release, on a utility queue).
+    func remove() {
+        guard let f = onRemove else { return }
+        onRemove = nil
+        if Thread.isMainThread { f() } else { DispatchQueue.main.async(execute: f) }
+    }
 }
 
 // The poll body rendered inside a message bubble (background/meta come from the parent MessageBubble).
