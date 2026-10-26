@@ -301,6 +301,16 @@ final class ChatComposerView: UIView {
         }
     }
 
+    /// The pill's glass with or without its touch response, keeping its tint.
+    private func setPillInteractive(_ on: Bool) {
+        let old = pill.effect as? UIGlassEffect
+        guard old?.isInteractive != on else { return }
+        let g = UIGlassEffect(style: .regular)
+        g.isInteractive = on
+        g.tintColor = old?.tintColor
+        pill.effect = g
+    }
+
     private func reapplyGlassForTheme() {
         for v in [pill, lockTarget] {
             let old = v.effect as? UIGlassEffect
@@ -654,6 +664,9 @@ final class ChatComposerView: UIView {
         syncText(new, wasFocused: old.focused)
         refreshStatic()
         syncBanners(from: old.banners, to: new.banners)
+        // The paused voice review: no liquid response to touch on its bar (owner 2026-10-26, "only
+        // this bar"). Interactive glass comes back as the review ends; nothing else changes.
+        if old.reviewing != new.reviewing { setPillInteractive(!new.reviewing) }
 
         // The one clock for this moment. Ordered by what is structurally largest: the lock owns the
         // bar; a recording starting owns the row; the review owns the strip; text owns the send.
