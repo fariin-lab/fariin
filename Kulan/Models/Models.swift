@@ -1554,7 +1554,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
         // A closed group starts no calls (audit 2026-10-26 item 4): ended by its owner, or
         // suspended / disabled by Fariin. The call buttons go with it.
         if isGroup && groupMod.blocksSending() { return false }
-        return !isGroup || !onlyAdminsCall || admins.contains(me) || isOwner(me)
+        // An admin needs Manage video chats (audit item 3): the same test as the server's groupRights.js.
+        return !isGroup || !onlyAdminsCall || adminCan(me, .manageCalls)
     }
 
     /// The kinds a group can turn off for members, each on its own (owner 2026-10-20: "a switch
