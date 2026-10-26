@@ -6361,7 +6361,8 @@ struct ThreadView: View {
         m.subtitle = presenceSubtitle
         m.subtitleIsStrong = isGroup
         // A group's first faces before its member count (owner 2026-10-26), members with a photo.
-        if isGroup, guest == nil, let conv = conversation {
+        // None on a suspended or disabled group (owner 2026-10-26): the page is closed, so are the faces.
+        if isGroup, guest == nil, let conv = conversation, !conv.fariinLocked {
             m.subtitleFaces = Array(conv.users.compactMap { u -> String? in
                 guard let p = conv.photos[u], !p.isEmpty else { return nil }
                 return p
