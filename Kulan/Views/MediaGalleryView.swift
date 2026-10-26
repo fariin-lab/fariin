@@ -291,9 +291,21 @@ struct MediaGalleryView: View {
         // NATIVE nav bar (user spec): centred "All Media" with the live count as the system
         // subtitle, the standard circular back button, and a "..." menu on the right â€” instead of
         // a custom left-aligned header.
-        .navigationTitle("All Media")
-        .navigationSubtitle(subtitle)
+        // ⛔ OUR OWN TITLE, NOT THE SYSTEM'S (owner 2026-10-26: "the text zooms out when I open the
+        // page"). The system title animates the subtitle in when the count lands; this one is drawn
+        // as it is, with no animation.
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                VStack(spacing: 1) {
+                    Text("All Media").font(.headline)
+                    Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
+                }
+                .lineLimit(1)
+                .transaction { $0.animation = nil }
+            }
+        }
         .navigationBarBackButtonHidden(selecting)   // selection mode → only the X, no back
         // ⛔ THIS SCREEN'S BAR FOLLOWS THE PHONE, AND IT HAS TO SAY SO OUT LOUD.
         //
