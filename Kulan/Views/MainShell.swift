@@ -630,6 +630,11 @@ struct CallsView: View {
         if groupDoorHandled(g) { return }
         let live = LiveGroupCalls.shared.calls.contains { $0.id == g }
         if let c = ConversationsRepository.shared.conversations.first(where: { $0.id == g }) {
+            // A closed group (audit 2026-10-26 item 4) is said as such, not as "only admins".
+            if c.groupMod.blocksSending() {
+                GroupCallService.presentOverTop(.init(title: "Can't Call", message: c.groupMod.noticeText))
+                return
+            }
             if !live && !c.canStartCall(AuthService.shared.uid ?? "") {
                 GroupCallService.presentOverTop(.init(title: "Can't Call", message: "Only admins can start a call in this group."))
                 return

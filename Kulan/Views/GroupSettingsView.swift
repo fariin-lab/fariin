@@ -56,7 +56,11 @@ struct GroupSettingsView: View {
     }
     @State private var ownConv: Conversation?
     @State private var convListener = ListenerBox()
-    private func can(_ r: Conversation.Right) -> Bool { conv?.adminCan(me, r) ?? false }
+    /// ⛔ A CLOSED GROUP IS READ-ONLY HERE (audit 2026-10-26 item 4): ended by its owner, or
+    /// suspended / disabled by Fariin. The rules refuse every change, so no switch, link, type or
+    /// request row offers one; the members and admins stay readable.
+    private var closed: Bool { conv.map { $0.groupMod.state == "ended" || $0.fariinLocked } ?? false }
+    private func can(_ r: Conversation.Right) -> Bool { !closed && (conv?.adminCan(me, r) ?? false) }
     /// The permissions are group rules: the change-info right edits them, other admins read them.
     private var canEdit: Bool { can(.changeInfo) }
 
@@ -156,7 +160,9 @@ struct GroupSettingsView: View {
     private var chatSection: some View {
         Section {
             Button {
-                if canEdit { showDisappear = true } else { actionError = "Only admins can change this." }
+                if canEdit { showDisappear = true }
+                else if closed { actionError = conv?.groupMod.noticeText ?? "" }
+                else { actionError = "Only admins can change this." }
             } label: {
                 HStack {
                     valueRow("timer", "Disappearing Messages",
@@ -992,7 +998,8 @@ struct GroupMembersListView: View {
     private var conv: Conversation? { live.start(cid); return live.conv ?? repo.conversations.first { $0.id == cid } }
     // A member an admin kept from adding sees no Add (audit 2026-10-20; the rules refuse it).
     private var canAdd: Bool {
-        guard let c = conv else { return false }
+        // An ended or Fariin-locked group takes nobody new (audit 2026-10-26 item 4).
+        guard let c = conv, c.groupMod.state != "ended", !c.fariinLocked else { return false }
         return c.adminCan(me, .inviteUsers)
             || (c.membersCanAdd && !c.isRestricted(me, .addMembers, now: Date().timeIntervalSince1970 * 1000))
     }
@@ -1123,7 +1130,8 @@ struct GroupRequestsView: View {
     private var me: String { AuthService.shared.uid ?? "" }
     // A member an admin kept from adding sees no Add (audit 2026-10-20; the rules refuse it).
     private var canAdd: Bool {
-        guard let c = conv else { return false }
+        // An ended or Fariin-locked group takes nobody new (audit 2026-10-26 item 4).
+        guard let c = conv, c.groupMod.state != "ended", !c.fariinLocked else { return false }
         return c.adminCan(me, .inviteUsers)
             || (c.membersCanAdd && !c.isRestricted(me, .addMembers, now: Date().timeIntervalSince1970 * 1000))
     }

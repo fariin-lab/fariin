@@ -676,7 +676,9 @@ struct GroupInfoView: View {
     }
 
     private var mayCall: Bool { CallFeatures.groupCalls && (conv?.canStartCall(me) ?? false) }
-    private var callReady: Bool { (mayCall || callLive) && !busyElsewhere }
+    private var callReady: Bool { (mayCall || callLive) && !busyElsewhere && !groupEnded }
+    /// Ended by its owner (audit 2026-10-26 item 4): the page reads as closed, nothing to call or edit.
+    private var groupEnded: Bool { conv?.groupMod.state == "ended" }
     /// This group's call is going (its own call doc), so the circles join it.
     @State private var callLive = false
     @State private var callListener = ListenerBox()
@@ -701,6 +703,7 @@ struct GroupInfoView: View {
         case .busy: flashNotice("You're already on a call"); return
         case .open: break
         }
+        if groupEnded { flashNotice("This group has ended."); return }
         // Joining a call that is already going is open to every member (audit 2026-10-20).
         if !mayCall && !callLive { flashNotice("Only admins can start a call"); return }
         // Nobody to ring (owner 2026-10-19): said here, not after an empty call screen.
@@ -2728,7 +2731,10 @@ struct GroupMembersSheet: View {
         return c.adminCan(me, .inviteUsers)
             || (c.membersCanAdd && !c.isRestricted(me, .addMembers, now: Date().timeIntervalSince1970 * 1000))
     }
-    private var canInvite: Bool { conv?.adminCan(me, .inviteUsers) ?? false }
+    private var canInvite: Bool {
+        guard let c = conv, c.groupMod.state != "ended", !c.fariinLocked else { return false }
+        return c.adminCan(me, .inviteUsers)
+    }
 
     private func name(_ uid: String) -> String { uid == me ? "You" : (conv?.names[uid] ?? "User") }
 

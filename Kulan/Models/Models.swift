@@ -1547,7 +1547,10 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// Group Settings "Start group call" (2026-10-18): with Admins only, a member may join a call
     /// that is going but not start one (the server's `groupCallToken` and the rules say the same).
     func canStartCall(_ me: String) -> Bool {
-        !isGroup || !onlyAdminsCall || admins.contains(me) || isOwner(me)
+        // A closed group starts no calls (audit 2026-10-26 item 4): ended by its owner, or
+        // suspended / disabled by Fariin. The call buttons go with it.
+        if isGroup && groupMod.blocksSending() { return false }
+        return !isGroup || !onlyAdminsCall || admins.contains(me) || isOwner(me)
     }
 
     /// The kinds a group can turn off for members, each on its own (owner 2026-10-20: "a switch

@@ -27,7 +27,11 @@ struct GroupTypeView: View {
     /// The group's own document first, so the page never depends on the chat list's window
     /// (the Group Settings page's lesson, 2026-10-19).
     private var conv: Conversation? { ownConv ?? repo.conversations.first { $0.id == cid } }
-    private var canEdit: Bool { conv?.adminCan(me, .changeInfo) ?? false }
+    // An ended or Fariin-locked group is closed (audit 2026-10-26 item 4): nothing to change here.
+    private var canEdit: Bool {
+        guard let c = conv, c.groupMod.state != "ended", !c.fariinLocked else { return false }
+        return c.adminCan(me, .changeInfo)
+    }
     private var isPublicNow: Bool { conv?.isPublic ?? false }
     private var showPublic: Bool { wantsPublic ?? isPublicNow }
     private var nameChanged: Bool { name != (conv?.publicName ?? "") }
