@@ -1358,7 +1358,8 @@ private struct MemberFace: Equatable {
     let photo: String?
 
     static func list(_ conv: Conversation?, _ ids: [String]) -> [MemberFace] {
-        ids.map { MemberFace(uid: $0, name: conv?.names[$0] ?? "User", photo: conv?.photos[$0]) }
+        ids.map { MemberFace(uid: $0, name: GroupMemberRow.freshName(conv, $0) ?? conv?.names[$0] ?? "User",
+                             photo: GroupMemberRow.freshPhoto(conv, $0)) }
     }
 }
 
@@ -1378,8 +1379,8 @@ private struct GroupInfoMemberRow: View, Equatable {
 
     init(conv: Conversation?, uid: String, me: String, onTap: @escaping () -> Void) {
         self.uid = uid
-        self.name = uid == me ? "You" : (conv?.names[uid] ?? "User")
-        self.photo = conv?.photos[uid]
+        self.name = uid == me ? "You" : (GroupMemberRow.freshName(conv, uid) ?? conv?.names[uid] ?? "User")
+        self.photo = GroupMemberRow.freshPhoto(conv, uid)
         self.rank = GroupMembers.rank(conv, uid)
         self.role = conv?.roles[uid]
         self.onTap = onTap
@@ -1529,6 +1530,24 @@ enum GroupMembers {
 
 /// One member: photo, name, their Role under it, and Owner / Admin on the right.
 struct GroupMemberRow: View, Equatable {
+    /// ⛔ THE MEMBER'S OWN NAME WHEN THIS RUN HAS READ IT (audit 2026-10-26 item 22). The group's
+    /// `names` / `photos` maps are copies made when someone joined, and went stale after a profile
+    /// change until the server's copy job caught up. A profile this run already read
+    /// (`ProfileStore.known`, memory only, no fetch) is fresher; otherwise the map. A deleted
+    /// account keeps the map's "Deleted Account".
+    static func freshName(_ conv: Conversation?, _ uid: String) -> String? {
+        guard conv?.isDeletedAccount(uid) != true, let p = ProfileStore.shared.known(uid) else { return nil }
+        let n = p.name.trimmingCharacters(in: .whitespaces)
+        return n.isEmpty ? nil : n
+    }
+    /// The same for the photo, under the member's own photo setting, as their profile page reads it.
+    static func freshPhoto(_ conv: Conversation?, _ uid: String) -> String? {
+        let mirror = conv?.photos[uid]
+        guard conv?.isDeletedAccount(uid) != true, let p = ProfileStore.shared.known(uid),
+              p.photoUrl != mirror else { return mirror }
+        return PrivacyPrefs.allows(p.privacy, "photo", contactOfMine: PrivacyPrefs.mayViewPhotoOf(uid)) ? p.photoUrl : nil
+    }
+
     // Plain values, read out of the group once (2026-10-19 fix round): a row whose member did not
     // change compares equal and is not redrawn when anything else in the group moves.
     let uid: String
@@ -1540,8 +1559,8 @@ struct GroupMemberRow: View, Equatable {
 
     init(conv: Conversation?, uid: String, me: String, onTap: @escaping () -> Void) {
         self.uid = uid
-        self.name = uid == me ? "You" : (conv?.names[uid] ?? "User")
-        self.photo = conv?.photos[uid]
+        self.name = uid == me ? "You" : (GroupMemberRow.freshName(conv, uid) ?? conv?.names[uid] ?? "User")
+        self.photo = GroupMemberRow.freshPhoto(conv, uid)
         self.rank = GroupMembers.rank(conv, uid)
         self.role = conv?.roles[uid]
         self.onTap = onTap

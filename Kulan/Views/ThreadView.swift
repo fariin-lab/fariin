@@ -516,7 +516,8 @@ struct ThreadView: View {
     // Never the group name for a member (that was a bug in several call sites).
     private func personName(_ uid: String) -> String {
         if uid == me { return "You" }
-        return isGroup ? (conversation?.names[uid] ?? "User") : title
+        // In a group, the member's own name when this run has read it (audit 2026-10-26 item 22).
+        return isGroup ? (GroupMemberRow.freshName(conversation, uid) ?? conversation?.names[uid] ?? "User") : title
     }
     /// ⛔ **A CHAT WITH A WALLPAPER IS ALWAYS DARK — OWNER, 2026-09-02, with a light-mode screenshot
     /// of a wallpapered chat: "Make it If User use custom welpeper always dark mode chats… if user
