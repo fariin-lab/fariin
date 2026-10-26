@@ -39,8 +39,8 @@ struct GroupPublicLinkCard: View {
                 .frame(width: 26)
                 .foregroundStyle(.primary)
             VStack(alignment: .leading, spacing: 2) {
-                // Plain text colour, the owner's mockup (2026-10-26); the row itself is the button.
-                Text(shownLink).foregroundStyle(.primary).lineLimit(1)
+                // Fariin blue, the one action colour (owner 2026-10-26: "make it blue link").
+                Text(shownLink).foregroundStyle(Color.fariinBlue).lineLimit(1)
                 Text(copied ? "Copied" : "Link").font(.system(size: 13)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
