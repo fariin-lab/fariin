@@ -272,6 +272,7 @@ struct MediaGalleryView: View {
         // No spinner overlay any more (2026-10-17): each page draws its own skeleton while `!loaded`,
         // so the tabs still swipe during a cold load. See `gridSkeleton` / `rowsSkeleton`.
         content
+            .modifier(RestrictedCapture(cid: cid))
             .background(GeometryReader { g in
                 Color.clear.onChange(of: g.frame(in: .global), initial: true) { _, f in gridFrame = f }
             })

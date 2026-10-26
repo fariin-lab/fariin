@@ -82,6 +82,7 @@ struct VideoPlayerScreen: View {
             // it. Background and chrome stay live so the coordinator's root-alpha scrub (the reference app's
             // fromView.alpha) can melt them into the chat with the finger, and back on cancel.
             playerContent
+                .modifier(RestrictedCapture(cid: cid))
                 .opacity(dismissing ? 0 : 1)
         }
         // The bottom panel measures from the screen's bottom EDGE, as theirs does on every phone;

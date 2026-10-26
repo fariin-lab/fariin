@@ -403,6 +403,7 @@ struct GroupInfoView: View {
         }
         // Named so the big header can read its own offset and stretch on a pull.
         .coordinateSpace(name: Self.scrollSpace)
+        .modifier(RestrictedCapture(cid: cid))
         // The person profile's page: one flat colour off the photo, washing in when it is read;
         // the plain grouped background for a group with no photo.
         .background { ProfileAdaptiveBackdrop(palette: palette, fallback: pageBackground) }

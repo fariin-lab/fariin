@@ -120,3 +120,17 @@ enum SecureCanvas {
         return field.layer.sublayers?.first?.delegate as? UIView
     }
 }
+
+/// ⛔ RESTRICTED CHAT REACHES PAST THE CHAT (owner 2026-10-26): with No Screenshots on, the chat's
+/// profile or group page, its All Media and its video player are kept out of screenshots and screen
+/// recordings too, for a 1:1 chat and a group alike. Off: the content as it is.
+struct RestrictedCapture: ViewModifier {
+    let cid: String
+    func body(content: Content) -> some View {
+        if ChatRestrictions.isOn(.noScreenshots, cid: cid) {
+            CaptureProtected { content }.ignoresSafeArea()
+        } else {
+            content
+        }
+    }
+}

@@ -798,6 +798,7 @@ struct ContactInfoView: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
         }
+        .modifier(RestrictedCapture(cid: cid))
         // Named so the backdrop can read its own offset and stretch on a rubber-band pull.
         .coordinateSpace(name: "profileScroll")
         // NO animation on this. The scroll IS the animation: animating a value that changes every
