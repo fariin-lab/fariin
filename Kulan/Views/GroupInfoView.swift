@@ -411,21 +411,40 @@ struct GroupInfoView: View {
     @Environment(\.colorScheme) private var scheme
     private static let scrollSpace = "groupInfoScroll"
 
-    /// The description in its own card under the actions, left-aligned, every line shown (owner
-    /// 2026-10-26: it was centred text under the count). A small grey label names it.
-    private var descriptionCard: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text("Description").font(.subheadline).foregroundStyle(.secondary)
-            Text(Self.blueLinks(desc)).font(.body).foregroundStyle(.primary)
-                .tint(Color(hex: 0x0A84FF))
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .environment(\.openURL, descLinkAction)
+    /// ⛔ ONE CARD FOR ABOUT AND THE LINK (owner's mockup 2026-10-26): an "About" title with its
+    /// icon, the description left-aligned with every line shown, a thin line, then the public link
+    /// row. Either half alone when the group has only one of them.
+    @ViewBuilder private var aboutCard: some View {
+        let link = conv?.publicName ?? ""
+        if !desc.isEmpty || !link.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                if !desc.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "text.alignleft").font(.system(size: 17))
+                            Text("About").font(.body)
+                        }
+                        .foregroundStyle(.primary)
+                        Text(Self.blueLinks(desc)).font(.body).foregroundStyle(.primary)
+                            .tint(Color(hex: 0x0A84FF))
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .environment(\.openURL, descLinkAction)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
+                    .padding(.bottom, link.isEmpty ? 14 : 16)
+                }
+                if !link.isEmpty {
+                    // The line starts under the link text, as between the settings rows.
+                    if !desc.isEmpty { Divider().padding(.leading, 56) }
+                    GroupPublicLinkCard(name: link, title: title, cardColor: cardColor,
+                                        photo: conv?.avatarUrl, memberCount: conv?.users.count, embedded: true)
+                }
+            }
+            .profileSurface(plain: cardColor)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .profileSurface(plain: cardColor)
     }
 
     /// Links and @usernames in the description (owner 2026-10-21): a web link in the in-app browser,
@@ -453,11 +472,8 @@ struct GroupInfoView: View {
     }
 
     @ViewBuilder private var cards: some View {
-        if !desc.isEmpty { descriptionCard }
-        // 2026-10-19 groups v2: a public group's own link, for every member (copy, share, QR).
-        if let name = conv?.publicName, !name.isEmpty {
-            GroupPublicLinkCard(name: name, title: title, cardColor: cardColor, photo: conv?.avatarUrl, memberCount: conv?.users.count)
-        }
+        // The description and a public group's own link (copy, share, QR) share one card.
+        aboutCard
         settingsCard
         // The bubble cloud is the admin panel's call (config/features memberCloud), live.
         if Flags.memberCloud(for: cid) { memberCloudCard }

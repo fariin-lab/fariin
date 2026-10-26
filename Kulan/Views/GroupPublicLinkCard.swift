@@ -10,6 +10,8 @@ struct GroupPublicLinkCard: View {
     let cardColor: Color
     var photo: String? = nil        // for the QR card (owner 2026-10-20: it showed no photo)
     var memberCount: Int? = nil
+    /// Inside another card (the About card on the group page): no surface of its own.
+    var embedded = false
 
     @State private var showQR = false
     @State private var showShare = false
@@ -26,7 +28,7 @@ struct GroupPublicLinkCard: View {
             .contextMenu {
                 Button { copy() } label: { Label("Copy Link", systemImage: "doc.on.doc") }
             }
-            .profileSurface(plain: cardColor)
+            .modifier(LinkCardSurface(on: !embedded, color: cardColor))
             .sheet(isPresented: $showQR) { GroupLinkQRSheet(title: title, link: link, photo: photo, memberCount: memberCount) }
             .sheet(isPresented: $showShare) { SendContactSheet(contactText: link) }
     }
@@ -37,7 +39,8 @@ struct GroupPublicLinkCard: View {
                 .frame(width: 26)
                 .foregroundStyle(.primary)
             VStack(alignment: .leading, spacing: 2) {
-                Text(shownLink).foregroundStyle(Color.accentColor).lineLimit(1)
+                // Plain text colour, the owner's mockup (2026-10-26); the row itself is the button.
+                Text(shownLink).foregroundStyle(.primary).lineLimit(1)
                 Text(copied ? "Copied" : "Link").font(.system(size: 13)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
@@ -66,5 +69,13 @@ struct GroupPublicLinkCard: View {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             copied = false
         }
+    }
+}
+
+private struct LinkCardSurface: ViewModifier {
+    let on: Bool
+    let color: Color
+    @ViewBuilder func body(content: Content) -> some View {
+        if on { content.profileSurface(plain: color) } else { content }
     }
 }
