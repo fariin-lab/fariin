@@ -194,8 +194,11 @@ enum ChatService {
     static func createGroup(title: String, memberIds: [String], avatarUrl: String? = nil,
                             disappearSeconds: Int = 0,
                             permissions: [String: Bool] = [:]) async throws -> String {
-        var memberSet = Set(memberIds); memberSet.insert(uid)
+        // Their "Groups" privacy first (owner 2026-10-26: No One still let people add him).
+        let refused = await groupAddRefusers(memberIds.filter { $0 != uid })
+        var memberSet = Set(memberIds).subtracting(refused.keys); memberSet.insert(uid)
         let users = Array(memberSet)
+        if !refused.isEmpty { await sayRefused(Array(refused.values)) }
 
         var names: [String: String] = [:]
         var photos: [String: String] = [:]
@@ -600,6 +603,43 @@ enum ChatService {
         }
     }
 
+    // MARK: - Who may add whom to a group
+
+    /// ⛔ THE "GROUPS" PRIVACY ROW, ENFORCED WHEN ADDING (owner 2026-10-26: "even if I make it No
+    /// One, users can still add me"). It was saved and never read. Their `privacy.groups` from
+    /// their users document: Everyone lets anyone add them, My Chats only people they have an
+    /// accepted one-to-one chat with (the same test as every other My Chats, a shared group does not
+    /// count), No One nobody; they join by a link instead. Returns uid -> name for each refusal.
+    /// A read that fails lets the add go, as the call-privacy check does.
+    static func groupAddRefusers(_ ids: [String]) async -> [String: String] {
+        var out: [String: String] = [:]
+        await withTaskGroup(of: (String, String)?.self) { g in
+            for u in ids where !u.isEmpty && u != ChatService.uid {
+                g.addTask {
+                    guard let snap = try? await ChatService.db.collection("users").document(u).getDocument(),
+                          let d = snap.data() else { return nil }
+                    let privacy = (d["privacy"] as? [String: String]) ?? [:]
+                    let contact = await MainActor.run { PrivacyPrefs.isContact(u) }
+                    guard !PrivacyPrefs.allows(privacy, "groups", contactOfMine: contact) else { return nil }
+                    let name = (d["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? (d["handle"] as? String) ?? "This person"
+                    return (u, name)
+                }
+            }
+            for await r in g { if let (u, n) = r { out[u] = n } }
+        }
+        return out
+    }
+
+    static func refusedSentence(_ names: [String]) -> String {
+        let who = names.count <= 2 ? names.joined(separator: " and ") : "\(names[0]) and \(names.count - 1) others"
+        return "\(who) can't be added because of their privacy settings. You can send them the group link instead."
+    }
+
+    private static func sayRefused(_ names: [String]) async {
+        let text = refusedSentence(names)
+        await MainActor.run { ToastNotice.show(text) }
+    }
+
     // MARK: - Group management (each writes a system event message + updates the conv)
 
     /// Add members + a "X added Y" system message. New members can't read prior history
@@ -608,8 +648,17 @@ enum ChatService {
     /// messages until they open Fariin) so the UI can warn the adder honestly.
     @discardableResult
     static func addGroupMembers(cid: String, add: [String]) async throws -> [String] {
-        let newOnes = add.filter { !$0.isEmpty }
-        guard !newOnes.isEmpty else { return [] }
+        let asked = add.filter { !$0.isEmpty }
+        guard !asked.isEmpty else { return [] }
+        // Their "Groups" privacy (owner 2026-10-26: No One still let people add him). Nobody
+        // allowed: the add stops with the sentence; some allowed: they go in and the rest is said.
+        let refused = await groupAddRefusers(asked)
+        let newOnes = asked.filter { refused[$0] == nil }
+        if newOnes.isEmpty {
+            throw NSError(domain: "ChatService", code: 31,
+                          userInfo: [NSLocalizedDescriptionKey: refusedSentence(Array(refused.values))])
+        }
+        if !refused.isEmpty { await sayRefused(Array(refused.values)) }
         forgetSealMembers(cid)   // 2026-09-24 fix-all #111: the next seal re-reads the member list
         let convRef = db.collection("conversations").document(cid)
         // The member cap on growth: config/limits.group_members_max (admin panel), fallback 30. The

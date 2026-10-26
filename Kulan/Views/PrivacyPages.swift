@@ -195,6 +195,16 @@ struct AudiencePage: View {
         return n == 0 ? "Add People" : (n == 1 ? "1 person" : "\(n) people")
     }
 
+    static func header(for key: String) -> String? {
+        switch key {
+        case "lastSeen": return "Who can see my last seen"
+        case "photo":    return "Who can see my profile photo"
+        case "bio":      return "Who can see my bio"
+        case "groups":   return "Who can add me to groups"
+        default:         return nil
+        }
+    }
+
     init(title: String, key: String, footer: String) {
         self.title = title
         self.key = key
@@ -230,6 +240,9 @@ struct AudiencePage: View {
                         .contentShape(Rectangle())
                     }
                 }
+            } header: {
+                // The question over the choices (owner 2026-10-26: the Groups page had none).
+                if let h = Self.header(for: key) { Text(h) }
             } footer: {
                 Text(footer)
             }
