@@ -3713,6 +3713,8 @@ final class StoriesRepository {
             if key.hasPrefix(StoryGroup.groupKeyPrefix) {
                 let gid = String(key.dropFirst(StoryGroup.groupKeyPrefix.count))
                 let conv = convs.first { $0.id == gid }
+                // Suspended or disabled by Fariin: its stories are gone from the row (owner 2026-10-26).
+                if conv?.fariinLocked == true { continue }
                 let last = sorted.last
                 // The group's own name and photo; a story posted before 2026-10-23 may carry a
                 // member's name in groupName (the 1:1 helper), so the live group wins.

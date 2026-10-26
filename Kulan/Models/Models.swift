@@ -1366,6 +1366,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
         // ⛔ ENDED BY ITS OWNER (owner 2026-10-20, endGroup): closed for good, messages kept. Read as a
         // moderation state, so every place that already stops sending, calls and changes stops here too.
         if data["endedAt"] != nil, data["type"] as? String == "group" { self.groupMod.state = "ended" }
+        // ⛔ Suspended or disabled by Fariin: no group photo either (owner 2026-10-26), the plain
+        // group circle everywhere the app draws this group.
+        if data["type"] as? String == "group", groupMod.locksGroup() { self.avatarUrl = nil }
         self.groupVerified = data["verified"] as? Bool ?? false
         self.groupNoReport = data["noReport"] as? Bool ?? false
         self.restrictedFlags = stringArrayMap(data["restrictedFlags"])
