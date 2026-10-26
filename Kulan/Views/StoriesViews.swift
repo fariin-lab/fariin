@@ -5006,7 +5006,21 @@ struct StoryViewer: View {
             ?? story.groupId.flatMap { gid in
                 ConversationsRepository.shared.conversations.first(where: { $0.id == gid })?.names[story.authorUid]
             } ?? ""
-        if story.isVideo { beginVideoRepost(story, authorName: authorName, creditUid: creditUid, creditStoryId: creditStoryId); return }
+        // ⛔ A GROUP'S STORY IS CREDITED TO THE GROUP (owner 2026-10-26: the card named the member
+        // who posted it): the group's name and photo on the card, and its tap opens the group.
+        let groupCredit = story.groupId.map { gid -> (id: String, name: String, photo: String?) in
+            let conv = ConversationsRepository.shared.conversations.first { $0.id == gid }
+            let ring = groups.first { $0.authorUid == StoryGroup.groupKeyPrefix + gid }
+            let name = conv?.displayName(me) ?? ring?.name ?? story.groupName ?? "Group"
+            let photo = conv?.displayPhoto(me) ?? ring?.photoUrl ?? story.groupPhoto
+            return (gid, name, photo.flatMap { $0.isEmpty ? nil : $0 })
+        }
+        let creditName = groupCredit?.name ?? authorName
+        if story.isVideo {
+            beginVideoRepost(story, authorName: creditName, creditUid: creditUid, creditStoryId: creditStoryId,
+                             group: groupCredit.map { ($0.id, $0.photo) })
+            return
+        }
         repostLoading = true
         Task {
             // The viewer has almost always cached this already — it is the picture on screen — so
@@ -5016,7 +5030,9 @@ struct StoryViewer: View {
             // author's face and name, over its own colours. Built here, before the composer opens,
             // so the composer edits exactly what will be posted. The face is best effort: no
             // picture reachable draws the letter circle.
-            let avatar = await resolveAuthorAvatar(creditUid)
+            var avatar: UIImage?
+            if let g = groupCredit { avatar = await Self.groupAvatar(g.photo) } else { avatar = await resolveAuthorAvatar(creditUid) }
+            let authorName = creditName
             // ⛔ THE CARD IS DRAWN AT THE TAP AGAIN (2026-10-12 later): the photo repost is back on its
             // baked card (see `StoryEditorView.isRepostPhoto`). Off the main thread, as before.
             let card: UIImage? = await Task.detached(priority: .userInitiated) {
@@ -5041,7 +5057,8 @@ struct StoryViewer: View {
                                       // A repost of a repost carries the reposter's media, not the
                                       // original's: never copied on the server.
                                       modified: story.repostOf != nil,
-                                      card: true))
+                                      card: true,
+                                      groupId: groupCredit?.id, groupPhoto: groupCredit?.photo))
                 // ⚠️ FULL SCREEN, NOT A SHEET — the composer is a full-screen editor everywhere else
                 // it opens from — and OVER THE STAGE, NOT INSTEAD OF IT: a `fullScreenCover` took
                 // this viewer out of the window and left it wrecked for when the composer came back
@@ -5064,7 +5081,8 @@ struct StoryViewer: View {
     /// own cache when it has it, which is almost always, else downloaded) and the composer opens on
     /// it like any picked video: trim, mute, text and stickers are the reposter's. It opens as the
     /// card (`RepostVideoCard`) and a tap switches it to full screen, exactly like a photo repost.
-    private func beginVideoRepost(_ story: Story, authorName: String, creditUid: String, creditStoryId: String) {
+    private func beginVideoRepost(_ story: Story, authorName: String, creditUid: String, creditStoryId: String,
+                                  group: (id: String, photo: String?)? = nil) {
         guard let remote = URL(string: story.mediaUrl), !story.mediaUrl.isEmpty else { return }
         repostLoading = true
         // Where the viewer is in this clip, read before anything moves, so the composer opens on the
@@ -5100,7 +5118,8 @@ struct StoryViewer: View {
             }.value
             let poster = await Self.storyImage(story.previewUrl)
             // The card chip's face, best effort, the same lookup the photo card uses.
-            let avatar = await resolveAuthorAvatar(creditUid)
+            var avatar: UIImage?
+            if let g = group { avatar = await Self.groupAvatar(g.photo) } else { avatar = await resolveAuthorAvatar(creditUid) }
             await MainActor.run {
                 repostLoading = false
                 guard let local = wrote else {
@@ -5115,7 +5134,8 @@ struct StoryViewer: View {
                                                           // The composer decides: card by
                                                           // default, full screen on a tap.
                                                           storyId: creditStoryId,
-                                                          modified: story.repostOf != nil, card: true),
+                                                          modified: story.repostOf != nil, card: true,
+                                                          groupId: group?.id, groupPhoto: group?.photo),
                                     repostAvatar: avatar,
                                     onPosted: { flashSentToast("Reposted") },
                                     sourceVideo: .init(url: local),
@@ -5143,16 +5163,37 @@ struct StoryViewer: View {
     private func repostTapArea(_ s: Story) -> [StoryUI.StoryTapArea] {
         guard let r = s.repostOf, let u = URL(string: "kulan://repost") else { return [] }
         let t = RepostCard.tapRect
+        // A group's story: the group's name and photo, and the tap opens the group (owner 2026-10-26).
+        let id = r.groupId.map { StoryGroup.groupKeyPrefix + $0 } ?? r.authorUid
+        let photo = r.groupId != nil ? r.groupPhoto : authorPhoto(r.authorUid)
         return [StoryUI.StoryTapArea(id: "repost-\(s.id)", x: t.midX, y: t.midY,
                                      w: t.width, h: t.height, rotation: 0, url: u,
                                      person: StoryUI.StoryTapPerson(
-                                        id: r.authorUid,
+                                        id: id,
                                         name: r.authorName.isEmpty ? "Reposted" : r.authorName,
-                                        photoURL: authorPhoto(r.authorUid).flatMap(URL.init(string:))))]
+                                        photoURL: photo.flatMap(URL.init(string:))))]
+    }
+
+    /// A group's photo for a repost card, or nil for the letter circle.
+    static func groupAvatar(_ url: String?) async -> UIImage? {
+        guard let url, !url.isEmpty else { return nil }
+        return await DiskImageCache.shared.image(for: url)
     }
 
     /// The bubble's tap: the original author's profile, in the same sheet the header's tap uses.
     private func openRepostAuthor(_ uid: String) {
+        // A group's credit opens the group: its page over the story when I am in it, else the
+        // group's public page, which the story makes way for.
+        if uid.hasPrefix(StoryGroup.groupKeyPrefix) {
+            let gid = String(uid.dropFirst(StoryGroup.groupKeyPrefix.count))
+            if ConversationsRepository.shared.conversations.contains(where: { $0.id == gid && $0.users.contains(me) }) {
+                groupPage = StoryGroupPage(id: gid)
+            } else {
+                onClose()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { GroupDirectory.open(cid: gid, name: nil) }
+            }
+            return
+        }
         // ⛔ A REPOST OF MY OWN STORY OPENS THAT STORY, NOT MY PROFILE — owner 2026-10-13: "Ali
         // reposts my story, I tap the middle and my name, and it opens my profile; open my story,
         // the exact one he reposted". Everybody else's bubble still opens their profile (his
@@ -5224,6 +5265,7 @@ struct StoryViewer: View {
               let r = s.repostOf else { return }
         // ⛔ EXCEPT MY OWN STORY (owner 2026-10-13, full-screen repost): the header credit must do
         // what the card's bubble does, open my story, not my profile.
+        if let gid = r.groupId { openRepostAuthor(StoryGroup.groupKeyPrefix + gid); return }
         if r.authorUid == me {
             openMyRepostedOriginal(r.storyId)
             return

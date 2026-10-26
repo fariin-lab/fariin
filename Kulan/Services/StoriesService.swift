@@ -235,10 +235,17 @@ struct StoryRepost: Equatable, Hashable, Codable {
     /// made before the card, which keep their header credit line. OPTIONAL so a post saved in the
     /// outbox before this field existed still decodes (`StoryOutbox` stores this type as JSON).
     var card: Bool? = nil
+    /// ⛔ A GROUP STORY'S REPOST CREDITS THE GROUP (owner 2026-10-26): `authorName` is then the
+    /// group's name, the card wears the group's photo, and a tap opens the group. `authorUid` stays
+    /// the poster, which the server's copy check compares with the original. Nil for a person's story.
+    var groupId: String? = nil
+    var groupPhoto: String? = nil
 
     var asData: [String: Any] {
-        ["authorUid": authorUid, "authorName": authorName, "storyId": storyId, "modified": modified,
-         "card": card ?? false]
+        var d: [String: Any] = ["authorUid": authorUid, "authorName": authorName, "storyId": storyId,
+                                "modified": modified, "card": card ?? false]
+        if let groupId, !groupId.isEmpty { d["groupId"] = groupId; d["groupPhoto"] = groupPhoto ?? "" }
+        return d
     }
 
     static func from(_ raw: Any?) -> StoryRepost? {
@@ -251,7 +258,9 @@ struct StoryRepost: Equatable, Hashable, Codable {
                            authorName: m["authorName"] as? String ?? "",
                            storyId: m["storyId"] as? String ?? "",
                            modified: m["modified"] as? Bool ?? false,
-                           card: m["card"] as? Bool)
+                           card: m["card"] as? Bool,
+                           groupId: (m["groupId"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                           groupPhoto: (m["groupPhoto"] as? String).flatMap { $0.isEmpty ? nil : $0 })
     }
 }
 
