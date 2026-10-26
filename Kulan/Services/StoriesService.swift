@@ -272,18 +272,23 @@ struct StoryRepost: Equatable, Hashable, Codable {
     private static func conv(_ gid: String) -> Conversation? {
         ConversationsRepository.shared.conversations.first { $0.id == gid && $0.isGroup }
     }
+    /// Staff = exactly who may take a story down (audit 2026-10-26 item 7). An admin without Delete
+    /// messages cannot delete one, so they keep Hide Stories and Report like any member.
     static func isStaff(ringKey: String) -> Bool {
-        guard ringKey.hasPrefix(StoryGroup.groupKeyPrefix), let c = conv(String(ringKey.dropFirst(StoryGroup.groupKeyPrefix.count)))
-        else { return false }
-        return c.users.contains(me) && (c.createdBy == me || c.isAdmin(me))
+        guard ringKey.hasPrefix(StoryGroup.groupKeyPrefix) else { return false }
+        return mayDelete(groupId: String(ringKey.dropFirst(StoryGroup.groupKeyPrefix.count)))
     }
     static func noReport(ringKey: String) -> Bool {
         guard ringKey.hasPrefix(StoryGroup.groupKeyPrefix) else { return false }
         return conv(String(ringKey.dropFirst(StoryGroup.groupKeyPrefix.count)))?.groupNoReport == true
     }
+    /// The rules' `groupStoryModerator`, word for word: a member who is the owner, or is in `admins`
+    /// with no rights entry (legacy, all rights) or one that lists deleteMessages.
     static func mayDelete(groupId: String) -> Bool {
         guard let c = conv(groupId), c.users.contains(me) else { return false }
-        return c.createdBy == me || (c.isAdmin(me) && c.adminCan(me, .deleteMessages))
+        if c.createdBy == me { return true }
+        guard c.admins.contains(me) else { return false }
+        return c.adminRights[me]?.contains(Conversation.Right.deleteMessages.rawValue) ?? true
     }
 }
 
