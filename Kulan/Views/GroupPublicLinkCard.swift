@@ -100,7 +100,7 @@ struct GroupAboutCard: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 10) {
                             Image(systemName: "text.alignleft").font(.system(size: 17))
-                            Text("About").font(.body)
+                            Text("Description").font(.body)
                         }
                         .foregroundStyle(.primary)
                         descText
