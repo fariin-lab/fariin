@@ -243,6 +243,37 @@ final class ProfileStore {
         memLock.lock(); defer { memLock.unlock() }
         return lastGood[uid]
     }
+    /// The profile this run last read for `uid`, from memory only: no fetch, no disk. For a screen
+    /// that can use a fresher name, photo or @username when it happens to be in hand (audit
+    /// 2026-10-26 items 17 and 22: the group member list and search).
+    func known(_ uid: String) -> UserProfile? { uid.isEmpty ? nil : lastGoodCopy(uid) }
+
+    /// Members' @usernames for the member search (audit 2026-10-26 item 17). What this run already
+    /// read, then the on-disk copies, then the server for the rest, eight at a time and at most
+    /// `fetchCap` of them, so a big group never turns one search into thousands of reads.
+    func handles(for uids: [String], fetchCap: Int = 200) async -> [String: String] {
+        var out: [String: String] = [:]
+        var missing: [String] = []
+        for uid in uids where !uid.isEmpty {
+            if let p = known(uid) { out[uid] = p.handle } else { missing.append(uid) }
+        }
+        var unread: [String] = []
+        for uid in missing {
+            if let p = await cachedPeer(uid) { out[uid] = p.handle } else { unread.append(uid) }
+        }
+        let toFetch = Array(unread.prefix(fetchCap))
+        for start in stride(from: 0, to: toFetch.count, by: 8) {
+            let chunk = Array(toFetch[start..<min(start + 8, toFetch.count)])
+            let got = await withTaskGroup(of: (String, String?).self) { g -> [(String, String?)] in
+                for uid in chunk { g.addTask { [self] in (uid, await fetch(uid)?.handle) } }
+                var rows: [(String, String?)] = []
+                for await r in g { rows.append(r) }
+                return rows
+            }
+            for (uid, h) in got { if let h { out[uid] = h } }
+        }
+        return out.filter { !$0.value.isEmpty }
+    }
     private func markFetch(_ uid: String, failed: Bool) {
         memLock.lock(); defer { memLock.unlock() }
         if failed { failedUids.insert(uid) } else { failedUids.remove(uid) }

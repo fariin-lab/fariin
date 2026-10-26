@@ -2742,11 +2742,14 @@ struct GroupMembersSheet: View {
     /// name and rank worked out once, not on every comparison (2026-10-19 fix round).
     private func members(_ c: Conversation?) -> [String] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        // "@ali" finds the member whose @username starts so (audit 2026-10-26 item 17).
+        let handleQ = q.hasPrefix("@") ? String(q.dropFirst()) : q
         let admins = Set(c?.admins ?? [])
         let owner = c?.createdBy
         let rows = (c?.users ?? []).compactMap { uid -> (uid: String, name: String, rank: Int)? in
             let n = uid == me ? "You" : (c?.names[uid] ?? "User")
             guard q.isEmpty || n.lowercased().contains(q)
+                    || (!handleQ.isEmpty && (handles[uid]?.lowercased().contains(handleQ) ?? false))
                     || (c?.roles[uid]?.display.lowercased().contains(q) ?? false) else { return nil }
             let rank = owner == uid ? 0 : (admins.contains(uid) ? 1 : 2)
             return (uid: uid, name: n, rank: rank)
@@ -2767,12 +2770,17 @@ struct GroupMembersSheet: View {
         let owner: String
         let query: String
         let adminsFirst: Bool
+        let handles: Int
     }
     private var listKey: ListKey {
         let c = conv
         return ListKey(users: c?.users ?? [], admins: c?.admins ?? [], names: c?.names ?? [:],
-                       roles: c?.roles ?? [:], owner: c?.createdBy ?? "", query: query, adminsFirst: adminsFirst)
+                       roles: c?.roles ?? [:], owner: c?.createdBy ?? "", query: query, adminsFirst: adminsFirst,
+                       handles: handles.count)
     }
+    /// The members' @usernames, read once the first search starts (`ProfileStore.handles`).
+    @State private var handles: [String: String] = [:]
+    @State private var handlesAsked = false
     @State private var cachedSections: [(String, [String])] = []
     @State private var sectionsBuilt = false
     /// The letter a name files under: A–Z, everything else "#".
@@ -2853,6 +2861,12 @@ struct GroupMembersSheet: View {
         .onChange(of: listKey, initial: true) { _, _ in
             cachedSections = buildSections()
             sectionsBuilt = true
+        }
+        .onChange(of: query) { _, q in
+            guard !q.isEmpty, !handlesAsked else { return }
+            handlesAsked = true
+            let uids = conv?.users ?? []
+            Task { handles = await ProfileStore.shared.handles(for: uids) }
         }
     }
 

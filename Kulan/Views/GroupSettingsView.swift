@@ -1011,8 +1011,15 @@ struct GroupMembersListView: View {
         let all = GroupMembers.sorted(conv, me: me)
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return all }
-        return all.filter { (conv?.names[$0] ?? "").lowercased().contains(q) }
+        // And by @username (audit 2026-10-26 item 17), once the members' handles are in.
+        let handleQ = q.hasPrefix("@") ? String(q.dropFirst()) : q
+        return all.filter {
+            (conv?.names[$0] ?? "").lowercased().contains(q)
+                || (!handleQ.isEmpty && (handles[$0]?.lowercased().contains(handleQ) ?? false))
+        }
     }
+    @State private var handles: [String: String] = [:]
+    @State private var handlesAsked = false
 
     var body: some View {
         // Read once per body (2026-10-19 fix round): the group lookup and the sort ran per use.
@@ -1073,6 +1080,12 @@ struct GroupMembersListView: View {
         .listStyle(.insetGrouped)
         // At the bottom, the system's own iOS 26 Liquid Glass field (owner 2026-10-19).
         .searchable(text: $query, placement: .toolbar, prompt: "Search members")
+        .onChange(of: query) { _, q in
+            guard !q.isEmpty, !handlesAsked else { return }
+            handlesAsked = true
+            let uids = conv?.users ?? []
+            Task { handles = await ProfileStore.shared.handles(for: uids) }
+        }
         // `.toolbar` placement alone leaves the field at the top on a pushed page; asking for the
         // system search item in the bottom bar is what puts it at the foot on iOS 26.
         .toolbar { DefaultToolbarItem(kind: .search, placement: .bottomBar) }
