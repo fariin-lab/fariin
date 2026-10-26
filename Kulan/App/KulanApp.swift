@@ -241,6 +241,11 @@ struct KulanApp: App {
     }
 
     /// One path piece that is safe to use as a Firestore document id (see the note in `route`).
+    /// fariin.com's own pages and route prefixes: never a name (the panel refuses them too).
+    static let sitePages: Set<String> = ["download", "privacy", "terms", "support", "help", "about", "faq",
+        "news", "safety", "security", "reset", "admin", "console", "index", "g", "u", "s", "hc",
+        "call", "voice", "video", "link"]
+
     static func safeSegment(_ value: String) -> Bool {
         !value.isEmpty && !value.contains("/") && value != "." && value != ".."
             && !(value.hasPrefix("__") && value.hasSuffix("__")) && value.count <= 128
@@ -297,12 +302,13 @@ struct KulanApp: App {
                 guard Self.safeSegment(h), Self.safeSegment(id) else { return nil }
                 return .story(StoryLinkId.full(id), handle: h)
             }
-            // A public link, /<name> (2026-10-19 groups v2): only the shape a name can have (a letter
-            // first, 5 to 30 letters, digits and _), so the site's own pages never read as one.
+            // A public link, /<name> (2026-10-19 groups v2): only the shape a name can have, so the
+            // site's own pages never read as one. 1 to 30 since 2026-10-26: the admin panel gives
+            // groups short names (@a, @fc); people and groups in the app still need 5.
             if parts.count == 1 {
                 let n = parts[0]
-                guard n.range(of: "^[A-Za-z][A-Za-z0-9_]{4,29}$", options: .regularExpression) != nil,
-                      !["download", "privacy", "terms", "support", "help", "about"].contains(n.lowercased())
+                guard n.range(of: "^[A-Za-z0-9_]{1,30}$", options: .regularExpression) != nil,
+                      !Self.sitePages.contains(n.lowercased())
                 else { return nil }
                 return .name(n)
             }
