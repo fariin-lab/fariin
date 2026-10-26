@@ -768,12 +768,23 @@ final class MessageRowView: UIView {
            !UIAccessibility.isReduceMotionEnabled, case .bubble(let ob)? = plan?.body {
             before = captureBefore(ob, oldKeys: oldKeys, newKeys: newKeys)
         }
+        // ⛔ THE CORNER EASES WHEN THE RUN CHANGES (owner 2026-10-26: "the corner comes like a pop").
+        // A new message below mine turns this bubble's big bottom corner into the run's small one;
+        // the same message at the same size with only its corners changed morphs over a quarter
+        // second instead of snapping. A reaction growth has its own animation and wins.
+        var cornerFrom: (fill: UIBezierPath, rim: CGPath?)?
+        if before == nil, model?.id == m.id, !UIAccessibility.isReduceMotionEnabled,
+           case .bubble(let ob)? = plan?.body, case .bubble(let nb) = p.body,
+           !ob.isCapsule, !nb.isCapsule, ob.bubble.size == nb.bubble.size, ob.radii != nb.radii {
+            cornerFrom = (fill.shownPath, rim.shape.path)
+        }
         model = m
         plan = p
         self.cid = cid
         let dark = traitCollection.userInterfaceStyle == .dark
         defer {
             if let before, case .bubble(let nb) = p.body { animateReactionChange(from: before, to: nb) }
+            if let cornerFrom, case .bubble(let nb) = p.body { animateCorners(from: cornerFrom, size: nb.bubble.size) }
             // Owner audit 2026-10-06 chat #39: the direction is for this pass only. Left set, it was
             // read by a later pass the list had not decided it for. Back to the fixed-top default.
             growsFromBottom = false
@@ -953,6 +964,20 @@ final class MessageRowView: UIView {
             }
             box.layer.add(a, forKey: "remove")
             CATransaction.commit()
+        }
+    }
+
+    private func animateCorners(from old: (fill: UIBezierPath, rim: CGPath?), size: CGSize) {
+        let dur: CFTimeInterval = 0.25
+        let curve = CAMediaTimingFunction(name: .easeInEaseOut)
+        fill.animateGeometry(fromPath: old.fill, fromSize: size, duration: dur, timing: curve)
+        guard let rp = old.rim else { return }
+        for l in [rim.shape, highlight.shape] {
+            let a = CABasicAnimation(keyPath: "path")
+            a.fromValue = rp
+            a.duration = dur
+            a.timingFunction = curve
+            l.add(a, forKey: "corners.path")
         }
     }
 
