@@ -975,7 +975,7 @@ struct GroupInfoView: View {
             // Statistics (owner 2026-10-26): owner/admins of a big enough group, last row.
             if showStatsRow {
                 rowDivider
-                ProfileInfoRow(title: "Statistics", icon: "chart.bar.xaxis") { showStats = true }
+                ProfileInfoRow(title: "Statistics", icon: "ic_statistics") { showStats = true }   // his drawing
             }
             // Recent Actions (audit 2026-10-26 item 14): the owner and admins, as the server's
             // `groupAdminLog` lets them read it.
