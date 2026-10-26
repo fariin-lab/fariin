@@ -2469,9 +2469,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // spring "squash and pop" preset sits behind a debug flag that defaults to off; it is not what
     // the app ships, so it is not copied.)
     //
-    // What ours does not copy: theirs lifts the bubble into an overlay above the input panel and
-    // morphs the field's own background into it. Ours keeps the bubble in the list, so for its first
-    // few points it rises from behind the composer's glass rather than over it.
+    // ⛔ THE BUBBLE GROWS OUT OF THE FIELD, BEHIND THE GLASS (owner 2026-10-26, with a video of the
+    // system Messages app): the flying bubble starts at the composer pill's full size with the text
+    // where it was typed, then shrinks into the finished bubble while it moves right and up. It is
+    // drawn between the list and the bottom bar, so the composer's glass stays on top of it and the
+    // composer itself never changes. The row's own bubble is hidden for the 0.3s and shown at the end.
+    // (The first version moved the finished bubble from the field's left edge, so a small bubble
+    // was seen at the left rising first and only then sliding over.)
 
     static let sendDuration: CFTimeInterval = 0.3
     static let sendVerticalCurve = CAMediaTimingFunction(controlPoints: 0.19919472913616398, 0.010644531250000006,
@@ -2483,7 +2487,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     /// The field the newest row's text left from, when that row is a text bubble this phone just
     /// sent. Taken once from the composer, so a later land cannot fly the same send twice.
-    private func textSendSource(for id: String?) -> CGRect? {
+    private func textSendSource(for id: String?) -> ChatComposerView.TextSendSource? {
         guard let id, case .bubble(let b)? = rowModels[id]?.content, b.isMe else { return nil }
         switch b.body {
         case .text, .jumbomoji: break
@@ -2492,44 +2496,100 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         return (composerBar as? ChatComposerView)?.takeTextSendSource()
     }
 
-    /// The list scrolls to the newest on the send curve, and the new bubble rides two additive moves
-    /// from the field to its place. Both run on one clock, so the bubble's path is a straight blend of
-    /// the field and its slot: the scroll carries the cell up, and the additive offset closes the gap
-    /// from where the cell started to where the field was.
-    private func flyOwnSendIntoPlace(id: String, source: CGRect) {
+    /// One send in flight: the bubble-coloured shape, the picture of the finished bubble riding in
+    /// it, where it started (this view's coordinates) and the row it lands on.
+    private final class SendFlight {
+        let id: String
+        let shape = UIView()
+        let picture: UIView
+        let pill: CGRect
+        let textX: CGFloat
+        let start: CFTimeInterval
+        weak var hidden: MessageRowCell?
+        var link: CADisplayLink?
+        init(id: String, picture: UIView, pill: CGRect, textX: CGFloat, start: CFTimeInterval) {
+            self.id = id; self.picture = picture; self.pill = pill; self.textX = textX; self.start = start
+        }
+    }
+    private var sendFlight: SendFlight?
+
+    /// The list scrolls to the newest on the send curve while the bubble flies from the field to its
+    /// row. Every frame reads the row's live place, so the flight lands exactly where the scroll puts it.
+    private func flyOwnSendIntoPlace(id: String, source: ChatComposerView.TextSendSource) {
         pinUnreadLanding = false
         pendingNewestJump = nil
         guard let ip = dataSource.indexPath(for: id),
-              let attr = collectionView.layoutAttributesForItem(at: ip) else {
+              collectionView.layoutAttributesForItem(at: ip) != nil else {
             perform(.newest(animated: true)); return
         }
-        // Where the cell sits on screen NOW, before the scroll moves it.
-        let before = collectionView.convert(attr.frame, to: nil)
         scrollToOffset(maxContentOffsetY, animated: true, sendCurve: true)
         collectionView.layoutIfNeeded()
-        guard let cell = collectionView.cellForItem(at: ip) as? MessageRowCell else { return }
-        let cellNow = collectionView.convert(cell.frame, to: nil)
-        // The bubble, at its final place, and where it was before the scroll began.
-        let bubble = cell.liftFrameInWindow
-        let bubbleBottomBefore = bubble.maxY + (before.minY - cellNow.minY)
-        // Theirs: bottoms aligned for the vertical, leading edges aligned for the horizontal.
-        let dy = source.maxY - bubbleBottomBefore
-        let dx = source.minX - bubble.minX
-        let now = CACurrentMediaTime()
-        func move(_ key: String, _ from: CGFloat, _ curve: CAMediaTimingFunction) {
-            guard abs(from) > 0.5 else { return }
-            let a = CABasicAnimation(keyPath: key)
-            a.fromValue = from
-            a.toValue = 0
-            a.isAdditive = true
-            a.duration = Self.sendDuration
-            a.beginTime = now
-            a.timingFunction = curve
-            a.fillMode = .backwards
-            cell.layer.add(a, forKey: "send.\(key)")
+        endSendFlight()
+        guard let cell = collectionView.cellForItem(at: ip) as? MessageRowCell,
+              let bubble = cell.bubbleForFlight(in: view) else { return }
+        let f = SendFlight(id: id, picture: bubble.picture, pill: view.convert(source.pill, from: nil),
+                           textX: view.convert(CGPoint(x: source.textX, y: 0), from: nil).x,
+                           start: CACurrentMediaTime())
+        f.shape.isUserInteractionEnabled = false
+        f.shape.backgroundColor = bubble.color
+        f.shape.layer.cornerCurve = .continuous
+        f.picture.isUserInteractionEnabled = false
+        // Between the list and the bottom bar: the composer's glass is drawn over the flight.
+        view.insertSubview(f.shape, belowSubview: bottomBarContainer)
+        view.insertSubview(f.picture, aboveSubview: f.shape)
+        cell.contentView.alpha = 0
+        f.hidden = cell
+        sendFlight = f
+        placeSendFlight(f, t: 0)
+        let link = CADisplayLink(target: self, selector: #selector(sendFlightTick(_:)))
+        if #available(iOS 15.0, *) {
+            let fps = Float(UIScreen.main.maximumFramesPerSecond)
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: fps, preferred: fps)
         }
-        move("position.y", dy, Self.sendVerticalCurve)
-        move("position.x", dx, Self.sendHorizontalCurve)
+        link.add(to: .main, forMode: .common)
+        f.link = link
+    }
+
+    @objc private func sendFlightTick(_ link: CADisplayLink) {
+        guard let f = sendFlight else { link.invalidate(); return }
+        let t = min(1, max(0, (link.targetTimestamp - f.start) / Self.sendDuration))
+        guard t < 1, placeSendFlight(f, t: t) else { endSendFlight(); return }
+    }
+
+    /// The flight at time `t` (0...1). Sideways on the horizontal curve, up on the vertical one, the
+    /// reference's two curves: the left edge closes in from the pill's to the bubble's, the bottom and
+    /// height go from the pill's to the bubble's, and the text picture travels from where the typed
+    /// text began to its place in the bubble. False once the row is gone.
+    @discardableResult
+    private func placeSendFlight(_ f: SendFlight, t: Double) -> Bool {
+        guard let ip = dataSource.indexPath(for: f.id),
+              let cell = collectionView.cellForItem(at: ip) as? MessageRowCell else { return false }
+        // The data source may have handed the row a fresh cell mid-flight: hide that one instead.
+        if cell !== f.hidden { f.hidden?.contentView.alpha = 1; cell.contentView.alpha = 0; f.hidden = cell }
+        let dst = cell.previewBubble.convert(cell.previewBubble.bounds, to: view)
+        let h = CGFloat(Self.sendHorizontalCurve.value(at: t))
+        let v = CGFloat(Self.sendVerticalCurve.value(at: t))
+        func mix(_ a: CGFloat, _ b: CGFloat, _ k: CGFloat) -> CGFloat { a + (b - a) * k }
+        let src = f.pill
+        let minX = mix(src.minX, dst.minX, h), maxX = mix(src.maxX, dst.maxX, h)
+        let maxY = mix(src.maxY, dst.maxY, v), height = mix(src.height, dst.height, v)
+        let shape = CGRect(x: minX, y: maxY - height, width: maxX - minX, height: height)
+        f.shape.frame = shape
+        f.shape.layer.cornerRadius = min(mix(20, BubbleMetrics.bigCorner, v), height / 2)
+        // The picture is the finished bubble at its own size; its text starts where the typed text did.
+        let picX = mix(f.textX - BubbleMetrics.hPad, dst.minX, h)
+        f.picture.frame = CGRect(x: picX, y: shape.midY - dst.height / 2, width: dst.width, height: dst.height)
+        return true
+    }
+
+    /// The flight ends: the row's own bubble shows again and the flying views go.
+    private func endSendFlight() {
+        guard let f = sendFlight else { return }
+        sendFlight = nil
+        f.link?.invalidate()
+        f.hidden?.contentView.alpha = 1
+        f.shape.removeFromSuperview()
+        f.picture.removeFromSuperview()
     }
 
     /// The scroll half: the offset written every frame on the vertical curve, so the list and the
@@ -5110,6 +5170,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        endSendFlight()   // a send still flying lands at once; its row shows
         // ⛔ BEFORE `isDisappearing` GOES UP, because `reportReadingPosition` refuses to run once it
         // is. Leaving the chat is the last honest moment to record where this reader is, and it was
         // the other half of the stale-position bug: a reader who scrolled up and then walked straight

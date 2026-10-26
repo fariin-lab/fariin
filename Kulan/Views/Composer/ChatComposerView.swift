@@ -268,14 +268,16 @@ final class ChatComposerView: UIView {
 
     private var holdStart: CGPoint?
     private var pillIsCapsule = false
-    /// The pill's rect in window coordinates at the moment of the last text send, and when. The list
-    /// takes it once (`takeTextSendSource`) to fly the new bubble out of the field.
-    private var lastTextSend: (rect: CGRect, at: CFTimeInterval)?
-    /// The last text send's source rect, if it was sent within the last second. One use only.
-    func takeTextSendSource() -> CGRect? {
+    /// Where a text send left from, in window coordinates: the pill, and the x of its first letter.
+    struct TextSendSource { let pill: CGRect; let textX: CGFloat }
+    /// The last text send's source and when. The list takes it once (`takeTextSendSource`) to fly
+    /// the new bubble out of the field.
+    private var lastTextSend: (source: TextSendSource, at: CFTimeInterval)?
+    /// The last text send's source, if it was sent within the last second. One use only.
+    func takeTextSendSource() -> TextSendSource? {
         defer { lastTextSend = nil }
         guard let s = lastTextSend, CACurrentMediaTime() - s.at < 1.0 else { return nil }
-        return s.rect
+        return s.source
     }
     private var displayLink: CADisplayLink?
 
@@ -404,7 +406,11 @@ final class ChatComposerView: UIView {
                 // Where the text left from, for the list's send transition — measured before the
                 // send clears the field and shrinks the pill. Not for an edit, which moves no bubble.
                 if !self.shown.editing, !self.textView.text.isEmpty {
-                    self.lastTextSend = (self.pill.convert(self.pill.bounds, to: nil), CACurrentMediaTime())
+                    let tv = self.textView
+                    let lead = tv.textContainerInset.left + tv.textContainer.lineFragmentPadding
+                    let source = TextSendSource(pill: self.pill.convert(self.pill.bounds, to: nil),
+                                                textX: tv.convert(CGPoint(x: lead, y: 0), to: nil).x)
+                    self.lastTextSend = (source, CACurrentMediaTime())
                 }
                 self.actions.send()
             }

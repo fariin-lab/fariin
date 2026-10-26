@@ -153,6 +153,29 @@ final class MessageRowCell: UICollectionViewCell {
 
     /// The rect the long-press menu should lift, in window coordinates. Wider than the bubble when
     /// reactions hang off its corner: lifting the bubble alone slices the badge in half.
+    /// The finished bubble for the send transition: a picture of it, its frame in `view`, and its
+    /// colour read from a point inside its left edge (before the text starts). The colour is nil
+    /// when the fill does not render into a picture (a glass material), so only the picture flies.
+    func bubbleForFlight(in view: UIView) -> (picture: UIView, frame: CGRect, color: UIColor?)? {
+        let box = rowView.liftTarget
+        guard box.bounds.width > 1, box.bounds.height > 1,
+              let picture = box.snapshotView(afterScreenUpdates: true) else { return nil }
+        var px = [UInt8](repeating: 0, count: 4)
+        var color: UIColor?
+        if let ctx = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                               space: CGColorSpaceCreateDeviceRGB(),
+                               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+            ctx.translateBy(x: -min(6, box.bounds.width / 2), y: -box.bounds.height / 2)
+            box.layer.render(in: ctx)
+            if px[3] > 200 {
+                let a = CGFloat(px[3]) / 255
+                color = UIColor(red: CGFloat(px[0]) / 255 / a, green: CGFloat(px[1]) / 255 / a,
+                                blue: CGFloat(px[2]) / 255 / a, alpha: 1)
+            }
+        }
+        return (picture, box.convert(box.bounds, to: view), color)
+    }
+
     var liftFrameInWindow: CGRect {
         var rect = rowView.liftTarget.frame
         if let p = rowView.plan, case .bubble(let b) = p.body, !b.reactions.isEmpty {
