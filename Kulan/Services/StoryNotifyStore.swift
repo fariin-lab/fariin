@@ -84,6 +84,9 @@ final class StoryNotifyStore {
         StoryGroupStaffSeam.isStaff = { key in
             MainActor.assumeIsolated { GroupStoryStaff.isStaff(ringKey: key) }
         }
+        StoryGroupStaffSeam.noReport = { key in
+            MainActor.assumeIsolated { GroupStoryStaff.noReport(ringKey: key) }
+        }
     }
 }
 

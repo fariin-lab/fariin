@@ -277,6 +277,10 @@ struct StoryRepost: Equatable, Hashable, Codable {
         else { return false }
         return c.users.contains(me) && (c.createdBy == me || c.isAdmin(me))
     }
+    static func noReport(ringKey: String) -> Bool {
+        guard ringKey.hasPrefix(StoryGroup.groupKeyPrefix) else { return false }
+        return conv(String(ringKey.dropFirst(StoryGroup.groupKeyPrefix.count)))?.groupNoReport == true
+    }
     static func mayDelete(groupId: String) -> Bool {
         guard let c = conv(groupId), c.users.contains(me) else { return false }
         return c.createdBy == me || (c.isAdmin(me) && c.adminCan(me, .deleteMessages))

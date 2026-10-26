@@ -1251,6 +1251,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var groupVerified: Bool = false
     /// The badge as it is shown: verified and no Scam / Fake label.
     var showsGroupBadge: Bool { isGroup && groupVerified && groupMod.label.isEmpty }
+    /// The admin panel hid Report on this group (owner 2026-10-26: Fariin's official groups).
+    var groupNoReport: Bool = false
     /// Suspended or disabled by Fariin right now (see `GroupMod.locksGroup`).
     var fariinLocked: Bool { isGroup && groupMod.locksGroup() }
 
@@ -1365,6 +1367,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         // moderation state, so every place that already stops sending, calls and changes stops here too.
         if data["endedAt"] != nil, data["type"] as? String == "group" { self.groupMod.state = "ended" }
         self.groupVerified = data["verified"] as? Bool ?? false
+        self.groupNoReport = data["noReport"] as? Bool ?? false
         self.restrictedFlags = stringArrayMap(data["restrictedFlags"])
         self.restrictedUntil = doubleMap(data["restrictedUntil"])
         self.lastReactionEnc = data["lastReactionEnc"] as? String

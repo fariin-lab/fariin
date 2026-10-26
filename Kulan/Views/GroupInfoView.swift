@@ -835,7 +835,8 @@ struct GroupInfoView: View {
                 // reference app hides Report for both too), so Report is for plain members only.
                 // No Block Group row: neither big app has one. Blocking rides inside Report as
                 // "Report and Leave" (see the Report alert), as the other big app does it.
-                if !(iAmAdmin || iAmOwner) {
+                // And not on a group the admin panel marked (owner 2026-10-26: official groups).
+                if !(iAmAdmin || iAmOwner), conv?.groupNoReport != true {
                     rowDivider
                     ProfileInfoRow(title: "Report Spam", icon: "exclamationmark.octagon", tint: Self.exitRed, chevron: false) { confirmReport = true }
                 }

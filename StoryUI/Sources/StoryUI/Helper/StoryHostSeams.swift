@@ -83,6 +83,8 @@ public enum StoryNotifySeam {
 /// the menu has no Hide Stories or Report: it is their own group (owner 2026-10-26).
 public enum StoryGroupStaffSeam {
     public static var isStaff: ((String) -> Bool)?
+    /// The admin panel hid Report on this group (an official group): no Report, Hide Stories stays.
+    public static var noReport: ((String) -> Bool)?
 }
 
 public enum StoryPosterSource {

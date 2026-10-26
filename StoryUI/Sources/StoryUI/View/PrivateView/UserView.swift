@@ -193,10 +193,12 @@ struct UserView: View {
                 out.append(.init(title: "Hide Stories", systemImage: "eye.slash", assetImage: "ic_eye_off") {
                     NotificationCenter.default.post(name: .init("storyActionHide"), object: nil)
                 })
-                out.append(.init(title: "Report", systemImage: "exclamationmark.bubble", assetImage: "ic_report",
-                                 destructive: true) {
-                    NotificationCenter.default.post(name: .init("storyActionReport"), object: nil)
-                })
+                if StoryGroupStaffSeam.noReport?(userId) != true {
+                    out.append(.init(title: "Report", systemImage: "exclamationmark.bubble", assetImage: "ic_report",
+                                     destructive: true) {
+                        NotificationCenter.default.post(name: .init("storyActionReport"), object: nil)
+                    })
+                }
             }
         }
         return out
