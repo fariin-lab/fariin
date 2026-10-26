@@ -14,10 +14,11 @@ struct AddToGroupView: View {
     @State private var noticeIsSuccess = false   // only a success notice should close the sheet on OK
     @State private var pendingGroup: Conversation?   // group awaiting the native "Add New Member" confirm
 
-    // Every group I'm a member of, alphabetical.
+    // Every group I'm a member of, alphabetical. Not a closed one (audit 2026-10-26 item 5): a group
+    // its owner ended, or one Fariin limited, suspended or disabled, takes nobody new; the add only failed.
     private var myGroups: [Conversation] {
         ConversationsRepository.shared.conversations
-            .filter { $0.isGroup && $0.users.contains(me) && !$0.isCleared(me) }
+            .filter { $0.isGroup && $0.users.contains(me) && !$0.isCleared(me) && !$0.groupMod.takesNoNewMembers() }
             .sorted { $0.displayName(me).lowercased() < $1.displayName(me).lowercased() }
     }
 

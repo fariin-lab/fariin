@@ -1042,6 +1042,10 @@ struct GroupMod: Equatable, Hashable {
         return untilMillis <= 0 || untilMillis > now.timeIntervalSince1970 * 1000
     }
 
+    /// Nobody new comes in (audit 2026-10-26 item 5): `limited`, or closed as `blocksSending` reads it.
+    /// The rules refuse a member add for each (firestore.rules, the group mod ladder).
+    func takesNoNewMembers(now: Date = Date()) -> Bool { state == "limited" || blocksSending(now: now) }
+
     /// The sentence in place of the message bar. The server's own notice when it wrote one, else
     /// a plain line from the reason, with the end date of a timed suspension.
     var noticeText: String {
