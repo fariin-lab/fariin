@@ -2312,12 +2312,14 @@ struct GroupMemberSheet: View {
     /// The card itself, measured so the sheet is exactly its height.
     private var shortCard: some View {
         VStack(spacing: 16) {
-            header.padding(.top, 28)
+            header.padding(.top, 36)
             if member.id != me { tiles }
             quickRows
         }
         .padding(.horizontal, 16)
-        .padding(.bottom, 44)   // clears the home bar: the detent height includes it
+        // ⛔ The iOS 26 card floats above the home bar, so it needs no room for it (owner 2026-10-26:
+        // empty space under Open Profile, too little over the photo).
+        .padding(.bottom, 20)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0; MemberCardMemo.height = $0 }
         .frame(maxHeight: .infinity, alignment: .top)
         .overlay(alignment: .topTrailing) {
