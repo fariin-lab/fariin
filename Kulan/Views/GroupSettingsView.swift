@@ -32,6 +32,41 @@ extension GroupMemberSheet {
     }
 }
 
+/// ⛔ A GROUP SETTING IS SAVED WHEN THE SERVER SAYS SO (audit 2026-10-26 item 20). Offline, a
+/// Firestore write never fails: it waits in the local cache, every listener shows it at once, and
+/// the switch looked saved while nothing had left the phone. Now a settings write is refused at once
+/// when there is no connection, and one the server has not confirmed within `seconds` is reported,
+/// so the page puts the switch back and says so. The pages read the group from server-confirmed
+/// snapshots only (`hasPendingWrites` skipped), so a late write shows up when it really lands.
+enum GroupSettingWrite {
+    struct NotSaved: LocalizedError {
+        var errorDescription: String? { "The change was not saved. Check your connection and try again." }
+    }
+
+    /// One answer, whichever of the write and the timer comes first. The write is not cancelled (a
+    /// Firestore write cannot be); it is only no longer waited for.
+    private final class Once: @unchecked Sendable {
+        private let lock = NSLock()
+        private var done = false
+        func claim() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done = true; return true }
+    }
+
+    static func confirmed(within seconds: Double = 12, _ op: @escaping () async throws -> Void) async throws {
+        guard NetworkState.shared.isOnline else { throw NotSaved() }
+        let once = Once()
+        try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+            Task {
+                do { try await op(); if once.claim() { c.resume() } }
+                catch { if once.claim() { c.resume(throwing: error) } }
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                if once.claim() { c.resume(throwing: NotSaved()) }
+            }
+        }
+    }
+}
+
 struct GroupSettingsView: View {
     let cid: String
     private var repo = ConversationsRepository.shared
@@ -150,7 +185,11 @@ struct GroupSettingsView: View {
 
     private func setTimer(_ seconds: Int) {
         Task {
-            if !(await ChatService.setDisappear(cid, seconds: seconds)) {
+            // Confirmed by the server, or said (audit 2026-10-26 item 20); offline it is not tried.
+            let ok = (try? await GroupSettingWrite.confirmed {
+                if !(await ChatService.setDisappear(cid, seconds: seconds)) { throw GroupSettingWrite.NotSaved() }
+            }) != nil
+            if !ok {
                 actionError = "The disappearing message timer was not changed. Check your connection and try again."
             }
         }
@@ -232,9 +271,12 @@ struct GroupSettingsView: View {
     /// Started once and kept while a child page is pushed (`ListenerBox`); again after a swap.
     private func attachListeners() {
         if convListener.reg == nil {
+            // Server-confirmed copies only (audit 2026-10-26 item 20): a write still waiting in the
+            // local cache is not shown as the group's state. The metadata changes are what bring
+            // the confirmed copy in when the server acknowledges a write.
             convListener.reg = FirestoreHub.db.collection("conversations").document(cid)
-                .addSnapshotListener { snap, _ in
-                    guard let snap, snap.exists, let data = snap.data() else { return }
+                .addSnapshotListener(includeMetadataChanges: true) { snap, _ in
+                    guard let snap, snap.exists, !snap.metadata.hasPendingWrites, let data = snap.data() else { return }
                     ownConv = Conversation(id: snap.documentID, data: data)
                 }
         }
@@ -420,9 +462,14 @@ struct GroupSettingsView: View {
                     in: 0...Double(Self.slowSteps.count - 1), step: 1) { editing in
                         guard !editing, let d = slowDraft else { return }
                         let secs = Self.slowSteps[d].0
-                        slowDraft = nil
-                        guard secs != current else { return }
-                        run { try await ChatService.setGroupSlowMode(cid: cid, seconds: secs) }
+                        guard secs != current else { slowDraft = nil; return }
+                        // The thumb stays where it was let go until the server answers; refused or
+                        // not confirmed, it goes back (audit 2026-10-26 item 20).
+                        Task {
+                            do { try await GroupSettingWrite.confirmed { try await ChatService.setGroupSlowMode(cid: cid, seconds: secs) } }
+                            catch { actionError = error.localizedDescription }
+                            slowDraft = nil
+                        }
                     }
                 .disabled(!canEdit)
             }
@@ -466,7 +513,7 @@ struct GroupSettingsView: View {
             }
             Section {
                 ForEach(Conversation.SendKind.allCases, id: \.self) { k in
-                    Toggle(isOn: bool(get: { $0.membersMaySend(k) }, set: { v in
+                    Toggle(isOn: bool("kind." + k.rawValue, get: { $0.membersMaySend(k) }, set: { v in
                         try await writeKind(k, v)
                     })) {
                         Label(k.label, systemImage: k.icon)
@@ -503,7 +550,7 @@ struct GroupSettingsView: View {
     /// One switch, written at once through `bool`, which says so if the write is refused.
     private func switchRow(_ title: String, get: @escaping (Conversation) -> Bool,
                            write: @escaping (Bool) async throws -> Void) -> some View {
-        Toggle(title, isOn: bool(get: get, set: write))
+        Toggle(title, isOn: bool(title, get: get, set: write))
             .disabled(!canEdit)
     }
 
@@ -514,7 +561,7 @@ struct GroupSettingsView: View {
 
     private var privacySection: some View {
         Section {
-            Toggle(isOn: bool(get: { $0.isRestricted },
+            Toggle(isOn: bool("protect", get: { $0.isRestricted },
                               set: { v in try await ChatService.setGroupRestricted(cid, on: v) })) {
                 Text("Protect Content")
             }
@@ -544,10 +591,10 @@ struct GroupSettingsView: View {
         }
     }
 
-    /// Runs a write and says so if it is refused.
+    /// Runs a write and says so if it is refused, or not confirmed in time (`GroupSettingWrite`).
     private func run(_ op: @escaping () async throws -> Void) {
         Task {
-            do { try await op() } catch {
+            do { try await GroupSettingWrite.confirmed(op) } catch {
                 let msg = error.localizedDescription
                 await MainActor.run { actionError = msg }
             }
@@ -556,19 +603,33 @@ struct GroupSettingsView: View {
 
     /// A binding onto the live group: reads the conversation, writes through `set`, says so if the
     /// write is refused (the page never pretends a change went through).
-    private func bool(get: @escaping (Conversation) -> Bool,
+    /// `key` names the switch: while its write is out, the switch holds the tap (`inFlight`); refused
+    /// or not confirmed in time, it goes back to the group's confirmed value and the alert says why
+    /// (audit 2026-10-26 item 20).
+    private func bool(_ key: String, get: @escaping (Conversation) -> Bool,
                       set: @escaping (Bool) async throws -> Void) -> Binding<Bool> {
         Binding(
-            get: { conv.map(get) ?? false },
+            get: { inFlight[key] ?? conv.map(get) ?? false },
             set: { v in
+                inFlight[key] = v
                 Task {
-                    do { try await set(v) } catch {
+                    do {
+                        try await GroupSettingWrite.confirmed { try await set(v) }
+                        // The confirmed copy normally lands with the write's answer; a moment more
+                        // if it is behind, so the switch does not flick back and forth.
+                        if await MainActor.run(body: { conv.map(get) != v }) {
+                            try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        }
+                    } catch {
                         let msg = error.localizedDescription
                         await MainActor.run { actionError = msg }
                     }
+                    await MainActor.run { inFlight[key] = nil }
                 }
             })
     }
+    /// The switches whose write is still out, with the value tapped (see `bool`).
+    @State private var inFlight: [String: Bool] = [:]
 }
 
 // MARK: - Administrators
@@ -966,7 +1027,8 @@ struct AdminRightsView: View {
         let list = Conversation.Right.allCases.map(\.rawValue).filter { next.contains($0) && grantable.contains($0) }
         Task {
             do {
-                try await ChatService.setAdminRights(cid: cid, uid: uid, rights: list)
+                // Confirmed or put back, never left spinning offline (audit 2026-10-26 item 20).
+                try await GroupSettingWrite.confirmed { try await ChatService.setAdminRights(cid: cid, uid: uid, rights: list) }
                 await MainActor.run { saving = false }
             } catch {
                 let msg = error.localizedDescription
@@ -1698,7 +1760,8 @@ struct ChatHistoryForNewMembersPage: View {
         hidden = value
         saving = true
         Task {
-            do { try await ChatService.setHideHistory(cid: cid, hidden: value) }
+            // Back to the old tick if the server did not confirm in time (audit 2026-10-26 item 20).
+            do { try await GroupSettingWrite.confirmed { try await ChatService.setHideHistory(cid: cid, hidden: value) } }
             catch { hidden = old; self.error = error.localizedDescription }
             saving = false
         }

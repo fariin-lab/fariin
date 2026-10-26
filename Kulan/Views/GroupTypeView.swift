@@ -186,7 +186,7 @@ struct GroupTypeView: View {
                 set: { v in
                     protectOn = v
                     Task {
-                        do { try await ChatService.setGroupRestricted(cid, on: v) }
+                        do { try await GroupSettingWrite.confirmed { try await ChatService.setGroupRestricted(cid, on: v) } }
                         catch { protectOn = nil; saveError = error.localizedDescription }
                     }
                 }))
@@ -300,7 +300,8 @@ struct GroupTypeView: View {
         saving = true
         Task {
             do {
-                try await GroupDirectory.setName(cid: cid, name: value)
+                // Bounded (audit 2026-10-26 item 20): offline at once, otherwise 20 s, not 70.
+                try await GroupSettingWrite.confirmed(within: 20) { try await GroupDirectory.setName(cid: cid, name: value) }
                 wantsPublic = !value.isEmpty
                 if value.isEmpty { name = "" }
                 check = .idle
