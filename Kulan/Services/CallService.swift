@@ -3794,6 +3794,7 @@ final class CallService: NSObject {
         // A fallback armed by the ringing signal must die with the stop too, or an accept that lands
         // inside its 1.2s window is followed by a ring nothing is left to stop.
         ringbackFallback?.invalidate(); ringbackFallback = nil
+        ringbackSwitchWork?.cancel(); ringbackSwitchWork = nil   // a pending calling-to-ringing switch
         let wasPlaying = ringbackPlayer != nil
         ringbackPlayer?.stop(); ringbackPlayer = nil
         callingToneSince = nil
@@ -3950,7 +3951,31 @@ final class CallService: NSObject {
     private func startRingbackIfDue() {
         guard state == .outgoing, !calleeAccepted else { return }
         if ringbackPlayer == nil { startRingback() }
-        else if ringbackIsRinging != calleeRinging { playRingbackTone() }
+        else if ringbackIsRinging != calleeRinging { switchRingbackToneWhenDue() }
+    }
+
+    /// ⛔ THE CALLING SOUND IS NEVER CUT MID-RING (owner 2026-10-26: "it cuts the calling tone in
+    /// the middle and starts the long one, users will see it as a bug"). When the other phone starts
+    /// ringing during a calling ring (1.8 s on), that ring finishes, the usual ringing gap follows,
+    /// and only then the long ring starts. During the calling sound's quiet part, the long ring
+    /// starts once that gap has passed. A player not yet heard (session not live) switches at once.
+    private var ringbackSwitchWork: DispatchWorkItem?
+    private func switchRingbackToneWhenDue() {
+        guard ringbackSwitchWork == nil else { return }
+        guard !ringbackIsRinging, let p = ringbackPlayer, p.isPlaying else { playRingbackTone(); return }
+        let ring = 1.8, gap = 2.2   // RingbackTone.wavData's ring, ringingData's gap
+        let at = p.currentTime
+        let wait = at < ring ? (ring - at) + gap : max(0, gap - (at - ring))
+        let id = callId
+        let w = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.ringbackSwitchWork = nil
+            guard self.callId == id, self.state == .outgoing, !self.calleeAccepted,
+                  self.ringbackPlayer != nil, self.ringbackIsRinging != self.calleeRinging else { return }
+            self.playRingbackTone()
+        }
+        ringbackSwitchWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: w)
     }
 
     /// Belt for the case CallKit never activates the session (activation failure, or a device that
