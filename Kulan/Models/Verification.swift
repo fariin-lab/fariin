@@ -387,6 +387,11 @@ final class VerificationSignal {
 struct GroupVerifiedMark: View {
     let on: Bool
     var size: CGFloat = 15
+    /// Tappable, opening the same sheet a person's tick opens (owner 2026-10-26). Only on the group
+    /// page, for the reason `VerifiedMark.explains` gives.
+    var explains: Bool = false
+
+    @State private var showingInfo = false
 
     var body: some View {
         if on {
@@ -394,6 +399,13 @@ struct GroupVerifiedMark: View {
                                               weight: VerifiedMark.weight))
                 .frame(width: size, height: size)
                 .accessibilityLabel("Verified group")
+                .accessibilityAddTraits(explains ? .isButton : [])
+                .contentShape(Rectangle())
+                .onTapGesture { if explains { showingInfo = true } }
+                .allowsHitTesting(explains)
+                .sheet(isPresented: $showingInfo) {
+                    VerificationInfoSheet(record: nil, peer: .group(""))
+                }
         }
     }
 }
@@ -479,7 +491,8 @@ struct VerifiedMark: View {
 /// way to interrogate the badge has no way to tell the two apart. A real mark can be tapped and will
 /// explain itself; a tick typed into a name cannot.
 struct VerificationInfoSheet: View {
-    let record: Verification
+    /// Nil for a group: its badge is a flag on the group, with no record behind it.
+    let record: Verification?
     let peer: PeerRef
     @Environment(\.dismiss) private var dismiss
 
@@ -496,13 +509,13 @@ struct VerificationInfoSheet: View {
                 Text("Verified")
                     .font(.system(size: 22, weight: .semibold))
 
-                Text(record.kind?.explanation ?? defaultExplanation)
+                Text(record?.kind?.explanation ?? defaultExplanation)
                     .font(.system(size: 16))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
 
-                Text("Fariin reviewed this account and confirmed it is genuine. Verification is granted by Fariin only. It can never be bought or requested.")
+                Text("Fariin reviewed this \(peer.kind == .group ? "group" : "account") and confirmed it is genuine. Verification is granted by Fariin only. It can never be bought or requested.")
                     .font(.system(size: 13))
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)

@@ -609,8 +609,10 @@ struct OfficialChatInfoView: View {
         .toolbar {
             if AdminStore.shared.can(.send) {
                 ToolbarItem(placement: .topBarTrailing) {
+                    // The Stories tab's new-story mark, not a bare plus (owner 2026-10-26).
                     Button { OfficialStoryCompose.open() } label: {
-                        Image(systemName: "plus")
+                        Image("ic_new_story").renderingMode(.template).resizable().scaledToFit()
+                            .frame(width: 26, height: 26)
                     }
                     .accessibilityLabel("Add Fariin story")
                 }
