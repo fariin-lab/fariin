@@ -127,10 +127,9 @@ enum OfficialStoryViews {
         // ⛔ SOLID DARK GREY, NEVER GLASS (owner 2026-10-18, build 969: "the sheet is glass, I can't read
         // the names"). Over a bright story the see-through sheet put white text on a light picture.
         let ground = UIColor(white: 0.11, alpha: 1)
-        let vc = UIHostingController(rootView: OfficialStoryViewersSheet(rawId: rawId)
-            .preferredColorScheme(.dark)
-            .scrollContentBackground(.hidden)
-            .background(Color(uiColor: ground).ignoresSafeArea()))
+        // owner 2026-10-27: the same viewers list a group story's poster gets (StoryViewersPanelView:
+        // its rows, search and look), fed from the official story's own list.
+        let vc = OfficialViewersPanelController(rawId: rawId)
         vc.overrideUserInterfaceStyle = .dark
         vc.view.backgroundColor = ground
         if let sheet = vc.sheetPresentationController {
@@ -319,6 +318,67 @@ struct OfficialStoryAdminFooter: View {
                 let ns = error as NSError
                 failure = ns.domain == FunctionsErrorDomain && !ns.localizedDescription.isEmpty
                     ? ns.localizedDescription : "Check your connection and try again."
+            }
+        }
+    }
+}
+
+
+/// The official story's viewers in the group story's panel (owner 2026-10-27, "use exactly the one
+/// groups use"). The panel is the group sheet's own list view; this controller only fills it from
+/// `officialStoryViews` and resumes the story when it closes, as the old sheet did.
+final class OfficialViewersPanelController: UIViewController {
+    private let rawId: String
+    private let panel: StoryViewersPanelView
+    /// uid -> @handle, for opening a viewer's profile card (it opens by handle).
+    private var handles: [String: String] = [:]
+
+    init(rawId: String) {
+        self.rawId = rawId
+        self.panel = StoryViewersPanelView(storyId: rawId)
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.addSubview(panel)
+        panel.audience = ("Fariin", false)
+        panel.onOpenProfile = { [weak self] v in
+            guard let self, let handle = handles[v.id], !handle.isEmpty else { return }
+            dismiss(animated: true) { Task { @MainActor in _ = await ProfileCardDoor.open(handle, push: false) } }
+        }
+        load()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        panel.frame = view.bounds.inset(by: UIEdgeInsets(top: 20, left: 0, bottom: 0, right: 0))
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if presentingViewController == nil || isBeingDismissed {
+            NotificationCenter.default.post(name: .init("resumeStory"), object: "officialViews")
+        }
+    }
+
+    private func load() {
+        panel.isLoading = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let s = try await OfficialStoryViews.fetch(rawId: rawId)
+                panel.isLoading = false
+                handles = Dictionary(s.viewers.map { ($0.id, $0.handle) }, uniquingKeysWith: { a, _ in a })
+                panel.viewers = s.viewers.map {
+                    StoryViewerInfo(id: $0.id, name: $0.name.isEmpty ? "@\($0.handle)" : $0.name,
+                                    photoUrl: $0.photoUrl.isEmpty ? nil : $0.photoUrl,
+                                    viewedAt: $0.at, reaction: nil)
+                }
+            } catch {
+                panel.isLoading = false
+                panel.loadFailed = true
             }
         }
     }
