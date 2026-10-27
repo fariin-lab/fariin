@@ -2819,7 +2819,7 @@ struct ChatsView: View {
                             // we have actually heard back.
                             // ⚠️ `newPeople` TOO, or a username that matches nobody you chat with
                             // draws "No results" straight over the person it just found.
-                            if visible.isEmpty, newPeople.isEmpty, repo.hasLoaded {
+                            if visible.isEmpty, newPeople.isEmpty, repo.hasLoaded || repo.freshAccount {
                                 // A SEARCH THAT FOUND NOTHING IS NOT AN EMPTY INBOX. Without this
                                 // branch, typing a name nobody has empties the list and the welcome
                                 // state below tells someone with two hundred chats that they have
@@ -2937,7 +2937,7 @@ struct ChatsView: View {
     /// The plain chat list with nothing typed, no filter and no selection, after the first answer.
     /// Shows through the first few chats (owner 2026-10-19); see `getStartedChatLimit`.
     private var getStartedContext: Bool {
-        repo.hasLoaded && !repo.loadFailed && chatFilter == 0 && !selecting
+        (repo.hasLoaded || repo.freshAccount) && !repo.loadFailed && chatFilter == 0 && !selecting
             && chatSearch.trimmingCharacters(in: .whitespaces).isEmpty
             && accountIsNew
             && realChatCount < Self.getStartedChatLimit && !getStarted.isFinished(me)

@@ -1367,6 +1367,7 @@ struct OnboardingView: View {
                     try? await ProfileStore.shared.uploadProfileImages(circle: pickedAvatar, poster: pickedPoster)
                 }
             }
+            await MainActor.run { ConversationsRepository.shared.freshAccount = true }
             onDone()
         } catch {
             // The server's own words when it has any — "Sorry, this username is already taken." reads

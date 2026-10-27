@@ -83,6 +83,10 @@ final class ConversationsRepository {
     }
     @ObservationIgnored private var repairedPreviews = Set<String>()
     var hasLoaded = false   // false until the first real snapshot -> drives the skeleton
+    /// owner 2026-10-27 (a brand-new account showed a blank list before "No chats yet"): set when
+    /// this phone has just finished creating the profile. Such an account has no chats to wait for,
+    /// so the empty state and the welcome card show at once instead of after the first answer.
+    var freshAccount = false
     /// 2026-09-24 audit: the listener ended in an error and no snapshot has arrived since. A failed
     /// listener used to print and nothing else, and the 3s safety net below then flipped `hasLoaded`,
     /// so a returning account whose chats could not load was shown the first-run welcome. The chat
@@ -806,6 +810,7 @@ final class ConversationsRepository {
         lastPublished = []; listBurnAsked = [:]   // the old account's expiry timer must not re-publish into the new one
         conversations = []
         hasLoaded = false
+        freshAccount = false
         loadFailed = false   // 2026-09-24 audit: belongs to the account that just went away
         // The warm-up listeners belong to an account that just went away.
         Task { @MainActor in ChatHistoryPreloader.shared.stopAll() }
