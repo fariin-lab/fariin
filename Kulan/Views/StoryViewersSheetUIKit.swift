@@ -1158,13 +1158,6 @@ struct StoryViewerRowContent: View {
     /// A group story's admin who did not post it (owner 2026-10-23): the list only, no "…" menu.
     var readOnly: Bool = false
 
-    private var doubleCheck: some View {
-        ZStack(alignment: .leading) {
-            Image(systemName: "checkmark"); Image(systemName: "checkmark").offset(x: 4)
-        }
-        .font(.system(size: 9, weight: .bold))
-    }
-
     /// How long ago, not the date (owner 2026-10-25: "only show like 26m ago, 1h ago").
     private func dateFmt(_ d: Date) -> String {
         let s = max(0, Int(Date().timeIntervalSince(d)))
@@ -1201,8 +1194,9 @@ struct StoryViewerRowContent: View {
                 }
             VStack(alignment: .leading, spacing: 2) {
                 Text(viewer.name).font(.body.weight(.semibold)).foregroundStyle(.white)
-                HStack(spacing: 5) { doubleCheck; Text(dateFmt(viewer.viewedAt)) }
-                    .font(.caption).foregroundStyle(.white.opacity(0.5))
+                // No tick, the time in bold (owner 2026-10-27).
+                Text(dateFmt(viewer.viewedAt))
+                    .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.5))
             }
             Spacer()
             if !readOnly {
