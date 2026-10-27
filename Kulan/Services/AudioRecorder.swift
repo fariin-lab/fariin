@@ -226,7 +226,24 @@ final class AudioRecorder {
             // OUTSIDE the guard on purpose: the warm path skips the configuration above, and a
             // session configured on some other path does not carry this flag for this one.
             Self.allowHapticsWhileRecording(s)
-            r.record(); beginMetering()   // already warmed → instant
+            // ⛔ A RECORDER BUILT BEFORE THE SESSION COULD RECORD MAY REFUSE (owner 2026-10-27: after
+            // the app is opened fresh the first note stays at 0:00, the second works). `prepare()` builds
+            // it on chat open with the session untouched (audit 06 F5), so on a cold launch it was
+            // prepared under a playback category and `record()` returns false. Then a fresh one is
+            // built here, now that the session is play-and-record, and that one starts.
+            if r.record() { beginMetering(); return }   // already warmed → instant
+            DiagLog.add("VOICEREC# warm recorder refused, rebuilding")
+            if let u = fileURL { try? FileManager.default.removeItem(at: u) }
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("voice-\(UUID().uuidString).m4a")
+            guard let fresh = try? AVAudioRecorder(url: url, settings: settings) else {
+                recorder = nil; fileURL = nil; return
+            }
+            fresh.isMeteringEnabled = true
+            recorder = fresh; fileURL = url
+            if fresh.record() { beginMetering() } else {
+                DiagLog.add("VOICEREC# fresh recorder refused too")
+            }
             return
         }
         // Not warmed yet (permission just granted / first launch): set up then start.
