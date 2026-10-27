@@ -183,7 +183,9 @@ struct OfficialStoryViewsPill: View {
 
     var body: some View {
         let count = m.summaries[rawId]?.count
-        Button { OfficialStoryViews.presentSheet(rawId: rawId) } label: {
+        // The normal story sheet (owner 2026-10-27: "exactly like a normal story"): the story
+        // shrinks to its card and the list comes up under it (StoriesViews `opensSheet`).
+        Button { NotificationCenter.default.post(name: .init("storyOpenViewers"), object: nil) } label: {
             HStack(spacing: 8) {
                 Image(systemName: "eye").font(.subheadline).foregroundStyle(.white)
                 Text(count.map { "\($0) View\($0 == 1 ? "" : "s")" } ?? "Views")

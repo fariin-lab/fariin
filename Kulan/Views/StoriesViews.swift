@@ -1587,6 +1587,10 @@ struct StoryViewer: View {
             return StoriesRepository.shared.others.first { $0.authorUid == key }?.stories
                 ?? groups.first { $0.authorUid == key }?.stories ?? []
         }
+        // Fariin's official ring: its own stories, as this viewer holds them.
+        if OfficialChannel.isOfficial(key) {
+            return groups.first { $0.authorUid == key }?.stories ?? []
+        }
         return StoriesRepository.shared.mine?.stories ?? myStories
     }
     // My-story viewers are always fed my bucket ALONE, so this is stable for the whole session
@@ -1639,6 +1643,20 @@ struct StoryViewer: View {
     private var showingOwnerBar: Bool {
         currentHasOwnerBar
             || (currentBucketUid.isEmpty && (StoryDoorState.shared.openGroup.map { Self.hasOwnerBar($0) } ?? false))
+    }
+    /// ⛔ FARIIN'S OWN STORIES OPEN THE NORMAL VIEWERS SHEET (owner 2026-10-27: "exactly like a normal
+    /// story", the card at the top included) for staff who may see their views ('send', as the
+    /// official footer). Their footer stays the official one; only the sheet is shared, so this is
+    /// its own flag and not `hasOwnerBar`.
+    @MainActor private static func opensSheet(_ g: StoryGroup) -> Bool {
+        hasOwnerBar(g) || (OfficialChannel.isOfficial(g.authorUid) && AdminStore.shared.can(.send))
+    }
+    private var currentOpensSheet: Bool {
+        groups.first { $0.authorUid == currentBucketUid }.map { Self.opensSheet($0) } ?? false
+    }
+    private var showingSheetOwner: Bool {
+        currentOpensSheet
+            || (currentBucketUid.isEmpty && (StoryDoorState.shared.openGroup.map { Self.opensSheet($0) } ?? false))
     }
     @State private var sheetStoryId = ""   // which of MY stories the carousel + viewers list target
     @State private var uploadSvc = StoriesService.shared   // observed → the "Uploading…" bar tracks the upload
@@ -2668,7 +2686,7 @@ struct StoryViewer: View {
             // `currentIsMine`: the viewers sheet only exists over MY OWN story, so a freeze
             // asserted while a friend's story is up can only ever be leaked state — it is what
             // kept re-pausing his freshly opened stories half a second in (2026-08-09).
-            if showViewers && currentHasOwnerBar && viewersProgress > 0.01 {
+            if showViewers && currentOpensSheet && viewersProgress > 0.01 {
                 NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
             }
         }
@@ -2718,7 +2736,7 @@ struct StoryViewer: View {
             // (Was `currentIsMine || mineOnly`. `mineOnly` stopped being true for my own story the
             // moment my bucket joined the paged set, so it had to become the first-frame fallback
             // rather than a second reading of the same thing — see `showingMine`.)
-            guard showViewers, showingOwnerBar, !id.isEmpty else { return }
+            guard showViewers, showingSheetOwner, !id.isEmpty else { return }
             // Same deferral as the first handler — a crossing mid-movement is not a destination.
             guard pageDragBox.rowLink?.isRowMoving != true else { return }
             NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: id)
@@ -2738,6 +2756,8 @@ struct StoryViewer: View {
         // list came to be dead in the first place. `watchViewCount` is idempotent, so re-asking for
         // the story it is already on costs nothing.
         .onChange(of: showViewers) { _, _ in syncViewCountWatch() }
+        // The official footer's views pill (owner 2026-10-27): the normal sheet, card and all.
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyOpenViewers"))) { _ in openViewers() }
         .onChange(of: sheetStoryId) { _, _ in syncViewCountWatch() }
         .onDisappear { StoriesService.shared.stopWatchingViewCount() }
         // The COVER'S OWN BACKING (not just an inner canvas) must be opaque black while the viewers
@@ -2848,7 +2868,7 @@ struct StoryViewer: View {
                 // zero opacity, which paints exactly what their page painted before: nothing.
                 // Deciding it with a second copy of `storyContent` is what cost the whole
                 // viewer its identity — see the note above this stack.
-                .background(Color.black.opacity(currentHasOwnerBar && !heroFlying ? 1 : 0))
+                .background(Color.black.opacity((currentHasOwnerBar || (showViewers && currentOpensSheet)) && !heroFlying ? 1 : 0))
             // ⚠️ EMPTY NOW, AND ON PURPOSE. The owner's bar used to be drawn here, as a sibling of
             // the pager, which is exactly why it could not travel with the story: the cube turns
             // PAGES. It is passed to the library instead and drawn inside my own page, beneath the
@@ -3011,7 +3031,7 @@ struct StoryViewer: View {
                 // block the whole swipe-up, or worse, drop through to the friend's-story branch below
                 // and open the REPLY KEYBOARD on my own story. `mineOnly` used to cover that window
                 // and cannot any more: my bucket is one page among several now.
-                guard showingOwnerBar else { return }
+                guard showingSheetOwner else { return }
                 // Same gate as `openViewers`: an uploading placeholder has no viewers to show.
                 guard !isUploadingItem else { return }
                 sheetAnimator.cancel()   // the finger owns progress; kill any in-flight snap
@@ -3035,7 +3055,7 @@ struct StoryViewer: View {
             onSwipeUpEnded: { translation, velocity in
                 // The other half of the guard above: a pull that never engaged has nothing to settle.
                 if sheetUp && !showViewers { openDragging = false; return }
-                guard showingOwnerBar else {
+                guard showingSheetOwner else {
                     // Friend's story: a swipe UP opens the reply keyboard (like tapping the reply
                     // pill). StoryUI's MessageView focuses its TextField on this notification.
                     openDragging = false
@@ -4873,7 +4893,7 @@ struct StoryViewer: View {
         // Re-open allowed even while the previous close is still unmounting: animating progress back
         // to 1 cancels the close animator (and with it the unmount completion) — no more
         // "swipe up does nothing for 0.42s after closing".
-        guard currentHasOwnerBar else { return }
+        guard currentOpensSheet else { return }
         // NOT ON A STORY THAT DOES NOT EXIST YET. The item on screen while a post is uploading is a
         // synthetic placeholder with no document behind it, so the viewers sheet would come up over
         // it asking the server who has seen a story id that has never been written — an empty list

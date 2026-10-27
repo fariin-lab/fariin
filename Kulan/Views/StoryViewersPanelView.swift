@@ -659,7 +659,8 @@ extension StoryViewersPanelView: UITableViewDataSource, UITableViewDelegate {
                 onBlock: { [weak self] in self?.onBlock?(v) },
                 isHidden: StoryAudienceStore.shared.isHidden(v.id),
                 // owner 2026-10-25: no "…" on a group story's viewers, the poster's own included.
-                readOnly: viewersReadOnly || isGroupStory)
+                // Nor on an official Fariin story's (owner 2026-10-27): nothing to hide or block there.
+                readOnly: viewersReadOnly || isGroupStory || OfficialStoryViews.rawId(storyId) != nil)
         }
         .margins(.horizontal, 16)
         .margins(.vertical, 9)

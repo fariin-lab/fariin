@@ -2893,6 +2893,16 @@ final class StoriesService {
 
     func fetchViewers(storyId: String) async -> [StoryViewerInfo]? {
         guard !uid.isEmpty else { return [] }
+        // An official Fariin story (owner 2026-10-27: its viewers in the normal story sheet): the
+        // list comes from the official callable, which only staff with 'send' may read.
+        if let raw = OfficialStoryViews.rawId(storyId) {
+            guard let s = try? await OfficialStoryViews.fetch(rawId: raw) else { return nil }
+            return s.viewers.map {
+                StoryViewerInfo(id: $0.id, name: $0.name.isEmpty ? "@\($0.handle)" : $0.name,
+                                photoUrl: $0.photoUrl.isEmpty ? nil : $0.photoUrl,
+                                viewedAt: $0.at, reaction: nil)
+            }
+        }
         // RECIPROCAL, as the Stories settings footer promises ("If disabled, you won't see when
         // others view your stories"). The gate existed only on the SENDING half — your views were
         // hidden from others while their full Seen-by list, timestamps and reactions still showed
