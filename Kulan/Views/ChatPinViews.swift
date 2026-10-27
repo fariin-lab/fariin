@@ -599,6 +599,8 @@ struct ChatPinPage: View {
     /// A new random key from the server, shown here at once.
     private func makeKey() {
         guard !generating else { return }
+        // The tap on Reset / Get a Chat Key buzzes as the digits start to spin (owner 2026-10-27).
+        Haptics.impact(.medium)
         generating = true
         rollingTo = nil
         withAnimation(.easeInOut(duration: 0.2)) { rolling = true }
@@ -853,6 +855,8 @@ struct ChatKeySlotView: View {
                 locked = i
                 Haptics.impact(.light)
             }
+            // All six chosen: the success buzz (owner 2026-10-27).
+            Haptics.notify(.success)
             try? await Task.sleep(nanoseconds: 450_000_000)
             onDone()
         }
