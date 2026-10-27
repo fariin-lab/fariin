@@ -3355,8 +3355,14 @@ struct ChatsView: View {
             // Native alert (the confirmationDialog rendered as an anchored popover bubble on iOS 26,
             // which read as non-native). A destructive-action confirmation as an alert with a red
             // Delete button is the textbook Apple HIG pattern.
+            // A group asks in its own card instead, with its photo (LeaveGroupAlert, owner 2026-10-27).
+            .onChange(of: pendingDelete?.id) { _, _ in
+                guard let c = pendingDelete, c.isGroup else { return }
+                pendingDelete = nil
+                LeaveGroupAlertDoor.show(c)
+            }
             .alert("Delete this chat?",
-                   isPresented: Binding(get: { pendingDelete != nil },
+                   isPresented: Binding(get: { pendingDelete.map { !$0.isGroup } ?? false },
                                         set: { if !$0 { pendingDelete = nil } })) {
                 Button("Delete Chat", role: .destructive) {
                     if let c = pendingDelete { Task { await ChatService.deleteForMe(c.id) } }
@@ -4204,8 +4210,14 @@ struct ArchivedChatsView: View {
             }
             // Word for word the chat list's own delete alert — one question, asked the same way
             // wherever a chat can go.
+            // A group asks in its own card instead, with its photo (LeaveGroupAlert, owner 2026-10-27).
+            .onChange(of: pendingDelete?.id) { _, _ in
+                guard let c = pendingDelete, c.isGroup else { return }
+                pendingDelete = nil
+                LeaveGroupAlertDoor.show(c)
+            }
             .alert("Delete this chat?",
-                   isPresented: Binding(get: { pendingDelete != nil },
+                   isPresented: Binding(get: { pendingDelete.map { !$0.isGroup } ?? false },
                                         set: { if !$0 { pendingDelete = nil } })) {
                 Button("Delete Chat", role: .destructive) {
                     if let c = pendingDelete { Task { await ChatService.deleteForMe(c.id) } }
