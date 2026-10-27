@@ -3827,6 +3827,8 @@ final class CallService: NSObject {
     /// how much AUDIO actually went out and came in, and whether the audio unit and the system call
     /// audio are up, written into this call's callTiming next to the connection steps. A silent call
     /// then says which phone's audio failed. Read-only stats; nothing about the call changes.
+    static let silentMicBytes5s: Double = 5000
+
     private func recordAudioFlow(callId id: String) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
             guard let self, self.callId == id, let pc = self.pc,
@@ -3851,7 +3853,10 @@ final class CallService: NSObject {
                     // ⛔ NOTHING WENT OUT AT ALL while not muted (owner 2026-10-24, @v: 0 bytes after
                     // another app's call took the mic; only a restart brought it back). Rebuild the
                     // audio now instead of leaving a silent call; logged so we know how often.
-                    if tx == 0, !self.isMuted, !self.isHeld, self.callId == id {
+                    // 2026-10-27: under 5 KB, not just zero. A microphone on a dead session still lets
+                    // a trickle of silence packets out (2,160 to 2,585 bytes in three silent calls
+                    // that morning), so `tx == 0` never fired; a live call sends 15 to 21 KB here.
+                    if tx < Self.silentMicBytes5s, !self.isMuted, !self.isHeld, self.callId == id {
                         DiagLog.add("CALLAUDIO# no sound sent in 5s (rx \(Int(rx))): rebuilding the audio")
                         Telemetry.event(.error, component: "calls", code: "mic_silent", detail: ["reason": role])
                         if ScreenShareAudioMixer.useCallAudioDevice {

@@ -773,7 +773,14 @@ extension CallKitManager: CXProviderDelegate {
         // 1:1 audit #26 (owner, 2026-10-08): the WebRTC audio unit (and the mic indicator) stays
         // off while the caller's call only rings; CallService turns it on at the accept. The
         // callee and every re-activation turn it on here as before.
-        s.isAudioEnabled = CallService.shared.callAudioUnitMayStart
+        // ⛔ CYCLED, NOT JUST SET (owner 2026-10-27, three silent calls in one morning: the phone
+        // that ANSWERED sent ~2 KB of silence in 5 s while reporting the unit on and the session
+        // up). A unit already marked on before this activation was started against a session that
+        // was not live, and writing `true` again is a no-op, so its microphone stayed on the dead
+        // session for the whole call. Off then on rebuilds it on the session CallKit just handed us.
+        let mayStart = CallService.shared.callAudioUnitMayStart
+        if mayStart, s.isAudioEnabled { s.isAudioEnabled = false }
+        s.isAudioEnabled = mayStart
         s.unlockForConfiguration()
         // Re-assert the speaker route. Every session (re)activation — first connect, and after any
         // interruption (Siri, an incoming cellular call) — resets the output to the earpiece default,
