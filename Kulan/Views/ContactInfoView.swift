@@ -2818,8 +2818,8 @@ private struct SlideUpPage<Content: View>: View {
 
 /// Every group I share with this person (owner 2026-10-25: "use exactly the one the members card is
 /// using"). The group page's Members sheet in its shape: a sheet rising from the bottom, X at the
-/// leading edge, the title inline, the rows under A–Z headers with the letter index down the side,
-/// search at the bottom. A row closes the sheet and the profile opens that group.
+/// leading edge, the title inline, the rows in one card sorted by name (no A-Z headers or index
+/// since 2026-10-27), search at the bottom. A row closes the sheet and the profile opens that group.
 struct GroupsInCommonSheet: View {
     let groups: [Conversation]
     let onOpen: (Conversation) -> Void
@@ -2828,27 +2828,19 @@ struct GroupsInCommonSheet: View {
     @State private var searching = false
     private var me: String { AuthService.shared.uid ?? "" }
 
-    private func letter(_ name: String) -> String {
-        guard let c = name.folding(options: .diacriticInsensitive, locale: .current).first,
-              c.isLetter, c.isASCII else { return "#" }
-        return String(c).uppercased()
-    }
-    private var sections: [(String, [Conversation])] {
+    // owner 2026-10-27: no A-Z headers or letter index, one card sorted by name.
+    private var shown: [Conversation] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        var out: [(String, [Conversation])] = []
-        for g in groups where q.isEmpty || g.displayName(me).lowercased().contains(q) {
-            let l = letter(g.displayName(me))
-            if let i = out.firstIndex(where: { $0.0 == l }) { out[i].1.append(g) } else { out.append((l, [g])) }
-        }
-        return out.sorted { a, b in a.0 == "#" ? false : (b.0 == "#" ? true : a.0 < b.0) }
+        return groups
+            .filter { q.isEmpty || $0.displayName(me).lowercased().contains(q) }
+            .sorted { $0.displayName(me).localizedCaseInsensitiveCompare($1.displayName(me)) == .orderedAscending }
     }
 
     var body: some View {
         NavigationStack {
             List {
-                ForEach(sections, id: \.0) { sec in
                     Section {
-                        ForEach(sec.1) { g in
+                        ForEach(shown) { g in
                             // The members sheet's row: 40pt photo, the name, the count where the rank goes.
                             Button { onOpen(g) } label: {
                                 HStack(spacing: 12) {
@@ -2863,14 +2855,10 @@ struct GroupsInCommonSheet: View {
                             .buttonStyle(.plain)
                             .listRowInsets(EdgeInsets())
                         }
-                    } header: {
-                        Text(sec.0)
                     }
-                    .sectionIndexLabel(Text(sec.0))
-                }
             }
             .listStyle(.insetGrouped)
-            .listSectionIndexVisibility(.visible)
+            .contentMargins(.top, 12, for: .scrollContent)
             .searchable(text: $query, isPresented: $searching, prompt: "Search")
             .navigationTitle("Groups in Common")
             .navigationBarTitleDisplayMode(.inline)
