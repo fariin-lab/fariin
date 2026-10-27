@@ -3342,6 +3342,29 @@ final class StoriesRepository {
                           isMine: story.authorUid == (Auth.auth().currentUser?.uid ?? ""))
     }
 
+    /// ⛔ A PUBLIC GROUP'S STORIES FOR A VISITOR (owner 2026-10-27): the ring on its page, never in
+    /// the visitor's Stories row. The server names the live ones (`publicGroupStoryIds`; the rules
+    /// let a visitor read one by id but not list them) and each is read through the rules, so one a
+    /// blocked author posted is simply missing. Nil when there are none.
+    func publicGroupStories(cid: String, name: String, photoUrl: String?) async -> StoryGroup? {
+        guard !cid.isEmpty,
+              let res = try? await Functions.functions(region: "me-central1")
+                .httpsCallable("publicGroupStoryIds").call(["cid": cid]),
+              let ids = (res.data as? [String: Any])?["ids"] as? [String], !ids.isEmpty else { return nil }
+        let me = Auth.auth().currentUser?.uid ?? ""
+        var stories: [Story] = []
+        for id in ids where !id.contains("/") {
+            guard let snap = try? await db.collection("stories").document(id).getDocument(),
+                  let data = snap.data(),
+                  let s = parse(id: snap.documentID, data: data, me: me),
+                  s.groupId == cid, s.expiresAt > ServerClock.now else { continue }
+            stories.append(s)
+        }
+        guard !stories.isEmpty else { return nil }
+        return StoryGroup(authorUid: StoryGroup.groupKeyPrefix + cid, name: name, photoUrl: photoUrl,
+                          stories: stories, lastViewedAt: nil, isMine: false)
+    }
+
     private func parse(_ docs: [QueryDocumentSnapshot]?) -> [Story] {
         // WHOSE PHONE THIS IS, read once. `uid` is StoriesService's own private property and this is
         // StoriesRepository, which is what the compiler caught; asking Auth inside the loop would

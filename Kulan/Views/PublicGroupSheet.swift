@@ -603,12 +603,26 @@ struct PublicGroupInfoView: View {
     @State private var viewerImage: Message?
     @State private var viewerVideo: Message?
     @State private var profile: PublicGroupMember?
+    @State private var stories: StoryGroup?
     private var me: String { AuthService.shared.uid ?? "" }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
+                // A public group's stories ring its photo here, and only here, for a visitor (owner
+                // 2026-10-27); a tap opens them. Their Stories row never shows them.
                 AvatarView(name: p.title, photoUrl: p.photoUrl, size: 132)
+                    .frame(width: 132, height: 132)
+                    .contentShape(Circle())
+                    .onTapGesture { if let g = stories { StoryDoor.open(g, from: "groupcircle-\(p.cid)") } }
+                    .modifier(MediaRectReporter(id: "groupcircle-\(p.cid)", scope: .storyRow, cornerRadius: 66))
+                    .overlay {
+                        if let g = stories {
+                            StoryRingView(seen: StoryPrefs.seenFlags(g.stories), lineWidth: 3)
+                                .frame(width: 146, height: 146)
+                                .allowsHitTesting(false)
+                        }
+                    }
                     .padding(.top, 12)
                 HStack(spacing: 6) {
                     Text(p.title)
@@ -663,6 +677,10 @@ struct PublicGroupInfoView: View {
             let m = await ChatService.sharedMedia(p.cid)
             media = m ?? media
             mediaLoaded = true
+        }
+        .task {
+            stories = await StoriesRepository.shared.publicGroupStories(cid: p.cid, name: p.title,
+                                                                        photoUrl: p.photoUrl)
         }
         .alert(joinNotice ?? "", isPresented: Binding(get: { joinNotice != nil },
                                                       set: { if !$0 { joinNotice = nil } })) {
