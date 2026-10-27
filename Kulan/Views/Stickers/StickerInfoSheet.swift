@@ -157,6 +157,33 @@ struct StickerInfoSheet: View {
                 }
                 .padding(.horizontal, 16)
             }
+            // owner 2026-10-27: the same Add / Remove the keyboard's pack sheet has (StickerPackSheet),
+            // so a pack seen in a chat can be added, or removed, from here.
+            packButton(pack)
+                .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 12)
+        }
+    }
+
+    @ViewBuilder private func packButton(_ pack: StickerPack) -> some View {
+        if StickerStore.shared.isAdded(pack.id) {
+            Button { StickerStore.shared.setAdded(pack.id, false); dismiss() } label: {
+                Text("Remove from my stickers")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity).frame(height: 50)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        } else {
+            Button { StickerStore.shared.setAdded(pack.id, true); dismiss() } label: {
+                Text("Add to my stickers")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity).frame(height: 50)
+                    .background(Capsule().fill(Color.fariinBlue))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
         }
     }
 }
