@@ -584,7 +584,10 @@ enum ChatService {
         let ref = Storage.storage().reference().child("profiles/group_\(cid)-wp\(stamp).jpg")
         let meta = StorageMetadata(); meta.contentType = "image/jpeg"
         _ = try await ref.putDataAsync(jpeg, metadata: meta)
+        // Without the SDK's ":443" (owner 2026-10-27, "Unknown wallpaper."): the rules and the
+        // server check the plain host, and the link opens the same either way.
         return try await ref.downloadURL().absoluteString
+            .replacingOccurrences(of: "firebasestorage.googleapis.com:443/", with: "firebasestorage.googleapis.com/")
     }
 
     /// Write the group's shared wallpaper (`ChatWallpaper.stored`, or "u:<download link>" for a
