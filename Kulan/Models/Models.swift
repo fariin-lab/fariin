@@ -1148,6 +1148,10 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var membersCanAdd: Bool            // group: non-admins may add members (default false)
     var membersCanEditInfo: Bool       // group: non-admins may edit name/photo/desc (default false)
     var onlyAdminsCall = false         // group: only admins may START a call (joining stays open)
+    /// owner 2026-10-27 (the founder): the group's profile hides its members, count, admins and
+    /// Owner label from everyone but Fariin staff. Set only by staff (functions-groups
+    /// setGroupHideMembers; the rules keep phones off it). Messages are unchanged.
+    var hideMembers = false
     /// group: what members may send (2026-10-20), `memberSend` {photos, videos, voice, files,
     /// stickers, gifs, links, polls, location}; a missing key = allowed. firestore.rules
     /// `memberSendOk` enforces it.
@@ -1338,6 +1342,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         // Change group info is a member switch again (owner 2026-10-19, later); the link stays admins'.
         self.membersCanEditInfo = data["membersCanEditInfo"] as? Bool ?? false
         self.onlyAdminsCall = data["onlyAdminsCall"] as? Bool ?? false
+        self.hideMembers = data["hideMembers"] as? Bool ?? false
         self.memberSend = data["memberSend"] as? [String: Bool] ?? [:]
         self.slowModeSeconds = (data["slowMode"] as? NSNumber)?.intValue ?? 0
         func ms(_ v: Any?) -> Double {

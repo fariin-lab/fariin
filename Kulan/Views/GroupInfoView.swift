@@ -1,5 +1,6 @@
 import SwiftUI
 import FirebaseFirestore
+import FirebaseFunctions
 import Photos
 
 // ⛔ GROUP INFO, IN THE PERSON PROFILE'S DESIGN — owner 2026-10-18: "make it exactly the design the
@@ -465,14 +466,16 @@ struct GroupInfoView: View {
         aboutCard
         settingsCard
         // The bubble cloud is the admin panel's call (config/features memberCloud), live.
-        if Flags.memberCloud(for: cid) { memberCloudCard }
+        if Flags.memberCloud(for: cid), !membersHidden { memberCloudCard }
         if !media.isEmpty {
             ProfileMediaCard(cid: cid, media: media, cardColor: cardColor,
                              onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
                              onSeeAll: { showAllMedia = true })
         }
+        // Fariin staff only: the switch that hides this group's members (2026-10-27).
+        if AdminStore.shared.isAdmin { hideMembersCard }
         // Members between All Media and the red rows (owner's mockup 2026-10-19).
-        membersSection
+        if !membersHidden { membersSection }
         exitCard
     }
 
@@ -580,6 +583,8 @@ struct GroupInfoView: View {
             }
             // The count stays under the name (owner 2026-10-20, reversing the same day's removal).
             // The first faces in front of the count (owner 2026-10-20), people with a photo first.
+            // Not on a group whose members are hidden (2026-10-27, `membersHidden`).
+            if !membersHidden {
             HStack(spacing: 6) {
                 if !countFaces.isEmpty {
                     HStack(spacing: -7) {
@@ -593,6 +598,7 @@ struct GroupInfoView: View {
                 }
                 // The reference app's subtitle (owner 2026-10-20): 16 pt regular, its grey.
                 Text(memberCountText).font(.system(size: 16)).foregroundStyle(Color(hex: 0x8E8E93))
+            }
             }
             // The description itself is a card under the actions now (owner 2026-10-26).
             if desc.isEmpty, canEditInfo {
@@ -617,6 +623,51 @@ struct GroupInfoView: View {
         let withPhoto = users.filter { !(conv?.photos[$0] ?? "").isEmpty }
         let rest = users.filter { (conv?.photos[$0] ?? "").isEmpty }
         return Array((withPhoto + rest).prefix(3))
+    }
+
+    // MARK: Hidden members (owner 2026-10-27, the founder)
+
+    /// ⛔ THE GROUP'S MEMBERS ARE HIDDEN ON ITS PROFILE (`hideMembers`): no list, no count, no admins
+    /// and no Owner label for anyone but Fariin staff, the group's own owner and admins included.
+    /// Messages are unchanged (his choice). Only staff set it, through the server.
+    private var membersHidden: Bool { conv?.hideMembers == true && !AdminStore.shared.isAdmin }
+
+    @State private var hideMembersBusy = false
+    @State private var hideMembersError: String?
+
+    /// The staff switch. Saved by functions-groups setGroupHideMembers, which refuses anyone who is
+    /// not Fariin staff; the page follows the group document when it lands.
+    private var hideMembersCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle(isOn: Binding(
+                get: { conv?.hideMembers == true },
+                set: { on in
+                    guard !hideMembersBusy else { return }
+                    hideMembersBusy = true
+                    Task { @MainActor in
+                        do {
+                            _ = try await Functions.functions(region: "me-central1")
+                                .httpsCallable("setGroupHideMembers").call(["cid": cid, "on": on])
+                        } catch {
+                            hideMembersError = error.localizedDescription
+                        }
+                        hideMembersBusy = false
+                    }
+                })) {
+                Text("Hide Members")
+            }
+            .tint(.green)
+            .disabled(hideMembersBusy)
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .profileSurface(plain: cardColor)
+            Text("Fariin staff only. Members, admins and the owner won't see the member list, the count or who the admins are. Messages don't change.")
+                .font(.footnote).foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+        }
+        .alert("Couldn't change that", isPresented: Binding(get: { hideMembersError != nil },
+                                                           set: { if !$0 { hideMembersError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(hideMembersError ?? "") }
     }
 
     private var memberCountText: String {

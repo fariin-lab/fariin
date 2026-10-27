@@ -114,7 +114,9 @@ struct GroupSettingsView: View {
         // People (members, admins, removed), Permissions. Every row keeps the right it needed.
         List {
             joiningSection
-            peopleSection
+            // 2026-10-27: not on a group whose members Fariin staff hid (`hideMembers`), for
+            // anyone but staff; the owner and admins included.
+            if !(conv?.hideMembers == true && !AdminStore.shared.isAdmin) { peopleSection }
             permissionsSection
             chatSection
         }
