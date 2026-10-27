@@ -3372,6 +3372,8 @@ struct ChatsView: View {
             } message: {
                 Text("This removes the chat from your list. It comes back if you get a new message.")
             }
+            // The phone-nearly-full sheet, from the chat list (LowStorage, owner 2026-10-27).
+            .onAppear { LowStorage.start() }
             // The list asks for the tab bar itself, from the stack's path (owner 2026-10-21: after
             // leaving a chat the bar came back late). `.automatic` waited for the pop to finish
             // before the pushed page's `.hidden` let go; the path empties as Back starts, so the

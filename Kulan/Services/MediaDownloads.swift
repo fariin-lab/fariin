@@ -343,6 +343,16 @@ final class MediaDownloads {
     private func start(_ job: Job) {
         pending.removeAll { $0 == job.url }
         guard let u = URL(string: job.url) else { finishJob(job, .failed(permanent: true)); return }
+        // The phone is too full (owner 2026-10-27, `LowStorage`): held for a tap instead of failing
+        // half-way; a tapped one says why.
+        let size = job.total ?? knownSizes[job.url]
+        if LowStorage.tooFullToDownload(size: size) {
+            job.heldForTap = true
+            set(job, .waitingTap(total: size))
+            resumeWaiters(job, false)
+            if job.priority == .user { LowStorage.warnForDownload() }
+            return
+        }
         if job.resumeData == nil { job.resumeData = loadResume(job.url) }
         let task: URLSessionDownloadTask
         if let data = job.resumeData {
