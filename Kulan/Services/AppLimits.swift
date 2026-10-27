@@ -46,7 +46,7 @@ final class AppLimits {
         static let groupMembersMax = 30   // appLimit('group_members_max', 30) in firestore.rules
         static let pinnedChatsMax = 3
         static let groupsOwnedMax = 10   // groups_owned_max, functions-groups groupCreateCheck
-        static let groupDescMax = 250    // group_desc_max (owner 2026-10-21, set from the panel; 150 owner 2026-10-22, 250 owner 2026-10-27)
+        static let groupDescMax = 200    // group_desc_max (owner 2026-10-21, set from the panel; 150 owner 2026-10-22, 200 owner 2026-10-27)
     }
 
     private var listener: ListenerRegistration?
