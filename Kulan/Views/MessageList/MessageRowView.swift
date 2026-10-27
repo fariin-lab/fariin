@@ -666,9 +666,10 @@ final class MessageRowView: UIView {
     }
 
     /// What a reply swipe moves with the bubble: the overlays above plus the sender's photo
-    /// (owner 2026-10-23: the bubble slid over a photo that stayed put).
+    /// (owner 2026-10-23: the bubble slid over a photo that stayed put). A story reply's caption,
+    /// bar and card ride too (owner 2026-10-27: only the text bubble moved, the card stayed put).
     var swipeRiders: [UIView] {
-        liftOverlays + [avatarView].compactMap { $0 }.filter { !$0.isHidden }
+        liftOverlays + [avatarView, storyReplyView].compactMap { $0 }.filter { !$0.isHidden }
     }
     private var albumView: AlbumBubbleView?
     private var fileView: FileBubbleView?

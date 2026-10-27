@@ -423,7 +423,11 @@ final class StoryReplyCardView: UIView {
             bar.backgroundColor = UIColor.label.withAlphaComponent(0.35)
             thumb.frame = thumbRect
             // A story thumbnail is NOT E2EE — it is baked plain into the reply so it shows in-window.
-            thumb.configure(url: sr.thumbUrl, enc: nil, cid: cid, cornerRadius: 14)
+            // ⛔ NO CID, ON PURPOSE (owner 2026-10-27: the card stayed a grey box forever). With a
+            // 1:1 cid and no `enc`, `MediaFetch.clearBytes` refuses the bytes as an unsealed 1:1
+            // file, the job ends .failed and nothing is ever drawn. The story mention card passes
+            // "" for the same reason.
+            thumb.configure(url: sr.thumbUrl, enc: nil, cid: "", cornerRadius: 14)
         } else {
             bar.isHidden = true; thumb.isHidden = true; thumb.reset()
         }
