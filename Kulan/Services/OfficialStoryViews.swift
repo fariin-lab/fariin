@@ -126,7 +126,8 @@ enum OfficialStoryViews {
         NotificationCenter.default.post(name: .init("pauseStory"), object: "officialViews")
         // ⛔ SOLID DARK GREY, NEVER GLASS (owner 2026-10-18, build 969: "the sheet is glass, I can't read
         // the names"). Over a bright story the see-through sheet put white text on a light picture.
-        let ground = UIColor(white: 0.11, alpha: 1)
+        // The panel's own ground (StoryViewersPanelView), so the sheet and the list are one colour.
+        let ground = UIColor(white: 0.10, alpha: 1)
         // owner 2026-10-27: the same viewers list a group story's poster gets (StoryViewersPanelView:
         // its rows, search and look), fed from the official story's own list.
         let vc = OfficialViewersPanelController(rawId: rawId)
@@ -134,7 +135,10 @@ enum OfficialStoryViews {
         vc.view.backgroundColor = ground
         if let sheet = vc.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
-            sheet.prefersGrabberVisible = true
+            // The panel draws its own grabber, as on a normal story; the system's made two
+            // (owner 2026-10-27).
+            sheet.prefersGrabberVisible = false
+            sheet.preferredCornerRadius = 38
         }
         host.present(vc, animated: true)
     }
@@ -343,7 +347,8 @@ final class OfficialViewersPanelController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.addSubview(panel)
-        panel.audience = ("Fariin", false)
+        // A normal story's tab name (owner 2026-10-27: "exactly like a normal story").
+        panel.audience = ("All Viewers", false)
         panel.onOpenProfile = { [weak self] v in
             guard let self, let handle = handles[v.id], !handle.isEmpty else { return }
             dismiss(animated: true) { Task { @MainActor in _ = await ProfileCardDoor.open(handle, push: false) } }
@@ -353,7 +358,7 @@ final class OfficialViewersPanelController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        panel.frame = view.bounds.inset(by: UIEdgeInsets(top: 20, left: 0, bottom: 0, right: 0))
+        panel.frame = view.bounds
     }
 
     override func viewDidDisappear(_ animated: Bool) {
