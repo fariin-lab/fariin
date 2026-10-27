@@ -2540,33 +2540,86 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         cell.contentView.alpha = 0
         f.hidden = cell
         sendFlight = f
-        placeSendFlight(f, t: 0)
-        let link = CADisplayLink(target: self, selector: #selector(sendFlightTick(_:)))
-        if #available(iOS 15.0, *) {
-            let fps = Float(UIScreen.main.maximumFramesPerSecond)
-            link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: fps, preferred: fps)
-        }
-        link.add(to: .main, forMode: .common)
-        f.link = link
+        // ⛔ RUN BY CORE ANIMATION, NOT FRAME BY FRAME (owner 2026-10-27: "it jumps 3 times, not
+        // smooth"). The flight used to be placed by a display link on the main thread, and the send
+        // itself (sealing, the write, the new row's layout) holds the main thread in exactly those
+        // 0.3 s, so most frames were never drawn. The whole path is now handed to the render server
+        // as keyframes sampled from the same two curves, which it plays at the screen's own rate
+        // whatever the main thread is doing. The landing place is where the row will be once the
+        // list's scroll to the newest has finished.
+        let dstNow = cell.previewBubble.convert(cell.previewBubble.bounds, to: view)
+        let dst = dstNow.offsetBy(dx: 0, dy: collectionView.contentOffset.y - clampOffset(maxContentOffsetY))
+        animateSendFlight(f, to: dst)
     }
 
-    @objc private func sendFlightTick(_ link: CADisplayLink) {
-        guard let f = sendFlight else { link.invalidate(); return }
-        let t = min(1, max(0, (link.targetTimestamp - f.start) / Self.sendDuration))
-        guard t < 1, placeSendFlight(f, t: t) else { endSendFlight(); return }
+    /// The landing (owner 2026-10-27, the system Messages app): the bubble eases a little smaller as
+    /// it arrives, then settles back to full size once it is in its row.
+    static let sendLandScale: CGFloat = 0.94
+    static let sendSettleDuration: CFTimeInterval = 0.24
+
+    private func animateSendFlight(_ f: SendFlight, to dst: CGRect) {
+        let steps = 36
+        var shapeFrames: [CGRect] = [], radii: [CGFloat] = [], picFrames: [CGRect] = [], scales: [CGFloat] = []
+        for i in 0...steps {
+            let t = Double(i) / Double(steps)
+            let g = sendFlightGeometry(f, dst: dst, t: t)
+            shapeFrames.append(g.shape); radii.append(g.radius); picFrames.append(g.picture)
+            // Full size until the last third, then down to the landing scale on an ease-in.
+            let k = max(0, (t - 0.66) / 0.34)
+            scales.append(1 - (1 - Self.sendLandScale) * CGFloat(k * k))
+        }
+        func keyframes(_ path: String, _ values: [Any]) -> CAKeyframeAnimation {
+            let a = CAKeyframeAnimation(keyPath: path)
+            a.values = values
+            a.duration = Self.sendDuration
+            a.calculationMode = .linear
+            return a
+        }
+        let last = shapeFrames.count - 1
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak self, weak f] in
+            guard let self, let f, self.sendFlight === f else { return }
+            self.landSendFlight(f)
+        }
+        // Model values are the landing ones, so nothing snaps back when the animations end.
+        f.shape.frame = shapeFrames[last]
+        f.shape.layer.cornerRadius = radii[last]
+        f.picture.frame = picFrames[last]
+        let scaleT = CATransform3DMakeScale(Self.sendLandScale, Self.sendLandScale, 1)
+        f.shape.layer.transform = scaleT
+        f.picture.layer.transform = scaleT
+        f.shape.layer.add(keyframes("position", shapeFrames.map { NSValue(cgPoint: CGPoint(x: $0.midX, y: $0.midY)) }), forKey: "fly.p")
+        f.shape.layer.add(keyframes("bounds.size", shapeFrames.map { NSValue(cgSize: $0.size) }), forKey: "fly.s")
+        f.shape.layer.add(keyframes("cornerRadius", radii), forKey: "fly.r")
+        f.picture.layer.add(keyframes("position", picFrames.map { NSValue(cgPoint: CGPoint(x: $0.midX, y: $0.midY)) }), forKey: "fly.p")
+        let scaleValues = scales.map { NSValue(caTransform3D: CATransform3DMakeScale($0, $0, 1)) }
+        f.shape.layer.add(keyframes("transform", scaleValues), forKey: "fly.t")
+        f.picture.layer.add(keyframes("transform", scaleValues), forKey: "fly.t")
+        CATransaction.commit()
+    }
+
+    /// Arrived: the row's own bubble takes over at the landing scale and springs back to full size.
+    private func landSendFlight(_ f: SendFlight) {
+        let row = f.hidden
+        endSendFlight()
+        guard let bubble = row?.previewBubble else { return }
+        let a = CASpringAnimation(keyPath: "transform.scale")
+        a.fromValue = Self.sendLandScale
+        a.toValue = 1
+        a.mass = 1
+        a.stiffness = 420
+        a.damping = 22
+        a.initialVelocity = 0
+        a.duration = max(Self.sendSettleDuration, a.settlingDuration)
+        bubble.layer.add(a, forKey: "send.settle")
     }
 
     /// The flight at time `t` (0...1). Sideways on the horizontal curve, up on the vertical one, the
     /// reference's two curves: the left edge closes in from the pill's to the bubble's, the bottom and
     /// height go from the pill's to the bubble's, and the text picture travels from where the typed
     /// text began to its place in the bubble. False once the row is gone.
-    @discardableResult
-    private func placeSendFlight(_ f: SendFlight, t: Double) -> Bool {
-        guard let ip = dataSource.indexPath(for: f.id),
-              let cell = collectionView.cellForItem(at: ip) as? MessageRowCell else { return false }
-        // The data source may have handed the row a fresh cell mid-flight: hide that one instead.
-        if cell !== f.hidden { f.hidden?.contentView.alpha = 1; cell.contentView.alpha = 0; f.hidden = cell }
-        let dst = cell.previewBubble.convert(cell.previewBubble.bounds, to: view)
+    private func sendFlightGeometry(_ f: SendFlight, dst: CGRect, t: Double)
+        -> (shape: CGRect, radius: CGFloat, picture: CGRect) {
         let h = CGFloat(Self.sendHorizontalCurve.value(at: t))
         let v = CGFloat(Self.sendVerticalCurve.value(at: t))
         func mix(_ a: CGFloat, _ b: CGFloat, _ k: CGFloat) -> CGFloat { a + (b - a) * k }
@@ -2574,12 +2627,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let minX = mix(src.minX, dst.minX, h), maxX = mix(src.maxX, dst.maxX, h)
         let maxY = mix(src.maxY, dst.maxY, v), height = mix(src.height, dst.height, v)
         let shape = CGRect(x: minX, y: maxY - height, width: maxX - minX, height: height)
-        f.shape.frame = shape
-        f.shape.layer.cornerRadius = min(mix(20, BubbleMetrics.bigCorner, v), height / 2)
+        let radius = min(mix(20, BubbleMetrics.bigCorner, v), height / 2)
         // The picture is the finished bubble at its own size; its text starts where the typed text did.
         let picX = mix(f.textX - BubbleMetrics.hPad, dst.minX, h)
-        f.picture.frame = CGRect(x: picX, y: shape.midY - dst.height / 2, width: dst.width, height: dst.height)
-        return true
+        let picture = CGRect(x: picX, y: shape.midY - dst.height / 2, width: dst.width, height: dst.height)
+        return (shape, radius, picture)
     }
 
     /// The flight ends: the row's own bubble shows again and the flying views go.
@@ -5958,6 +6010,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                         forItemAt indexPath: IndexPath) {
         (cell as? MessageRowCell)?.setOnScreen(true)
         pinRunAvatars(extra: cell)   // configured before it was in the list; place it now
+        // A fresh cell for the row a send is flying to stays hidden until the flight lands (the
+        // flight no longer checks its row every frame).
+        if let f = sendFlight, let row = cell as? MessageRowCell, row !== f.hidden,
+           dataSource.itemIdentifier(for: indexPath) == f.id {
+            f.hidden?.contentView.alpha = 1
+            row.contentView.alpha = 0
+            f.hidden = row
+        }
     }
 
     /// ⛔ ONE PHOTO PER RUN, RIDING THE VISIBLE BOTTOM (owner 2026-10-26, from the reference app). A
