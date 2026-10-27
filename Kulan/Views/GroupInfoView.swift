@@ -473,7 +473,6 @@ struct GroupInfoView: View {
                              onSeeAll: { showAllMedia = true })
         }
         // Fariin staff only: the switch that hides this group's members (2026-10-27).
-        if AdminStore.shared.isAdmin { hideMembersCard }
         // Members between All Media and the red rows (owner's mockup 2026-10-19).
         if !membersHidden { membersSection }
         exitCard
@@ -631,44 +630,6 @@ struct GroupInfoView: View {
     /// and no Owner label for anyone but Fariin staff, the group's own owner and admins included.
     /// Messages are unchanged (his choice). Only staff set it, through the server.
     private var membersHidden: Bool { conv?.hideMembers == true && !AdminStore.shared.isAdmin }
-
-    @State private var hideMembersBusy = false
-    @State private var hideMembersError: String?
-
-    /// The staff switch. Saved by functions-groups setGroupHideMembers, which refuses anyone who is
-    /// not Fariin staff; the page follows the group document when it lands.
-    private var hideMembersCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Toggle(isOn: Binding(
-                get: { conv?.hideMembers == true },
-                set: { on in
-                    guard !hideMembersBusy else { return }
-                    hideMembersBusy = true
-                    Task { @MainActor in
-                        do {
-                            _ = try await Functions.functions(region: "me-central1")
-                                .httpsCallable("setGroupHideMembers").call(["cid": cid, "on": on])
-                        } catch {
-                            hideMembersError = error.localizedDescription
-                        }
-                        hideMembersBusy = false
-                    }
-                })) {
-                Text("Hide Members")
-            }
-            .tint(.green)
-            .disabled(hideMembersBusy)
-            .padding(.horizontal, 16).padding(.vertical, 12)
-            .profileSurface(plain: cardColor)
-            Text("Fariin staff only. Members, admins and the owner won't see the member list, the count or who the admins are. Messages don't change.")
-                .font(.footnote).foregroundStyle(.secondary)
-                .padding(.horizontal, 16)
-        }
-        .alert("Couldn't change that", isPresented: Binding(get: { hideMembersError != nil },
-                                                           set: { if !$0 { hideMembersError = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: { Text(hideMembersError ?? "") }
-    }
 
     private var memberCountText: String {
         let n = conv?.users.count ?? 0
@@ -2870,6 +2831,9 @@ struct GroupMembersSheet: View {
         let sections = sectionsBuilt ? cachedSections : buildSections()
         return NavigationStack {
             List {
+                // ⛔ HIDE MEMBERS AT THE TOP OF THE MEMBER LIST (owner 2026-10-27), not on the group
+                // page. Fariin staff only.
+                if AdminStore.shared.isAdmin, query.isEmpty { HideMembersSection(cid: cid, on: c?.hideMembers == true) }
                 ForEach(sections, id: \.0) { sec in
                     Section {
                         ForEach(sec.1, id: \.self) { uid in
@@ -3142,5 +3106,42 @@ struct TransferPasswordAlert: ViewModifier {
                 await MainActor.run { busy = false; failure = words }
             }
         }
+    }
+}
+
+/// Fariin staff's Hide Members switch (2026-10-27). Saved by functions-groups setGroupHideMembers,
+/// which refuses anyone who is not staff; the list follows the group document when it lands.
+private struct HideMembersSection: View {
+    let cid: String
+    let on: Bool
+    @State private var busy = false
+    @State private var error: String?
+
+    var body: some View {
+        Section {
+            Toggle(isOn: Binding(get: { on }, set: { want in
+                guard !busy else { return }
+                busy = true
+                Task { @MainActor in
+                    do {
+                        _ = try await Functions.functions(region: "me-central1")
+                            .httpsCallable("setGroupHideMembers").call(["cid": cid, "on": want])
+                    } catch {
+                        self.error = error.localizedDescription
+                    }
+                    busy = false
+                }
+            })) {
+                Text("Hide Members")
+            }
+            .tint(.green)
+            .disabled(busy)
+        } footer: {
+            Text("Fariin staff only. Members, admins and the owner won't see the member list, the count or who the admins are. Messages don't change.")
+        }
+        .alert("Couldn't change that", isPresented: Binding(get: { error != nil },
+                                                           set: { if !$0 { error = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(error ?? "") }
     }
 }
