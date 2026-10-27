@@ -1276,7 +1276,13 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // literally `animated ? .automatic : .none`. The old code passed `.automatic` unconditionally
         // and simply never reached here on a non-animated apply, so the constant was never wrong;
         // it is spelled out now because the non-animated path below does reach here.
-        let rowAnimation: UITableView.RowAnimation = animated ? .automatic : .none
+        // ⛔ ONLY A CHANGE THAT HAPPENS WHILE HE IS LOOKING MOVES ON SCREEN (owner 2026-10-27:
+        // "I open the app and the chats move, for things that happened earlier"). While the list is
+        // catching up after a launch or a return to the front, or the app is not active, the rows go
+        // straight to their places. A send or a new message in front of him still animates.
+        let live = !ConversationsRepository.shared.catchingUp
+            && UIApplication.shared.applicationState == .active
+        let rowAnimation: UITableView.RowAnimation = animated && live ? .automatic : .none
 
         let work = {
             // ⛔ A SWIPED ROW THAT IS ABOUT TO BE DELETED LOSES ITS PLATTER FIRST, AND NOT INSIDE THE
@@ -1446,7 +1452,9 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
                 DispatchQueue.main.async { [weak self] in self?.flushDeferredState(afterFlight: true) }
             }
         }
-        if animated {
+        // `live` too (2026-10-27): a moveRow takes the block's timing, so a catch-up must be in the
+        // zero-length wrapper or its moves still fly even with `.none` row animations.
+        if animated && live {
             work()
         } else {
             UIView.animate(withDuration: 0) { work() }

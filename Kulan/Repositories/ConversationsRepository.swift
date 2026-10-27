@@ -87,6 +87,35 @@ final class ConversationsRepository {
     /// this phone has just finished creating the profile. Such an account has no chats to wait for,
     /// so the empty state and the welcome card show at once instead of after the first answer.
     var freshAccount = false
+    /// ⛔ CATCHING UP, NOT HAPPENING NOW (owner 2026-10-27: "I open the app and see chats moving
+    /// for changes that should have happened earlier"). True from the moment the list starts, or the
+    /// app comes back to the front, until the server's first answer since then has been published.
+    /// Everything in that answer happened while we were away (iOS suspends the listener in the
+    /// background), so the list puts it in place without animating it; the reference app likewise
+    /// only animates changes that land while the list is on screen and the app is active. Read by
+    /// ChatListTableController.apply. Not observed by views (no re-render on change).
+    @ObservationIgnored var catchingUp = true
+    @ObservationIgnored private var catchUpTimeout: DispatchWorkItem?
+
+    /// Starts a catch-up window. Ended by the next server answer, or after 4 s if none comes (a
+    /// listener with nothing new may stay quiet on resume).
+    func beginCatchUp() {
+        catchingUp = true
+        catchUpTimeout?.cancel()
+        let w = DispatchWorkItem { [weak self] in self?.catchingUp = false }
+        catchUpTimeout = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: w)
+    }
+
+    /// The server's answer is on screen: from here on a change is live and may animate. A beat
+    /// later than the snapshot, because `publish` may hold it for its throttle interval.
+    private func endCatchUpAfterPublish() {
+        guard catchingUp else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + minPublishInterval + 0.15) { [weak self] in
+            self?.catchUpTimeout?.cancel()
+            self?.catchingUp = false
+        }
+    }
     /// 2026-09-24 audit: the listener ended in an error and no snapshot has arrived since. A failed
     /// listener used to print and nothing else, and the 3s safety net below then flipped `hasLoaded`,
     /// so a returning account whose chats could not load was shown the first-run welcome. The chat
@@ -195,6 +224,7 @@ final class ConversationsRepository {
             foregroundObserver = NotificationCenter.default.addObserver(
                 forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
                     self?.listBurnTick()
+                    self?.beginCatchUp()   // 2026-10-27: what changed while away lands without animating
                 }
         }
         // Media a Sign Out kept on this phone: back to its own account, or wiped before anyone else's
@@ -275,6 +305,7 @@ final class ConversationsRepository {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         stop()
         listenerUid = uid
+        beginCatchUp()   // 2026-10-27: a fresh listener's first answers are a catch-up, not live moves
         let limit = windowLimit
         // Attach the listener IMMEDIATELY — never block the chat list behind ensureReady.
         // Cached chats render instantly (hasLoaded flips on the first non-empty snapshot);
@@ -359,6 +390,7 @@ final class ConversationsRepository {
                 let visible = self.hideAccountBlocked(self.withPinnedExtras(convs), me: uid)
                 UnknownChatArchiver.sweep(visible)
                 self.publish(visible)
+                if fromServer { self.endCatchUpAfterPublish() }
                 // 2026-09-25 delivered ticks: this phone has these chats' newest messages now. Only
                 // from the server (a cached snapshot proves nothing arrived), and never for a chat
                 // I blocked, so a blocked sender keeps seeing one tick.
