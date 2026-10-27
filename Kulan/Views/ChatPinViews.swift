@@ -390,6 +390,9 @@ struct ChatPinPage: View {
     @State private var setting = false
     /// The app makes the key (owner 2026-10-27): first key and Reset both call the server.
     @State private var generating = false
+    /// The digits spinning while a key is made; `rollingTo` is the key once the server has answered.
+    @State private var rolling = false
+    @State private var rollingTo: String?
     @State private var confirmReset = false
     @State private var plusOnly = false
     @State private var confirmRemove = false
@@ -407,7 +410,16 @@ struct ChatPinPage: View {
     var body: some View {
         List {
             Section {
-                if isSet {
+                if rolling {
+                    ChatKeySlotView(final: rollingTo) {
+                        mine = rollingTo
+                        isSet = true
+                        rolling = false
+                        rollingTo = nil
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                } else if isSet {
                     if let mine, !mine.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
                             Text(spaced)
@@ -588,14 +600,19 @@ struct ChatPinPage: View {
     private func makeKey() {
         guard !generating else { return }
         generating = true
+        rollingTo = nil
+        withAnimation(.easeInOut(duration: 0.2)) { rolling = true }
         Task {
             do {
-                mine = try await ChatPin.generate()
-                isSet = true
+                // The digits spin until the key arrives, then settle one by one (`ChatKeySlotView`),
+                // which shows it and ends the roll.
+                let pin = try await ChatPin.generate()
                 setAt = ChatPin.lastSetAt
                 copied = false
                 failure = ""
+                rollingTo = pin
             } catch {
+                rolling = false
                 failure = error.localizedDescription
             }
             generating = false
@@ -797,5 +814,52 @@ struct ChatPinSetSheet: View {
                 failure = error.localizedDescription
             }
         }
+    }
+}
+
+/// ⛔ THE KEY IS FOUND, NOT POPPED IN (owner 2026-10-27): while a key is being made all six digits
+/// spin; once the server's key is here they stop one at a time, left to right, each with a light
+/// tap, the rest still spinning, until all six are chosen. Then `onDone` shows the key as usual.
+struct ChatKeySlotView: View {
+    /// nil while the server is still choosing: every digit spins.
+    let final: String?
+    let onDone: () -> Void
+    @State private var locked = 0
+    private let count = 6
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.06)) { _ in
+            HStack(spacing: 8) {
+                ForEach(0..<count, id: \.self) { i in
+                    let settled = final != nil && i < locked
+                    Text(settled ? digit(i) : String(Int.random(in: 0...9)))
+                        .font(.system(size: 34, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(settled ? Color.primary : Color.secondary)
+                        .frame(width: 22)
+                        .scaleEffect(settled ? 1 : 0.9)
+                        .blur(radius: settled ? 0 : 0.6)
+                        .animation(.spring(response: 0.3, dampingFraction: 0.55), value: settled)
+                }
+            }
+        }
+        .accessibilityLabel(final == nil || locked < count ? "Making your Chat Key" : "Your Chat Key")
+        .task(id: final) {
+            guard let f = final, f.count == count else { return }
+            // A beat of spinning first, so even a fast answer is seen being "found".
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            for i in 1...count {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                locked = i
+                Haptics.impact(.light)
+            }
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            onDone()
+        }
+    }
+
+    private func digit(_ i: Int) -> String {
+        guard let f = final, i < f.count else { return "0" }
+        return String(Array(f)[i])
     }
 }
