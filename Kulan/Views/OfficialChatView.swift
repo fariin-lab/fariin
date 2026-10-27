@@ -32,6 +32,11 @@ struct OfficialChatView: View {
     @State private var reactorsFor: String?   // my chip tapped → the reactions list
     @State private var pendingDelete: [String]?
     @State private var showClearConfirm = false
+    /// owner 2026-10-27: the group id of a Reject Ownership tap waiting for its confirm, and the
+    /// server's answer to show after (groups:rejectGroupOwnership).
+    @State private var pendingReject: String?
+    @State private var rejecting = false
+    @State private var rejectResult: String?
     // Search in the chat itself, the normal chat's way (owner, 2026-09-28): top field, ↑/↓ and
     // "n of N" at the bottom, each step scrolls to the match.
     @State private var searching = false
@@ -151,6 +156,20 @@ struct OfficialChatView: View {
             .alert("Clear this chat?", isPresented: $showClearConfirm) {
                 Button("Clear", role: .destructive) { store.clearHistory(); endSelection() }
                 Button("Cancel", role: .cancel) {}
+            }
+            .alert("Reject ownership?", isPresented: Binding(get: { pendingReject != nil },
+                                                            set: { if !$0 { pendingReject = nil } })) {
+                Button("Reject", role: .destructive) {
+                    if let cid = pendingReject { rejectOwnership(cid) }
+                    pendingReject = nil
+                }
+                Button("Cancel", role: .cancel) { pendingReject = nil }
+            } message: {
+                Text("The group goes back to its previous owner, or to its longest-standing admin if they have left. You keep the role you had before.")
+            }
+            .alert(rejectResult ?? "", isPresented: Binding(get: { rejectResult != nil },
+                                                           set: { if !$0 { rejectResult = nil } })) {
+                Button("OK", role: .cancel) { rejectResult = nil }
             }
             .navigationDestination(isPresented: $showInfo) {
                 // Search pops back to the chat and opens its search there, as a normal chat's
@@ -546,6 +565,24 @@ struct OfficialChatView: View {
         case .screen:
             guard let screen = AnnouncementButton.Screen(rawValue: button.value) else { return }
             if screen == .invite { shareInvite = true } else { pushedScreen = screen }
+        case .rejectOwnership:
+            guard !rejecting else { return }
+            pendingReject = button.value
+        }
+    }
+
+    private func rejectOwnership(_ cid: String) {
+        rejecting = true
+        Task {
+            let text: String
+            do {
+                let returning = try await ChatService.rejectGroupOwnership(cid: cid)
+                text = returning ? "Done. The group is back with its previous owner."
+                    : "Done. The group now belongs to its longest-standing admin."
+            } catch {
+                text = error.localizedDescription
+            }
+            await MainActor.run { rejecting = false; rejectResult = text }
         }
     }
 }

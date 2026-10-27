@@ -190,6 +190,10 @@ struct AnnouncementButton: Equatable, Identifiable {
         case link          // open a web address
         case appStore      // open our App Store page (the "Update Now" button)
         case screen        // jump to a screen inside the app
+        /// owner 2026-10-27: hand a group back (groups:rejectGroupOwnership). Written by the server
+        /// only, on the note a new group owner gets; `value` is the group's id, `until` the deadline.
+        /// Never offered in the announcement editor (`adminChoices`).
+        case rejectOwnership
 
         var id: String { rawValue }
         var label: String {
@@ -197,8 +201,12 @@ struct AnnouncementButton: Equatable, Identifiable {
             case .link:     return "Open a link"
             case .appStore: return "Update the app"
             case .screen:   return "Open a screen in the app"
+            case .rejectOwnership: return "Reject group ownership"
             }
         }
+
+        /// What a person writing an announcement may pick.
+        static var adminChoices: [Action] { allCases.filter { $0 != .rejectOwnership } }
     }
 
     /// Screens a button is allowed to open. AN ALLOWLIST ON PURPOSE: the value travels in a document,
@@ -236,11 +244,14 @@ struct AnnouncementButton: Equatable, Identifiable {
     var id = UUID().uuidString
     var label: String
     var action: Action
-    /// A web address for `.link`, a `Screen` raw value for `.screen`, ignored for `.appStore`.
+    /// A web address for `.link`, a `Screen` raw value for `.screen`, a group id for
+    /// `.rejectOwnership`, ignored for `.appStore`.
     var value: String
+    /// `.rejectOwnership` only: the end of the 48 hours, so the button goes when the window does.
+    var until: Date?
 
     static func == (l: AnnouncementButton, r: AnnouncementButton) -> Bool {
-        l.label == r.label && l.action == r.action && l.value == r.value
+        l.label == r.label && l.action == r.action && l.value == r.value && l.until == r.until
     }
 
     /// Named `asMap`, not `map`: `buttons.map(\.map)` is a key path called `map` handed to a method
@@ -261,6 +272,7 @@ struct AnnouncementButton: Equatable, Identifiable {
         self.label = label
         self.action = action
         self.value = map["value"] as? String ?? ""
+        self.until = (map["until"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
     }
 
     /// Nothing renders a button we cannot honour — a link with no address is a dead tap.
@@ -269,6 +281,7 @@ struct AnnouncementButton: Equatable, Identifiable {
         case .link:     return URL(string: value)?.scheme?.hasPrefix("http") == true
         case .appStore: return true
         case .screen:   return Screen(rawValue: value) != nil
+        case .rejectOwnership: return !value.isEmpty && (until.map { $0 > ServerClock.now } ?? false)
         }
     }
 }

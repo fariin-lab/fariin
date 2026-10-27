@@ -1065,6 +1065,26 @@ enum ChatService {
         try await callOwnershipTransfer(["cid": cid, "to": heir])
     }
 
+    /// owner 2026-10-27: the new owner hands the group back within 48 hours of a transfer
+    /// (groups:rejectGroupOwnership; the Reject Ownership button on the Fariin note). The server
+    /// decides who gets it: the previous owner if still in the group, else the longest-standing
+    /// admin. True = it went back to the previous owner.
+    static func rejectGroupOwnership(cid: String) async throws -> Bool {
+        do {
+            let result = try await Functions.functions(region: "me-central1")
+                .httpsCallable("rejectGroupOwnership").call(["cid": cid])
+            return (result.data as? [String: Any])?["returning"] as? Bool ?? true
+        } catch {
+            let ns = error as NSError
+            let details = ns.userInfo["details"] as? [String: Any]
+            let reason = details?["reason"] as? String ?? ""
+            if ns.domain == FunctionsErrorDomain, !reason.isEmpty {
+                throw OwnershipRefusal(reason: reason, message: ns.localizedDescription)
+            }
+            throw OwnershipRefusal(reason: "", message: "Could not reject ownership. Check your connection and try again.")
+        }
+    }
+
     private static func callOwnershipTransfer(_ payload: [String: Any]) async throws {
         do {
             _ = try await Functions.functions(region: "me-central1")

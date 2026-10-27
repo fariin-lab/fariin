@@ -612,7 +612,7 @@ private struct AnnouncementButtonEditor: View {
             }
             Section("What it does") {
                 Picker("Action", selection: $button.action) {
-                    ForEach(AnnouncementButton.Action.allCases) { a in
+                    ForEach(AnnouncementButton.Action.adminChoices) { a in
                         Text(a.label).tag(a)
                     }
                 }
@@ -652,6 +652,9 @@ private struct AnnouncementButtonEditor: View {
                     .pickerStyle(.inline)
                     .labelsHidden()
                 }
+            case .rejectOwnership:
+                // Server-written only (a new group owner's note); never offered in the picker above.
+                EmptyView()
             }
         }
         .navigationTitle("Button")
