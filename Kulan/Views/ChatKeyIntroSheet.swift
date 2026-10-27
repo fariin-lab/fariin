@@ -58,14 +58,14 @@ struct ChatKeyIntroSheet: View {
                         // and using it for something else would make the real claim worth less.
                         // What is written here is true and is the same reassurance.
                         point("lock", "Private and secure",
-                              "Your key is never stored as you typed it. We keep a scrambled copy "
-                              + "that cannot be turned back into your key.")
+                              "Fariin makes a random 6-digit key that nobody else has. We keep only "
+                              + "a scrambled copy that cannot be turned back into your key.")
                         point("person.2", "Direct communication",
                               "People with your Chat Key can message and call you straight away, "
                               + "whatever your Messages and Calls settings say.")
                         point("checkmark.shield", "You are in control",
-                              "Share it only with people you want to hear from, and change or "
-                              + "remove it whenever you like.")
+                              "Share it only with people you want to hear from. Reset it for a new "
+                              + "one, or remove it, whenever you like.")
                     }
                     .padding(.top, 34)
                 }

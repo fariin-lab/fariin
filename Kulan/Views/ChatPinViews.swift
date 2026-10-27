@@ -388,6 +388,10 @@ struct ChatPinPage: View {
     /// Raised by the explainer's "Got it" and acted on once that sheet is really gone.
     @State private var continueToKeypad = false
     @State private var setting = false
+    /// The app makes the key (owner 2026-10-27): first key and Reset both call the server.
+    @State private var generating = false
+    @State private var confirmReset = false
+    @State private var plusOnly = false
     @State private var confirmRemove = false
     @State private var removing = false
     @State private var copied = false
@@ -471,8 +475,14 @@ struct ChatPinPage: View {
                     // has no key; somebody changing one has already been through this. That is also
                     // what makes a seen-flag unnecessary — the door is rare by construction.
                     Button { explaining = true } label: {
-                        Text("Set a Chat Key").frame(maxWidth: .infinity)
+                        HStack {
+                            Spacer()
+                            Text("Get a Chat Key")
+                            if generating { ProgressView().padding(.leading, 6) }
+                            Spacer()
+                        }
                     }
+                    .disabled(generating)
                 }
             } header: {
                 Text(isSet ? "Your Chat Key" : "")
@@ -484,15 +494,38 @@ struct ChatPinPage: View {
 
             if isSet {
                 Section {
-                    Button("Change Chat Key") { setting = true }
+                    // ⛔ RESET, NOT CHANGE (owner 2026-10-27): a new random key from the server.
+                    Button { confirmReset = true } label: {
+                        HStack { Text("Reset Chat Key"); if generating { Spacer(); ProgressView() } }
+                    }
+                    .disabled(generating)
                     Button(role: .destructive) { confirmRemove = true } label: {
                         HStack { Text("Remove Chat Key"); if removing { Spacer(); ProgressView() } }
                     }
                     .disabled(removing)
                 } footer: {
                     // Spec §22: rotating controls NEW access only.
-                    Text("Changing your Chat Key doesn't remove people who already used it.")
+                    Text("Resetting gives you a new key and the old one stops working. People who already used it stay in your chats.")
                 }
+            }
+
+            // Your own digits: Fariin Plus (owner 2026-10-27). Staff only until Plus exists.
+            Section {
+                Button {
+                    if ChatPin.mayChooseOwn { setting = true } else { plusOnly = true }
+                } label: {
+                    HStack {
+                        Text("Choose Your Own Key").foregroundStyle(.primary)
+                        Spacer()
+                        Text("Fariin Plus")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color.fariinBlue)
+                            .padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(Capsule().fill(Color.fariinBlue.opacity(0.14)))
+                    }
+                }
+            } footer: {
+                Text("Fariin makes a random 6-digit key for you, different from everyone else's.")
             }
 
             if !failure.isEmpty {
@@ -510,9 +543,20 @@ struct ChatPinPage: View {
         .onAppear { Task { await refresh() } }
         .sheet(isPresented: $explaining, onDismiss: {
             // Only when "Got it" was pressed; the ✕ leaves this false and nothing follows.
-            if continueToKeypad { continueToKeypad = false; setting = true }
+            if continueToKeypad { continueToKeypad = false; makeKey() }
         }) {
             ChatKeyIntroSheet { continueToKeypad = true }
+        }
+        .alert("Reset your Chat Key?", isPresented: $confirmReset) {
+            Button("Reset", role: .destructive) { makeKey() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You'll get a new key and the old one will stop working.")
+        }
+        .alert("Fariin Plus", isPresented: $plusOnly) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Choosing your own Chat Key will come with Fariin Plus.")
         }
         .sheet(isPresented: $setting) {
             ChatPinSetSheet {
@@ -538,6 +582,24 @@ struct ChatPinPage: View {
         mine = ChatPin.mine
         setAt = ChatPin.lastSetAt
         checking = false
+    }
+
+    /// A new random key from the server, shown here at once.
+    private func makeKey() {
+        guard !generating else { return }
+        generating = true
+        Task {
+            do {
+                mine = try await ChatPin.generate()
+                isSet = true
+                setAt = ChatPin.lastSetAt
+                copied = false
+                failure = ""
+            } catch {
+                failure = error.localizedDescription
+            }
+            generating = false
+        }
     }
 
     private func remove() {

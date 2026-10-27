@@ -118,6 +118,27 @@ enum ChatPin {
         SecurityCheckup.settingChanged()
     }
 
+    /// ⛔ THE APP MAKES THE KEY (owner 2026-10-27): six random digits from the server
+    /// (`generateChatPin`), held by no other account. First key and Reset both come here; the old
+    /// key stops working. Choosing your own digits is Fariin Plus (`set`, `mayChooseOwn`).
+    @discardableResult
+    static func generate() async throws -> String {
+        let data = try await call("generateChatPin", [:], onFailure: "Couldn’t make your Chat Key. Try again.")
+        guard let pin = data["pin"] as? String, isValid(pin) else {
+            throw Failure(message: "Couldn’t make your Chat Key. Try again.")
+        }
+        Keychain.set(keychainKey, pin)
+        UserDefaults.standard.set(true, forKey: statusKey)
+        UserDefaults.standard.removeObject(forKey: stampKey)
+        await MainActor.run { ChatPinState.shared.changed() }
+        SecurityCheckup.settingChanged()
+        return pin
+    }
+
+    /// May this account choose its own digits? Fariin Plus (not sold yet) or Fariin staff, the same
+    /// test the server makes (`mayChooseOwn`). Until Plus exists this is staff only.
+    @MainActor static var mayChooseOwn: Bool { AdminStore.shared.isAdmin }
+
     static func remove() async throws {
         _ = try await call("setChatPin", ["pin": ""], onFailure: "Couldn’t remove your Chat Key. Try again.")
         Keychain.delete(keychainKey)

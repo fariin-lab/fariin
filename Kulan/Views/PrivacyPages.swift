@@ -578,7 +578,16 @@ struct MessagesPrivacyPage: View {
         // The mode is written by the sheet's SUCCESS and by nothing else — see `choose`. Dismissing
         // it without saving leaves the selection where it was.
         .sheet(isPresented: $explainingKey, onDismiss: {
-            if continueToKeySheet { continueToKeySheet = false; settingKey = true }
+            // The app makes the key now (owner 2026-10-27); the mode follows a key that exists.
+            if continueToKeySheet {
+                continueToKeySheet = false
+                Task {
+                    if (try? await ChatPin.generate()) != nil {
+                        privMessages = Audience.contacts.rawValue
+                        PrivacyPrefs.setMine("messages", .contacts)
+                    }
+                }
+            }
         }) {
             ChatKeyIntroSheet { continueToKeySheet = true }
         }
