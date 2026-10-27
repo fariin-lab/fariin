@@ -592,8 +592,13 @@ enum ChatService {
     /// who may change group info write it (firestore.rules `nonOwnerAdminWriteOK`, and the
     /// members-can-edit-info branch). The previous photo file is removed best-effort.
     static func setGroupWallpaper(cid: String, stored: String, previous: String?) async throws {
-        let convRef = db.collection("conversations").document(cid)
-        try await convRef.updateData(["wallpaper": stored, "updatedAt": FieldValue.serverTimestamp()])
+        // ⛔ THROUGH THE SERVER (owner 2026-10-27: "I still can't set my group's wallpaper from
+        // photos"). The direct write was refused on a real group (FIRFirestoreErrorDomain 7) though the
+        // rules allow it: the group update rule reads several documents and Firestore stops a check at
+        // 10, which the rules test tool does not enforce. functions-groups setGroupWallpaper makes the
+        // same checks (lib/groupwallpaper.js) and writes it.
+        _ = try await Functions.functions(region: "me-central1")
+            .httpsCallable("setGroupWallpaper").call(["cid": cid, "wallpaper": stored])
         let text = stored == "none" ? "\(myName()) removed the group wallpaper"
                                     : "\(myName()) changed the group wallpaper"
         try? await writeSystemMessage(cid: cid, text: text)
