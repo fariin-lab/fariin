@@ -117,60 +117,9 @@ struct OfficialChatView: View {
     }
 
     var body: some View {
-        chatSurface
-            // Tapping the header opens the info screen, the same as every other chat. It used to do
-            // nothing at all — I left the closure empty when this screen was built, so the one chat
-            // people are most likely to be suspicious of was the one that would not tell them
-            // anything about itself. Owner caught it.
-            .background(ChatNavigationItem(model: headerModel, bar: navigationBar,
-                                           onTap: { if !selecting { showInfo = true } }))
-            .sheet(item: Binding(get: { forwarding.map(ForwardBatch.init) },
-                                 set: { if $0 == nil { forwarding = nil } })) { batch in
-                ForwardPicker(messages: batch.messages, sourceCid: OfficialChannel.cid,
-                              onSent: { endSelection() })
-            }
-            .sheet(item: Binding(get: { morePickerId.map(ZoomTarget.init) },
-                                 set: { morePickerId = $0?.url })) { target in
-                EmojiMorePicker { store.react(target.url, $0) }
-            }
-            // The chat's own reactions list for my chip, "Tap to remove" included.
-            .sheet(item: Binding(get: { reactorsFor.map(ZoomTarget.init) },
-                                 set: { reactorsFor = $0?.url })) { target in
-                let me = AuthService.shared.uid ?? ""
-                ReactorsSheet(reactions: store.state.reactions[target.url].map { [me: $0] } ?? [:],
-                              nameFor: { _ in
-                                  let mine = ProfileStore.shared.me?.name.trimmingCharacters(in: .whitespaces) ?? ""
-                                  return mine.isEmpty ? "You" : mine
-                              },
-                              photoFor: { _ in ProfileStore.shared.me?.photoUrl },
-                              me: me,
-                              onRemoveMine: { store.react(target.url, nil) })
-            }
-            .alert(deleteTitle, isPresented: Binding(get: { pendingDelete != nil },
-                                                    set: { if !$0 { pendingDelete = nil } })) {
-                Button("Delete for Me", role: .destructive) {
-                    store.hide(pendingDelete ?? []); pendingDelete = nil; endSelection()
-                }
-                Button("Cancel", role: .cancel) { pendingDelete = nil }
-            }
-            .alert("Clear this chat?", isPresented: $showClearConfirm) {
-                Button("Clear", role: .destructive) { store.clearHistory(); endSelection() }
-                Button("Cancel", role: .cancel) {}
-            }
-            .alert("Reject ownership?", isPresented: Binding(get: { pendingReject != nil },
-                                                            set: { if !$0 { pendingReject = nil } })) {
-                Button("Reject", role: .destructive) {
-                    if let cid = pendingReject { rejectOwnership(cid) }
-                    pendingReject = nil
-                }
-                Button("Cancel", role: .cancel) { pendingReject = nil }
-            } message: {
-                Text("The group goes back to its previous owner, or to its longest-standing admin if they have left. You keep the role you had before.")
-            }
-            .alert(rejectResult ?? "", isPresented: Binding(get: { rejectResult != nil },
-                                                           set: { if !$0 { rejectResult = nil } })) {
-                Button("OK", role: .cancel) { rejectResult = nil }
-            }
+        // Two parts: one chain of every modifier was too long for the type-checker (build of
+        // 2026-10-27, after the two Reject Ownership alerts joined it).
+        withDialogs
             .navigationDestination(isPresented: $showInfo) {
                 // Search pops back to the chat and opens its search there, as a normal chat's
                 // profile does (`ContactInfoView.onSearch`), a beat later so the pop has finished.
@@ -226,6 +175,63 @@ struct OfficialChatView: View {
             // A new announcement landing while the chat is open is read the moment it is on screen —
             // but only if the reader is actually at the bottom looking at it.
             .onChange(of: store.visible.count) { if isAtBottom { store.markRead() } }
+    }
+
+    private var withDialogs: some View {
+        chatSurface
+            // Tapping the header opens the info screen, the same as every other chat. It used to do
+            // nothing at all — I left the closure empty when this screen was built, so the one chat
+            // people are most likely to be suspicious of was the one that would not tell them
+            // anything about itself. Owner caught it.
+            .background(ChatNavigationItem(model: headerModel, bar: navigationBar,
+                                           onTap: { if !selecting { showInfo = true } }))
+            .sheet(item: Binding(get: { forwarding.map(ForwardBatch.init) },
+                                 set: { if $0 == nil { forwarding = nil } })) { batch in
+                ForwardPicker(messages: batch.messages, sourceCid: OfficialChannel.cid,
+                              onSent: { endSelection() })
+            }
+            .sheet(item: Binding(get: { morePickerId.map(ZoomTarget.init) },
+                                 set: { morePickerId = $0?.url })) { target in
+                EmojiMorePicker { store.react(target.url, $0) }
+            }
+            // The chat's own reactions list for my chip, "Tap to remove" included.
+            .sheet(item: Binding(get: { reactorsFor.map(ZoomTarget.init) },
+                                 set: { reactorsFor = $0?.url })) { target in
+                let me = AuthService.shared.uid ?? ""
+                ReactorsSheet(reactions: store.state.reactions[target.url].map { [me: $0] } ?? [:],
+                              nameFor: { _ in
+                                  let mine = ProfileStore.shared.me?.name.trimmingCharacters(in: .whitespaces) ?? ""
+                                  return mine.isEmpty ? "You" : mine
+                              },
+                              photoFor: { _ in ProfileStore.shared.me?.photoUrl },
+                              me: me,
+                              onRemoveMine: { store.react(target.url, nil) })
+            }
+            .alert(deleteTitle, isPresented: Binding(get: { pendingDelete != nil },
+                                                    set: { if !$0 { pendingDelete = nil } })) {
+                Button("Delete for Me", role: .destructive) {
+                    store.hide(pendingDelete ?? []); pendingDelete = nil; endSelection()
+                }
+                Button("Cancel", role: .cancel) { pendingDelete = nil }
+            }
+            .alert("Clear this chat?", isPresented: $showClearConfirm) {
+                Button("Clear", role: .destructive) { store.clearHistory(); endSelection() }
+                Button("Cancel", role: .cancel) {}
+            }
+            .alert("Reject ownership?", isPresented: Binding(get: { pendingReject != nil },
+                                                            set: { if !$0 { pendingReject = nil } })) {
+                Button("Reject", role: .destructive) {
+                    if let cid = pendingReject { rejectOwnership(cid) }
+                    pendingReject = nil
+                }
+                Button("Cancel", role: .cancel) { pendingReject = nil }
+            } message: {
+                Text("The group goes back to its previous owner, or to its longest-standing admin if they have left. You keep the role you had before.")
+            }
+            .alert(rejectResult ?? "", isPresented: Binding(get: { rejectResult != nil },
+                                                           set: { if !$0 { rejectResult = nil } })) {
+                Button("OK", role: .cancel) { rejectResult = nil }
+            }
     }
 
     // MARK: The list
