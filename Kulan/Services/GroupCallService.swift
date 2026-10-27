@@ -152,6 +152,14 @@ final class GroupCallService: ObservableObject {
 
     // Public LiveKit server address (not a secret — it's just where the app connects).
     private let url = "wss://kulan-irgnsxba.livekit.cloud"
+    // 2026-10-27 (owner): our own media server (rtc.fariin.com) comes first and the hosted one is
+    // the fallback. The server picks per call and names it in the pass (`url`); a server without
+    // that field leaves the hosted address as the default. Only these two addresses are accepted.
+    private static let mediaServers: Set<String> = ["wss://rtc.fariin.com", "wss://kulan-irgnsxba.livekit.cloud"]
+    private func serverURL(_ d: [String: Any]?) -> String {
+        if let u = d?["url"] as? String, Self.mediaServers.contains(u) { return u }
+        return url
+    }
 
     // Observe this room in the UI for live participant updates. Dynacast and adaptiveStream both
     // default to FALSE in the SDK, so we were publishing simulcast layers nobody had subscribed to
@@ -477,7 +485,7 @@ final class GroupCallService: ObservableObject {
             // Listening BEFORE the room is up: people already in the call send their raised hand
             // the moment they see me arrive, which can be before this line returns.
             GroupCallSocial.shared.attach(room: room, myUid: myUid, myName: ProfileStore.shared.me?.name ?? "")
-            try await room.connect(url: url, token: token)
+            try await room.connect(url: serverURL(d), token: token)
             guard gen == joinGeneration else { await abandonJoin(); return }
             // Audit M-059, 2026-10-07: a late ring answer or a stale Join bar found nobody in the
             // room. Ask the server whether the call is still on before this tap becomes a new call;
@@ -1957,7 +1965,7 @@ final class GroupCallService: ObservableObject {
         guard d?["pending"] as? Bool != true, let token = d?["token"] as? String else { return ("refused", nil) }
         // 3. The same room again. The watchdog ends the call if this outlives the window.
         do {
-            try await room.connect(url: url, token: token)
+            try await room.connect(url: serverURL(d), token: token)
         } catch {
             return (stale() ? "cancelled" : "connect_" + Telemetry.code(error), nil)
         }
@@ -2600,7 +2608,7 @@ final class GroupCallService: ObservableObject {
                 // Warm the media server while the pre-join screen is up: DNS, TLS and the nearest
                 // region are settled before Join, so `connect` starts from a warm socket.
                 if let token = d["token"] as? String, room.connectionState == .disconnected {
-                    try? await room.prepareConnection(url: url, token: token)
+                    try? await room.prepareConnection(url: serverURL(d), token: token)
                 }
             }
         }
@@ -2726,7 +2734,7 @@ final class GroupCallService: ObservableObject {
             // the moment they see me arrive, which can be before this line returns.
             GroupCallSocial.shared.attach(room: room, myUid: myUid, myName: ProfileStore.shared.me?.name ?? "")
             let t1 = Date()
-            try await room.connect(url: url, token: token)
+            try await room.connect(url: serverURL(d), token: token)
             DiagLog.add("JOIN# \(isLinkRoom ? "link" : "group") token=\(tokenSource) \(Int(t1.timeIntervalSince(t0) * 1000))ms room=\(Int(Date().timeIntervalSince(t1) * 1000))ms")
             DiagLog.flagForUpload()
             // owner audit 2026-10-06 #4: hung up while this was connecting. Before this the room came
