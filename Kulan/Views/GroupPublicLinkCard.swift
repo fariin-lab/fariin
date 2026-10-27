@@ -121,11 +121,55 @@ struct GroupAboutCard: View {
         }
     }
 
+    @State private var expanded = false
+    @State private var fullHeight: CGFloat = 0
+    @State private var foldHeight: CGFloat = 0
+    private var folds: Bool { !expanded && fullHeight > foldHeight + 1 }
+
+    /// ⛔ THREE LINES, THEN "more" (owner 2026-10-27, with the reference app's card): a longer
+    /// description stops at three lines, the end of the third fades out, and a blue "more" sits at
+    /// its right. Tapping opens the rest in place; there is no "less", as there.
     @ViewBuilder private var descText: some View {
-        let t = Text(GroupInfoView.blueLinks(desc)).font(.body).foregroundStyle(.primary)
+        let t = plainDesc.lineLimit(folds ? 3 : nil)
+            .mask { if folds { foldMask } else { Rectangle() } }
+            .overlay(alignment: .bottomTrailing) {
+                if folds {
+                    Text("more").font(.body).foregroundStyle(Color(hex: 0x0A84FF))
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { if folds { withAnimation(.easeInOut(duration: 0.25)) { expanded = true } } }
+            // Both heights read from hidden copies, so the fold is decided from the real layout.
+            .background(alignment: .topLeading) {
+                ZStack(alignment: .topLeading) {
+                    plainDesc.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fullHeight = $0 }
+                    plainDesc.lineLimit(3).onGeometryChange(for: CGFloat.self) { $0.size.height } action: { foldHeight = $0 }
+                }
+                .hidden()
+            }
+        if let openURL { t.environment(\.openURL, openURL) } else { t }
+    }
+
+    private var plainDesc: some View {
+        Text(GroupInfoView.blueLinks(desc)).font(.body).foregroundStyle(.primary)
             .tint(Color(hex: 0x0A84FF))
             .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
-        if let openURL { t.environment(\.openURL, openURL) } else { t }
+    }
+
+    /// Everything shows except the end of the last line: a short fade, then room for "more".
+    private var foldMask: some View {
+        let line = UIFont.preferredFont(forTextStyle: .body).lineHeight
+        return VStack(spacing: 0) {
+            Rectangle()
+            HStack(spacing: 0) {
+                Rectangle()
+                LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: 36)
+                Color.clear.frame(width: 52)
+            }
+            .frame(height: line)
+        }
     }
 }
