@@ -1596,7 +1596,6 @@ struct StorySettingsView: View {
     @State private var audiences = StoryAudienceStore.shared
     @State private var contacts: [StoryContact] = []
     @State private var creating = false
-    @State private var groupPicking = false
 
     var body: some View {
         List {
@@ -1645,8 +1644,9 @@ struct StorySettingsView: View {
                     HStack {
                         Text("Stories")
                         Spacer()
-                        NewAudienceButton(onCustom: { creating = true }, canAddCustom: audiences.canAddCustom,
-                                          onGroup: { groupPicking = true })
+                        // owner 2026-10-27: no New Group Story here (dimmed like One-Time Story);
+                        // this page manages audiences, a group story is posted from + New / the group.
+                        NewAudienceButton(onCustom: { creating = true }, canAddCustom: audiences.canAddCustom)
                     }
                     .textCase(nil)
                 } footer: {
@@ -1667,17 +1667,6 @@ struct StorySettingsView: View {
         .navigationTitle("Stories")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { contacts = StoryContact.all() }   // recomputed, so a fresh block counts
-        // New Group Story (owner 2026-10-23): pick the group, then the camera opens for it once
-        // the list has gone, so the camera is presented from this page rather than the closing list.
-        .sheet(isPresented: $groupPicking) {
-            GroupStoryPicker(onPick: { t in
-                groupPicking = false
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 450_000_000)
-                    GroupStoryCompose.open(t)
-                }
-            }, onCancel: { groupPicking = false })
-        }
         .sheet(isPresented: $creating) {
             CreateCustomStoryFlow(onCreated: { _ in creating = false },
                                   onCancel: { creating = false })

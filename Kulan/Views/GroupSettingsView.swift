@@ -119,6 +119,9 @@ struct GroupSettingsView: View {
             chatSection
         }
         .listStyle(.insetGrouped)
+        // owner 2026-10-27 ("space between cards is big"): the group page's own card gap (20).
+        .listSectionSpacing(20)
+        .contentMargins(.top, 12, for: .scrollContent)
         .navigationTitle("Group Settings")
         .navigationBarTitleDisplayMode(.inline)
         // Started once and kept while a child page is pushed; removed with the page (`ListenerBox`).

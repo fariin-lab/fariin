@@ -478,9 +478,8 @@ struct ConnectionTitleLabel: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            ProgressView()
-                .progressViewStyle(.circular)
-                .scaleEffect(0.7)
+            // owner 2026-10-27: our own turning arc instead of the system's ticking spinner.
+            BusyArc(size: 14, lineWidth: 2.2, color: .secondary)
             Text(text)
                 .font(.headline)
                 .foregroundStyle(.primary)

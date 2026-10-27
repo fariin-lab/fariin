@@ -81,6 +81,9 @@ struct GroupStoryPicker: View {
                     }
                 }
             }
+            // owner 2026-10-27: the big gap above the card, same spacing as Group Settings.
+            .listSectionSpacing(20)
+            .contentMargins(.top, 12, for: .scrollContent)
             .navigationTitle("New Group Story")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

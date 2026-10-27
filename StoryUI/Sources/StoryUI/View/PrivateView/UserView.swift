@@ -272,8 +272,12 @@ struct UserView: View {
             // THE SOUND SWITCH (owner 2026-10-26, the reference app's header): a video with sound
             // gets a speaker left of "more"; one tap mutes every story until it is tapped again.
             if let id = videoStoryId, sound.withSound.contains(id) {
-                Image(systemName: sound.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .font(.system(size: 17, weight: .semibold))
+                // owner 2026-10-27: his own speaker drawings (app assets ic_speaker_on / _off).
+                Image(sound.muted ? "ic_speaker_off" : "ic_speaker_on", bundle: .main)
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 24, height: 24)
                     .foregroundColor(.white)
                     .frame(width: 32, height: 32)
                     .storyHeaderIconShadow()

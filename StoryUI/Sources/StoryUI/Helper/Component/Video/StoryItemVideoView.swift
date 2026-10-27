@@ -523,7 +523,10 @@ final class StoryItemVideoView: UIView {
         let soundId = storyId
         Task {
             let tracks = (try? await item.asset.loadTracks(withMediaType: .audio)) ?? []
-            await MainActor.run { StorySound.shared.noteAudio(storyId: soundId, has: !tracks.isEmpty) }
+            // owner 2026-10-27: the speaker only on a LONG clip with sound; a short one plays as is.
+            let length = (try? await item.asset.load(.duration)).map(CMTimeGetSeconds) ?? 0
+            let show = !tracks.isEmpty && length > StorySound.longClipSeconds
+            await MainActor.run { StorySound.shared.noteAudio(storyId: soundId, has: show) }
         }
         trace("player built: streamed=\(streamed != nil) file=\(file.isFileURL) waits=\(p.automaticallyWaitsToMinimizeStalling) mode=\(mode) prepared=\(prepared)")
 

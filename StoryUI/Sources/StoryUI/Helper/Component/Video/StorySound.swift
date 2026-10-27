@@ -20,8 +20,10 @@ final class StorySound: ObservableObject {
 
     /// Every story player follows this (`StoryItemVideoView` sets `isMuted` from it).
     @Published var muted = false
-    /// Story ids whose clip carries an audio track.
+    /// Story ids whose clip carries an audio track AND runs longer than `longClipSeconds` (owner
+    /// 2026-10-27: no speaker on short clips or silent ones).
     @Published private(set) var withSound: Set<String> = []
+    static let longClipSeconds: Double = 15
 
     private init() {}
 

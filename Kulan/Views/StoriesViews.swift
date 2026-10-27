@@ -6026,14 +6026,15 @@ struct StoryOwnerStats: View {
                     .font(.subheadline.weight(.medium)).foregroundStyle(.white)
                     .lineLimit(1)
             }
-            if reposts > 0 { stat("arrow.2.squarepath", reposts) }
-            if reactions > 0 { stat("heart", reactions) }
+            if reposts > 0 { stat(Image("ic_repost").renderingMode(.template).resizable().scaledToFit().frame(width: 22, height: 22), reposts) }
+            if reactions > 0 { stat(Image(systemName: "heart").font(.system(size: 19, weight: .regular)), reactions) }
         }
     }
 
-    private func stat(_ icon: String, _ n: Int) -> some View {
+    // owner 2026-10-27: the repost count uses his own repost drawing (ic_repost), as the story row does.
+    private func stat(_ icon: some View, _ n: Int) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: icon).font(.system(size: 19, weight: .regular))
+            icon
             Text("\(n)").font(.subheadline.weight(.medium)).monospacedDigit()
         }
         .foregroundStyle(.white)

@@ -31,6 +31,8 @@ struct AddToGroupView: View {
                 } else {
                     List { ForEach(myGroups) { groupRow($0) } }
                         .listStyle(.insetGrouped)
+                        // owner 2026-10-27: the big gap above the card, as in Group Settings.
+                        .contentMargins(.top, 12, for: .scrollContent)
                 }
             }
             .navigationTitle("Add to a Group")
