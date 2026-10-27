@@ -126,31 +126,38 @@ struct GroupRecentActionsView: View {
 
     /// Two days of placeholder entries in the page's own shape: a centred date pill, then a card of
     /// rows (photo, name line, action line).
+    /// ⛔ THE REAL PAGE'S MEASUREMENTS (owner 2026-10-27: "wrong skeleton"): it sat 16pt further in
+    /// than the cards (the list already pads 16), with smaller corners and faces, no time, no dividers.
+    /// Now `datePill`, `dayCard` and `row` exactly: pill 18 above / 10 below, card radius 26, rows
+    /// 14 x 11 with a 42pt face, the name line with the time at its right, dividers from 68.
     private var recentActionsSkeleton: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 0) {
             ForEach(0..<2, id: \.self) { day in
-                VStack(spacing: 10) {
-                    SkeletonBlock(width: 96, height: 24, radius: 12)
-                    VStack(spacing: 0) {
-                        ForEach(0..<(day == 0 ? 4 : 3), id: \.self) { i in
-                            HStack(spacing: 12) {
-                                SkeletonCircle(size: 40)
-                                VStack(alignment: .leading, spacing: 8) {
-                                    SkeletonBlock(width: 110, height: 12)
-                                    SkeletonBlock(width: [210, 170, 230, 150][i % 4], height: 11)
+                SkeletonBlock(width: 84, height: 26, radius: 13)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 18).padding(.bottom, 10)
+                VStack(spacing: 0) {
+                    ForEach(0..<(day == 0 ? 4 : 3), id: \.self) { i in
+                        if i > 0 { Divider().padding(.leading, 68) }
+                        HStack(alignment: .top, spacing: 12) {
+                            SkeletonCircle(size: 42).padding(.top, 1)
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    SkeletonBlock(width: [96, 120, 84, 110][i % 4], height: 13)
+                                    Spacer(minLength: 8)
+                                    SkeletonBlock(width: 44, height: 10)
                                 }
-                                Spacer(minLength: 0)
+                                SkeletonBlock(width: [200, 160, 220, 140][i % 4], height: 12)
                             }
-                            .padding(.horizontal, 16).padding(.vertical, 12)
+                            .padding(.top, 3)
                         }
+                        .padding(.horizontal, 14).padding(.vertical, 11)
                     }
-                    .background(Color(.secondarySystemGroupedBackground),
-                                in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                 }
+                .background(Color(.secondarySystemGroupedBackground),
+                            in: RoundedRectangle(cornerRadius: 26, style: .continuous))
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 12)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
