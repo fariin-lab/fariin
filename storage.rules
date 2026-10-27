@@ -343,6 +343,16 @@ service firebase.storage {
         && (request.resource.contentType == 'image/webp' || request.resource.contentType == 'image/png');
       allow delete: if false;
     }
+    // 2026-10-27 (owner: "custom stickers lost after sign out and in; only deleting may lose one"):
+    // each account's own copy of the stickers it made and its Favorites list (StickerBackup.swift).
+    // userStickers/{uid}/{stickerId}.png and userStickers/{uid}/index.json. The owner only, both ways.
+    match /userStickers/{uid}/{file} {
+      allow read, delete: if request.auth != null && request.auth.uid == uid;
+      allow write: if request.auth != null && request.auth.uid == uid
+        && request.resource.size <= 2 * 1024 * 1024
+        && ((file == 'index.json' && request.resource.contentType == 'application/json')
+            || (file.matches('^[A-Za-z0-9-]{1,64}[.]png$') && request.resource.contentType == 'image/png'));
+    }
 
     match /officialStories/{storyId}/{file} {
       function isAdminUser() {

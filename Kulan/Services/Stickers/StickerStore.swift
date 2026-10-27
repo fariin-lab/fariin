@@ -41,6 +41,7 @@ final class StickerStore {
             MainActor.assumeIsolated {
                 self?.watchCatalog(signedIn: uid != nil)
                 self?.loadAdded(uid: uid)   // the added packs are the account's (owner 2026-10-21)
+                if let uid { self?.restoreFromAccount(uid) }   // 2026-10-27, see StickerBackup
             }
         }
         // 2026-10-20 (owner): after `FirestoreHub.swap` the catalog listener belongs to the stuck
@@ -333,6 +334,7 @@ final class StickerStore {
         let s = Sticker(source: .mine, packId: "mine", stickerId: id, emoji: emoji, animated: false)
         favorites.insert(s, at: 0)
         save()
+        if let uid = Auth.auth().currentUser?.uid { StickerBackup.uploadMine(png, id: id, uid: uid) }
         return s
     }
 
@@ -359,8 +361,12 @@ final class StickerStore {
     /// and so does its recents entry, since it would have no picture left to draw.
     func removeFavorites(_ ids: Set<String>) {
         guard !ids.isEmpty else { return }
+        let uid = Auth.auth().currentUser?.uid
         for s in favorites where ids.contains(s.id) && s.source == .mine {
             try? FileManager.default.removeItem(at: Self.mineDir.appendingPathComponent("\(s.stickerId).png"))
+            // Deleting is the one way a sticker I made goes away (owner 2026-10-27), so it goes from
+            // the account's copy too.
+            if let uid { StickerBackup.deleteMine(id: s.stickerId, uid: uid) }
         }
         let gone = Set(favorites.filter { ids.contains($0.id) && $0.source == .mine }.map(\.id))
         favorites.removeAll { ids.contains($0.id) }
@@ -387,6 +393,54 @@ final class StickerStore {
         save()
     }
 
+    // MARK: The account's copy (2026-10-27, StickerBackup)
+
+    @ObservationIgnored private var lastBackedUp: [Sticker]?
+    @ObservationIgnored private var restoring = false
+    @ObservationIgnored private var restoredUid: String?
+    /// The restore for `restoredUid` has finished. Until then nothing is uploaded, or an empty list on a
+    /// fresh phone (a sticker used before the restore lands) would overwrite the account's copy.
+    @ObservationIgnored private var backupReady = false
+
+    /// Signed in: bring back the account's Favorites, and the made stickers' pictures this phone does
+    /// not hold. Merged, never replacing: anything already here stays, account entries this phone is
+    /// missing are added in the account's order. Once per account per launch.
+    private func restoreFromAccount(_ uid: String) {
+        guard restoredUid != uid else { return }
+        restoredUid = uid
+        backupReady = false
+        let dir = Self.mineDir
+        Task { @MainActor in
+            guard let got = await StickerBackup.restore(uid: uid, have: { s in
+                FileManager.default.fileExists(atPath: dir.appendingPathComponent("\(s.stickerId).png").path)
+            }), Auth.auth().currentUser?.uid == uid else {
+                // Could not read the account's copy (no network): nothing is uploaded this run, so a
+                // good copy is never overwritten; the next launch tries again.
+                restoredUid = nil
+                return
+            }
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            for (id, png) in got.pngs where Self.safeStem(id) {
+                try? png.write(to: dir.appendingPathComponent("\(id).png"), options: .atomic)
+            }
+            let here = Set(favorites.map(\.id))
+            let usable = got.list.filter { s in
+                !here.contains(s.id) && (s.source == .bundled
+                    || FileManager.default.fileExists(atPath: dir.appendingPathComponent("\(s.stickerId).png").path))
+            }
+            restoring = true
+            favorites += usable
+            save()
+            restoring = false
+            lastBackedUp = got.list
+            backupReady = true
+            // Something here the account did not have yet (made on this phone while signed out of
+            // sync): send the merged list up.
+            if favorites != got.list { save() }
+            NotificationCenter.default.post(name: Self.packsChanged, object: nil)
+        }
+    }
+
     // MARK: Sign-out
 
     func wipe() {
@@ -394,6 +448,10 @@ final class StickerStore {
         recents = []
         addedPacks = []   // only in memory: the next account reads its own list (owner 2026-10-21)
         addedUid = nil
+        // The account's copy stays in Storage; the next sign-in (of any account) restores its own.
+        restoredUid = nil
+        lastBackedUp = nil
+        backupReady = false
         try? FileManager.default.removeItem(at: Self.rootDir)
     }
 
@@ -441,6 +499,12 @@ final class StickerStore {
     private static let saveQueue = DispatchQueue(label: "StickerStore.save", qos: .utility)
     private func save() {
         let saved = Saved(favorites: favorites, recents: recents)
+        // The account's copy of Favorites follows every change (2026-10-27, StickerBackup). Only when
+        // it changed, so a recents-only save does not upload. Not while a restore is filling the list.
+        if backupReady, favorites != lastBackedUp, !restoring, let uid = Auth.auth().currentUser?.uid, uid == restoredUid {
+            lastBackedUp = favorites
+            StickerBackup.writeIndex(favorites, uid: uid)
+        }
         let dir = Self.rootDir, url = Self.indexURL
         Self.saveQueue.async {
             do {
