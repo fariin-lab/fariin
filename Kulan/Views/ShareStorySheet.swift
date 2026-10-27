@@ -765,7 +765,9 @@ struct ShareStorySheet: View {
 
     /// The same pieces `sheetHeight` adds up, for one row and its footer.
     private var groupSheetHeight: CGFloat {
-        56 + 44 + 60 + 40 + Self.captureSectionHeight + 76 + Self.bottomSafeInset + 72   // + Allow Replies
+        // + Allow Replies (72), + 3% of the screen (owner 2026-10-27, "add like 3": it was ~54%).
+        56 + 44 + 60 + 40 + Self.captureSectionHeight + 76 + Self.bottomSafeInset + 72
+            + (UIScreen.main.bounds.height * 0.03).rounded()
     }
 
     /// Posts to the group: `StoriesService` reads its members from the server and the rules check I
