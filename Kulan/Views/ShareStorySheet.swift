@@ -230,6 +230,7 @@ struct ShareStorySheet: View {
     /// always will. So the row says "Block screenshots" and the line under it does not promise more
     /// than that.
     @State private var captureProtectedChoice = false
+    @State private var groupAllowsReplies = true
     /// WHICH AUDIENCE THE SHEET HAS TICKED WHILE EDITING, held here rather than in the store.
     ///
     /// `StoryAudienceStore.selectedId` is the default for the NEXT post and is remembered between
@@ -736,6 +737,11 @@ struct ShareStorySheet: View {
                 } footer: {
                     Text(Self.captureFooter)
                 }
+                // owner 2026-10-27: a group story could not turn replies off.
+                Section {
+                    Toggle("Allow Replies", isOn: $groupAllowsReplies)
+                        .tint(Color(.systemGreen))
+                }
             }
             .floatingBottomBar { postButton }
             .navigationTitle("Share Story")
@@ -759,7 +765,7 @@ struct ShareStorySheet: View {
 
     /// The same pieces `sheetHeight` adds up, for one row and its footer.
     private var groupSheetHeight: CGFloat {
-        56 + 44 + 60 + 40 + Self.captureSectionHeight + 76 + Self.bottomSafeInset
+        56 + 44 + 60 + 40 + Self.captureSectionHeight + 76 + Self.bottomSafeInset + 72   // + Allow Replies
     }
 
     /// Posts to the group: `StoriesService` reads its members from the server and the rules check I
@@ -773,12 +779,12 @@ struct ShareStorySheet: View {
                 videoURL: video.url, thumbnail: video.thumbnail, muted: video.muted,
                 burn: video.burn, trim: video.trim, caption: caption, stickers: stickers,
                 excluded: [], included: [], everyone: false,
-                allowsReplies: true, tag: tag, captureProtected: captureProtected)
+                allowsReplies: groupAllowsReplies, tag: tag, captureProtected: captureProtected)
         } else {
             StoriesService.shared.postStoryBackground(
                 image: image, caption: caption, stickers: stickers,
                 excluded: [], included: [], everyone: false,
-                allowsReplies: true, tag: tag, captureProtected: captureProtected)
+                allowsReplies: groupAllowsReplies, tag: tag, captureProtected: captureProtected)
         }
         for extra in extras {
             if let v = extra.video {
@@ -786,12 +792,12 @@ struct ShareStorySheet: View {
                     videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim,
                     caption: extra.caption, stickers: extra.stickers,
                     excluded: [], included: [], everyone: false,
-                    allowsReplies: true, tag: tag, captureProtected: captureProtected)
+                    allowsReplies: groupAllowsReplies, tag: tag, captureProtected: captureProtected)
             } else if let p = extra.photo {
                 StoriesService.shared.postStoryBackground(
                     image: p, caption: extra.caption, stickers: extra.stickers,
                     excluded: [], included: [], everyone: false,
-                    allowsReplies: true, tag: tag, captureProtected: captureProtected)
+                    allowsReplies: groupAllowsReplies, tag: tag, captureProtected: captureProtected)
             }
         }
         onPosted()
