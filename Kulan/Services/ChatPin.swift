@@ -318,7 +318,9 @@ enum ChatPin {
             return fallback
         }
         switch code {
-        case .resourceExhausted, .invalidArgument: return ns.localizedDescription
+        // `alreadyExists` (2026-10-27): "That Chat Key is taken" when choosing my own digits; it
+        // is about MY choice, never about somebody else's key being right.
+        case .resourceExhausted, .invalidArgument, .alreadyExists: return ns.localizedDescription
         case .unavailable, .deadlineExceeded: return "Try again in a moment."
         default: return fallback
         }
