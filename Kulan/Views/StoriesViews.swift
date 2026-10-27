@@ -4711,6 +4711,8 @@ struct StoryViewer: View {
         // returning a labelled tuple inside one is exactly that shape.
         let audienceFor: (String) -> (title: String, bothTabs: Bool) = { id in
             guard let s = arr.first(where: { $0.id == id }) else { return ("All Viewers", true) }
+            // A group story's second tab is Replies: none when its replies are off (owner 2026-10-27).
+            if s.groupId != nil { return ("All Viewers", s.allowsReplies) }
             return (storyAudienceTitle(for: s), storyAudienceHasBothTabs(s))
         }
         // Group story (owner 2026-10-23): Views and Replies tabs. Typed out for the same reason.

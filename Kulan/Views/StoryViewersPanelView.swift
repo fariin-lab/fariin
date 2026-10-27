@@ -160,7 +160,7 @@ final class StoryViewersPanelView: UIView {
         didSet {
             // The reference app opens on Replies when there are any. Once, and never over a tab
             // the person picked themselves.
-            if !replies.isEmpty, !autoPickedReplies, !userPickedTab, isGroupStory, tab == 0 {
+            if !replies.isEmpty, !autoPickedReplies, !userPickedTab, isGroupStory, showsBothTabs, tab == 0 {
                 autoPickedReplies = true
                 tab = 1
                 configureTab(allTab, allTabTitle, selected: false)
@@ -334,7 +334,9 @@ final class StoryViewersPanelView: UIView {
     private var secondTabTitle: String { isGroupStory ? "Replies" : "Friends" }
     /// Members see only Replies, so the second tab is the one shown and the first is gone.
     private var membersRepliesOnly: Bool { isGroupStory && repliesOnly }
-    private var showsBothTabs: Bool { isGroupStory ? !repliesOnly : audience.bothTabs }
+    /// A group story with replies off has no Replies tab (owner 2026-10-27): `audience.bothTabs`
+    /// carries its allowsReplies.
+    private var showsBothTabs: Bool { isGroupStory ? (!repliesOnly && audience.bothTabs) : audience.bothTabs }
 
     private func applyAudienceTabs() {
         // A HIDDEN FRIENDS TAB MUST NOT LEAVE ITS FILTER ON — a story whose audience has no second
