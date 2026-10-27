@@ -2662,6 +2662,13 @@ struct GroupMemberSheet: View {
         if mayEditRights && member.isAdmin {
             rows.append(AnyView(iconRow("slider.horizontal.3", "Edit Admin Rights") { showEdit = true }))
         }
+        // ⛔ A TAG FOR A MEMBER WHO IS NOT AN ADMIN (owner 2026-10-27): the owner, and an admin with
+        // Change group info, give it from the member's card (an admin's tag is on Edit Admin
+        // Rights). The member never sets their own. Same page, tag part only (`adminSelected` is
+        // false for a member, so nothing about admin rights is shown or written).
+        if member.id != me && !member.isAdmin && canEditRole {
+            rows.append(AnyView(iconRow("tag", role == nil ? "Add Tag" : "Edit Tag") { showEdit = true }))
+        }
         // My own card: my own tag (owner 2026-10-20). The rules let the owner, and admins with
         // change info, tag themselves.
         if member.id == me && canEditRole {
