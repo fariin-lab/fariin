@@ -654,6 +654,7 @@ struct GroupAdminsView: View {
     @State private var actionError: String?
     /// The member picked in Add Admin; their Add Admin page is pushed in the sheet.
     @State private var pickedAdmin: String?
+    @State private var pickQuery = ""
 
     // The group itself, live (2026-10-20): roles and rights show the moment they change.
     @State private var live = LiveGroupDoc()
@@ -704,16 +705,27 @@ struct GroupAdminsView: View {
             ContactInfoView(cid: ChatService.convId(me, uid), name: conv?.names[uid] ?? "User",
                             photoUrl: conv?.photos[uid], source: .calls)
         }
-        .sheet(isPresented: $showPick, onDismiss: { pickedAdmin = nil }) {
+        .sheet(isPresented: $showPick, onDismiss: { pickedAdmin = nil; pickQuery = "" }) {
             // Pick a member, then their Add Admin page (rights, tag, the button), in the sheet.
             NavigationStack {
-                List(others, id: \.self) { uid in
+                let q = pickQuery.trimmingCharacters(in: .whitespaces)
+                let pickList = q.isEmpty ? others
+                    : others.filter { (conv?.names[$0] ?? "").localizedCaseInsensitiveContains(q) }
+                List(pickList, id: \.self) { uid in
                     GroupMemberRow(conv: conv, uid: uid, me: me) { pickedAdmin = uid }.equatable()
                         .listRowInsets(EdgeInsets())
                 }
                 .navigationTitle("Choose Member")
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Cancel") { showPick = false } } }
+                // owner 2026-10-27: a search at the foot (the Glow list's placement) and an X, not "Cancel".
+                .searchable(text: $pickQuery, prompt: "Search")
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button { showPick = false } label: { Image(systemName: "xmark") }
+                            .accessibilityLabel("Close")
+                    }
+                    DefaultToolbarItem(kind: .search, placement: .bottomBar)
+                }
                 .navigationDestination(item: $pickedAdmin) { uid in
                     AddAdminPage(cid: cid, uid: uid) { showPick = false }
                 }

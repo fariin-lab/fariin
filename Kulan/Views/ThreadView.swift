@@ -1396,6 +1396,8 @@ struct ThreadView: View {
             // not the members' one (see the destination below).
             // Close the keyboard before pushing the profile, else it stays up behind the pushed screen
             // and is still there when you swipe back (the reported bug).
+            // owner 2026-10-27: a group Fariin suspended or disabled opens nothing from its header.
+            if conversation?.fariinLocked == true { return }
             inputFocused = false
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             showContactInfo = true
@@ -3210,6 +3212,8 @@ struct ThreadView: View {
         // A guest's count comes from the join page's preview (the stand-in has nobody in `users`).
         if let g = guest?.preview { return GroupDirectory.membersLine(g.memberCount) }
         if isGroup {
+            // owner 2026-10-27: no member count on a suspended or disabled group.
+            if conversation?.fariinLocked == true { return nil }
             // Show who's typing in the group; otherwise the member count.
             if typingPref, repo.otherTyping, !repo.typingNames.isEmpty {
                 let first = repo.typingNames.first ?? "Someone"

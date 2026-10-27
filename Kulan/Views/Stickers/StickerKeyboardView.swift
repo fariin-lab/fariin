@@ -1249,6 +1249,11 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         let shelf = sections[ip.section].shelf
         h.title.text = shelf.title
         h.edit.isHidden = true   // the one pen beside the tabs edits every shelf (2026-10-17)
+        h.onTitleTap = nil
+        if case .pack(let p) = shelf, StickerStore.shared.isAdded(p.id) {
+            h.title.text = shelf.title + " ›"
+            h.onTitleTap = { [weak self] in self?.openPack(p) }
+        }
         return h
     }
 
@@ -1446,11 +1451,17 @@ private final class ShelfHeader: UICollectionReusableView {
     let title = UILabel()
     let edit = UIButton(type: .system)
     var onEdit: () -> Void = {}
+    /// owner 2026-10-27 ("after add I can't remove"): an added pack's name opens its sheet, where
+    /// "Remove from my stickers" lives. Nil on every other shelf.
+    var onTitleTap: (() -> Void)? {
+        didSet { title.isUserInteractionEnabled = onTitleTap != nil }
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         title.font = .systemFont(ofSize: 13, weight: .semibold)
         title.textColor = .secondaryLabel
+        title.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(titleTapped)))
         addSubview(title)
         edit.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
         edit.addTarget(self, action: #selector(editTapped), for: .touchUpInside)
@@ -1467,6 +1478,7 @@ private final class ShelfHeader: UICollectionReusableView {
     }
 
     @objc private func editTapped() { onEdit() }
+    @objc private func titleTapped() { onTitleTap?() }
 }
 
 /// The app-window layer the card grows in during GIF search: touches on the card only, the rest of
