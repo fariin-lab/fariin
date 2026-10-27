@@ -158,6 +158,12 @@ final class OfficialStoryViewsModel {
 
     func forget(_ rawId: String) { fetchedAt[rawId] = nil }
 
+    /// A list fetched elsewhere (the story sheet, `StoriesService.fetchViewers`) counts here too.
+    func remember(_ rawId: String, _ s: OfficialStoryViews.Summary) {
+        summaries[rawId] = s
+        fetchedAt[rawId] = Date()
+    }
+
     func load(_ rawId: String, force: Bool = false) {
         guard !inFlight.contains(rawId) else { return }
         if !force, let at = fetchedAt[rawId], Date().timeIntervalSince(at) < 30 { return }
@@ -198,7 +204,9 @@ struct OfficialStoryViewsPill: View {
         }
         .buttonStyle(.plain)
         .fixedSize()
-        .onAppear { m.load(rawId) }
+        // Per story, not once (owner 2026-10-27: the count showed only after the sheet opened). The
+        // footer is reused as the viewer pages, so `onAppear` asked for the first story alone.
+        .task(id: rawId) { m.load(rawId) }
     }
 }
 

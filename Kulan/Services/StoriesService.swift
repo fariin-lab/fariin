@@ -2901,6 +2901,7 @@ final class StoriesService {
         // list comes from the official callable, which only staff with 'send' may read.
         if let raw = OfficialStoryViews.rawId(storyId) {
             guard let s = try? await OfficialStoryViews.fetch(rawId: raw) else { return nil }
+            await MainActor.run { OfficialStoryViewsModel.shared.remember(raw, s) }
             return s.viewers.map {
                 StoryViewerInfo(id: $0.id, name: $0.name.isEmpty ? "@\($0.handle)" : $0.name,
                                 photoUrl: $0.photoUrl.isEmpty ? nil : $0.photoUrl,
