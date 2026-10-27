@@ -265,6 +265,12 @@ final class ChatComposerView: UIView {
     private let holdHintPill = UIView()
     private let holdHintPillLabel = UILabel()
     private let onceToast = NoticePillView()
+    // Slow mode: the ring on the send button, the countdown's clock, the tip above send.
+    private let slowRing = CAShapeLayer()
+    private var slowTimer: Timer?
+    private let slowTip = UIView()
+    private let slowTipLabel = UILabel()
+    private let slowTipArrow = CAShapeLayer()
 
     private var holdStart: CGPoint?
     private var pillIsCapsule = false
@@ -586,6 +592,26 @@ final class ChatComposerView: UIView {
         onceToast.isUserInteractionEnabled = false
         onceToast.alpha = 0
         onceToast.isHidden = true
+        // Slow mode. The ring rides the send button's own layer, so it comes and goes with it.
+        slowRing.fillColor = UIColor.clear.cgColor
+        slowRing.lineWidth = 2
+        slowRing.lineCap = .round
+        slowRing.strokeEnd = 0
+        sendButton.layer.addSublayer(slowRing)
+        addSubview(slowTip)
+        slowTip.isUserInteractionEnabled = false
+        let tipColor = UIColor(white: 0.12, alpha: 0.94)
+        slowTip.backgroundColor = tipColor
+        slowTip.layer.cornerRadius = 12
+        slowTip.layer.cornerCurve = .continuous
+        slowTipArrow.fillColor = tipColor.cgColor
+        slowTip.layer.addSublayer(slowTipArrow)
+        slowTip.addSubview(slowTipLabel)
+        slowTipLabel.font = .systemFont(ofSize: 14, weight: .medium)
+        slowTipLabel.textColor = .white
+        slowTipLabel.numberOfLines = 0
+        slowTip.alpha = 0
+        slowTip.isHidden = true
 
         refreshStatic()
         refreshAppearance()
@@ -724,7 +750,113 @@ final class ChatComposerView: UIView {
         if old.cancelArmed != new.cancelArmed { Clock.armed.run { [self] in refreshArmed() } }
         if old.holdHint != new.holdHint { toast(holdHintPill, on: new.holdHint) }
         if old.voiceOnceToast != new.voiceOnceToast { toast(onceToast, on: new.voiceOnceToast) }
+        if old.slowUntil != new.slowUntil || old.slowTotal != new.slowTotal { startSlow() }
+        if old.sendTint != new.sendTint { slowRing.strokeColor = new.sendTint.cgColor }
+        if old.slowTip != new.slowTip { showSlowTip(new.slowTip) }
         setLive(new.recordingActive)
+    }
+
+    // MARK: - Slow mode
+
+    // ⛔ SLOW MODE IN THE BAR, NOT IN AN ALERT (owner 2026-10-27, from the reference app): while a
+    // member waits, a ring round the send button runs down to nothing (full at the send, empty when
+    // they may send again), and the empty field shows a stopwatch and the time left. A send too soon
+    // brings up a small tip pointing at the send button (`slowTip`, set by the chat for 3 s); the
+    // text stays in the field. One clock: `slowUntil`, from the chat.
+
+    private func slowLeft() -> Double { shown.slowUntil?.timeIntervalSinceNow ?? 0 }
+
+    private func startSlow() {
+        slowTimer?.invalidate(); slowTimer = nil
+        slowRing.removeAnimation(forKey: "slow")
+        guard slowLeft() > 0, shown.slowTotal > 0 else { endSlow(); return }
+        slowRing.strokeColor = shown.sendTint.cgColor
+        runSlowRing()
+        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tickSlow() }
+        }
+        RunLoop.main.add(t, forMode: .common)   // keeps counting while the list scrolls
+        slowTimer = t
+        tickSlow()
+    }
+
+    /// The ring from what is left now down to nothing, in step with the clock.
+    private func runSlowRing() {
+        let left = slowLeft()
+        guard left > 0 else { return }
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        slowRing.strokeEnd = 0
+        CATransaction.commit()
+        let a = CABasicAnimation(keyPath: "strokeEnd")
+        a.fromValue = min(1, left / shown.slowTotal)
+        a.toValue = 0
+        a.duration = left
+        a.timingFunction = CAMediaTimingFunction(name: .linear)
+        slowRing.add(a, forKey: "slow")
+    }
+
+    private func tickSlow() {
+        let left = slowLeft()
+        guard left > 0 else { endSlow(); return }
+        // Back from the background, Core Animation has dropped the run: start it again from now.
+        if slowRing.animation(forKey: "slow") == nil { runSlowRing() }
+        let n = Int(left.rounded(.up))
+        textView.placeholderIcon = "stopwatch"
+        textView.placeholder = String(format: "%d:%02d", n / 60, n % 60)
+    }
+
+    private func endSlow() {
+        slowTimer?.invalidate(); slowTimer = nil
+        slowRing.removeAnimation(forKey: "slow")
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        slowRing.strokeEnd = 0
+        CATransaction.commit()
+        textView.placeholderIcon = nil
+        textView.placeholder = shown.placeholder
+    }
+
+    private func showSlowTip(_ text: String?) {
+        let v = slowTip
+        if let text {
+            slowTipLabel.text = text
+            setNeedsLayout(); layoutIfNeeded()
+            v.isHidden = false
+            v.layer.removeAllAnimations()
+            v.alpha = 0
+            v.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
+            UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.7, initialSpringVelocity: 0,
+                           options: [.beginFromCurrentState]) {
+                v.alpha = 1
+                v.transform = .identity
+            }
+        } else {
+            UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseIn, .beginFromCurrentState], animations: {
+                v.alpha = 0
+            }, completion: { _ in
+                if v.alpha == 0 { v.isHidden = true }
+            })
+        }
+    }
+
+    /// The tip sits above the send button, its arrow pointing down at the button's middle.
+    private func layoutSlowTip(width W: CGFloat) {
+        let maxW = min(W - 16, 290)
+        let ls = slowTipLabel.sizeThatFits(CGSize(width: maxW - 24, height: .greatestFiniteMagnitude))
+        let tipW = ceil(ls.width) + 24, tipH = ceil(ls.height) + 16
+        let target = convert(sendButton.center, from: sendButton.superview)
+        let top = target.y - M.button / 2 - 10 - tipH
+        let x = max(8, min(W - 8 - tipW, target.x - tipW / 2))
+        // `bounds` and `center`, not `frame`: the tip may be mid-pop with a scale on it.
+        slowTip.bounds = CGRect(x: 0, y: 0, width: tipW, height: tipH)
+        slowTip.center = CGPoint(x: x + tipW / 2, y: top + tipH / 2)
+        slowTipLabel.frame = CGRect(x: 12, y: 8, width: tipW - 24, height: tipH - 16)
+        let ax = min(tipW - 16, max(16, target.x - x))
+        let p = UIBezierPath()
+        p.move(to: CGPoint(x: ax - 7, y: tipH))
+        p.addLine(to: CGPoint(x: ax, y: tipH + 7))
+        p.addLine(to: CGPoint(x: ax + 7, y: tipH))
+        p.close()
+        slowTipArrow.path = p.cgPath
     }
 
     private func syncText(_ s: ChatComposerState, wasFocused: Bool) {
@@ -736,7 +868,8 @@ final class ChatComposerView: UIView {
             }
             textView.refreshPlaceholder()
         }
-        textView.placeholder = s.placeholder
+        // The slow-mode countdown owns the placeholder while it runs (`tickSlow`).
+        if slowTimer == nil { textView.placeholder = s.placeholder }
         textView.textOnly = s.textOnly
         // ⛔ THE FOCUS FLAG IS A REQUEST, HONOURED WHEN IT CHANGES — NOT A TRUTH TO BE ENFORCED.
         // Owner, builds 693-695: "tap the composer, the keyboard often does not open; several taps
@@ -1362,6 +1495,13 @@ final class ChatComposerView: UIView {
         let toastSize = onceToast.sizeThatFits(.zero)
         onceToast.bounds = CGRect(origin: .zero, size: toastSize)
         onceToast.center = CGPoint(x: padded.midX, y: padded.minY - M.toastLift + toastSize.height / 2)
+        // Slow mode's ring just outside the send button, starting at the top and running clockwise.
+        let ringRect = buttonBounds.insetBy(dx: -3, dy: -3)
+        slowRing.frame = ringRect
+        slowRing.path = UIBezierPath(arcCenter: CGPoint(x: ringRect.width / 2, y: ringRect.height / 2),
+                                     radius: ringRect.width / 2 - 1, startAngle: -.pi / 2,
+                                     endAngle: 1.5 * .pi, clockwise: true).cgPath
+        layoutSlowTip(width: W)
 
         // A width change can re-wrap the text; the host is told off the layout pass, not inside it.
         if W != lastMeasuredWidth {
@@ -1722,7 +1862,26 @@ final class ComposerTextView: UITextView {
 
     private let placeholderLabel = UILabel()
     var placeholder: String = "" {
-        didSet { placeholderLabel.text = placeholder }
+        didSet { if placeholder != oldValue { renderPlaceholder() } }
+    }
+    /// A symbol before the placeholder (slow mode's stopwatch); nil for plain text.
+    var placeholderIcon: String? = nil {
+        didSet { if placeholderIcon != oldValue { renderPlaceholder() } }
+    }
+
+    private func renderPlaceholder() {
+        guard let name = placeholderIcon,
+              let img = UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: 15))?
+                .withTintColor(.placeholderText, renderingMode: .alwaysOriginal) else {
+            placeholderLabel.attributedText = nil
+            placeholderLabel.text = placeholder
+            return
+        }
+        let s = NSMutableAttributedString(attachment: NSTextAttachment(image: img))
+        s.append(NSAttributedString(string: " " + placeholder,
+                                    attributes: [.font: font ?? .systemFont(ofSize: 17),
+                                                 .foregroundColor: UIColor.placeholderText]))
+        placeholderLabel.attributedText = s
     }
 
     init() {

@@ -278,6 +278,8 @@ struct ThreadView: View {
     @State private var previewTimer: Timer?
     @State private var holdHint = false             // "hold to record" flash after an accidental tap
     @State private var holdHintDismiss: DispatchWorkItem?   // cancels a superseded flash's own timer (audit)
+    @State private var slowTip: String?             // slow mode's tip above the send button
+    @State private var slowTipDismiss: DispatchWorkItem?
     @State private var voiceViewOnce = false        // "1" armed on the recording bar → send as one-time listen
     @State private var voiceOnceToast = false       // the little auto-fading confirmation when it arms
     @State private var voiceOnceDismiss: DispatchWorkItem?   // cancels a superseded toast's own timer (audit)
@@ -5588,22 +5590,32 @@ struct ThreadView: View {
         return true
     }
 
-    /// The slow-mode notice for a send now, or nil when it may go.
-    private func slowModeWaitText() -> String? {
+    /// When I may send again under slow mode, or nil when I may send now.
+    private func slowModeUntil() -> Date? {
         guard isGroup, let conv = conversation, conv.slowsMember(me),
               let last = repo.items.last(where: { $0.authorId == me && !$0.isSystem }) else { return nil }
-        let left = Double(conv.slowModeSeconds) - Date().timeIntervalSince(last.createdAt)
-        guard left > 0 else { return nil }
-        // m:ss over a minute, seconds under it (audit: 61 to 119 s read "2 min").
-        let n = Int(left.rounded(.up))
-        let wait = n >= 60 ? String(format: "%d:%02d", n / 60, n % 60) : "\(n) seconds"
-        return "You can send your next message in \(wait)."
+        let until = last.createdAt.addingTimeInterval(Double(conv.slowModeSeconds))
+        return until > Date() ? until : nil
     }
 
+    /// The slow-mode notice for a send now, or nil when it may go.
+    private func slowModeWaitText() -> String? {
+        guard let until = slowModeUntil() else { return nil }
+        // m:ss over a minute, seconds under it (audit: 61 to 119 s read "2 min").
+        let n = Int(until.timeIntervalSinceNow.rounded(.up))
+        let wait = n >= 60 ? String(format: "%d:%02d", n / 60, n % 60) : "\(n) second\(n == 1 ? "" : "s")"
+        return "Slow mode is on. You can send again in \(wait)."
+    }
+
+    /// ⛔ A TIP AT THE SEND BUTTON, NOT AN ALERT (owner 2026-10-27, the reference app's way): it
+    /// pops above the send button for 3 s and the text stays in the field.
     private func showSlowNotice(_ text: String) {
-        restrictedNoticeTitle = "Slow mode"
-        restrictedNoticeText = text
-        voiceRestricted = true
+        Haptics.impact(.light)
+        slowTipDismiss?.cancel()
+        slowTip = text
+        let work = DispatchWorkItem { slowTip = nil }
+        slowTipDismiss = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
     }
 
     /// Slow mode for a send from the "+" sheet (groups audit review 2026-10-26): the server removes a
@@ -9318,6 +9330,11 @@ struct ThreadView: View {
         s.sendTint = UIColor(chatColorSpec?.swatch ?? Theme.defaultBubble(dark))
         s.noticeSurface = Theme.receivedSurface(dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur)
         s.onWallpaper = chatHasWallpaper
+        if let until = slowModeUntil() {
+            s.slowUntil = until
+            s.slowTotal = Double(conversation?.slowModeSeconds ?? 0)
+        }
+        s.slowTip = slowTip
         return s
     }
 

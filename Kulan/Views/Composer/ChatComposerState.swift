@@ -68,6 +68,12 @@ struct ChatComposerState: Equatable {
     var sendTint: UIColor = .systemBlue
     var noticeSurface: Theme.ReceivedSurface = .material
     var onWallpaper = false
+    /// Slow mode: when I may send again (nil when I am not waiting) and the group's full wait, for
+    /// the ring on the send button and the countdown in the field.
+    var slowUntil: Date? = nil
+    var slowTotal: Double = 0
+    /// The tip above the send button after a send that came too soon; nil hides it.
+    var slowTip: String? = nil
 
     var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     /// A finger is on the mic right now (not yet locked). The big overlay and the hold row.
