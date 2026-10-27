@@ -456,6 +456,10 @@ enum GroupStoryRights {
         // poster's block on me, as for any story.
         if let gid = s.groupId, !gid.isEmpty {
             guard groupIsPublic(gid), !s.oneTime, !s.captureProtected else { return false }
+            // The GROUP's screenshot blocker (Restricted group) holds its stories too (owner
+            // 2026-10-27): no Share, Repost or Save from a group that forbids copying.
+            if let c = ConversationsRepository.shared.conversations.first(where: { $0.id == gid }),
+               c.noScreenshots || c.noForwarding || c.noSaving { return false }
             return !authorHasBlockedMe(s.authorUid)
         }
         // The author's own copy, and the two flags that say "not this one" even then. A one-time
