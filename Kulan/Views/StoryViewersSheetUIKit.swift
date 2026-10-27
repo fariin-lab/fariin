@@ -1177,18 +1177,19 @@ struct StoryViewerRowContent: View {
                     // photo. A liked story draws the heart; any other reaction emoji sits on the
                     // same disc so the row reads as one design.
                     if let r = viewer.reaction, !r.isEmpty {
+                        // A liquid glass disc (owner 2026-10-27), the heart red on it.
                         ZStack {
-                            Circle().fill(Color(red: 1.0, green: 0.36, blue: 0.47))
                             if r == "❤️" {
                                 Image(systemName: "heart.fill")
                                     .font(.system(size: 11, weight: .bold))
-                                    .foregroundStyle(.white)
+                                    .foregroundStyle(Color(red: 1.0, green: 0.27, blue: 0.38))
                             } else {
                                 Text(r).font(.system(size: 11))
                             }
                         }
                         .frame(width: 22, height: 22)
-                        .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+                        .liquidGlass(Circle())
+                        .environment(\.colorScheme, .dark)
                         .offset(x: 5, y: 4)
                     }
                 }
