@@ -672,7 +672,11 @@ final class ChatComposerView: UIView {
         syncBanners(from: old.banners, to: new.banners)
         // The paused voice review: no liquid response to touch on its bar (owner 2026-10-26, "only
         // this bar"). Interactive glass comes back as the review ends; nothing else changes.
-        if old.reviewing != new.reviewing { setPillInteractive(!new.reviewing) }
+        // 2026-10-27 (owner: "still the liquid effect when I tap play"): every pass, not only on the
+        // change. A bar that came up already reviewing (a parked draft adopted on return) never saw
+        // the change, so its glass kept the touch response. `setPillInteractive` is a no-op when
+        // nothing differs.
+        setPillInteractive(!new.reviewing)
 
         // The one clock for this moment. Ordered by what is structurally largest: the lock owns the
         // bar; a recording starting owns the row; the review owns the strip; text owns the send.
