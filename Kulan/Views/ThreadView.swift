@@ -1046,6 +1046,9 @@ struct ThreadView: View {
                     // only place the real inset still exists is the window.
                     ThreadSkeleton()
                         .padding(.top, Self.skeletonTopInset)
+                        // 2026-10-27: the skeleton now fills from the bottom, so it stops above the
+                        // composer (the same lift the jump arrow uses) instead of running under it.
+                        .padding(.bottom, composerLift + 60)
                         .allowsHitTesting(false)
                 }
             }

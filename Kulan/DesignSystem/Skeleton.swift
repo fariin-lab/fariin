@@ -127,19 +127,28 @@ struct ThreadSkeleton: View {
         (false, 180), (false, 120), (true, 150), (false, 210), (true, 90),
         (false, 160), (true, 200), (false, 130), (true, 110), (false, 175),
     ]
+    // owner 2026-10-27 ("the skeleton looks half, make it full screen"): ten fixed bubbles filled
+    // the top half. The pattern now repeats until the screen is full, and sits on the bottom like a
+    // real conversation (newest at the foot); clipped, so a partial bubble at the top is fine.
     var body: some View {
-        VStack(spacing: 10) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, r in
-                HStack(spacing: 0) {
-                    if r.mine { Spacer(minLength: 64) }
-                    SkeletonBlock(width: r.w, height: 34, radius: 18)
-                    if !r.mine { Spacer(minLength: 64) }
+        GeometryReader { g in
+            let count = max(rows.count, Int(g.size.height / 44) + 1)
+            VStack(spacing: 10) {
+                Spacer(minLength: 0)
+                ForEach(0..<count, id: \.self) { i in
+                    let r = rows[i % rows.count]
+                    HStack(spacing: 0) {
+                        if r.mine { Spacer(minLength: 64) }
+                        SkeletonBlock(width: r.w, height: 34, radius: 18)
+                        if !r.mine { Spacer(minLength: 64) }
+                    }
                 }
             }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 12)
+            .frame(width: g.size.width, height: g.size.height, alignment: .bottom)
+            .clipped()
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 
