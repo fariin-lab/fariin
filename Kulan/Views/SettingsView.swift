@@ -151,6 +151,13 @@ struct SettingsView: View {
                 } }   // hidden 2026-10-11 — see `AppFeatures.myProfileCard`
 
                 Section {
+                    // Subscriptions, first in this card, for @v alone while it is being built (owner
+                    // 2026-10-27). The page is a preview: nothing on it is sold or switched on yet.
+                    if profile.me?.handle.lowercased() == "v" {
+                        NavigationLink { SubscriptionsView().toolbar(.hidden, for: .tabBar) } label: {
+                            SettingsRowLabel("Subscriptions", system: "star.circle")
+                        }
+                    }
                     // Account is data + session actions only — no profile fields here, they all
                     // live above now (see AccountSettingsView's own note, user direction 2026-07-22).
                     NavigationLink { AccountSettingsView(onSignOut: onSignOut).toolbar(.hidden, for: .tabBar) } label: {
