@@ -414,7 +414,7 @@ enum GroupStoryRights {
 /// ⚠️ MY OWN STORY IS ALWAYS SHAREABLE, whatever its audience. A private story of mine is private
 /// from other people, not from me — sending my own picture on is a thing I am allowed to decide, and
 /// the Posted Stories page has offered exactly that since it was built.
-enum StoryShareRights {
+@MainActor enum StoryShareRights {
     /// The viewer's uid, or "" when signed out.
     private static var me: String { AuthService.shared.uid ?? "" }
 
@@ -434,10 +434,16 @@ enum StoryShareRights {
         return c.isBlockedByMe(authorUid)
     }
 
-    /// A public group: it has an @name and is switched public (`Conversation.isPublic`). Only a
-    /// group in my chat list can answer; anything else reads as private.
+    /// A public group: it has an @name and is switched public (`Conversation.isPublic`). A group in
+    /// my chat list answers itself; another one answers by a kept public preview (2026-10-27).
     static func groupIsPublic(_ groupId: String) -> Bool {
-        ConversationsRepository.shared.conversations.first(where: { $0.id == groupId })?.isPublic == true
+        if let c = ConversationsRepository.shared.conversations.first(where: { $0.id == groupId }) {
+            return c.isPublic
+        }
+        // owner 2026-10-27: someone NOT in the group may open a public group's story (search, a
+        // link) and may share and repost it. The server answers a preview only for a public group,
+        // so a kept preview is the answer for a group that is not in my list.
+        return GroupDirectory.cachedPreview(name: nil, cid: groupId) != nil
     }
 
     /// The one question. True = Share, Copy Story Link and Repost may all be offered.
