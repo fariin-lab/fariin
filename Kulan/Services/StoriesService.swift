@@ -279,6 +279,8 @@ struct StoryRepost: Equatable, Hashable, Codable {
         return mayDelete(groupId: String(ringKey.dropFirst(StoryGroup.groupKeyPrefix.count)))
     }
     static func noReport(ringKey: String) -> Bool {
+        // Fariin's own official stories: nothing to report to Fariin (owner 2026-10-27).
+        if OfficialChannel.isOfficial(ringKey) { return true }
         guard ringKey.hasPrefix(StoryGroup.groupKeyPrefix) else { return false }
         return conv(String(ringKey.dropFirst(StoryGroup.groupKeyPrefix.count)))?.groupNoReport == true
     }
