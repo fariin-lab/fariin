@@ -160,6 +160,13 @@ final class GroupCallService: ObservableObject {
         if let u = d?["url"] as? String, Self.mediaServers.contains(u) { return u }
         return url
     }
+    // Tells groupCallToken this build follows `url`. Without it the server keeps the call on the
+    // hosted address, because older builds connect there whatever the pass says.
+    private static func tokenAsk(_ p: [String: Any]) -> [String: Any] {
+        var p = p
+        p["servers"] = ["own"]
+        return p
+    }
 
     // Observe this room in the UI for live participant updates. Dynacast and adaptiveStream both
     // default to FALSE in the SDK, so we were publishing simulcast layers nobody had subscribed to
@@ -473,7 +480,7 @@ final class GroupCallService: ObservableObject {
         let gen = joinGeneration   // owner audit 2026-10-06 #4
         do {
             let res = try await Functions.functions(region: "me-central1")
-                .httpsCallable("groupCallToken").call(["cid": cid])
+                .httpsCallable("groupCallToken").call(Self.tokenAsk(["cid": cid]))
             guard gen == joinGeneration else { await abandonJoin(); return }
             guard let d = res.data as? [String: Any], let token = d["token"] as? String else {
                 // Group call audit 2026-10-23 (A1): through `failJoin`, which also says it over the
@@ -1956,7 +1963,7 @@ final class GroupCallService: ObservableObject {
         callable.timeoutInterval = left
         let d: [String: Any]?
         do {
-            d = try await callable.call(payload).data as? [String: Any]
+            d = try await callable.call(Self.tokenAsk(payload)).data as? [String: Any]
         } catch {
             return (stale() ? "cancelled" : "token_" + Telemetry.code(error), nil)
         }
@@ -2590,7 +2597,7 @@ final class GroupCallService: ObservableObject {
         if let p = prefetchingLinkToken, p.roomId == roomId, p.uid == uid { return }
         let callable = functions.httpsCallable("groupCallToken")
         let task = Task<[String: Any]?, Never> {
-            guard let res = try? await callable.call(["roomId": roomId, "link": true]),
+            guard let res = try? await callable.call(Self.tokenAsk(["roomId": roomId, "link": true])),
                   let d = res.data as? [String: Any],
                   d["token"] is String, d["pending"] as? Bool != true else { return nil }
             return d
@@ -2712,7 +2719,7 @@ final class GroupCallService: ObservableObject {
                 prefetchedLinkToken = nil   // never kept past a join, used or not
             }
             if !haveAnswer {
-                let res = try await functions.httpsCallable("groupCallToken").call(payload)
+                let res = try await functions.httpsCallable("groupCallToken").call(Self.tokenAsk(payload))
                 d = res.data as? [String: Any]
             }
             guard gen == joinGeneration else { await abandonJoin(); return false }
