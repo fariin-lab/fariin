@@ -6559,7 +6559,7 @@ struct ThreadView: View {
         if LinkPreviewService.firstURL(in: text) != nil || text.range(of: "www.", options: .caseInsensitive) != nil,
            sendHeldBack(.sendLinks, .links) { return }
         if slowModeHeldBack() { return }
-        impact(.light)   // tactile send (parity with voice release)
+        // owner 2026-10-27: no vibration when a text message is sent.
         // ⛔ BEFORE THE COMPOSER IS TOUCHED. Everything below shrinks the bar — the input clears,
         // the reply banner animates away — and the list is pinned to the bottom, so it follows the
         // bar down and then the glide brings it back up: his "the messages move down under the
