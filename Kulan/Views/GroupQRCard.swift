@@ -297,19 +297,20 @@ private struct GroupQRCardFace: View {
             // they would stack for a moment).
             ZStack {
             if let img = qrImage(from: link, clearCentre: 0.22, ink: inks == nil ? ink : .black) {
-                ZStack {
-                    Image(uiImage: img).interpolation(.none).resizable().scaledToFit()
+                Image(uiImage: img).interpolation(.none).resizable().scaledToFit()
                     // Black dots on white, screened with the gradient: each dot takes the gradient's
-                    // colour where it sits and the white stays white.
-                    if let inks {
-                        LinearGradient(colors: inks, startPoint: .topLeading, endPoint: .bottomTrailing)
-                            .blendMode(.screen)
+                    // colour where it sits and the white stays white. An OVERLAY, so it takes the
+                    // code's size (owner 2026-10-27: in a ZStack the gradient filled all the height it
+                    // was offered and the card grew).
+                    .overlay {
+                        if let inks {
+                            LinearGradient(colors: inks, startPoint: .topLeading, endPoint: .bottomTrailing)
+                                .blendMode(.screen)
+                        }
                     }
-                }
-                .compositingGroup()
-                .overlay { QRCentreMark(size: 46, tint: inks.map { $0[0] } ?? Color(uiColor: ink)) }
-                .frame(maxWidth: 250)
-                .aspectRatio(1, contentMode: .fit)
+                    .compositingGroup()
+                    .overlay { QRCentreMark(size: 46, tint: inks.map { $0[0] } ?? Color(uiColor: ink)) }
+                    .frame(maxWidth: 250)
                 .id(themeKey)
                 .transition(.opacity)
             }
