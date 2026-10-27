@@ -386,6 +386,9 @@ struct ThreadView: View {
     /// reported by the list's controller, which is what places it. The floating overlays clear the
     /// bar by this. The default is one bar's worth so the first frame is not wrong.
     @State private var composerLift: CGFloat = 48
+    /// This screen counted itself into the shared repository (`repo.open`), so it must count itself
+    /// out on leaving. False for a suspended group, which opens nothing (2026-10-27).
+    @State private var repoOpened = false
     /// The bar's side inset, reported with the lift by the same controller. The floating buttons
     /// and the @-mention popup align to it.
     @State private var composerSide: CGFloat = 20
@@ -602,7 +605,10 @@ struct ThreadView: View {
             // chat listens again.
             .onChange(of: groupModHidesChat) { _, locked in
                 repo.moderationLocked = locked
-                if !locked { repo.start() }
+                if !locked {
+                    // A chat that opened while locked never counted itself in (onAppear).
+                    if !quiet && !repoOpened { repo.open(); repoOpened = true } else { repo.start() }
+                }
             }
             .overlay {
                 if groupModHidesChat {
@@ -2359,7 +2365,13 @@ struct ThreadView: View {
             // A preview owns its repository; a real chat shares the live one (`forChat`), so it
             // counts itself in and out rather than stopping a run another screen may be using.
             repo.moderationLocked = groupModHidesChat
-            if quiet { repo.start() } else { repo.open() }
+            // ⛔ A GROUP FARIIN SUSPENDED LOADS NOTHING (owner 2026-10-27: "the suspended group opens
+            // with lag"). Its page is opaque and says why, yet the open still seeded every cached
+            // message, poll cards included, under it: the work behind the lag and behind the build
+            // 1036 crash. The `groupModHidesChat` onChange above starts the chat if the hold lifts.
+            if !groupModHidesChat {
+                if quiet { repo.start() } else { repo.open(); repoOpened = true }
+            }
             // PAY THE GIF KEY'S ROUND TRIP NOW, quietly, instead of on the first tap of the button.
             // Opening a chat is the moment we learn a GIF might be sent, and it is a moment with
             // nothing else competing for the network. No-op once the key is on the phone, which is
@@ -2469,7 +2481,8 @@ struct ThreadView: View {
             // themselves.
             VoiceNotePlayer.shared.handOff(followOn: repo.items,
                                            after: VoiceNotePlayer.shared.messageId)
-            repo.close()
+            // Only what this screen opened (a suspended group opens nothing; see onAppear).
+            if repoOpened { repo.close(); repoOpened = false }
             groupCallListener?.remove(); groupCallListener = nil
             // Only when it is still ours: a chat pushed over this one has already claimed it.
             if AppRouter.shared.activeChatId == cid { AppRouter.shared.activeChatId = nil }
