@@ -124,12 +124,44 @@ struct GroupRecentActionsView: View {
         return out
     }
 
+    /// Two days of placeholder entries in the page's own shape: a centred date pill, then a card of
+    /// rows (photo, name line, action line).
+    private var recentActionsSkeleton: some View {
+        VStack(spacing: 18) {
+            ForEach(0..<2, id: \.self) { day in
+                VStack(spacing: 10) {
+                    SkeletonBlock(width: 96, height: 24, radius: 12)
+                    VStack(spacing: 0) {
+                        ForEach(0..<(day == 0 ? 4 : 3), id: \.self) { i in
+                            HStack(spacing: 12) {
+                                SkeletonCircle(size: 40)
+                                VStack(alignment: .leading, spacing: 8) {
+                                    SkeletonBlock(width: 110, height: 12)
+                                    SkeletonBlock(width: [210, 170, 230, 150][i % 4], height: 11)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 16).padding(.vertical, 12)
+                        }
+                    }
+                    .background(Color(.secondarySystemGroupedBackground),
+                                in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 if loading && events.isEmpty {
-                    BusyArc(size: 44, lineWidth: 5, color: Color.fariinBlue)
-                        .padding(.top, 120)
+                    // owner 2026-10-27: a skeleton of the page (date pill, a card of entries)
+                    // instead of a spinner on an empty screen.
+                    recentActionsSkeleton
                 } else if let failure, events.isEmpty {
                     emptyState(icon: "exclamationmark.arrow.circlepath", title: "Couldn't Load", text: failure,
                                button: "Try Again") { Task { await load(more: false) } }
