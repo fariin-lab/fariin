@@ -136,10 +136,16 @@ final class VoiceBubbleView: UIView {
     private func paint() {
         guard let b = body else { return }
         let player = VoiceNotePlayer.shared
-        disc.showsPause = player.isPlaying(b.messageId) && !b.loading
+        // ⛔ A NOTE THAT IS PLAYING IS NOT UPLOADING (owner 2026-10-27: "I hear the voice but the
+        // loading keeps spinning"). The row can still carry the upload flag from the snapshot that
+        // first drew it while the player already has the real file; whatever the player is doing
+        // with this note wins over that flag.
+        let inPlayer = player.isPlaying(b.messageId) || player.progress(for: b.messageId) > 0
+        let uploading = b.loading && !inPlayer
+        disc.showsPause = player.isPlaying(b.messageId) && !uploading
         // The upload's spinner and the player's are the same spinner: there is nothing to play
         // until the bytes land, and the disc is the one place that says so.
-        disc.isBusy = b.loading || player.isLoading(b.messageId)
+        disc.isBusy = uploading || player.isLoading(b.messageId)
         disc.showsFailed = !disc.isBusy && player.loadFailed(b.messageId)
         let progress = player.progress(for: b.messageId)
         wave.progress = progress
