@@ -3616,9 +3616,10 @@ service cloud.firestore {
             || (resource.data.recipientUids.hasAll(request.resource.data.recipientUids)
                 && request.resource.data.get('audienceLabel', '') == resource.data.get('audienceLabel', '')
                 && request.resource.data.get('public', false) == resource.data.get('public', false)))
+        // owner 2026-10-27: the author may fix the CAPTION after posting; the picture stays frozen.
         && (resource.data.get('mediaUrl', '') == ''
             || (request.resource.data.get('mediaUrl', '') == resource.data.get('mediaUrl', '')
-                && request.resource.data.get('caption', '') == resource.data.get('caption', '')));
+                && request.resource.data.get('caption', '') is string));
       // The author deletes; Fariin's moderators take stories down through adminApi storyRemove
       // (2026-10-12, audited).
       allow delete: if signedIn() && (request.auth.uid == resource.data.authorUid || groupStoryModerator());

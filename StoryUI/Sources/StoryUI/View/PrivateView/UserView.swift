@@ -122,6 +122,12 @@ struct UserView: View {
     /// places. Others' stories keep Hide Stories and Report (App Store 1.2; the host files the doc).
     private var moreItems: [StoryMoreMenu.Item] {
         var out: [StoryMoreMenu.Item] = []
+        // My own story, a group story I posted included: fix the caption (owner 2026-10-27).
+        if StoryCaptionEditSeam.canEditCurrent {
+            out.append(.init(title: "Edit Caption", systemImage: "pencil") {
+                NotificationCenter.default.post(name: .init("storyActionEditCaption"), object: nil)
+            })
+        }
         if isMyStory {
             out.append(.init(title: "Save", systemImage: "square.and.arrow.down") {
                 NotificationCenter.default.post(name: .init("storyActionSave"), object: nil)
@@ -157,6 +163,12 @@ struct UserView: View {
                 })
             }
         } else {
+            // Save to Photos on an official or a passable group story (owner 2026-10-27).
+            if StorySaveSeam.canSaveCurrent {
+                out.append(.init(title: "Save", systemImage: "square.and.arrow.down") {
+                    NotificationCenter.default.post(name: .init("storyActionSave"), object: nil)
+                })
+            }
             // ⛔ GET NOTIFICATIONS, FIRST — owner, 2026-10-16, with the place drawn on his screenshot:
             // this person's new stories notify me, like a chat. Off until turned on; the app answers
             // whether it is (nil = not offered, e.g. the official account). The reference app's

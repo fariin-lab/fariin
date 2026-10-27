@@ -87,6 +87,19 @@ public enum StoryGroupStaffSeam {
     public static var noReport: ((String) -> Bool)?
 }
 
+/// May the viewer edit the caption of the story on screen? The host sets it as the story changes:
+/// true when I posted it, a group story included (owner 2026-10-27). The menu posts
+/// "storyActionEditCaption".
+public enum StoryCaptionEditSeam {
+    public static var canEditCurrent = false
+}
+
+/// May the viewer save (download) somebody else's story on screen? Fariin's official stories, and
+/// a group story that may be passed on (owner 2026-10-27). My own always have Save.
+public enum StorySaveSeam {
+    public static var canSaveCurrent = false
+}
+
 public enum StoryPosterSource {
     /// Must be synchronous and memory-only — it is called on the main thread on the frame a story
     /// opens, which is the whole point of it.

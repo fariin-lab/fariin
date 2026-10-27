@@ -1277,6 +1277,7 @@ struct StoryViewer: View {
     /// rather than a flag because the sheet edits THAT story: same id, same posting time, same
     /// media. See `ShareStorySheet.editing`.
     @State private var editViewers: Story?
+    @State private var editCaption: Story?          // "…" → Edit Caption (owner 2026-10-27)
     @State private var ownRepostGone = false            // the repost's original was mine and is gone
     @State private var profileSheet: StoryGroup?        // tap the header → profile sheet OVER the story (paused)
     @State private var myPostedUp = false                // tap MY header → my Posted Stories, over the story
@@ -1648,6 +1649,16 @@ struct StoryViewer: View {
     /// story", the card at the top included) for staff who may see their views ('send', as the
     /// official footer). Their footer stays the official one; only the sheet is shared, so this is
     /// its own flag and not `hasOwnerBar`.
+    /// Save on somebody else's story (owner 2026-10-27): Fariin's official stories, and a group
+    /// story that may be passed on (`StoryShareRights.allows`: a public group, not one-time, not
+    /// capture-protected). A private group's story stays in the group.
+    @MainActor private static func othersMaySave(_ s: Story) -> Bool {
+        // Never on a story with the screenshot blocker on (owner 2026-10-27).
+        guard !s.captureProtected else { return false }
+        if OfficialChannel.isOfficial(s.authorUid) { return true }
+        guard let g = s.groupId, !g.isEmpty else { return false }
+        return StoryShareRights.allows(s)
+    }
     @MainActor private static func opensSheet(_ g: StoryGroup) -> Bool {
         hasOwnerBar(g) || (OfficialChannel.isOfficial(g.authorUid) && AdminStore.shared.can(.send))
     }
@@ -1767,7 +1778,7 @@ struct StoryViewer: View {
     // with the 09-11 pass-on work and neither was added here, so the story ran on under them; under
     // the composer that was the whole "repost is frozen" report (see `StoryComposerPresenter`).
     private var sheetUp: Bool {
-        shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || myPostedUp || officialInfoUp || editViewers != nil
+        shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || myPostedUp || officialInfoUp || editViewers != nil || editCaption != nil
             || repostUp || repostLoading || shareURL != nil || ownRepostGone
             // ⛔ The group page from the header (owner 2026-10-26: it closed by itself after a few
             // seconds). It was not on this list, so the story ran on under it, reached its end and
@@ -2116,6 +2127,9 @@ struct StoryViewer: View {
         .sheet(item: $editViewers) { s in
             ShareStorySheet(editing: s, onPosted: { flashSentToast("Viewers updated") })
         }
+        .sheet(item: $editCaption) { s in
+            StoryCaptionEditor(story: s) { flashSentToast("Caption updated") }
+        }
         .sheet(item: $groupPage) { p in
             NavigationStack {
                 GroupInfoView(cid: p.id)
@@ -2284,7 +2298,7 @@ struct StoryViewer: View {
         // menu no longer offers them on someone else's story, but the menu is the part a modified
         // client replaces, and these three are the ones that take a story off the app for good.
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionSave"))) { _ in
-            guard currentIsMine else { return }
+            guard currentIsMine || (currentStory.map(Self.othersMaySave) ?? false) else { return }
             if currentStory?.isVideo == true { saveCurrentVideo(currentStory?.mediaUrl) }
             else { saveCurrentImage(currentStory?.mediaUrl) }
         }
@@ -2312,6 +2326,18 @@ struct StoryViewer: View {
         // writes to the story that is already up — no upload, no second story, no new id. The same
         // three guards the library's own flag carries, re-asserted on LIVE state here because the
         // menu is the part a modified client replaces.
+        // "…" → Edit Caption: only the author, on a story that is really up (owner 2026-10-27).
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyActionEditCaption"))) { _ in
+            guard let s = currentStory, s.authorUid == me, !StoriesService.isPending(s.id) else { return }
+            editCaption = s
+        }
+        .onChange(of: currentStoryId, initial: true) { _, _ in
+            let s = currentStory
+            StoryCaptionEditSeam.canEditCurrent = s.map {
+                $0.authorUid == me && !me.isEmpty && OfficialStoryViews.rawId($0.id) == nil && !StoriesService.isPending($0.id)
+            } ?? false
+            StorySaveSeam.canSaveCurrent = s.map(Self.othersMaySave) ?? false
+        }
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionEditViewers"))) { _ in
             guard currentIsMine, let s = currentStory,
                   !s.oneTime, !StoriesService.isPending(s.id) else { return }
