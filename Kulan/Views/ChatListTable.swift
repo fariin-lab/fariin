@@ -1280,9 +1280,9 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // "I open the app and the chats move, for things that happened earlier"). While the list is
         // catching up after a launch or a return to the front, or the app is not active, the rows go
         // straight to their places. A send or a new message in front of him still animates.
-        let live = !ConversationsRepository.shared.catchingUp
+        let liveChange = !ConversationsRepository.shared.catchingUp
             && UIApplication.shared.applicationState == .active
-        let rowAnimation: UITableView.RowAnimation = animated && live ? .automatic : .none
+        let rowAnimation: UITableView.RowAnimation = animated && liveChange ? .automatic : .none
 
         let work = {
             // ⛔ A SWIPED ROW THAT IS ABOUT TO BE DELETED LOSES ITS PLATTER FIRST, AND NOT INSIDE THE
@@ -1454,7 +1454,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         }
         // `live` too (2026-10-27): a moveRow takes the block's timing, so a catch-up must be in the
         // zero-length wrapper or its moves still fly even with `.none` row animations.
-        if animated && live {
+        if animated && liveChange {
             work()
         } else {
             UIView.animate(withDuration: 0) { work() }
