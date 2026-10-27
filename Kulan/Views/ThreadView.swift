@@ -759,18 +759,8 @@ struct ThreadView: View {
                 .padding(.bottom, composerLift + 10)
                 .animation(keyboard.systemAnimation, value: composerLift)
             }
-            // "Recording a voice note" indicator (their side): floats OVER the list at bottom-leading.
-            // Deliberately NOT a list row — inserting transient rows touches the inverted-list scroll
-            // machine (do-not-touch rules); an overlay moves nothing and costs nothing when absent.
-            .overlay(alignment: .bottomLeading) {
-                if repo.otherRecording, typingPref, !repo.iBlocked {
-                    RecordingBubble(dark: dark)
-                        // Same rule as the jump arrow above: clear the composer, not the keyboard.
-                        .padding(.leading, 12).padding(.bottom, composerLift + 10)
-                        .transition(.scale(scale: 0.5, anchor: .bottomLeading).combined(with: .opacity))
-                }
-            }
-            .animation(.spring(response: 0.32, dampingFraction: 0.75), value: repo.otherRecording)
+            // owner 2026-10-27: no "recording" bubble over the list any more; the header says
+            // "recording…" where it says "typing…" (presenceSubtitle).
             // In-chat search as a list ("Show as List"): over the conversation, under the bars.
             .overlay {
                 if searchActive && searchAsList && !searchMatches.isEmpty {
@@ -3203,8 +3193,8 @@ struct ThreadView: View {
     /// tint is allowed to mean. Deliberately the same set of tests `presenceSubtitle` uses to decide
     /// whether to say the words, so the colour can never disclose what the words withhold.
     private var showsLiveTyping: Bool {
-        guard typingPref, repo.otherTyping else { return false }
-        if isGroup { return !repo.typingNames.isEmpty }
+        guard typingPref, repo.otherTyping || repo.otherRecording else { return false }
+        if isGroup { return !repo.typingNames.isEmpty || !repo.recordingNames.isEmpty }
         return !repo.iBlocked
     }
 
@@ -3219,10 +3209,16 @@ struct ThreadView: View {
                 let first = repo.typingNames.first ?? "Someone"
                 return repo.typingNames.count == 1 ? "\(first) is typing…" : "\(repo.typingNames.count) people typing…"
             }
+            // owner 2026-10-27: recording a voice note shows here too, in place of the old bubble.
+            if typingPref, repo.otherRecording, !repo.recordingNames.isEmpty {
+                let first = repo.recordingNames.first ?? "Someone"
+                return repo.recordingNames.count == 1 ? "\(first) is recording…" : "\(repo.recordingNames.count) people recording…"
+            }
             return conversation?.memberCountLabel
         }
         if repo.iBlocked { return nil }   // blocked: don't reveal their typing/online/last-seen
         if typingPref && repo.otherTyping { return "typing…" }   // reciprocal: only if I share typing
+        if typingPref && repo.otherRecording { return "recording…" }
         // Reciprocal (my audience isn't "No One") AND their audience allows me (in a chat
         // together we're contacts, so only their "No One" hides it — defense in depth on
         // top of their client not publishing at all).

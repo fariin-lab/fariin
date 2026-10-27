@@ -251,6 +251,7 @@ final class ThreadRepository {
     @ObservationIgnored var lockedGuest = false
     var otherTyping = false
     var otherRecording = false       // someone is recording a voice note (string "audio…" in the typing map)
+    var recordingNames: [String] = []   // group only: who is recording, for the header's "X is recording…"
     var typingNames: [String] = []   // group: who is currently typing
     private var typingExpiry: Timer? // incoming typing self-clears after 15s — a crashed sender's flag can't stick
     var otherOnline = false
@@ -907,9 +908,11 @@ final class ThreadRepository {
                         ((typingMap[$0] as? Bool) == true || (typingMap[$0] as? String)?.hasPrefix("text") == true)
                     }
                     self.otherTyping = !typers.isEmpty
-                    self.otherRecording = others.contains {
+                    let recorders = others.filter {
                         !blocks.contains($0) && (typingMap[$0] as? String)?.hasPrefix("audio") == true
                     }
+                    self.otherRecording = !recorders.isEmpty
+                    self.recordingNames = recorders.map { names[$0] ?? "Someone" }
                     self.typingNames = typers.map { names[$0] ?? "Someone" }
                     self.armTypingExpiry()
                     if !others.isEmpty {
