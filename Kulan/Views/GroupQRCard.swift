@@ -13,13 +13,47 @@ import PhotosUI
 
 private struct QRTheme {
     let top: Color, bottom: Color, ink: UIColor, dot: Color
+    /// A multi-colour ground (owner 2026-10-27: "add multi colours like the wallpapers"): the four
+    /// corners of a wallpaper gradient. Nil is the plain top-to-bottom pair.
+    var corners: [Color]? = nil
+    /// Two dark shades the code's dots run between on a multi-colour theme. Both stay dark enough
+    /// on white to scan.
+    var inks: [Color]? = nil
+
+    /// Every ground is a 2x2 mesh, so switching between a plain and a multi-colour theme morphs the
+    /// colours instead of cutting from one kind of gradient to another.
+    var meshColors: [Color] { corners ?? [top, top, bottom, bottom] }
+
+    static func multi(_ c: [UInt], inks i: [UInt]) -> QRTheme {
+        let inkColors = i.map { Color(hex: $0) }
+        return QRTheme(top: Color(hex: c[0]), bottom: Color(hex: c[3]), ink: UIColor(inkColors[0]),
+                       dot: Color(hex: c[0]), corners: c.map { Color(hex: $0) }, inks: inkColors)
+    }
+
     static let all: [QRTheme] = [
         QRTheme(top: Color(hex: 0x5AA2FF), bottom: Color(hex: 0x1D3FB0), ink: UIColor(red: 0.11, green: 0.25, blue: 0.69, alpha: 1), dot: Color(hex: 0x2C6BED)),
         QRTheme(top: Color(hex: 0xFFB36B), bottom: Color(hex: 0xB8432A), ink: UIColor(red: 0.66, green: 0.24, blue: 0.13, alpha: 1), dot: Color(hex: 0xF0703C)),
         QRTheme(top: Color(hex: 0x5FD39A), bottom: Color(hex: 0x137A4A), ink: UIColor(red: 0.06, green: 0.42, blue: 0.25, alpha: 1), dot: Color(hex: 0x21A366)),
         QRTheme(top: Color(hex: 0xC48BE8), bottom: Color(hex: 0x5B2585), ink: UIColor(red: 0.36, green: 0.15, blue: 0.52, alpha: 1), dot: Color(hex: 0x8E44AD)),
         QRTheme(top: Color(hex: 0x4A4A50), bottom: Color(hex: 0x111114), ink: UIColor(red: 0.08, green: 0.08, blue: 0.09, alpha: 1), dot: Color(hex: 0x222226)),
+        // The wallpapers' own gradients (WallpaperStore), after the five plain ones so a saved pick
+        // keeps its colour.
+        .multi([0xF3DC47, 0xF2CD46, 0xE54F41, 0xE44040], inks: [0xB4410C, 0x7F1D1D]),
+        .multi([0xE4384B, 0xF53844, 0x42378F, 0x533788], inks: [0xA61B34, 0x33287A]),
+        .multi([0x0093E9, 0x0093E9, 0x80D0C7, 0x80D0C7], inks: [0x005A8F, 0x1C6B62]),
+        .multi([0xDC7DE6, 0xED82E6, 0x3753E6, 0x4858E6], inks: [0x8E1C93, 0x1B2C9A]),
+        .multi([0x65CDAC, 0x65CDAC, 0x0A995A, 0x0A995A], inks: [0x1C6E53, 0x064F2E]),
     ]
+}
+
+/// The ground: a 2x2 mesh of the theme's corners.
+private struct QRGround: View {
+    let theme: QRTheme
+    var body: some View {
+        MeshGradient(width: 2, height: 2,
+                     points: [[0, 0], [1, 0], [0, 1], [1, 1]],
+                     colors: theme.meshColors)
+    }
 }
 
 struct GroupLinkQRSheet: View {
@@ -41,12 +75,13 @@ struct GroupLinkQRSheet: View {
     @State private var cardImage: UIImage?
     @State private var photoFull: UIImage?
     @State private var toastTask: Task<Void, Never>?
+    @State private var cardDip = false
 
     private var theme: QRTheme { QRTheme.all[min(max(themeIndex, 0), QRTheme.all.count - 1)] }
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: [theme.top, theme.bottom], startPoint: .top, endPoint: .bottom)
+            QRGround(theme: theme)
                 .ignoresSafeArea()
             // Scrolls only when it does not fit (audit 2026-10-20: on an SE or at large text the close
             // X and the Share row went off the screen); on a normal phone it sits as before.
@@ -85,7 +120,16 @@ struct GroupLinkQRSheet: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
             }
         }
-        .animation(.easeInOut(duration: 0.3), value: themeIndex)
+        .animation(.easeInOut(duration: 0.45), value: themeIndex)
+        // ⛔ A COLOUR CHANGE YOU CAN FEEL (owner 2026-10-27): the card dips and springs back while
+        // the ground morphs and the code fades to its new colour, with a light tap.
+        .onChange(of: themeIndex) {
+            Haptics.impact(.light)
+            withAnimation(.easeOut(duration: 0.12)) { cardDip = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.55)) { cardDip = false }
+            }
+        }
         .presentationDetents([.large])
         .task(id: themeIndex) {
             // The full photo first, so the shared picture is never missing it (audit 2026-10-20).
@@ -103,23 +147,38 @@ struct GroupLinkQRSheet: View {
 
     private var card: some View {
         GroupQRCardFace(title: title, photo: photo, memberCount: memberCount, link: link, ink: theme.ink,
-                        subtitleText: subtitle, hint: hint)
+                        inks: theme.inks, themeKey: themeIndex, subtitleText: subtitle, hint: hint)
             .padding(.horizontal, 28)
+            .scaleEffect(cardDip ? 0.94 : 1)
     }
 
+    /// Ten colours now, so the row scrolls sideways when it does not fit.
     private var swatches: some View {
-        HStack(spacing: 14) {
-            ForEach(QRTheme.all.indices, id: \.self) { i in
-                Button { themeIndex = i } label: {
-                    Circle().fill(QRTheme.all[i].dot)
-                        .frame(width: 28, height: 28)
-                        .overlay(Circle().stroke(.white, lineWidth: i == themeIndex ? 3 : 1.5))
-                        .padding(4)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 14) {
+                ForEach(QRTheme.all.indices, id: \.self) { i in
+                    Button { themeIndex = i } label: {
+                        swatch(QRTheme.all[i])
+                            .frame(width: 28, height: 28)
+                            .overlay(Circle().stroke(.white, lineWidth: i == themeIndex ? 3 : 1.5))
+                            .scaleEffect(i == themeIndex ? 1.12 : 1)
+                            .padding(4)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Colour \(i + 1)")
+                    .accessibilityAddTraits(i == themeIndex ? .isSelected : [])
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Colour \(i + 1)")
-                .accessibilityAddTraits(i == themeIndex ? .isSelected : [])
             }
+            .padding(.horizontal, 20)
+        }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+    }
+
+    @ViewBuilder private func swatch(_ t: QRTheme) -> some View {
+        if let c = t.corners {
+            Circle().fill(LinearGradient(colors: [c[0], c[3]], startPoint: .topLeading, endPoint: .bottomTrailing))
+        } else {
+            Circle().fill(t.dot)
         }
     }
 
@@ -163,9 +222,9 @@ struct GroupLinkQRSheet: View {
     /// one on screen.
     @MainActor private func renderCard() -> UIImage? {
         let art = ZStack {
-            LinearGradient(colors: [theme.top, theme.bottom], startPoint: .top, endPoint: .bottom)
+            QRGround(theme: theme)
             GroupQRCardFace(title: title, photo: photo, memberCount: memberCount, link: link, ink: theme.ink,
-                            photoImage: photoFull ?? photo.flatMap { DiskImageCache.shared.smallImageSync($0) },
+                            inks: theme.inks, photoImage: photoFull ?? photo.flatMap { DiskImageCache.shared.smallImageSync($0) },
                             subtitleText: subtitle, hint: hint)
                 .padding(.horizontal, 32)
                 .padding(.top, 40)
@@ -215,6 +274,10 @@ private struct GroupQRCardFace: View {
     let memberCount: Int?
     let link: String
     let ink: UIColor
+    /// A multi-colour theme's two shades: the dots run from one to the other.
+    var inks: [Color]? = nil
+    /// Changes with the picked colour, so the code fades to its new colour instead of cutting.
+    var themeKey: Int = 0
     var photoImage: UIImage? = nil
     var subtitleText: String? = nil
     var hint: String = "Scan with the camera to join"
@@ -230,14 +293,28 @@ private struct GroupQRCardFace: View {
             Text(title).font(.system(size: 22, weight: .bold)).foregroundStyle(.black)
                 .lineLimit(2).multilineTextAlignment(.center)
             Text(subtitle).font(.subheadline).foregroundStyle(Color.black.opacity(0.5))
-            if let img = qrImage(from: link, clearCentre: 0.22, ink: ink) {
+            // One ZStack round it, so the old and new code overlap while they fade (in the VStack
+            // they would stack for a moment).
+            ZStack {
+            if let img = qrImage(from: link, clearCentre: 0.22, ink: inks == nil ? ink : .black) {
                 ZStack {
                     Image(uiImage: img).interpolation(.none).resizable().scaledToFit()
-                    QRCentreMark(size: 46, tint: Color(uiColor: ink))
+                    // Black dots on white, screened with the gradient: each dot takes the gradient's
+                    // colour where it sits and the white stays white.
+                    if let inks {
+                        LinearGradient(colors: inks, startPoint: .topLeading, endPoint: .bottomTrailing)
+                            .blendMode(.screen)
+                    }
                 }
+                .compositingGroup()
+                .overlay { QRCentreMark(size: 46, tint: inks.map { $0[0] } ?? Color(uiColor: ink)) }
                 .frame(maxWidth: 250)
-                .padding(.top, 14)
+                .aspectRatio(1, contentMode: .fit)
+                .id(themeKey)
+                .transition(.opacity)
             }
+            }
+            .padding(.top, 14)
             Text(hint)
                 .font(.footnote).foregroundStyle(Color.black.opacity(0.5))
                 .padding(.top, 10)
