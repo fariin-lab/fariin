@@ -654,7 +654,18 @@ final class AudioRecorder {
               let meta = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let files = meta["files"] as? [String],
               let durations = meta["durations"] as? [Double],
-              files.count == durations.count, !files.isEmpty else { return false }
+              files.count == durations.count, !files.isEmpty else {
+            DiagLog.add("VOICEDRAFT# adopt refused cid=\(cid) meta=\(FileManager.default.fileExists(atPath: dir.appendingPathComponent("meta.json").path))")
+            return false
+        }
+        // A draft whose audio is gone is not a draft (owner 2026-10-27: the chat list said
+        // "Draft: 0:04" and the chat had nothing). Drop it so the list stops promising it.
+        let missing = files.filter { !FileManager.default.fileExists(atPath: dir.appendingPathComponent($0).path) }
+        if !missing.isEmpty {
+            DiagLog.add("VOICEDRAFT# stale cid=\(cid) missing=\(missing.count)/\(files.count)")
+            Self.discardDraft(cid)
+            return false
+        }
         segments = zip(files, durations).map { (url: dir.appendingPathComponent($0), duration: $1) }
         completedElapsed = durations.reduce(0, +)
         elapsed = completedElapsed

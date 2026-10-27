@@ -2537,6 +2537,15 @@ struct ThreadView: View {
         // Back in front with the newest message on screen: send the read receipt the background
         // arrivals were denied above (2026-09-24 audit).
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            // ⛔ THE NOTE PARKED ON THE WAY OUT COMES BACK ON THE WAY IN (owner 2026-10-27: the chat
+            // list said "Draft: 0:04", the chat showed nothing). Going to the background parks a
+            // locked recording (above) and clears the bar; only `onAppear` adopted it again, and
+            // staying in the chat never fires that. Same adoption, on coming back.
+            if !quiet, !recordLocked, AppRouter.shared.activeChatId == cid,
+               AudioRecorder.hasDraft(cid), recorder.adoptDraft(cid: cid) {
+                recordLocked = true
+                beginPreview()
+            }
             guard !quiet, isAtBottom, !repo.iBlocked, AppRouter.shared.activeChatId == cid else { return }
             if chatCovered { armCoveredRead(); return }   // owner audit 2026-10-06 chat #13
             ChatService.markReadThrottled(cid)
@@ -9724,6 +9733,7 @@ struct ThreadView: View {
             guard let (url, _, wf) = await recorder.pauseForReview() else {
                 // Nothing recorded at all (or the stitch failed and the recorder cleaned up):
                 // a cancel rather than an empty bar.
+                DiagLog.add("VOICEDRAFT# review failed cid=\(cid)")
                 cancelRecording()
                 return
             }

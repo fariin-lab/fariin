@@ -93,8 +93,8 @@ struct LeaveGroupAlert: View {
             .padding(.horizontal, 14).padding(.top, 18).padding(.bottom, 14)
         }
         .frame(width: 290)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
-        .shadow(color: .black.opacity(0.18), radius: 24, y: 8)
+        // Liquid glass, as the system's own alerts (owner 2026-10-27).
+        .liquidGlass(RoundedRectangle(cornerRadius: 30, style: .continuous))
     }
 
     private func button(_ title: String, color: Color, weight: Font.Weight,
@@ -104,7 +104,7 @@ struct LeaveGroupAlert: View {
                 .font(.system(size: 17, weight: weight))
                 .foregroundStyle(color)
                 .frame(maxWidth: .infinity).frame(height: 48)
-                .background(Capsule().fill(Color(.tertiarySystemFill)))
+                .background(Capsule().fill(Color.primary.opacity(0.08)))
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
