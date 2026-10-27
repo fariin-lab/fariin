@@ -4738,7 +4738,18 @@ struct ChatRow: View, Equatable {
             // FIRST, above everything — a call in progress outranks typing, a draft, the last
             // message, all of it. Green because that is what "live" reads as everywhere else in
             // the app (the minimized call bar, the answer button), not a colour picked here.
-            previewRow("phone.fill", "Active call", iconTint: .green, textTint: .green)
+            // owner 2026-10-27: the kind of call in bold green, then " · In call" in grey (his
+            // picture), instead of a plain "Active call".
+            let video = CallService.shared.isVideoCall
+            HStack(spacing: 5) {
+                Image(systemName: video ? "video.fill" : "phone.fill")
+                    .font(.system(size: 13)).foregroundStyle(.green)
+                (Text(video ? "Video call" : "Voice call").fontWeight(.semibold).foregroundColor(.green)
+                    + Text(" · In call").foregroundColor(.secondary))
+                    .font(.subheadline).lineLimit(1)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(video ? "Video call, in call" : "Voice call, in call")
         } else if conv.leaksBlocked(me) {
             previewRow("hand.raised.fill", "Blocked")
         } else if let r = recordingLabel, !activityExpired {
