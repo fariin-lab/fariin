@@ -316,7 +316,14 @@ final class ChatComposerView: UIView {
         let g = UIGlassEffect(style: .regular)
         g.isInteractive = on
         g.tintColor = old?.tintColor
-        pill.effect = g
+        // ⚠️ NIL FIRST (owner 2026-10-27, third report: the paused review bar still glowed under the
+        // finger). A glass effect laid over a glass effect kept the old one's touch response; it is
+        // only dropped when the effect is cleared, as the theme change already does
+        // (`reapplyGlassForTheme`). No animation, so the bar never shows without its glass.
+        UIView.performWithoutAnimation {
+            pill.effect = nil
+            pill.effect = g
+        }
     }
 
     private func reapplyGlassForTheme() {
