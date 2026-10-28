@@ -1445,10 +1445,15 @@ struct EditGroupView: View {
                                 if hasPhoto {
                                     Button { nameFocused = false; confirmRemovePhoto = true } label: {
                                         // Liquid Glass, like Set New Photo under it (owner 2026-10-20).
+                                        // Owner 2026-10-28: clear glass vanished over a bright photo
+                                        // (a white X on orange, light mode worst). Dark-tinted glass
+                                        // and a thin white ring: readable on any photo, both modes.
                                         Image(systemName: "xmark")
                                             .font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
                                             .frame(width: 30, height: 30)
-                                            .liquidGlass(Circle(), interactive: true)
+                                            .liquidGlass(Circle(), interactive: true, tint: .black.opacity(0.55))
+                                            .overlay(Circle().stroke(.white.opacity(0.85), lineWidth: 1.5))
+                                            .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
                                             .frame(width: 44, height: 44).contentShape(Circle())
                                     }
                                     .buttonStyle(.plain)
