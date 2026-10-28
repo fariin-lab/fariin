@@ -1250,6 +1250,9 @@ struct GroupCallParticipantsSheet: View {
         case "tooSoon": return "Wait a minute before ringing \(name) again"
         case "unreachable": return "Couldn't reach \(name)'s phone"
         case "notMember": return "\(name) isn't in this group"
+        // 2026-10-28 server limits: three rings per person per call; the ring list is full.
+        case "limit": return "\(name) was rung 3 times. Try a notification later."
+        case "full": return "Too many people rung in this call"
         default: return "Can't ring \(name) now"
         }
     }
