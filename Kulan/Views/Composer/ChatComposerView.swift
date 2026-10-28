@@ -578,6 +578,9 @@ final class ChatComposerView: UIView {
         strip.addSubview(stripX)
         strip.addSubview(stripSend)
         strip.addSubview(stripControl)
+        // Owner 2026-10-28, later: the pause floats above the bar again (ThreadView voiceControl);
+        // this in-bar copy is kept but hidden.
+        stripControl.isHidden = true
         stripRecording.addSubview(recDot)
         recDot.backgroundColor = .systemRed
         recDot.layer.cornerRadius = 4
@@ -1463,7 +1466,7 @@ final class ChatComposerView: UIView {
         let ctlW: CGFloat = 32
         stripControl.frame = CGRect(x: stripSend.frame.minX - 8 - ctlW, y: (sh - ctlW) / 2, width: ctlW, height: ctlW)
         let onceW: CGFloat = 24
-        onceButton.frame = CGRect(x: stripControl.frame.minX - 10 - onceW, y: 0, width: onceW, height: sh)
+        onceButton.frame = CGRect(x: stripSend.frame.minX - 12 - onceW, y: 0, width: onceW, height: sh)
         recDot.frame = CGRect(x: stripX.frame.maxX + 12, y: (sh - 8) / 2, width: 8, height: 8)
         let timerW = ceil(stripTimer.intrinsicContentSize.width)
         stripTimer.frame = CGRect(x: recDot.frame.maxX + 6, y: 0, width: timerW, height: sh)
