@@ -2668,20 +2668,36 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         f.picture.removeFromSuperview()
     }
 
-    /// The scroll half: the offset written every frame on the vertical curve, so the list and the
-    /// bubble share it exactly. A display link rather than a UIView animation because every frame has
-    /// to reach `scrollViewDidScroll` (the wallpaper slices, the header blur and the cell sweep all
-    /// read the offset there), as UIKit's own animated scroll does.
+    /// The scroll half. ⛔ RUN BY CORE ANIMATION, NOT FRAME BY FRAME (owner 2026-10-28: the bubble
+    /// flies smoothly now but the other messages jump as they make room). The offset used to be
+    /// written every frame from a display link on the main thread, and the send holds that thread in
+    /// exactly these 0.3 s, so the older messages skipped frames under a smooth flight. The bubble got
+    /// the same fix on 10-27 (`animateSendFlight`). Now the offset goes to the newest at once and the
+    /// list's layer plays the way there as keyframes on the same vertical curve, ADDITIVE on top of
+    /// the real offset, so a composer shrinking mid-flight still shows through instead of snapping at
+    /// the end. `scrollViewDidScroll` gets the one final offset; the wallpaper slices follow it.
     private func startSendGlide(from: CGFloat, to: CGFloat, seq: Int) {
         sendGlide = (from, to, CACurrentMediaTime(), seq)
-        let link = CADisplayLink(target: self, selector: #selector(sendGlideTick(_:)))
-        if #available(iOS 15.0, *) {
-            let fps = Float(UIScreen.main.maximumFramesPerSecond)
-            link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: fps, preferred: fps)
+        collectionView.setContentOffset(CGPoint(x: 0, y: to), animated: false)
+        let steps = 36
+        let a = CAKeyframeAnimation(keyPath: "bounds.origin.y")
+        a.values = (0...steps).map { i -> CGFloat in
+            let k = CGFloat(Self.sendVerticalCurve.value(at: Double(i) / Double(steps)))
+            return (from - to) * (1 - k)
         }
-        link.add(to: .main, forMode: .common)
-        sendGlideLink = link
+        a.isAdditive = true
+        a.duration = Self.sendDuration
+        a.calculationMode = .linear
+        collectionView.layer.add(a, forKey: Self.sendGlideKey)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.sendDuration) { [weak self] in
+            guard let self, let g = self.sendGlide, g.seq == seq, seq == self.glideSeq,
+                  self.programmaticScrollAnimating else { return }
+            self.stopSendGlideLink()
+            self.sendAnimating = false
+            self.scrollingAnimationDidComplete()
+        }
     }
+    private static let sendGlideKey = "send.glide"
 
     @objc private func sendGlideTick(_ link: CADisplayLink) {
         guard let g = sendGlide, g.seq == glideSeq, programmaticScrollAnimating else {
@@ -2701,6 +2717,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private func stopSendGlideLink() {
         sendGlideLink?.invalidate()
         sendGlideLink = nil
+        // A hand or a newer move ends the glide where the list really is.
+        if sendGlide != nil { collectionView.layer.removeAnimation(forKey: Self.sendGlideKey) }
         sendGlide = nil
     }
 
