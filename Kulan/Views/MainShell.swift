@@ -3340,6 +3340,7 @@ struct ChatsView: View {
                     .barFollowsPhone()
             }
             .navigationDestination(for: ChatTarget.self) { t in
+                let _ = ChatOpenTimer.shared.markOnce("destination built")
                 // The official channel gets its own screen. ThreadView is built around a composer and
                 // an encrypted message pipeline, neither of which exists here.
                 if OfficialChannel.isOfficial(t.id) {

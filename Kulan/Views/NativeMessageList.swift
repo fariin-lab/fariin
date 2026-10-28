@@ -239,6 +239,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIViewController(context: Context) -> MessageListController {
+        ChatOpenTimer.shared.markOnce("message list make")
         let vc = MessageListController()
         vc.coordinator = context.coordinator
         context.coordinator.controller = vc
@@ -3227,6 +3228,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // commit (the snapshot work off main, no republish of an unchanged window) stay.
 
     func apply(rowIds rawIds: [String], scrollTarget: String? = nil) {
+        ChatOpenTimer.shared.markOnce("first apply \(rawIds.count) rows")
+        defer { ChatOpenTimer.shared.markOnce("first apply done") }
         // LAST LINE OF DEFENCE, AND IT IS NOT OPTIONAL. `appendItemsWithIdentifiers:` throws on a repeated
         // identifier and the throw is an abort â€” the app is gone, mid-scroll, with no recovery. The repo
         // guarantees uniqueness upstream, but this is a boundary into UIKit and a crash is far worse than

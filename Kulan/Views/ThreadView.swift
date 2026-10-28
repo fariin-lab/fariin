@@ -558,6 +558,7 @@ struct ThreadView: View {
     private var dark: Bool { scheme == .dark }
 
     init(cid: String, title: String, photoUrl: String?, preview: Bool = false, guest: PublicGroupGuest? = nil) {
+        if !preview { ChatOpenTimer.shared.markOnce("ThreadView init") }
         self.cid = cid
         self.title = title
         self.photoUrl = photoUrl
@@ -612,6 +613,7 @@ struct ThreadView: View {
                     if !quiet && !repoOpened { repo.open(); repoOpened = true } else { repo.start() }
                 }
             }
+            .overlay(alignment: .top) { ChatOpenTimerBox() }   // admins only (owner 2026-10-28)
             .overlay {
                 if groupModHidesChat {
                     // ⛔ AN OPAQUE PAGE (owner 2026-10-26): the hidden list left the chat see-through, so
@@ -2177,6 +2179,7 @@ struct ThreadView: View {
     }
 
     var body: some View {
+        let _ = ChatOpenTimer.shared.markOnce("ThreadView body")
         // READ-RECEIPT LIVE FIX: read otherLastReadMillis DIRECTLY in the body so a live read update re-runs
         // the view. It's otherwise only read inside the rowSignatures helper — and unlike pins/reactions
         // (read directly in the body), that wasn't enough to refresh the tick, so my ✓ stayed single until a
@@ -2360,9 +2363,13 @@ struct ThreadView: View {
             if holdStarted { lockRecording() }
         }
         .onAppear {
+            ChatOpenTimer.shared.markOnce("onAppear start")
+            DispatchQueue.main.async { ChatOpenTimer.shared.markOnce("first runloop after onAppear") }
             cachedConv = openingConversation()
+            ChatOpenTimer.shared.markOnce("openingConversation done")
             startOwnGroupDoc()
             noteHistoryStart()
+            ChatOpenTimer.shared.markOnce("own doc + history start done")
             // A preview owns its repository; a real chat shares the live one (`forChat`), so it
             // counts itself in and out rather than stopping a run another screen may be using.
             repo.moderationLocked = groupModHidesChat
@@ -2373,6 +2380,7 @@ struct ThreadView: View {
             if !groupModHidesChat {
                 if quiet { repo.start() } else { repo.open(); repoOpened = true }
             }
+            ChatOpenTimer.shared.markOnce("repo open done (locked=\(groupModHidesChat))")
             // PAY THE GIF KEY'S ROUND TRIP NOW, quietly, instead of on the first tap of the button.
             // Opening a chat is the moment we learn a GIF might be sent, and it is a moment with
             // nothing else competing for the network. No-op once the key is on the phone, which is
