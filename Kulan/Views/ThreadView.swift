@@ -10156,7 +10156,7 @@ private struct CallBarOrPin<Pin: View>: View {
         .accessibilityLabel("\(heading) in \(title), \(subtitle). Join")
     }
 
-    /// Up to three photos, overlapping, a green dot on whoever has the mic on; the call icon while
+    /// Up to three photos, overlapping (no ring, no mic dot, owner 2026-10-28); the call icon while
     /// the list is not in yet.
     @ViewBuilder private var faces: some View {
         if people.isEmpty {
@@ -10167,14 +10167,8 @@ private struct CallBarOrPin<Pin: View>: View {
         } else {
             HStack(spacing: -10) {
                 ForEach(Array(people.prefix(3).enumerated()), id: \.element.uid) { i, p in
+                    // Just the photo (owner 2026-10-28): no dark ring round it, no green mic dot.
                     AvatarView(name: p.name, photoUrl: p.photo, size: 34)
-                        .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2))
-                        .overlay(alignment: .bottomTrailing) {
-                            if p.mic {
-                                Circle().fill(Color.green).frame(width: 10, height: 10)
-                                    .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 1.5))
-                            }
-                        }
                         .zIndex(Double(3 - i))
                 }
             }
