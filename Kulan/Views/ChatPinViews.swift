@@ -521,23 +521,26 @@ struct ChatPinPage: View {
                 }
             }
 
-            // Your own digits: Fariin Plus (owner 2026-10-27). Staff only until Plus exists.
-            Section {
-                Button {
-                    if ChatPin.mayChooseOwn { setting = true } else { plusOnly = true }
-                } label: {
-                    HStack {
-                        Text("Choose Your Own Key").foregroundStyle(.primary)
-                        Spacer()
-                        Text("Fariin Plus")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Color.fariinBlue)
-                            .padding(.horizontal, 8).padding(.vertical, 3)
-                            .background(Capsule().fill(Color.fariinBlue.opacity(0.14)))
+            // Your own digits: Fariin Plus (owner 2026-10-27). ⛔ HIDDEN FROM USERS (owner
+            // 2026-10-28): a feature card for something they cannot have yet. Staff only.
+            if ChatPin.mayChooseOwn {
+                Section {
+                    Button {
+                        if ChatPin.mayChooseOwn { setting = true } else { plusOnly = true }
+                    } label: {
+                        HStack {
+                            Text("Choose Your Own Key").foregroundStyle(.primary)
+                            Spacer()
+                            Text("Fariin Plus")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Color.fariinBlue)
+                                .padding(.horizontal, 8).padding(.vertical, 3)
+                                .background(Capsule().fill(Color.fariinBlue.opacity(0.14)))
+                        }
                     }
+                } footer: {
+                    Text("Fariin makes a random 6-digit key for you, different from everyone else's.")
                 }
-            } footer: {
-                Text("Fariin makes a random 6-digit key for you, different from everyone else's.")
             }
 
             if !failure.isEmpty {
@@ -603,7 +606,8 @@ struct ChatPinPage: View {
         Haptics.impact(.medium)
         generating = true
         rollingTo = nil
-        withAnimation(.easeInOut(duration: 0.2)) { rolling = true }
+        // No fade: a fade showed the old key under the zeroes for a moment (owner 2026-10-28).
+        rolling = true
         Task {
             do {
                 // The digits spin until the key arrives, then settle one by one (`ChatKeySlotView`),
@@ -819,51 +823,53 @@ struct ChatPinSetSheet: View {
     }
 }
 
-/// ⛔ THE KEY IS FOUND, NOT POPPED IN (owner 2026-10-27): while a key is being made all six digits
-/// spin; once the server's key is here they stop one at a time, left to right, each with a light
-/// tap, the rest still spinning, until all six are chosen. Then `onDone` shows the key as usual.
+/// ⛔ THE KEY IS COUNTED UP TO, LIKE A METER (owner 2026-10-28, his video): six zeroes while the
+/// server chooses; once the key is here the whole number counts up from 000000 to it, every digit
+/// rolling upward, fast first and slowing at the end, all six stopping together. Then `onDone`
+/// shows the key as usual.
+///
+/// ⚠️ `shown` IS RESET AT THE START OF EVERY RUN. The old version kept its "how many have stopped"
+/// count from the last Reset, so the second Reset flashed the whole key and then rolled again.
 struct ChatKeySlotView: View {
-    /// nil while the server is still choosing: every digit spins.
+    /// nil while the server is still choosing: the zeroes wait.
     let final: String?
     let onDone: () -> Void
-    @State private var locked = 0
+    @State private var shown = Array(repeating: 0, count: 6)
     private let count = 6
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.06)) { _ in
-            HStack(spacing: 8) {
-                ForEach(0..<count, id: \.self) { i in
-                    let settled = final != nil && i < locked
-                    Text(settled ? digit(i) : String(Int.random(in: 0...9)))
-                        .font(.system(size: 34, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(settled ? Color.primary : Color.secondary)
-                        .frame(width: 22)
-                        .scaleEffect(settled ? 1 : 0.9)
-                        .blur(radius: settled ? 0 : 0.6)
-                        .animation(.spring(response: 0.3, dampingFraction: 0.55), value: settled)
-                }
+        HStack(spacing: 8) {
+            ForEach(0..<count, id: \.self) { i in
+                Text(String(shown[i]))
+                    .font(.system(size: 34, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .contentTransition(.numericText(value: Double(shown[i])))
+                    .frame(width: 22)
+                    .clipped()
             }
         }
-        .accessibilityLabel(final == nil || locked < count ? "Making your Chat Key" : "Your Chat Key")
+        .accessibilityLabel(final == nil ? "Making your Chat Key" : "Your Chat Key")
         .task(id: final) {
-            guard let f = final, f.count == count else { return }
-            // A beat of spinning first, so even a fast answer is seen being "found".
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            for i in 1...count {
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                locked = i
-                Haptics.impact(.light)
+            shown = Array(repeating: 0, count: count)
+            guard let f = final, f.count == count, let target = Int(f) else { return }
+            // The zeroes hold a beat before counting, as in his video.
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            let steps = 40
+            for s in 1...steps {
+                guard !Task.isCancelled else { return }
+                let t = Double(s) / Double(steps)
+                let eased = 1 - pow(1 - t, 3)
+                let value = s == steps ? target : Int(Double(target) * eased)
+                let digits = String(format: "%06d", value).compactMap(\.wholeNumberValue)
+                withAnimation(.snappy(duration: 0.18)) { shown = digits }
+                if s % 4 == 0 { Haptics.impact(.light) }
+                try? await Task.sleep(nanoseconds: 60_000_000)
             }
-            // All six chosen: the success buzz (owner 2026-10-27).
+            // All six stopped: the success buzz (owner 2026-10-27).
             Haptics.notify(.success)
             try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled else { return }
             onDone()
         }
-    }
-
-    private func digit(_ i: Int) -> String {
-        guard let f = final, i < f.count else { return "0" }
-        return String(Array(f)[i])
     }
 }
