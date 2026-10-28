@@ -50,10 +50,16 @@ struct GroupCallStripView: View {
                     if let tile = byId[id] {
                         GroupCallTileView(
                             tile: tile,
-                            // A presenter who is not the focus: their camera (or avatar), not a
-                            // second 72pt copy of the screen.
-                            track: (tile.hasVideo && visible.contains(id))
-                                ? stage.videoTrack(id, preferScreen: false) : nil,
+                            // ⛔ A SECOND PRESENTER SHOWS THEIR SCREEN HERE (owner 2026-10-28: with
+                            // two people sharing, the one not shown large looked like a voice call,
+                            // a photo in the strip). Someone sharing who is not the large tile now
+                            // shows a live small copy of their screen, so the share is seen and a
+                            // tap brings it up large. Everyone else: their camera, or their photo.
+                            // Never my own screen (videoTrack refuses the local share).
+                            track: visible.contains(id)
+                                ? (tile.isScreenShare ? stage.videoTrack(id, preferScreen: true)
+                                    : (tile.hasVideo ? stage.videoTrack(id, preferScreen: false) : nil))
+                                : nil,
                             style: .strip,
                             isActiveSpeaker: stage.activeSpeakerId == id,
                             isPinned: stage.pinnedId == id,
