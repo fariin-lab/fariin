@@ -84,14 +84,9 @@ struct GroupWelcomeCard: View {
                 }
             }
 
-            Button { if let u = URL(string: "https://fariin.com/safety") { WebLink.open(u) } } label: {
-                // Groups are not end-to-end encrypted (owner 2026-10-19 / 2026-10-23), switched or not yet.
-                (Text("\(Image(systemName: "shield.fill")) Messages in this group are not end-to-end encrypted. They are protected in transit and on our servers. ")
-                 + Text("Learn more").foregroundStyle(Theme.defaultBubble(dark)))
-                    .font(.caption).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            .buttonStyle(.plain)
+            // Owner 2026-10-28: no "not end-to-end encrypted" line on the group's front; it made people
+            // doubt the group (the reference apps with unencrypted groups show none). Nothing claims
+            // encryption either; the full explanation stays on the group's info page.
         }
         .padding(.horizontal, 18).padding(.vertical, 24)
         .frame(maxWidth: 340)
