@@ -1424,7 +1424,11 @@ private struct MemberLabelPill: View {
     let uid: String
     @Environment(\.colorScheme) private var scheme
 
-    private var tint: Color { Color(uiColor: BubblePalette.senderColor(uid)) }
+    /// The tag's own colour when it has one (owner 2026-10-28: the list ignored it), else the
+    /// member's name colour as before.
+    private var tint: Color {
+        GroupRole.rgb(role.color).map { Color(hex: $0) } ?? Color(uiColor: BubblePalette.senderColor(uid))
+    }
 
     var body: some View {
         Text(role.display)

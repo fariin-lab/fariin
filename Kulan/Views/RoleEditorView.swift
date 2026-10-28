@@ -125,12 +125,14 @@ struct RoleEditorView: View {
                     .layoutPriority(1)
                 VerifiedMark(uid: uid, size: 11)
                 if let preview {
+                    // The tag's own colour when it has one, as the chat draws it (owner 2026-10-28).
+                    let chip = GroupRole.rgb(preview.color).map { Color(hex: $0) } ?? tint
                     Text(preview.display)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(tint)
+                        .foregroundStyle(chip)
                         .lineLimit(1)
                         .padding(.horizontal, 6).padding(.vertical, 1.5)
-                        .background(Capsule().fill(tint.opacity(0.14)))
+                        .background(Capsule().fill(chip.opacity(0.14)))
                         .padding(.leading, 2)
                 }
             }
