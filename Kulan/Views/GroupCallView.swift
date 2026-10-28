@@ -61,6 +61,7 @@ struct GroupCallView: View {
                              onTileRelease: armAutoHide,
                              onShowChrome: showChrome,
                              onFlipCamera: { service.flipCamera() })
+                .environment(\.groupCallIAmSharing, service.screenSharing)
                 .transition(.opacity)
             if f.remote == nil, !service.isGroupChatCall {
                 // Alone in a call I started: who is being rung, over the alone view. On a clock,
@@ -151,11 +152,52 @@ struct GroupCallView: View {
             CallLinkRequestStack()
                 .padding(.horizontal, 14)
                 .padding(.bottom, requestCardShowing ? 12 : 0)
+            sharePill
+                .padding(.bottom, (service.screenSharing || service.sharePending) ? 12 : 0)
+                .animation(.easeInOut(duration: 0.2), value: service.screenSharing)
+                .animation(.easeInOut(duration: 0.2), value: service.sharePending)
             controls.padding(.horizontal, 14)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { controlsHeight = $0 }
                 .opacity(chromeVisible ? 1 : 0)
                 .allowsHitTesting(chromeVisible)
                 .accessibilityHidden(!chromeVisible)
+        }
+    }
+
+    /// ⛔ YOU ARE SHARING, SAID ON THE SCREEN — owner 2026-10-28: he shared his screen in a group
+    /// call without knowing it; only the share button's white fill said so. The 1:1 call's signs
+    /// (`CallView.sharePill`): "Starting…" while the share comes up, then one red Stop Sharing pill
+    /// above the controls for as long as it runs, shown with the controls hidden too.
+    @ViewBuilder private var sharePill: some View {
+        if service.screenSharing {
+            Button {
+                Haptics.impact(.light)
+                service.toggleScreenShare()
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "rectangle.on.rectangle.slash").font(.system(size: 14, weight: .semibold))
+                    Text("Stop Sharing").font(.system(size: 15, weight: .semibold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 18)
+                .frame(height: 40)
+                .background(Color(.systemRed), in: Capsule())
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Stop sharing screen")
+            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+        } else if service.sharePending {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small).tint(.white)
+                Text("Starting…").font(.system(size: 15, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 18)
+            .frame(height: 40)
+            .liquidGlass(Capsule(), interactive: false)
+            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            .accessibilityElement(children: .combine)
         }
     }
 
@@ -478,6 +520,7 @@ struct GroupCallView: View {
             .environment(\.groupCallSelfPipWidth, selfPipWidth)
             // Audit M-101, 2026-10-07: what the tiles' top marks must clear (see `topClearance`).
             .environment(\.groupCallTopClearance, topClearance)
+            .environment(\.groupCallIAmSharing, service.screenSharing)
             .overlay(alignment: .bottomTrailing) { if showsSelfPip { selfPip } }
             .animation(GroupCallMotion.stage(reduceMotion: reduceMotion), value: stage.mode)
             .contentShape(Rectangle())

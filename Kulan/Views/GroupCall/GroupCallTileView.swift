@@ -29,6 +29,7 @@ struct GroupCallTileView: View {
     var topClearance: CGFloat = 0
 
     @State private var showVideoNote = false
+    @Environment(\.groupCallIAmSharing) private var iAmSharing
     /// The camera's first frame is on screen (LiveKit's `isRendering`); until then the photo shows.
     @State private var cameraRendering = false
 
@@ -85,6 +86,32 @@ struct GroupCallTileView: View {
 
     @ViewBuilder
     private func content(width: CGFloat, height: CGFloat) -> some View {
+        baseContent(width: width, height: height)
+            .overlay { if tile.isLocal && iAmSharing { sharingCard(width: width) } }
+    }
+
+    /// The 1:1 call's "You're sharing your screen" (CallView `shareCard`), on my own tile while I
+    /// share (owner 2026-10-28: he shared without knowing). A small tile keeps the icon only.
+    private func sharingCard(width: CGFloat) -> some View {
+        ZStack {
+            Color(white: 0.12).opacity(0.92)
+            VStack(spacing: 8) {
+                Image(systemName: "rectangle.on.rectangle")
+                    .font(.system(size: width >= 150 ? 30 : 18, weight: .semibold))
+                if width >= 150 {
+                    Text("You're sharing your screen")
+                        .font(.system(size: 15, weight: .semibold))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 10)
+                }
+            }
+            .foregroundStyle(.white)
+        }
+        .accessibilityLabel("You're sharing your screen")
+    }
+
+    @ViewBuilder
+    private func baseContent(width: CGFloat, height: CGFloat) -> some View {
         if let track {
             // A video view only when there is a track: adaptiveStream pauses a track that has no
             // attached view, so camera-off and unsubscribed tiles must not build one (contract rule).
@@ -319,7 +346,16 @@ private struct GroupCallTopClearanceKey: EnvironmentKey {
     static let defaultValue: CGFloat = 0
 }
 
+/// I am sharing my screen (owner 2026-10-28): my own tile says so instead of showing my photo.
+private struct GroupCallIAmSharingKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
+    var groupCallIAmSharing: Bool {
+        get { self[GroupCallIAmSharingKey.self] }
+        set { self[GroupCallIAmSharingKey.self] = newValue }
+    }
     var groupCallTopClearance: CGFloat {
         get { self[GroupCallTopClearanceKey.self] }
         set { self[GroupCallTopClearanceKey.self] = newValue }
