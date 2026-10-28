@@ -112,12 +112,19 @@ final class AuthService: NSObject {
             try? Auth.auth().signOut()
             throw AuthFlowError.noAccount
         }
-        // THE SIGN-UP DOOR, mirror guard: this Google/Apple identity ALREADY has a Fariin account.
-        // Entering the old account under a "create" flow reads as the app losing your new account —
-        // sign back out and point at the right door, exactly like the email door's emailTaken.
+        // THE SIGN-UP DOOR with a Google/Apple identity that ALREADY has a Fariin account: let them in
+        // (owner 2026-10-28, reversing 2026-07-28's refusal). Google itself calls it "signing back
+        // in", the big apps treat one Google/Apple button as both doors, and the red "go back and
+        // choose Log In" cost a second try for someone who had just proved who they are. The old
+        // worry, "the app lost the new account I just made", is answered with "Welcome back".
+        // (The email door still refuses: there a password or a code is needed anyway.)
         if requireNewAccount, result.additionalUserInfo?.isNewUser != true {
-            try? Auth.auth().signOut()
-            throw AuthFlowError.accountExists
+            let first = result.user.displayName?.split(separator: " ").first.map(String.init)
+            Task { @MainActor in
+                // After the app has swapped from the sign-up screen to the chats.
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                ToastNotice.show(first.map { "Welcome back, \($0)" } ?? "Welcome back")
+            }
         }
         uid = result.user.uid
         if let door { Self.rememberSignInMethod(door) }
