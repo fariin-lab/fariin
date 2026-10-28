@@ -598,6 +598,7 @@ struct CallsView: View {
     @State private var searchText = ""
     @State private var pendingCall: PendingCall?   // confirm before dialing (thread-view parity)
     @State private var groupInfoTarget: CallEntry?   // (i) on a multi-person row → Call info
+    @State private var groupChatTarget: ChatTarget?  // (i) on a group chat's call → its chat, pushed here
     @State private var linkTarget: SavedCallLink?    // a saved call link row → its details page
     @State private var showCreateLink = false
     @State private var linkService = CallLinkService.shared
@@ -804,10 +805,10 @@ struct CallsView: View {
                 live: isLiveCall(run),
                 onProfile: {
                     // A group's (i) opens the group's chat; a person's opens their profile.
+                    // Owner 2026-10-28: pushed right here on the Calls tab with the system's slide
+                    // from the side; it used to switch to the Chats tab first and open it there.
                     if let g = call.groupCid {
-                        AppRouter.shared.pendingChatName = call.name
-                        AppRouter.shared.pendingChatPhoto = call.photoUrl
-                        AppRouter.shared.pendingChatId = g
+                        groupChatTarget = ChatTarget(id: g, name: call.name, photo: call.photoUrl)
                     } else {
                         profileTarget = call
                     }
@@ -1231,6 +1232,9 @@ struct CallsView: View {
             // when the pop ENDS, and the bar redraws the field then. Declared, nothing flips.
             .toolbarColorScheme(scheme, for: .navigationBar)
             .navigationDestination(item: $groupInfoTarget) { c in GroupCallInfoView(entry: c) }
+            .navigationDestination(item: $groupChatTarget) { t in
+                ThreadView(cid: t.id, title: t.name, photoUrl: t.photo).id(t.id)
+            }
             .navigationDestination(item: $linkTarget) { l in CallLinkDetailsView(link: l) }
             .createCallLinkFlow(isPresented: $showCreateLink)
             .sheet(isPresented: $showNew) { NewCallView() }
