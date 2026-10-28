@@ -18,8 +18,9 @@ struct GroupCallDuoShareView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // The 1:1 layout's tile height: about a sixth of the screen, 96 to 150 pt.
-            let tileH = min(150, max(96, geo.size.height * 0.17))
+            // Owner 2026-10-28: the 1:1 size (96 to 150 pt) looked big here; about an eighth of the
+            // screen, 84 to 110 pt, leaves the shared screen more room.
+            let tileH = min(110, max(84, geo.size.height * 0.13))
             VStack(spacing: 12) {
                 card
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
