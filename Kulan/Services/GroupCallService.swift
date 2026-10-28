@@ -785,10 +785,37 @@ final class GroupCallService: ObservableObject {
     /// after the note does, so a mic that is not live yet is asked again twice, half a second apart.
     /// True once my own `micBlocked` attribute has read "1" in this call (see `attributesChanged`).
     private var sawMicBlockedAttribute = false
+    /// The media server muted my microphone track in this call (`noteServerMute`).
+    private var serverMutedMe = false
+
+    /// ⛔ "ALLOW TO SPEAK" MUST WORK (owner 2026-10-28: "I unmute him and still can't hear him").
+    /// The lock follows my own server-set `micBlocked` attribute, but the change event for my OWN
+    /// participant may never come, and then nothing was locked and the server's note was ignored.
+    /// The note may act when either thing nobody in the call can forge is true: the lock, or the
+    /// media server having muted my track.
+    var mayBeAllowedToSpeak: Bool { micLockedByAdmin || serverMutedMe }
+
+    /// The server's "<Name> muted you" note arrived: read my own attribute directly for a couple of
+    /// seconds rather than wait for an event that may not fire for the local participant.
+    func checkMicBlockedSoon() {
+        let gen = joinGeneration
+        Task { @MainActor [weak self] in
+            for _ in 0..<5 {
+                guard let self, gen == self.joinGeneration, self.isActive else { return }
+                if self.room.localParticipant.attributes["micBlocked"] == "1" {
+                    self.sawMicBlockedAttribute = true
+                    self.setMicLockedByAdmin(true)
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+    }
     func allowedToSpeak() {
         // Both the attribute and the note call this: not locked and already speaking = nothing to do.
         if !micLockedByAdmin && micOn { return }
         setMicLockedByAdmin(false)
+        serverMutedMe = false
         guard isActive, !leaving else { startMuted = false; micOn = true; return }
         let gen = joinGeneration
         micOn = true
@@ -934,6 +961,9 @@ final class GroupCallService: ObservableObject {
     /// the mute lands while my own change is running (controls 1-A6).
     private func noteServerMute() {
         micOn = false
+        // The media server itself muted my track: nobody in the call can fake this, so an admin's
+        // "allow to speak" may turn the mic back on (`mayBeAllowedToSpeak`).
+        serverMutedMe = true
         GCLog.event("server_mute", room: logRoom)
         // The server now also says WHO ("<Name> muted you", a data message `GroupCallSocial` shows),
         // and that note lands a beat after the mute itself. Wait for it; say the plain line only if
@@ -3135,7 +3165,7 @@ final class GroupCallService: ObservableObject {
         // (CallService clears its own on end), so the next call's card starts in the corner.
         GroupFloatingCardSpot.shared.reset()
         isGroupChatCall = false; groupPhotoUrl = nil; dialing = false; joinStartedAt = nil; joiningPeople = []
-        micLockedByAdmin = false; sawMicBlockedAttribute = false
+        micLockedByAdmin = false; sawMicBlockedAttribute = false; serverMutedMe = false
         cancelRejoin()      // controls 7: a rejoin in flight goes with the call
         stopScreenShare()   // every leave path comes through here
         startMuted = false

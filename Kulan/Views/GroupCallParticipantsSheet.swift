@@ -48,6 +48,8 @@ struct GroupCallParticipantsSheet: View {
     /// People I removed from this call in this session (group chat calls keep no `removedUids`), so
     /// they are not listed as "Left" with a bell.
     @State private var removedHere: Set<String> = []
+    /// The mic button's answer while the server catches up: uid -> asked to be muted (owner 2026-10-28).
+    @State private var pendingBlocked: [String: Bool] = [:]
     /// A short line at the foot of the sheet ("Nudged X", a refusal).
     @State private var sheetToast: String?
     @State private var sheetToastTask: Task<Void, Never>?
@@ -998,16 +1000,37 @@ struct GroupCallParticipantsSheet: View {
     /// Owner 2026-10-28: red "allow to speak" only for someone an admin muted (the server sets their
     /// `micBlocked` attribute to "1"). Someone who muted THEMSELVES shows a plain muted mic that does
     /// nothing: only they can turn it back on.
+    private func tapMic(_ t: CallTile, block: Bool) {
+        let uid = t.uid
+        pendingBlocked[uid] = block
+        Haptics.impact(.light)
+        Task { @MainActor in
+            do {
+                try await service.admin(block ? .mute : .unmute, target: uid)
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                if pendingBlocked[uid] == block { pendingBlocked[uid] = nil }
+            } catch {
+                pendingBlocked[uid] = nil
+                actionError = Self.errorText(error)
+            }
+        }
+    }
+
     private func adminMuted(_ t: CallTile) -> Bool {
         _ = service.rolesVersion   // redraw when anyone's attributes change
         return t.isMuted && stage.participant(t.id)?.attributes["micBlocked"] == "1"
     }
 
+    /// ⛔ THE BUTTON ANSWERS THE TAP AT ONCE (owner 2026-10-28: "mute and unmute is not realtime").
+    /// The real state (their track, the server's `micBlocked`) lands a moment later; until then the
+    /// button shows what was asked. A refusal puts it back; after 4 s the real state rules again.
     private func muteButton(_ t: CallTile) -> some View {
-        let blocked = adminMuted(t)
-        let selfMuted = t.isMuted && !blocked
-        return Button { run(blocked ? .unmute : .mute, target: t.uid) } label: {
-            Image(systemName: t.isMuted ? "mic.slash.fill" : "mic.fill")
+        let asked = pendingBlocked[t.uid]
+        let blocked = asked ?? adminMuted(t)
+        let shownMuted = asked ?? t.isMuted
+        let selfMuted = asked == nil && t.isMuted && !blocked
+        return Button { tapMic(t, block: !blocked) } label: {
+            Image(systemName: shownMuted ? "mic.slash.fill" : "mic.fill")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(blocked ? Color.white : (selfMuted ? Color.secondary : Color.primary))
                 .frame(width: 36, height: 36)

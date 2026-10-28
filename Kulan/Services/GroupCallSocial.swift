@@ -334,7 +334,9 @@ final class GroupCallSocial: ObservableObject {
             guard fromServer else { return }
             // Owner 2026-10-28: the lock is NOT set here. A participant can forge this note by
             // sending it and leaving; the lock follows my own `micBlocked` attribute instead
-            // (`GroupCallService.attributesChanged`). The note only shows the toast.
+            // (`GroupCallService.attributesChanged`). The note only shows the toast, and has my own
+            // attribute read directly in case its change event never comes (owner 2026-10-28).
+            if message["hard"] as? Bool == true { GroupCallService.shared.checkMicBlockedSoon() }
             mutedBy(message["name"] as? String)
 
         case "micAllowed":
@@ -344,7 +346,7 @@ final class GroupCallSocial: ObservableObject {
             // (sent, then the sender leaves), and it turns the mic ON: from anyone else it would open
             // the mic of someone who muted themselves. A lock comes only from the join pass or my
             // own server-set attribute, which nobody in the call can fake.
-            guard GroupCallService.shared.micLockedByAdmin else { return }
+            guard GroupCallService.shared.mayBeAllowedToSpeak else { return }
             // Owner 2026-10-28: the mic comes on by itself (`allowedToSpeak`).
             GroupCallService.shared.allowedToSpeak()
             let name = Self.clean(message["name"] as? String)
