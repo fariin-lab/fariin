@@ -549,6 +549,10 @@ struct GroupCallView: View {
                             // Owner 2026-10-28: with the controls away, the stage takes their room
                             // too (it stopped at their top edge and left a black band).
                             .padding(.bottom, chromeVisible ? 0 : -(controlsHeight + 16))
+                            // Owner 2026-10-28 (screen recording, "the top has empty space"): the
+                            // header's room too, up to the status bar and never under it (his
+                            // earlier rule: no tile under the clock and battery).
+                            .padding(.top, chromeVisible ? 0 : -(headerHeight + 16))
                             .animation(GroupCallMotion.fade, value: chromeVisible)
                             .transition(.opacity)
                     }

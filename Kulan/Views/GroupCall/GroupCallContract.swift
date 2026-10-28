@@ -116,7 +116,7 @@ enum GroupCallMetrics {
     // owner, 2026-10-07 ("feeling like flat design", plan #3 softer tiles): 14. The two-person
     // tile keeps the 1:1 screen's own 18 (GroupCallDuoView).
     static let tileCorner: CGFloat = 14
-    static let stripTile: CGFloat = 72          // square strip tiles
+    static let stripTile: CGFloat = 96          // square strip tiles (owner 2026-10-28: 72 looked small)
     static let stripSpacing: CGFloat = 4        // the reference app's (was 6)
     static let stripLeading: CGFloat = 16       // the strip's first tile from the screen edge (was 6)
     static let stripInset: CGFloat = 12         // under the strip; the self pip's bottom edge too
