@@ -300,6 +300,8 @@ struct GroupCallView: View {
     private var watched: some View {
         screen
             .onChange(of: remoteCount) { _, _ in showChrome() }
+            // The last camera or share went off: the controls come back (and stay, voice only).
+            .onChange(of: anyVideoOnStage) { _, video in if video { armAutoHide() } else { showChrome() } }
             .onChange(of: service.pendingRequests.count) { _, _ in showChrome() }
             .onChange(of: isReconnecting) { _, _ in showChrome() }
             .onChange(of: service.toast) { _, toast in toastChanged(toast) }
@@ -678,7 +680,13 @@ struct GroupCallView: View {
         guard service.joinState == .joined, remoteCount >= 1 else { return false }
         if UIAccessibility.isVoiceOverRunning { return false }
         if duoPair != nil && !duoHasVideo { return false }
-        return true
+        // Owner 2026-10-28: a voice-only group call keeps its controls; hiding them only stretched
+        // the grid with nothing behind them to see. Hidden (tap, or after 5 s) only while someone's
+        // camera is on or a screen is shared, the 1:1 call's rule.
+        return anyVideoOnStage
+    }
+    private var anyVideoOnStage: Bool {
+        service.screenSharing || stage.tiles.contains { $0.hasVideo || $0.isScreenShare }
     }
 
     /// A join-request card is on screen (link creator only): someone is waiting for an answer.
