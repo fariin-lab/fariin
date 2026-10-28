@@ -2326,16 +2326,11 @@ struct StoryViewer: View {
         // writes to the story that is already up — no upload, no second story, no new id. The same
         // three guards the library's own flag carries, re-asserted on LIVE state here because the
         // menu is the part a modified client replaces.
-        // "…" → Edit Caption: only the author, on a story that is really up (owner 2026-10-27).
-        .onReceive(NotificationCenter.default.publisher(for: .init("storyActionEditCaption"))) { _ in
-            guard let s = currentStory, s.authorUid == me, !StoriesService.isPending(s.id) else { return }
-            editCaption = s
-        }
+        // ⛔ EDIT CAPTION REMOVED (owner 2026-10-28; it was added 2026-10-27). The "…" no longer
+        // offers it: the seam stays false and nothing listens for its action.
         .onChange(of: currentStoryId, initial: true) { _, _ in
             let s = currentStory
-            StoryCaptionEditSeam.canEditCurrent = s.map {
-                $0.authorUid == me && !me.isEmpty && OfficialStoryViews.rawId($0.id) == nil && !StoriesService.isPending($0.id)
-            } ?? false
+            StoryCaptionEditSeam.canEditCurrent = false
             StorySaveSeam.canSaveCurrent = s.map(Self.othersMaySave) ?? false
         }
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionEditViewers"))) { _ in
