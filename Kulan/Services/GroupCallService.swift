@@ -210,7 +210,9 @@ final class GroupCallService: ObservableObject {
         joinState = now
         // Owner 2026-10-27 (the reference app's rule): a tone when I get into the call and when I
         // am out of it again. Nothing for other people joining or leaving (the banner says that).
-        if now == .joined { playPresenceTone(RingbackTone.groupJoinedData()) }
+        // Not while my own ringing sound plays (owner 2026-10-28): the caller's ringing starts at
+        // the tap, the room connects ~3 s later, and the joined tone beeped in the middle of it.
+        if now == .joined { if ringback == nil { playPresenceTone(RingbackTone.groupJoinedData()) } }
         else if was == .joined { playPresenceTone(RingbackTone.groupLeftData()) }
     }
     private var presenceTone: AVAudioPlayer?
