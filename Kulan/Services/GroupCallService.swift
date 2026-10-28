@@ -783,7 +783,11 @@ final class GroupCallService: ObservableObject {
     /// found the button. Now the admin's unmute turns their microphone on at once. The server lifts
     /// the publish block before it sends the note, but the permission can reach this phone a moment
     /// after the note does, so a mic that is not live yet is asked again twice, half a second apart.
+    /// True once my own `micBlocked` attribute has read "1" in this call (see `attributesChanged`).
+    private var sawMicBlockedAttribute = false
     func allowedToSpeak() {
+        // Both the attribute and the note call this: not locked and already speaking = nothing to do.
+        if !micLockedByAdmin && micOn { return }
         setMicLockedByAdmin(false)
         guard isActive, !leaving else { startMuted = false; micOn = true; return }
         let gen = joinGeneration
@@ -991,6 +995,19 @@ final class GroupCallService: ObservableObject {
     /// Someone's LiveKit attributes changed; mine may carry a new role.
     fileprivate func attributesChanged() {
         rolesVersion &+= 1
+        // Owner 2026-10-28: the admin lock follows MY OWN server-set attribute `micBlocked` ("1" while
+        // an admin's mute holds, "" after), not a data packet any participant could forge. A server
+        // that never sets the attribute keeps the join pass + `micAllowed` note path: only a lock
+        // this attribute set is lifted by it.
+        if isActive {
+            if room.localParticipant.attributes["micBlocked"] == "1" {
+                sawMicBlockedAttribute = true
+                setMicLockedByAdmin(true)
+            } else if sawMicBlockedAttribute {
+                sawMicBlockedAttribute = false
+                if micLockedByAdmin { allowedToSpeak() }
+            }
+        }
         guard isActive, let r = room.localParticipant.attributes["role"] else { return }
         // audit M-072, 2026-10-07: in a group conversation's call my attribute is the role from my
         // join, frozen; the group's own doc is newer when it has loaded.
@@ -1809,6 +1826,20 @@ final class GroupCallService: ObservableObject {
     /// the ring minute, ends by itself with "No answer" (it used to sit on "No one else is here"
     /// until I hung up). Not when the group was only told (too big to ring, or nobody rung): people
     /// join those whenever they like.
+    /// Owner 2026-10-28: the people sheet rang someone again (or rang new people) in a group chat's
+    /// call I started and nobody has come yet: the "No answer" minute starts over from now, so the
+    /// call is not ended while a ring is still up. The first timer sees a new `ringStart` and stands down.
+    func noteRangAgain() {
+        guard case .group(let cid)? = activeRoom, isActive, !leaving, groupRingStartedAt != nil,
+              !someoneJoined, room.remoteParticipants.isEmpty else { return }
+        let ringStart = Date()
+        groupRingStartedAt = ringStart
+        updateRingback()
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.ringWindow * 1_000_000_000))
+            self?.endIfNobodyAnswered(cid: cid, ringStart: ringStart)
+        }
+    }
     private func endIfNobodyAnswered(cid: String, ringStart: Date) {
         guard case .group(let now)? = activeRoom, now == cid, isActive, !leaving,
               groupRingStartedAt == ringStart, !someoneJoined, room.remoteParticipants.isEmpty else { return }
@@ -2712,17 +2743,23 @@ final class GroupCallService: ObservableObject {
 
     /// Creator of a link call: let everyone waiting in, or turn them all away (the reference app's
     /// "Approve all" / "Deny all"). One server call; a failure puts them back in the list.
-    func answerAllRequests(approve: Bool) async {
+    /// Owner 2026-10-28: `uids` is the list that was on screen when the confirm dialog opened. Only
+    /// those people are sent and cleared, so someone who knocked while the dialog was open is not
+    /// let in (or turned away) without ever having a card.
+    func answerAllRequests(approve: Bool, uids: [String]) async {
         guard case .link(_, _)? = activeRoom, let roomId = currentLink?.roomId, isLinkCreator, !pendingRequests.isEmpty else { return }
-        let before = pendingRequests
-        pendingRequests = []
+        let asked = Set(uids)
+        let before = pendingRequests.filter { asked.contains($0.uid) }
+        guard !before.isEmpty else { return }
+        let sent = before.map { $0.uid }
+        pendingRequests.removeAll { asked.contains($0.uid) }
         let gen = joinGeneration, r = activeRoom   // audit M-152, 2026-10-07
         do {
             _ = try await functions.httpsCallable("answerAllCallLinkRequests")
-                .call(["roomId": roomId, "approve": approve])
+                .call(["roomId": roomId, "approve": approve, "uids": sent] as [String: Any])
         } catch {
             guard gen == joinGeneration, activeRoom == r else { return }   // audit M-152
-            if pendingRequests.isEmpty { pendingRequests = before }
+            for who in before where !pendingRequests.contains(who) { pendingRequests.append(who) }
             showToast("Couldn't answer everyone. Try again.")
         }
     }
@@ -3062,7 +3099,7 @@ final class GroupCallService: ObservableObject {
         // (CallService clears its own on end), so the next call's card starts in the corner.
         GroupFloatingCardSpot.shared.reset()
         isGroupChatCall = false; groupPhotoUrl = nil; dialing = false; joinStartedAt = nil; joiningPeople = []
-        micLockedByAdmin = false
+        micLockedByAdmin = false; sawMicBlockedAttribute = false
         cancelRejoin()      // controls 7: a rejoin in flight goes with the call
         stopScreenShare()   // every leave path comes through here
         startMuted = false

@@ -332,13 +332,19 @@ final class GroupCallSocial: ObservableObject {
         case "mutedBy":
             // Only the server says this. From a participant it is someone pretending.
             guard fromServer else { return }
-            // 2026-10-28: an admin's mute holds until they allow me to speak.
-            if message["hard"] as? Bool == true { GroupCallService.shared.setMicLockedByAdmin(true) }
+            // Owner 2026-10-28: the lock is NOT set here. A participant can forge this note by
+            // sending it and leaving; the lock follows my own `micBlocked` attribute instead
+            // (`GroupCallService.attributesChanged`). The note only shows the toast.
             mutedBy(message["name"] as? String)
 
         case "micAllowed":
             // The server: an admin allowed me to speak again (callAdmin 'unmute', 2026-10-28).
             guard fromServer else { return }
+            // ⛔ ONLY WHILE AN ADMIN'S LOCK IS ON. This note can be forged the same way as mutedBy
+            // (sent, then the sender leaves), and it turns the mic ON: from anyone else it would open
+            // the mic of someone who muted themselves. A lock comes only from the join pass or my
+            // own server-set attribute, which nobody in the call can fake.
+            guard GroupCallService.shared.micLockedByAdmin else { return }
             // Owner 2026-10-28: the mic comes on by itself (`allowedToSpeak`).
             GroupCallService.shared.allowedToSpeak()
             let name = Self.clean(message["name"] as? String)

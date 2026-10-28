@@ -163,6 +163,7 @@ struct GroupCallView: View {
     private var bottomBar: some View {
         VStack(spacing: 0) {
             CallLinkRequestStack()
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { requestsHeight = $0 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, requestCardShowing ? 12 : 0)
             controls.padding(.horizontal, 14)
@@ -209,7 +210,9 @@ struct GroupCallView: View {
                     .accessibilityAddTraits(.isButton)
                 // Above the controls again, where its button now is (owner 2026-10-28).
                 GroupCallMoreMenu(onClose: { showMore = false })
-                    .padding(.bottom, Self.moreMenuLift + controlsHeight)
+                    // Owner 2026-10-28: above the join-request cards too, so Let in / Deny stay clear.
+                    .padding(.bottom, Self.moreMenuLift + controlsHeight
+                             + (requestCardShowing ? requestsHeight + 12 : 0))
             }
             .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
         }
@@ -628,6 +631,8 @@ struct GroupCallView: View {
     @State private var winInsets = EdgeInsets()
     @State private var headerHeight: CGFloat = 44
     @State private var controlsHeight: CGFloat = 0
+    /// The join-request cards' height (link creator), so the "..." panel can sit above them.
+    @State private var requestsHeight: CGFloat = 0
 
     private var remoteCount: Int { stage.tiles.reduce(0) { $1.isLocal ? $0 : $0 + 1 } }
     private var isAlone: Bool { service.joinState == .joined && remoteCount == 0 }

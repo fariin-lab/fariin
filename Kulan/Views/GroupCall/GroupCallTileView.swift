@@ -319,6 +319,8 @@ struct GroupCallTileView: View {
 
     private var accessibilityHintText: String {
         if showsUnavailable { return "Double-tap to hear why" }
+        // Owner 2026-10-28: no hint where a tap does nothing (the alone tile, my own tile on the grid).
+        if style == .alone || (style == .grid && tile.isLocal) { return "" }
         return isPinned ? "Double-tap to unpin" : "Double-tap to focus"
     }
 }

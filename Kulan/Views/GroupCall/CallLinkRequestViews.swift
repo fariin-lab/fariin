@@ -332,13 +332,17 @@ struct CallLinkBulkRequestsSheet: View {
 
     init() {}
 
+    /// Owner 2026-10-28: the people on screen when a confirm dialog opened. The answer covers exactly
+    /// them, and the dialog's count is theirs, so a late knock is never answered unseen.
+    @State private var frozenUids: [String] = []
+
     private var waiting: [CallMember] { service.isLinkCreator ? service.pendingRequests : [] }
     private var title: String { "\(waiting.count) waiting" }
     private var approveTitle: String {
-        waiting.count == 1 ? "Let 1 person in?" : "Let all \(waiting.count) people in?"
+        frozenUids.count == 1 ? "Let 1 person in?" : "Let all \(frozenUids.count) people in?"
     }
     private var denyTitle: String {
-        waiting.count == 1 ? "Deny 1 request?" : "Deny all \(waiting.count) requests?"
+        frozenUids.count == 1 ? "Deny 1 request?" : "Deny all \(frozenUids.count) requests?"
     }
 
     var body: some View {
@@ -400,7 +404,7 @@ struct CallLinkBulkRequestsSheet: View {
 
     // Each confirmation hangs on its own button, so it opens from the button that asked for it.
     private var denyAllButton: some View {
-        Button { confirmDeny = true } label: {
+        Button { frozenUids = waiting.map { $0.uid }; confirmDeny = true } label: {
             CallLinkChoiceLabel(title: "Deny All", text: Color(.systemRed), fill: Color(.tertiarySystemFill))
         }
         .confirmationDialog(denyTitle, isPresented: $confirmDeny, titleVisibility: .visible) {
@@ -410,7 +414,7 @@ struct CallLinkBulkRequestsSheet: View {
     }
 
     private var approveAllButton: some View {
-        Button { confirmApprove = true } label: {
+        Button { frozenUids = waiting.map { $0.uid }; confirmApprove = true } label: {
             CallLinkChoiceLabel(title: "Approve All", text: .white, fill: Color(.systemGreen))
         }
         .confirmationDialog(approveTitle, isPresented: $confirmApprove, titleVisibility: .visible) {
@@ -431,8 +435,9 @@ struct CallLinkBulkRequestsSheet: View {
     private func answerAll(_ approve: Bool) {
         guard !working else { return }
         working = true
+        let uids = frozenUids
         Task { @MainActor in
-            await service.answerAllRequests(approve: approve)
+            await service.answerAllRequests(approve: approve, uids: uids)
             working = false
         }
     }

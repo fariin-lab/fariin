@@ -43,6 +43,11 @@ struct GroupCallParticipantsSheet: View {
     @State private var rangAgainAt: [String: Date] = [:]
     /// Group chat calls: the call doc's `joined` (everyone who has been in it), live while open.
     @State private var callJoined: Set<String> = []
+    /// Bumped on `FirestoreHub.swapped`: restarts the `groupCalls/{cid}` listener on the fresh client.
+    @State private var swapTick = 0
+    /// People I removed from this call in this session (group chat calls keep no `removedUids`), so
+    /// they are not listed as "Left" with a bell.
+    @State private var removedHere: Set<String> = []
     /// A short line at the foot of the sheet ("Nudged X", a refusal).
     @State private var sheetToast: String?
     @State private var sheetToastTask: Task<Void, Never>?
@@ -181,7 +186,10 @@ struct GroupCallParticipantsSheet: View {
     /// Was in this call and is not now: the call doc's `joined` (the server's word, read while the
     /// sheet is open) and everyone this phone saw in the room.
     private func leftUids(here: Set<String>) -> Set<String> {
+        // Owner 2026-10-28: someone I removed is not "Left" (no bell asking them back). `removedUids`
+        // is the ad-hoc call's server list; `removedHere` covers a group chat's call.
         callJoined.union(service.everHereUids).subtracting(here).subtracting([service.myUid, ""])
+            .subtracting(service.removedUids).subtracting(removedHere)
     }
 
     /// Add People on a group chat's call: the group's members, with everyone already in, rung,
@@ -621,16 +629,22 @@ struct GroupCallParticipantsSheet: View {
         }
         .onDisappear { linkInvites.stop() }
         // Group chat calls: who has been in the call (the server's `joined`), for the "Left" rows.
-        .task(id: groupCid) {
+        // Owner 2026-10-28: attached through `FirestoreHub.db`, and again on its swap signal (a new
+        // `swapTick` restarts this task), so a swapped client never leaves the list stale.
+        .task(id: "\(groupCid ?? "")#\(swapTick)") {
             guard let cid = groupCid else { return }
-            let ref = Firestore.firestore().collection("groupCalls").document(cid)
+            let ref = FirestoreHub.db.collection("groupCalls").document(cid)
             let stream = AsyncStream<Set<String>> { cont in
                 let reg = ref.addSnapshotListener { snap, _ in
                     cont.yield(Set(snap?.data()?["joined"] as? [String] ?? []))
                 }
-                cont.onTermination = { _ in reg.remove() }
+                cont.onTermination = { _ in FirestoreHub.drop([reg]) }
             }
             for await joined in stream { callJoined = joined }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: FirestoreHub.swapped)) { _ in
+            swapTick += 1
+            linkInvites.reattachAfterSwap()
         }
         .overlay(alignment: .bottom) { toastView }
         .animation(.easeInOut(duration: 0.2), value: sheetToast)
@@ -670,7 +684,8 @@ struct GroupCallParticipantsSheet: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16).padding(.vertical, 10)
                 .background(Capsule().fill(Color.black.opacity(0.85)))
-                .padding(.bottom, 84)   // clear of the pinned End Call bar
+                // Clear of the pinned End Call bar, which only the owner of a live call has.
+                .padding(.bottom, service.myRole == .owner && service.isActive ? 84 : 24)
                 .transition(.opacity)
                 .allowsHitTesting(false)
         }
@@ -851,7 +866,10 @@ struct GroupCallParticipantsSheet: View {
 
     private func run(_ action: CallAdminAction, target uid: String? = nil) {
         Task { @MainActor in
-            do { try await service.admin(action, target: uid) }
+            do {
+                try await service.admin(action, target: uid)
+                if action == .remove, let uid { removedHere.insert(uid) }
+            }
             catch { actionError = Self.errorText(error) }
         }
     }
@@ -863,6 +881,7 @@ struct GroupCallParticipantsSheet: View {
     private func block(_ t: CallTile) {
         Task { @MainActor in
             let done = await service.block(t.uid)
+            if done { removedHere.insert(t.uid) }
             if !done { actionError = "Couldn't block \(t.name). Check your connection and try again." }
         }
     }
@@ -916,9 +935,9 @@ struct GroupCallParticipantsSheet: View {
                 Button { run(.mute, target: t.uid) } label: {
                     Label("Mute", systemImage: "mic.slash")
                 }
-            } else {
+            } else if adminMuted(t) {
                 // 2026-10-28: an admin's mute holds until an admin allows them to speak (callAdmin
-                // 'unmute'); the owner looked for it here first.
+                // 'unmute'); the owner looked for it here first. Not for a self-muted person.
                 Button { run(.unmute, target: t.uid) } label: {
                     Label("Allow to Speak", systemImage: "mic")
                 }
@@ -975,16 +994,27 @@ struct GroupCallParticipantsSheet: View {
     /// ⛔ ONE TAP EACH WAY (owner 2026-10-28: muting was easy, letting them speak again was hidden
     /// in the "..." menu). Their mic: tap to mute; red and struck through while muted, tap again to
     /// allow them to speak (callAdmin 'unmute').
+    /// Owner 2026-10-28: red "allow to speak" only for someone an admin muted (the server sets their
+    /// `micBlocked` attribute to "1"). Someone who muted THEMSELVES shows a plain muted mic that does
+    /// nothing: only they can turn it back on.
+    private func adminMuted(_ t: CallTile) -> Bool {
+        _ = service.rolesVersion   // redraw when anyone's attributes change
+        return t.isMuted && stage.participant(t.id)?.attributes["micBlocked"] == "1"
+    }
+
     private func muteButton(_ t: CallTile) -> some View {
-        Button { run(t.isMuted ? .unmute : .mute, target: t.uid) } label: {
+        let blocked = adminMuted(t)
+        let selfMuted = t.isMuted && !blocked
+        return Button { run(blocked ? .unmute : .mute, target: t.uid) } label: {
             Image(systemName: t.isMuted ? "mic.slash.fill" : "mic.fill")
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(t.isMuted ? Color.white : Color.primary)
+                .foregroundStyle(blocked ? Color.white : (selfMuted ? Color.secondary : Color.primary))
                 .frame(width: 36, height: 36)
-                .background(t.isMuted ? Color(.systemRed) : Color(.tertiarySystemFill), in: Circle())
+                .background(blocked ? Color(.systemRed) : Color(.tertiarySystemFill), in: Circle())
                 .contentShape(Circle())
         }
-        .accessibilityLabel(t.isMuted ? "Allow \(t.name) to speak" : "Mute \(t.name)")
+        .disabled(selfMuted)
+        .accessibilityLabel(blocked ? "Allow \(t.name) to speak" : (selfMuted ? "\(t.name) is muted" : "Mute \(t.name)"))
     }
 
     private func focusButton(_ t: CallTile, micShown: Bool = true) -> some View {
@@ -1115,6 +1145,7 @@ struct GroupCallParticipantsSheet: View {
                 let data = result.data as? [String: Any] ?? [:]
                 let rung = data["rung"] as? [String] ?? []
                 if rung.contains(uid) {
+                    service.noteRangAgain()
                     showSheetToast("Ringing \(name)")
                     return
                 }
@@ -1172,6 +1203,7 @@ struct GroupCallParticipantsSheet: View {
                 }
             }
             if rung > 0 {
+                service.noteRangAgain()
                 showSheetToast(people.count == 1 ? "Ringing \(people[0].name)" : "Ringing \(rung) people")
             } else if let lastRefusal {
                 showSheetToast(lastRefusal)
@@ -1358,6 +1390,16 @@ final class LinkCallInvites: ObservableObject {
                     self.loadProfiles(rows.map(\.uid))
                 }
             }
+    }
+
+    /// Owner 2026-10-28: after `FirestoreHub.swapped`. The old registration belongs to the stuck
+    /// client, so it is let go off the main thread and the same link is listened to again.
+    func reattachAfterSwap() {
+        guard let roomId, listener != nil else { return }
+        FirestoreHub.drop([listener])
+        listener = nil
+        self.roomId = nil
+        listen(roomId: roomId)
     }
 
     func stop() {
