@@ -776,6 +776,30 @@ final class GroupCallService: ObservableObject {
     func setMicLockedByAdmin(_ locked: Bool) {
         if micLockedByAdmin != locked { micLockedByAdmin = locked }
     }
+
+    /// ⛔ ALLOWED TO SPEAK = THE MIC COMES ON (owner 2026-10-28: "I unmute him and he is still
+    /// muted, he has to tap again; and I can't hear him for a long time"). Lifting the lock used to
+    /// leave the mic off, and a tap made while locked was thrown away, so nobody heard them until they
+    /// found the button. Now the admin's unmute turns their microphone on at once. The server lifts
+    /// the publish block before it sends the note, but the permission can reach this phone a moment
+    /// after the note does, so a mic that is not live yet is asked again twice, half a second apart.
+    func allowedToSpeak() {
+        setMicLockedByAdmin(false)
+        guard isActive, !leaving else { startMuted = false; micOn = true; return }
+        let gen = joinGeneration
+        micOn = true
+        syncMic()
+        Task { @MainActor [weak self] in
+            for _ in 0..<2 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let self, gen == self.joinGeneration, self.isActive, !self.leaving,
+                      !self.micLockedByAdmin else { return }
+                if self.room.localParticipant.isMicrophoneEnabled() { return }
+                self.micOn = true
+                self.syncMic()
+            }
+        }
+    }
     private func noteJoinPass(_ d: [String: Any]?) {
         guard let d else { return }
         setMicLockedByAdmin(d["micBlocked"] as? Bool == true)

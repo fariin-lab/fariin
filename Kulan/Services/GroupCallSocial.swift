@@ -339,7 +339,8 @@ final class GroupCallSocial: ObservableObject {
         case "micAllowed":
             // The server: an admin allowed me to speak again (callAdmin 'unmute', 2026-10-28).
             guard fromServer else { return }
-            GroupCallService.shared.setMicLockedByAdmin(false)
+            // Owner 2026-10-28: the mic comes on by itself (`allowedToSpeak`).
+            GroupCallService.shared.allowedToSpeak()
             let name = Self.clean(message["name"] as? String)
             GroupCallService.shared.showToast(name.isEmpty ? "You can speak now" : "\(name) allowed you to speak")
 
