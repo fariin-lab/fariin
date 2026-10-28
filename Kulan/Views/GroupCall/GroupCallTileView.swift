@@ -204,7 +204,26 @@ struct GroupCallTileView: View {
             // Muted. owner, 2026-10-06: not on the big focus tile, as the reference app hides it
             // there (the people list and VoiceOver still say it). It stays on grid, strip and pip,
             // and on fullscreen, which is me alone (I must see that I am muted).
-            if tile.isMuted && style != .focus {
+            // ⛔ NAMES ON THE TILES — owner 2026-10-28: "I'm not the big person, I'm this one". Grid
+            // and focus tiles showed photos only, so nobody could tell who was who, or which tile was
+            // their own. A small dark label at the bottom-leading corner: the name ("You" on mine),
+            // with the muted mark inside it where the badge used to be (not on focus, as before).
+            if (style == .grid || style == .focus) && width >= 90 {
+                HStack(spacing: 4) {
+                    if tile.isMuted && style != .focus {
+                        Image(systemName: "mic.slash.fill").font(.system(size: 11, weight: .semibold))
+                    }
+                    Text(tile.isLocal ? "You" : tile.name)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(Capsule().fill(.black.opacity(0.45)))
+                .padding(inset)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                .transition(.opacity)
+            } else if tile.isMuted && style != .focus {
                 badge("mic.slash.fill", size: compact ? 16 : 28, glyph: compact ? 9 : 16)
                     .padding(inset)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
