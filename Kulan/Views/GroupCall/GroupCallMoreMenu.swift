@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// The "…" button's panel on the group call screen (owner, 2026-10-06: the one button the controls
-/// capsule was allowed to gain). A small glass panel just above the capsule, not a system sheet, the
-/// way the reference app's "more" panel sits over its controls:
+/// The "…" button's panel on the group call screen. The "..." is the first button of the controls
+/// capsule (owner 2026-10-28, in Share Screen's place) and this small glass panel opens just above
+/// it, not a system sheet:
 ///
 /// - a row of quick emojis: a tap sends that reaction to everyone and closes the panel;
 /// - "Raise Hand" / "Lower Hand";
-/// - "Flip Camera", only while my camera is on;
-/// - "Share Screen" / "Stop Sharing", once in the room and never on a voice call link.
+/// - "Share Screen" / "Cancel Sharing" / "Stop Sharing", once in the room and never on a voice call link;
+/// - "Flip Camera", only while my camera is on.
 ///
 /// `GroupCallView` places it, draws the tap-outside catcher under it and keeps the chrome up while
 /// it is open. Every choice closes the panel (`onClose`).
@@ -60,17 +60,29 @@ struct GroupCallMoreMenu: View {
     private var rows: some View {
         VStack(spacing: 0) {
             row(handTitle, icon: handIcon) { social.setHand(!social.myHandUp) }
+            // Back in this menu (owner 2026-10-28; it was a bar button from 2026-10-22). Never on a
+            // voice call link. Pending (the system sheet is up) says that a tap cancels.
+            if shareOn || (service.isActive && !service.cameraLocked) {
+                divider
+                row(shareTitle, icon: shareOn ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle") {
+                    service.toggleScreenShare()
+                }
+            }
             if service.cameraOn {
                 divider
                 row("Flip Camera", icon: "arrow.triangle.2.circlepath.camera") { service.flipCamera() }
             }
-            // Screen sharing moved to its own button in the call bar (Kasim 2026-10-22).
         }
         .liquidGlass(RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
     private var handTitle: String { social.myHandUp ? "Lower Hand" : "Raise Hand" }
     private var handIcon: String { social.myHandUp ? "hand.raised.slash" : "hand.raised" }
+
+    private var shareOn: Bool { service.screenSharing || service.sharePending }
+    private var shareTitle: String {
+        service.screenSharing ? "Stop Sharing" : service.sharePending ? "Cancel Sharing" : "Share Screen"
+    }
 
     private var divider: some View {
         Rectangle()

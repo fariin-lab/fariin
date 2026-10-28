@@ -165,10 +165,6 @@ struct GroupCallView: View {
             CallLinkRequestStack()
                 .padding(.horizontal, 14)
                 .padding(.bottom, requestCardShowing ? 12 : 0)
-            sharePill
-                .padding(.bottom, ((service.screenSharing && front != nil) || service.sharePending) ? 12 : 0)
-                .animation(.easeInOut(duration: 0.2), value: service.screenSharing)
-                .animation(.easeInOut(duration: 0.2), value: service.sharePending)
             controls.padding(.horizontal, 14)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { controlsHeight = $0 }
                 .opacity(chromeVisible ? 1 : 0)
@@ -177,44 +173,10 @@ struct GroupCallView: View {
         }
     }
 
-    /// ⛔ YOU ARE SHARING, SAID ON THE SCREEN — owner 2026-10-28: he shared his screen in a group
-    /// call without knowing it; only the share button's white fill said so. The 1:1 call's signs
-    /// (`CallView.sharePill`): "Starting…" while the share comes up, then one red Stop Sharing pill
-    /// above the controls for as long as it runs, shown with the controls hidden too.
-    @ViewBuilder private var sharePill: some View {
-        // Live, the Stop Sharing button is inside the large sharing card (GroupCallSharingCard); this
-        // stays for the two-person look and anywhere the card is not on screen.
-        if service.screenSharing && front != nil {
-            Button {
-                Haptics.impact(.light)
-                service.toggleScreenShare()
-            } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: "rectangle.on.rectangle.slash").font(.system(size: 14, weight: .semibold))
-                    Text("Stop Sharing").font(.system(size: 15, weight: .semibold))
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 18)
-                .frame(height: 40)
-                .background(Color(.systemRed), in: Capsule())
-                .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Stop sharing screen")
-            .transition(.opacity.combined(with: .scale(scale: 0.96)))
-        } else if service.sharePending {
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small).tint(.white)
-                Text("Starting…").font(.system(size: 15, weight: .semibold))
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 18)
-            .frame(height: 40)
-            .liquidGlass(Capsule(), interactive: false)
-            .transition(.opacity.combined(with: .scale(scale: 0.96)))
-            .accessibilityElement(children: .combine)
-        }
-    }
+    // ⛔ NO SHARE PILL ABOVE THE CONTROLS (owner 2026-10-28, reverses the same day's "Starting…" /
+    // Stop Sharing pill). Sharing is started and stopped from the "..." menu, and the "..." button
+    // turns solid white while a share is starting or running, so it is still said on the screen.
+    // The big sharing card keeps its own Stop Sharing.
 
     /// Group stage with the chrome away: a tap where the header or the controls were brings them
     /// back. It sits UNDER the chrome stack, so it only gets the taps that stack lets through (the
@@ -238,23 +200,22 @@ struct GroupCallView: View {
     @ViewBuilder
     private var moreLayer: some View {
         if showMore {
-            ZStack(alignment: .topTrailing) {
+            ZStack(alignment: .bottom) {
                 Color.clear
                     .contentShape(Rectangle())
                     .ignoresSafeArea()
                     .onTapGesture { showMore = false }
                     .accessibilityLabel("Close menu")
                     .accessibilityAddTraits(.isButton)
-                // Under the header now, where its button is (Kasim 2026-10-22).
+                // Above the controls again, where its button now is (owner 2026-10-28).
                 GroupCallMoreMenu(onClose: { showMore = false })
-                    .padding(.top, Self.moreMenuDrop + headerHeight)
-                    .padding(.trailing, 14)
+                    .padding(.bottom, Self.moreMenuLift + controlsHeight)
             }
-            .transition(.opacity)
+            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
         }
     }
-    /// The header's top padding (10) and an 8pt gap: the panel hangs under the header.
-    private static let moreMenuDrop: CGFloat = 18
+    /// The chrome's bottom padding (10) and a 10pt gap: the panel sits just above the capsule.
+    private static let moreMenuLift: CGFloat = 20
 
     // MARK: - Screen (layout switches and the hide clock's own triggers)
 
@@ -874,8 +835,6 @@ struct GroupCallView: View {
                     .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)   // owner, 2026-10-06: Liquid Glass
             }
             .accessibilityLabel("Minimize")
-            // Balances the two buttons on the right, so the title stays centred.
-            Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
             Spacer()
             VStack(spacing: 2) {
                 Text(title).font(.headline).foregroundStyle(.white).lineLimit(1)
@@ -883,10 +842,8 @@ struct GroupCallView: View {
                     .lineLimit(1)   // owner, 2026-10-07: the ringing line wrapped onto two
             }
             Spacer()
-            HStack(spacing: 8) {
-                moreButton
-                participantsButton
-            }
+            // The "..." left the header for the controls (owner 2026-10-28); one button each side.
+            participantsButton
         }
     }
 
@@ -910,8 +867,9 @@ struct GroupCallView: View {
         // (`CallView.controlBar`): big circles, no names, Share Screen where the "..." was. The "..."
         // (raise hand, flip camera) moved up into the header. On a 375 pt phone:
         // 5 x 56 + 4 x 10 + 2 x 12 = 344, inside the 14 pt gutters (347).
+        // Owner 2026-10-28: the "..." takes Share Screen's place; Share Screen is in its menu.
         HStack(spacing: 10) {
-            shareButton
+            moreButton
             cameraButton
             speakerButton
             micButton
@@ -960,34 +918,16 @@ struct GroupCallView: View {
             .accessibilityLabel(service.speakerOn ? "Turn speaker off" : "Turn speaker on")
     }
 
-    // Share Screen, moved out of the "..." panel into the bar (Kasim 2026-10-22). Same rule as
-    // that row had: once the room is up, never on a voice call link. Solid white while sharing.
-    // Controls audit 4-B5 (2026-10-23): from the tap until the broadcast starts (the system sheet is
-    // up) the button said "Share Screen", and a second tap quietly ended the pending share. Now it
-    // shows the pending state, half lit, and says that a tap cancels.
-    private var shareButton: some View {
-        let can = service.isActive && !service.cameraLocked
-        let pending = service.sharePending && !service.screenSharing
-        let on = service.screenSharing || pending
-        return ctrl(on ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle",
-                    active: on) { service.toggleScreenShare() }
-            .disabled(!can && !on)
-            .opacity(pending ? 0.6 : (can || on ? 1 : 0.35))
-            .accessibilityLabel(service.screenSharing ? "Stop Sharing" : pending ? "Cancel Sharing" : "Share Screen")
-    }
-
-    // Owner, 2026-10-06: raise hand and flip camera live in its panel (`GroupCallMoreMenu`). They
-    // need the room, so it waits for the call to be joined. Kasim 2026-10-22: a header button now,
-    // beside Participants; its panel hangs under the header.
+    // ⛔ THE "..." IS IN THE CONTROLS, WHERE SHARE SCREEN WAS (owner 2026-10-28): its panel opens
+    // above the capsule with the emoji row, Raise Hand, Share Screen and Flip Camera. It needs the
+    // room, so it waits for the call to be joined. Solid white while a share is starting or
+    // running: with the share pill gone, this is the sign on screen that you are sharing.
     private var moreButton: some View {
-        Button { showMore.toggle(); armAutoHide() } label: {
-            Image(systemName: "ellipsis").font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)
-        }
-        .disabled(!moreEnabled)
-        .opacity(moreEnabled ? 1 : 0.35)
-        .accessibilityLabel("More")
+        let sharing = service.screenSharing || service.sharePending
+        return ctrl("ellipsis", active: sharing || showMore) { showMore.toggle(); armAutoHide() }
+            .disabled(!moreEnabled)
+            .opacity(moreEnabled ? 1 : 0.35)
+            .accessibilityLabel(sharing ? "More, sharing your screen" : "More")
     }
     private var moreEnabled: Bool { service.joinState == .joined }
 
