@@ -28,6 +28,8 @@ enum CallPipMorph {
     // moving different ways. The hand-over now happens in the last stretch, when both are small.
     static let fadeDelay: TimeInterval = 0.17
     static let fadeDuration: TimeInterval = 0.15
+    /// Restore only: the card's picture is gone by about the middle of the grow (owner 2026-10-28).
+    static let restoreFadeDuration: TimeInterval = 0.16
     static let cardRadius: CGFloat = 20
 
     /// A restore waiting for the call screen to reach the window. See `CallPipMorphProbe`.
@@ -222,7 +224,12 @@ enum CallPipMorph {
             card.frame = shown   // exactly over the card on screen once scaled
             v.alpha = 1
             InstantCover.release()   // the cover's cut is done; this flight must move
-            UIView.animate(withDuration: fadeDuration, delay: fadeDelay, options: [.curveEaseOut], animations: {
+            // ⛔ THE CARD'S PICTURE GOES EARLY ON THE WAY UP (owner 2026-10-28: "the card opens to 90%,
+            // then the picture changes"). The late hand-over is the SHRINK's rule (two faces side by
+            // side, 2026-10-07); growing, the stretched card picture sat over the real screen until
+            // ~90% and then swapped. Now it fades in the first half, so the real call screen, zoomed
+            // as one picture, is what grows.
+            UIView.animate(withDuration: restoreFadeDuration, delay: 0, options: [.curveEaseOut], animations: {
                 card.alpha = 0
             })
             UIView.animate(withDuration: duration, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0,
