@@ -5701,11 +5701,19 @@ struct ThreadView: View {
     private func followGroupCallPeople() async {
         guard groupCallActive, isGroup else { groupCallPeople = []; groupCallMicOn = []; return }
         let fn = Functions.functions(region: "me-central1").httpsCallable("groupCallPeek")
+        var passAt = Date.distantPast
         while !Task.isCancelled, groupCallActive, !notAMember {
             // In the call myself: the bar is not shown, so nobody is asked (audit 2026-10-20).
             if GroupCallService.shared.isActive {
                 try? await Task.sleep(nanoseconds: 12_000_000_000)
                 continue
+            }
+            // Owner 2026-10-28: Join sat on "Connecting…" while its pass was fetched. The pass is
+            // fetched while the bar shows (and again every 4 minutes, inside its 5-minute life), so
+            // Join lands at once, as answering a ring does (`prefetchJoin`).
+            if Date().timeIntervalSince(passAt) > 240 {
+                GroupCallService.shared.prefetchJoin(cid: cid)
+                passAt = Date()
             }
             if let r = try? await fn.call(["cid": cid]), let d = r.data as? [String: Any],
                let list = d["people"] as? [[String: Any]] {
