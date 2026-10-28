@@ -3918,6 +3918,7 @@ struct ThreadView: View {
             nameFor: { personName($0) },
             avatarFor: { conversation?.photos[$0] },
             roleFor: { isGroup ? conversation?.roles[$0]?.display : nil },   // owner 2026-10-18 Role
+            roleColorFor: { isGroup ? conversation?.roles[$0]?.color : nil },   // owner 2026-10-28
             resolveOriginal: { id in loadedMessage(id: id) },   // owner audit 2026-10-06 chat #45
             quoteHiddenByBlock: { repo.isHiddenByBlock(id: $0) },
             storyIsLive: { storyId, author in

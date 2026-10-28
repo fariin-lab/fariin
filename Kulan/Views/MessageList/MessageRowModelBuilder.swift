@@ -35,6 +35,8 @@ struct MessageRowContext {
     var avatarFor: (String) -> String?
     /// owner 2026-10-18: a group member's Role as the chip shows it, or nil. Groups only.
     var roleFor: (String) -> String? = { _ in nil }
+    /// The colour name of that member's tag (owner 2026-10-28), or nil.
+    var roleColorFor: (String) -> String? = { _ in nil }
     var resolveOriginal: (String) -> Message?
     /// The quoted message was sent while I had its author blocked: never shown, so a reply to it
     /// says "Not available" instead of the copy of its words the reply carries.
@@ -308,7 +310,8 @@ enum MessageRowModelBuilder {
                 startsRun: first,
                 avatarUrl: ctx.avatarFor(msg.authorId),
                 verified: VerificationIndex.of(msg.authorId)?.showsBadge == true,
-                role: ctx.roleFor(msg.authorId))
+                role: ctx.roleFor(msg.authorId),
+                roleColor: ctx.roleColorFor(msg.authorId))
         }
 
         var storyReply: StoryReplyChrome?

@@ -47,6 +47,9 @@ struct SenderChrome: Equatable {
     /// owner 2026-10-18: their Role in this group ("🎨 Designer", `GroupRole.display`), drawn as a
     /// small chip after the name and tick inside the first bubble. nil = none.
     var role: String? = nil
+    /// The tag's colour name (`GroupRole.colors`, owner 2026-10-28: the chip in chat ignored it and
+    /// drew the sender's name colour). nil = the name colour, as before.
+    var roleColor: String? = nil
 }
 
 /// The tinted quote box inside a bubble that is a reply.

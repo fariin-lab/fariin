@@ -1332,7 +1332,12 @@ enum MessageRowLayout {
     /// never carry a sender, so never a chip.
     private static func roleChip(_ b: BubbleRow) -> (attr: NSAttributedString, size: CGSize, tint: UIColor)? {
         guard nameInBubble(b), let s = b.sender, let role = s.role, !role.isEmpty else { return nil }
-        let color = BubblePalette.senderColor(s.colorSeed)
+        // The colour picked for the tag (owner 2026-10-28: it showed everywhere but here); a tag
+        // with none keeps the sender's name colour.
+        let color = GroupRole.rgb(s.roleColor).map { v in
+            UIColor(red: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255,
+                    blue: CGFloat(v & 0xFF) / 255, alpha: 1)
+        } ?? BubblePalette.senderColor(s.colorSeed)
         let para = NSMutableParagraphStyle()
         para.lineBreakMode = .byTruncatingTail
         let attr = NSAttributedString(string: role, attributes: [
