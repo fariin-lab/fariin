@@ -35,6 +35,10 @@ struct NewGroupView: View {
     @State private var avatarData: Data?
     @State private var showPhotoPicker = false
     @State private var pickedImage: UIImage?
+    /// Owner 2026-10-28: the camera circle went straight to the photo library, with no way to take a
+    /// picture. It asks first now: Take Photo, Choose Photo, and Remove Photo once one is set.
+    @State private var showPhotoOptions = false
+    @State private var showCamera = false
     @State private var cropItem: GroupCropItem?
     @State private var disappearSeconds = UserDefaults.standard.integer(forKey: "defaultDisappearSeconds")
     @State private var query = ""
@@ -209,7 +213,7 @@ struct NewGroupView: View {
         List {
             Section {
                 HStack(spacing: 16) {
-                    Button { nameFocused = false; showPhotoPicker = true } label: { groupAvatarThumb }
+                    Button { nameFocused = false; showPhotoOptions = true } label: { groupAvatarThumb }
                         .buttonStyle(.plain)
                         .accessibilityLabel(avatarData == nil ? "Set Group Photo" : "Change Group Photo")
                     TextField("Group Name", text: $groupName)
@@ -306,6 +310,20 @@ struct NewGroupView: View {
         .task {
             try? await Task.sleep(for: .milliseconds(600))
             if !Task.isCancelled { nameFocused = true }
+        }
+        .confirmationDialog("Group Photo", isPresented: $showPhotoOptions, titleVisibility: .hidden) {
+            Button("Take Photo") { showCamera = true }
+            Button("Choose Photo") { showPhotoPicker = true }
+            if avatarData != nil {
+                Button("Remove Photo", role: .destructive) { avatarData = nil }
+            }
+        }
+        // A taken photo goes through the same circle cropper as a chosen one.
+        .fullScreenCover(isPresented: $showCamera, onDismiss: {
+            if let ui = pickedImage { pickedImage = nil; cropItem = GroupCropItem(image: ui) }
+        }) {
+            CameraPicker { data in pickedImage = UIImage(data: data) }
+                .ignoresSafeArea()
         }
         // Picked photo -> the circle cropper once the picker is down, as Edit Group (owner 2026-10-23).
         .sheet(isPresented: $showPhotoPicker, onDismiss: {
