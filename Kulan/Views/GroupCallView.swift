@@ -539,7 +539,19 @@ struct GroupCallView: View {
             .allowsHitTesting(false)
             .background(alignment: .bottom) {
                 ZStack {
-                    if front == nil, !groupWaiting {
+                    if front == nil, !groupWaiting, let pair = duoSharePair {
+                        // Two people and a shared screen: the 1:1 call's share layout (owner
+                        // 2026-10-28), in the stage's slot, taking the header's and the controls'
+                        // room when they hide, as the stage does.
+                        GroupCallDuoShareView(stage: stage, local: pair.local, remote: pair.remote,
+                                              iAmSharing: service.screenSharing,
+                                              onTap: { toggleChrome() },
+                                              onStop: { service.toggleScreenShare() })
+                            .padding(.bottom, chromeVisible ? 0 : -(controlsHeight + 16))
+                            .padding(.top, chromeVisible ? 0 : -(headerHeight + 16))
+                            .animation(GroupCallMotion.fade, value: chromeVisible)
+                            .transition(.opacity)
+                    } else if front == nil, !groupWaiting {
                         // ⛔ THE STAGE STARTS UNDER THE HEADER — owner 2026-10-28, two screenshots
                         // with a red line where the call's name and buttons end: the tiles ran up
                         // under the clock and the battery (the 2026-10-07 full-screen stage, lifted
@@ -619,6 +631,17 @@ struct GroupCallView: View {
     private var frontKind: Int {
         guard let f = front else { return 0 }
         return f.remote == nil ? 1 : 2
+    }
+    /// Me and exactly one other person in a joined call, with a screen being shared by either of us:
+    /// the 1:1 call's share layout (`GroupCallDuoShareView`, owner 2026-10-28). Three or more keep
+    /// the group stage.
+    private var duoSharePair: (local: CallTile, remote: CallTile)? {
+        guard service.joinState == .joined else { return nil }
+        var local: CallTile?, remote: CallTile?, remotes = 0
+        for t in stage.tiles { if t.isLocal { local = t } else { remotes += 1; remote = t } }
+        guard remotes == 1, let local, let remote,
+              remote.isScreenShare || service.screenSharing else { return nil }
+        return (local, remote)
     }
     private var duoPair: (local: CallTile, remote: CallTile)? {
         guard let f = front, let remote = f.remote else { return nil }
