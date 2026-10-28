@@ -119,7 +119,7 @@ struct LiveGroupCallRow: View {
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 16).frame(height: 32)
-                    .background(Capsule().fill(Color.green))
+                    .background(Capsule().fill(Color.fariinBlue))   // owner 2026-10-28: blue, was green
             }
             .buttonStyle(.plain)
             .accessibilityLabel(isMine ? "Return to the call in \(title)" : "Join the call in \(title)")

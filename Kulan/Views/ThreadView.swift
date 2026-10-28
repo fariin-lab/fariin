@@ -10138,10 +10138,11 @@ private struct CallBarOrPin<Pin: View>: View {
                     Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 8)
+                // Fariin blue, the one action colour (owner 2026-10-28; was green).
                 Text("JOIN")
                     .font(.subheadline.weight(.bold)).foregroundStyle(.white)
                     .padding(.horizontal, 16).frame(minHeight: 32)
-                    .background(Capsule().fill(Color.green))
+                    .background(Capsule().fill(Color.fariinBlue))
             }
             .padding(.leading, 10).padding(.trailing, 8).padding(.vertical, 4)
             .frame(minHeight: 52)
