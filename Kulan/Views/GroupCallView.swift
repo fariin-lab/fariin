@@ -631,6 +631,12 @@ struct GroupCallView: View {
     @State private var winInsets = EdgeInsets()
     @State private var headerHeight: CGFloat = 44
     @State private var controlsHeight: CGFloat = 0
+    /// The header's name and status sizes, the 1:1 call's (CallView, owner 2026-10-28): 22 and 15,
+    /// growing with the text size and capped so the header still fits.
+    @ScaledMetric(relativeTo: .title) private var headerNameScaled: CGFloat = 22
+    @ScaledMetric(relativeTo: .subheadline) private var headerStatusScaled: CGFloat = 15
+    private var headerNameSize: CGFloat { min(headerNameScaled, 40) }
+    private var headerStatusSize: CGFloat { min(headerStatusScaled, 24) }
     /// The join-request cards' height (link creator), so the "..." panel can sit above them.
     @State private var requestsHeight: CGFloat = 0
 
@@ -841,20 +847,23 @@ struct GroupCallView: View {
             }
             .accessibilityLabel("Minimize")
             Spacer()
-            VStack(spacing: 2) {
-                Text(title).font(.headline).foregroundStyle(.white).lineLimit(1)
+            // The 1:1 call's own header sizes (CallView nameSize / statusSize, owner 2026-10-28):
+            // 22 pt bold name, 15 pt line under it, 3 pt apart, both following the text size.
+            VStack(spacing: 3) {
+                Text(title).font(.system(size: headerNameSize, weight: .bold)).foregroundStyle(.white)
+                    .lineLimit(1).minimumScaleFactor(0.6)
                 // Two people (the 1:1 look): their mute is the word "Muted" between the name and the
                 // timer, the 1:1 call's own design (CallView, owner 2026-10-10), instead of a dot in
                 // the corner (owner 2026-10-28). Three or more keep the tiles' own marks.
                 if let pair = duoPair, pair.remote.isMuted {
                     Text("Muted")
-                        .font(.caption.weight(.semibold))
+                        .font(.system(size: headerStatusSize, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.9))
                         .lineLimit(1)
                         .accessibilityLabel("\(pair.remote.name) is muted")
                         .transition(.opacity)
                 }
-                subtitleView.font(.caption).foregroundStyle(.white.opacity(0.7))
+                subtitleView.font(.system(size: headerStatusSize)).monospacedDigit().foregroundStyle(.white.opacity(0.75))
                     .lineLimit(1)   // owner, 2026-10-07: the ringing line wrapped onto two
             }
             .animation(.easeInOut(duration: 0.2), value: duoPair?.remote.isMuted == true)
