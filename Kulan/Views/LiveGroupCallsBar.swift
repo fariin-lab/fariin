@@ -114,12 +114,15 @@ struct LiveGroupCallRow: View {
             }
             Spacer(minLength: 8)
             faces
+            // Owner 2026-10-28: blue liquid glass (was a flat green pill). The glass sits on the pill
+            // and the button stays plain: a styled button in a List row turns the WHOLE row into it,
+            // so a tap anywhere on the row would join the call.
             Button(action: onJoin) {
                 Text(isMine ? "RETURN" : "JOIN")
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 16).frame(height: 32)
-                    .background(Capsule().fill(Color.fariinBlue))   // owner 2026-10-28: blue, was green
+                    .glassEffect(.regular.tint(Color.fariinBlue).interactive(), in: Capsule())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(isMine ? "Return to the call in \(title)" : "Join the call in \(title)")
