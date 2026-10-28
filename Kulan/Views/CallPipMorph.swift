@@ -133,7 +133,10 @@ enum CallPipMorph {
                 // One picture at a time: the screen shrinks alone for most of the flight and hands
                 // over to the card's picture in a short cross-fade near the end, when both are small
                 // and close, instead of two faces visible side by side from the first frame.
-                UIView.animate(withDuration: fadeDuration, delay: fadeDelay, options: [.curveEaseIn], animations: {
+                // Owner 2026-10-28 (reverses the 2026-10-07 late hand-over): the screen shrank almost
+                // to card size and THEN the picture changed. The hand-over is early now, the same as
+                // the restore, so it is the card's own picture that flies into place.
+                UIView.animate(withDuration: restoreFadeDuration, delay: 0, options: [.curveEaseOut], animations: {
                     screen.alpha = 0
                     card?.alpha = 1
                 })
