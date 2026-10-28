@@ -365,6 +365,17 @@ import UIKit
         for v in live.allObjects { v.reposition() }
     }
 
+    /// The send glide is played by Core Animation, not scroll ticks (`NativeMessageList.startSendGlide`),
+    /// so a slice is placed for where the list will be. This gives every slice inside `root` the
+    /// glide's own keyframes (additive `position.y`, the same values as the list's), which keep the
+    /// picture still on the screen while its bubble slides. `animation` nil removes them.
+    static func followGlide(in root: UIView, animation: CAAnimation?, key: String) {
+        for v in live.allObjects where v.isDescendant(of: root) {
+            if let animation { v.imageView.layer.add(animation, forKey: key) }
+            else { v.imageView.layer.removeAnimation(forKey: key) }
+        }
+    }
+
     /// Every live slice inside `root`, for a cell the list has just PLACED (see
     /// `MessageRowCell.apply(_:)`). A cell is configured before the list hands it its frame, so the
     /// `reposition` inside `BubbleFillView.apply` measures the cell where it USED to be: a recycled

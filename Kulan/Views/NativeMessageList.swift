@@ -2689,6 +2689,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         a.duration = Self.sendDuration
         a.calculationMode = .linear
         collectionView.layer.add(a, forKey: Self.sendGlideKey)
+        // The blurred wallpaper under incoming bubbles was placed for the final offset; the same
+        // values on its own position keep it still on the screen while the rows slide over it.
+        let w = a.copy() as! CAKeyframeAnimation
+        w.keyPath = "position.y"
+        WallpaperBlurSliceView.followGlide(in: collectionView, animation: w, key: Self.sendGlideKey)
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.sendDuration) { [weak self] in
             guard let self, let g = self.sendGlide, g.seq == seq, seq == self.glideSeq,
                   self.programmaticScrollAnimating else { return }
@@ -2718,7 +2723,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         sendGlideLink?.invalidate()
         sendGlideLink = nil
         // A hand or a newer move ends the glide where the list really is.
-        if sendGlide != nil { collectionView.layer.removeAnimation(forKey: Self.sendGlideKey) }
+        if sendGlide != nil {
+            collectionView.layer.removeAnimation(forKey: Self.sendGlideKey)
+            WallpaperBlurSliceView.followGlide(in: collectionView, animation: nil, key: Self.sendGlideKey)
+        }
         sendGlide = nil
     }
 

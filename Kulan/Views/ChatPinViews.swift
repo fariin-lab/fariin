@@ -860,7 +860,9 @@ struct ChatKeySlotView: View {
                 let t = Double(s) / Double(steps)
                 let eased = 1 - pow(1 - t, 3)
                 let value = s == steps ? target : Int(Double(target) * eased)
-                let digits = String(format: "%06d", value).compactMap(\.wholeNumberValue)
+                let text = String(value)
+                let digits = (String(repeating: "0", count: max(0, count - text.count)) + text)
+                    .compactMap(\.wholeNumberValue)
                 withAnimation(.snappy(duration: 0.18)) { shown = digits }
                 if s % 4 == 0 { Haptics.impact(.light) }
                 try? await Task.sleep(nanoseconds: 60_000_000)
