@@ -103,8 +103,12 @@ enum ChatService {
             "users": [uid, other.id],
             "names": [uid: me?.name ?? "Me", other.id: other.name.isEmpty ? other.handle : other.name],
             "photos": photos,
-            "updatedAt": FieldValue.serverTimestamp(),
         ]
+        // ⛔ OPENING A CHAT DOES NOT MOVE IT — owner 2026-10-28: tapping an old chat far down the
+        // list (no message sent) put it at the top with the time of the tap. The list sorts by
+        // `updatedAt`, and this write stamped it on every open. Only the creating write stamps it
+        // now (and a read that did not answer, as before: then we do not know the chat exists).
+        if !exists { seed["updatedAt"] = FieldValue.serverTimestamp() }
         if !exists {
             seed["unreadCount"] = [uid: 0, other.id: 0]
             seed["typing"] = [uid: false, other.id: false]
