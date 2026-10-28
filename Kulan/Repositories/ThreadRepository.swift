@@ -194,6 +194,11 @@ final class ThreadRepository {
         didSet { ThreadMessageCache.shared.storePending(cid, pending) }
     }
     var canLoadOlder = true
+    /// The phone's saved copy opened with less than a page and the server has not answered yet: the
+    /// whole history is almost certainly here already. The group's welcome card (ThreadView
+    /// `groupHistoryCard`) shows on that instead of waiting for the server (owner 2026-10-28: "the
+    /// card appears late"). The server's first window decides from then on (`canLoadOlder`).
+    var cacheLooksWhole = false
     var loadingOlder = false
     /// Owner audit 2026-10-06 chat #1: completions of `loadOlder` calls made while a page was in
     /// flight. They run when that page lands, never before.
@@ -1411,7 +1416,9 @@ final class ThreadRepository {
             oldestDocFromCacheWindow = fromCache
         }
         if !didInitialLoad { didInitialLoad = true }
+        if fromCache && !sawServerWindow { cacheLooksWhole = docs.count < pageSize }
         if !fromCache && !sawServerWindow {
+            cacheLooksWhole = false   // the server's window decides from here (`canLoadOlder`)
             sawServerWindow = true
             serverWindowSettled = true   // published with the rebuild below, in the same update
             NSLog("[REOPEN] repo first SERVER window docs=%ld", docs.count)

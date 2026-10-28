@@ -1148,7 +1148,8 @@ struct ThreadView: View {
     /// whole history is loaded (`!repo.canLoadOlder`), so it is never wedged between pages; scrolling
     /// up to the start shows it. The empty chat keeps the centred card (`encryptionNotice`).
     private var groupHistoryCard: (view: AnyView, key: String)? {
-        guard repo.didInitialLoad, isGroup, !notAMember, !preview, !repo.canLoadOlder,
+        // `cacheLooksWhole` (owner 2026-10-28): from the saved copy, before the server has answered.
+        guard repo.didInitialLoad, isGroup, !notAMember, !preview, !repo.canLoadOlder || repo.cacheLooksWhole,
               let conv = conversation, !repo.items.isEmpty else { return nil }
         let key = [conv.id, conv.title, conv.avatarUrl ?? "", "\(conv.users.count)", "\(conv.admins.count)",
                    conv.createdBy, "\(dark)", "\(conv.hashValue)"].joined(separator: "|")
