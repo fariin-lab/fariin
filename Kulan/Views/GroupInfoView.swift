@@ -583,10 +583,10 @@ struct GroupInfoView: View {
             }
             // The count stays under the name (owner 2026-10-20, reversing the same day's removal).
             // The first faces in front of the count (owner 2026-10-20), people with a photo first.
-            // Not on a group whose members are hidden (2026-10-27, `membersHidden`).
-            if !membersHidden {
+            // Owner 2026-10-28: a group whose members are hidden still shows HOW MANY (the count
+            // says nothing about who); only the faces in front of it go, with the list.
             HStack(spacing: 6) {
-                if !countFaces.isEmpty {
+                if !membersHidden, !countFaces.isEmpty {
                     HStack(spacing: -7) {
                         ForEach(Array(countFaces.enumerated()), id: \.element) { i, uid in
                             AvatarView(name: conv?.names[uid] ?? "", photoUrl: conv?.photos[uid], size: 22)
@@ -598,7 +598,6 @@ struct GroupInfoView: View {
                 }
                 // The reference app's subtitle (owner 2026-10-20): 16 pt regular, its grey.
                 Text(memberCountText).font(.system(size: 16)).foregroundStyle(Color(hex: 0x8E8E93))
-            }
             }
             // The description itself is a card under the actions now (owner 2026-10-26).
             if desc.isEmpty, canEditInfo {
@@ -627,9 +626,9 @@ struct GroupInfoView: View {
 
     // MARK: Hidden members (owner 2026-10-27, the founder)
 
-    /// ⛔ THE GROUP'S MEMBERS ARE HIDDEN ON ITS PROFILE (`hideMembers`): no list, no count, no admins
+    /// ⛔ THE GROUP'S MEMBERS ARE HIDDEN ON ITS PROFILE (`hideMembers`): no list, no faces, no admins
     /// and no Owner label for anyone but Fariin staff, the group's own owner and admins included.
-    /// Messages are unchanged (his choice). Only staff set it, through the server.
+    /// Messages are unchanged (his choice). The count stays (owner 2026-10-28). Only staff set it.
     private var membersHidden: Bool { conv?.hideMembers == true && !AdminStore.shared.isAdmin }
 
     private var memberCountText: String {
