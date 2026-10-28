@@ -21,14 +21,19 @@ struct AddPeopleSheet: View {
     /// "+ Add to call" button. Nil = the ad-hoc look the owner chose on 2026-10-07, unchanged.
     /// The number is the cap on people in the call, the invited counted in.
     let linkCap: Int?
+    /// A group chat's call (owner 2026-10-28): the people to choose from are the group's members,
+    /// not my 1:1 chats. Nil = my chats, as before.
+    let candidates: [CallMember]?
 
     init(alreadyIn: Set<String>, notes: [String: String] = [:], unavailable: Set<String> = [],
-         actionTitle: String = "Add to call", linkCap: Int? = nil, onAdd: @escaping ([CallMember]) -> Void) {
+         actionTitle: String = "Add to call", linkCap: Int? = nil, candidates: [CallMember]? = nil,
+         onAdd: @escaping ([CallMember]) -> Void) {
         self.alreadyIn = alreadyIn.filter { !$0.isEmpty }
         self.notes = notes
         self.unavailable = unavailable.subtracting(alreadyIn)
         self.actionTitle = actionTitle
         self.linkCap = linkCap
+        self.candidates = candidates
         self.onAdd = onAdd
     }
 
@@ -72,6 +77,9 @@ struct AddPeopleSheet: View {
     /// One entry per person, newest chat first.
     private var people: [CallMember] {
         var seen = Set<String>()
+        if let candidates {
+            return candidates.filter { !$0.uid.isEmpty && $0.uid != me && seen.insert($0.uid).inserted }
+        }
         return chats.map { member($0) }.filter { seen.insert($0.uid).inserted }
     }
 
@@ -84,7 +92,8 @@ struct AddPeopleSheet: View {
     /// The app keeps no per-chat message count, so "frequently" is the most recent people, as in
     /// the forward picker and New Message.
     private var frequent: [CallMember] {
-        trimmedQuery.isEmpty ? Array(people.prefix(7)) : []
+        // A group's members are listed A-Z only: "frequently contacted" means nothing there.
+        trimmedQuery.isEmpty && candidates == nil ? Array(people.prefix(7)) : []
     }
 
     private var matches: [CallMember] {
@@ -129,9 +138,12 @@ struct AddPeopleSheet: View {
                             ForEach(matches) { row($0) }
                         }
                     } else if people.isEmpty {
-                        Text("Chat with someone first to add them here.").foregroundStyle(.secondary)
+                        Text(candidates != nil ? "Everyone in the group is already here."
+                                               : "Chat with someone first to add them here.").foregroundStyle(.secondary)
                     } else {
-                        Section { ForEach(frequent) { row($0) } } header: { sectionTitle("Frequently contacted") }
+                        if !frequent.isEmpty {
+                            Section { ForEach(frequent) { row($0) } } header: { sectionTitle("Frequently contacted") }
+                        }
                         ForEach(sections) { s in
                             Section { ForEach(s.people) { row($0) } } header: { sectionTitle(s.letter) }
                                 .id("az-\(s.letter)")

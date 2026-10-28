@@ -931,7 +931,9 @@ final class GroupCallService: ObservableObject {
     private var someoneJoined = false
     /// Everyone who has been in the room with me this call: someone who came and left is not
     /// "ringing" again (`stillRinging`).
-    private var everHereUids: Set<String> = []
+    /// Everyone I have seen in this call. Read by the people sheet (owner 2026-10-28: someone who left
+    /// is nudged, never rung again).
+    private(set) var everHereUids: Set<String> = []
     private func noteRoomPeople() {
         guard isActive, room.connectionState == .connected else { return }
         if room.remoteParticipants.isEmpty {

@@ -41,6 +41,8 @@ struct GroupCallParticipantsSheet: View {
     @State private var nudgedAt: [String: Date] = [:]
     /// Group chat calls: when I last rang each person again from here (the button's one-minute wait).
     @State private var rangAgainAt: [String: Date] = [:]
+    /// Group chat calls: the call doc's `joined` (everyone who has been in it), live while open.
+    @State private var callJoined: Set<String> = []
     /// A short line at the foot of the sheet ("Nudged X", a refusal).
     @State private var sheetToast: String?
     @State private var sheetToastTask: Task<Void, Never>?
@@ -75,9 +77,11 @@ struct GroupCallParticipantsSheet: View {
         let name: String
         let photoUrl: String?
         let subtitle: String?
-        /// Group chat calls (ring again, 2026-10-23): this row has a ring button.
-        var ringable = false
+        /// Group chat calls: the row's button. Ring (2026-10-23) for someone rung who has not come;
+        /// Notify (owner 2026-10-28) for someone who was in the call and left: never rung again.
+        var action: RowAction = .none
     }
+    private enum RowAction { case none, ring, notify }
 
     /// Everyone connected right now: you first, then by name (the reference app's order; ties by id
     /// so two people with one name do not swap places on every update).
@@ -128,41 +132,73 @@ struct GroupCallParticipantsSheet: View {
     /// (`groupCallRingAgain`): people whose ring went unanswered, and people the first ring skipped
     /// (muted the group, a group too big to ring). A decline stands: no button on "Declined". Busy
     /// is not a no, so it keeps the button. Someone rung from here reads "Ringing…" for the minute.
+    ///
+    /// ⛔ OWNER 2026-10-28: ONLY PEOPLE THIS CALL HAS TOUCHED. The rest of the group is no longer
+    /// listed with a ring button each; they are rung from Add People (the sheet's first row). And
+    /// someone who was in the call and LEFT is never rung again (the server refuses it too,
+    /// `ringAgainSkipReason` 'joined'): their row says "Left" and its button sends one notification
+    /// asking them back (`groupCallNudge`).
     private func groupInvited(cid: String, here: Set<String>, at now: Date) -> [Row] {
         let me = service.myUid
+        let left = leftUids(here: here)
         // `stillRinging`, not `ringingMembers` (owner 2026-10-27): the people still being rung stay
         // listed after the first person came; `ringingMembers` empties at the first answer.
-        let ringing = service.stillRinging(at: now).filter { !here.contains($0.uid) && $0.uid != me }
+        let ringing = service.stillRinging(at: now).filter { !here.contains($0.uid) && $0.uid != me && !left.contains($0.uid) }
         var rows = ringing.map { Row(id: $0.uid, name: $0.name, photoUrl: $0.photoUrl, subtitle: "Ringing…") }
         var listed = Set(ringing.map(\.uid))
-        let conv = ConversationsRepository.shared.conversations.first { $0.id == cid }
-        func name(_ uid: String) -> String {
-            ContactNames.shared.name(for: uid) ?? conv?.names[uid].flatMap { $0.isEmpty ? nil : $0 } ?? "Member"
+        for uid in left.sorted(by: { groupName(cid, $0) < groupName(cid, $1) }) {
+            rows.append(Row(id: uid, name: groupName(cid, uid), photoUrl: groupPhoto(cid, uid),
+                            subtitle: "Left", action: .notify))
+            listed.insert(uid)
         }
-        func photo(_ uid: String) -> String? { conv?.photos[uid].flatMap { $0.isEmpty ? nil : $0 } }
         let answered = service.declinedUids.union(service.busyUids).subtracting(here).subtracting(listed)
         for uid in answered.sorted() where uid != me {
             let declined = service.declinedUids.contains(uid)
             let rangNow = !declined && ringingAgain(uid, at: now)
-            rows.append(Row(id: uid, name: name(uid), photoUrl: photo(uid),
+            rows.append(Row(id: uid, name: groupName(cid, uid), photoUrl: groupPhoto(cid, uid),
                             subtitle: declined ? "Declined" : rangNow ? "Ringing…" : "Busy",
-                            ringable: !declined))
+                            action: declined ? .none : .ring))
             listed.insert(uid)
         }
-        // The rest of the group, by name. A very big group lists its first ringAgainListMax.
-        let rest: [String] = (conv?.users ?? []).filter { $0 != me && !here.contains($0) && !listed.contains($0) }
-        var named: [(uid: String, name: String)] = rest.map { uid in (uid: uid, name: name(uid)) }
-        named.sort { a, b in a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending }
-        for p in named.prefix(Self.ringAgainListMax) {
-            rows.append(Row(id: p.uid, name: p.name, photoUrl: photo(p.uid),
-                            subtitle: ringingAgain(p.uid, at: now) ? "Ringing…" : "Not in the call",
-                            ringable: true))
+        // Rung from Add People (or rung once and not answered): still on the list, with Ring.
+        for uid in rangAgainAt.keys.sorted() where uid != me && !here.contains(uid) && !listed.contains(uid) {
+            rows.append(Row(id: uid, name: groupName(cid, uid), photoUrl: groupPhoto(cid, uid),
+                            subtitle: ringingAgain(uid, at: now) ? "Ringing…" : "Didn't join", action: .ring))
         }
         return rows
     }
 
-    /// How many not-joined members a group chat call's sheet lists with a ring button.
-    private static let ringAgainListMax = 100
+    private func groupConv(_ cid: String) -> Conversation? {
+        ConversationsRepository.shared.conversations.first { $0.id == cid }
+    }
+    private func groupName(_ cid: String, _ uid: String) -> String {
+        ContactNames.shared.name(for: uid) ?? groupConv(cid)?.names[uid].flatMap { $0.isEmpty ? nil : $0 } ?? "Member"
+    }
+    private func groupPhoto(_ cid: String, _ uid: String) -> String? {
+        groupConv(cid)?.photos[uid].flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// Was in this call and is not now: the call doc's `joined` (the server's word, read while the
+    /// sheet is open) and everyone this phone saw in the room.
+    private func leftUids(here: Set<String>) -> Set<String> {
+        callJoined.union(service.everHereUids).subtracting(here).subtracting([service.myUid, ""])
+    }
+
+    /// Add People on a group chat's call: the group's members, with everyone already in, rung,
+    /// left or who declined shown but not pickable.
+    private func groupAddCandidates(_ cid: String) -> [CallMember] {
+        (groupConv(cid)?.users ?? []).map { CallMember(uid: $0, name: groupName(cid, $0), photoUrl: groupPhoto(cid, $0)) }
+    }
+    private func groupAddNotes(here: Set<String>) -> [String: String] {
+        let now = Date()
+        var notes: [String: String] = [:]
+        for uid in here { notes[uid] = "In this call" }
+        for uid in leftUids(here: here) { notes[uid] = "Left · notify them from the list" }
+        for uid in service.declinedUids where notes[uid] == nil { notes[uid] = "Declined" }
+        for m in service.stillRinging(at: now) where notes[m.uid] == nil { notes[m.uid] = "Ringing…" }
+        for uid in rangAgainAt.keys where notes[uid] == nil && ringingAgain(uid, at: now) { notes[uid] = "Ringing…" }
+        return notes
+    }
     /// The server's own wait (groupCallRingAgain): one ring again per person per minute.
     private static let ringAgainWait: TimeInterval = 60
 
@@ -252,6 +288,28 @@ struct GroupCallParticipantsSheet: View {
                 .padding(.vertical, 6)
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+            }
+        }
+    }
+
+    /// ⛔ ADD PEOPLE, THE FIRST ROW (owner 2026-10-28, as the reference app has it): a group chat's call rings
+    /// more of the group from here, picked from the group's members.
+    @ViewBuilder private var groupAddSection: some View {
+        if case .group? = service.activeRoom, service.isActive {
+            Section {
+                Button { showAdd = true } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "person.badge.plus")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 36, height: 36)
+                            .background(Circle().fill(Color.fariinBlue))
+                        Text("Add People").foregroundStyle(Color.fariinBlue)
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -468,6 +526,7 @@ struct GroupCallParticipantsSheet: View {
         // Ticks so "Ringing…" turns into "Didn't join" without anyone touching the sheet.
         TimelineView(.periodic(from: .now, by: 5)) { context in
             List {
+                groupAddSection
                 raisedHandsSection
                 waitingSection
                 shareSection
@@ -544,8 +603,8 @@ struct GroupCallParticipantsSheet: View {
         .environment(\.colorScheme, .dark)
         .preferredColorScheme(.dark)
         .presentationBackground(Color(.systemGroupedBackground))
-        // Owner, 2026-10-06: opens at half height, so the call stays in view; pull up for the rest.
-        .presentationDetents([.medium, .large])
+        // Owner 2026-10-28: opens full height, always (it opened at half, reversing 2026-10-06).
+        .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         // Names and photos come from the service's member list; a stage built by the fallback init
         // has not had them yet, and an invite adds members while the sheet is open.
@@ -561,10 +620,29 @@ struct GroupCallParticipantsSheet: View {
             if service.isLink, let sid = try? await service.room.sid() { linkInvites.currentSid = sid.stringValue }
         }
         .onDisappear { linkInvites.stop() }
+        // Group chat calls: who has been in the call (the server's `joined`), for the "Left" rows.
+        .task(id: groupCid) {
+            guard let cid = groupCid else { return }
+            let ref = Firestore.firestore().collection("groupCalls").document(cid)
+            let stream = AsyncStream<Set<String>> { cont in
+                let reg = ref.addSnapshotListener { snap, _ in
+                    cont.yield(Set(snap?.data()?["joined"] as? [String] ?? []))
+                }
+                cont.onTermination = { _ in reg.remove() }
+            }
+            for await joined in stream { callJoined = joined }
+        }
         .overlay(alignment: .bottom) { toastView }
         .animation(.easeInOut(duration: 0.2), value: sheetToast)
         .sheet(isPresented: $showAdd) {
-            if service.isAdhoc {
+            if let cid = groupCid {
+                let here = Set(stage.tiles.map(\.uid))
+                let notes = groupAddNotes(here: here)
+                AddPeopleSheet(alreadyIn: Set(notes.keys), notes: notes, actionTitle: "Ring",
+                               candidates: groupAddCandidates(cid)) { people in
+                    ringPeople(people.map { ($0.uid, ContactNames.shared.name(for: $0.uid) ?? $0.name) })
+                }
+            } else if service.isAdhoc {
                 // `removedUids`: server-written, read by the service (audit M-102, fix/F4).
                 let removed = service.removedUids
                 AddPeopleSheet(alreadyIn: Set(service.members.map(\.uid)),
@@ -884,8 +962,8 @@ struct GroupCallParticipantsSheet: View {
             // Three controls in one row: borderless, so the row tap, the mic and the menu each keep
             // their own. The mic is the one-tap mute (owner, 2026-10-07); a muted person's mic is
             // shown struck through and does nothing, since only they can turn it back on.
-            HStack(spacing: 4) {
-                focusButton(t).buttonStyle(.borderless)
+            HStack(spacing: 6) {
+                focusButton(t, micShown: false).buttonStyle(.borderless)
                 muteButton(t).buttonStyle(.borderless)
                 actionsMenu(t).buttonStyle(.borderless)
             }
@@ -894,27 +972,29 @@ struct GroupCallParticipantsSheet: View {
         }
     }
 
+    /// ⛔ ONE TAP EACH WAY (owner 2026-10-28: muting was easy, letting them speak again was hidden
+    /// in the "..." menu). Their mic: tap to mute; red and struck through while muted, tap again to
+    /// allow them to speak (callAdmin 'unmute').
     private func muteButton(_ t: CallTile) -> some View {
-        Button { run(.mute, target: t.uid) } label: {
+        Button { run(t.isMuted ? .unmute : .mute, target: t.uid) } label: {
             Image(systemName: t.isMuted ? "mic.slash.fill" : "mic.fill")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(t.isMuted ? Color.secondary : Color.primary)
-                .frame(width: 38, height: 38)
-                .background(Color(.tertiarySystemFill).opacity(t.isMuted ? 0 : 1), in: Circle())
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(t.isMuted ? Color.white : Color.primary)
+                .frame(width: 36, height: 36)
+                .background(t.isMuted ? Color(.systemRed) : Color(.tertiarySystemFill), in: Circle())
                 .contentShape(Circle())
         }
-        .disabled(t.isMuted)
-        .accessibilityLabel(t.isMuted ? "\(t.name) is muted" : "Mute \(t.name)")
+        .accessibilityLabel(t.isMuted ? "Allow \(t.name) to speak" : "Mute \(t.name)")
     }
 
-    private func focusButton(_ t: CallTile) -> some View {
+    private func focusButton(_ t: CallTile, micShown: Bool = true) -> some View {
         Button {
             // Audit M-162, 2026-10-07: no pin in the two-person look (the other person is already
             // the whole screen). It was set silently there and took over once a third joined.
             if !twoPersonLook, stage.pinnedId != t.id { stage.togglePin(t.id) }
             dismiss()
         } label: {
-            rowContent(t).contentShape(Rectangle())
+            rowContent(t, micShown: micShown).contentShape(Rectangle())
         }
         .foregroundStyle(.primary)
         .accessibilityElement(children: .ignore)
@@ -923,7 +1003,9 @@ struct GroupCallParticipantsSheet: View {
         .accessibilityAddTraits(.isButton)
     }
 
-    private func rowContent(_ t: CallTile) -> some View {
+    /// `micShown` false: the row's own mute button says it, so no second mic (owner 2026-10-28:
+    /// two struck-through mics on one row).
+    private func rowContent(_ t: CallTile, micShown: Bool = true) -> some View {
         let speaking = isSpeaking(t)
         return HStack(spacing: 12) {
             // The reference app's 36pt avatar; the green ring is ours (spec §8: who is speaking must
@@ -946,12 +1028,12 @@ struct GroupCallParticipantsSheet: View {
                 }
             }
             Spacer(minLength: 8)
-            // Fixed slots, space always kept, so every row's icons line up (as the reference's
-            // mic slot does).
-            HStack(spacing: 14) {
-                slot(t.hasVideo ? "video.fill" : "video.slash", show: true, color: .secondary)
-                slot("mic.slash.fill", show: t.isMuted, color: .secondary)
-                slot("wifi.exclamationmark", show: t.networkPoor, color: .orange)
+            // Minimal (owner 2026-10-28): only icons that say something. Camera only while it is
+            // on, the mic only while muted, the network only while poor.
+            HStack(spacing: 12) {
+                if t.networkPoor { slot("wifi.exclamationmark", show: true, color: .orange) }
+                if t.hasVideo { slot("video.fill", show: true, color: .secondary) }
+                if micShown && t.isMuted { slot("mic.slash.fill", show: true, color: .secondary) }
             }
             .font(.system(size: 15))
             .accessibilityHidden(true)
@@ -991,8 +1073,8 @@ struct GroupCallParticipantsSheet: View {
                 }
             }
             .accessibilityElement(children: .combine)
-            if r.ringable, r.subtitle != "Ringing…" {
-                Spacer(minLength: 8)
+            Spacer(minLength: 8)
+            if r.action == .ring, r.subtitle != "Ringing…" {
                 Button { ringAgain(r.id, name: r.name) } label: {
                     Image(systemName: "phone.arrow.up.right")
                         .font(.system(size: 15, weight: .semibold))
@@ -1003,6 +1085,19 @@ struct GroupCallParticipantsSheet: View {
                 .disabled(waiting)
                 .opacity(waiting ? 0.4 : 1)
                 .accessibilityLabel("Ring \(r.name)")
+            } else if r.action == .notify {
+                // Left the call: a bell, never the phone (owner 2026-10-28).
+                let notified = nudgedAt[r.id].map { date.timeIntervalSince($0) < 60 } ?? false
+                Button { notifyLeft(r.id, name: r.name) } label: {
+                    Image(systemName: "bell")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(Color(.tertiarySystemFill)))
+                }
+                .buttonStyle(.borderless)
+                .disabled(notified)
+                .opacity(notified ? 0.4 : 1)
+                .accessibilityLabel("Notify \(r.name)")
             }
         }
     }
@@ -1043,11 +1138,82 @@ struct GroupCallParticipantsSheet: View {
         }
     }
 
+    /// The group chat's id while this is a group chat's call.
+    private var groupCid: String? {
+        if case .group(let cid)? = service.activeRoom { return cid }
+        return nil
+    }
+
+    /// Add People on a group chat's call: rings everyone picked (`groupCallRingAgain`, at most 16
+    /// per request, so a bigger pick goes in turns). One foot line for the lot.
+    private func ringPeople(_ people: [(uid: String, name: String)]) {
+        guard let cid = groupCid, !people.isEmpty else { return }
+        let now = Date()
+        for p in people { rangAgainAt[p.uid] = now }
+        Task { @MainActor in
+            var rung = 0
+            var lastRefusal: String?
+            for start in stride(from: 0, to: people.count, by: 16) {
+                let part = Array(people[start..<min(start + 16, people.count)])
+                do {
+                    let result = try await Functions.functions(region: "me-central1")
+                        .httpsCallable("groupCallRingAgain").call(["cid": cid, "uids": part.map(\.uid)])
+                    let data = result.data as? [String: Any] ?? [:]
+                    rung += (data["rung"] as? [String] ?? []).count
+                    for s in data["skipped"] as? [[String: Any]] ?? [] {
+                        guard let uid = s["uid"] as? String, let p = part.first(where: { $0.uid == uid }) else { continue }
+                        let reason = s["reason"] as? String
+                        if reason != "tooSoon" && reason != "unreachable" && reason != "ringing" { rangAgainAt[uid] = nil }
+                        lastRefusal = Self.ringAgainRefusal(reason, name: p.name)
+                    }
+                } catch {
+                    for p in part { rangAgainAt[p.uid] = nil }
+                    lastRefusal = "Couldn't ring. Try again."
+                }
+            }
+            if rung > 0 {
+                showSheetToast(people.count == 1 ? "Ringing \(people[0].name)" : "Ringing \(rung) people")
+            } else if let lastRefusal {
+                showSheetToast(lastRefusal)
+            }
+        }
+    }
+
+    /// Someone who left (owner 2026-10-28): one notification asking them back (`groupCallNudge`),
+    /// never a ring. Once a minute per person, as the server holds it.
+    private func notifyLeft(_ uid: String, name: String) {
+        guard let cid = groupCid else { return }
+        nudgedAt[uid] = Date()
+        Task { @MainActor in
+            do {
+                _ = try await Functions.functions(region: "me-central1")
+                    .httpsCallable("groupCallNudge").call(["cid": cid, "uid": uid])
+                showSheetToast("Notified \(name)")
+            } catch {
+                let ns = error as NSError
+                let code: FunctionsErrorCode? = ns.domain == FunctionsErrorDomain ? FunctionsErrorCode(rawValue: ns.code) : nil
+                switch code {
+                case .resourceExhausted?: showSheetToast("Wait a minute before notifying \(name) again")
+                case .failedPrecondition?:
+                    nudgedAt[uid] = nil
+                    showSheetToast(ns.localizedDescription == "inCall" ? "\(name) is back in the call" : "Can't notify \(name) now")
+                case .notFound?, .unimplemented?:
+                    nudgedAt[uid] = nil
+                    showSheetToast("Notify isn't available yet")
+                default:
+                    nudgedAt[uid] = nil
+                    showSheetToast("Couldn't notify. Try again.")
+                }
+            }
+        }
+    }
+
     /// The foot line for a person the server did not ring (groupCallRingAgain's `skipped` reasons).
     private static func ringAgainRefusal(_ reason: String?, name: String) -> String {
         switch reason {
         case "declined": return "\(name) declined this call"
-        case "inCall", "joined": return "\(name) is already in the call"
+        case "inCall": return "\(name) is already in the call"
+        case "joined": return "\(name) left this call. Notify them instead."
         case "ringing": return "\(name) is still ringing"
         case "tooSoon": return "Wait a minute before ringing \(name) again"
         case "unreachable": return "Couldn't reach \(name)'s phone"
