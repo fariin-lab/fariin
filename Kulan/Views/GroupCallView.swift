@@ -927,12 +927,12 @@ struct GroupCallView: View {
     // above the capsule with the emoji row, Raise Hand, Share Screen and Flip Camera. It needs the
     // room, so it waits for the call to be joined. Solid white while a share is starting or
     // running: with the share pill gone, this is the sign on screen that you are sharing.
+    // ⛔ APPLE'S OWN MENU (owner 2026-10-28: "use real Apple liquid glass"). The panel we drew
+    // (`GroupCallMoreMenu`) is replaced by the system menu, which is the real iOS 26 glass: the
+    // emojis as its top row (a palette ControlGroup, as the system shows icon rows in a menu), then
+    // Raise Hand, Share Screen and Flip Camera. Fixed order, so the emojis stay on top above the bar.
     private var moreButton: some View {
-        let sharing = service.screenSharing || service.sharePending
-        return ctrl("ellipsis", active: sharing || showMore) { showMore.toggle(); armAutoHide() }
-            .disabled(!moreEnabled)
-            .opacity(moreEnabled ? 1 : 0.35)
-            .accessibilityLabel(sharing ? "More, sharing your screen" : "More")
+        GroupCallMoreButton(enabled: moreEnabled)
     }
     private var moreEnabled: Bool { service.joinState == .joined }
 
@@ -971,6 +971,68 @@ struct GroupCallView: View {
                 .liquidGlass(Circle(), interactive: true, tint: tint, enabled: !active)
                 .contentShape(Circle())
         }
+    }
+}
+
+/// The "..." in the controls and its system menu. Its own view so that GroupCallSocial (which
+/// publishes every emoji anyone sends) redraws only this button, never the whole call screen.
+private struct GroupCallMoreButton: View {
+    let enabled: Bool
+    @ObservedObject private var service = GroupCallService.shared
+    @ObservedObject private var social = GroupCallSocial.shared
+
+    var body: some View {
+        let sharing = service.screenSharing || service.sharePending
+        return Menu {
+            ControlGroup {
+                ForEach(GroupCallSocial.quickEmojis, id: \.self) { emoji in
+                    Button { social.react(emoji) } label: { Image(uiImage: Self.emojiImage(emoji)) }
+                        .accessibilityLabel("React with \(emoji)")
+                }
+            }
+            .controlGroupStyle(.palette)
+            Button { social.setHand(!social.myHandUp) } label: {
+                Label(social.myHandUp ? "Lower Hand" : "Raise Hand",
+                      systemImage: social.myHandUp ? "hand.raised.slash" : "hand.raised")
+            }
+            // Never on a voice call link; pending (the system sheet is up) says a tap cancels.
+            if sharing || (service.isActive && !service.cameraLocked) {
+                Button { service.toggleScreenShare() } label: {
+                    Label(service.screenSharing ? "Stop Sharing" : service.sharePending ? "Cancel Sharing" : "Share Screen",
+                          systemImage: sharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle")
+                }
+            }
+            if service.cameraOn {
+                Button { service.flipCamera() } label: {
+                    Label("Flip Camera", systemImage: "arrow.triangle.2.circlepath.camera")
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis").font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(sharing ? .black : .white)
+                .frame(width: 56, height: 56)
+                .background(sharing ? AnyShapeStyle(.white) : AnyShapeStyle(.clear), in: Circle())
+                .liquidGlass(Circle(), interactive: true, enabled: !sharing)
+                .contentShape(Circle())
+        }
+        .menuOrder(.fixed)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.35)
+        .accessibilityLabel(sharing ? "More, sharing your screen" : "More")
+    }
+
+    /// An emoji drawn as a picture, because a menu's icon row shows images, not text.
+    private static var emojiCache: [String: UIImage] = [:]
+    private static func emojiImage(_ emoji: String) -> UIImage {
+        if let hit = emojiCache[emoji] { return hit }
+        let font = UIFont.systemFont(ofSize: 26)
+        let text = emoji as NSString
+        let size = text.size(withAttributes: [.font: font])
+        let image = UIGraphicsImageRenderer(size: size).image { _ in
+            text.draw(at: .zero, withAttributes: [.font: font])
+        }.withRenderingMode(.alwaysOriginal)
+        emojiCache[emoji] = image
+        return image
     }
 }
 
