@@ -20,7 +20,7 @@ struct GroupCallSelfView: View {
     /// the corner it is parked in (it was a 0.3s ease in and out).
     static let resize: Animation = .spring(response: 0.3, dampingFraction: 1)
 
-    /// 72pt tall (9:16) with 2+ remotes, 90x160 with exactly one. Enlarged: 170x300, capped at 45%
+    /// 90x160 (9:16) however many remotes. Enlarged: 170x300, capped at 45%
     /// of the stage width and the stage height less 24 (a phone on its side, a small stage), with
     /// the same shape, so it never covers the whole stage. A zero size (first pass) is not a cap.
     static func size(remoteCount: Int, expanded: Bool, stageSize: CGSize) -> CGSize {
@@ -29,11 +29,12 @@ struct GroupCallSelfView: View {
             var width: CGFloat = 170
             if stageSize.width > 0 { width = min(width, stageSize.width * 0.45) }
             if stageSize.height > 0 { width = min(width, (stageSize.height - 24) * aspect) }
-            width = max(width, 40.5)   // never smaller than the small pip
+            width = max(width, 90)   // never smaller than the small pip
             return CGSize(width: width, height: width / aspect)
         }
-        if remoteCount <= 1 { return CGSize(width: 90, height: 160) }
-        return CGSize(width: 40.5, height: 72)
+        // Owner 2026-10-27: 40.5x72 with 2+ remotes was too small to see yourself in. One size now,
+        // the two-person call's.
+        return CGSize(width: 90, height: 160)
     }
 
     private var local: CallTile? { stage.tiles.first(where: { $0.isLocal }) }
@@ -73,7 +74,7 @@ struct GroupCallSelfView: View {
 /// The self pip's current width (small, one-remote or enlarged), set by GroupCallView on the stage
 /// so the strip's trailing gap clears the pip as it really is drawn.
 private struct GroupCallSelfPipWidthKey: EnvironmentKey {
-    static let defaultValue: CGFloat = 40.5
+    static let defaultValue: CGFloat = 90
 }
 
 extension EnvironmentValues {

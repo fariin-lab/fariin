@@ -286,6 +286,12 @@ final class GroupCallService: ObservableObject {
     }
     @Published var minimized = false        // swiped down → CallContainer shows the return bar
     @Published var callTitle = ""
+    /// A group chat's call (`start(cid:)`), not a multi-person or link call. While nobody else is
+    /// here and my camera is off, the screen shows the group's photo (owner 2026-10-27: the caller
+    /// saw four different screens in two seconds; the reference app keeps the group's photo).
+    @Published private(set) var isGroupChatCall = false
+    /// That group's photo: from the chat list at the start, then from the group's own doc.
+    @Published private(set) var groupPhotoUrl: String?
     /// 2026-09-24 decision D25: why a start did not become a call. GroupCallView shows it as an alert
     /// and closes on OK. Before this a failed start left the call screen up on "1 in call", with
     /// nobody in it and nothing saying why.
@@ -475,6 +481,8 @@ final class GroupCallService: ObservableObject {
         // its closing tail).
         guard !Self.oneToOneLive else { clearJoinWishes(); notice = Self.busyNotice; return }
         connecting = true; isVideo = video; callTitle = title
+        isGroupChatCall = true
+        groupPhotoUrl = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.avatarUrl
         cameraOn = video   // round 2 (V2 N8): the camera button shows the call's wish while joining
         joiningRoomId = cid
         let gen = joinGeneration   // owner audit 2026-10-06 #4
@@ -581,9 +589,14 @@ final class GroupCallService: ObservableObject {
                 if started, gen == joinGeneration, activeCid == cid {
                     groupRecordId = recordId
                     // I am ringing the group: the caller's sound and "Ringing…" (Kasim 2026-10-21).
-                    groupRingStartedAt = Date()
+                    let ringStart = Date()
+                    groupRingStartedAt = ringStart
                     listenGroupAnswers(cid)
                     updateRingback()
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(nanoseconds: UInt64(Self.ringWindow * 1_000_000_000))
+                        self?.endIfNobodyAnswered(cid: cid, ringStart: ringStart)
+                    }
                     await Self.writeRecord(cid: cid, id: recordId, video: video)
                 } else if started {
                     // Audit M-139, 2026-10-07: ended (or left) while the start write was out. The
@@ -875,6 +888,7 @@ final class GroupCallService: ObservableObject {
                     return
                 }
                 self.groupConv = conv
+                if conv.avatarUrl != self.groupPhotoUrl { self.groupPhotoUrl = conv.avatarUrl }
                 if let mine = self.groupRole(of: self.myUid), mine != self.myRole { self.myRole = mine }
                 self.rolesVersion &+= 1   // other people's badges and buttons redraw too
                 // Build 1008, Kasim: a group chat's call still rang in silence. `groupRingingMembers`
@@ -1643,6 +1657,21 @@ final class GroupCallService: ObservableObject {
                            photoUrl: conv?.photos[uid].flatMap { $0.isEmpty ? nil : $0 })
             }
     }
+    /// Owner 2026-10-27: a group chat's call I started, that rang people and that nobody came to in
+    /// the ring minute, ends by itself with "No answer" (it used to sit on "No one else is here"
+    /// until I hung up). Not when the group was only told (too big to ring, or nobody rung): people
+    /// join those whenever they like.
+    private func endIfNobodyAnswered(cid: String, ringStart: Date) {
+        guard case .group(let now)? = activeRoom, now == cid, isActive, !leaving,
+              groupRingStartedAt == ringStart, !someoneJoined, room.remoteParticipants.isEmpty else { return }
+        let rangAnyone = groupRungUids.map { !$0.isEmpty }
+            ?? ((groupConv?.users.count ?? 0) <= Self.groupRingMaxMembers)
+        guard rangAnyone else { return }
+        GCLog.event("no_answer", room: logRoom)
+        end()
+        Self.presentOverTop(Notice(title: "No answer", message: nil))
+    }
+
     /// The call doc's server-only `rung` (group call audit 2026-10-23); nil until it is there.
     private var groupRungUids: [String]?
     /// functions-groups GROUP_RING_MAX_MEMBERS: a bigger group's call is announced, not rung.
@@ -2859,6 +2888,7 @@ final class GroupCallService: ObservableObject {
     }
 
     private func resetRoomState() {
+        isGroupChatCall = false; groupPhotoUrl = nil
         cancelRejoin()      // controls 7: a rejoin in flight goes with the call
         stopScreenShare()   // every leave path comes through here
         startMuted = false

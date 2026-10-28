@@ -20,6 +20,12 @@ struct GroupCallRingingView: View {
     /// My camera is on and fills the screen behind: no colour of our own, a smaller photo, and a
     /// shadow so the white words stay readable over the picture.
     let overVideo: Bool
+    /// The line under the names; nil = none, and no pulse (owner 2026-10-27: a group chat's call
+    /// waiting with nobody rung any more shows the group's photo still).
+    var subtitle: String? = "Ringing…"
+    /// Plain black instead of the first person's colour (a group chat's call: one calm screen, no
+    /// colour change as the photo loads or the list changes).
+    var plainGround = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -27,7 +33,9 @@ struct GroupCallRingingView: View {
 
     var body: some View {
         ZStack {
-            if !overVideo {
+            if plainGround {
+                Color.black.ignoresSafeArea()
+            } else if !overVideo {
                 Self.ground(people.first?.photoUrl).ignoresSafeArea()
             }
             VStack(spacing: 22) {
@@ -38,9 +46,11 @@ struct GroupCallRingingView: View {
                         .foregroundStyle(.white)
                         .lineLimit(2)
                         .multilineTextAlignment(.center)
-                    Text("Ringing…")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.75))
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.75))
+                    }
                 }
                 .padding(.horizontal, 32)
                 .shadow(color: .black.opacity(overVideo ? 0.5 : 0), radius: 8)
@@ -54,7 +64,7 @@ struct GroupCallRingingView: View {
 
     private var photo: some View {
         ZStack {
-            if !reduceMotion {
+            if !reduceMotion, subtitle != nil {
                 // Audit H3 (2026-10-23): driven by a timeline, not `.repeatForever` (the iOS 26
                 // deadlock pattern of build 959). Two rings 1.2 s apart, each 2.4 s, ease-out.
                 TimelineView(.animation) { ctx in

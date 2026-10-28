@@ -13,7 +13,7 @@ import LiveKit
 //   GroupCallTileView.swift       one participant tile, every state
 //   GroupCallGridView.swift       the grid page
 //   GroupCallFocusView.swift      one large tile + the strip (a pin, a share, or the speaker page)
-//   GroupCallStagePager.swift     grid page above, speaker page below, one vertical swipe apart
+//   GroupCallStagePager.swift     the grid, or a tapped person large (no swipe page since 2026-10-27)
 //   GroupCallStripView.swift      the horizontal overflow strip
 //   GroupCallSelfView.swift       my own camera, the 9:16 pip bottom-right (when others are here)
 //   GroupCallStatusBanner.swift   connection lost / poor network / join-leave toasts

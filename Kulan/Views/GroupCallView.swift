@@ -13,7 +13,7 @@ import AVFoundation
 //
 //   alone (joined)      GroupCallDuoView, my camera edge to edge
 //   two people          GroupCallDuoView, the 1:1 look
-//   three or more       GroupCallStagePager (grid page + speaker page)
+//   three or more       GroupCallStagePager (the grid; a tapped person large)
 //   under the header    GroupCallStatusBanner, GroupCallTopToast, GroupCallRaisedHandsPill
 //   above the controls  GroupCallReactionsOverlay, CallLinkRequestStack, GroupCallMoreMenu
 struct GroupCallView: View {
@@ -43,6 +43,7 @@ struct GroupCallView: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             frontLayer
+            groupWaitingLayer
             hiddenChromeCatcher   // UNDER the chrome stack: see its note
             chromeStack
             moreLayer
@@ -61,7 +62,7 @@ struct GroupCallView: View {
                              onShowChrome: showChrome,
                              onFlipCamera: { service.flipCamera() })
                 .transition(.opacity)
-            if f.remote == nil {
+            if f.remote == nil, !service.isGroupChatCall {
                 // Alone in a call I started: who is being rung, over the alone view. On a clock,
                 // because the ring window ends by time alone.
                 TimelineView(.periodic(from: .now, by: 1)) { ctx in
@@ -79,6 +80,35 @@ struct GroupCallView: View {
             GroupCallRingingView(people: rung.map { .init(name: $0.name, photoUrl: $0.photoUrl) },
                                  overVideo: myVideo)
                 .transition(.opacity)
+        }
+    }
+
+    /// Owner 2026-10-27: a group chat's call showed four screens in its first two seconds (my own
+    /// photo while connecting, then the alone view, then the rung people's photo and colour, then
+    /// the same again in the server's order). Now one screen, the group's photo on black, from the
+    /// tap until somebody comes, and again once everyone has left. My camera on: my camera instead,
+    /// as the reference app does.
+    private var groupWaiting: Bool {
+        guard service.isGroupChatCall, !service.cameraOn else { return false }
+        switch service.joinState {
+        case .joined: return remoteCount == 0
+        case .joining: return true
+        case .notJoined: return service.connecting
+        case .pending: return false
+        }
+    }
+
+    @ViewBuilder
+    private var groupWaitingLayer: some View {
+        if groupWaiting {
+            // On a clock, because the ring minute ends by time alone.
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                GroupCallRingingView(people: [.init(name: service.callTitle, photoUrl: service.groupPhotoUrl)],
+                                     overVideo: false,
+                                     subtitle: service.ringingMembers(at: ctx.date).isEmpty ? nil : "Ringing…",
+                                     plainGround: true)
+            }
+            .transition(.opacity)
         }
     }
 
@@ -485,7 +515,7 @@ struct GroupCallView: View {
             .allowsHitTesting(false)
             .background(alignment: .bottom) {
                 ZStack {
-                    if front == nil {
+                    if front == nil, !groupWaiting {
                         stageArea
                             .overlay(alignment: .top) { stageScrim }
                             // The pager's scroll view must not pad itself for the status bar it
