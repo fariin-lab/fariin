@@ -132,7 +132,8 @@ struct GroupCallView: View {
     /// "Pinned" / "Presenting" label sat under the status bar and the Dynamic Island. The stage
     /// stays full screen; only those top marks move down, measured from the screen's top edge:
     /// under the header while it shows, under the status bar while the chrome is away.
-    private var topClearance: CGFloat { chromeVisible ? stageLift : winInsets.top }
+    /// Nothing to clear any more: the stage starts below the header (owner 2026-10-28).
+    private var topClearance: CGFloat { 0 }
 
     private var headerBar: some View {
         header.padding(.horizontal, 14)
@@ -517,12 +518,12 @@ struct GroupCallView: View {
             .background(alignment: .bottom) {
                 ZStack {
                     if front == nil, !groupWaiting {
+                        // ⛔ THE STAGE STARTS UNDER THE HEADER — owner 2026-10-28, two screenshots
+                        // with a red line where the call's name and buttons end: the tiles ran up
+                        // under the clock and the battery (the 2026-10-07 full-screen stage, lifted
+                        // behind the header). Reversed: the stage starts below the header whether
+                        // the controls show or not, so no tile ever sits under the status bar.
                         stageArea
-                            .overlay(alignment: .top) { stageScrim }
-                            // The pager's scroll view must not pad itself for the status bar it
-                            // now lies under.
-                            .ignoresSafeArea(.container, edges: .top)
-                            .padding(.top, -stageLift)
                             // Owner 2026-10-28: with the controls away, the stage takes their room
                             // too (it stopped at their top edge and left a black band).
                             .padding(.bottom, chromeVisible ? 0 : -(controlsHeight + 16))
