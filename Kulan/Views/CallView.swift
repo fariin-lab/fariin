@@ -1990,7 +1990,9 @@ struct FloatingCallWindow: View {
                     Color.black
                     voiceFace(name: call.myName, photoUrl: call.myPhotoUrl, size: 22)
                 }
-                .frame(width: tw, height: tw * 16 / 9)
+                // Owner 2026-10-28: a camera's 9:16 was too tall for just my photo in a voice call;
+                // a little taller than wide. The video card's tile keeps 9:16 for a real camera.
+                .frame(width: tw, height: tw * 1.2)
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
