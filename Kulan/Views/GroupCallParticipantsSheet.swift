@@ -276,28 +276,20 @@ struct GroupCallParticipantsSheet: View {
     /// three list rows. An ad-hoc call has no link: Add people alone.
     @ViewBuilder private var shareSection: some View {
         if service.isAdhoc || link != nil {
+            // ⛔ THE GROUP CALL'S ROWS (owner 2026-10-28: "a link call uses the old UI, make it exactly
+            // like the group call"): plain rows in one card, the group's Add People row first, then
+            // Copy Link and Share Link. Were three round glass buttons (2026-10-20 / 10-23).
             Section {
-                // ⛔ THE APP'S OWN LINK LOOK (owner 2026-10-20: "follow my app, minimalist"): the link
-                // in one pill that copies on a tap, then the glass circles the Invite Links page uses.
-                // Owner 2026-10-23: no link pill here any more, the three circles only.
-                VStack(spacing: 16) {
-                    HStack(spacing: 0) {
-                        // Owner, 2026-10-06: Add people on a link call too. It opens my chats and
-                        // sends each person the link (a link call has no member list to add to).
-                        if service.isAdhoc || (!service.linkRevoked && linkURL != nil) {
-                            roundAction("person.badge.plus", "Add") { showAdd = true }
-                        }
-                        // Everyone may copy or share the link (the access table).
-                        if !service.linkRevoked, let url = linkURL {
-                            roundAction(copied ? "checkmark" : "doc.on.doc", copied ? "Copied" : "Copy") { copy(url) }
-                            ShareLink(item: url) { roundLabel("ic_link_share", "Share") }
-                                .buttonStyle(.plain)
-                        }
-                    }
+                // Owner, 2026-10-06: Add people on a link call too (it rings each person picked).
+                if service.isAdhoc || (!service.linkRevoked && linkURL != nil) {
+                    plainRow("person.badge.plus", "Add People") { showAdd = true }
                 }
-                .padding(.vertical, 6)
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                // Everyone may copy or share the link (the access table).
+                if !service.linkRevoked, let url = linkURL {
+                    plainRow(copied ? "checkmark" : "doc.on.doc", copied ? "Copied" : "Copy Link") { copy(url) }
+                    ShareLink(item: url) { plainRowLabel("square.and.arrow.up", "Share Link") }
+                        .buttonStyle(.plain)
+                }
             }
         }
     }
@@ -323,6 +315,26 @@ struct GroupCallParticipantsSheet: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    /// One plain row, the group's Add People look: the icon in a 36 pt frame (lined up with the
+    /// faces below), the words, both in the primary colour.
+    private func plainRow(_ icon: String, _ title: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) { plainRowLabel(icon, title) }
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+    }
+
+    private func plainRowLabel(_ icon: String, _ title: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 20, weight: .regular))
+                .foregroundStyle(.primary)
+                .frame(width: 36, height: 36)
+            Text(title).foregroundStyle(.primary)
+            Spacer()
+        }
+        .contentShape(Rectangle())
     }
 
     private func roundAction(_ icon: String, _ title: String, _ action: @escaping () -> Void) -> some View {
