@@ -67,6 +67,8 @@ struct PublicGroupPreview: Equatable {
     var requested: Bool
     /// The panel's badge, without a Scam / Fake label (the server's preview carries both).
     var verified: Bool
+    /// Fariin's Scam / Fake label ("scam", "fake" or ""), shown by the name (owner 2026-10-28).
+    var label: String
     /// Who is in it, for a visitor's view of the group page (owner, admins, then the rest; at most
     /// 100, from `publicGroupPreview`). Empty from an older server.
     var members: [PublicGroupMember]
@@ -85,6 +87,7 @@ struct PublicGroupPreview: Equatable {
         self.needsApproval = data["needsApproval"] as? Bool ?? false
         self.requested = data["requested"] as? Bool ?? false
         let label = data["label"] as? String ?? ""
+        self.label = ["scam", "fake"].contains(label) ? label : ""
         self.verified = (data["verified"] as? Bool ?? false) && label.isEmpty
         self.members = (data["members"] as? [[String: Any]] ?? []).compactMap(PublicGroupMember.init)
     }

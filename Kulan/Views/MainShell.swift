@@ -5094,7 +5094,8 @@ struct ChatRow: View, Equatable {
                     } else if !conv.isGroup {
                         VerifiedMark(uid: conv.otherUid(me), size: 15)
                     } else {
-                        GroupVerifiedMark(on: conv.showsGroupBadge, size: 15, kind: conv.groupVerifiedType)
+                        GroupVerifiedMark(on: conv.showsGroupBadge, size: 15, kind: conv.groupVerifiedType,
+                                          label: conv.groupMod.label)
                     }
                     if muted {
                         // His icon, a little bigger than the 11 pt symbol it replaces (owner 2026-10-18).

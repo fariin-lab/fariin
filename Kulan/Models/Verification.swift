@@ -392,11 +392,25 @@ struct GroupVerifiedMark: View {
     /// Tappable, opening the same sheet a person's tick opens (owner 2026-10-26). Only on the group
     /// page, for the reason `VerifiedMark.explains` gives.
     var explains: Bool = false
+    /// ⛔ FARIIN'S SCAM / FAKE LABEL, EVERYWHERE THE NAME IS (owner 2026-10-28: it showed only in the
+    /// chat header). "scam" or "fake" draws a small red outlined tag in place of the tick, the way
+    /// the reference app marks such a chat by its name in every list. "" = the tick as before.
+    var label: String = ""
 
     @State private var showingInfo = false
 
     var body: some View {
-        if on {
+        if label == "scam" || label == "fake" {
+            Text(label == "scam" ? "SCAM" : "FAKE")
+                .font(.system(size: max(9, size * 0.62), weight: .bold))
+                .foregroundStyle(Color(.systemRed))
+                .padding(.horizontal, 4)
+                .frame(height: size)
+                .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(Color(.systemRed), lineWidth: 1))
+                .fixedSize()
+                .accessibilityLabel(label == "scam" ? "Scam warning" : "Fake group warning")
+        } else if on {
             Image(uiImage: VerifiedMark.badge(size: size * VerifiedMark.scale, blue: VerifiedMark.color(for: kind),
                                               weight: VerifiedMark.weight))
                 .frame(width: size, height: size)

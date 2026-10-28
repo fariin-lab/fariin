@@ -177,7 +177,7 @@ struct PublicGroupSheet: View {
                     .font(.system(size: 22, weight: .semibold))
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
-                GroupVerifiedMark(on: p.verified, size: 18)
+                GroupVerifiedMark(on: p.verified, size: 18, label: p.label)
             }
             .padding(.horizontal, 24)
             .padding(.top, 14)
@@ -628,7 +628,7 @@ struct PublicGroupInfoView: View {
                     Text(p.title)
                         .font(.system(size: 28, weight: .bold))
                         .multilineTextAlignment(.center)
-                    GroupVerifiedMark(on: p.verified, size: 20)
+                    GroupVerifiedMark(on: p.verified, size: 20, label: p.label)
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 14)

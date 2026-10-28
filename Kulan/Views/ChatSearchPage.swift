@@ -550,7 +550,7 @@ struct ChatSearchPage: View {
             if let c = m.chats[row.key] {
                 if c.isGroup {
                     RecentRow(name: c.displayName(me), photo: c.displayPhoto(me), uid: nil,
-                              line: c.memberCountLabel, groupBadge: c.showsGroupBadge)
+                              line: c.memberCountLabel, groupBadge: c.showsGroupBadge, groupLabel: c.groupMod.label)
                 } else {
                     RecentRow(name: c.displayName(me), photo: c.displayPhoto(me), uid: c.otherUid(me), line: nil)
                 }
@@ -777,6 +777,8 @@ private struct RecentRow: View {
     let uid: String?
     let line: String?
     var groupBadge = false
+    /// Fariin's Scam / Fake label on a group, shown in place of the tick (owner 2026-10-28).
+    var groupLabel = ""
     @State private var seen: RecentLastSeen.Line?
 
     var body: some View {
@@ -786,7 +788,7 @@ private struct RecentRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
                     Text(name).font(.headline).foregroundStyle(.primary).lineLimit(1)
-                    if let uid { VerifiedMark(uid: uid, size: 14) } else { GroupVerifiedMark(on: groupBadge, size: 14) }
+                    if let uid { VerifiedMark(uid: uid, size: 14) } else { GroupVerifiedMark(on: groupBadge, size: 14, label: groupLabel) }
                 }
                 if let text = line ?? seen?.text {
                     Text(text).font(.subheadline)
