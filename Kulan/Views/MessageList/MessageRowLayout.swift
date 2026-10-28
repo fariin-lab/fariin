@@ -1455,7 +1455,8 @@ enum MessageRowLayout {
             // rect — the album path has said so since it was written and this one did not, so a
             // sending video wore a ring on top of a play triangle.
             if !m.uploading {
-                let side: CGFloat = min(box.width, box.height) * 0.28
+                // At most 52 pt (owner 2026-10-28): a big video wore a huge disc at 28 %.
+                let side: CGFloat = min(52, min(box.width, box.height) * 0.28)
                 plan.playBadge = CGRect(x: mediaRect.midX - side / 2, y: mediaRect.midY - side / 2,
                                         width: side, height: side)
             }
@@ -1574,7 +1575,7 @@ enum MessageRowLayout {
             } else if model?.isVideo == true, !a.uploading {
                 // A play badge means "this is ready, tap it", which is not true mid-upload — and
                 // while the album uploads the tile shows its OWN ring instead.
-                let side = min(t.rect.width, t.rect.height) * 0.28
+                let side = min(52, min(t.rect.width, t.rect.height) * 0.28)
                 tile.playBadge = CGRect(x: t.rect.midX - side / 2, y: t.rect.midY - side / 2,
                                         width: side, height: side)
                 if let d = model?.durationText {

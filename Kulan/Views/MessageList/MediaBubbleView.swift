@@ -275,8 +275,7 @@ final class MediaBubbleView: UIView {
         if let badge = plan.playBadge {
             playBadge.isHidden = false
             playBadge.frame = badge
-            playBadge.image = UIImage(systemName: "play.circle.fill",
-                                      withConfiguration: UIImage.SymbolConfiguration(pointSize: badge.height))
+            playBadge.image = MediaPlayGlyph.image(side: badge.height)
         } else {
             playBadge.isHidden = true
         }
@@ -816,8 +815,7 @@ final class AlbumTileView: UIView {
         if let b = tile.playBadge {
             playBadge.isHidden = false
             playBadge.frame = b.offsetBy(dx: -tile.rect.minX, dy: -tile.rect.minY)
-            playBadge.image = UIImage(systemName: "play.circle.fill",
-                                      withConfiguration: UIImage.SymbolConfiguration(pointSize: b.height))
+            playBadge.image = MediaPlayGlyph.image(side: b.height)
         } else {
             playBadge.isHidden = true
         }
@@ -1180,5 +1178,16 @@ final class UploadRingView: UIView {
         cross.frame = bounds
         cross.image = UIImage(systemName: "xmark", withConfiguration:
             UIImage.SymbolConfiguration(pointSize: round(side * 0.34), weight: .semibold))
+    }
+}
+
+/// ⛔ THE VIDEO'S PLAY BUTTON (owner 2026-10-28, "fix play button"): a dark see-through circle with a
+/// solid white triangle. It was `play.circle.fill` tinted white, so the triangle was a hole showing
+/// the video through it and the whole button read as a washed-out white disc on bright frames.
+enum MediaPlayGlyph {
+    static func image(side: CGFloat) -> UIImage? {
+        let cfg = UIImage.SymbolConfiguration(pointSize: side)
+            .applying(UIImage.SymbolConfiguration(paletteColors: [.white, UIColor.black.withAlphaComponent(0.45)]))
+        return UIImage(systemName: "play.circle.fill", withConfiguration: cfg)
     }
 }
