@@ -311,9 +311,9 @@ struct GroupCallParticipantsSheet: View {
                         // 36 pt frame keeps "Add People" lined up with the names below.
                         Image(systemName: "person.badge.plus")
                             .font(.system(size: 20, weight: .regular))
-                            .foregroundStyle(Color.fariinBlue)
+                            .foregroundStyle(.primary)
                             .frame(width: 36, height: 36)
-                        Text("Add People").foregroundStyle(Color.fariinBlue)
+                        Text("Add People").foregroundStyle(.primary)   // owner 2026-10-28: not blue, a plain row
                         Spacer()
                     }
                     .contentShape(Rectangle())
