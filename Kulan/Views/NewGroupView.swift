@@ -295,10 +295,15 @@ struct NewGroupView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 // The spinner takes the word's place in the button (owner 2026-10-18), not the page's centre.
+                // Owner 2026-10-28: the button went grey with a plain spinner while creating (a disabled
+                // button is greyed). It stays blue now, with a white ring turning in the word's place;
+                // a second tap does nothing (`create` returns while `creating`).
                 Button { create() } label: {
-                    if creating { ProgressView().tint(.white) } else { Text("Create").fontWeight(.semibold) }
+                    Text("Create").fontWeight(.semibold)
+                        .opacity(creating ? 0 : 1)
+                        .overlay { if creating { CreatingRing() } }
                 }
-                .disabled(!canCreate)
+                .disabled(!canCreate && !creating)
                     .buttonStyle(.borderedProminent).tint(.blue)   // blue (owner 2026-10-18)
             }
         }
@@ -438,6 +443,7 @@ struct NewGroupView: View {
     }
 
     private func create() {
+        guard !creating else { return }   // the button stays tappable-looking while it works
         let name = String(groupName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(100))
         guard !name.isEmpty else { return }
         // "Create new groups" switched off from the admin panel while this page was open (owner
@@ -499,6 +505,30 @@ struct NewGroupView: View {
             } catch {
                 await MainActor.run { self.error = "Could not create group. Try again."; creating = false }
             }
+        }
+    }
+}
+
+/// A white ring turning in the Create button while the group is made (owner 2026-10-28). On a
+/// timeline, not `.repeatForever` (audit H3: the iOS 26 deadlock pattern). Reduce Motion: the
+/// system spinner.
+private struct CreatingRing: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        if reduceMotion {
+            ProgressView().tint(.white)
+        } else {
+            TimelineView(.animation) { ctx in
+                // One turn every 0.8 s.
+                let turn = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.8) / 0.8
+                Circle()
+                    .trim(from: 0, to: 0.72)
+                    .stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .frame(width: 18, height: 18)
+                    .rotationEffect(.degrees(turn * 360))
+            }
+            .accessibilityLabel("Creating group")
         }
     }
 }
