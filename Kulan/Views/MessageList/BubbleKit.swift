@@ -25,7 +25,9 @@ enum BubbleMetrics {
     /// for an in-bubble footer.
     static let metaInlineGap: CGFloat = 5
     static let maxWidthFraction: CGFloat = 0.72
-    static let avatarSize: CGFloat = 28
+    /// A group sender's photo: 34 pt, the reference app's own size (its avatarHeaderSize(), owner
+    /// 2026-10-28: "use exactly their size"; was 28).
+    static let avatarSize: CGFloat = 34
     static let avatarGap: CGFloat = 6
     static let senderNameGap: CGFloat = 3      // VStack spacing above the bubble
     /// The verified mark beside a sender's name (owner 2026-10-23: 11pt "looks small"): the name's
