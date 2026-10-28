@@ -105,7 +105,7 @@ struct GroupCallView: View {
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
                 GroupCallRingingView(people: [.init(name: service.callTitle, photoUrl: service.groupPhotoUrl)],
                                      overVideo: false,
-                                     subtitle: service.ringingMembers(at: ctx.date).isEmpty ? nil : "Ringing…",
+                                     subtitle: service.callingNow(at: ctx.date) ? "Calling…" : nil,
                                      plainGround: true)
             }
             .transition(.opacity)
@@ -715,6 +715,19 @@ struct GroupCallView: View {
     /// two people: the clock (a 1:1 call's) > "N in call".
     @ViewBuilder
     private var subtitleView: some View {
+        if service.isGroupChatCall, service.dialing, !isReconnecting, service.joinState != .pending {
+            // A group chat's call I started (owner 2026-10-28): one line, "Calling…", from the tap
+            // until somebody comes; then the usual lines.
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                if service.callingNow(at: ctx.date) { Text("Calling…") } else { joinedSubtitle }
+            }
+        } else {
+            joinedSubtitle
+        }
+    }
+
+    @ViewBuilder
+    private var joinedSubtitle: some View {
         if let words = statusWords {
             Text(words)
         } else if isAlone {

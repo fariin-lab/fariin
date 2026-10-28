@@ -305,6 +305,25 @@ final class GroupCallService: ObservableObject {
     @Published private(set) var isGroupChatCall = false
     /// That group's photo: from the chat list at the start, then from the group's own doc.
     @Published private(set) var groupPhotoUrl: String?
+    /// The Call button started this group chat's call (not a Join of a live one): until the room is
+    /// up, I am calling. See `callingNow`.
+    @Published private(set) var dialing = false
+
+    /// Owner 2026-10-28 (the reference app keeps one line the whole time): a group chat's call I
+    /// started says "Calling…" from the tap until somebody comes, with the calling sound from the
+    /// tap, instead of a silent "Connecting…", then "Ringing…", then "No one else is here".
+    /// "Ringing…" stays the 1:1 call's word. True while connecting from the Call button, then while
+    /// my ring minute runs with nobody here and someone still rung (or the list not loaded yet).
+    func callingNow(at now: Date) -> Bool {
+        guard isGroupChatCall else { return false }
+        if !isActive { return dialing }   // every way out of a join clears it (`resetRoomState`)
+        guard !someoneJoined, room.remoteParticipants.isEmpty else { return false }
+        // In the room, the start's own write still out: still calling, no gap in the sound or words.
+        guard let start = groupRingStartedAt else { return dialing }
+        guard now.timeIntervalSince(start) < Self.ringWindow else { return false }
+        if groupConv == nil && groupRungUids == nil { return true }   // who is rung, not known yet
+        return !groupRingingMembers(at: now).isEmpty
+    }
     /// 2026-09-24 decision D25: why a start did not become a call. GroupCallView shows it as an alert
     /// and closes on OK. Before this a failed start left the call screen up on "1 in call", with
     /// nobody in it and nothing saying why.
@@ -501,6 +520,8 @@ final class GroupCallService: ObservableObject {
         connecting = true; isVideo = video; callTitle = title
         isGroupChatCall = true
         groupPhotoUrl = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.avatarUrl
+        dialing = !requireLive
+        updateRingback()   // the calling sound from the tap (`callingNow`)
         cameraOn = video   // round 2 (V2 N8): the camera button shows the call's wish while joining
         joiningRoomId = cid
         let gen = joinGeneration   // owner audit 2026-10-06 #4
@@ -1786,14 +1807,19 @@ final class GroupCallService: ObservableObject {
     fileprivate func updateRingback() {
         let now = Date()
         let rung = ringingMembers(at: now)
-        let ringing = isActive && room.connectionState == .connected && room.remoteParticipants.isEmpty
-            && !rung.isEmpty
+        // A group chat's call: `callingNow` (from the tap, owner 2026-10-28). Others as before.
+        let ringing = isGroupChatCall
+            ? callingNow(at: now)
+            : isActive && room.connectionState == .connected && room.remoteParticipants.isEmpty && !rung.isEmpty
         guard ringing else { stopRingback(); return }
         if ringback == nil {
             let player = try? AVAudioPlayer(data: RingbackTone.wavData())
             player?.numberOfLoops = -1
             player?.play()
             ringback = player
+        } else if ringback?.isPlaying == false {
+            // Started before the room set the call's audio up; that change can stop the player.
+            ringback?.play()
         }
         // The ring minute ends by the clock, with no event to hang the stop on. audit M-065,
         // 2026-10-07: it ends with the LAST person's minute, and is set again on every pass, so a
@@ -2919,7 +2945,7 @@ final class GroupCallService: ObservableObject {
     }
 
     private func resetRoomState() {
-        isGroupChatCall = false; groupPhotoUrl = nil
+        isGroupChatCall = false; groupPhotoUrl = nil; dialing = false
         cancelRejoin()      // controls 7: a rejoin in flight goes with the call
         stopScreenShare()   // every leave path comes through here
         startMuted = false
