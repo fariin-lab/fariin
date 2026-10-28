@@ -110,7 +110,8 @@ struct GroupCallView: View {
                                      // calling sound say it.
                                      subtitle: nil,
                                      plainGround: true,
-                                     pulse: service.callingNow(at: ctx.date))
+                                     pulse: service.callingNow(at: ctx.date),
+                                     showsNames: false)
             }
             .transition(.opacity)
         }
@@ -783,7 +784,8 @@ struct GroupCallView: View {
             // A group chat's call I started (owner 2026-10-28): one line, "Calling…", from the tap
             // until somebody comes; then the usual lines.
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                if service.callingNow(at: ctx.date) { Text(" ") } else { joinedSubtitle }
+                // Owner 2026-10-28: active words, our own ("Ringing everyone…"), in the header only.
+                if service.callingNow(at: ctx.date) { Text("Ringing everyone…") } else { joinedSubtitle }
             }
         } else if service.isGroupChatCall, !service.dialing, statusWords == "Connecting…",
                   let since = service.joinStartedAt {

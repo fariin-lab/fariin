@@ -29,6 +29,9 @@ struct GroupCallRingingView: View {
     /// The pulse around the photo; by default while there is a subtitle. A group chat's call pulses
     /// with no words under the name (owner 2026-10-28).
     var pulse: Bool? = nil
+    /// The names (and subtitle) under the photo. Off for a group chat's call: the header already
+    /// says the group's name and "Ringing everyone…" (owner 2026-10-28, "said twice, weird").
+    var showsNames = true
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -43,7 +46,7 @@ struct GroupCallRingingView: View {
             }
             VStack(spacing: 22) {
                 photo
-                VStack(spacing: 6) {
+                if showsNames { VStack(spacing: 6) {
                     Text(Self.names(people.map(\.name)))
                         .font(.title2.weight(.semibold))
                         .foregroundStyle(.white)
@@ -56,7 +59,7 @@ struct GroupCallRingingView: View {
                     }
                 }
                 .padding(.horizontal, 32)
-                .shadow(color: .black.opacity(overVideo ? 0.5 : 0), radius: 8)
+                .shadow(color: .black.opacity(overVideo ? 0.5 : 0), radius: 8) }
             }
             // A little above the middle, clear of the controls under it.
             .padding(.bottom, 60)
