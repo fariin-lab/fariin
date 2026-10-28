@@ -11,11 +11,13 @@ struct GroupCallStagePager: View {
     @ObservedObject var stage: GroupCallStage
     /// The screen's namespace, for the focus view's large tile (nil under Reduce Motion: it fades).
     var namespace: Namespace.ID?
+    /// A tap on the person shown large: the screen shows or hides its controls.
+    var onFocusTap: () -> Void = {}
 
     var body: some View {
         ZStack {
             if case .focus(let id) = stage.mode {
-                GroupCallFocusView(stage: stage, focusId: id, namespace: namespace)
+                GroupCallFocusView(stage: stage, focusId: id, namespace: namespace, onLargeTap: onFocusTap)
                     .transition(.opacity)
             } else {
                 GroupCallGridView(stage: stage)

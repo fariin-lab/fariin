@@ -339,6 +339,11 @@ final class GroupCallService: ObservableObject {
     /// (owner 2026-10-23, "fix all": a group ring had only the system call banner). Set and cleared
     /// by `GroupCallRinging` while its ring is up and still ringing.
     @Published var groupRingScreen: AdhocInvite?
+    /// The room the system call screen is ringing me for right now (GroupCallRinging), nil when
+    /// none. Owner 2026-10-27, "it rings twice": our own full-screen invitation came up on top of
+    /// the system ring. While the system rings, ours stays hidden (the reference app shows only the
+    /// system ring and opens its call screen once answered).
+    @Published var systemRingRoom: String?
     /// An ad-hoc or link call wants its screen up. `IncomingGroupCallLayer` presents GroupCallView for
     /// these; group conversation calls keep their own covers in the chat and in group info.
     @Published var presentsRoomScreen = false
@@ -836,6 +841,9 @@ final class GroupCallService: ObservableObject {
     /// `someoneJoined`: anybody else was ever in the room with me, so the record says "answered".
     private var aloneSince: Date?
     private var someoneJoined = false
+    /// Everyone who has been in the room with me this call: someone who came and left is not
+    /// "ringing" again (`stillRinging`).
+    private var everHereUids: Set<String> = []
     private func noteRoomPeople() {
         guard isActive, room.connectionState == .connected else { return }
         if room.remoteParticipants.isEmpty {
@@ -843,6 +851,7 @@ final class GroupCallService: ObservableObject {
         } else {
             aloneSince = nil
             someoneJoined = true
+            everHereUids.formUnion(room.remoteParticipants.values.compactMap { $0.identity?.stringValue })
         }
     }
     /// The chat record of the group conversation call I am in (`recordId` on its doc): written by me
@@ -1280,7 +1289,7 @@ final class GroupCallService: ObservableObject {
         installAudioRecovery()        // controls 5-9
         GroupCallSocial.shared.attach(room: room, myUid: myUid, myName: ProfileStore.shared.me?.name ?? "")
         GroupCallRinging.shared.callJoined()
-        aloneSince = nil; someoneJoined = false
+        aloneSince = nil; someoneJoined = false; everHereUids = []
         noteRoomPeople()              // audit M-019 / M-088: who was already here when I came in
         updateRingback()
         updateGroupScreenBehavior()   // audit M-096
@@ -1636,8 +1645,16 @@ final class GroupCallService: ObservableObject {
     /// it skips people who muted the group or blocked me, and everyone when the ring is rate
     /// limited), the list is that. Before it lands, or from an older server, the group as above.
     /// (A8) With the members' photos, not only their initials.
-    private func groupRingingMembers(at now: Date) -> [CallMember] {
-        guard isActive, !someoneJoined, let start = groupRingStartedAt,
+    /// The people still inside their ring minute, also after somebody came (the header's
+    /// ", 2 ringing", owner 2026-10-27). `ringingMembers` stops at the first answer on purpose: the
+    /// caller's ringing sound and the ringing screen hang on it.
+    func stillRinging(at now: Date) -> [CallMember] {
+        if case .group? = activeRoom { return groupRingingMembers(at: now, afterAnswer: true) }
+        return ringingMembers(at: now)
+    }
+
+    private func groupRingingMembers(at now: Date, afterAnswer: Bool = false) -> [CallMember] {
+        guard isActive, afterAnswer || !someoneJoined, let start = groupRingStartedAt,
               now.timeIntervalSince(start) < Self.ringWindow else { return [] }
         let conv = groupConv
         let base: [String]
@@ -1651,7 +1668,8 @@ final class GroupCallService: ObservableObject {
         let me = myUid
         let here = Set(room.remoteParticipants.values.compactMap { $0.identity?.stringValue })
         return base
-            .filter { $0 != me && !here.contains($0) && !declinedUids.contains($0) && !busyUids.contains($0) }
+            .filter { $0 != me && !here.contains($0) && !everHereUids.contains($0)
+                && !declinedUids.contains($0) && !busyUids.contains($0) }
             .map { uid in
                 CallMember(uid: uid, name: conv?.names[uid].flatMap { $0.isEmpty ? nil : $0 } ?? "Member",
                            photoUrl: conv?.photos[uid].flatMap { $0.isEmpty ? nil : $0 })
@@ -2154,7 +2172,7 @@ final class GroupCallService: ObservableObject {
         // refused as busy. Every `end()` comes through here; the old join's generation check (and
         // `abandonJoin`'s own guard) keep it from touching anything newer.
         connecting = false
-        groupRecordId = nil; aloneSince = nil; someoneJoined = false
+        groupRecordId = nil; aloneSince = nil; someoneJoined = false; everHereUids = []
         resetRoomState()
         presentsRoomScreen = false
         reevaluateInvites()

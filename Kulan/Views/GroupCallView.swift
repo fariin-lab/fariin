@@ -468,7 +468,7 @@ struct GroupCallView: View {
     /// that lands on no tile reaches this view and shows or hides the chrome.
     private var stageArea: some View {
         // Reduce Motion: no matched-geometry flight, the focus view fades in.
-        GroupCallStagePager(stage: stage, namespace: reduceMotion ? nil : ns)
+        GroupCallStagePager(stage: stage, namespace: reduceMotion ? nil : ns, onFocusTap: { toggleChrome() })
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // The stage's size, for the enlarged pip's cap. A background reader adds no layout of its own.
             .background(stageSizeReader)
@@ -476,7 +476,7 @@ struct GroupCallView: View {
             .environment(\.groupCallSelfPipWidth, selfPipWidth)
             // Audit M-101, 2026-10-07: what the tiles' top marks must clear (see `topClearance`).
             .environment(\.groupCallTopClearance, topClearance)
-            .overlay(alignment: .bottomTrailing) { selfPip }
+            .overlay(alignment: .bottomTrailing) { if showsSelfPip { selfPip } }
             .animation(GroupCallMotion.stage(reduceMotion: reduceMotion), value: stage.mode)
             .contentShape(Rectangle())
             .onTapGesture { toggleChrome() }
@@ -672,7 +672,15 @@ struct GroupCallView: View {
     @State private var stageSize: CGSize = .zero
 
     private var selfPipWidth: CGFloat {
-        GroupCallSelfView.size(remoteCount: remoteCount, expanded: selfExpanded, stageSize: stageSize).width
+        guard showsSelfPip else { return 0 }
+        return GroupCallSelfView.size(remoteCount: remoteCount, expanded: selfExpanded, stageSize: stageSize).width
+    }
+    /// Owner 2026-10-27: with 2+ others on the grid I am a tile of my own, first in the grid
+    /// (GroupCallGridView), as in the reference app; the corner card was too easy to lose. The card
+    /// stays for one person shown large (pinned or presenting) and for one other person presenting.
+    private var showsSelfPip: Bool {
+        if case .focus = stage.mode { return true }
+        return remoteCount <= 1
     }
     @State private var settled = false
     @State private var showParticipants = false
@@ -714,9 +722,15 @@ struct GroupCallView: View {
         } else if duoPair != nil, let since = service.joinedAt {
             clock(since)
         } else {
-            Text(countLine)
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                Text(countLine + Self.ringingTail(service.stillRinging(at: ctx.date).count))
+            }
         }
     }
+
+    /// Owner 2026-10-27 (from the reference app's "2 participants, 3 invited"): once somebody came,
+    /// the people still being rung were no longer mentioned anywhere. ", 2 ringing" while they are.
+    static func ringingTail(_ n: Int) -> String { n > 0 ? ", \(n) ringing" : "" }
 
     /// Alone: "Ringing Alice…" while the people I called are still inside the ring window, then
     /// "No one else is here". On a clock, because the ring window ends by time alone.
@@ -731,7 +745,8 @@ struct GroupCallView: View {
 
     private func clock(_ since: Date) -> some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
-            Text(CallDuration.clock(Int(ctx.date.timeIntervalSince(since))))
+            Text(CallDuration.clock(Int(ctx.date.timeIntervalSince(since)))
+                 + Self.ringingTail(service.stillRinging(at: ctx.date).count))
                 .monospacedDigit()
         }
     }

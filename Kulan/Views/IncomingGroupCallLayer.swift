@@ -33,8 +33,11 @@ struct IncomingGroupCallLayer: View {
             // invitations can load after that decline).
             // 2026-10-23 (owner): a group chat's ring shows here too (`groupRingScreen`).
             // A nudge's invitation (owner 2026-10-23) is for someone who declined: it shows anyway.
+            // Owner 2026-10-27: not while the system call screen rings for the same room (two ring
+            // screens for one call). Shown when the system could not ring (Focus, refused).
             if CallFeatures.groupCalls, let invite = service.incomingInvite ?? service.groupRingScreen,
-               invite.fromNudge || !GroupCallRinging.shared.isDeclined(invite.roomId) {
+               invite.fromNudge || !GroupCallRinging.shared.isDeclined(invite.roomId),
+               invite.fromNudge || invite.roomId != service.systemRingRoom {
                 IncomingGroupCallScreen(invite: invite)
                     .transition(.opacity)
             }

@@ -5,8 +5,8 @@ import LiveKit
 ///
 /// - Alone (no remotes): the local tile fills the stage in `.alone` style. The "Waiting for others…"
 ///   text is the header's job, not drawn here.
-/// - Others present: only remotes go on the grid; the local camera is the self pip, drawn by the
-///   parent at the bottom-right.
+/// - One other person: only they go on the grid; the local camera is the self pip, drawn by the
+///   parent at the bottom-right. Two or more (owner 2026-10-27): my own tile is the first cell.
 /// - Who gets a place: `GroupCallStage.gridPlacement`, sticky cells (spec §12/§13): a placed tile
 ///   keeps its cell, and an active speaker off the grid takes the least important person's cell.
 /// - The rest go to `GroupCallStripView` at the bottom, and the grid area shrinks by the strip.
@@ -39,16 +39,18 @@ struct GroupCallGridView: View {
 
     @ViewBuilder
     private func content(in size: CGSize) -> some View {
-        // Local goes to the pip once anyone else is present, so the grid is remotes only. Live
-        // speech filled in for the ranking (the published tiles leave it out, see CallTile ==).
+        // Live speech filled in for the ranking (the published tiles leave it out, see CallTile ==).
         let remotes = stage.tilesWithLiveSpeech.filter { !$0.isLocal }
+        // Owner 2026-10-27: with 2+ others I am the grid's first tile (no corner card, see
+        // GroupCallView.showsSelfPip). With one other, the corner card as before.
+        let local = remotes.count >= 2 ? stage.tiles.first(where: { $0.isLocal }) : nil
 
         // Alone -> the first person arrives (and back): one cross-fade, not a hard cut (spec §12).
         ZStack {
             if remotes.isEmpty {
                 aloneTile(size: size)
             } else {
-                gridStage(remotes: remotes, size: size)
+                gridStage(remotes: remotes, local: local, size: size)
                     .transition(.opacity)
             }
         }
@@ -81,9 +83,10 @@ struct GroupCallGridView: View {
     // MARK: - Grid
 
     @ViewBuilder
-    private func gridStage(remotes: [CallTile], size: CGSize) -> some View {
-        let geometry = Self.plan(remotes: remotes, stage: stage, size: size)
-        let byId = Dictionary(remotes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    private func gridStage(remotes: [CallTile], local: CallTile?, size: CGSize) -> some View {
+        let geometry = Self.plan(remotes: remotes, local: local, stage: stage, size: size)
+        let byId = Dictionary((remotes + (local.map { [$0] } ?? [])).map { ($0.id, $0) },
+                              uniquingKeysWith: { first, _ in first })
         let layout = geometry.layout
         let placed = geometry.placedIds
 
@@ -95,9 +98,9 @@ struct GroupCallGridView: View {
                             tile: tile,
                             track: tile.hasVideo ? stage.videoTrack(id) : nil,
                             style: .grid,
-                            isActiveSpeaker: stage.activeSpeakerId == id,
+                            isActiveSpeaker: !tile.isLocal && stage.activeSpeakerId == id,
                             isPinned: stage.pinnedId == id,
-                            onTap: { stage.togglePin(id) },
+                            onTap: { if !tile.isLocal { stage.togglePin(id) } },
                             menu: stage.tileMenu(for: tile),
                             topClearance: clearance(minY: frame.minY, height: frame.height)
                         )
@@ -136,19 +139,21 @@ struct GroupCallGridView: View {
 
     /// Decide the grid area, who is on it, and their frames.
     @MainActor
-    private static func plan(remotes: [CallTile], stage: GroupCallStage, size: CGSize) -> Plan {
+    private static func plan(remotes: [CallTile], local: CallTile?, stage: GroupCallStage, size: CGSize) -> Plan {
+        // My own tile (2+ others) always has the first cell; the others share the rest.
+        let mine = local.map { [$0.id] } ?? []
         let ranked = GroupCallPriority.ranked(remotes, focusedId: stage.pinnedId,
                                               speakerId: stage.activeSpeakerId, now: Date())
 
         // The strip only exists when the full stage cannot hold everyone; only then does the grid
         // give up the strip's height.
         let fullCapacity = GroupCallLayoutEngine.capacity(in: size)
-        let needsStrip = ranked.count > fullCapacity
+        let needsStrip = ranked.count + mine.count > fullCapacity
         let gridSize = CGSize(
             width: size.width,
             height: max(0, size.height - (needsStrip ? stripReserve : 0))
         )
-        let capacity = max(0, GroupCallLayoutEngine.capacity(in: gridSize))
+        let capacity = max(0, GroupCallLayoutEngine.capacity(in: gridSize) - mine.count)
         // The first layout pass has no size yet; its caps (rows by height) are not the real ones,
         // and feeding them to the sticky cells would drop and re-add people (a reorder).
         guard size.width > 0, size.height > 0 else {
@@ -159,7 +164,7 @@ struct GroupCallGridView: View {
         // follow in priority order, so the engine hands them back as `overflow` for the strip.
         let cells = stage.gridPlacement(remotes, capacity: capacity)
         let placedSet = Set(cells)
-        let ids = cells + ranked.filter { !placedSet.contains($0.id) }.map(\.id)
+        let ids = mine + cells + ranked.filter { !placedSet.contains($0.id) }.map(\.id)
 
         let layout = GroupCallLayoutEngine.grid(ids: ids, in: gridSize)
         let placed = ids.filter { layout.frames[$0] != nil }

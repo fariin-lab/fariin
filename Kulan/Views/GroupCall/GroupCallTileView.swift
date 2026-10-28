@@ -29,6 +29,8 @@ struct GroupCallTileView: View {
     var topClearance: CGFloat = 0
 
     @State private var showVideoNote = false
+    /// The camera's first frame is on screen (LiveKit's `isRendering`); until then the photo shows.
+    @State private var cameraRendering = false
 
     /// "Can't show video" is drawn: no picture to show and the wait is over.
     private var showsUnavailable: Bool { track == nil && tile.videoUnavailable }
@@ -99,8 +101,19 @@ struct GroupCallTileView: View {
                 .id(tile.screenTrackSid)
             } else {
                 // `.auto` mirrors only the local front camera, the same as the old screen did.
-                SwiftUIVideoView(track, layoutMode: .fill)
-                    .id(tile.cameraTrackSid)   // same reason: a republished camera rebinds
+                // Owner 2026-10-27 (the reference app's tiles): the person's photo over the video
+                // until its first frame is drawn, never a black tile. The video view stays built
+                // and sized underneath, so the stream keeps coming.
+                ZStack {
+                    SwiftUIVideoView(track, layoutMode: .fill, isRendering: $cameraRendering)
+                        .id(tile.cameraTrackSid)   // same reason: a republished camera rebinds
+                    if !cameraRendering {
+                        cameraOff(width: width, height: height)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.easeOut(duration: 0.2), value: cameraRendering)
+                .onChange(of: tile.cameraTrackSid) { _, _ in cameraRendering = false }
             }
         } else if tile.videoUnavailable {
             cameraOff(width: width, height: height)

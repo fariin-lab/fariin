@@ -15,6 +15,9 @@ struct GroupCallFocusView: View {
     var namespace: Namespace.ID? = nil
     /// The pager's speaker page: the large tile follows the active speaker and nobody is pinned.
     var isSpeakerPage: Bool = false
+    /// Owner 2026-10-27 (the reference app's focus view): a tap on the large tile shows or hides
+    /// the controls, and a swipe down goes back to the grid. Unpin is in the long-press menu too.
+    var onLargeTap: () -> Void = {}
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Audit M-101, 2026-10-07: the large tile's top is the stage inset from the top of the screen,
     /// under the status bar and the header; its label and top marks move down by the rest.
@@ -63,18 +66,19 @@ struct GroupCallFocusView: View {
             style: .focus,
             isActiveSpeaker: stage.activeSpeakerId == tile.id,
             isPinned: stage.pinnedId == tile.id,
-            onTap: {
-                // A presenter the stage put here by itself (nobody pinned) stays: the share holds
-                // the stage until it ends, so a pin would only add a badge and change nothing.
-                guard !isAutoPresenter(tile) else { return }
-                // Tap again to go back to the grid (owner spec §16: how to focus someone, and undo it).
-                // On the speaker page nobody is pinned yet, so the same tap pins this person.
-                withAnimation(GroupCallMotion.stage(reduceMotion: reduceMotion)) { stage.togglePin(tile.id) }
-            },
+            onTap: onLargeTap,
             menu: stage.tileMenu(for: tile),
             topClearance: labelDrop
         )
         .clipShape(RoundedRectangle(cornerRadius: GroupCallMetrics.tileCorner, style: .continuous))
+        .gesture(DragGesture(minimumDistance: 24).onEnded { v in
+            // A clear downward swipe, on a person I pinned (a presenter the stage put here by
+            // itself stays until the share ends).
+            guard v.translation.height > 80,
+                  abs(v.translation.height) > abs(v.translation.width) * 1.5,
+                  stage.pinnedId == tile.id else { return }
+            withAnimation(GroupCallMotion.stage(reduceMotion: reduceMotion)) { stage.togglePin(tile.id) }
+        })
         .overlay(alignment: .topLeading) {
             viewingLabel(tile)
                 .padding(.top, labelDrop)
@@ -89,8 +93,8 @@ struct GroupCallFocusView: View {
     }
 
     private func tapHint(_ tile: CallTile) -> String {
-        if isAutoPresenter(tile) { return "" }
-        return isSpeakerPage ? "Double-tap to pin" : "Double-tap to return to the grid"
+        if isAutoPresenter(tile) { return "Double-tap to show or hide the controls" }
+        return "Double-tap to show or hide the controls. Unpin from the actions menu"
     }
 
     /// Shown large because they are presenting, not because the user pinned them.

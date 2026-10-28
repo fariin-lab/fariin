@@ -73,6 +73,8 @@ final class GroupCallRinging {
     /// whatever path (answered, declined, ended, timed out, a 1:1 took over).
     private func syncScreen() {
         let service = GroupCallService.shared
+        let ringingRoom = phase == .ringing ? ring?.roomId : nil
+        if service.systemRingRoom != ringingRoom { service.systemRingRoom = ringingRoom }
         // A nudge's invitation has no ring behind it: it keeps its own clock (`openNudge`).
         guard let shown = service.groupRingScreen, !shown.fromNudge else { return }
         if ring?.roomId != shown.roomId || phase != .ringing { service.groupRingScreen = nil }
