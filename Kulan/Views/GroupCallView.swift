@@ -102,14 +102,11 @@ struct GroupCallView: View {
     @ViewBuilder
     private var groupWaitingLayer: some View {
         if groupWaiting, !service.dialing, service.joinState != .joined, !service.joiningPeople.isEmpty {
-            // Joining a running call (owner 2026-10-28): the people already in it, at once, while the
-            // line finishes behind them; the first one large, "+N" for the rest, their names under.
-            GroupCallRingingView(people: service.joiningPeople.map { .init(name: $0.name, photoUrl: $0.photoUrl) },
-                                 overVideo: false,
-                                 subtitle: nil,
-                                 plainGround: true,
-                                 pulse: false)
-                .transition(.opacity)
+            // ⛔ JOINING A RUNNING CALL: NO SCREEN OF ITS OWN (owner 2026-10-28, "don't show it at
+            // all"; reverses the same day's photos-and-names screen, 25c82ea1). The call screen
+            // itself shows while the line finishes, and the tiles come in once it is up. This branch
+            // stays so the group-photo waiting screen below is not shown in its place either.
+            EmptyView()
         } else if groupWaiting {
             // On a clock, because the ring minute ends by time alone.
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
