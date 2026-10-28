@@ -29,8 +29,10 @@ struct GroupCallSelfView: View {
         // Owner 2026-10-28: with one person shown large, the 90x160 card hung over the large tile.
         // There it sits in the strip's row instead, as tall as the strip's tiles, 9:16.
         if inStrip && !expanded {
-            let h = GroupCallMetrics.stripTile
-            return CGSize(width: (h * 9 / 16).rounded(), height: h)
+            // Owner 2026-10-28 (second look): a narrow 9:16 card with a tiny photo did not match the
+            // strip's square tiles beside it. Exactly their size and shape now.
+            let s = GroupCallMetrics.stripTile
+            return CGSize(width: s, height: s)
         }
         if expanded {
             let aspect: CGFloat = 170.0 / 300.0
