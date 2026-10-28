@@ -144,12 +144,14 @@ enum CallPipMorph {
                 }, completion: { _ in
                     // M-147: a cancelled flight has already cleaned up, and must not clear the flag
                     // of a newer one.
-                    if flightBox === box {
-                        minimizeInFlight = false
-                        flightBox = nil
-                        CallService.shared.cardHiddenForMorph = false
-                    }
-                    box.removeFromSuperview()
+                    guard flightBox === box else { box.removeFromSuperview(); return }
+                    minimizeInFlight = false
+                    flightBox = nil
+                    CallService.shared.cardHiddenForMorph = false
+                    // ⛔ THE FLIGHT STAYS UNTIL THE REAL CARD HAS DRAWN (owner 2026-10-28: "blinks").
+                    // SwiftUI shows the card a frame or two after the flag flips; taking the
+                    // flight down in the same turn left a frame with neither.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { box.removeFromSuperview() }
                 })
             }
         }
@@ -197,13 +199,27 @@ enum CallPipMorph {
         // frame on completion); alpha is the one thing it leaves alone.
         v.alpha = 0
         DispatchQueue.main.async {
-            v.frame = from
-            v.layer.cornerRadius = cardRadius
-            v.layer.cornerCurve = .continuous
-            v.clipsToBounds = true
-            v.addSubview(card)   // off the window (#43) and into the call view, in one move
-            card.frame = v.bounds   // = the card's own size at this moment
+            // ⛔ ZOOMED, NOT RESIZED (owner 2026-10-28: "shape looks wrong"). The call view used to
+            // start at the card's frame and grow to the screen, so its buttons and pictures were
+            // laid out at card size and re-laid out on the way up, squeezed and jumping. It now
+            // keeps the full screen's size the whole time: a transform scales it down uniformly
+            // onto the card and a rounded mask crops it to the card's shape, and both run back
+            // to nothing. Only the picture moves; the layout never changes.
+            let full = win.bounds
+            v.frame = full
             v.layoutIfNeeded()
+            let s = max(from.width / full.width, from.height / full.height)
+            let shown = CGRect(x: (full.width - from.width / s) / 2, y: (full.height - from.height / s) / 2,
+                               width: from.width / s, height: from.height / s)
+            let mask = UIView(frame: shown)
+            mask.backgroundColor = .black
+            mask.layer.cornerRadius = cardRadius / s
+            mask.layer.cornerCurve = .continuous
+            v.mask = mask
+            v.transform = CGAffineTransform(translationX: from.midX - full.midX, y: from.midY - full.midY)
+                .scaledBy(x: s, y: s)
+            v.addSubview(card)   // off the window (#43) and into the call view, in one move
+            card.frame = shown   // exactly over the card on screen once scaled
             v.alpha = 1
             InstantCover.release()   // the cover's cut is done; this flight must move
             UIView.animate(withDuration: fadeDuration, delay: fadeDelay, options: [.curveEaseOut], animations: {
@@ -211,15 +227,16 @@ enum CallPipMorph {
             })
             UIView.animate(withDuration: duration, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0,
                            options: [], animations: {
-                v.frame = win.bounds
-                v.layer.cornerRadius = 0
+                v.transform = .identity
+                mask.frame = v.bounds
+                mask.layer.cornerRadius = 0
                 // The card's picture grows uniformly, cropped, over the screen taking shape beneath it:
                 // the same rule as the shrink, so nothing is stretched (owner, 2026-10-07).
-                card.frame = fillFrame(from.size, in: win.bounds.size)
-                v.layoutIfNeeded()
+                card.frame = fillFrame(from.size, in: full.size)
             }, completion: { _ in
                 card.removeFromSuperview()
-                v.clipsToBounds = false
+                v.mask = nil
+                v.transform = .identity
             })
         }
     }
