@@ -1545,12 +1545,40 @@ final class GroupCallService: ObservableObject {
                 showToast("Couldn't share your screen")
                 return
             }
-            // The sheet closed without Start: nothing tells us, so a share that has not begun within
-            // a minute is dropped (the next tap starts afresh either way, 3-3).
+            // ⛔ THE SHEET CLOSED WITHOUT START (owner 2026-10-28: the "..." stayed white and the menu
+            // said Cancel Sharing after he only looked at the sheet). ReplayKit says nothing, so this
+            // is the 1:1 call's own answer (`CallService.watchPickerReturn`, its audit #15): when the
+            // app is active again and no broadcast has started 6 s later (the 3-2-1 countdown and
+            // the extension's launch), the pending share is dropped.
+            watchSharePickerReturn(session)
+            // The minute below stays as the last net.
             Task { @MainActor [weak self, weak session] in
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
                 guard let self, let session, self.shareSession === session, !session.hasStarted else { return }
                 self.endScreenShare()
+            }
+        }
+    }
+
+    private var sharePickerReturn: NSObjectProtocol?
+    private func watchSharePickerReturn(_ pending: ScreenShareSession) {
+        if let t = sharePickerReturn { NotificationCenter.default.removeObserver(t) }
+        sharePickerReturn = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self, weak pending] _ in
+            guard let self else { return }
+            if let t = self.sharePickerReturn { NotificationCenter.default.removeObserver(t) }
+            self.sharePickerReturn = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self, weak session = pending] in
+                guard let self, let session, self.shareSession === session,
+                      !self.screenSharing, !session.hasStarted else { return }
+                // A broadcast already stamping its keepalive is never stopped here.
+                session.extensionKeepaliveFresh { [weak self, weak session] fresh in
+                    guard !fresh, let self, let session, self.shareSession === session,
+                          !self.screenSharing, !session.hasStarted else { return }
+                    GCLog.event("share_sheet_closed", room: self.logRoom)
+                    self.endScreenShare()
+                }
             }
         }
     }
