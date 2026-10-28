@@ -203,7 +203,20 @@ final class GroupCallService: ObservableObject {
     private func syncJoinState() {
         let now: GroupJoinState = activeCid != nil ? .joined
             : (waitingForApproval ? .pending : (connecting ? .joining : .notJoined))
-        if now != joinState { joinState = now }
+        guard now != joinState else { return }
+        let was = joinState
+        joinState = now
+        // Owner 2026-10-27 (the reference app's rule): a tone when I get into the call and when I
+        // am out of it again. Nothing for other people joining or leaving (the banner says that).
+        if now == .joined { playPresenceTone(RingbackTone.groupJoinedData()) }
+        else if was == .joined { playPresenceTone(RingbackTone.groupLeftData()) }
+    }
+    private var presenceTone: AVAudioPlayer?
+    private func playPresenceTone(_ data: Data) {
+        presenceTone?.stop()
+        presenceTone = try? AVAudioPlayer(data: data)
+        presenceTone?.volume = 0.6
+        presenceTone?.play()
     }
     @Published var isVideo = false
     @Published var micOn = true

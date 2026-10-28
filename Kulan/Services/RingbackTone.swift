@@ -93,6 +93,27 @@ enum RingbackTone {
         return wav(samples, sampleRate: sampleRate)
     }
 
+    // Owner 2026-10-27, the reference app's rule: a group call makes a sound when I get into it and
+    // when I leave it (or am removed), never for other people coming and going. Our own notes:
+    // joined rises (523 -> 784 Hz), left falls (784 -> 523 Hz), each note faded in and out.
+    static func groupJoinedData(sampleRate: Int = 16000) -> Data { twoNotes(523, 784, sampleRate: sampleRate) }
+    static func groupLeftData(sampleRate: Int = 16000) -> Data { twoNotes(784, 523, sampleRate: sampleRate) }
+
+    private static func twoNotes(_ first: Double, _ second: Double, sampleRate: Int) -> Data {
+        let note = 0.11, gap = 0.03
+        let total = Int(Double(sampleRate) * (note * 2 + gap))
+        var samples = [Int16](repeating: 0, count: total)
+        for i in 0..<total {
+            let t = Double(i) / Double(sampleRate)
+            var v = 0.0, local = 0.0
+            if t < note { v = sin(2 * .pi * first * t); local = t }
+            else if t > note + gap { v = sin(2 * .pi * second * t); local = t - note - gap }
+            let env = sin(.pi * min(1, max(0, local / note)))   // smooth in and out
+            samples[i] = Int16(v * 5600 * env)
+        }
+        return wav(samples, sampleRate: sampleRate)
+    }
+
     private static func wav(_ samples: [Int16], sampleRate: Int) -> Data {
         var d = Data()
         let dataBytes = samples.count * 2
