@@ -766,10 +766,12 @@ struct CallView: View {
                     // The flip glyph belongs to a LIVE local camera only — and never to the hand-off.
                     if pipIsLocal, pipTrack != nil, !tileEntering, !myScreenOnCamera {
                         Button { buzz(); flipCamera() } label: {
-                            Image(systemName: "arrow.triangle.2.circlepath.camera.fill")
-                                .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
-                                .padding(6).background(.black.opacity(0.45), in: Circle())
-                                // r2 H7: a 44pt target around the same 27pt glyph (drawn as before).
+                            // Owner 2026-10-28: bigger, liquid glass, his own flip icon.
+                            Image("ic_flip_camera").renderingMode(.template).resizable().scaledToFit()
+                                .frame(width: 18, height: 18).foregroundStyle(.white)
+                                .frame(width: 34, height: 34)
+                                .liquidGlass(Circle(), interactive: true)
+                                // r2 H7: a 44pt target around the glyph.
                                 .padding(6)
                                 .frame(minWidth: 44, minHeight: 44, alignment: .topTrailing)
                                 .contentShape(Rectangle())

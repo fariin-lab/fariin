@@ -250,10 +250,13 @@ struct GroupCallDuoView: View {
 
     private var flipGlyph: some View {
         Button { onFlipCamera() } label: {
-            Image(systemName: "arrow.triangle.2.circlepath.camera.fill")
-                .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
-                .padding(6).background(.black.opacity(0.45), in: Circle())
+            // Owner 2026-10-28: bigger, liquid glass, his own flip icon (as the 1:1 tile).
+            Image("ic_flip_camera").renderingMode(.template).resizable().scaledToFit()
+                .frame(width: 18, height: 18).foregroundStyle(.white)
+                .frame(width: 34, height: 34)
+                .liquidGlass(Circle(), interactive: true)
         }
+        .buttonStyle(.plain)
         .accessibilityLabel("Flip camera")
         .padding(6)
     }
