@@ -307,11 +307,12 @@ struct GroupCallParticipantsSheet: View {
             Section {
                 Button { showAdd = true } label: {
                     HStack(spacing: 12) {
+                        // A plain icon as in Settings rows, no filled circle (owner 2026-10-28). The
+                        // 36 pt frame keeps "Add People" lined up with the names below.
                         Image(systemName: "person.badge.plus")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .font(.system(size: 20, weight: .regular))
+                            .foregroundStyle(Color.fariinBlue)
                             .frame(width: 36, height: 36)
-                            .background(Circle().fill(Color.fariinBlue))
                         Text("Add People").foregroundStyle(Color.fariinBlue)
                         Spacer()
                     }
