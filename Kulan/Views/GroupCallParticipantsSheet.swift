@@ -838,6 +838,12 @@ struct GroupCallParticipantsSheet: View {
                 Button { run(.mute, target: t.uid) } label: {
                     Label("Mute", systemImage: "mic.slash")
                 }
+            } else {
+                // 2026-10-28: an admin's mute holds until an admin allows them to speak (callAdmin
+                // 'unmute'); the owner looked for it here first.
+                Button { run(.unmute, target: t.uid) } label: {
+                    Label("Allow to Speak", systemImage: "mic")
+                }
             }
             Button(role: .destructive) { removeTarget = t } label: {
                 Label("Remove from call", systemImage: "person.fill.xmark")
