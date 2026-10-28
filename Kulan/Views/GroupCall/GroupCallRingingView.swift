@@ -26,6 +26,9 @@ struct GroupCallRingingView: View {
     /// Plain black instead of the first person's colour (a group chat's call: one calm screen, no
     /// colour change as the photo loads or the list changes).
     var plainGround = false
+    /// The pulse around the photo; by default while there is a subtitle. A group chat's call pulses
+    /// with no words under the name (owner 2026-10-28).
+    var pulse: Bool? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -64,7 +67,7 @@ struct GroupCallRingingView: View {
 
     private var photo: some View {
         ZStack {
-            if !reduceMotion, subtitle != nil {
+            if !reduceMotion, pulse ?? (subtitle != nil) {
                 // Audit H3 (2026-10-23): driven by a timeline, not `.repeatForever` (the iOS 26
                 // deadlock pattern of build 959). Two rings 1.2 s apart, each 2.4 s, ease-out.
                 TimelineView(.animation) { ctx in

@@ -324,8 +324,11 @@ final class GroupCallService: ObservableObject {
         // In the room, the start's own write still out: still calling, no gap in the sound or words.
         guard let start = groupRingStartedAt else { return dialing }
         guard now.timeIntervalSince(start) < Self.ringWindow else { return false }
-        if groupConv == nil && groupRungUids == nil { return true }   // who is rung, not known yet
-        return !groupRingingMembers(at: now).isEmpty
+        // Owner 2026-10-28: the whole ring minute, whoever declined. One "no" switched the screen to
+        // "No one else is here" while the others still rang; the reference app keeps waiting. Only a
+        // group too big to ring (nobody rung) is not "calling".
+        return groupRungUids.map { !$0.isEmpty }
+            ?? ((groupConv?.users.count ?? 0) <= Self.groupRingMaxMembers)
     }
     /// 2026-09-24 decision D25: why a start did not become a call. GroupCallView shows it as an alert
     /// and closes on OK. Before this a failed start left the call screen up on "1 in call", with
@@ -1771,12 +1774,9 @@ final class GroupCallService: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self, case .group(let now)? = self.activeRoom, now == cid else { return }
                 if let rung { self.groupRungUids = rung }
-                if let uid = busy.subtracting(self.busyUids).first, let name = names[uid] ?? self.groupConv?.names[uid] {
-                    self.showToast("\(name) is busy")
-                } else if let uid = declined.subtracting(self.declinedUids).first,
-                          let name = names[uid] ?? self.groupConv?.names[uid] {
-                    self.showToast("\(name) declined")
-                }
+                // Owner 2026-10-28: a group chat's call never says who declined or was busy (the
+                // reference app says nothing either). The people sheet still knows, for whoever looks.
+                _ = names
                 self.declinedUids = declined; self.busyUids = busy
                 self.updateRingback()
             }

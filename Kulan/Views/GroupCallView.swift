@@ -106,8 +106,11 @@ struct GroupCallView: View {
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
                 GroupCallRingingView(people: [.init(name: service.callTitle, photoUrl: service.groupPhotoUrl)],
                                      overVideo: false,
-                                     subtitle: service.callingNow(at: ctx.date) ? "Calling…" : nil,
-                                     plainGround: true)
+                                     // Owner 2026-10-28: no "Calling…" words; the pulse and the
+                                     // calling sound say it.
+                                     subtitle: nil,
+                                     plainGround: true,
+                                     pulse: service.callingNow(at: ctx.date))
             }
             .transition(.opacity)
         }
@@ -780,7 +783,7 @@ struct GroupCallView: View {
             // A group chat's call I started (owner 2026-10-28): one line, "Calling…", from the tap
             // until somebody comes; then the usual lines.
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                if service.callingNow(at: ctx.date) { Text("Calling…") } else { joinedSubtitle }
+                if service.callingNow(at: ctx.date) { Text(" ") } else { joinedSubtitle }
             }
         } else if service.isGroupChatCall, !service.dialing, statusWords == "Connecting…",
                   let since = service.joinStartedAt {
