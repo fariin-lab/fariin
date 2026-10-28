@@ -1042,28 +1042,32 @@ private struct GroupCallMoreButton: View {
             }
             // Never on a voice call link; pending (the system sheet is up) says a tap cancels.
             if sharing || (service.isActive && !service.cameraLocked) {
+                // Owner 2026-10-28: his own Share Screen and Flip Camera icons.
                 Button { service.toggleScreenShare() } label: {
-                    Label(service.screenSharing ? "Stop Sharing" : service.sharePending ? "Cancel Sharing" : "Share Screen",
-                          systemImage: sharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle")
+                    Label { Text(service.screenSharing ? "Stop Sharing" : service.sharePending ? "Cancel Sharing" : "Share Screen") }
+                        icon: { MenuIcon("ic_share_screen_menu") }
                 }
             }
             if service.cameraOn {
                 Button { service.flipCamera() } label: {
-                    Label("Flip Camera", systemImage: "arrow.triangle.2.circlepath.camera")
+                    Label { Text("Flip Camera") } icon: { MenuIcon("ic_flip_camera") }
                 }
             }
         } label: {
+            // White only once sharing has really started; the system sheet being open (pending) is
+            // not sharing yet (owner 2026-10-28: it went white before he pressed Start Sharing).
+            let live = service.screenSharing
             Image(systemName: "ellipsis").font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(sharing ? .black : .white)
+                .foregroundStyle(live ? .black : .white)
                 .frame(width: 56, height: 56)
-                .background(sharing ? AnyShapeStyle(.white) : AnyShapeStyle(.clear), in: Circle())
-                .liquidGlass(Circle(), interactive: true, enabled: !sharing)
+                .background(live ? AnyShapeStyle(.white) : AnyShapeStyle(.clear), in: Circle())
+                .liquidGlass(Circle(), interactive: true, enabled: !live)
                 .contentShape(Circle())
         }
         .menuOrder(.fixed)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.35)
-        .accessibilityLabel(sharing ? "More, sharing your screen" : "More")
+        .accessibilityLabel(service.screenSharing ? "More, sharing your screen" : "More")
     }
 
     /// An emoji drawn as a picture, because a menu's icon row shows images, not text.
