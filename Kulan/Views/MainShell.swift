@@ -4357,13 +4357,13 @@ struct DisappearingAvatarBadge: View {
         // the list's own background (black at night, white by day), so the badge reads as a notch
         // cut out of the photo with the grey clock in it. Not the dark grey tried in `98b0f323`.
         // Icon and its grey unchanged.
+        // ⛔ LIQUID GLASS (owner 2026-10-28, "make that badge liquid glass"): the disc is real glass
+        // over the photo now, not a notch in the page's colour. Same size, same grey clock.
         Image(systemName: "timer")
-            .font(.system(size: 14, weight: .semibold))
+            .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(Color(uiColor: .systemGray))   // grey again in both modes (owner, 2026-09-29)
-            .frame(width: Self.side, height: Self.side)
-            .background(Circle().fill(Color(uiColor: .systemBackground)))
-            .padding(2.5)
-            .background(Circle().fill(Color(uiColor: .systemBackground)))
+            .frame(width: Self.side + 4, height: Self.side + 4)
+            .liquidGlass(Circle())
             .accessibilityLabel("Disappearing messages on")
     }
 }
