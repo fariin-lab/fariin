@@ -36,14 +36,20 @@ enum GroupCallLayoutEngine {
 
         var frames: [String: CGRect] = [:]
         frames.reserveCapacity(shown.count)
+        // ⛔ EVERY TILE THE SAME SIZE — owner 2026-10-28: with three people the last one got a tile
+        // twice as wide as the other two, as if the grid had picked someone to make big (making
+        // someone big is what a tap does). A shorter last row keeps the full rows' tile width and
+        // sits CENTRED. (The shape choice below is unchanged: three people stay two on top, one
+        // under them.)
+        let tileWidth = (width - spacing * CGFloat(shape.columns - 1)) / CGFloat(shape.columns)
         for row in 0..<shape.rows {
             let start = row * shape.columns
             let inRow = min(shape.columns, shown.count - start)
-            // Every row spans the full width: the last, shorter row gets wider tiles.
-            let tileWidth = (width - spacing * CGFloat(inRow - 1)) / CGFloat(inRow)
+            let rowWidth = tileWidth * CGFloat(inRow) + spacing * CGFloat(inRow - 1)
+            let lead = (width - rowWidth) / 2
             let y = inset + CGFloat(row) * (rowHeight + spacing)
             for col in 0..<inRow {
-                let x = inset + CGFloat(col) * (tileWidth + spacing)
+                let x = inset + lead + CGFloat(col) * (tileWidth + spacing)
                 frames[shown[start + col]] = CGRect(x: x, y: y, width: tileWidth, height: rowHeight)
             }
         }
