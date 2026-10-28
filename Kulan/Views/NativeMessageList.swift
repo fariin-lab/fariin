@@ -534,6 +534,30 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         historyHeaderWidth = 0   // re-measure
         layoutHistoryHeader()
+        if content != nil { remeasureHistoryHeaderSoon() }
+    }
+
+    /// ⛔ THE CARD CAME ONLY WITH THE KEYBOARD — owner 2026-10-28: after a cold start the group card
+    /// stayed away until the keyboard opened (typing changes the group doc, so the key changed and
+    /// the card was measured again). The first measure runs while the new host is not on screen yet
+    /// and can come back far too short (zero). Measured again on the next passes, until it is a real
+    /// height or the tries run out (the card is never under 40 pt).
+    private var headerRemeasureTries = 0
+    private func remeasureHistoryHeaderSoon() {
+        headerRemeasureTries = 0
+        scheduleHeaderRemeasure()
+    }
+    private func scheduleHeaderRemeasure() {
+        let delay = headerRemeasureTries == 0 ? 0.0 : 0.12
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.historyHeaderHost != nil else { return }
+            self.headerRemeasureTries += 1
+            self.historyHeaderWidth = 0
+            self.layoutHistoryHeader()
+            // Always a second pass (a short first measure is not always zero), then only while short.
+            if self.headerRemeasureTries < 2
+                || (self.layout.headerHeight < 40 && self.headerRemeasureTries < 8) { self.scheduleHeaderRemeasure() }
+        }
     }
 
     /// Measures the card at the list's width and moves the rows by the difference, keeping every
