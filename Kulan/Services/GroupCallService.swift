@@ -3032,6 +3032,9 @@ final class GroupCallService: ObservableObject {
     }
 
     private func resetRoomState() {
+        // Owner 2026-10-28: the minimized card's place goes with the call, as the 1:1 card's does
+        // (CallService clears its own on end), so the next call's card starts in the corner.
+        GroupFloatingCardSpot.shared.reset()
         isGroupChatCall = false; groupPhotoUrl = nil; dialing = false; joinStartedAt = nil; joiningPeople = []
         micLockedByAdmin = false
         cancelRejoin()      // controls 7: a rejoin in flight goes with the call

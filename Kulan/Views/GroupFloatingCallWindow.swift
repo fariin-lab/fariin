@@ -4,81 +4,75 @@ import LiveKit
 // The minimized MULTI-PERSON call (group, ad-hoc or link): the same floating card a minimized 1:1
 // call gets, replacing the green full-width "Return to call" bar (owner, 2026-10-04: "group call is
 // using old UI"). Same size, corner, border and shadow as `FloatingCallWindow`, same rules: no
-// buttons on it, tap goes back to the call, drag moves it and it snaps to the nearer side at the
-// height you let go.
+// buttons on it, tap goes back to the call.
 //
-// Deliberately simpler than the 1:1 card: no stash-to-a-tab. That gesture is built on CallService's
-// own card state, and a second copy of it for this card would be two implementations of one thing.
+// ⛔ THE SAME MOVEMENT AS THE 1:1 CARD, FROM THE SAME CODE — owner 2026-10-28: this card "is full of
+// lag" while the 1:1 card is smooth and tucks into the screen edge. It had its own simpler drag (no
+// tab, no pinch, no overshoot) on a view that also observed the group call service, the room and the
+// social state, so every publish during a call (speakers, levels, people coming and going) re-ran the
+// view under the finger. Now `FloatingCardShell` moves it, the 1:1 card's own code, with its place
+// in `GroupFloatingCardSpot` (kept across minimizes, cleared when the call ends). The observing
+// lives only in `GroupFloatingCardContent`, which the shell never re-runs while dragging, and whose
+// redraws on a publish never touch the shell.
 //
 // Owner, 2026-10-06 (group call build plan, the screen package), both as the reference app's card:
 // - the card shows whoever is SPEAKING (it showed the alphabetically first camera); 2026-10-07 it
 //   became one person always, camera or not, see `picked`;
-// - it moves up when the keyboard would cover it and goes back when the keyboard leaves.
+// - it moves up when the keyboard would cover it and goes back when the keyboard leaves (the
+//   shell's `avoidsKeyboard`, on for this card only).
 struct GroupFloatingCallWindow: View {
-    @ObservedObject private var service = GroupCallService.shared
-    @ObservedObject private var room = GroupCallService.shared.room
-    /// Audit M-026, 2026-10-07: the quick reconnect's flag (`GroupCallSocial.quickReconnecting`).
-    @ObservedObject private var social = GroupCallSocial.shared
-
-    private let w: CGFloat = 112
-    private let h: CGFloat = 199   // 9:16, the 1:1 card's shape
-
-    /// Settled position from the top-right home (x ≤ 0 is leftward, y ≥ 0 downward) and the live drag
-    /// as a transform on top of it — the 1:1 card's split, for the same reason (layout at rest, a
-    /// cheap transform under the finger).
-    @State private var base: CGSize = .zero
-    @State private var dragLive: CGSize = .zero
-    @State private var insets: UIEdgeInsets = .zero
-    /// Whose camera the card showed last (their identity), kept while they are quiet.
-    @State private var shownId: String?
-    /// The docked keyboard's top edge in screen points, nil while it is down.
-    @State private var keyboardTop: CGFloat?
-    /// Where the card rested before the keyboard pushed it up, so it can go back. nil = not pushed.
-    @State private var beforeKeyboard: CGFloat?
-
-    private static let keyboardFrames = NotificationCenter.default
-        .publisher(for: UIResponder.keyboardWillChangeFrameNotification)
-
     var body: some View {
-        GeometryReader { geo in
-            card
-                // Where the minimize flight lands (`CallPipMorph`), reported on the 1:1 card's own
-                // slot: only one of the two cards exists at a time. Owner, 2026-10-06: the group
-                // call slid down instead of zooming out into the card like a normal call.
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { CallService.shared.cardFrame = $0 }
-                .onDisappear { CallService.shared.cardFrame = .zero }
-                .opacity(CallService.shared.cardHiddenForMorph ? 0 : 1)
-                .offset(dragLive)
-                .gesture(drag(in: geo.size))
-                // CallContainer re-presents GroupCallView when `minimized` clears.
-                // Through the morph, the 1:1 card's way: the screen grows out of this card over
-                // 0.35s instead of cutting straight in (owner, 2026-10-07).
-                .onTapGesture { cardTapped() }
-                .padding(.top, insets.top + 8 + base.height)
-                .padding(.trailing, 12 - base.width)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                .onReceive(Self.keyboardFrames) { note in keyboardMoved(note, in: geo.size) }
-        }
-        .ignoresSafeArea()
-        .onAppear {
-            insets = UIApplication.shared.connectedScenes
-                .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets }
-                .max(by: { $0.top < $1.top }) ?? .zero
-            shownId = pickedId
-        }
-        .onChange(of: pickedId) { _, id in
-            if let id { shownId = id }
-        }
+        FloatingCardShell(spot: GroupFloatingCardSpot.shared, avoidsKeyboard: true, onTap: {
+            Self.cardTapped()
+        }, card: {
+            GroupFloatingCardContent(framed: true)
+        }, picture: {
+            // The bare picture the edge tab blurs (no corner, border or shadow; the tab cuts its own).
+            GroupFloatingCardContent(framed: false)
+        })
         .accessibilityLabel("Back to the call")
     }
 
     /// Audit M-146, 2026-10-07: a tap while the call is already over or being left (the card can
     /// outlive it for a moment) did the restore into a dead call. Ignored then.
-    private func cardTapped() {
+    /// CallContainer re-presents GroupCallView when `minimized` clears, through the morph, the 1:1
+    /// card's way: the screen grows out of this card over 0.35s instead of cutting straight in
+    /// (owner, 2026-10-07).
+    private static func cardTapped() {
+        let service = GroupCallService.shared
         // `connecting` too (verifier V4): F8 shows this card for a call minimized while still
         // connecting (M-087), and a tap there must bring that call back, not do nothing.
         guard service.isActive || service.connecting, !service.leaving else { return }
         CallPipMorph.restore { service.minimized = false }
+    }
+}
+
+/// What the group card shows: one person (camera or face) or the call's waiting words. The ONLY
+/// part of the card that watches the group call, so a publish redraws this and nothing that moves.
+/// Its size follows the pinch step in `GroupFloatingCardSpot` (112x199 times the step).
+private struct GroupFloatingCardContent: View {
+    /// true = the finished card (corner, border, shadow); false = the bare picture for the edge tab.
+    let framed: Bool
+
+    @ObservedObject private var service = GroupCallService.shared
+    @ObservedObject private var room = GroupCallService.shared.room
+    /// Audit M-026, 2026-10-07: the quick reconnect's flag (`GroupCallSocial.quickReconnecting`).
+    @ObservedObject private var social = GroupCallSocial.shared
+
+    private var w: CGFloat { 112 * GroupFloatingCardSpot.shared.cardScale }
+    private var h: CGFloat { 199 * GroupFloatingCardSpot.shared.cardScale }   // 9:16, the 1:1 card's shape
+
+    /// Whose camera the card showed last (their identity), kept while they are quiet.
+    @State private var shownId: String?
+
+    var body: some View {
+        Group {
+            if framed { card } else { picture }
+        }
+        .onAppear { shownId = pickedId }
+        .onChange(of: pickedId) { _, id in
+            if let id { shownId = id }
+        }
     }
 
     /// Audit M-026, 2026-10-07: either kind of reconnect, the call screen's own reading.
@@ -86,75 +80,6 @@ struct GroupFloatingCallWindow: View {
         room.connectionState == .reconnecting
             || (room.connectionState != .disconnected && social.quickReconnecting)
             || service.rejoining   // controls 7: the automatic rejoin after a lost connection
-    }
-
-    // MARK: - Drag
-
-    private func drag(in size: CGSize) -> some Gesture {
-        DragGesture(minimumDistance: 8)
-            .onChanged { v in
-                let (maxLeft, maxDown) = limits(size)
-                let x = min(0, max(maxLeft, base.width + v.translation.width))
-                let y = min(maxDown, max(0, base.height + v.translation.height))
-                dragLive = CGSize(width: x - base.width, height: y - base.height)
-            }
-            .onEnded { v in
-                let (maxLeft, maxDown) = limits(size)
-                // Where the throw was heading, not where the finger stopped.
-                let thrownX = base.width + v.predictedEndTranslation.width
-                // The side follows the throw; the height follows the hand, with a quarter of the
-                // throw (audit 2026-10-20: a sideways flick with a little drop landed at the bottom).
-                let dropped = v.translation.height
-                    + 0.25 * (v.predictedEndTranslation.height - v.translation.height)
-                let y = min(maxDown, max(0, base.height + dropped))
-                // Moved by hand: this is its place now, the keyboard has nothing to put back.
-                beforeKeyboard = nil
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
-                    base = CGSize(width: thrownX < maxLeft / 2 ? maxLeft : 0, height: y)
-                    dragLive = .zero
-                }
-            }
-    }
-
-    private func limits(_ size: CGSize) -> (CGFloat, CGFloat) {
-        let maxLeft = -(size.width - w - 24)
-        var maxDown = max(0, size.height - h - (insets.top + 8) - (insets.bottom + 76))
-        // With the keyboard up the card cannot be parked under it.
-        if let keyboardTop { maxDown = min(maxDown, lowestRest(above: keyboardTop)) }
-        return (maxLeft, maxDown)
-    }
-
-    // MARK: - Keyboard
-
-    /// The lowest `base.height` whose card still ends 8pt above `top`.
-    private func lowestRest(above top: CGFloat) -> CGFloat {
-        max(0, top - 8 - h - (insets.top + 8))
-    }
-
-    /// The reference app's rule: a card the keyboard would cover moves up to sit just above it, and
-    /// returns to where it was once the keyboard is out of the way. A card that was never covered
-    /// does not move.
-    private func keyboardMoved(_ note: Notification, in size: CGSize) {
-        guard let info = note.userInfo,
-              let end = (info[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
-        let seconds = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
-        // Down, or not docked to the bottom edge (floating on an iPad): it covers nothing here.
-        let docked = end.height > 0 && end.minY < size.height && end.maxY >= size.height - 1
-        let top: CGFloat? = docked ? end.minY : nil
-        keyboardTop = top
-        let wanted = beforeKeyboard ?? base.height
-        var target = wanted
-        var pushedFrom: CGFloat?
-        if let top {
-            let lowest = lowestRest(above: top)
-            if wanted > lowest {
-                target = lowest
-                pushedFrom = wanted
-            }
-        }
-        beforeKeyboard = pushedFrom
-        guard target != base.height else { return }
-        withAnimation(.easeOut(duration: max(0.1, seconds))) { base.height = target }
     }
 
     // MARK: - Content
@@ -203,7 +128,8 @@ struct GroupFloatingCallWindow: View {
         return nil
     }
 
-    private var card: some View {
+    /// The picture alone at card size: what the edge tab shows blurred, and what `card` frames.
+    private var picture: some View {
         Group {
             if let shown = picked {
                 personCard(shown)
@@ -213,9 +139,13 @@ struct GroupFloatingCallWindow: View {
         }
         .animation(GroupCallMotion.fade, value: pickedId)   // a new speaker cross-fades in
         .frame(width: w, height: h)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(.white.opacity(0.22), lineWidth: 1))
-        .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
+    }
+
+    private var card: some View {
+        picture
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(.white.opacity(0.22), lineWidth: 1))
+            .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
     }
 
     /// The one person: their camera filling the card, or with it off their photo centred on their
