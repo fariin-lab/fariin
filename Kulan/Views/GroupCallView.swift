@@ -153,7 +153,7 @@ struct GroupCallView: View {
                 .padding(.horizontal, 14)
                 .padding(.bottom, requestCardShowing ? 12 : 0)
             sharePill
-                .padding(.bottom, (service.screenSharing || service.sharePending) ? 12 : 0)
+                .padding(.bottom, ((service.screenSharing && front != nil) || service.sharePending) ? 12 : 0)
                 .animation(.easeInOut(duration: 0.2), value: service.screenSharing)
                 .animation(.easeInOut(duration: 0.2), value: service.sharePending)
             controls.padding(.horizontal, 14)
@@ -169,7 +169,9 @@ struct GroupCallView: View {
     /// (`CallView.sharePill`): "Starting…" while the share comes up, then one red Stop Sharing pill
     /// above the controls for as long as it runs, shown with the controls hidden too.
     @ViewBuilder private var sharePill: some View {
-        if service.screenSharing {
+        // Live, the Stop Sharing button is inside the large sharing card (GroupCallSharingCard); this
+        // stays for the two-person look and anywhere the card is not on screen.
+        if service.screenSharing && front != nil {
             Button {
                 Haptics.impact(.light)
                 service.toggleScreenShare()
@@ -512,7 +514,8 @@ struct GroupCallView: View {
     /// that lands on no tile reaches this view and shows or hides the chrome.
     private var stageArea: some View {
         // Reduce Motion: no matched-geometry flight, the focus view fades in.
-        GroupCallStagePager(stage: stage, namespace: reduceMotion ? nil : ns, onFocusTap: { toggleChrome() })
+        GroupCallStagePager(stage: stage, namespace: reduceMotion ? nil : ns, onFocusTap: { toggleChrome() },
+                            iAmSharing: service.screenSharing, onStopSharing: { service.toggleScreenShare() })
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // The stage's size, for the enlarged pip's cap. A background reader adds no layout of its own.
             .background(stageSizeReader)
@@ -627,7 +630,8 @@ struct GroupCallView: View {
         for t in stage.tiles {
             if t.isLocal { local = t } else { remotes += 1; remote = t }
         }
-        guard remotes <= 1, let local, !local.isScreenShare else { return nil }
+        // Sharing my screen: always the group stage, which shows the sharing card (owner 2026-10-28).
+        guard remotes <= 1, let local, !local.isScreenShare, !service.screenSharing else { return nil }
         if let remote, remote.isScreenShare { return nil }
         return Front(local: local, remote: remote)
     }
@@ -735,6 +739,7 @@ struct GroupCallView: View {
     /// (GroupCallGridView), as in the reference app; the corner card was too easy to lose. The card
     /// stays for one person shown large (pinned or presenting) and for one other person presenting.
     private var showsSelfPip: Bool {
+        if service.screenSharing { return false }   // the sharing card is my tile then
         if case .focus = stage.mode { return true }
         return remoteCount <= 1
     }
