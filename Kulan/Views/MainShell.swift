@@ -1159,7 +1159,6 @@ struct CallsView: View {
             .onChange(of: ConversationsRepository.shared.conversations.filter(\.isGroup).map(\.id)) { _, _ in
                 liveCalls.sync(groups: ConversationsRepository.shared.conversations)
             }
-            .fullScreenCover(isPresented: $showLiveCall) { GroupCallView() }
             .searchable(text: $searchText, prompt: "Search calls")
             .searchFieldOwnsFill()   // the grey survives the back swipe — see `SearchFieldFill`
             .toolbar {
@@ -1211,6 +1210,10 @@ struct CallsView: View {
             // Load the list, then make the next "Create a Call Link" ahead of the tap (owner, 2026-10-06).
             .task { await linkService.load(); linkService.prepare() }
             .refreshable { await repo.load(force: true); await linkService.load() }
+            // ⛔ AFTER `.refreshable`, NOT BEFORE IT (owner 2026-10-28: pulling the call's people
+            // sheet down to close it showed a refresh spinner). A cover attached inside the refresh
+            // hands that pull-to-refresh to everything it presents, down to the sheet's list.
+            .fullScreenCover(isPresented: $showLiveCall) { GroupCallView() }
             .confirmationDialog(deleteSelectionTitle,
                                 isPresented: $showDeleteCalls, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) { deleteSelectedCalls() }
