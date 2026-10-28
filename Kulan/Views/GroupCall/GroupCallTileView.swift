@@ -428,10 +428,15 @@ private struct CallTileMenuItems: View {
                 Label(menu.isPinned ? "Unpin" : "Pin", systemImage: menu.isPinned ? "pin.slash" : "pin")
             }
             if menu.canModerate {
-                // Like the people list: no Mute for someone already muted.
+                // Like the people list: no Mute for someone already muted. Muted, the admin can let
+                // them speak again (2026-10-28: an admin's mute holds until then).
                 if !tile.isMuted {
                     Button { menu.onMute() } label: {
                         Label("Mute", systemImage: "mic.slash")
+                    }
+                } else {
+                    Button { menu.onAllowToSpeak() } label: {
+                        Label("Allow to Speak", systemImage: "mic")
                     }
                 }
                 Button(role: .destructive) { menu.onRemove() } label: {

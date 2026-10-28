@@ -278,6 +278,13 @@ final class GroupCallStage: ObservableObject {
                 guard let self else { return }
                 // The screen confirms before anyone is removed.
                 self.removeCandidate = tile
+            },
+            onAllowToSpeak: { [weak self] in
+                guard self != nil, !tile.uid.isEmpty else { return }
+                Task { @MainActor in
+                    do { try await GroupCallService.shared.admin(.unmute, target: tile.uid) }
+                    catch { GroupCallService.shared.showToast("Couldn't allow them to speak. Try again.") }
+                }
             }
         )
     }

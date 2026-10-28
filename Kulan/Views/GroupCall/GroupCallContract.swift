@@ -86,6 +86,8 @@ struct CallTileMenu {
     var onPin: () -> Void
     var onMute: () -> Void
     var onRemove: () -> Void
+    /// "Allow to Speak" for someone muted (2026-10-28): lifts an admin's hard mute.
+    var onAllowToSpeak: () -> Void = {}
 }
 
 /// What the stage is showing.

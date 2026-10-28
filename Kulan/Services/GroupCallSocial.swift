@@ -332,7 +332,16 @@ final class GroupCallSocial: ObservableObject {
         case "mutedBy":
             // Only the server says this. From a participant it is someone pretending.
             guard fromServer else { return }
+            // 2026-10-28: an admin's mute holds until they allow me to speak.
+            if message["hard"] as? Bool == true { GroupCallService.shared.setMicLockedByAdmin(true) }
             mutedBy(message["name"] as? String)
+
+        case "micAllowed":
+            // The server: an admin allowed me to speak again (callAdmin 'unmute', 2026-10-28).
+            guard fromServer else { return }
+            GroupCallService.shared.setMicLockedByAdmin(false)
+            let name = Self.clean(message["name"] as? String)
+            GroupCallService.shared.showToast(name.isEmpty ? "You can speak now" : "\(name) allowed you to speak")
 
         case "hand":
             guard !fromServer, !uid.isEmpty, uid != myUid, let up = message["up"] as? Bool else { return }

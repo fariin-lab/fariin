@@ -60,7 +60,9 @@ enum CallAdminAction: String {
     /// by that link for good. A plain `remove` on a link only takes the person out; they may ask again.
     /// `muteAll` (controls round 2, 2026-10-23): everyone but me, in one request, with the same
     /// permission as a single mute (the server's `callAdmin`). No target.
-    case mute, remove, block, end, muteAll
+    /// `unmute` (2026-10-28): "Allow to Speak", lifts an admin's hard mute; the person turns their
+    /// own microphone on.
+    case mute, remove, block, end, muteAll, unmute
 }
 
 /// Where I am on the way into a call (owner 2026-10-06, reference study). ONE state for the screens
@@ -544,6 +546,7 @@ final class GroupCallService: ObservableObject {
                     .httpsCallable("groupCallToken").call(Self.tokenAsk(["cid": cid])).data
             }
             guard gen == joinGeneration else { await abandonJoin(); return }
+            noteJoinPass(answer as? [String: Any])
             guard let d = answer as? [String: Any], let token = d["token"] as? String else {
                 // Group call audit 2026-10-23 (A1): through `failJoin`, which also says it over the
                 // top screen when the join was minimized (the card used to vanish without a word).
@@ -748,9 +751,29 @@ final class GroupCallService: ObservableObject {
     /// while the join's first publish was still running found no publication, did nothing, and the
     /// publish then went out with the button saying muted. Now the tap only changes the wish and
     /// `syncMic` applies the latest wish, one SDK call at a time.
+    /// ⛔ AN ADMIN'S MUTE HOLDS — owner 2026-10-28. Muted by an admin in this call, my microphone
+    /// cannot come back on until an admin allows me to speak; the media server refuses it anyway
+    /// (callAdmin, the publish permission and every join pass for this live call), this only says
+    /// so. Set from the join pass (`micBlocked`), the server's notes ({t:"mutedBy",hard} /
+    /// {t:"micAllowed"}, GroupCallSocial), cleared with the call.
+    @Published private(set) var micLockedByAdmin = false
+    func setMicLockedByAdmin(_ locked: Bool) {
+        if micLockedByAdmin != locked { micLockedByAdmin = locked }
+    }
+    private func noteJoinPass(_ d: [String: Any]?) {
+        guard let d else { return }
+        setMicLockedByAdmin(d["micBlocked"] as? Bool == true)
+        // Muted in this call before I left: I come back muted, so the join publishes no mic.
+        if micLockedByAdmin { micOn = false; startMuted = true }
+    }
+
     func toggleMic() {
         guard !leaving else { return }   // audit M-060: the dead call screen's buttons do nothing
         guard isActive || connecting || waitingForApproval else { return }   // no call, nothing to mute
+        if micLockedByAdmin && !micOn {
+            showToast("An admin muted you. Raise your hand to ask to speak.")
+            return
+        }
         micOn.toggle()
         GCLog.event("tap", room: logRoom, ["what": "mic", "to": micOn ? "on" : "off", "live": isActive ? "1" : "0"])
         // Still joining: the wish is what the join publishes with (`startMuted`), not a call on a
@@ -2083,6 +2106,7 @@ final class GroupCallService: ObservableObject {
         }
         if stale() { return ("cancelled", nil) }
         // A link that asks for approval again, or no pass at all: not this rejoin's to wait on.
+        noteJoinPass(d)
         guard d?["pending"] as? Bool != true, let token = d?["token"] as? String else { return ("refused", nil) }
         // 3. The same room again. The watchdog ends the call if this outlives the window.
         do {
@@ -2860,6 +2884,7 @@ final class GroupCallService: ObservableObject {
                 connecting = false
                 return false
             }
+            noteJoinPass(d)
             guard let token = d?["token"] as? String else {
                 await failJoin(Notice(title: "Call failed", message: nil))
                 return false
@@ -2992,6 +3017,7 @@ final class GroupCallService: ObservableObject {
 
     private func resetRoomState() {
         isGroupChatCall = false; groupPhotoUrl = nil; dialing = false; joinStartedAt = nil
+        micLockedByAdmin = false
         cancelRejoin()      // controls 7: a rejoin in flight goes with the call
         stopScreenShare()   // every leave path comes through here
         startMuted = false

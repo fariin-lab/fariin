@@ -919,6 +919,18 @@ struct GroupCallView: View {
     private var micButton: some View {
         // Muted = the solid white circle, as the 1:1 call's Mute (owner 2026-10-23).
         ctrl(service.micOn ? "mic.fill" : "mic.slash.fill", active: !service.micOn) { micTapped() }
+            // 2026-10-28: muted by an admin, a small lock says why the mic will not come on.
+            .overlay(alignment: .topTrailing) {
+                if service.micLockedByAdmin {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 20, height: 20)
+                        .background(Circle().fill(Color(.systemRed)))
+                        .offset(x: 2, y: -2)
+                        .allowsHitTesting(false)
+                }
+            }
             .accessibilityLabel(service.micOn ? "Mute" : "Unmute")
     }
 
