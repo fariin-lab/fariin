@@ -348,8 +348,8 @@ struct GroupCallParticipantsSheet: View {
     @ViewBuilder private func invitedSection(at date: Date) -> some View {
         let waiting = invited(at: date)
         if !waiting.isEmpty {
-            // "Not connected", the link call's own heading for the same people (one name for both).
-            Section("Not connected") {
+            // Our own heading, the link call's too (owner 2026-10-27: not the reference's words).
+            Section("Not here yet") {
                 ForEach(waiting) { invitedRow($0, at: date) }
             }
         }
@@ -365,7 +365,7 @@ struct GroupCallParticipantsSheet: View {
                 ForEach(rows) { notConnectedRow($0, at: date) }
             } header: {
                 HStack(spacing: 0) {
-                    Text("Not connected").fontWeight(.semibold)
+                    Text("Not here yet").fontWeight(.semibold)
                     Text(" · \(rows.count)")
                 }
                 .textCase(nil)
@@ -389,7 +389,7 @@ struct GroupCallParticipantsSheet: View {
         let canNudge = i.state != "joined"
         let waiting: Bool = nudgedAt[i.uid].map { date.timeIntervalSince($0) < 60 } ?? false
         return HStack(spacing: 12) {
-            AvatarView(name: name, photoUrl: who?.photoUrl, size: 36)
+            CallRingingAvatar(name: name, photoUrl: who?.photoUrl, ringing: status.hasPrefix("Ringing"))
             Text(name).lineLimit(1)
             Spacer(minLength: 8)
             Text(status).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
@@ -976,7 +976,7 @@ struct GroupCallParticipantsSheet: View {
         let waiting: Bool = ringingAgain(r.id, at: date)
         return HStack(spacing: 12) {
             HStack(spacing: 12) {
-                AvatarView(name: r.name, photoUrl: r.photoUrl, size: 36)
+                CallRingingAvatar(name: r.name, photoUrl: r.photoUrl, ringing: r.subtitle == "Ringing…")
                 VStack(alignment: .leading, spacing: 2) {
                     Text(r.name).lineLimit(1)
                     if let s = r.subtitle {
@@ -985,11 +985,7 @@ struct GroupCallParticipantsSheet: View {
                 }
             }
             .accessibilityElement(children: .combine)
-            if r.subtitle == "Ringing…" {
-                // Owner 2026-10-27 (the reference's sheet): their phone is ringing right now.
-                Spacer(minLength: 8)
-                CallRingingDots().accessibilityHidden(true)   // the subtitle says it
-            } else if r.ringable {
+            if r.ringable, r.subtitle != "Ringing…" {
                 Spacer(minLength: 8)
                 Button { ringAgain(r.id, name: r.name) } label: {
                     Image(systemName: "phone.arrow.up.right")
@@ -1126,7 +1122,7 @@ struct ActiveCallLink: CallLinkRef {
 }
 
 /// ⛔ CALL LINK INVITES (owner 2026-10-23): `callLinks/{roomId}/invites/{uid}`, written only by the
-/// server (`linkCallInvite`, `groupRingAnswer`). The people sheet's "Not connected" list and the
+/// server (`linkCallInvite`, `groupRingAnswer`). The people sheet's "Not here yet" list and the
 /// Add people picker's "already invited" both read it. Names and photos come from the profile
 /// cache (the invite doc holds only the inviter's name), or from the picker for people I added.
 @MainActor
@@ -1239,32 +1235,36 @@ private extension GroupCallService {
     }
 }
 
-/// Three dots lighting up in turn: this person's phone is ringing now (owner 2026-10-27). On a
-/// timeline, not `.repeatForever` (audit H3: the iOS 26 deadlock pattern). Reduce Motion: still.
-struct CallRingingDots: View {
+/// A person's photo in the call's people list; while their phone rings, a soft ring pulses out
+/// from it, the same pulse as the big ringing screen (GroupCallRingingView). Owner 2026-10-27: our
+/// own sign, not the reference app's dots. On a timeline, not `.repeatForever` (audit H3: the iOS 26
+/// deadlock pattern). Reduce Motion: a still ring.
+struct CallRingingAvatar: View {
+    let name: String
+    let photoUrl: String?
+    let ringing: Bool
+    var size: CGFloat = 36
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        if reduceMotion {
-            dots(at: 0, moving: false)
-        } else {
-            TimelineView(.animation) { ctx in
-                dots(at: ctx.date.timeIntervalSinceReferenceDate, moving: true)
+        AvatarView(name: name, photoUrl: photoUrl, size: size)
+            .background {
+                if ringing {
+                    if reduceMotion {
+                        Circle().stroke(Color.green.opacity(0.6), lineWidth: 1.5)
+                            .frame(width: size + 6, height: size + 6)
+                    } else {
+                        TimelineView(.animation) { ctx in
+                            // One ring every 1.6 s, growing out of the photo and fading.
+                            let p = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6
+                            let e = 1 - (1 - p) * (1 - p)   // ease-out
+                            Circle().stroke(Color.green.opacity(0.7 * (1 - e)), lineWidth: 1.5)
+                                .frame(width: size, height: size)
+                                .scaleEffect(1 + 0.45 * e)
+                        }
+                    }
+                }
             }
-        }
-    }
-
-    private func dots(at t: Double, moving: Bool) -> some View {
-        HStack(spacing: 5) {
-            ForEach(0..<3, id: \.self) { i in
-                // One 1.2 s wave, each dot 0.2 s after the one before it.
-                let p = (t - Double(i) * 0.2).truncatingRemainder(dividingBy: 1.2) / 1.2
-                let lit = moving ? max(0, sin(.pi * min(1, max(0, p * 2)))) : 0.5
-                Circle()
-                    .fill(Color.secondary)
-                    .frame(width: 6, height: 6)
-                    .opacity(0.3 + 0.7 * lit)
-            }
-        }
+            .frame(width: size, height: size)
     }
 }
