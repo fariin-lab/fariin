@@ -11,6 +11,8 @@ struct GroupCallSelfView: View {
     @Binding var expanded: Bool
     /// The stage area's size, for the enlarged cap.
     let stageSize: CGSize
+    /// One person is shown large with the strip under them: the card takes the strip's size.
+    var inStrip: Bool = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let trailingInset: CGFloat = 16
@@ -23,7 +25,13 @@ struct GroupCallSelfView: View {
     /// 90x160 (9:16) however many remotes. Enlarged: 170x300, capped at 45%
     /// of the stage width and the stage height less 24 (a phone on its side, a small stage), with
     /// the same shape, so it never covers the whole stage. A zero size (first pass) is not a cap.
-    static func size(remoteCount: Int, expanded: Bool, stageSize: CGSize) -> CGSize {
+    static func size(remoteCount: Int, expanded: Bool, stageSize: CGSize, inStrip: Bool = false) -> CGSize {
+        // Owner 2026-10-28: with one person shown large, the 90x160 card hung over the large tile.
+        // There it sits in the strip's row instead, as tall as the strip's tiles, 9:16.
+        if inStrip && !expanded {
+            let h = GroupCallMetrics.stripTile
+            return CGSize(width: (h * 9 / 16).rounded(), height: h)
+        }
         if expanded {
             let aspect: CGFloat = 170.0 / 300.0
             var width: CGFloat = 170
@@ -42,7 +50,7 @@ struct GroupCallSelfView: View {
 
     var body: some View {
         if let local, remoteCount >= 1 {
-            let size = Self.size(remoteCount: remoteCount, expanded: expanded, stageSize: stageSize)
+            let size = Self.size(remoteCount: remoteCount, expanded: expanded, stageSize: stageSize, inStrip: inStrip)
             // The tile's video view already mirrors the local front camera (`.auto`); flipping it
             // again here un-mirrored the preview and drew the mute badge backwards.
             // Camera off, the tile draws the avatar look.

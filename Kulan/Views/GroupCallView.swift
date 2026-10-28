@@ -151,6 +151,7 @@ struct GroupCallView: View {
                 .padding(.horizontal, 14)
                 .padding(.bottom, requestCardShowing ? 12 : 0)
             controls.padding(.horizontal, 14)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { controlsHeight = $0 }
                 .opacity(chromeVisible ? 1 : 0)
                 .allowsHitTesting(chromeVisible)
                 .accessibilityHidden(!chromeVisible)
@@ -497,7 +498,7 @@ struct GroupCallView: View {
 
     /// Bottom edge in line with the strip's tiles (strip inset), as in the reference app.
     private var selfPip: some View {
-        GroupCallSelfView(stage: stage, expanded: $selfExpanded, stageSize: stageSize)
+        GroupCallSelfView(stage: stage, expanded: $selfExpanded, stageSize: stageSize, inStrip: pipInStrip)
             .padding(.bottom, GroupCallMetrics.stripInset)
     }
 
@@ -522,6 +523,10 @@ struct GroupCallView: View {
                             // now lies under.
                             .ignoresSafeArea(.container, edges: .top)
                             .padding(.top, -stageLift)
+                            // Owner 2026-10-28: with the controls away, the stage takes their room
+                            // too (it stopped at their top edge and left a black band).
+                            .padding(.bottom, chromeVisible ? 0 : -(controlsHeight + 16))
+                            .animation(GroupCallMotion.fade, value: chromeVisible)
                             .transition(.opacity)
                     }
                 }
@@ -598,6 +603,7 @@ struct GroupCallView: View {
     @State private var duoSwapped = false
     @State private var winInsets = EdgeInsets()
     @State private var headerHeight: CGFloat = 44
+    @State private var controlsHeight: CGFloat = 0
 
     private var remoteCount: Int { stage.tiles.reduce(0) { $1.isLocal ? $0 : $0 + 1 } }
     private var isAlone: Bool { service.joinState == .joined && remoteCount == 0 }
@@ -673,7 +679,13 @@ struct GroupCallView: View {
 
     private var selfPipWidth: CGFloat {
         guard showsSelfPip else { return 0 }
-        return GroupCallSelfView.size(remoteCount: remoteCount, expanded: selfExpanded, stageSize: stageSize).width
+        return GroupCallSelfView.size(remoteCount: remoteCount, expanded: selfExpanded, stageSize: stageSize,
+                                      inStrip: pipInStrip).width
+    }
+    /// One person large with others in the strip under them: my card sits in that row, strip-sized.
+    private var pipInStrip: Bool {
+        if case .focus = stage.mode { return remoteCount >= 2 }
+        return false
     }
     /// Owner 2026-10-27: with 2+ others on the grid I am a tile of my own, first in the grid
     /// (GroupCallGridView), as in the reference app; the corner card was too easy to lose. The card
