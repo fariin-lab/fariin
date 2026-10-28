@@ -28,7 +28,9 @@ struct GroupCallSelfView: View {
     static func size(remoteCount: Int, expanded: Bool, stageSize: CGSize, inStrip: Bool = false) -> CGSize {
         // Owner 2026-10-28: with one person shown large, the 90x160 card hung over the large tile.
         // There it sits in the strip's row instead, as tall as the strip's tiles, 9:16.
-        if inStrip && !expanded {
+        // Owner 2026-10-28 (third look): a tap no longer grows it out of the strip into a big card
+        // over the stage; in the strip it is always the strip's size.
+        if inStrip {
             // Owner 2026-10-28 (second look): a narrow 9:16 card with a tiny photo did not match the
             // strip's square tiles beside it. Exactly their size and shape now.
             let s = GroupCallMetrics.stripTile
@@ -73,12 +75,13 @@ struct GroupCallSelfView: View {
                 .animation(reduceMotion ? nil : Self.resize, value: remoteCount > 1)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(local.isMuted ? "Your video, muted" : "Your video")
-                .accessibilityHint(expanded ? "Double-tap to shrink" : "Double-tap to enlarge")
-                .accessibilityAddTraits(.isButton)
+                .accessibilityHint(inStrip ? "" : (expanded ? "Double-tap to shrink" : "Double-tap to enlarge"))
+                .accessibilityAddTraits(inStrip ? [] : .isButton)
         }
     }
 
-    private func toggle() { expanded.toggle() }
+    /// In the strip a tap does nothing (owner 2026-10-28); elsewhere it enlarges and shrinks.
+    private func toggle() { if !inStrip { expanded.toggle() } }
 }
 
 /// The self pip's current width (small, one-remote or enlarged), set by GroupCallView on the stage
