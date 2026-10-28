@@ -3602,7 +3602,13 @@ final class StoriesRepository {
             .addSnapshotListener { [weak self] snap, _ in
                 guard let self, let snap else { return }
                 for d in snap.documents {
-                    if let ts = (d.data()["lastViewedAt"] as? Timestamp)?.dateValue() {
+                    // ⛔ PLUS ONE MILLISECOND — owner 2026-10-28: a watched ring came back unwatched
+                    // after every log out and in. The watermark is written as the story's own post
+                    // time, and Date -> Timestamp truncates its nanoseconds, so the stored value
+                    // reads back a hair EARLIER than `createdAt`, and `createdAt > watermark` called
+                    // the story new. Within a session the phone's own seen list hid it; a log out
+                    // wipes that list. No two stories of one author are a millisecond apart.
+                    if let ts = (d.data()["lastViewedAt"] as? Timestamp)?.dateValue().addingTimeInterval(0.001) {
                         // Merge FORWARD only — read into a local first (same-property read inside
                         // its own write access is an exclusivity crash, see markSeenLocally).
                         let cur = self.serverWatermarks[d.documentID] ?? .distantPast
