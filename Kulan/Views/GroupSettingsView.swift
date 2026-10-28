@@ -1444,20 +1444,19 @@ struct EditGroupView: View {
                             .overlay(alignment: .topTrailing) {
                                 if hasPhoto {
                                     Button { nameFocused = false; confirmRemovePhoto = true } label: {
-                                        // Liquid Glass, like Set New Photo under it (owner 2026-10-20).
-                                        // Owner 2026-10-28: clear glass vanished over a bright photo
-                                        // (a white X on orange, light mode worst). Dark-tinted glass
-                                        // and a thin white ring: readable on any photo, both modes.
-                                        Image(systemName: "xmark")
-                                            .font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
-                                            .frame(width: 30, height: 30)
-                                            .liquidGlass(Circle(), interactive: true, tint: .black.opacity(0.55))
-                                            .overlay(Circle().stroke(.white.opacity(0.85), lineWidth: 1.5))
-                                            .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
-                                            .frame(width: 44, height: 44).contentShape(Circle())
+                                        // ⛔ THE PROFILE PHOTO'S OWN "−" BADGE (owner 2026-10-28: "use
+                                        // exactly the badge you used on the profile avatar";
+                                        // ProfilePhotoSheet.removeBadge): a minus, 17 semibold, a 40 pt
+                                        // Liquid Glass circle, the same offset. Was a small dark ✕.
+                                        Image(systemName: "minus")
+                                            .font(.system(size: 17, weight: .semibold))
+                                            .foregroundStyle(Color(.label))
+                                            .frame(width: 40, height: 40)
+                                            .liquidGlass(Circle(), interactive: true)
+                                            .contentShape(Circle())
                                     }
                                     .buttonStyle(.plain)
-                                    .offset(x: 8, y: -4)
+                                    .offset(x: 4, y: 8)
                                     .accessibilityLabel("Remove Photo")
                                 }
                             }
