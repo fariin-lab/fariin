@@ -721,6 +721,13 @@ struct GroupCallView: View {
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
                 if service.callingNow(at: ctx.date) { Text("Calling…") } else { joinedSubtitle }
             }
+        } else if service.isGroupChatCall, !service.dialing, statusWords == "Connecting…",
+                  let since = service.joinStartedAt {
+            // Answering a group call (owner 2026-10-28): no "Connecting…" for the first two seconds;
+            // with the pass fetched while it rang, the call is usually there before that.
+            TimelineView(.periodic(from: .now, by: 0.5)) { ctx in
+                Text(ctx.date.timeIntervalSince(since) < 2 ? " " : "Connecting…")
+            }
         } else {
             joinedSubtitle
         }

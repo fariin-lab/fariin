@@ -183,6 +183,8 @@ final class GroupCallRinging {
         }
         ring = r
         phase = .ringing
+        // The join pass now, while it rings, so Answer lands in the call (owner 2026-10-28).
+        if kind == "group" { service.prefetchJoin(cid: roomId) }
         // A group chat's call gets the full-screen invitation too (owner 2026-10-23), as a
         // multi-person call already does: the group's title, the caller's face. A call link's ring
         // too (owner 2026-10-23): the person who added me, and Join opens the link.

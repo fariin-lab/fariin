@@ -308,6 +308,9 @@ final class GroupCallService: ObservableObject {
     /// The Call button started this group chat's call (not a Join of a live one): until the room is
     /// up, I am calling. See `callingNow`.
     @Published private(set) var dialing = false
+    /// When this join started (`start(cid:)`): the joiner's "Connecting…" waits two seconds before
+    /// it shows, since a ring's prefetched pass usually lands the call before that (owner 2026-10-28).
+    private(set) var joinStartedAt: Date?
 
     /// Owner 2026-10-28 (the reference app keeps one line the whole time): a group chat's call I
     /// started says "Calling…" from the tap until somebody comes, with the calling sound from the
@@ -521,15 +524,24 @@ final class GroupCallService: ObservableObject {
         isGroupChatCall = true
         groupPhotoUrl = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.avatarUrl
         dialing = !requireLive
+        joinStartedAt = Date()
         updateRingback()   // the calling sound from the tap (`callingNow`)
         cameraOn = video   // round 2 (V2 N8): the camera button shows the call's wish while joining
         joiningRoomId = cid
         let gen = joinGeneration   // owner audit 2026-10-06 #4
         do {
-            let res = try await Functions.functions(region: "me-central1")
-                .httpsCallable("groupCallToken").call(Self.tokenAsk(["cid": cid]))
+            // The pass fetched while the call rang (`prefetchJoin`), when there is a fresh one for
+            // this group: answering then skips this round trip (owner 2026-10-28, "boom, land").
+            let answer: Any?
+            if let p = prefetchedJoin, p.cid == cid, Date().timeIntervalSince(p.at) < Self.prefetchFresh {
+                prefetchedJoin = nil
+                answer = p.data
+            } else {
+                answer = try await Functions.functions(region: "me-central1")
+                    .httpsCallable("groupCallToken").call(Self.tokenAsk(["cid": cid])).data
+            }
             guard gen == joinGeneration else { await abandonJoin(); return }
-            guard let d = res.data as? [String: Any], let token = d["token"] as? String else {
+            guard let d = answer as? [String: Any], let token = d["token"] as? String else {
                 // Group call audit 2026-10-23 (A1): through `failJoin`, which also says it over the
                 // top screen when the join was minimized (the card used to vanish without a word).
                 // It resets the mute, camera and speaker wishes as this path did (V2 N4, #44).
@@ -887,7 +899,23 @@ final class GroupCallService: ObservableObject {
             someoneJoined = true
             everHereUids.formUnion(room.remoteParticipants.values.compactMap { $0.identity?.stringValue })
         }
+        // ⛔ A SOUND WHEN SOMEONE COMES OR GOES — owner 2026-10-28: people joining and leaving a
+        // running call happened in silence ("give the user an experience"). The joined tone for
+        // someone arriving, the left tone for someone leaving; not in the first 1.5 s after I
+        // joined (that is the room I walked into), not past 20 people (it would never stop), and
+        // several changes in one pass make one sound.
+        let nowHere = Set(room.remoteParticipants.values.compactMap { $0.identity?.stringValue })
+        defer { lastRemoteUids = nowHere }
+        guard let joined = joinedAt, Date().timeIntervalSince(joined) > 1.5,
+              nowHere.count + 1 <= 20 else { return }
+        if !nowHere.subtracting(lastRemoteUids).isEmpty {
+            playPresenceTone(RingbackTone.groupJoinedData())
+        } else if !lastRemoteUids.subtracting(nowHere).isEmpty {
+            playPresenceTone(RingbackTone.groupLeftData())
+        }
     }
+    /// Who was here at the last `noteRoomPeople`, for the come-and-go sounds.
+    private var lastRemoteUids: Set<String> = []
     /// The chat record of the group conversation call I am in (`recordId` on its doc): written by me
     /// as the starter, read once as a joiner. The last-out end write checks it (audit M-033).
     private var groupRecordId: String?
@@ -1323,7 +1351,7 @@ final class GroupCallService: ObservableObject {
         installAudioRecovery()        // controls 5-9
         GroupCallSocial.shared.attach(room: room, myUid: myUid, myName: ProfileStore.shared.me?.name ?? "")
         GroupCallRinging.shared.callJoined()
-        aloneSince = nil; someoneJoined = false; everHereUids = []
+        aloneSince = nil; someoneJoined = false; everHereUids = []; lastRemoteUids = []
         noteRoomPeople()              // audit M-019 / M-088: who was already here when I came in
         updateRingback()
         updateGroupScreenBehavior()   // audit M-096
@@ -2211,7 +2239,7 @@ final class GroupCallService: ObservableObject {
         // refused as busy. Every `end()` comes through here; the old join's generation check (and
         // `abandonJoin`'s own guard) keep it from touching anything newer.
         connecting = false
-        groupRecordId = nil; aloneSince = nil; someoneJoined = false; everHereUids = []
+        groupRecordId = nil; aloneSince = nil; someoneJoined = false; everHereUids = []; lastRemoteUids = []
         resetRoomState()
         presentsRoomScreen = false
         reevaluateInvites()
@@ -2710,6 +2738,24 @@ final class GroupCallService: ObservableObject {
     /// Wakes the token function while the pre-join screen is up, so Join does not wait on its cold
     /// start (owner, 2026-10-07: "after I tap Join it loads a long time"). Fire and forget; the
     /// server answers `{warm:true}` before doing anything (functions/index.js groupCallToken).
+    /// ⛔ THE JOIN PASS WHILE IT RINGS — owner 2026-10-28: answering a group call sat on
+    /// "Connecting…" first. The pass (`groupCallToken`) only builds a token, writes nothing, and
+    /// lives ten minutes (CALL_TOKEN_TTL_S), so it is fetched the moment the ring arrives and the
+    /// answer's `start` uses it. Kept five minutes, for that group only; a refused or failed fetch
+    /// leaves nothing, and `start` asks as before.
+    private var prefetchedJoin: (cid: String, data: [String: Any], at: Date)?
+    private static let prefetchFresh: TimeInterval = 300
+    func prefetchJoin(cid: String) {
+        guard !cid.isEmpty else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let res = try? await Functions.functions(region: "me-central1")
+                    .httpsCallable("groupCallToken").call(Self.tokenAsk(["cid": cid])),
+                  let d = res.data as? [String: Any], d["token"] is String else { return }
+            self.prefetchedJoin = (cid, d, Date())
+        }
+    }
+
     func warmJoin() {
         functions.httpsCallable("groupCallToken").call(["warm": true]) { _, _ in }
     }
@@ -2945,7 +2991,7 @@ final class GroupCallService: ObservableObject {
     }
 
     private func resetRoomState() {
-        isGroupChatCall = false; groupPhotoUrl = nil; dialing = false
+        isGroupChatCall = false; groupPhotoUrl = nil; dialing = false; joinStartedAt = nil
         cancelRejoin()      // controls 7: a rejoin in flight goes with the call
         stopScreenShare()   // every leave path comes through here
         startMuted = false
