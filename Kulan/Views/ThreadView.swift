@@ -5720,6 +5720,7 @@ struct ThreadView: View {
                 let uids = list.compactMap { $0["uid"] as? String }
                 let mics = Set(list.filter { $0["mic"] as? Bool == true }.compactMap { $0["uid"] as? String })
                 if uids != groupCallPeople { groupCallPeople = uids }
+                GroupCallService.shared.noteCallPeople(cid: cid, uids: uids)
                 if mics != groupCallMicOn { groupCallMicOn = mics }
             }
             try? await Task.sleep(nanoseconds: 12_000_000_000)

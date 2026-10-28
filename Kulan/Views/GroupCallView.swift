@@ -101,7 +101,16 @@ struct GroupCallView: View {
 
     @ViewBuilder
     private var groupWaitingLayer: some View {
-        if groupWaiting {
+        if groupWaiting, !service.dialing, service.joinState != .joined, !service.joiningPeople.isEmpty {
+            // Joining a running call (owner 2026-10-28): the people already in it, at once, while the
+            // line finishes behind them; the first one large, "+N" for the rest, their names under.
+            GroupCallRingingView(people: service.joiningPeople.map { .init(name: $0.name, photoUrl: $0.photoUrl) },
+                                 overVideo: false,
+                                 subtitle: nil,
+                                 plainGround: true,
+                                 pulse: false)
+                .transition(.opacity)
+        } else if groupWaiting {
             // On a clock, because the ring minute ends by time alone.
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
                 GroupCallRingingView(people: [.init(name: service.callTitle, photoUrl: service.groupPhotoUrl)],

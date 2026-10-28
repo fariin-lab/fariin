@@ -273,28 +273,30 @@ struct GroupCallNoticeCard: View {
     var avatar: Avatar? = nil
     var wide: Bool = true
 
-    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 8, style: .continuous) }
+    // ⛔ A SMALL CENTRED PILL — owner 2026-10-28, his own drawing: the full-width notice ("kream
+    // joined" across the whole screen) was too big. A capsule that hugs a small photo and the words,
+    // centred under the header. `wide` stays for the callers; every notice is the pill now.
+    private var shape: Capsule { Capsule(style: .continuous) }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             if let avatar {
-                AvatarView(name: avatar.name, photoUrl: avatar.photoUrl, size: 40)
+                AvatarView(name: avatar.name, photoUrl: avatar.photoUrl, size: 26)
             }
             Text(text)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.92))
                 // Long names, or large Dynamic Type: wrap, shrink a little, rather than cut a name off.
-                .lineLimit(3)
+                .lineLimit(2)
                 .minimumScaleFactor(0.85)
-                .multilineTextAlignment(.leading)
-            if wide { Spacer(minLength: 0) }
+                .multilineTextAlignment(.center)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .frame(minHeight: 44)
-        .frame(maxWidth: wide ? 512 : nil)
+        .padding(.leading, avatar == nil ? 14 : 5)
+        .padding(.trailing, 14)
+        .padding(.vertical, 5)
+        .frame(minHeight: 36)
         .background(backdrop)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 24)
         // The reference app clamps this text too: a notice must not grow to cover the stage.
         .dynamicTypeSize(...DynamicTypeSize.accessibility1)
     }

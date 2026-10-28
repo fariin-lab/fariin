@@ -310,6 +310,21 @@ final class GroupCallService: ObservableObject {
     /// The Call button started this group chat's call (not a Join of a live one): until the room is
     /// up, I am calling. See `callingNow`.
     @Published private(set) var dialing = false
+    /// ⛔ JOINING SHOWS WHO IS THERE — owner 2026-10-28 (the reference app's join: the screen opens
+    /// already showing the people in the call while the line finishes in the background). Who the
+    /// chat's Join bar last saw in this group's call (`noteCallPeople`), shown on the joining screen
+    /// instead of an empty group photo.
+    @Published private(set) var joiningPeople: [CallMember] = []
+    private var knownCallPeople: [String: [String]] = [:]
+    func noteCallPeople(cid: String, uids: [String]) { knownCallPeople[cid] = uids }
+    private func peopleShown(cid: String) -> [CallMember] {
+        let me = myUid
+        let conv = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })
+        return (knownCallPeople[cid] ?? []).filter { $0 != me }.prefix(8).map { uid in
+            CallMember(uid: uid, name: conv?.names[uid].flatMap { $0.isEmpty ? nil : $0 } ?? "Member",
+                       photoUrl: conv?.photos[uid].flatMap { $0.isEmpty ? nil : $0 })
+        }
+    }
     /// When this join started (`start(cid:)`): the joiner's "Connecting…" waits two seconds before
     /// it shows, since a ring's prefetched pass usually lands the call before that (owner 2026-10-28).
     private(set) var joinStartedAt: Date?
@@ -529,6 +544,7 @@ final class GroupCallService: ObservableObject {
         isGroupChatCall = true
         groupPhotoUrl = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.avatarUrl
         dialing = !requireLive
+        joiningPeople = requireLive ? peopleShown(cid: cid) : []
         joinStartedAt = Date()
         updateRingback()   // the calling sound from the tap (`callingNow`)
         cameraOn = video   // round 2 (V2 N8): the camera button shows the call's wish while joining
@@ -3016,7 +3032,7 @@ final class GroupCallService: ObservableObject {
     }
 
     private func resetRoomState() {
-        isGroupChatCall = false; groupPhotoUrl = nil; dialing = false; joinStartedAt = nil
+        isGroupChatCall = false; groupPhotoUrl = nil; dialing = false; joinStartedAt = nil; joiningPeople = []
         micLockedByAdmin = false
         cancelRejoin()      // controls 7: a rejoin in flight goes with the call
         stopScreenShare()   // every leave path comes through here
