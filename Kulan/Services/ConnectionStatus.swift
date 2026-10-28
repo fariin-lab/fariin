@@ -485,6 +485,10 @@ struct ConnectionTitleLabel: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
+                // Never cut to "Waiting for netwo…" (owner 2026-10-28): shrink a little to fit the
+                // slot between the bar's buttons instead.
+                .minimumScaleFactor(0.7)
+                .allowsTightening(true)
         }
         // Announced as one phrase; the spinner is decoration and has nothing to say on its own.
         .accessibilityElement(children: .ignore)
