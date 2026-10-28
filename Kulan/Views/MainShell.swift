@@ -1089,6 +1089,8 @@ struct CallsView: View {
                                 LiveGroupCallRow(live: live,
                                                  conv: ConversationsRepository.shared.conversations.first { $0.id == live.id },
                                                  onJoin: { joinLive(live) })
+                                    // The history rows' insets, so the photo lines up under theirs.
+                                    .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
                             }
                         }
                         // Links and calls in ONE time-ordered list; see `mergedRows` for why.

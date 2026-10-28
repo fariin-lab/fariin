@@ -103,7 +103,8 @@ struct LiveGroupCallRow: View {
     // call list"): the group, "Video Chat · 4 participants", the faces of who is in it, green JOIN.
     var body: some View {
         HStack(spacing: 12) {
-            AvatarView(name: title, photoUrl: conv?.avatarUrl, size: 44)
+            // 46 pt, the history rows' size (owner 2026-10-28: it looked smaller than the others).
+            AvatarView(name: title, photoUrl: conv?.avatarUrl, size: 46)
                 .overlay(alignment: .bottomTrailing) {
                     Circle().fill(Color.green).frame(width: 12, height: 12)
                         .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2))
