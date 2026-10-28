@@ -934,11 +934,13 @@ struct GroupCallParticipantsSheet: View {
     /// and for a link's owner "Remove and Block".
     private func actionsMenu(_ t: CallTile) -> some View {
         Menu {
-            if !t.isMuted {
+            // Owner 2026-10-28: Mute for anyone an admin has not muted yet, self-muted included (it
+            // locks their mic); Allow to Speak once an admin has.
+            if !adminMuted(t) {
                 Button { run(.mute, target: t.uid) } label: {
                     Label("Mute", systemImage: "mic.slash")
                 }
-            } else if adminMuted(t) {
+            } else {
                 // 2026-10-28: an admin's mute holds until an admin allows them to speak (callAdmin
                 // 'unmute'); the owner looked for it here first. Not for a self-muted person.
                 Button { run(.unmute, target: t.uid) } label: {
@@ -1037,8 +1039,9 @@ struct GroupCallParticipantsSheet: View {
                 .background(blocked ? Color(.systemRed) : Color(.tertiarySystemFill), in: Circle())
                 .contentShape(Circle())
         }
-        .disabled(selfMuted)
-        .accessibilityLabel(blocked ? "Allow \(t.name) to speak" : (selfMuted ? "\(t.name) is muted" : "Mute \(t.name)"))
+        // Owner 2026-10-28: NOT disabled for someone who muted themselves. An admin can still mute
+        // them, which locks it: they cannot turn their own mic back on until allowed to speak.
+        .accessibilityLabel(blocked ? "Allow \(t.name) to speak" : (selfMuted ? "Mute \(t.name) and lock their mic" : "Mute \(t.name)"))
     }
 
     private func focusButton(_ t: CallTile, micShown: Bool = true) -> some View {
