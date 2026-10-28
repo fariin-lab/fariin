@@ -842,10 +842,11 @@ struct GroupCallView: View {
         }
     }
 
+    /// The two-person header reads like a 1:1 call: just the clock. Owner 2026-10-28: "00:24, 1 ringing"
+    /// after someone answered looked wrong; who is still rung stays in the people sheet.
     private func clock(_ since: Date) -> some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
-            Text(CallDuration.clock(Int(ctx.date.timeIntervalSince(since)))
-                 + Self.ringingTail(service.stillRinging(at: ctx.date).count))
+            Text(CallDuration.clock(Int(ctx.date.timeIntervalSince(since))))
                 .monospacedDigit()
         }
     }
@@ -1029,13 +1030,18 @@ private struct GroupCallMoreButton: View {
     var body: some View {
         let sharing = service.screenSharing || service.sharePending
         return Menu {
-            ControlGroup {
-                ForEach(GroupCallSocial.quickEmojis, id: \.self) { emoji in
-                    Button { social.react(emoji) } label: { Image(uiImage: Self.emojiImage(emoji)) }
-                        .accessibilityLabel("React with \(emoji)")
+            // Owner 2026-10-28: the emojis in a block of their own, and a tap closes the menu (a
+            // palette keeps the menu up by default).
+            Section {
+                ControlGroup {
+                    ForEach(GroupCallSocial.quickEmojis, id: \.self) { emoji in
+                        Button { social.react(emoji) } label: { Image(uiImage: Self.emojiImage(emoji)) }
+                            .accessibilityLabel("React with \(emoji)")
+                    }
                 }
+                .controlGroupStyle(.palette)
+                .menuActionDismissBehavior(.enabled)
             }
-            .controlGroupStyle(.palette)
             Button { social.setHand(!social.myHandUp) } label: {
                 Label(social.myHandUp ? "Lower Hand" : "Raise Hand",
                       systemImage: social.myHandUp ? "hand.raised.slash" : "hand.raised")
