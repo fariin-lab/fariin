@@ -152,6 +152,8 @@ struct ChatComposerActions {
     var cancelRecording: () -> Void = {}
     var sendRecording: () -> Void = {}
     var togglePreview: () -> Void = {}
+    /// The bar's own pause / keep-recording button (owner 2026-10-28; it floated above the bar).
+    var pauseOrResumeRecording: () -> Void = {}
     var seekPreview: (Double) -> Void = { _ in }
     var toggleVoiceOnce: () -> Void = {}
 }

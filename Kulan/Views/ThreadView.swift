@@ -4821,7 +4821,9 @@ struct ThreadView: View {
             composerBarHeight: composerBarHeight,   // extra bottom clearance so the newest msg clears the bar
             // The recording's floating pause / continue — drawn and hit-tested by the LIST, which
             // owns the screen above the bar (see `MessageListController.setVoiceControl`).
-            voiceControl: recordLocked ? (reviewingNote ? 2 : 1) : 0,
+            // Owner 2026-10-28: no control floating over the chat; pause / keep recording is a
+            // button inside the bar now (ChatComposerView `stripControl`).
+            voiceControl: 0,
             onVoiceControlTap: { if reviewingNote { resumeRecording() } else { beginPreview() } },
             menuActionTick: menuActionTick,         // SwiftUI menu action fired → hold reloads through its dismissal
             sendTick: sendTick,                     // Send tapped → the list holds its offset until the row lands
@@ -9506,6 +9508,7 @@ struct ThreadView: View {
         a.cancelRecording = { cancelRecording() }
         a.sendRecording = { sendRecording() }
         a.togglePreview = { togglePreview() }
+        a.pauseOrResumeRecording = { if reviewingNote { resumeRecording() } else { beginPreview() } }
         a.seekPreview = { seekPreview($0) }
         a.toggleVoiceOnce = {
             // ONE-TIME LISTEN — arming it flashes the little confirmation over the bar.

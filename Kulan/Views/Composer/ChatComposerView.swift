@@ -217,14 +217,15 @@ final class ChatComposerView: UIView {
         cfg.cornerStyle = .capsule
         cfg.contentInsets = .zero
         cfg.baseBackgroundColor = .tertiarySystemFill
-        cfg.baseForegroundColor = .label
-        cfg.image = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
+        // Owner 2026-10-28: a red trash, not an X (an X read as "cancel" or "close"; this deletes).
+        cfg.baseForegroundColor = .systemRed
+        cfg.image = UIImage(systemName: "trash", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold))
         // ⛔ TAPS AROUND IT COUNT — owner 2026-10-15: "the X works only when I hit the icon, the touch
         // area is too small". The 32pt circle stays as drawn; its tap area reaches the bar's left
         // end and its full height, and 6pt to the right (the play button starts just after).
         let b = OutsetHitButton(configuration: cfg)
         b.hitOutset = UIEdgeInsets(top: 12, left: 20, bottom: 12, right: 6)
-        b.accessibilityLabel = "Cancel recording"
+        b.accessibilityLabel = "Delete recording"
         return b
     }()
     private let stripSend: UIButton = {
@@ -238,6 +239,22 @@ final class ChatComposerView: UIView {
         return b
     }()
     private let liveWave = LiveLevelsView()
+    /// ⛔ PAUSE LIVES IN THE BAR — owner 2026-10-28: the pause / keep-recording control floated over
+    /// the chat (`MessageListController.setVoiceControl`, the reference app's stop button where the
+    /// lock was). It is a button inside the bar now, just before the send: pause while recording,
+    /// the mic to keep recording while paused. Inside the bar, its touches arrive like any other.
+    private let stripControl: UIButton = {
+        var cfg = UIButton.Configuration.filled()
+        cfg.cornerStyle = .capsule
+        cfg.contentInsets = .zero
+        cfg.baseBackgroundColor = UIColor.systemBlue.withAlphaComponent(0.14)
+        cfg.baseForegroundColor = .systemBlue
+        let b = OutsetHitButton(configuration: cfg)
+        b.hitOutset = UIEdgeInsets(top: 4, left: 4, bottom: 4, right: 4)
+        return b
+    }()
+    /// A red dot before the timer while recording: the bar is listening.
+    private let recDot = UIView()
 
     // Over the bar, outside its bounds: the big mic and the lock target, and the two toasts.
     private let overlayGroup = UIView()
@@ -560,6 +577,11 @@ final class ChatComposerView: UIView {
         // the X and the live wave, in the paused bar's time style.
         strip.addSubview(stripX)
         strip.addSubview(stripSend)
+        strip.addSubview(stripControl)
+        stripRecording.addSubview(recDot)
+        recDot.backgroundColor = .systemRed
+        recDot.layer.cornerRadius = 4
+        stripControl.addAction(UIAction { [weak self] _ in self?.actions.pauseOrResumeRecording() }, for: .touchUpInside)
         stripRecording.addSubview(liveWave)
         for v in [stripMic, cancelButton] as [UIView] { v.isHidden = true }
         stripTimer.font = .monospacedDigitSystemFont(ofSize: 15, weight: .regular)
@@ -965,6 +987,11 @@ final class ChatComposerView: UIView {
         // 2026-10-15 picture: a black play and a grey wave, like the rest of the bar's glyphs.
         playButton.icon.tintColor = .label
         playButton.accessibilityLabel = s.previewPlaying ? "Pause preview" : "Play preview"
+        var ctl = stripControl.configuration ?? .filled()
+        ctl.image = UIImage(systemName: s.reviewing ? "mic.fill" : "pause.fill",
+                            withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold))
+        stripControl.configuration = ctl
+        stripControl.accessibilityLabel = s.reviewing ? "Keep recording" : "Pause and listen back"
         waveform.decibels = s.previewDecibels
         waveform.progress = s.previewProgress
         waveform.played = .label
@@ -1013,6 +1040,18 @@ final class ChatComposerView: UIView {
         strip.alpha = s.recordLocked ? 1 : 0
         strip.isUserInteractionEnabled = s.recordLocked
         stripRecording.alpha = s.reviewing ? 0 : 1
+        // The red dot breathes while recording (Core Animation, not a SwiftUI repeatForever).
+        if s.recordLocked && !s.reviewing && !UIAccessibility.isReduceMotionEnabled {
+            if recDot.layer.animation(forKey: "blink") == nil {
+                let blink = CABasicAnimation(keyPath: "opacity")
+                blink.fromValue = 1; blink.toValue = 0.25
+                blink.duration = 0.6; blink.autoreverses = true; blink.repeatCount = .infinity
+                blink.isRemovedOnCompletion = false
+                recDot.layer.add(blink, forKey: "blink")
+            }
+        } else {
+            recDot.layer.removeAnimation(forKey: "blink")
+        }
         stripRecording.isUserInteractionEnabled = !s.reviewing
         stripReview.alpha = s.reviewing ? 1 : 0
         stripReview.isUserInteractionEnabled = s.reviewing
@@ -1421,10 +1460,13 @@ final class ChatComposerView: UIView {
         let xc = M.stripX
         stripX.frame = CGRect(x: M.stripInset + (c - xc) / 2, y: (sh - xc) / 2, width: xc, height: xc)
         stripSend.frame = CGRect(x: pw - M.stripInset - c, y: cy, width: c, height: c)
+        let ctlW: CGFloat = 32
+        stripControl.frame = CGRect(x: stripSend.frame.minX - 8 - ctlW, y: (sh - ctlW) / 2, width: ctlW, height: ctlW)
         let onceW: CGFloat = 24
-        onceButton.frame = CGRect(x: stripSend.frame.minX - 12 - onceW, y: 0, width: onceW, height: sh)
+        onceButton.frame = CGRect(x: stripControl.frame.minX - 10 - onceW, y: 0, width: onceW, height: sh)
+        recDot.frame = CGRect(x: stripX.frame.maxX + 12, y: (sh - 8) / 2, width: 8, height: 8)
         let timerW = ceil(stripTimer.intrinsicContentSize.width)
-        stripTimer.frame = CGRect(x: stripX.frame.maxX + 12, y: 0, width: timerW, height: sh)
+        stripTimer.frame = CGRect(x: recDot.frame.maxX + 6, y: 0, width: timerW, height: sh)
         liveWave.frame = CGRect(x: stripTimer.frame.maxX + 12, y: (sh - 22) / 2,
                                 width: max(0, onceButton.frame.minX - 12 - (stripTimer.frame.maxX + 12)), height: 22)
         // ⛔ A 44pt TARGET — owner 2026-10-15: "play / pause lags, the button doesn't work well". The
