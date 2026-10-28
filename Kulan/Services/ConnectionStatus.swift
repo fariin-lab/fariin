@@ -470,18 +470,19 @@ final class ConnectionStatus {
 // ⛔ THE HEADER'S OWN LABEL — his screenshot: a small spinner, then the word, centred where the
 // title sits.
 //
-// ⚠️ `.headline`, MATCHING `navigationTitle`'s INLINE WEIGHT, because this stands in that title's
-// place and a different weight reads as a different screen. The spinner is scaled down rather than
-// given a frame: a `ProgressView` at full size is taller than the bar's title row and would grow it.
+// ⛔ ONE SIZE UNDER THE TITLE, SO IT FITS IN THE MIDDLE (owner 2026-10-28, "that text no centre").
+// At `.headline` (17 pt) "Waiting for network" plus the arc was ~163 pt, and the Chats bar (Edit on
+// the left, filter + compose on the right) has ~156 pt of centred room, so the system pushed it
+// left. `.subheadline` semibold (15 pt) keeps the title's weight and fits centred.
 struct ConnectionTitleLabel: View {
     let text: String
 
     var body: some View {
         HStack(spacing: 6) {
             // owner 2026-10-27: our own turning arc instead of the system's ticking spinner.
-            BusyArc(size: 14, lineWidth: 2.2, color: .secondary)
+            BusyArc(size: 13, lineWidth: 2.1, color: .secondary)
             Text(text)
-                .font(.headline)
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
         }
