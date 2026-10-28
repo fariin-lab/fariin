@@ -832,6 +832,10 @@ service cloud.firestore {
 
       // 2026-10-20 (owner): groups I blocked (Block Group). Read by the server only, when someone
       // adds me back (onGroupMembersAdded); mine to write and remove.
+      // Channels I follow (2026-10-28), written by functions-groups followChannel only.
+      match /channels/{c} {
+        allow read: if signedIn() && request.auth.uid == uid;
+      }
       match /blockedGroups/{gid} {
         allow read, delete: if signedIn() && request.auth.uid == uid;
         allow create, update: if signedIn() && request.auth.uid == uid
@@ -1786,9 +1790,16 @@ service cloud.firestore {
       // was proven with 8 cases against the live ruleset (both members ALLOWED on a not-yet-existing
       // chat, an outsider DENIED on the same, members/outsiders unchanged on existing 1:1s AND
       // groups), with the previous rules as the control, where the two fix cases FAIL.
+      // A channel's followers are not in `users` (2026-10-28): conversations/{cid}/followers/{uid},
+      // server-written by followChannel. They read the channel and its posts, nothing else.
+      function follows(c) {
+        return c.get('channel', false) == true
+          && exists(/databases/$(database)/documents/conversations/$(cid)/followers/$(request.auth.uid));
+      }
       allow read: if signedIn() && (
         request.auth.uid in cid.split('_')
         || request.auth.uid in resource.data.get('users', [])
+        || follows(resource.data)
       );
       // 1:1 must be exactly 2; a group ("type":"group") may have 1 to group_members_max members and the
       // creator must be in its admins list.
@@ -1800,7 +1811,7 @@ service cloud.firestore {
         // 2026-10-19 groups v2: the group type and its public @name are written only by
         // functions-username setGroupUsername, which claims the name in `usernames` in the same step.
         // `joinApproval` (a public group files join requests instead of adding) is server-only too.
-        && !request.resource.data.keys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'hideMembers', 'hideMembersBy'])
+        && !request.resource.data.keys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'hideMembers', 'hideMembersBy', 'channel', 'followerCount'])
         // 2026-10-19 groups v2 (owner): groups are not end-to-end encrypted. A new group may say so
         // itself (`e2ee: false`, written by the app's createGroup), and nothing else: `e2ee` is
         // false-only and groups-only, and the switch time `e2eeOffAt` is the server's alone.
@@ -1815,9 +1826,7 @@ service cloud.firestore {
                 && request.resource.data.users.size() == 2
                 && !requestsOnFor(otherMember())))
         && (
-          // THE GROUP BRANCH GOES FIRST, on purpose. A two-member group also satisfies `size() == 2`,
-          // and evaluating the 1:1 branch would send it through a privacy lookup it has no business
-          // doing — and, when that lookup errors, deny a group that was perfectly legal.
+          // Group branch first: a 2-member group must not take the 1:1 privacy lookup.
           (
             request.resource.data.get('type', '') == 'group'
             // ⛔ ONE IS ENOUGH — owner 2026-10-18: a group may start with only its creator (New
@@ -2157,7 +2166,7 @@ service cloud.firestore {
         // `e2eeOffAt`) is the server's to change (the groupsE2eeOff migration). In the same list, not
         // a line of its own: a second diff here pushed a busy admin write past the rules engine's
         // 1,000-expression ceiling (rules-tests/role-1018).
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt', 'memberSince', 'endedAt', 'hideMembers', 'hideMembersBy'])
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt', 'memberSince', 'endedAt', 'hideMembers', 'hideMembersBy', 'channel', 'followerCount'])
         && groupModWriteOK()
         && groupAddOK()   // audit F4: no adding someone with a block either way
         // owner 2026-10-18: the group wallpaper, groups only and a known shape (groupWallpaperOK).
@@ -2649,15 +2658,9 @@ service cloud.firestore {
             || convAfter().get('users', []).size() > c.users.size()
             || !(request.auth.uid in convAfter().get('users', []));
         }
-        // ⛔ A PUBLIC GROUP'S MESSAGES, READ FROM OUTSIDE — owner 2026-10-21 (messages before
-        // joining): tapping a public group I am not in opens its real chat with Join at the bottom.
-        // Only when every one of these holds: a group, public (`isPublic`, server-written), switched
-        // (`e2ee == false`; owner 2026-10-23: its WHOLE history, released keys `rk` too), history not
-        // hidden from newcomers (`hideHistoryAt` absent or 0: hidden history
-        // means no preview), not ended by its owner (`endedAt` absent or 0), not suspended or
-        // disabled by Fariin, and the reader not banned from it. READ ONLY, and only the messages:
-        // the conversation document stays members-only (invite codes, unread maps, names), so the
-        // app takes the header from `publicGroupPreview`. Votes under a message stay members-only.
+        // A public group's messages read from outside (owner 2026-10-21): public, not E2EE, history
+        // not hidden, not ended, not suspended/disabled, reader not banned. Messages only; the
+        // conversation doc stays members-only (header via publicGroupPreview).
         function publicPreviewRead() {
           let c = convData();
           let gm = c.get('mod', {});
@@ -2672,7 +2675,8 @@ service cloud.firestore {
                  && (gm.get('until', null) == null || gm.get('until', null) > request.time));
         }
         allow read: if signedIn()
-          && ((request.auth.uid in convData().users && !groupFariinLocked(convData())) || publicPreviewRead());
+          && (((request.auth.uid in convData().users || follows(convData())) && !groupFariinLocked(convData()))
+              || publicPreviewRead());
         allow create: if signedIn()
           && (request.auth.uid == request.resource.data.authorId || isCallRecordForMember())
           && request.auth.uid in convData().users
