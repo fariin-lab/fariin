@@ -130,7 +130,9 @@ struct GroupCallParticipantsSheet: View {
     /// is not a no, so it keeps the button. Someone rung from here reads "Ringing…" for the minute.
     private func groupInvited(cid: String, here: Set<String>, at now: Date) -> [Row] {
         let me = service.myUid
-        let ringing = service.ringingMembers(at: now).filter { !here.contains($0.uid) && $0.uid != me }
+        // `stillRinging`, not `ringingMembers` (owner 2026-10-27): the people still being rung stay
+        // listed after the first person came; `ringingMembers` empties at the first answer.
+        let ringing = service.stillRinging(at: now).filter { !here.contains($0.uid) && $0.uid != me }
         var rows = ringing.map { Row(id: $0.uid, name: $0.name, photoUrl: $0.photoUrl, subtitle: "Ringing…") }
         var listed = Set(ringing.map(\.uid))
         let conv = ConversationsRepository.shared.conversations.first { $0.id == cid }
@@ -346,7 +348,8 @@ struct GroupCallParticipantsSheet: View {
     @ViewBuilder private func invitedSection(at date: Date) -> some View {
         let waiting = invited(at: date)
         if !waiting.isEmpty {
-            Section("Invited") {
+            // "Not connected", the link call's own heading for the same people (one name for both).
+            Section("Not connected") {
                 ForEach(waiting) { invitedRow($0, at: date) }
             }
         }
@@ -982,7 +985,11 @@ struct GroupCallParticipantsSheet: View {
                 }
             }
             .accessibilityElement(children: .combine)
-            if r.ringable {
+            if r.subtitle == "Ringing…" {
+                // Owner 2026-10-27 (the reference's sheet): their phone is ringing right now.
+                Spacer(minLength: 8)
+                CallRingingDots().accessibilityHidden(true)   // the subtitle says it
+            } else if r.ringable {
                 Spacer(minLength: 8)
                 Button { ringAgain(r.id, name: r.name) } label: {
                     Image(systemName: "phone.arrow.up.right")
@@ -1229,5 +1236,35 @@ private extension GroupCallService {
         }
         let payload: [String: Any] = ["room": target, "action": "muteAll"]
         _ = try await Functions.functions(region: "me-central1").httpsCallable("callAdmin").call(payload)
+    }
+}
+
+/// Three dots lighting up in turn: this person's phone is ringing now (owner 2026-10-27). On a
+/// timeline, not `.repeatForever` (audit H3: the iOS 26 deadlock pattern). Reduce Motion: still.
+struct CallRingingDots: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        if reduceMotion {
+            dots(at: 0, moving: false)
+        } else {
+            TimelineView(.animation) { ctx in
+                dots(at: ctx.date.timeIntervalSinceReferenceDate, moving: true)
+            }
+        }
+    }
+
+    private func dots(at t: Double, moving: Bool) -> some View {
+        HStack(spacing: 5) {
+            ForEach(0..<3, id: \.self) { i in
+                // One 1.2 s wave, each dot 0.2 s after the one before it.
+                let p = (t - Double(i) * 0.2).truncatingRemainder(dividingBy: 1.2) / 1.2
+                let lit = moving ? max(0, sin(.pi * min(1, max(0, p * 2)))) : 0.5
+                Circle()
+                    .fill(Color.secondary)
+                    .frame(width: 6, height: 6)
+                    .opacity(0.3 + 0.7 * lit)
+            }
+        }
     }
 }
