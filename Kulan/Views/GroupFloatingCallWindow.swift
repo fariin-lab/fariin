@@ -130,8 +130,14 @@ private struct GroupFloatingCardContent: View {
 
     /// The picture alone at card size: what the edge tab shows blurred, and what `card` frames.
     private var picture: some View {
+        // ⛔ THE GROUP'S PHOTO, ONE CALM CARD — owner 2026-10-28: "just use the group photo, or the
+        // placeholder, instead of a bunch of things". A group chat's call keeps its card on the group
+        // (no speaker switching, no faces coming and going); the call screen is one tap away. A
+        // multi-person or link call has no group photo and keeps the speaker card as before.
         Group {
-            if let shown = picked {
+            if service.isGroupChatCall {
+                groupCard
+            } else if let shown = picked {
                 personCard(shown)
             } else {
                 waitingCard
@@ -200,6 +206,30 @@ private struct GroupFloatingCardContent: View {
 
     /// Nobody else connected yet, or the call is not simply running: a face and the header's line.
     /// On a clock, because "Ringing…" ends by time alone.
+    /// A group chat's call minimized: the group's photo (its placeholder when it has none) on black,
+    /// and the call's own short line under it ("Ringing everyone…", "3 in call").
+    private var groupCard: some View {
+        VStack(spacing: 10) {
+            AvatarView(name: service.callTitle, photoUrl: service.groupPhotoUrl, size: 64)
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                Text(groupLine(at: ctx.date))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(2).minimumScaleFactor(0.75)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 8)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.white.opacity(0.06))
+        .background(Color.black)
+    }
+    private func groupLine(at now: Date) -> String {
+        if service.callingNow(at: now) { return "Ringing everyone…" }
+        if let words = stageLabel(at: now) { return words }
+        return "\(remotes.count + 1) in call"
+    }
+
     private var waitingCard: some View {
         VStack(spacing: 10) {
             face(uid: firstOtherUid, fallbackName: service.callTitle, size: 54, speaking: false)
