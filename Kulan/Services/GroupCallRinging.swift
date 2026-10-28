@@ -523,7 +523,7 @@ final class GroupCallRinging {
             roomId: n.roomId, title: n.title ?? n.callerName, video: n.video, startedBy: n.callerUid,
             startedAt: n.startedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date(),
             others: n.callerUid.isEmpty ? [] : [CallMember(uid: n.callerUid, name: n.callerName, photoUrl: n.photoUrl)],
-            linkKey: n.key, fromNudge: true)
+            linkKey: n.isGroup ? nil : n.key, fromNudge: true)
         service.groupRingScreen = screen
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(Self.ringWindow * 1_000_000_000))
@@ -812,13 +812,24 @@ struct LinkNudge: Equatable {
     let startedAtMs: Double?
     var photoUrl: String?
 
-    /// Nil unless the push names a room and carries a key that reads as one.
+    /// A group chat's call (owner 2026-10-28, `groupCallNudge`: "{name} wants you back"): no link
+    /// key; `roomId` is the group's id and Join joins that group's call.
+    var isGroup: Bool { key.isEmpty }
+
+    /// Nil unless the push names a room and carries a key that reads as one, or is a group nudge
+    /// (`{ type: "groupnudge", cid, callerUid, callerName, title, video, startedAt }`).
     init?(_ d: [AnyHashable: Any]) {
-        guard d["type"] as? String == "linknudge",
-              let roomId = d["roomId"] as? String, !roomId.isEmpty, !roomId.contains("/"),
-              let key = d["key"] as? String, CallLinkKey(text: key) != nil else { return nil }
-        self.roomId = roomId
-        self.key = key
+        if d["type"] as? String == "groupnudge" {
+            guard let cid = d["cid"] as? String, !cid.isEmpty, !cid.contains("/") else { return nil }
+            self.roomId = cid
+            self.key = ""
+        } else {
+            guard d["type"] as? String == "linknudge",
+                  let roomId = d["roomId"] as? String, !roomId.isEmpty, !roomId.contains("/"),
+                  let key = d["key"] as? String, CallLinkKey(text: key) != nil else { return nil }
+            self.roomId = roomId
+            self.key = key
+        }
         self.callerUid = d["callerUid"] as? String ?? ""
         self.callerName = (d["callerName"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Someone"
         self.title = (d["title"] as? String).flatMap { $0.isEmpty ? nil : $0 }

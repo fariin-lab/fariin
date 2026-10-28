@@ -262,7 +262,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         if content.userInfo["type"] as? String == "adhoccall" { return [] }
         // A call link's nudge (owner 2026-10-23): our dark capsule with a Join pill, not the system
         // banner. The push's own sound still plays.
-        if content.userInfo["type"] as? String == "linknudge" {
+        // A group call nudge too (owner 2026-10-28, "groupnudge"): the same capsule with Join.
+        if ["linknudge", "groupnudge"].contains(content.userInfo["type"] as? String ?? "") {
             guard var nudge = LinkNudge(content.userInfo) else { return [] }
             if !nudge.callerUid.isEmpty, BlockList.snapshot.contains(nudge.callerUid) { return [] }
             if !nudge.callerUid.isEmpty {
@@ -333,7 +334,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         }
         // A call link's nudge, tapped (owner 2026-10-23): the call's full-screen invitation, with
         // Ignore and Join; not straight into the call.
-        if info["type"] as? String == "linknudge" {
+        if ["linknudge", "groupnudge"].contains(info["type"] as? String ?? "") {
             if var nudge = LinkNudge(info) {
                 if !nudge.callerUid.isEmpty {
                     nudge.photoUrl = await ProfileStore.shared.cachedPeer(nudge.callerUid)?.photoUrl

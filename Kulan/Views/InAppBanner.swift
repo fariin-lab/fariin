@@ -307,7 +307,7 @@ struct InAppBannerCard: View {
         let top = topInset(safeTop: safeTop)
         return motion(HStack(spacing: 10) {
             AvatarView(name: n.callerName, photoUrl: n.photoUrl, size: 40)
-            Text("👋 \(n.callerName) wants to talk")
+            Text(n.isGroup ? "👋 \(n.callerName) wants you back" : "👋 \(n.callerName) wants to talk")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white)
                 .lineLimit(1)
