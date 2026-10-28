@@ -2384,6 +2384,14 @@ final class GroupCallService: ObservableObject {
             if (try? await Functions.functions(region: "me-central1").httpsCallable("groupCallClose").call(body)) != nil {
                 return
             }
+        } else {
+            // 2026-10-28 (owner, group call audit): the rules let only the starter end an ad-hoc
+            // call from a phone now. Everyone else asks the server, which closes it only when the
+            // room is really empty. Unreachable: the write below (fine for the starter).
+            if (try? await Functions.functions(region: "me-central1").httpsCallable("groupCallClose")
+                .call(["roomId": cid])) != nil {
+                return
+            }
         }
         let db = FirestoreHub.db
         let ref = db.collection("groupCalls").document(cid)

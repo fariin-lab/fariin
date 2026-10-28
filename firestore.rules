@@ -3110,8 +3110,11 @@ service cloud.firestore {
         && isStartWrite() && startStampNewOrKept()
         && mayStartCall()   // a start write is a START: joiners never write one
         && callModOK()
+        // 2026-10-28 (owner): the starter of a live call keeps its recordId and startedAt.
         && (resource.data.get('active', false) != true
-            || resource.data.get('startedBy', '') == request.auth.uid
+            || (resource.data.get('startedBy', '') == request.auth.uid
+                && request.resource.data.get('recordId', null) == resource.data.get('recordId', null)
+                && request.resource.data.get('startedAt', null) == resource.data.get('startedAt', null))
             || (resource.data.get('startedAt', null) is timestamp
                 && resource.data.startedAt < request.time - duration.value(4, 'h')));
 
@@ -3152,14 +3155,8 @@ service cloud.firestore {
         && request.resource.data.get('joined', []) is list
         && request.resource.data.get('joined', []).hasOnly([request.auth.uid])
         && startStampNew();
-      // Members only ever grow: nobody can take a person off an invite list they did not write.
-      // owner 2026-10-06 call roles: `startedBy` (the call's owner) and `removedUids` (people the owner
-      // removed, written by callAdmin) stay outside the keys a phone may touch. Nobody may put a removed
-      // person back on the list. And an ended call stays ended: `active` may go false (the app's last
-      // one out, and a start that was abandoned), never back to true, so a member cannot re-ring
-      // everyone after the owner ended it. Ending by the last one out is still a phone write; the rules
-      // cannot see whether the media room is empty. It only clears the ringing, and the owner's End
-      // (callAdmin) is the one that closes the room.
+      // Members only grow; a removed person never comes back. `startedBy` and `removedUids` are
+      // server-only. An ended call stays ended (`active` never goes back to true).
       allow update: if signedIn() && isAdhoc()
         && request.auth.uid in resource.data.members
         && request.resource.data.diff(resource.data).affectedKeys()
@@ -3168,6 +3165,9 @@ service cloud.firestore {
         && request.resource.data.members.hasAll(resource.data.members)
         && !request.resource.data.members.hasAny(resource.data.get('removedUids', []))
         && (request.resource.data.active == false || resource.data.active == true)
+        // 2026-10-28 (owner): only the starter ends it from a phone; others via groupCallClose.
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['active', 'endedAt'])
+            || resource.data.startedBy == request.auth.uid)
         && adhocMapGrowsOnly('names') && adhocMapGrowsOnly('photos')
         && adhocJoinedGrowsByMe()
         && adhocInvitedAtOk();
