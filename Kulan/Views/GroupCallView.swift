@@ -843,9 +843,21 @@ struct GroupCallView: View {
             Spacer()
             VStack(spacing: 2) {
                 Text(title).font(.headline).foregroundStyle(.white).lineLimit(1)
+                // Two people (the 1:1 look): their mute is the word "Muted" between the name and the
+                // timer, the 1:1 call's own design (CallView, owner 2026-10-10), instead of a dot in
+                // the corner (owner 2026-10-28). Three or more keep the tiles' own marks.
+                if let pair = duoPair, pair.remote.isMuted {
+                    Text("Muted")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .lineLimit(1)
+                        .accessibilityLabel("\(pair.remote.name) is muted")
+                        .transition(.opacity)
+                }
                 subtitleView.font(.caption).foregroundStyle(.white.opacity(0.7))
                     .lineLimit(1)   // owner, 2026-10-07: the ringing line wrapped onto two
             }
+            .animation(.easeInOut(duration: 0.2), value: duoPair?.remote.isMuted == true)
             Spacer()
             // The "..." left the header for the controls (owner 2026-10-28); one button each side.
             participantsButton

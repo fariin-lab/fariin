@@ -159,7 +159,9 @@ struct GroupCallDuoView: View {
     /// on the corner tile instead while the other person is the small picture.
     @ViewBuilder
     private var remoteMarks: some View {
-        if let remote, big.id == remote.id, remote.isMuted || remote.networkPoor {
+        // Their mute is the word "Muted" in the header now (GroupCallView, owner 2026-10-28, the 1:1
+        // call's design); only a poor connection still shows here.
+        if let remote, big.id == remote.id, remote.networkPoor {
             marks(remote)
                 .padding(.top, insets.top + (chromeVisible ? 72 : 10))
                 .padding(.leading, 14)
@@ -172,7 +174,6 @@ struct GroupCallDuoView: View {
 
     private func marks(_ t: CallTile) -> some View {
         HStack(spacing: 6) {
-            if t.isMuted { GroupCallBadge(symbol: "mic.slash.fill", size: 28, glyph: 16) }
             if t.networkPoor { GroupCallBadge(symbol: "wifi.exclamationmark", size: 22, glyph: 11) }
         }
         .accessibilityElement(children: .ignore)
