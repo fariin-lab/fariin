@@ -863,7 +863,7 @@ struct GroupInfoView: View {
                     Button("Leave", role: .destructive) {
                         unfollowing = true
                         Task {
-                            do { try await ChannelService.unfollow(cid: cid); onGone() }
+                            do { try await ChannelService.unfollow(cid: cid); dismiss() }
                             catch { actionError = error.localizedDescription }
                             unfollowing = false
                         }
