@@ -329,6 +329,10 @@ struct GroupSettingsView: View {
                 NavigationLink { ChannelFollowersView(cid: cid, count: conv?.followerCount ?? 0) } label: {
                     valueRow("ic_gs_members", "Followers", "\(conv?.followerCount ?? 0)")
                 }
+                // Moved here off the channel's info page (owner 2026-10-29).
+                NavigationLink { ScheduledPostsView(cid: cid) } label: {
+                    valueRow("calendar.badge.clock", "Scheduled Posts", "")
+                }
             } else {
                 NavigationLink { GroupMembersListView(cid: cid) } label: {
                     valueRow("ic_gs_members", "Members", "\(conv?.users.count ?? 0)")
@@ -689,6 +693,8 @@ struct GroupAdminsView: View {
     /// The member whose profile Info opened, pushed on this page's stack.
     @State private var profileUid: String?
     @State private var showPick = false
+    /// Bumped after a channel admin invite goes out, so the waiting list shows it at once.
+    @State private var invitesTick = 0
     @State private var actionError: String?
     /// The member picked in Add Admin; their Add Admin page is pushed in the sheet.
     @State private var pickedAdmin: String?
@@ -722,7 +728,8 @@ struct GroupAdminsView: View {
                 // same card as the admins (owner 2026-10-19).
                 if canAddAdmins && conv?.isChannel == true {
                     // A channel has no members to pick from: an admin is invited, and accepts (2026-10-29).
-                    Button { showInvite = true } label: { Label("Invite Admin", systemImage: "person.badge.plus") }
+                    // Worded "Add Admin" like a group's (owner 2026-10-29); the accept step stays.
+                    Button { showInvite = true } label: { Label("Add Admin", systemImage: "person.badge.plus") }
                 } else if canAddAdmins && !others.isEmpty {
                     Button { showPick = true } label: { Label("Add Admin", systemImage: "person.badge.plus") }
                 }
@@ -735,6 +742,10 @@ struct GroupAdminsView: View {
                 Text(conv?.isChannel == true
                      ? "Admins post in the channel. The owner decides what else each admin can do. Followers never see who the admins are."
                      : "The owner decides what each admin can do. Tap an admin to see what they can do, including removing members.")
+            }
+            // A channel's admin invites not yet accepted (moved here off the info page, 2026-10-29).
+            if conv?.isChannel == true && canAddAdmins {
+                ChannelPendingAdminsSection(cid: cid, reloadTick: invitesTick)
             }
         }
         .listStyle(.insetGrouped)
@@ -750,12 +761,14 @@ struct GroupAdminsView: View {
                             photoUrl: conv?.photos[uid], source: .calls)
         }
         .sheet(isPresented: $showInvite) {
-            AddPeopleSheet(alreadyIn: Set(conv?.users ?? []), actionTitle: "Invite", linkCap: 16) { people in
+            AddPeopleSheet(alreadyIn: Set(conv?.users ?? []), actionTitle: "Add", linkCap: 16) { people in
                 let title = conv?.title ?? "Channel"
                 Task {
                     do {
                         let refused = try await ChannelAdminInvites.invite(cid: cid, title: title, people: people)
-                        ToastNotice.show(refused.isEmpty ? "Invite sent." : "Invite sent. Not sent to: " + refused.joined(separator: ", "))
+                        ToastNotice.show(refused.isEmpty ? "Sent. They become an admin when they accept."
+                                         : "Sent. Not sent to: " + refused.joined(separator: ", "))
+                        invitesTick += 1
                     } catch { ToastNotice.show(error.localizedDescription) }
                 }
             }

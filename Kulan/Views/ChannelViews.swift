@@ -473,25 +473,17 @@ struct AdminInviteSheet: View {
     }
 }
 
-/// On a channel's page, for its admins (2026-10-29): invite admins and followers, and the admin
-/// invites still waiting (tap one to revoke it).
-struct ChannelAdminInviteRows: View {
+/// The admin invites still waiting, on a channel's Administrators page (owner 2026-10-29: moved off
+/// the channel's info page, with Invite Followers / Invite Admins, which Share and Add Admin cover).
+/// Tap one to revoke it. `reloadTick` changes after an invite is sent, to show it at once.
+struct ChannelPendingAdminsSection: View {
     let cid: String
-    let title: String
-    /// What "Invite Followers" sends: the public link, or nil for a private channel.
-    let followLink: String?
-    let cardColor: Color
+    var reloadTick = 0
     @State private var pending: [ChannelAdminInvites.Pending] = []
-    @State private var pickAdmins = false
-    @State private var shareText: String?
     @State private var revoking: ChannelAdminInvites.Pending?
-    private var mayAddAdmins: Bool {
-        let me = AuthService.shared.uid ?? ""
-        return ConversationsRepository.shared.conversations.first { $0.id == cid }?.adminCan(me, .addAdmins) == true
-    }
 
     var body: some View {
-        VStack(spacing: 0) {
+        Section {
             ForEach(pending) { p in
                 HStack(spacing: 12) {
                     AvatarView(name: p.name, photoUrl: p.photoUrl, size: 40)
@@ -500,37 +492,13 @@ struct ChannelAdminInviteRows: View {
                     // What he was invited to (owner 2026-10-29: "Invited" read as "invited to follow").
                     Text("Invited as admin").foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 16).padding(.vertical, 10)
                 .contentShape(Rectangle())
                 .onTapGesture { revoking = p }
-                Divider().padding(.leading, 68)
             }
-            row("person.badge.plus", "Invite Followers") {
-                if let followLink { shareText = "Follow \u{201C}\(title)\u{201D} on Fariin: " + followLink }
-                else { Task { await shareInviteLink() } }
-            }
-            // Only the owner, or an admin the owner let add admins (the server holds to the same).
-            if mayAddAdmins {
-                Divider().padding(.leading, 56)
-                row("plus", "Invite Admins") { pickAdmins = true }
-            }
+        } header: {
+            if !pending.isEmpty { Text("Waiting to Accept") }
         }
-        .background(cardColor, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .task { await reload() }
-        .sheet(isPresented: $pickAdmins) {
-            AddPeopleSheet(alreadyIn: [], actionTitle: "Invite", linkCap: 16) { people in
-                Task {
-                    do {
-                        let refused = try await ChannelAdminInvites.invite(cid: cid, title: title, people: people)
-                        ToastNotice.show(refused.isEmpty ? "Invite sent." : "Invite sent. Not sent to: " + refused.joined(separator: ", "))
-                        await reload()
-                    } catch { ToastNotice.show(error.localizedDescription) }
-                }
-            }
-        }
-        .sheet(item: Binding(get: { shareText.map { ShareText(id: $0) } }, set: { shareText = $0?.id })) { t in
-            SendContactSheet(contactText: t.id)
-        }
+        .task(id: reloadTick) { await reload() }
         .alert("Revoke admin invite for \(revoking?.name ?? "")?",
                isPresented: Binding(get: { revoking != nil }, set: { if !$0 { revoking = nil } })) {
             Button("Cancel", role: .cancel) {}
@@ -546,30 +514,8 @@ struct ChannelAdminInviteRows: View {
         }
     }
 
-    private func row(_ icon: String, _ text: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                Image(systemName: icon).font(.system(size: 17)).frame(width: 26)
-                Text(text)
-                Spacer()
-            }
-            .padding(.horizontal, 16).padding(.vertical, 16)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
     private func reload() async {
         if let p = try? await ChannelAdminInvites.pending(cid: cid) { pending = p }
-    }
-
-    /// A private channel: its invite link, from the server.
-    private func shareInviteLink() async {
-        guard let code = await ChannelInviteLink.code(cid) else {
-            ToastNotice.show("Couldn't get the channel's link. Check your connection and try again.")
-            return
-        }
-        shareText = "Follow \u{201C}\(title)\u{201D} on Fariin: " + KulanApp.groupLink(code: code)
     }
 }
 

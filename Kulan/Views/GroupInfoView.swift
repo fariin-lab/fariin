@@ -165,8 +165,6 @@ struct GroupInfoView: View {
     @State private var unfollowing = false
     @State private var following = false   // a Follow from this page on its way
     @State private var confirmChannelReport = false
-    @State private var showFollowers = false
-    @State private var showScheduled = false
     @State private var confirmUnfollow = false
     private var pageBackground: Color { Color(uiColor: .systemGroupedBackground) }
     /// The group's photo, only when there is a real one: it decides the big header and the colour.
@@ -976,23 +974,9 @@ struct GroupInfoView: View {
     /// owner. Red words and red icons, the rows the rest of the page uses.
     private var exitCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // A channel's admins see who follows it (2026-10-28); nobody else does.
-            if isChannel, iAmAdmin || iAmOwner {
-                // Invite admins and followers, and the admin invites still waiting (2026-10-29).
-                ChannelAdminInviteRows(cid: cid, title: conv?.title ?? "Channel",
-                                       followLink: (conv?.publicName ?? "").isEmpty ? nil : "https://fariin.com/" + (conv?.publicName ?? ""),
-                                       cardColor: cardColor)
-                VStack(spacing: 0) {
-                    ProfileInfoRow(title: "Followers", icon: "person.2", value: "\(conv?.followerCount ?? 0)") { showFollowers = true }
-                    rowDivider
-                    ProfileInfoRow(title: "Scheduled Posts", icon: "calendar.badge.clock") { showScheduled = true }
-                }
-                .profileSurface(plain: cardColor)
-                .navigationDestination(isPresented: $showFollowers) {
-                    ChannelFollowersView(cid: cid, count: conv?.followerCount ?? 0)
-                }
-                .navigationDestination(isPresented: $showScheduled) { ScheduledPostsView(cid: cid) }
-            }
+            // ⛔ NO ADMIN CARDS HERE (owner 2026-10-29, crossed out): pending admin invites live on
+            // Administrators, Followers and Scheduled Posts in Channel Settings, invites via Share
+            // and Add Admin.
             if isFollowerHere {
                 // A channel I follow (2026-10-28): Leave Channel unfollows; Follow if I am not.
                 VStack(spacing: 0) {
