@@ -1364,12 +1364,22 @@ struct ThreadView: View {
             } else if searchActive {
                 searchNavBar.transition(.opacity)
             } else if let conv = conversation, conv.isChannel, !conv.users.contains(me), !groupModHidesChat {
-                // A channel I follow (or could): Mute / Follow where the composer goes (2026-10-28).
-                ChannelFollowerBar(conv: conv).transition(.opacity)
-                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
-                        let h = UIScreen.main.bounds.height
-                        if top > 0, top < h { composerLift = h - top }
-                    }
+                if ChannelFollows.shared.follows(conv.id) {
+                    // Following: nothing at the bottom, the posts get the whole screen. Mute is the
+                    // bell at the top (owner 2026-10-29, "keep the screen clear").
+                    Color.clear.frame(height: 0)
+                        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
+                            let h = UIScreen.main.bounds.height
+                            if top > 0, top <= h { composerLift = h - top }
+                        }
+                } else {
+                    // Not following yet: Follow where the composer goes (2026-10-28).
+                    ChannelFollowerBar(conv: conv).transition(.opacity)
+                        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
+                            let h = UIScreen.main.bounds.height
+                            if top > 0, top < h { composerLift = h - top }
+                        }
+                }
             } else if notAMember {
                 // A public group I left can be joined again from here (owner 2026-10-25).
                 if conversation?.isPublic == true, !(conversation?.bannedUids.contains(me) ?? false) {
@@ -5671,6 +5681,20 @@ struct ThreadView: View {
             return .selection(deleteAll: { showDeleteAllConfirm = true },
                               deleteEnabled: true,
                               cancel: { exitSelection() })
+        }
+        // A channel I follow: its bell, top right (owner 2026-10-29), instead of a Mute bar below.
+        if let conv = conversation, conv.isChannel, !conv.users.contains(me), ChannelFollows.shared.follows(conv.id) {
+            let muted = ChannelFollows.shared.entry(conv.id)?.muted ?? false
+            let id = conv.id
+            return .custom([ChatNavigationItem.BarButton(
+                id: "chbell",
+                image: muted ? "ic_bell_off_outline" : "ic_bell_outline",
+                accessibilityLabel: muted ? "Unmute channel" : "Mute channel",
+                action: {
+                    Haptics.impact(.light)
+                    ChannelService.setMuted(cid: id, !muted)
+                    ToastNotice.show(muted ? "Notifications on for this channel" : "Channel muted")
+                })])
         }
         let state = CallService.shared.state
         let callsEnabled = state == .idle || state == .ended   // their `currentCall == nil`

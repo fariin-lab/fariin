@@ -764,8 +764,10 @@ struct ChannelReactionsSettingsView: View {
     @State private var loaded = false
     @State private var saving = false
     @State private var problem: String?
+    @State private var pickAny = false
 
     /// What an owner picks from: a wide set, so "only these" can fit any channel.
+    /// Any other emoji comes in through the "+" (the full picker) and joins the grid.
     static let palette = ["👍", "❤️", "🔥", "😂", "😮", "😢", "🙏", "👏", "🎉", "💯", "🤔", "😍",
                           "👎", "😡", "🤝", "💪", "✅", "⭐️", "🌙", "☀️", "⚽️", "📌", "💡", "🙌"]
 
@@ -781,7 +783,7 @@ struct ChannelReactionsSettingsView: View {
             if mode == "some" {
                 Section {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 12) {
-                        ForEach(Self.palette, id: \.self) { e in
+                        ForEach(Self.palette + list.filter { !Self.palette.contains($0) }, id: \.self) { e in
                             let on = list.contains(e)
                             Button { toggle(e) } label: {
                                 Text(e).font(.system(size: 28))
@@ -792,6 +794,15 @@ struct ChannelReactionsSettingsView: View {
                             .buttonStyle(.plain)
                             .opacity(!on && list.count >= 6 ? 0.35 : 1)
                         }
+                        // Any emoji at all (2026-10-29): the full picker.
+                        Button { pickAny = true } label: {
+                            Image(systemName: "plus").font(.system(size: 18, weight: .semibold))
+                                .frame(width: 46, height: 46)
+                                .background(Circle().fill(Color(.tertiarySystemFill)))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(list.count >= 6)
+                        .accessibilityLabel("Choose any emoji")
                     }
                     .padding(.vertical, 6)
                 } header: {
@@ -805,6 +816,12 @@ struct ChannelReactionsSettingsView: View {
         .navigationTitle("Reactions")
         .navigationBarTitleDisplayMode(.inline)
         .disabled(saving)
+        .sheet(isPresented: $pickAny) {
+            EmojiMorePicker(title: "Choose Emoji") { e in
+                pickAny = false
+                if !list.contains(e) { toggle(e) }
+            }
+        }
         .onAppear {
             guard !loaded, let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) else { return }
             mode = c.reactMode
