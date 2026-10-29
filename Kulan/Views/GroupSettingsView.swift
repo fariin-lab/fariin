@@ -256,7 +256,8 @@ struct GroupSettingsView: View {
                 .foregroundStyle(.primary)
             }
             // ⛔ CHAT HISTORY FOR NEW MEMBERS (owner 2026-10-20): Visible or Hidden. Change-info admins.
-            if canEdit {
+            // Not in a channel: its posts are what a follower comes for (2026-10-29).
+            if canEdit, conv?.isChannel != true {
                 NavigationLink {
                     ChatHistoryForNewMembersPage(cid: cid, hidden: (conv?.hideHistoryAt ?? 0) > 0)
                 } label: {
@@ -283,7 +284,7 @@ struct GroupSettingsView: View {
                 // Private / Public and the public link name live on the Group Type page.
                 if canEdit {
                     NavigationLink { GroupTypeView(cid: cid) } label: {
-                        valueRow("ic_gs_group_type", "Group Type", isPublicNow ? "Public" : "Private")
+                        valueRow("ic_gs_group_type", conv?.isChannel == true ? "Channel Type" : "Group Type", isPublicNow ? "Public" : "Private")
                     }
                 }
                 if can(.inviteUsers) {   // public groups have invite links too (owner 2026-10-20)
@@ -296,7 +297,7 @@ struct GroupSettingsView: View {
                 }
                 if can(.inviteUsers) {
                     NavigationLink { GroupRequestsView(cid: cid) } label: {
-                        valueRow("ic_gs_join_requests", "Join Requests",
+                        valueRow("ic_gs_join_requests", conv?.isChannel == true ? "Follow Requests" : "Join Requests",
                                  joinReqs.isEmpty ? "None" : "\(joinReqs.count)")
                     }
                 }
@@ -1327,7 +1328,7 @@ struct GroupRequestsView: View {
         // Requests only (owner 2026-10-20): the invite links have their own page and card.
         List { requestsSections }
         .listStyle(.insetGrouped)
-        .navigationTitle("Join Requests")
+        .navigationTitle(Conversation.Right.isChannel(cid) ? "Follow Requests" : "Join Requests")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             guard reqListener == nil else { return }
