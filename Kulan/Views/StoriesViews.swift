@@ -4791,7 +4791,13 @@ struct StoryViewer: View {
         let audienceFor: (String) -> (title: String, bothTabs: Bool) = { id in
             guard let s = arr.first(where: { $0.id == id }) else { return ("All Viewers", true) }
             // A group story's second tab is Replies: none when its replies are off (owner 2026-10-27).
-            if s.groupId != nil { return ("All Viewers", s.allowsReplies) }
+            // ⛔ NEVER ON A CHANNEL'S STORY (owner 2026-10-29: "a channel has no replies, remove that
+            // tab"): followers cannot reply to it (`ChannelStoryFooter`), so the tab could only ever be
+            // empty, whatever the story's own replies switch says.
+            if let gid = s.groupId {
+                let channel = Conversation.Right.isChannel(gid) || ChannelFollows.shared.follows(gid)
+                return ("All Viewers", s.allowsReplies && !channel)
+            }
             return (storyAudienceTitle(for: s), storyAudienceHasBothTabs(s))
         }
         // Group story (owner 2026-10-23): Views and Replies tabs. Typed out for the same reason.
