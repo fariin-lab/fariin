@@ -592,3 +592,93 @@ struct ChannelPrivacySheet: View {
         }
     }
 }
+
+/// The top of a channel for its owner and admins (owner 2026-10-29): the channel, how many follow
+/// it, and the two things that grow it, Share and Edit. Followers never see this card.
+struct ChannelAdminCard: View {
+    let conv: Conversation
+    let me: String
+
+    @State private var showEdit = false
+    @State private var shareText: String?
+
+    private var canEdit: Bool { conv.adminCan(me, .changeInfo) }
+    private var startedLine: String {
+        conv.createdBy == me ? "You created this channel" : "You're an admin of this channel"
+    }
+    private var followersLine: String {
+        conv.followerCount == 1 ? "1 follower" : "\(conv.followerCount) followers"
+    }
+
+    var body: some View {
+        VStack(spacing: 14) {
+            VStack(spacing: 10) {
+                Button { if canEdit { showEdit = true } } label: {
+                    AvatarView(name: conv.title, photoUrl: conv.avatarUrl, size: 92)
+                        .overlay(alignment: .bottomTrailing) {
+                            if canEdit && (conv.avatarUrl ?? "").isEmpty {
+                                Image("ic_group_camera").renderingMode(.template).resizable().scaledToFit()
+                                    .frame(width: 16, height: 16).foregroundStyle(.primary)
+                                    .frame(width: 32, height: 32)
+                                    .liquidGlass(Circle())
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+                .allowsHitTesting(canEdit)
+                .accessibilityLabel(canEdit ? "Edit Channel" : conv.title)
+
+                VStack(spacing: 3) {
+                    Text(conv.title).font(.title3.weight(.semibold)).lineLimit(2)
+                        .multilineTextAlignment(.center)
+                    Text("\(startedLine) · \(followersLine)")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            if conv.followerCount == 0 {
+                Text("Share your channel so people can follow it.")
+                    .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+            HStack(spacing: 0) {
+                circle("square.and.arrow.up", "Share") { Task { await share() } }
+                if canEdit {
+                    circle("pencil", conv.groupDescription.isEmpty ? "Description" : "Edit") { showEdit = true }
+                }
+            }
+        }
+        .padding(.horizontal, 18).padding(.vertical, 24)
+        .frame(maxWidth: 340)
+        .liquidGlass(RoundedRectangle(cornerRadius: 36, style: .continuous))
+        .padding(.horizontal, 20)
+        .sheet(isPresented: $showEdit) {
+            EditGroupView(cid: conv.id, title: conv.title, photoUrl: conv.avatarUrl,
+                          description: conv.groupDescription)
+        }
+        .sheet(item: Binding(get: { shareText.map { ShareText(id: $0) } }, set: { shareText = $0?.id })) { t in
+            SendContactSheet(contactText: t.id)
+        }
+    }
+
+    private func circle(_ icon: String, _ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            PosterActionIcon(icon: icon, diameter: 56, onPhoto: false, label: title)
+        }
+        .tint(.primary)
+        .accessibilityLabel(title)
+    }
+
+    /// The public link, else the private channel's invite link.
+    private func share() async {
+        let link: String
+        if conv.isPublic, !conv.publicName.isEmpty {
+            link = "https://fariin.com/" + conv.publicName
+        } else if let code = try? await GroupInviteService.shareCode(cid: conv.id) {
+            link = KulanApp.groupLink(code: code)
+        } else {
+            ToastNotice.show("This channel has no invite link. Turn one on in Channel Type.")
+            return
+        }
+        shareText = "Follow \u{201C}\(conv.title)\u{201D} on Fariin: " + link
+    }
+}

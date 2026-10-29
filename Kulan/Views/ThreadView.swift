@@ -1167,6 +1167,15 @@ struct ThreadView: View {
         // A channel opens with its privacy notice at the top, for everyone (owner 2026-10-29).
         if let conv = conversation, conv.isChannel, repo.didInitialLoad, !preview,
            !repo.canLoadOlder || repo.cacheLooksWhole {
+            // Its owner and admins also get the channel's card: share it, edit it (owner 2026-10-29).
+            if conv.admins.contains(me) || conv.isOwner(me) {
+                let key = ["chadm", conv.title, conv.avatarUrl ?? "", conv.groupDescription, "\(conv.followerCount)",
+                           conv.publicName, "\(conv.isPublic)", "\(dark)"].joined(separator: "|")
+                return (AnyView(VStack(spacing: 14) {
+                    ChannelPrivacyNotice()
+                    ChannelAdminCard(conv: conv, me: me)
+                }.padding(.vertical, 14)), key)
+            }
             return (AnyView(ChannelPrivacyNotice().padding(.vertical, 14)), "chpriv|\(dark)")
         }
         // `cacheLooksWhole` (owner 2026-10-28): from the saved copy, before the server has answered.
@@ -1183,7 +1192,7 @@ struct ThreadView: View {
         // even system lines the card is a row above them (`groupHistoryCard`), because centred over
         // the list it covered them (owner 2026-10-26, "badges text is going under the card").
         if repo.didInitialLoad, isGroup, !notAMember, !preview, let conv = conversation,
-           repo.items.isEmpty {
+           repo.items.isEmpty, !conv.isChannel {
             GroupWelcomeCard(conv: conv, me: me, dark: dark)
         } else if repo.didInitialLoad, repo.items.isEmpty, !notAMember, !isGroup {
             // Groups are NOT end-to-end encrypted (owner 2026-10-19 / 2026-10-23), so a group never
