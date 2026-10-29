@@ -795,6 +795,12 @@ service cloud.firestore {
 
       // 2026-10-20 (owner): groups I blocked (Block Group). Read by the server only, when someone
       // adds me back (onGroupMembersAdded); mine to write and remove.
+      // A channel admin's own "post without sound" (2026-10-28); onNewMessage reads it.
+      match /channelPrefs/{c} {
+        allow read, delete: if signedIn() && request.auth.uid == uid;
+        allow create, update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['silent']) && request.resource.data.silent is bool;
+      }
       // Channels I follow (2026-10-28), written by functions-groups followChannel only.
       match /channels/{c} {
         allow read: if signedIn() && request.auth.uid == uid;

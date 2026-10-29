@@ -9360,6 +9360,13 @@ struct ThreadView: View {
         s.textOnly = requestStance == .firstMessage
         // Stickers off in this group (owner 2026-10-20): no sticker button, nothing else moves.
         s.stickersOff = heldBackText(.sendStickers, .stickers) != nil
+        // A channel I post in: the bell, with sound or silent (2026-10-28).
+        if conversation?.isChannel == true && conversation?.users.contains(me) == true {
+            ChannelPosting.shared.load(cid)   // once per launch; the answer lands a moment later
+            s.channelSilent = ChannelPosting.shared.isSilent(cid)
+        } else {
+            s.channelSilent = nil
+        }
         s.banners = composerBanners
         // The bar is shown the REVEALED hold, not the raw touch-down — see `holdRevealed`.
         s.holdStarted = holdStarted && holdRevealed
@@ -9549,6 +9556,13 @@ struct ThreadView: View {
         a.sendRecording = { sendRecording() }
         a.togglePreview = { togglePreview() }
         a.pauseOrResumeRecording = { if reviewingNote { resumeRecording() } else { beginPreview() } }
+        a.toggleChannelSilent = {
+            let on = !ChannelPosting.shared.isSilent(cid)
+            ChannelPosting.shared.setSilent(cid, on)
+            Haptics.impact(.light)
+            ToastNotice.show(on ? "Followers will get your posts without sound."
+                                : "Followers will get your posts with sound.")
+        }
         a.seekPreview = { seekPreview($0) }
         a.toggleVoiceOnce = {
             // ONE-TIME LISTEN — arming it flashes the little confirmation over the bar.

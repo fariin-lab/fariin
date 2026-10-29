@@ -258,3 +258,39 @@ final class ChannelViewQueue {
         }
     }
 }
+
+/// A channel admin's "post without sound" (2026-10-28), the reference app's bell in the broadcast
+/// field: on until switched off, per channel, mine only (users/{me}/channelPrefs/{cid}). The server
+/// reads it for each post (onNewMessage) and sends the followers' banner without sound.
+@Observable
+final class ChannelPosting {
+    static let shared = ChannelPosting()
+    private(set) var silent: [String: Bool] = [:]
+    @ObservationIgnored private var loaded = Set<String>()
+
+    func isSilent(_ cid: String) -> Bool { silent[cid] ?? false }
+
+    /// Read once per channel per launch, when its chat opens.
+    func load(_ cid: String) {
+        guard let uid = Auth.auth().currentUser?.uid, loaded.insert(cid).inserted else { return }
+        FirestoreHub.db.collection("users").document(uid).collection("channelPrefs").document(cid)
+            .getDocument { [weak self] snap, _ in
+                guard let self, let on = snap?.data()?["silent"] as? Bool else { return }
+                DispatchQueue.main.async { self.silent[cid] = on }
+            }
+    }
+
+    func setSilent(_ cid: String, _ on: Bool) {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        silent[cid] = on
+        FirestoreHub.db.collection("users").document(uid).collection("channelPrefs").document(cid)
+            .setData(["silent": on]) { [weak self] err in
+                guard let err else { return }
+                print("[channel] silent not saved:", err.localizedDescription)
+                DispatchQueue.main.async {
+                    self?.silent[cid] = !on
+                    ToastNotice.show("Couldn't change that. Try again.")
+                }
+            }
+    }
+}

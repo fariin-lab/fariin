@@ -164,10 +164,15 @@ final class ChatComposerView: UIView {
     private let gifButton = IconButton(image: UIImage(named: "ic_gif"), size: CGSize(width: 24, height: 24))
     /// Stickers are off for me here: the sticker slot is empty and the camera takes it.
     private var stickerSlotEmpty = false
+    /// The channel bell is in the field (a channel admin), so the text leaves it a slot.
+    private var bellSlot = false
     /// ⛔ THE CAMERA LIVES IN THE FIELD — owner 2026-10-15: "remove Camera from the attach sheet,
     /// show the camera in the input bar". Beside the GIF, the same dimmed ink, shown when the GIF is.
     /// His own camera drawing (owner 2026-10-15, SVG), drawn like the GIF icon beside it.
     private let cameraButton = IconButton(image: UIImage(named: "ic_camera_field"), size: CGSize(width: 24, height: 24))
+    /// A channel admin's bell (2026-10-28, the reference app's broadcast field): posts with sound,
+    /// or silent. Beside the camera, the same dimmed ink, shown when the field icons are.
+    private let bellButton = IconButton(image: UIImage(systemName: "bell"), size: CGSize(width: 24, height: 24))
     private let micButton = AccessibleActivationView()
     /// Drag on the bar grows / shrinks the sticker panel while it is up (see `barPanShouldBegin`).
     private let stickerBarPan = UIPanGestureRecognizer()
@@ -455,6 +460,10 @@ final class ChatComposerView: UIView {
         fieldRow.addSubview(textView)
         fieldRow.addSubview(gifButton)
         fieldRow.addSubview(cameraButton)
+        fieldRow.addSubview(bellButton)
+        bellButton.icon.tintColor = UIColor.label.withAlphaComponent(0.55)
+        bellButton.alpha = 0
+        bellButton.addAction(UIAction { [weak self] _ in self?.actions.toggleChannelSilent() }, for: .touchUpInside)
         // ⛔ THE GLYPH IS IN THE GLASS, THE TOUCH IS NOT — his screenshot, 2026-08-27: "the recording
         // icon is not part of the composer, but the GIF icon is." He is reading it exactly right. The
         // mic was a bare sibling drawn OVER the pill, so it never sat on the pill's material: the
@@ -1066,6 +1075,13 @@ final class ChatComposerView: UIView {
         if stickerSlotEmpty != s.stickersOff { stickerSlotEmpty = s.stickersOff; setNeedsLayout() }
         // Gone while the sticker panel is up (owner 2026-10-18), back when it closes.
         cameraButton.alpha = stickerPanelUp ? 0 : fieldIcons
+        // The channel bell (2026-10-28): only for an admin writing in a channel.
+        let bellShown = s.channelSilent != nil
+        bellButton.alpha = (bellShown && !stickerPanelUp) ? fieldIcons : 0
+        bellButton.isUserInteractionEnabled = bellShown
+        bellButton.icon.image = UIImage(systemName: s.channelSilent == true ? "bell.slash" : "bell")
+        bellButton.accessibilityLabel = s.channelSilent == true ? "Posting without sound" : "Posting with sound"
+        if bellSlot != bellShown { bellSlot = bellShown; setNeedsLayout() }
         // The mic sits ABOVE the pill now, so it must go when the locked strip takes the pill (the "1"
         // lives in its slot then). While a finger holds it only the glyph fades — the view stays, so
         // the gesture keeps tracking; a lock ends the gesture, and then the whole button can leave.
@@ -1330,6 +1346,7 @@ final class ChatComposerView: UIView {
                       // ONE button inside the pill now, not two: the GIF. The mic left.
                       // Two now: the camera beside the GIF (2026-10-15).
                       : pillWidth - M.micTrailing - M.button - M.fieldIconPitch - M.inPillSpacing
+                        - (bellSlot ? M.fieldIconPitch : 0)   // the channel bell (2026-10-28)
     }
 
     private var maxTextHeight: CGFloat {
@@ -1418,6 +1435,8 @@ final class ChatComposerView: UIView {
                                  width: M.button, height: M.button)
         cameraButton.frame = CGRect(x: stickerSlotEmpty ? gifButton.frame.minX : gifButton.frame.minX - M.fieldIconPitch,
                                     y: fh - M.button, width: M.button, height: M.button)
+        bellButton.frame = CGRect(x: cameraButton.frame.minX - M.fieldIconPitch,
+                                  y: fh - M.button, width: M.button, height: M.button)
         textView.frame = CGRect(x: 0, y: 0, width: max(0, tw), height: fh)
         let fit = ceil(textView.sizeThatFits(CGSize(width: max(1, tw), height: .greatestFiniteMagnitude)).height)
         // ⛔ A PASTE PAST THE LAST LINE — owner 2026-10-15: pasting a long link, the text ran off the
