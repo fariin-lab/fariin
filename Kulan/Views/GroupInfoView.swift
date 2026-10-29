@@ -52,6 +52,7 @@ struct GroupInfoView: View {
     @State private var confirmClear = false
     @State private var confirmReport = false
     @State private var confirmDelete = false
+    @State private var showChannelDelete = false
     /// A refused Leave / Delete Group. Both used to close the page on `try?` whatever happened.
     @State private var actionError: String?
     /// The members in page order, re-sorted only when `membersKey` changes (see `memberIds`).
@@ -289,6 +290,10 @@ struct GroupInfoView: View {
                                      confirmReport: $confirmReport, confirmDelete: $confirmDelete,
                                      actionError: $actionError, onGone: { dismiss() },
                                      onReported: { flashNotice("Thanks for reporting. We'll take a look.") }))
+            .sheet(isPresented: $showChannelDelete) {
+                DeleteChannelSheet(cid: cid, title: conv?.title ?? "Channel", photoUrl: conv?.avatarUrl,
+                                   followers: conv?.followerCount ?? 0) { dismiss() }
+            }
             // A full page, pushed (owner 2026-10-18), not a half sheet.
             .sheet(item: Binding(get: { shareGroupText.map { ShareText(id: $0) } },
                                  set: { shareGroupText = $0?.id })) { t in
@@ -1027,7 +1032,10 @@ struct GroupInfoView: View {
                         rowDivider
                     }
                     // Only the owner can permanently delete the whole group (for everyone).
-                    ProfileInfoRow(title: isChannel ? "Delete Channel" : "Delete Group", icon: "trash", tint: Self.exitRed, chevron: false) { confirmDelete = true }
+                    ProfileInfoRow(title: isChannel ? "Delete Channel" : "Delete Group", icon: "trash", tint: Self.exitRed, chevron: false) {
+                        // A channel: its own page with the password (owner 2026-10-29).
+                        if isChannel { showChannelDelete = true } else { confirmDelete = true }
+                    }
                 }
                 .profileSurface(plain: cardColor)
                 .padding(.top, 10)

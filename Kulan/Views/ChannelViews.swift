@@ -866,3 +866,140 @@ struct ChannelReactionsSettingsView: View {
         }
     }
 }
+
+/// DELETE CHANNEL (owner 2026-10-29): a page, not a one-tap alert. What happens, in three lines, and
+/// then my password, as Transfer Ownership asks it: someone holding my unlocked phone cannot wipe my
+/// channel. An account with no password (signed up another way) types the channel's name instead.
+struct DeleteChannelSheet: View {
+    let cid: String
+    let title: String
+    let photoUrl: String?
+    let followers: Int
+    let onDeleted: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var password = ""
+    @State private var typedName = ""
+    @State private var busy = false
+    @State private var problem: String?
+    @FocusState private var focused: Bool
+
+    private var hasPassword: Bool { AuthService.shared.passwordAddress != nil }
+    private var ready: Bool {
+        hasPassword ? !password.isEmpty
+            : typedName.trimmingCharacters(in: .whitespaces).caseInsensitiveCompare(title.trimmingCharacters(in: .whitespaces)) == .orderedSame
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 22) {
+                    AvatarView(name: title, photoUrl: photoUrl, size: 84)
+                        .padding(.top, 8)
+                    Text("Delete \u{201C}\(title)\u{201D}?")
+                        .font(.title2.bold()).multilineTextAlignment(.center)
+                    VStack(alignment: .leading, spacing: 16) {
+                        point("trash", "Gone for everyone",
+                              "Every post, its photos and videos, and its link are deleted from Fariin.")
+                        point("person.2.slash", followers == 1 ? "Your follower loses it" : "Your \(followers) followers lose it",
+                              "It disappears from their chats.")
+                        point("arrow.uturn.backward.circle", "There is no undo",
+                              "A deleted channel cannot be brought back.")
+                    }
+                    .padding(18)
+                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(hasPassword ? "Enter your password to delete it" : "Type the channel's name to delete it")
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                            .padding(.leading, 4)
+                        Group {
+                            if hasPassword {
+                                SecureField("Password", text: $password).textContentType(.password)
+                            } else {
+                                TextField(title, text: $typedName).autocorrectionDisabled().textInputAutocapitalization(.never)
+                            }
+                        }
+                        .focused($focused)
+                        .submitLabel(.done)
+                        .onSubmit { if ready { delete() } }
+                        .padding(.horizontal, 16).frame(height: 52)
+                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        if let problem {
+                            Text(problem).font(.footnote).foregroundStyle(.red).padding(.leading, 4)
+                        }
+                    }
+
+                    Button { delete() } label: {
+                        ZStack {
+                            Text("Delete Channel").fontWeight(.semibold).opacity(busy ? 0 : 1)
+                            if busy { CreatingRing(label: "Deleting channel") }
+                        }
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).frame(height: 52)
+                        .background(Capsule().fill(Color.red.opacity(ready ? 1 : 0.4)))
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!ready || busy)
+                }
+                .padding(.horizontal, 20).padding(.bottom, 24)
+            }
+            .background(Color(.systemGroupedBackground).ignoresSafeArea())
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("Close")
+                        .disabled(busy)
+                }
+            }
+        }
+        .interactiveDismissDisabled(busy)
+        .task {
+            try? await Task.sleep(for: .milliseconds(450))
+            focused = true
+        }
+    }
+
+    private func point(_ icon: String, _ head: String, _ line: String) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: icon).font(.system(size: 19)).frame(width: 26).foregroundStyle(.red)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(head).font(.body.weight(.semibold))
+                Text(line).font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func delete() {
+        guard ready, !busy else { return }
+        busy = true; problem = nil
+        let typed = password
+        password = ""
+        let cid = cid
+        Task {
+            if hasPassword {
+                do { try await AuthService.shared.reauthPassword(typed) }
+                catch {
+                    let words = AuthService.plainMessage(error, credentialHint: "That password is not right.")
+                        ?? "Could not check that. Try again."
+                    await MainActor.run { busy = false; problem = words }
+                    return
+                }
+            }
+            do {
+                try await GroupInviteService.deleteGroup(cid: cid)
+                await MainActor.run {
+                    busy = false
+                    LeaveGroupUndo.shared.closeChat(cid)
+                    ToastNotice.show("Channel deleted")
+                    dismiss()
+                    onDeleted()
+                }
+            } catch {
+                let words = error.localizedDescription
+                await MainActor.run { busy = false; problem = words }
+            }
+        }
+    }
+}
