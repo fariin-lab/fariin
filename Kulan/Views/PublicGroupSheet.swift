@@ -567,7 +567,10 @@ struct PublicGroupHitRow: View {
                     Text(hit.title).font(.headline).foregroundStyle(.primary).lineLimit(1)
                     GroupVerifiedMark(on: hit.verified || badgeFromChats, size: 14)
                 }
-                Text(hit.subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                // The @name in our blue, it is the link; the count stays grey (owner 2026-10-29).
+                (Text("@" + hit.handle).foregroundStyle(Color(hex: 0x2392FE))
+                 + Text(String(hit.subtitle.dropFirst(hit.handle.count + 1))).foregroundStyle(.secondary))
+                    .font(.subheadline).lineLimit(1)
             }
             Spacer(minLength: 0)
         }
