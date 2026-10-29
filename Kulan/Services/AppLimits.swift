@@ -218,7 +218,7 @@ final class AppLimits {
 
     /// Smallest channel whose owner/admins see Statistics (owner 2026-10-29), counted in followers,
     /// panel `channel_stats_min_followers`. The server's `groupStats` holds the same key and fallback.
-    var channelStatsMinFollowers: Int { number("channel_stats_min_followers", 50) }
+    var channelStatsMinFollowers: Int { number("channel_stats_min_followers", 100) }
 
     /// GROUP STORIES NEED A REAL GROUP (owner 2026-10-23): at least this many members, app admins
     /// excepted. Panel row "Members a group needs for stories"; firestore.rules `groupPoster` reads the
