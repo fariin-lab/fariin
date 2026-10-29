@@ -30,9 +30,14 @@ enum PollService {
             .collection("messages").document(messageId).updateData(["pollClosed": true])
     }
 
+    /// The placeholder voters a channel poll is drawn with (`listenChannel`): never a real uid, so
+    /// no screen can name them.
+    static let anonPrefix = "~voter:"
+
     /// Live map of uid → chosen option indices. Shared per poll (PollVotesHub); call on the main thread.
     static func listen(cid: String, messageId: String, _ cb: @escaping ([String: [Int]]) -> Void) -> ListenerRegistration {
-        PollVotesHub.shared.subscribe(key: "\(cid)|\(messageId)", cb) {
+        if Conversation.Right.isChannel(cid) { return listenChannel(cid: cid, messageId: messageId, cb) }
+        return PollVotesHub.shared.subscribe(key: "\(cid)|\(messageId)", cb) {
             votesRef(cid, messageId).addSnapshotListener { snap, _ in
                 var out: [String: [Int]] = [:]
                 for d in snap?.documents ?? [] {
@@ -43,6 +48,62 @@ enum PollService {
             }
         }
     }
+
+    /// ⛔ A CHANNEL'S POLL (owner 2026-10-29 audit, S4): followers never read each other's votes. The
+    /// rules let me read only my own vote; the server keeps `pollCounts` {option index: voters} and
+    /// `pollVoters` on the post. The screens count from a uid map, so the same map is built here:
+    /// my own vote under my uid, and the rest as placeholder voters (`anonPrefix`) carrying exactly
+    /// the server's numbers. My vote is taken out of the server's numbers first, so it is never
+    /// counted twice; until the server has counted a new vote the total can be one short for a moment.
+    private static func listenChannel(cid: String, messageId: String,
+                                      _ cb: @escaping ([String: [Int]]) -> Void) -> ListenerRegistration {
+        let key = "\(cid)|\(messageId)"
+        return PollVotesHub.shared.subscribe(key: key, cb) {
+            let msgRef = db.collection("conversations").document(cid).collection("messages").document(messageId)
+            var counts: [Int: Int] = [:], voters = 0, mine: [Int] = []
+            let emit = {
+                var c = counts, v = voters
+                if !mine.isEmpty {
+                    for i in mine { c[i] = max(0, (c[i] ?? 0) - 1) }
+                    v = max(0, v - 1)
+                }
+                // Placeholder voter k holds option i when k < its count, so each option's count and
+                // the number of voters both come out as the server's.
+                var out: [String: [Int]] = [:]
+                let top = max(v, c.values.max() ?? 0)
+                for k in 0..<top {
+                    let picks = c.filter { k < $0.value }.map(\.key).sorted()
+                    if !picks.isEmpty { out[anonPrefix + String(k)] = picks }
+                }
+                if !mine.isEmpty, !me.isEmpty { out[me] = mine }
+                PollVotesHub.shared.deliver(key: key, out)
+            }
+            let postReg = msgRef.addSnapshotListener { snap, _ in
+                let d = snap?.data() ?? [:]
+                var next: [Int: Int] = [:]
+                for (k, val) in (d["pollCounts"] as? [String: Any]) ?? [:] {
+                    if let i = Int(k), let n = (val as? NSNumber)?.intValue, n > 0 { next[i] = n }
+                }
+                counts = next
+                voters = (d["pollVoters"] as? NSNumber)?.intValue ?? 0
+                emit()
+            }
+            guard !me.isEmpty else { return postReg }
+            let mineReg = votesRef(cid, messageId).document(me).addSnapshotListener { snap, _ in
+                let raw = snap?.data()?["options"]
+                mine = (raw as? [Int]) ?? ((raw as? [NSNumber])?.map(\.intValue) ?? [])
+                emit()
+            }
+            return PollCompositeRegistration([postReg, mineReg])
+        }
+    }
+}
+
+/// Two listeners handed out as one (a channel poll's post and my own vote).
+private final class PollCompositeRegistration: NSObject, ListenerRegistration {
+    private let regs: [ListenerRegistration]
+    init(_ regs: [ListenerRegistration]) { self.regs = regs }
+    func remove() { regs.forEach { $0.remove() } }
 }
 
 /// One votes listener per poll, shared by every view showing it, and kept for a minute after the
@@ -456,7 +517,9 @@ struct PollResultsSheet: View {
                 ForEach(poll.options.indices, id: \.self) { i in
                     let who = voters(i)
                     Section {
-                        if poll.hideVoters {
+                        // A channel never names its voters (2026-10-29, S4): counts only, as an
+                        // anonymous poll; its map holds placeholders (`PollService.anonPrefix`).
+                        if poll.hideVoters || Conversation.Right.isChannel(cid) {
                             Text(who.isEmpty ? "No votes" : "\(who.count) vote\(who.count == 1 ? "" : "s")")
                                 .foregroundStyle(.secondary)
                         } else if who.isEmpty {
@@ -480,7 +543,7 @@ struct PollResultsSheet: View {
                         }
                     }
                 }
-                if poll.hideVoters {
+                if poll.hideVoters || Conversation.Right.isChannel(cid) {
                     Section { } footer: { Text("Names are hidden for this poll.") }
                 }
                 if isCreator && isOpen {

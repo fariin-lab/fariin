@@ -366,6 +366,9 @@ struct GroupStatsChannelData {
         for (i, item) in (v as? [Any] ?? []).enumerated() {
             let row = P.dict(item)
             guard let day = P.day(row["d"]) else { continue }
+            // A day from before the server started counting (`counted: false`, 2026-10-29 audit E11)
+            // is left out, so the growth line is not drawn as history it does not have.
+            if (row["counted"] as? Bool) == false { continue }
             for k in keys {
                 out.append(GroupStatsPoint(id: "\(k.name)-\(i)", date: day, series: k.name, value: P.int(row[k.key])))
             }
