@@ -21,6 +21,7 @@ struct NewChatView: View {
     @State private var error: String?
     @State private var showNewGroup = false
     @State private var showNewChannel = false
+    @State private var showDiscover = false
     @State private var showNewContact = false
     /// @handles for the people in the list, read from Firestore's ON-DISK cache only.
     ///
@@ -96,6 +97,8 @@ struct NewChatView: View {
                                 Button { showNewGroup = true } label: { actionRow("person.2", "New group") }   // outline, like Invite (owner 2026-10-18)
                                     .tint(.primary)
                                 Button { showNewChannel = true } label: { actionRow("megaphone", "New channel") }   // 2026-10-28
+                                    .tint(.primary)
+                                Button { showDiscover = true } label: { actionRow("safari", "Find channels") }
                                     .tint(.primary)
                             }
                             // New contact and Scan QR code rows removed (owner 2026-09-30): scanning
@@ -182,6 +185,14 @@ struct NewChatView: View {
                 // Message page showed for a moment first). Dismissing this page takes the New Group
                 // sheet on top of it down with it.
                 NewGroupView { t in dismiss(); onOpen(t) }
+            }
+            .sheet(isPresented: $showDiscover) {
+                // Both sheets go down, then the channel opens in the Chats tab (as New Group does).
+                DiscoverChannelsView { cid, handle in
+                    showDiscover = false
+                    dismiss()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { GroupDirectory.open(cid: cid, name: handle) }
+                }
             }
             .sheet(isPresented: $showNewChannel) {
                 NewChannelView { t in dismiss(); onOpen(t) }

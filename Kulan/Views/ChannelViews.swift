@@ -62,3 +62,107 @@ struct ChannelFollowerBar: View {
         }
     }
 }
+
+/// FIND CHANNELS (2026-10-28): public channels, most followed first, this country's first (the
+/// reference directory's country filter). A tap opens the channel to look at before following
+/// (`GroupDirectory.open`, the public group page's way); Follow follows from the list.
+struct DiscoverChannelsView: View {
+    /// Opens the channel once the sheets above it are down (the presenter closes them).
+    var onOpen: (_ cid: String, _ handle: String?) -> Void = { cid, handle in GroupDirectory.open(cid: cid, name: handle) }
+    @Environment(\.dismiss) private var dismiss
+    @State private var rows: [ChannelService.Discovered] = []
+    @State private var loading = true
+    @State private var failed = false
+    @State private var busy: Set<String> = []
+    @State private var follows = ChannelFollows.shared
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if loading && rows.isEmpty {
+                    HStack { Spacer(); ProgressView(); Spacer() }.listRowBackground(Color.clear)
+                } else if failed && rows.isEmpty {
+                    Text("Couldn't load channels. Check your connection and try again.")
+                        .foregroundStyle(.secondary).listRowBackground(Color.clear)
+                } else if rows.isEmpty {
+                    Text("No public channels yet. Create the first one!")
+                        .foregroundStyle(.secondary).listRowBackground(Color.clear)
+                } else {
+                    Section {
+                        ForEach(rows) { row($0) }
+                    } footer: {
+                        Text("Public channels anyone can follow. Only their admins post.")
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Find Channels")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
+                }
+            }
+            .refreshable { await load() }
+            .task { await load() }
+        }
+    }
+
+    private func row(_ c: ChannelService.Discovered) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                onOpen(c.cid, c.handle.isEmpty ? nil : c.handle)
+            } label: {
+                HStack(spacing: 12) {
+                    AvatarView(name: c.title, photoUrl: c.photoUrl, size: 48)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Text(c.title).font(.body.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+                            GroupVerifiedMark(on: c.verified, size: 14, label: c.label)
+                        }
+                        Text(GroupDirectory.followersLine(c.followerCount))
+                            .font(.subheadline).foregroundStyle(.secondary)
+                        if !c.description.isEmpty {
+                            Text(c.description).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            followButton(c)
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder private func followButton(_ c: ChannelService.Discovered) -> some View {
+        let mine = follows.follows(c.cid)
+            || ConversationsRepository.shared.conversations.contains { $0.id == c.cid && $0.users.contains(AuthService.shared.uid ?? "") }
+        Button {
+            guard !mine, !busy.contains(c.cid) else { return }
+            busy.insert(c.cid)
+            Task {
+                do { try await ChannelService.follow(cid: c.cid); Haptics.notify(.success) }
+                catch { ToastNotice.show(error.localizedDescription) }
+                busy.remove(c.cid)
+            }
+        } label: {
+            Text(mine ? "Following" : (busy.contains(c.cid) ? "…" : "Follow"))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(mine ? Color.secondary : Color.white)
+                .padding(.horizontal, 14).frame(height: 32)
+                .liquidGlass(Capsule(), interactive: !mine, tint: mine ? nil : Color(hex: 0x2392FE))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(mine)
+    }
+
+    private func load() async {
+        loading = true
+        do { rows = try await ChannelService.discover(); failed = false }
+        catch { failed = true }
+        loading = false
+    }
+}

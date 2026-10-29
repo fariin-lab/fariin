@@ -13,7 +13,42 @@ enum ChannelService {
 
     /// Turns the group I just created (and am alone in) into a channel.
     static func makeChannel(cid: String) async throws {
-        _ = try await fn.httpsCallable("makeChannel").call(["cid": cid])
+        var data: [String: Any] = ["cid": cid]
+        // Where Discover lists it: this phone's region (two letters), when it has one.
+        if let region = Locale.current.region?.identifier, region.count == 2 { data["country"] = region }
+        _ = try await fn.httpsCallable("makeChannel").call(data)
+    }
+
+    /// One channel on the Discover page.
+    struct Discovered: Identifiable, Equatable {
+        let cid: String
+        let handle: String
+        let title: String
+        let photoUrl: String?
+        let description: String
+        let followerCount: Int
+        let verified: Bool
+        let label: String
+        var id: String { cid }
+    }
+
+    /// Public channels, most followed first, this phone's country first (`discoverChannels`).
+    static func discover() async throws -> [Discovered] {
+        var data: [String: Any] = [:]
+        if let region = Locale.current.region?.identifier, region.count == 2 { data["country"] = region }
+        let r = try await fn.httpsCallable("discoverChannels").call(data)
+        let rows = (r.data as? [String: Any])?["channels"] as? [[String: Any]] ?? []
+        return rows.compactMap { d in
+            guard let cid = d["cid"] as? String, GroupDirectory.safeId(cid) else { return nil }
+            let photo = d["photoUrl"] as? String ?? ""
+            return Discovered(cid: cid, handle: d["handle"] as? String ?? "",
+                              title: d["title"] as? String ?? "Channel",
+                              photoUrl: photo.isEmpty ? nil : photo,
+                              description: d["description"] as? String ?? "",
+                              followerCount: (d["followerCount"] as? NSNumber)?.intValue ?? 0,
+                              verified: d["verified"] as? Bool ?? false,
+                              label: d["label"] as? String ?? "")
+        }
     }
 
     /// Follow a public channel, or a private one with its invite `code`. "following" or "already".
