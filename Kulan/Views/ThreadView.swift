@@ -1335,6 +1335,12 @@ struct ThreadView: View {
 
     /// 2026-09-24 decision D-composer-5: the reasons in `canShowComposer` that mean "you cannot send
     /// here now" (not selection, search or the key notice, which are only a moment).
+    /// `ChannelFollowerBar` is where the composer goes (the same test `bottomBarContent` makes).
+    private var channelFollowerBarShown: Bool {
+        guard let conv = conversation, conv.isChannel, !conv.users.contains(me), !groupModHidesChat else { return false }
+        return !preview && guest == nil && !selecting && !searchActive
+    }
+
     private var sendingClosed: Bool {
         notAMember || groupModBlocked || cannotSendAnnouncement || iAmMuted || repo.iBlocked
             || requestStance == .incoming || (requestStance == .awaitingReply && !keyAccepted)
@@ -5016,7 +5022,14 @@ struct ThreadView: View {
             // How far the composer stands above the keyboard and its side inset, measured where it
             // is placed. The floating overlays sit on those instead of on the bottom safe area,
             // which no longer contains the bar. See `onComposerGeometry` in the controller.
-            onComposerGeometry: { lift, side in if guest == nil { composerLift = lift }; composerSide = side },
+            // ⛔ NOT WHILE A CHANNEL'S FOLLOWER BAR STANDS THERE (owner 2026-10-29: the down arrow sat
+            // far above "You're following this channel"). The hidden composer still reports its own
+            // height and overwrote the bar's (`ChannelFollowerBar` reports its top itself), as the
+            // guest's Join bar already does.
+            onComposerGeometry: { lift, side in
+                if guest == nil && !channelFollowerBarShown { composerLift = lift }
+                composerSide = side
+            },
             onJumpButtonVisibility: { showJumpButton = $0 },
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,

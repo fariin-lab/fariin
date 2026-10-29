@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Where the composer goes for someone who is not an admin of a channel (2026-10-28). Following:
-/// a grey line, "You're following this channel" (owner 2026-10-29; mute is the bell at the top).
+/// the official chat's card, "You're following this channel" (owner 2026-10-29; mute is the bell).
 /// Not following (I unfollowed, or opened it from a link I have not used): Follow.
 struct ChannelFollowerBar: View {
     let conv: Conversation
@@ -29,23 +29,31 @@ struct ChannelFollowerBar: View {
                     .multilineTextAlignment(.center)
             }
             if following && phase == .idle {
-                // ⛔ A LINE OF TEXT, NO BUTTON (owner 2026-10-29: no Mute / Unmute at the bottom,
-                // "add text"). Mute is the bell at the top.
-                Text("You're following this channel")
-                    .font(.system(size: 15)).foregroundStyle(.secondary)
-                    .frame(height: 44)
+                // ⛔ THE OFFICIAL FARIIN CHAT'S CARD, NO BUTTON (owner 2026-10-29: no Mute / Unmute at
+                // the bottom; then "only text, add a card exactly like official Fariin"). The same
+                // glass card as `OfficialChatView.cannotReplyBar`: its font, padding and 26 pt corner,
+                // in the composer's place. Mute is the bell at the top.
+                Self.noticeCard("You're following this channel")
             } else if phase == .idle, let blocked = followBlocked {
-                Text(blocked)
-                    .font(.system(size: 15)).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 16)
-                    .frame(minHeight: 44)
+                Self.noticeCard(blocked)
             } else {
                 followButton
             }
         }
         .frame(maxWidth: .infinity)
         .systemBarChrome()
+    }
+
+    /// The official chat's bottom card, word for word in style (`OfficialChatView.cannotReplyBar`).
+    static func noticeCard(_ text: String) -> some View {
+        Text(text)
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .liquidGlass(RoundedRectangle(cornerRadius: 26, style: .continuous))
     }
 
     /// Follow (owner 2026-10-29): a long blue bar; a tap draws it in to a round button with the

@@ -550,11 +550,12 @@ enum AvatarShape {
 /// The path starts at the top centre and runs clockwise, so a `trim` of it starts at the top the way
 /// the story ring's rotated circle does.
 struct SquircleShape: InsettableShape {
-    /// ⛔ n = 6, HIS CURVE (owner 2026-10-29, a plot: "exactly use this"). Measured off it: the corner
-    /// crosses the diagonal at ~0.89 of the half-side, which is |x|⁶ + |y|⁶ = 1 (n = 4 gives 0.84,
-    /// rounder than his). At n = 6 the shape fills 0.964 of its square, so it draws at 0.90 of the
-    /// frame to keep a circle's area beside the people's photos.
-    static let exponent: CGFloat = 6
+    /// ⛔ n = 3 AT 0.90, MEASURED OFF HIS PICTURE (owner 2026-10-29, third look: "still not the real
+    /// squircle, use exactly this", a 200 px black squircle). Read pixel by pixel: the shape spans 10…189
+    /// (0.90 of the box), and a least-squares fit of |x|ⁿ + |y|ⁿ = 1 over its outline gives n = 3.05
+    /// (rms error under 1%); the corner crosses the diagonal at 0.80 of the half-side, n = 3.1. The
+    /// n = 6 before came from his earlier axis plot, which was squarer than the shape he means.
+    static let exponent: CGFloat = 3
     static let scale: CGFloat = 0.90
     var insetAmount: CGFloat = 0
     /// The photo viewer morphs the avatar's squircle into the square photo by raising these
