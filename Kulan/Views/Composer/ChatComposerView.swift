@@ -172,7 +172,9 @@ final class ChatComposerView: UIView {
     private let cameraButton = IconButton(image: UIImage(named: "ic_camera_field"), size: CGSize(width: 24, height: 24))
     /// A channel admin's bell (2026-10-28, the reference app's broadcast field): posts with sound,
     /// or silent. Beside the camera, the same dimmed ink, shown when the field icons are.
-    private let bellButton = IconButton(image: UIImage(systemName: "bell"), size: CGSize(width: 24, height: 24))
+    // His outline bell (owner 2026-10-29), the channel header's drawing, not Apple's `bell`.
+    private let bellButton = IconButton(image: UIImage(named: "ic_bell_outline")?.withRenderingMode(.alwaysTemplate),
+                                        size: CGSize(width: 24, height: 24))
     private let micButton = AccessibleActivationView()
     /// Drag on the bar grows / shrinks the sticker panel while it is up (see `barPanShouldBegin`).
     private let stickerBarPan = UIPanGestureRecognizer()
@@ -1079,7 +1081,8 @@ final class ChatComposerView: UIView {
         let bellShown = s.channelSilent != nil
         bellButton.alpha = (bellShown && !stickerPanelUp) ? fieldIcons : 0
         bellButton.isUserInteractionEnabled = bellShown
-        bellButton.icon.image = UIImage(systemName: s.channelSilent == true ? "bell.slash" : "bell")
+        bellButton.icon.image = UIImage(named: s.channelSilent == true ? "ic_bell_off_outline" : "ic_bell_outline")?
+            .withRenderingMode(.alwaysTemplate)
         bellButton.accessibilityLabel = s.channelSilent == true ? "Posting without sound" : "Posting with sound"
         if bellSlot != bellShown { bellSlot = bellShown; setNeedsLayout() }
         // Hold Post to schedule it (a channel admin with words written; 2026-10-28). A tap still

@@ -2099,12 +2099,13 @@ struct ChatsView: View {
                 || c.id == live   // ...and so does a call: ringing someone you have never texted
         }                         //   otherwise the "Active call" row has no chat to sit on
         out = out.filter { searchMatches($0) }
-        out = out.filter { (c: Conversation) -> Bool in   // Filter: 0 = All, 1 = Unread, 2 = Groups
+        out = out.filter { (c: Conversation) -> Bool in   // Filter: 0 All, 1 Unread, 2 Groups, 3 Channels
             switch chatFilter {
             // Blocked-aware, like the row badge and the tab badge (audit: a silently blocked
             // chat appeared under Unread with no badge and a zero tab count).
             case 1: return !c.isBlockedByMe(me) && c.hasUnreadMark(me)
-            case 2: return c.isGroup
+            case 2: return c.isGroup && !c.isChannel   // channels have their own filter (2026-10-29)
+            case 3: return c.isChannel
             default: return true
             }
         }
@@ -2158,6 +2159,9 @@ struct ChatsView: View {
                 if Flags.groupsEnabled {
                     // The owner's group icon, as on the New group / Group Type rows (2026-10-21).
                     Label { Text("Groups") } icon: { MenuIcon("ic_gs_group_type") }.tag(2)
+                    // Channels apart from groups (owner 2026-10-29). No drawing of his yet: the
+                    // megaphone the app already uses for a channel.
+                    Label { Text("Channels") } icon: { MenuIcon(system: "megaphone") }.tag(3)
                 }
             }
             .pickerStyle(.inline)
@@ -2899,6 +2903,9 @@ struct ChatsView: View {
                                             } description: {
                                                 Text("Groups you join will appear here.")
                                             }
+                                        } else if chatFilter == 3 {
+                                            ContentUnavailableView("No channels yet", systemImage: "megaphone",
+                                                                   description: Text("Channels you follow or run will appear here."))
                                         } else {
                                             ContentUnavailableView("No unread chats", systemImage: "checkmark.circle",
                                                                    description: Text("You're all caught up."))
