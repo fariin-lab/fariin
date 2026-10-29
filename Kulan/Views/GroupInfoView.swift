@@ -547,14 +547,17 @@ struct GroupInfoView: View {
     private var followerStorageCard: some View {
         // The group's card, row for row (owner 2026-10-29: "Sounds & Notifications exactly like
         // group"; Your Privacy removed).
-        // Sounds only while following (owner 2026-10-29 audit U2): a visitor, or someone who just
-        // unfollowed, has nothing to mute, and the page's Mute was refused and snapped back.
+        // Shown before following too (owner 2026-10-29: "before joining sound and notification is
+        // not appearing"), so the page looks the same either way. A visitor has no follow record to
+        // mute yet (audit U2: the page's Mute was refused and snapped back), so their tap says to
+        // follow first instead of opening a page that cannot save.
         VStack(spacing: 0) {
-            if followingNow {
-                ProfileInfoRow(title: "Sounds & Notifications", icon: "ic_notifications",
-                               value: muted ? "Off" : "On") { showSounds = true }
-                rowDivider
+            ProfileInfoRow(title: "Sounds & Notifications", icon: "ic_notifications",
+                           value: muted ? "Off" : "On") {
+                if followingNow { showSounds = true }
+                else { actionError = "Follow this channel to change its notifications." }
             }
+            rowDivider
             ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
                            value: storage.map { Self.bytes($0.total) } ?? "") { showStorage = true }
         }

@@ -212,7 +212,10 @@ struct GroupCallTileView: View {
         else if width > 102 { byWidth = 96 }
         else if width > 48 { byWidth = width - 36 }
         else { byWidth = 16 }
-        return min(byWidth, max(16, height - 16))
+        // A wide, short tile (the two-person screen-share tiles, owner 2026-10-29: "bottom cards
+        // looks bug, fix the weight") takes the photo from its height, with room above and below.
+        let byHeight = width > height * 1.4 ? height * 0.56 : height - 16
+        return min(byWidth, max(16, byHeight))
     }
 
     // MARK: - Badges
@@ -261,7 +264,9 @@ struct GroupCallTileView: View {
             if showHand || (showNetwork && networkLeading) {
                 HStack(spacing: 4) {
                     if showHand {
-                        CallRaisedHandChip(name: (style == .strip || width < 150) ? nil : tile.name)
+                        // No name where the bottom label already shows it (owner 2026-10-29: the
+                        // name twice on one tile).
+                        CallRaisedHandChip(name: (style == .strip || style == .grid || width < 150) ? nil : tile.name)
                             .transition(.opacity)
                     }
                     if showNetwork && networkLeading {
