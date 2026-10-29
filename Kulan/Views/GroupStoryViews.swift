@@ -131,16 +131,35 @@ extension GroupStoryRow where Trailing == EmptyView {
 /// turn (never SwiftUI's repeatForever: the iOS 26 deadlock noted in StickerPlayerView).
 struct GroupStoryUploadRing: View {
     let active: Bool
+    /// A channel's photo is a squircle (owner 2026-10-29: "uploading story is using a ring circle,
+    /// use my design"): the arc runs along that outline instead of turning a circle.
+    var squircle = false
 
     var body: some View {
         if active {
             TimelineView(.animation) { ctx in
                 let turn = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.2) / 1.2
-                Circle()
-                    .trim(from: 0, to: 0.28)
-                    .stroke(Color(hex: 0x0A84FF), style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
-                    .rotationEffect(.degrees(turn * 360))
+                if squircle {
+                    // Rotating a squircle would turn its corners, so the trim window travels the
+                    // path instead; past the end it wraps as a second piece from the start.
+                    let style = StrokeStyle(lineWidth: 3.5, lineCap: .round)
+                    let end = turn + 0.28
+                    ZStack {
+                        SquircleShape().trim(from: turn, to: min(end, 1))
+                            .stroke(Color(hex: 0x0A84FF), style: style)
+                        if end > 1 {
+                            SquircleShape().trim(from: 0, to: end - 1)
+                                .stroke(Color(hex: 0x0A84FF), style: style)
+                        }
+                    }
                     .padding(-7)
+                } else {
+                    Circle()
+                        .trim(from: 0, to: 0.28)
+                        .stroke(Color(hex: 0x0A84FF), style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
+                        .rotationEffect(.degrees(turn * 360))
+                        .padding(-7)
+                }
             }
             .allowsHitTesting(false)
             .transition(.opacity)

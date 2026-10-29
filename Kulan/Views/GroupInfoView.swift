@@ -690,7 +690,8 @@ struct GroupInfoView: View {
                         .allowsHitTesting(false)
                 }
             }
-            .overlay { GroupStoryUploadRing(active: StoriesService.shared.uploadingGroups.contains(cid)) }
+            .overlay { GroupStoryUploadRing(active: StoriesService.shared.uploadingGroups.contains(cid),
+                                                 squircle: isChannel) }
             headerCaption(.primary)
             if conv?.fariinLocked != true {
                 if isFollowerHere { followerCircles.padding(.top, 2) } else { actionsRow.padding(.top, 2) }

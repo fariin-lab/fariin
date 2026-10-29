@@ -1693,10 +1693,16 @@ struct EditGroupView: View {
                 AvatarView(name: title, photoUrl: photoUrl, size: 120)   // Edit Profile's size (owner 2026-10-18)
             }
         }
+        // A channel edits its squircle, as its page shows it (owner 2026-10-29: "channel edit photo
+        // also use my design"). Its corner sits where the circle's 45° rim did, so the − badge
+        // keeps its place.
+        .avatarSquircle(isChannel)
         .frame(width: 120, height: 120)
-        .clipShape(Circle())
-        .contentShape(Circle())
+        .clipShape(isChannel ? AnyShape(SquircleShape()) : AnyShape(Circle()))
+        .contentShape(isChannel ? AnyShape(SquircleShape()) : AnyShape(Circle()))
     }
+
+    private var isChannel: Bool { Conversation.Right.isChannel(cid) }
 
     /// A group photo is a small round picture: 1024 px is plenty, and the upload stays quick.
     private func setPhoto(_ ui: UIImage) {
