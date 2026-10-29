@@ -54,27 +54,46 @@ struct NewChannelView: View {
 
     // MARK: 1. What a channel is
 
+    // ⛔ THE FIRST PAGE SAYS WHAT A CHANNEL IS (owner 2026-10-29: the lone icon looked cheap next to
+    // the reference app's page). Ours, not theirs: a small live-looking post at the top (a channel's
+    // name, a post, its reactions and views) instead of an illustration, then three points that are
+    // true of OUR channels, the guidelines, and Create Channel.
     private var intro: some View {
-        VStack(spacing: 18) {
-            Spacer()
-            Image(systemName: "megaphone.fill")
-                .font(.system(size: 64, weight: .regular))
-                .foregroundStyle(Color(hex: 0x2392FE))
-                .frame(width: 132, height: 132)
-                .background(Circle().fill(Color(hex: 0x2392FE).opacity(0.12)))
-            Text("Channels").font(.title.bold())
-            Text("Share news and updates with as many people as you like. Only you and your admins post; everyone else follows.")
-                .font(.body).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-            Spacer()
-            Button { path.append(.details) } label: {
-                Text("Create Channel").fontWeight(.semibold).foregroundStyle(.white)
-                    .frame(maxWidth: .infinity).frame(height: 52)
-                    .liquidGlass(Capsule(), interactive: true, tint: Color(hex: 0x2392FE))
-                    .contentShape(Capsule())
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(spacing: 26) {
+                    ChannelIntroPreview()
+                        .padding(.top, 8)
+                    Text("Start a channel")
+                        .font(.largeTitle.bold())
+                        .multilineTextAlignment(.center)
+                    VStack(alignment: .leading, spacing: 22) {
+                        introPoint("megaphone", "Reach everyone",
+                                   "Post news, photos and videos to as many people as you like. Only you and your admins post.")
+                        introPoint("eye.slash", "Followers stay private",
+                                   "Followers can't see each other. Fariin has no phone numbers, so there are none to show.")
+                        introPoint("globe", "Public or invite only",
+                                   "Anyone can find a public channel. A private one is followed with its invite link.")
+                    }
+                    .padding(.horizontal, 8)
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 16)
             }
-            .buttonStyle(.plain)
+            .scrollBounceBehavior(.basedOnSize)
+            VStack(spacing: 12) {
+                Text("By creating a channel you agree to the [Channel Guidelines](https://help.fariin.com/channels/channel-guidelines).")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .tint(Color(hex: 0x2392FE))
+                Button { path.append(.details) } label: {
+                    Text("Create Channel").fontWeight(.semibold).foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).frame(height: 52)
+                        .liquidGlass(Capsule(), interactive: true, tint: Color(hex: 0x2392FE))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
         }
@@ -82,6 +101,21 @@ struct NewChannelView: View {
             ToolbarItem(placement: .topBarLeading) {
                 Button { dismiss() } label: { Image(systemName: "xmark") }
                     .accessibilityLabel("Close")
+            }
+        }
+    }
+
+    private func introPoint(_ icon: String, _ title: String, _ line: String) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Color(hex: 0x2392FE))
+                .frame(width: 40, height: 40)
+                .background(Circle().fill(Color(hex: 0x2392FE).opacity(0.12)))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.body.weight(.semibold))
+                Text(line).font(.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -269,5 +303,69 @@ struct NewChannelView: View {
         let target = ChatTarget(id: cid, name: trimmedName, photo: nil)
         dismiss()
         onOpen(target)
+    }
+}
+
+/// New Channel's opening picture (owner 2026-10-29): what a channel looks like, drawn from our own
+/// parts. A channel's header, one post with lines for its words, its reactions and its views, on a
+/// soft blue card. Decorative: VoiceOver skips it, the three points under it say the same.
+struct ChannelIntroPreview: View {
+    private let blue = Color(hex: 0x2392FE)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle().fill(LinearGradient(colors: [blue, blue.opacity(0.65)],
+                                                 startPoint: .topLeading, endPoint: .bottomTrailing))
+                    Image(systemName: "megaphone.fill").font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 36, height: 36)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Your channel").font(.subheadline.weight(.semibold))
+                    Text("12.4K followers").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "bell").font(.system(size: 14, weight: .semibold)).foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(LinearGradient(colors: [blue.opacity(0.35), blue.opacity(0.12)],
+                                         startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(height: 74)
+                    .overlay(Image(systemName: "photo").font(.system(size: 22)).foregroundStyle(blue.opacity(0.7)))
+                line(0.92); line(0.7)
+                HStack(spacing: 6) {
+                    chip("👍 248"); chip("❤️ 96")
+                    Spacer(minLength: 0)
+                    Image(systemName: "eye").font(.system(size: 11))
+                    Text("9.1K").font(.caption2.monospacedDigit())
+                }
+                .foregroundStyle(.secondary)
+            }
+            .padding(10)
+            .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .padding(14)
+        .frame(maxWidth: 300)
+        .background(blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(blue.opacity(0.15), lineWidth: 1))
+        .rotationEffect(.degrees(-2))
+        .shadow(color: blue.opacity(0.18), radius: 18, y: 8)
+        .accessibilityHidden(true)
+    }
+
+    private func line(_ fraction: CGFloat) -> some View {
+        GeometryReader { g in
+            Capsule().fill(Color(.tertiarySystemFill)).frame(width: g.size.width * fraction, height: 8)
+        }
+        .frame(height: 8)
+    }
+
+    private func chip(_ s: String) -> some View {
+        Text(s).font(.caption2.weight(.semibold))
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(Capsule().fill(Color(.tertiarySystemFill)))
     }
 }
