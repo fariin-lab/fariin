@@ -107,6 +107,10 @@ enum OfficialStoryViews {
     @MainActor
     static func installPill() {
         StoryFooterAccessory.view = { storyId in
+            // A channel's story for a follower (2026-10-29): its counts row, the whole footer.
+            if let info = ChannelStoryFooter.info(storyId) {
+                return AnyView(ChannelStoryFooterView(storyId: storyId, info: info))
+            }
             // Not an official story: nothing (a group's owner and admins have the poster's bar, 2026-10-25).
             guard let raw = rawId(storyId) else { return nil }
             let canSee = AdminStore.shared.can(.send), canDelete = AdminStore.shared.can(.remove)

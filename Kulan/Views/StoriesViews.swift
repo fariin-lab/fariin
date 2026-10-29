@@ -1926,6 +1926,14 @@ struct StoryViewer: View {
                     let plainConfig: StoryInteractionConfig? = actionURL != nil
                         ? StoryInteractionConfig(actionTitle: s.buttonText, actionURL: actionURL)
                         : locked.map { StoryInteractionConfig(lockedText: $0) }
+                    // ⛔ A CHANNEL'S STORY, FOR A FOLLOWER (owner 2026-10-29): no reply, no react bar;
+                    // views, reposts and likes for everyone, Share on the right (`ChannelStoryFooter`).
+                    // Its owner and admins keep the poster's bar (`plainOnly`).
+                    let channelStory = !plainOnly && (s.groupId.map {
+                        Conversation.Right.isChannel($0) || ChannelFollows.shared.follows($0) } ?? false)
+                    let _ = channelStory
+                        ? ChannelStoryFooter.register(s.id, .init(canRepost: canRepost, canShare: canPassOn))
+                        : ()
                     return StoryUI.Story(
                         id: s.id,
                         mediaURL: s.mediaUrl,
@@ -2043,6 +2051,8 @@ struct StoryViewer: View {
                             // promises nothing; turning receipts back on brings it back.
                             storyType: plainOnly
                                 ? .plain(config: plainConfig)
+                                : channelStory
+                                ? .plain(config: nil)   // the row is `ChannelStoryFooterView`
                                 : canMessage
                                     ? .message(config: StoryInteractionConfig(showLikeButton: StoryPrefs.viewReceiptsOn,
                                                                               showRepostButton: canRepost),
@@ -2131,6 +2141,11 @@ struct StoryViewer: View {
         .onReceive(NotificationCenter.default.publisher(for: .init("storyRepostTapped"))) { note in
             guard let id = note.object as? String else { return }
             beginRepost(storyId: id)
+        }
+        // A channel story's heart (`ChannelStoryFooterView`): the same like path as the library's.
+        .onReceive(NotificationCenter.default.publisher(for: ChannelStoryFooter.likeNote)) { note in
+            guard let id = note.object as? String else { return }
+            handle(storyId: id, message: nil, emoji: nil, isLiked: note.userInfo?["liked"] as? Bool ?? false)
         }
         // ⛔ THE CREDIT LINE OPENS THE ORIGINAL — 2026-09-24. Posted by the header's audience line
         // for a repost (see `audienceBadge`), with the id of the story whose credit was tapped.

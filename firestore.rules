@@ -3617,7 +3617,9 @@ service cloud.firestore {
       // THE VIEW COUNT, kept by `onStoryViewWritten` (admin rights), never written by a client. A
       // subcollection rather than a field on the story, which every recipient can read.
       match /meta/{docId} {
-        allow read: if signedIn() && storyViewsReader();
+        // `public` (2026-10-29): a channel story's bare numbers (views, likes, reposts), no uids,
+        // written by mirrorChannelStoryCounts only. Every follower sees them by design.
+        allow read: if signedIn() && (docId == 'public' || storyViewsReader());
       }
       // Views and meta: the author, and for a group story its owner and admins (owner 2026-10-23).
       function storyViewsReader() {
