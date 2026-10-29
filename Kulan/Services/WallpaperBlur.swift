@@ -329,7 +329,7 @@ import UIKit
         // Cropped back to the source's extent: the clamp made it infinite.
         // ONE context for the app (2026-09-27, the first chat open after launch): a `CIContext` is
         // expensive to build and this made a fresh one on every chat open, on the main thread.
-        guard let result = wallpaperBlurContext.createCGImage(out, from: input.extent) else { return nil }
+        guard let result = WallpaperBlurRender.cgImage(out, from: input.extent) else { return nil }
         return UIImage(cgImage: result, scale: 1, orientation: .up)
     }
 }
@@ -564,6 +564,38 @@ struct WallpaperAnchor: UIViewRepresentable {
 
 /// See `blurred`: built once, reused for every chat's wallpaper blur. Thread-safe per Core Image.
 private let wallpaperBlurContext = CIContext(options: nil)
+
+/// ⛔ THE RENDER RUNS ON ITS OWN THREAD WITH A BIG STACK — owner, 2026-10-29, build 1058: "if i open
+/// that channel it keeps crashing". The crash log was EXC_BAD_ACCESS, "Thread stack size exceeded",
+/// inside `createCGImage` → Core Image's recursive tile render → Metal texture setup, called from
+/// `state(for:)` in the middle of ThreadView's body during the navigation push. The main thread's
+/// stack is small and was already deep in SwiftUI's graph update; the render's own frames pushed it
+/// over. Only chats WITH a wallpaper reach this, and every open after a relaunch is a cache miss, so
+/// that chat crashed every time.
+///
+/// Same work, same timing (the caller still waits the few tens of milliseconds it always did), but
+/// on a thread whose stack is ours to size. Core Image contexts are thread-safe.
+enum WallpaperBlurRender {
+    private final class Box: @unchecked Sendable {
+        var image: CIImage?
+        var result: CGImage?
+    }
+
+    nonisolated static func cgImage(_ image: CIImage, from rect: CGRect) -> CGImage? {
+        let box = Box()
+        box.image = image
+        let done = DispatchSemaphore(value: 0)
+        let worker = Thread {
+            if let img = box.image { box.result = wallpaperBlurContext.createCGImage(img, from: rect) }
+            done.signal()
+        }
+        worker.stackSize = 8 << 20
+        worker.qualityOfService = .userInteractive
+        worker.start()
+        done.wait()
+        return box.result
+    }
+}
 
 /// ⛔ WARMED AT LAUNCH, OFF THE MAIN THREAD — owner, 2026-09-27, the first chat opened after launch
 /// still late. A global is created on first use, so the context above, its Metal setup and the
