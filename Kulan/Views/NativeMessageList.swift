@@ -98,6 +98,8 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onTapContactCard: (String) -> Void = { _ in }
     var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
+    /// A tap on one pill: (row id, emoji). True = handled (a channel reacts), so no sheet opens.
+    var onTapReactionPill: (String, String) -> Bool = { _, _ in false }
     var onTapShare: (String) -> Void = { _ in }   // a channel post's share button (2026-10-29)
     var onTapRetry: (String) -> Void = { _ in }
     /// The failed-send question, anchored to the red badge (2026-09-27). nil = fall back to onTapRetry.
@@ -314,6 +316,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onTapContactCard = onTapContactCard
         vc.onTapContactMessage = onTapContactMessage
         vc.onTapReactions = onTapReactions
+        vc.onTapReactionPill = onTapReactionPill
         vc.onTapShare = onTapShare
         vc.onTapRetry = onTapRetry
         vc.failedActions = failedActions
@@ -920,6 +923,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onTapContactCard: (String) -> Void = { _ in }
     var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
+    /// A tap on one pill: (row id, emoji). True = handled (a channel reacts), so no sheet opens.
+    var onTapReactionPill: (String, String) -> Bool = { _, _ in false }
     var onTapShare: (String) -> Void = { _ in }   // a channel post's share button (2026-10-29)
     var onTapRetry: (String) -> Void = { _ in }
     /// The failed-send question, anchored to the red badge (2026-09-27). nil = fall back to onTapRetry.
@@ -7161,6 +7166,7 @@ extension MessageListController: MessageRowCellDelegate {
 
     func rowCellDidTapReactions(_ cell: MessageRowCell) {
         guard let id = cell.rowId else { return }
+        if let e = cell.tappedReaction, onTapReactionPill(id, e) { return }
         onTapReactions(id)
     }
 

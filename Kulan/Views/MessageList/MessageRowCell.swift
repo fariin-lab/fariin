@@ -28,7 +28,7 @@ protocol MessageRowCellDelegate: AnyObject {
     func rowCellDidTapPollResults(_ cell: MessageRowCell)
     func rowCellDidTapContactCard(_ cell: MessageRowCell)
     func rowCellDidTapContactMessage(_ cell: MessageRowCell)
-    func rowCellDidTapReactions(_ cell: MessageRowCell)
+    func rowCellDidTapReactions(_ cell: MessageRowCell)   // `cell.tappedReaction` = the pill's emoji
     /// A channel post's share button (owner 2026-10-29): opens Forward.
     func rowCellDidTapShare(_ cell: MessageRowCell)
     func rowCellDidTapRetry(_ cell: MessageRowCell)
@@ -47,6 +47,8 @@ final class MessageRowCell: UICollectionViewCell {
     static let reuseId = "MessageRowCell"
 
     private let rowView = MessageRowView()
+    /// The emoji of the reaction pill last tapped, read by the delegate in `rowCellDidTapReactions`.
+    private(set) var tappedReaction: String?
     private var tap: UITapGestureRecognizer!
 
     weak var delegate: MessageRowCellDelegate?
@@ -552,6 +554,7 @@ final class MessageRowCell: UICollectionViewCell {
                 return
             }
             if rowView.hitsReactions(p) {
+                tappedReaction = rowView.reactionEmoji(at: p)
                 delegate?.rowCellDidTapReactions(self)
                 return
             }

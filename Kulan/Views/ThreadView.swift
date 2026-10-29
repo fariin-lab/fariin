@@ -4825,6 +4825,16 @@ struct ThreadView: View {
                     if conversation?.isChannel == true { channelReactTarget = m } else { reactorsTarget = MessageRef(id: m.id) }
                 }
             },
+            // ⛔ A CHANNEL PILL REACTS ON TAP (owner 2026-10-29: "when user clicks that react it means
+            // give react, don't open a sheet"). The pill's emoji becomes mine, or mine again comes
+            // off; my pill is the highlighted one. Groups keep the reactors list.
+            onTapReactionPill: { id, emoji in
+                guard conversation?.isChannel == true, channelCanReact,
+                      let m = repo.items.first(where: { $0.rowId == id }) else { return false }
+                Haptics.impact(.light)
+                sendChannelReaction(m.id, ChannelEmoji.same(myReaction(m), emoji) ? nil : emoji)
+                return true
+            },
             // A channel post's share button (owner 2026-10-29): the long-press menu's Forward.
             onTapShare: { id in
                 if let m = repo.items.first(where: { $0.rowId == id }) { forwardTarget = m }

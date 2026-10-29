@@ -2060,6 +2060,15 @@ final class MessageRowView: UIView {
         return c.bubble.contains(point)
     }
 
+    /// The emoji of the pill under the finger (owner 2026-10-29: a channel pill reacts on tap). nil
+    /// for the "+N" overflow pill, which has no emoji of its own.
+    func reactionEmoji(at point: CGPoint) -> String? {
+        guard let p = plan, case .bubble(let b) = p.body,
+              let i = b.reactions.firstIndex(where: { $0.contains(point) }),
+              let keys = Self.reactionKeys(model), i < keys.count else { return nil }
+        return keys[i]
+    }
+
     func hitsReactions(_ point: CGPoint) -> Bool {
         guard let p = plan, case .bubble(let b) = p.body else { return false }
         return b.reactions.contains { $0.contains(point) }

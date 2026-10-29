@@ -62,9 +62,11 @@ struct ChannelFollowerBar: View {
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.white)
                     .opacity(joined ? 0 : 1)
+                // Primary, not secondary (owner 2026-10-29: "this card use Apple liquid glass"): on
+                // glass over busy posts the grey words sank into the messages behind them.
                 Text("You're following this channel")
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.primary)
                     .multilineTextAlignment(.center)
                     .opacity(joined ? 1 : 0)
             }
@@ -72,11 +74,12 @@ struct ChannelFollowerBar: View {
             .padding(.horizontal, 18)
             .frame(height: joined ? 48 : 50)
             .liquidGlass(RoundedRectangle(cornerRadius: joined ? 26 : 25, style: .continuous),
-                         interactive: !joined, tint: joined ? nil : Color(hex: 0x2392FE))
+                         interactive: true, tint: joined ? nil : Color(hex: 0x2392FE))
             .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
         }
         .buttonStyle(.plain)
-        .disabled(joined)
+        // Not disabled once joined: the glass answers a touch the way Apple's does (`follow()`
+        // already ignores a tap while following).
         // The Follow bar's 16 pt in from the sides; the card sits at the official chat's width.
         .padding(.horizontal, joined ? 0 : 16)
         .accessibilityLabel(joined ? "You're following this channel" : "Follow")
