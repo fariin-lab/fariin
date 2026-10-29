@@ -149,6 +149,12 @@ enum BubbleText {
 
     static func meta(_ m: MetaChrome, isMe: Bool, color: UIColor, solidTicks: Bool = false) -> NSAttributedString {
         let s = NSMutableAttributedString()
+        // A signed channel post: the admin's name first (Sign Posts), at most 24 characters.
+        if let who = m.signature, !who.isEmpty {
+            let short = who.count > 24 ? String(who.prefix(23)) + "…" : who
+            s.append(NSAttributedString(string: short + "  ", attributes: [
+                .font: BubbleMetrics.metaItalicFont, .foregroundColor: color]))
+        }
         // A channel post (2026-10-28): the eye and how many have seen it, before everything else.
         if let v = m.views,
            let eye = UIImage(systemName: "eye.fill",

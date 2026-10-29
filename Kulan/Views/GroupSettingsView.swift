@@ -108,6 +108,26 @@ struct GroupSettingsView: View {
 
     private var isPublicNow: Bool { conv?.isPublic ?? false }
 
+    /// Sign Posts (2026-10-28, the reference app's channel signatures): the admin's name under
+    /// each post. Off, posts are the channel speaking.
+    @State private var signOn: Bool?
+    private var channelPostsSection: some View {
+        Section {
+            Toggle("Sign Posts", isOn: Binding(
+                get: { signOn ?? conv?.signPosts ?? false },
+                set: { v in
+                    signOn = v
+                    Task {
+                        do { try await ChatService.setGroupPermission(cid: cid, key: "signPosts", v) }
+                        catch { signOn = nil }
+                    }
+                }))
+                .disabled(!canEdit)
+        } footer: {
+            Text("Show the name of the admin who wrote each post. Off, posts come from the channel.")
+        }
+    }
+
     var body: some View {
         // ⛔ SHORT CARDS THAT OPEN THEIR OWN PAGES (owner 2026-10-19, later: "when you tap you get
         // the options you need, instead of one flat page"). Joining (Group Type, link, requests),
@@ -116,8 +136,10 @@ struct GroupSettingsView: View {
             joiningSection
             // 2026-10-27: not on a group whose members Fariin staff hid (`hideMembers`), for
             // anyone but staff; the owner and admins included.
-            if !(conv?.hideMembers == true && !AdminStore.shared.isAdmin) { peopleSection }
-            permissionsSection
+            // A channel's own admins manage its admins (2026-10-28), though its members are hidden.
+            if conv?.isChannel == true || !(conv?.hideMembers == true && !AdminStore.shared.isAdmin) { peopleSection }
+            // A channel: followers have no permissions to set; its posts have Sign Posts instead.
+            if conv?.isChannel == true { channelPostsSection } else { permissionsSection }
             chatSection
         }
         .listStyle(.insetGrouped)

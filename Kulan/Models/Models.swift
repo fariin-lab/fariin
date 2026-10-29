@@ -1167,6 +1167,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var followerMuted = false
     var followerPinned = false
     var followerArchived = false
+    /// Admins' names under their posts (Channel Settings > Sign Posts).
+    var signPosts = false
     /// group: what members may send (2026-10-20), `memberSend` {photos, videos, voice, files,
     /// stickers, gifs, links, polls, location}; a missing key = allowed. firestore.rules
     /// `memberSendOk` enforces it.
@@ -1359,6 +1361,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.onlyAdminsCall = data["onlyAdminsCall"] as? Bool ?? false
         self.hideMembers = data["hideMembers"] as? Bool ?? false
         self.isChannel = data["channel"] as? Bool ?? false
+        self.signPosts = data["signPosts"] as? Bool ?? false
         self.followerCount = max(0, (data["followerCount"] as? NSNumber)?.intValue ?? 0)
         self.postCount = max(0, (data["postCount"] as? NSNumber)?.intValue ?? 0)
         self.memberSend = data["memberSend"] as? [String: Bool] ?? [:]

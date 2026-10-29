@@ -18,6 +18,8 @@ struct MessageRowContext {
     /// A channel (2026-10-28): every post is the channel speaking, drawn as received for everyone,
     /// its admin too (the reference app's rule), with no sender name or face.
     var isChannel: Bool = false
+    /// The channel signs its posts with the admin's name (Sign Posts).
+    var signPosts: Bool = false
     var dark: Bool
     var selecting: Bool
     /// Their `wasShowingSelectionUI`: was selection mode up on the PREVIOUS pass. See
@@ -373,6 +375,7 @@ enum MessageRowModelBuilder {
             meta: MetaChrome(timeText: min(msg.createdAt, Date()).formatted(date: .omitted, time: .shortened),
                              edited: msg.edited && !msg.deleted,
                              views: ctx.isChannel && !msg.deleted ? msg.views : nil,
+                             signature: ctx.isChannel && ctx.signPosts && !msg.deleted ? ctx.nameFor(msg.authorId) : nil,
                              tick: tick,
                              bornAt: msg.createdAt,
                              // A tombstone is already gone; putting a countdown on one would be

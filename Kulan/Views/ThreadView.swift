@@ -3927,7 +3927,7 @@ struct ThreadView: View {
             // The Restricted chat request I can answer: its notice carries Reject / Accept.
             liveRestrictRequestId ?? "-",
             // A channel draws every post as received (2026-10-28); known only once the doc is in.
-            conversation?.isChannel == true ? "ch" : "-",
+            conversation?.isChannel == true ? (conversation?.signPosts == true ? "chs" : "ch") : "-",
         ].joined(separator: "|")
         return key
     }
@@ -3943,7 +3943,8 @@ struct ThreadView: View {
             : nil
 
         let ctx = MessageRowContext(
-            me: me, cid: cid, isGroup: isGroup, isChannel: conversation?.isChannel == true, dark: dark,
+            me: me, cid: cid, isGroup: isGroup, isChannel: conversation?.isChannel == true,
+            signPosts: conversation?.signPosts == true, dark: dark,
             selecting: selecting, wasSelecting: wasSelecting, selectedIds: selectedIds,
             highlightId: highlightId, firstUnreadId: firstUnreadId,
             chatColor: chatColorSpec,
