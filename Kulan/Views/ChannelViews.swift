@@ -244,12 +244,32 @@ struct ChannelFollowersView: View {
     /// Taken off the header's count on each Remove / Ban (owner 2026-10-29 audit U10: `count` is the
     /// number when the page opened, and it did not go down).
     @State private var removed = 0
-    private var shownCount: Int { max(0, count - removed) }
+    /// ⛔ THE ADMINS ARE ON THE LIST AND IN ITS COUNT (owner 2026-10-29: the page said "3 Followers",
+    /// the list showed one). The reference app counts a channel's admins among its subscribers and
+    /// lists them first, marked; `Conversation.subscriberCount` already counts them the same way.
+    private var conv: Conversation? { ConversationsRepository.shared.conversations.first { $0.id == cid } }
+    private var admins: [String] {
+        guard let c = conv else { return [] }
+        return c.users.sorted { a, b in
+            if (a == c.createdBy) != (b == c.createdBy) { return a == c.createdBy }
+            return (c.names[a] ?? "").lowercased() < (c.names[b] ?? "").lowercased()
+        }
+    }
+    private var shownCount: Int { max(0, count - removed) + admins.count }
 
     var body: some View {
         List {
             Section {
-                ForEach(rows) { f in
+                ForEach(admins, id: \.self) { uid in
+                    HStack(spacing: 12) {
+                        AvatarView(name: conv?.names[uid] ?? "", photoUrl: conv?.photos[uid], size: 40)
+                        Text(uid == AuthService.shared.uid ? "You" : (conv?.names[uid] ?? "")).lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(uid == conv?.createdBy ? "Owner" : "Admin")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }
+                ForEach(rows.filter { !(conv?.users.contains($0.uid) ?? false) }) { f in
                     HStack(spacing: 12) {
                         AvatarView(name: f.name, photoUrl: f.photoUrl, size: 40)
                         Text(f.name).lineLimit(1)
@@ -282,7 +302,7 @@ struct ChannelFollowersView: View {
                 }
                 if failed { Text("Couldn't load followers. Pull to try again.").foregroundStyle(.secondary) }
                 // Nobody yet: said, not a spinner (owner 2026-10-29: it turned on an empty list).
-                if rows.isEmpty, !loading, !failed, !more {
+                if rows.isEmpty, admins.isEmpty, !loading, !failed, !more {
                     Text("No followers yet. Share the channel to get your first ones.").foregroundStyle(.secondary)
                 }
             } header: {

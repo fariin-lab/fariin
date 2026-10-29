@@ -327,7 +327,8 @@ struct GroupSettingsView: View {
             // A channel's people are its followers; its "members" are only the admins (2026-10-29).
             if conv?.isChannel == true {
                 NavigationLink { ChannelFollowersView(cid: cid, count: conv?.followerCount ?? 0) } label: {
-                    valueRow("ic_gs_members", "Followers", "\(conv?.followerCount ?? 0)")
+                    // The admins included, as the page header and the list count them (2026-10-29).
+                    valueRow("ic_gs_members", "Followers", "\(conv?.subscriberCount ?? 0)")
                 }
                 // Moved here off the channel's info page (owner 2026-10-29); hidden with the
                 // feature (`Flags.schedulePosts`).
