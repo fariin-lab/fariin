@@ -555,8 +555,11 @@ struct SquircleShape: InsettableShape {
     /// (0.90 of the box), and a least-squares fit of |x|ⁿ + |y|ⁿ = 1 over its outline gives n = 3.05
     /// (rms error under 1%); the corner crosses the diagonal at 0.80 of the half-side, n = 3.1. The
     /// n = 6 before came from his earlier axis plot, which was squarer than the shape he means.
+    /// SIZE: 0.94, not the picture's 0.90 (owner 2026-10-29, the chat list: "user and channel image
+    /// size not looks same"). At 0.94 the n = 3 squircle covers the same area as the round avatars in
+    /// the same box (4·Γ(4/3)²/Γ(5/3) · 0.94² ≈ π), so the two read as one size. Shape unchanged.
     static let exponent: CGFloat = 3
-    static let scale: CGFloat = 0.90
+    static let scale: CGFloat = 0.94
     var insetAmount: CGFloat = 0
     /// The photo viewer morphs the avatar's squircle into the square photo by raising these
     /// (n → ~64 is a square to the eye, scale → 1 fills the frame). Everyone else keeps the defaults.

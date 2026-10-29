@@ -533,7 +533,7 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
                     card.center = CGPoint(x: r.midX, y: r.midY)
                     card.transform = CGAffineTransform(scaleX: scale, y: scale)
                     if squircle {
-                        // SquircleShape fills 0.90 of its box; n = 3 reads as a continuous corner of
+                        // SquircleShape fills `scale` of its box; n = 3 reads as a continuous corner of
                         // about a third of the side. It fades over the last 0.25 s, so close is enough.
                         let side = w * SquircleShape.scale
                         card.bounds = CGRect(x: (w - side) / 2, y: (h - side) / 2, width: side, height: side)
