@@ -1071,7 +1071,7 @@ struct GroupStatsPostsCard: View {
         HStack(spacing: 12) {
             thumb(p)
             VStack(alignment: .leading, spacing: 2) {
-                Text(p.preview.isEmpty ? (p.isStory ? "Story" : "Post") : p.preview).font(.body).lineLimit(1)
+                Text(Self.title(p)).font(.body).lineLimit(1)
                 Text(Self.detail(p)).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
@@ -1100,13 +1100,30 @@ struct GroupStatsPostsCard: View {
         }
     }
 
-    /// "Oct 28 · 412 views · 12 reactions · 3 shares": only what the server counted.
+    /// ⛔ A STORY SAYS IT IS ONE (owner 2026-10-29: "I posted nothing in this channel but it shows
+    /// posts"). The list mixes posts and stories, as the reference app's does, but a story came in
+    /// as "📷 Photo", exactly what a photo post says, so his channel stories read as posts he never
+    /// made. A story is "Photo Story" / "Video Story", or "Story: " and its caption.
+    private static func title(_ p: GroupStatsPost) -> String {
+        guard p.isStory else { return p.preview.isEmpty ? "Post" : p.preview }
+        switch p.preview {
+        case "", "📷 Photo": return "Photo Story"
+        case "📹 Video": return "Video Story"
+        default: return "Story: " + p.preview
+        }
+    }
+
+    /// "Oct 28 · 412 views · 12 reactions · 3 shares": only what the server counted. A story's are
+    /// reposts (the server's `reposts` for it), so it says so.
     private static func detail(_ p: GroupStatsPost) -> String {
         var parts: [String] = []
         if let at = p.at { parts.append(at.formatted(.dateTime.month(.abbreviated).day())) }
         if let v = p.views { parts.append("\(v.formatted()) \(v == 1 ? "view" : "views")") }
         if let r = p.reactions { parts.append("\(r.formatted()) \(r == 1 ? "reaction" : "reactions")") }
-        if let s = p.shares { parts.append("\(s.formatted()) \(s == 1 ? "share" : "shares")") }
+        if let s = p.shares {
+            let word = p.isStory ? (s == 1 ? "repost" : "reposts") : (s == 1 ? "share" : "shares")
+            parts.append("\(s.formatted()) \(word)")
+        }
         return parts.joined(separator: " \u{00B7} ")
     }
 }
