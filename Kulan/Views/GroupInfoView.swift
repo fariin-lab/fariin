@@ -566,14 +566,10 @@ struct GroupInfoView: View {
                 try await ChannelService.unfollow(cid: cid)
                 // The channel closes and leaves the list too (owner 2026-10-29: left open, it turned
                 // into a 1:1 chat with Voice, Video and Block).
+                // Back to the chat list, nothing else opens (owner 2026-10-29: jumping to the
+                // channel's visitor page after Unfollow felt broken).
                 LeaveGroupUndo.shared.closeChat(cid)
                 dismiss()
-                // A public channel stays open to look at, as a visitor with Follow (the reference
-                // apps): its page comes up once the chat has closed. A private one is gone.
-                if conv?.isPublic == true {
-                    let cid = cid, name = conv?.publicName
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { GroupDirectory.open(cid: cid, name: name) }
-                }
             }
             catch { actionError = error.localizedDescription }
             unfollowing = false

@@ -1378,6 +1378,11 @@ struct ThreadView: View {
                             if top > 0, top < h { composerLift = h - top }
                         }
                 }
+            } else if conversation == nil, ChannelFollows.shared.follows(cid) {
+                // A channel I follow whose doc has not loaded yet (owner 2026-10-29: a follower
+                // got the composer in that gap, typed, and the post was refused). Nothing until it
+                // loads; a follower never gets a composer.
+                Color.clear.frame(height: 0)
             } else if notAMember {
                 // A public group I left can be joined again from here (owner 2026-10-25).
                 if conversation?.isPublic == true, !(conversation?.bannedUids.contains(me) ?? false) {

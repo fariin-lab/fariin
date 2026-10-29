@@ -681,7 +681,7 @@ struct PublicGroupInfoView: View {
             .padding(.bottom, 24)
         }
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
-        .navigationTitle(p.isChannel ? "Channel info" : "")
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .overlay(alignment: .bottom) {
             if undoShown {
@@ -745,33 +745,34 @@ struct PublicGroupInfoView: View {
 
     private var link: URL? { p.username.isEmpty ? nil : URL(string: "https://fariin.com/\(p.username)") }
 
-    /// Follow, Share, Search, More: four equal cards, no calls (a channel has none).
+    /// Follow, Share, Search, More, in the same round circles a follower and the owner see (owner
+    /// 2026-10-29: one design for everyone, never square cards on one page and circles on the next).
     private var channelActionsRow: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 0) {
             Button { follow() } label: {
-                channelCard(following ? "checkmark" : "plus", following ? "Following" : "Follow", tint: Color(hex: 0x2392FE))
+                circle(following ? "checkmark" : "plus", following ? "Following" : "Follow")
             }
             .disabled(following)
             // Our own "Share with" sheet first (chats); its corner button opens other apps.
             if let link {
                 Button { shareText = "Follow " + p.title + " on Fariin: " + link.absoluteString } label: {
-                    channelCard("square.and.arrow.up", "Share")
+                    circle("square.and.arrow.up", "Share")
                 }
             } else {
-                channelCard("square.and.arrow.up", "Share").opacity(0.45)
+                circle("square.and.arrow.up", "Share").opacity(0.45)
             }
             Button { joinNotice = "Follow the channel to search its posts." } label: {
-                channelCard("magnifyingglass", "Search")
+                circle("magnifyingglass", "Search")
             }
             Menu {
                 if let link {
                     Button { UIPasteboard.general.string = link.absoluteString } label: { Label("Copy Link", systemImage: "doc.on.doc") }
                 }
                 Button(role: .destructive) { confirmReport = true } label: { Label("Report Channel", systemImage: "exclamationmark.octagon") }
-            } label: { channelCard("ellipsis", "More") }
+            } label: { circle("ellipsis", "More") }
         }
         .tint(.primary)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 12)
         .alert("Report this channel?", isPresented: $confirmReport) {
             Button("Cancel", role: .cancel) {}
             Button("Report", role: .destructive) { report() }
