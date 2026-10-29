@@ -36,9 +36,14 @@ const cases = [
   ['I read my own followed list', 'ALLOW', F, 'get', `users/${F}/channels/${CID}`, { at: T }, null, chan, true],
   ['I read someone else\'s followed list', 'DENY', X, 'get', `users/${F}/channels/${CID}`, { at: T }, null, chan, true],
   ['I write my own followed list', 'DENY', F, 'create', `users/${F}/channels/${CID}`, null, { at: T }, chan, true],
+  ['I mark read + muted on my entry', 'ALLOW', F, 'update', `users/${F}/channels/${CID}`, { at: T }, { at: T, read: 12, muted: true }, chan, true],
+  ['I change the follow time', 'DENY', F, 'update', `users/${F}/channels/${CID}`, { at: T }, { at: '2020-01-01T00:00:00Z' }, chan, true],
+  ['read as text', 'DENY', F, 'update', `users/${F}/channels/${CID}`, { at: T }, { at: T, read: 'x' }, chan, true],
+  ['someone marks my entry', 'DENY', X, 'update', `users/${F}/channels/${CID}`, { at: T }, { at: T, read: 1 }, chan, true],
   ['admin renames the channel (control)', 'ALLOW', OWNER, 'update', `conversations/${CID}`, chan, { ...chan, title: 'News 2' }, chan, false],
   ['admin turns a group INTO a channel', 'DENY', OWNER, 'update', `conversations/${CID}`, group, { ...group, channel: true }, group, false],
   ['admin edits followerCount', 'DENY', OWNER, 'update', `conversations/${CID}`, chan, { ...chan, followerCount: 999 }, chan, false],
+  ['admin edits postCount', 'DENY', OWNER, 'update', `conversations/${CID}`, chan, { ...chan, postCount: 5 }, chan, false],
 ];
 
 (async () => {

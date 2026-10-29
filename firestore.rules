@@ -273,47 +273,10 @@ service cloud.firestore {
       // write, so this is a named, revocable exception rather than a hole.
       allow list: if isAdmin();
 
-      // FIELDS THE OWNER OF THE DOCUMENT MAY NOT WRITE. Only the server (the claimUsername
-      // transaction, which runs with admin rights and bypasses these rules) or a moderator sets
-      // these.
-      //
-      // The ban half was a REAL HOLE and it was mine, introduced the same day the ban was: rules are
-      // cumulative, an OR, not a chain. The moderator rule below GRANTS a moderator the right to
-      // write these fields; it takes nothing away from the rule above it. So the plain
-      // "you may write your own document" rule still matched, and a banned account could simply set
-      // `banned: false` on itself. The ban lasted exactly as long as the banned person left it
-      // alone. Caught by Gemini reading these rules, not by me writing them.
-      //
-      // The username half was never exploited but is the same shape and worse: `claimUsername` is a
-      // server transaction precisely so two people cannot take one name, and a client writing
-      // `handleLower` straight onto its own document walked around the whole thing and could have
-      // taken any name already in use. The client has never written these fields — every one comes
-      // from the server — so refusing them costs nothing.
-      // `verification` is here for the most important reason on the list: a badge somebody can give
-      // themselves is not a badge. This is the whole security model — the client is never trusted to
-      // write it, so spoofing it locally, editing an API response or replacing the app changes
-      // nothing that anybody else can see. Only the rule below, gated on an admin capability, may
-      // touch it.
-      // `usernameChecks` is the throttle that stops somebody walking the namespace to learn which
-      // handles exist, and until 2026-08-09 THE PERSON BEING THROTTLED COULD RESET IT.
-      //
-      // `checkUsername` allows 40 checks a minute and keeps the tally at `users/{uid}.usernameChecks`
-      // — on the caller's own document. The field was not on this list, so the rules let its owner
-      // write it: set the count back to zero between calls and the limit never trips. A lock with the
-      // key taped to it. The comment in functions/index.js has described this hole for days as the
-      // example of what NOT to do; this is the fix it was asking for.
-      //
-      // Every other throttle in the project is already safe for a different reason: `rateLimits`,
-      // `alertSends`, `loginCodes` and `usernames` live in collections with NO match block at all,
-      // and Firestore is default-deny, so no client can reach them. This counter was the only one
-      // parked somewhere its subject could edit.
-      //
-      // Costs nothing to lock: the app never writes this field (checked across the whole iOS source),
-      // and the function writes it with the admin SDK, which does not go through these rules.
-      //
-      // `fcmTokens`/`voipTokens`/`pushTokens` are NOT in this list on purpose: the current app still
-      // strips its own token off them. 2026-09-24 audit (stage 4): they are guarded instead by
-      // pushTokensNotAdded() below, which lets them shrink and never grow.
+      // Fields the owner of a user doc may NOT write: only the server (admin SDK) or a moderator.
+      // Rules are an OR: without this list `banned`, `handleLower`, `verification` and the
+      // `usernameChecks` throttle were self-editable. Push tokens are guarded by
+      // pushTokensNotAdded() instead (they may shrink, never grow).
       function serverOnlyUserFields() {
         // glowerCount / glowingCount: the Glow feature's public numbers, maintained by the
         // onGlowWrite function off the /glows collection. Here so no phone can inflate its own —
@@ -835,6 +798,10 @@ service cloud.firestore {
       // Channels I follow (2026-10-28), written by functions-groups followChannel only.
       match /channels/{c} {
         allow read: if signedIn() && request.auth.uid == uid;
+        // Mine to mark: how many posts I have read, and muted.
+        allow update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'muted'])
+          && request.resource.data.get('read', 0) is int && request.resource.data.get('muted', false) is bool;
       }
       match /blockedGroups/{gid} {
         allow read, delete: if signedIn() && request.auth.uid == uid;
@@ -1811,7 +1778,7 @@ service cloud.firestore {
         // 2026-10-19 groups v2: the group type and its public @name are written only by
         // functions-username setGroupUsername, which claims the name in `usernames` in the same step.
         // `joinApproval` (a public group files join requests instead of adding) is server-only too.
-        && !request.resource.data.keys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'hideMembers', 'hideMembersBy', 'channel', 'followerCount'])
+        && !request.resource.data.keys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'hideMembers', 'hideMembersBy', 'channel', 'followerCount', 'postCount'])
         // 2026-10-19 groups v2 (owner): groups are not end-to-end encrypted. A new group may say so
         // itself (`e2ee: false`, written by the app's createGroup), and nothing else: `e2ee` is
         // false-only and groups-only, and the switch time `e2eeOffAt` is the server's alone.
@@ -2166,7 +2133,7 @@ service cloud.firestore {
         // `e2eeOffAt`) is the server's to change (the groupsE2eeOff migration). In the same list, not
         // a line of its own: a second diff here pushed a busy admin write past the rules engine's
         // 1,000-expression ceiling (rules-tests/role-1018).
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt', 'memberSince', 'endedAt', 'hideMembers', 'hideMembersBy', 'channel', 'followerCount'])
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt', 'memberSince', 'endedAt', 'hideMembers', 'hideMembersBy', 'channel', 'followerCount', 'postCount'])
         && groupModWriteOK()
         && groupAddOK()   // audit F4: no adding someone with a block either way
         // owner 2026-10-18: the group wallpaper, groups only and a known shape (groupWallpaperOK).
