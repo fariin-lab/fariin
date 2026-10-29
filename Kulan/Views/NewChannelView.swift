@@ -99,6 +99,13 @@ struct NewChannelView: View {
                     Button { nameFocused = false; showPhotoOptions = true } label: { avatarThumb }
                         .buttonStyle(.plain)
                         .accessibilityLabel(avatarData == nil ? "Set Channel Photo" : "Change Channel Photo")
+                        // On the photo itself, so the choices point at what was tapped (owner
+                        // 2026-10-29: on the page they hung over the name).
+                        .confirmationDialog("Channel Photo", isPresented: $showPhotoOptions, titleVisibility: .hidden) {
+                            Button("Take Photo") { showCamera = true }
+                            Button("Choose Photo") { showPhotoPicker = true }
+                            if avatarData != nil { Button("Remove Photo", role: .destructive) { avatarData = nil } }
+                        }
                     TextField("Channel Name", text: $name)
                         .font(.title3)
                         .textInputAutocapitalization(.words)
@@ -140,11 +147,6 @@ struct NewChannelView: View {
         .task {
             try? await Task.sleep(for: .milliseconds(600))   // after the push (NewGroupView's lesson)
             if !Task.isCancelled { nameFocused = true }
-        }
-        .confirmationDialog("Channel Photo", isPresented: $showPhotoOptions, titleVisibility: .hidden) {
-            Button("Take Photo") { showCamera = true }
-            Button("Choose Photo") { showPhotoPicker = true }
-            if avatarData != nil { Button("Remove Photo", role: .destructive) { avatarData = nil } }
         }
         .fullScreenCover(isPresented: $showCamera, onDismiss: {
             if let ui = pickedImage { pickedImage = nil; cropItem = GroupCropItem(image: ui) }

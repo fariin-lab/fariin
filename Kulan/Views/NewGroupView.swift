@@ -216,6 +216,14 @@ struct NewGroupView: View {
                     Button { nameFocused = false; showPhotoOptions = true } label: { groupAvatarThumb }
                         .buttonStyle(.plain)
                         .accessibilityLabel(avatarData == nil ? "Set Group Photo" : "Change Group Photo")
+                        // On the photo itself, so the choices point at what was tapped (owner 2026-10-29).
+                        .confirmationDialog("Group Photo", isPresented: $showPhotoOptions, titleVisibility: .hidden) {
+                            Button("Take Photo") { showCamera = true }
+                            Button("Choose Photo") { showPhotoPicker = true }
+                            if avatarData != nil {
+                                Button("Remove Photo", role: .destructive) { avatarData = nil }
+                            }
+                        }
                     TextField("Group Name", text: $groupName)
                         .font(.title3)
                         .textInputAutocapitalization(.words)
@@ -315,13 +323,6 @@ struct NewGroupView: View {
         .task {
             try? await Task.sleep(for: .milliseconds(600))
             if !Task.isCancelled { nameFocused = true }
-        }
-        .confirmationDialog("Group Photo", isPresented: $showPhotoOptions, titleVisibility: .hidden) {
-            Button("Take Photo") { showCamera = true }
-            Button("Choose Photo") { showPhotoPicker = true }
-            if avatarData != nil {
-                Button("Remove Photo", role: .destructive) { avatarData = nil }
-            }
         }
         // A taken photo goes through the same circle cropper as a chosen one.
         .fullScreenCover(isPresented: $showCamera, onDismiss: {
