@@ -4108,6 +4108,12 @@ enum ChatService {
     /// Mute until a specific epoch-ms time (0 = unmute, far-future = always).
     @discardableResult
     static func setMute(_ cid: String, until: Double) async -> Bool {
+        // A channel I follow (2026-10-28): one switch on my own entry; the server skips muted
+        // followers. A timed mute is kept as on (followers' mute has no end time yet).
+        if followedChannelPosts(cid) != nil {
+            ChannelService.setMuted(cid: cid, until > Date().timeIntervalSince1970 * 1000)
+            return true
+        }
         if OfficialChannel.isOfficial(cid) {
             // ⛔ TIMED NOW — owner, 2026-09-29: the channel's Mute offers the same 1 hour … Always as
             // any chat. It used to be a plain on/off. The channel still STARTS muted (Always); only
