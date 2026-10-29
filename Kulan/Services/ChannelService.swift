@@ -77,6 +77,25 @@ enum ChannelService {
         return (added, refused)
     }
 
+    /// Admins: a page of followers, newest first.
+    static func followers(cid: String, after: String?) async throws -> (rows: [ChannelFollowersView.Follower], more: Bool) {
+        var data: [String: Any] = ["cid": cid]
+        if let after { data["after"] = after }
+        let r = try await fn.httpsCallable("listChannelFollowers").call(data)
+        let d = r.data as? [String: Any] ?? [:]
+        let rows = (d["followers"] as? [[String: Any]] ?? []).compactMap { f -> ChannelFollowersView.Follower? in
+            guard let uid = f["uid"] as? String, !uid.isEmpty else { return nil }
+            let p = f["photoUrl"] as? String ?? ""
+            return .init(uid: uid, name: f["name"] as? String ?? "Fariin user", photoUrl: p.isEmpty ? nil : p)
+        }
+        return (rows, d["more"] as? Bool ?? false)
+    }
+
+    /// Admins: take a follower out, and keep them out when `ban`.
+    static func removeFollower(cid: String, uid: String, ban: Bool) async throws {
+        _ = try await fn.httpsCallable("removeChannelFollower").call(["cid": cid, "uid": uid, "ban": ban])
+    }
+
     /// I have read up to `count` posts (only ever forward).
     static func markRead(cid: String, count: Int) {
         let uid = me

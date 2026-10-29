@@ -166,3 +166,77 @@ struct DiscoverChannelsView: View {
         loading = false
     }
 }
+
+/// A channel's followers, for its admins (2026-10-28): newest first, 50 at a time, swipe to remove
+/// (or remove and keep out). Nobody else sees who follows.
+struct ChannelFollowersView: View {
+    let cid: String
+    let count: Int
+
+    struct Follower: Identifiable, Equatable { let uid: String; let name: String; let photoUrl: String?; var id: String { uid } }
+
+    @State private var rows: [Follower] = []
+    @State private var more = true
+    @State private var loading = false
+    @State private var failed = false
+    @State private var confirm: (Follower, Bool)?
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(rows) { f in
+                    HStack(spacing: 12) {
+                        AvatarView(name: f.name, photoUrl: f.photoUrl, size: 40)
+                        Text(f.name).lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button("Remove", role: .destructive) { confirm = (f, false) }
+                        Button("Ban") { confirm = (f, true) }.tint(.orange)
+                    }
+                    .onAppear { if f == rows.last, more { Task { await load() } } }
+                }
+                if loading { HStack { Spacer(); ProgressView(); Spacer() } }
+                if failed { Text("Couldn't load followers. Pull to try again.").foregroundStyle(.secondary) }
+            } header: {
+                Text(GroupDirectory.followersLine(count))
+            } footer: {
+                Text("Only admins can see who follows this channel.")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Followers")
+        .navigationBarTitleDisplayMode(.inline)
+        .refreshable { rows = []; more = true; await load() }
+        .task { if rows.isEmpty { await load() } }
+        .alert(confirm?.1 == true ? "Remove and ban?" : "Remove follower?",
+               isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } })) {
+            Button("Cancel", role: .cancel) {}
+            Button(confirm?.1 == true ? "Ban" : "Remove", role: .destructive) {
+                guard let pick = confirm else { return }
+                let f = pick.0, ban = pick.1
+                Task {
+                    do {
+                        try await ChannelService.removeFollower(cid: cid, uid: f.uid, ban: ban)
+                        rows.removeAll { $0.uid == f.uid }
+                    } catch { ToastNotice.show(error.localizedDescription) }
+                }
+            }
+        } message: {
+            Text(confirm?.1 == true ? "They stop following and can't follow again."
+                                    : "They stop following. They can follow again if the channel is public.")
+        }
+    }
+
+    private func load() async {
+        guard !loading, more else { return }
+        loading = true; failed = false
+        do {
+            let page = try await ChannelService.followers(cid: cid, after: rows.last?.uid)
+            let seen = Set(rows.map(\.uid))
+            rows += page.rows.filter { !seen.contains($0.uid) }
+            more = page.more
+        } catch { failed = true }
+        loading = false
+    }
+}

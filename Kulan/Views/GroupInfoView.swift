@@ -159,6 +159,7 @@ struct GroupInfoView: View {
     private var isChannel: Bool { conv?.isChannel == true }
     private var isFollowerHere: Bool { isChannel && !iAmMember }
     @State private var unfollowing = false
+    @State private var showFollowers = false
     @State private var confirmUnfollow = false
     private var pageBackground: Color { Color(uiColor: .systemGroupedBackground) }
     /// The group's photo, only when there is a real one: it decides the big header and the colour.
@@ -841,6 +842,14 @@ struct GroupInfoView: View {
     /// owner. Red words and red icons, the rows the rest of the page uses.
     private var exitCard: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // A channel's admins see who follows it (2026-10-28); nobody else does.
+            if isChannel, iAmAdmin || iAmOwner {
+                ProfileInfoRow(title: "Followers", icon: "person.2", value: "\(conv?.followerCount ?? 0)") { showFollowers = true }
+                    .profileSurface(plain: cardColor)
+                    .navigationDestination(isPresented: $showFollowers) {
+                        ChannelFollowersView(cid: cid, count: conv?.followerCount ?? 0)
+                    }
+            }
             if isFollowerHere {
                 // A channel I follow (2026-10-28): Leave Channel unfollows; Follow if I am not.
                 VStack(spacing: 0) {
