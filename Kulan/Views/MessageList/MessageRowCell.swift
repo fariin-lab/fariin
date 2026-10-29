@@ -339,7 +339,7 @@ final class MessageRowCell: UICollectionViewCell {
             if let expires = b.meta.expiresAt, expires > Date() {
                 parts.append("Disappearing message")
             }
-            for chip in b.reactions {
+            for chip in b.reactions where !chip.isAdd {
                 parts.append(chip.count > 1 ? "\(chip.emoji) \(chip.count) reactions"
                                             : "\(chip.emoji) reaction")
             }

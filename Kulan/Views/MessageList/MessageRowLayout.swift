@@ -954,11 +954,25 @@ enum MessageRowLayout {
             let shown = Array(b.reactions.prefix(3))
             let extra = b.reactions.count - shown.count
             var chips: [(NSAttributedString, Bool, [ReactionFace])] = shown.map { chip in
+                // The channel's "add a reaction" chip: a smiling face and a small plus, real symbols.
+                if chip.isAdd {
+                    let s = NSMutableAttributedString()
+                    for (name, size, weight, dy) in [("face.smiling", CGFloat(15), UIImage.SymbolWeight.regular, CGFloat(-3)),
+                                                     ("plus", CGFloat(9), UIImage.SymbolWeight.bold, CGFloat(5))] {
+                        guard let img = UIImage(systemName: name,
+                                                withConfiguration: UIImage.SymbolConfiguration(pointSize: size, weight: weight))?
+                            .withTintColor(.secondaryLabel, renderingMode: .alwaysOriginal) else { continue }
+                        let a = NSTextAttachment(image: img)
+                        a.bounds = CGRect(x: 0, y: dy, width: img.size.width, height: img.size.height)
+                        s.append(NSAttributedString(attachment: a))
+                    }
+                    return (s, false, [])
+                }
                 let s = NSMutableAttributedString(string: chip.emoji, attributes: [
                     .font: UIFont.systemFont(ofSize: inside ? BubbleMetrics.reactionEmojiFont
                                                             : BubbleMetrics.reactionEmojiFontSmall)])
                 // The count appears only where there are no faces to show — see `ReactionChip`.
-                if chip.count > 1, chip.faces.isEmpty {
+                if chip.count > 1 || chip.showCount, chip.faces.isEmpty {
                     s.append(NSAttributedString(string: " \(chip.count)", attributes: [
                         .font: UIFont.systemFont(ofSize: 12, weight: .semibold),
                         .foregroundColor: chip.mine ? BubblePalette.accent : UIColor.secondaryLabel]))

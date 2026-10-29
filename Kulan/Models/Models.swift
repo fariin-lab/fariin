@@ -371,6 +371,8 @@ struct Message: Identifiable, Equatable, Codable {
     var isRestrictRequest = false
     /// A channel post's views (2026-10-28), counted by the server (functions-groups channelViews).
     var views: Int = 0
+    /// A channel post's reactions as counts only (2026-10-29): who picked what is never on the post.
+    var reactionCounts: [String: Int] = [:]
     var edited: Bool = false               // text was edited after sending
     /// Deleted for everyone. The document SURVIVES as a tombstone so both sides see that something
     /// was here and removed, the way the standard messengers do it, instead of a message silently
@@ -829,6 +831,8 @@ struct Message: Identifiable, Equatable, Codable {
         self.isRestrictRequest = data["restrictRequest"] as? Bool ?? false
         self.edited = data["edited"] as? Bool ?? false
         self.views = max(0, (data["views"] as? NSNumber)?.intValue ?? 0)
+        self.reactionCounts = ((data["reactionCounts"] as? [String: Any]) ?? [:])
+            .compactMapValues { ($0 as? NSNumber)?.intValue }.filter { $0.value > 0 }
         self.deleted = data["deleted"] as? Bool ?? false
         self.deletedBy = data["deletedBy"] as? String   // 2026-09-24 feature-audit
         self.forwarded = data["forwarded"] as? Bool ?? false
@@ -1169,6 +1173,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var followerArchived = false
     /// Admins' names under their posts (Channel Settings > Sign Posts).
     var signPosts = false
+    /// A channel's reactions (2026-10-29): "all", "some" (only `reactList`, up to 6) or "off".
+    var reactMode = "all"
+    var reactList: [String] = []
     /// group: what members may send (2026-10-20), `memberSend` {photos, videos, voice, files,
     /// stickers, gifs, links, polls, location}; a missing key = allowed. firestore.rules
     /// `memberSendOk` enforces it.
@@ -1362,6 +1369,10 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.hideMembers = data["hideMembers"] as? Bool ?? false
         self.isChannel = data["channel"] as? Bool ?? false
         self.signPosts = data["signPosts"] as? Bool ?? false
+        if let rs = data["reactSet"] as? [String: Any] {
+            self.reactMode = (rs["mode"] as? String).flatMap { ["all", "some", "off"].contains($0) ? $0 : nil } ?? "all"
+            self.reactList = (rs["list"] as? [String]) ?? []
+        }
         self.followerCount = max(0, (data["followerCount"] as? NSNumber)?.intValue ?? 0)
         self.postCount = max(0, (data["postCount"] as? NSNumber)?.intValue ?? 0)
         self.memberSend = data["memberSend"] as? [String: Bool] ?? [:]

@@ -491,6 +491,7 @@ struct ThreadView: View {
     // owner audit 2026-10-06 chat #13: arrivals at the bottom while covered still owe a receipt.
     @State private var coveredReadPending = false
     @State private var morePickerTarget: Message? // any-emoji picker
+    @State private var channelReactTarget: Message?   // a channel post's reactions (2026-10-29)
     @State private var reactorsTarget: MessageRef?   // "who reacted" sheet (id only)
     @State private var pendingDelete: Message?
     /// owner 2026-10-18: an admin deleting other members' messages in a group (AdminDeleteSheet).
@@ -2009,6 +2010,13 @@ struct ThreadView: View {
         .sheet(item: $morePickerTarget, onDismiss: { CMOverlay.current?.dismiss(animated: true) }) { m in
             EmojiMorePicker { emoji in react(m, emoji) }
         }
+        .sheet(item: $channelReactTarget) { m in
+            let live = repo.items.first(where: { $0.id == m.id }) ?? m
+            ChannelReactSheet(offered: channelOffered, counts: channelCounts(live), mine: myReaction(live),
+                              canReact: canReact(live), allowMore: conversation?.reactMode != "some",
+                              onPick: { e in react(live, e) },
+                              onMore: { DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { morePickerTarget = live } })
+        }
         .sheet(item: $reactorsTarget) { ref in
           if let m = repo.items.first(where: { $0.id == ref.id }) {
             // 2026-09-24 feature-audit: the live row, so a reaction added or taken back while the
@@ -3513,7 +3521,9 @@ struct ThreadView: View {
                 onConfirmLink: { WebLink.open($0) },   // owner 2026-10-13: no "Open link?", straight in
                 onUserNotFound: { tappedUserNotFound = true },
                 isGroup: isGroup,
-                onTapReactions: { reactorsTarget = MessageRef(id: msg.id) },
+                onTapReactions: {
+                    if conversation?.isChannel == true { channelReactTarget = msg } else { reactorsTarget = MessageRef(id: msg.id) }
+                },
                 onTapSender: { uid in
                     tappedMember = GroupInfoView.MemberAction(
                         id: uid, name: personName(uid), isAdmin: conversation?.isAdmin(uid) ?? false)
@@ -3716,7 +3726,10 @@ struct ThreadView: View {
         let geo = rowGeometry
         // The open Restricted chat request grows Reject / Accept buttons, a HEIGHT change on one row.
         let liveRequest = liveRestrictRequestId
-        let key = "\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)|\(liveRequest ?? "-")"   // 2026-09-24 feature-audit: edit clock
+        // A channel's reactions (2026-10-29): my picks live apart from the posts, so they key too.
+        let chanRx = conversation?.isChannel == true
+        let chanTok = chanRx ? "\(ChannelFollows.shared.myReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.pendingReactions[cid]?.hashValue ?? 0):\(channelReactOn)\(channelCanReact)" : "-"
+        let key = "\(chanTok)|\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)|\(liveRequest ?? "-")"   // 2026-09-24 feature-audit: edit clock
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
@@ -3738,7 +3751,11 @@ struct ThreadView: View {
                 // it loses its pill and takes a different gap while its two cluster flags often stay
                 // the same, so its signature did not move and the cell kept the pill in a shorter frame.
                 let cluster = "\(g.first)\(g.last)|\(g.dateLabel ?? "-")|\(g.gap)"
-                let reactions = m.reactions.isEmpty ? "" : m.reactions.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
+                var reactions = m.reactions.isEmpty ? "" : m.reactions.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
+                if chanRx {   // a channel post: its counts, my pick, and whether reactions are on (2026-10-29)
+                    reactions += "|" + m.reactionCounts.map { "\($0.key)\($0.value)" }.sorted().joined(separator: ",")
+                        + "|\(ChannelFollows.shared.myReaction(cid, m.id) ?? "")|\(channelReactOn)\(channelCanReact)"
+                }
                 // Ticks: the same gate rowView applies before it hands the cutoffs over (mine, not
                 // blocked, not held), so a row's value moves exactly when its drawn tick can.
                 let ticks = m.authorId == me && !repo.iBlocked && !m.held
@@ -3962,7 +3979,11 @@ struct ThreadView: View {
 
         let ctx = MessageRowContext(
             me: me, cid: cid, isGroup: isGroup, isChannel: conversation?.isChannel == true,
-            signPosts: conversation?.signPosts == true, dark: dark,
+            signPosts: conversation?.signPosts == true,
+            channelReactionsOn: channelReactOn, channelCanReact: channelCanReact,
+            channelMine: { [cid] in ChannelFollows.shared.myReaction(cid, $0) },
+            channelConfirmed: { [cid] in ChannelFollows.shared.confirmedReaction(cid, $0) },
+            dark: dark,
             selecting: selecting, wasSelecting: wasSelecting, selectedIds: selectedIds,
             highlightId: highlightId, firstUnreadId: firstUnreadId,
             chatColor: chatColorSpec,
@@ -4278,7 +4299,7 @@ struct ThreadView: View {
         // one just used to the front. Later the same day, with a picture: "never change the default
         // emojis", so a reaction from the swipe part stays in its own place there too
         // (`CMReactionBar.init`). Recents are still recorded, for the full picker.
-        return (QuickReaction.bar, m.reactions[me])
+        return (conversation?.isChannel == true ? channelOffered : QuickReaction.bar, myReaction(m))
     }
 
     private func handleCustomReact(_ rowId: String, _ selection: CMReactionSelection) {
@@ -4314,6 +4335,59 @@ struct ThreadView: View {
         guest == nil && m.sendState == nil && !iAmMuted && !reactionsHeldBack && !m.isCall && !m.isSystem
             && !m.deleted && m.pinNotice == nil && !m.isUnsupportedFeature
             && !m.isStoryReaction   // a story react-bar emoji takes no reaction (see Message.isStoryReaction)
+            && (conversation?.isChannel != true || channelCanReact)   // a channel: its followers, reactions on
+    }
+
+    // MARK: Channel reactions (2026-10-29)
+
+    /// The channel shows reactions (not "off").
+    private var channelReactOn: Bool { conversation?.isChannel == true && conversation?.reactMode != "off" }
+    /// I may react: reactions on and I follow it. Its admins post; they see the counts.
+    private var channelCanReact: Bool {
+        channelReactOn && guest == nil && !(conversation?.users.contains(me) ?? true) && ChannelFollows.shared.follows(cid)
+    }
+    /// What the bar offers in a channel: its own list, or the usual quick set.
+    private var channelOffered: [String] {
+        conversation?.reactMode == "some" ? (conversation?.reactList ?? []) : QuickReaction.bar
+    }
+    /// My reaction on a message: in a channel from my own entry, never from the post.
+    private func myReaction(_ m: Message) -> String? {
+        conversation?.isChannel == true ? ChannelFollows.shared.myReaction(cid, m.id) : m.reactions[me]
+    }
+    /// A post's counts with my pick still on its way already in them (as the row draws them).
+    private func channelCounts(_ m: Message) -> [String: Int] {
+        var counts = m.reactionCounts
+        let mine = ChannelFollows.shared.myReaction(cid, m.id), held = ChannelFollows.shared.confirmedReaction(cid, m.id)
+        if mine != held {
+            if let h = held { counts[h] = max(0, (counts[h] ?? 0) - 1) }
+            if let x = mine { counts[x, default: 0] += 1 }
+        }
+        return counts.filter { $0.value > 0 }
+    }
+
+    /// A channel reaction goes through the server, which keeps who picked what private.
+    private func sendChannelReaction(_ mid: String, _ emoji: String?) {
+        if let e = emoji, conversation?.reactMode == "some", !(conversation?.reactList.contains(e) ?? false) {
+            showJumpToast("This channel allows only " + (conversation?.reactList.joined(separator: " ") ?? ""))
+            return
+        }
+        if let e = emoji { ReactionRecents.add(e) }
+        let cid = cid
+        let follows = ChannelFollows.shared
+        let held = follows.confirmedReaction(cid, mid)
+        follows.setPendingReaction(cid, mid, emoji)
+        Task {
+            do {
+                try await ChannelService.react(cid: cid, mid: mid, emoji: emoji)
+                await MainActor.run { follows.settleReaction(cid, mid, confirmed: emoji) }
+            } catch {
+                let msg = error.localizedDescription
+                await MainActor.run {
+                    follows.settleReaction(cid, mid, confirmed: held)
+                    showJumpToast(msg)
+                }
+            }
+        }
     }
 
     /// An admin turned reactions off for me (`sendReactions`, audit 2026-10-26 item 6). The rules
@@ -4344,8 +4418,11 @@ struct ThreadView: View {
             return
         }
         // The user's chosen quick reaction, not a hard-coded heart (Settings > Appearance).
-        let quick = QuickReaction.current
-        let emoji: String? = Self.sameEmoji(m.reactions[me], quick) ? nil : quick
+        var quick = QuickReaction.current
+        // A channel with its own list: its first one when my quick one is not on it.
+        if conversation?.isChannel == true, conversation?.reactMode == "some",
+           let list = conversation?.reactList, !list.contains(quick), let first = list.first { quick = first }
+        let emoji: String? = Self.sameEmoji(myReaction(m), quick) ? nil : quick
         sendReaction(messageId: m.id, emoji: emoji, toAuthor: m.authorId)
     }
 
@@ -4687,7 +4764,9 @@ struct ThreadView: View {
                 Task { await ChatService.openConversation(uid: other) }   // 2026-09-24 audit: create it properly
             },
             onTapReactions: { id in
-                if let m = repo.items.first(where: { $0.rowId == id }) { reactorsTarget = MessageRef(id: m.id) }
+                if let m = repo.items.first(where: { $0.rowId == id }) {
+                    if conversation?.isChannel == true { channelReactTarget = m } else { reactorsTarget = MessageRef(id: m.id) }
+                }
             },
             onTapRetry: { id in
                 // 2026-09-24 decision D14: the tap asks Resend / Delete; the automatic retries still
@@ -8051,7 +8130,7 @@ struct ThreadView: View {
         guard canReact(live) else { return }
         // Same emoji with or without the U+FE0F presentation mark (an older ❤ against the bar's ❤️)
         // is the same reaction, so the tap takes it back instead of re-sending it.
-        let new = Self.sameEmoji(live.reactions[me], emoji) ? nil : emoji
+        let new = Self.sameEmoji(myReaction(live), emoji) ? nil : emoji
         sendReaction(messageId: live.id, emoji: new, toAuthor: live.authorId)
     }
 
@@ -8059,6 +8138,7 @@ struct ThreadView: View {
     /// (message deleted meanwhile, server said no) used to vanish with nothing said. Same brief toast
     /// the forward and jump paths use.
     private func sendReaction(messageId: String, emoji: String?, toAuthor: String) {
+        if conversation?.isChannel == true { sendChannelReaction(messageId, emoji); return }
         RxTrace.begin("sendReaction \(emoji ?? "remove")")   // TEMPORARY, see RxTrace
         // 2026-09-24 feature-audit: every pick feeds the quick bar's recents (bar, picker and
         // double-tap alike); only the full picker used to record one.

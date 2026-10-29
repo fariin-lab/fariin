@@ -111,6 +111,14 @@ struct GroupSettingsView: View {
     /// Sign Posts (2026-10-28, the reference app's channel signatures): the admin's name under
     /// each post. Off, posts are the channel speaking.
     @State private var signOn: Bool?
+    private var reactionsValue: String {
+        switch conv?.reactMode {
+        case "off": return "Off"
+        case "some": return (conv?.reactList ?? []).joined()
+        default: return "Any"
+        }
+    }
+
     private var channelPostsSection: some View {
         Section {
             Toggle("Sign Posts", isOn: Binding(
@@ -123,6 +131,16 @@ struct GroupSettingsView: View {
                     }
                 }))
                 .disabled(!canEdit)
+            // What followers may react with (2026-10-29).
+            if canEdit {
+                NavigationLink { ChannelReactionsSettingsView(cid: cid) } label: {
+                    HStack {
+                        Text("Reactions")
+                        Spacer()
+                        Text(reactionsValue).foregroundStyle(.secondary)
+                    }
+                }
+            }
         } footer: {
             Text("Show the name of the admin who wrote each post. Off, posts come from the channel.")
         }

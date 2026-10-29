@@ -20,6 +20,12 @@ struct MessageRowContext {
     var isChannel: Bool = false
     /// The channel signs its posts with the admin's name (Sign Posts).
     var signPosts: Bool = false
+    /// A channel's reactions (2026-10-29): shown at all (not "off"), may I add one (a follower),
+    /// and my pick per post, as shown and as the server holds it (the counts include the latter).
+    var channelReactionsOn: Bool = false
+    var channelCanReact: Bool = false
+    var channelMine: (String) -> String? = { _ in nil }
+    var channelConfirmed: (String) -> String? = { _ in nil }
     var dark: Bool
     var selecting: Bool
     /// Their `wasShowingSelectionUI`: was selection mode up on the PREVIOUS pass. See
@@ -761,6 +767,7 @@ enum MessageRowModelBuilder {
     /// the uid away in the same expression that counts it — so the chip could say how many but never
     /// who. `msg.reactions` is uid → emoji, and the reactor is the key.
     private static func reactionChips(_ msg: Message, ctx: MessageRowContext) -> [ReactionChip] {
+        if ctx.isChannel { return channelChips(msg, ctx: ctx) }
         guard !msg.reactions.isEmpty else { return [] }
         let mine = msg.reactions[ctx.me]
         var byEmoji: [String: [String]] = [:]
@@ -774,6 +781,26 @@ enum MessageRowModelBuilder {
             return ReactionChip(emoji: emoji, count: uids.count, mine: mine == emoji, faces: faces)
         }
         .sorted { $0.count != $1.count ? $0.count > $1.count : $0.emoji > $1.emoji }
+    }
+
+    /// A channel post: counts only, never faces (followers never see who reacted). My pick still on
+    /// its way moves the counts at once. Nobody yet: one "add" chip, for a follower.
+    private static func channelChips(_ msg: Message, ctx: MessageRowContext) -> [ReactionChip] {
+        guard ctx.channelReactionsOn, !msg.isSystem, !msg.isCall else { return [] }
+        var counts = msg.reactionCounts
+        let mine = ctx.channelMine(msg.id), held = ctx.channelConfirmed(msg.id)
+        if mine != held {
+            if let h = held { counts[h] = max(0, (counts[h] ?? 0) - 1) }
+            if let m = mine { counts[m, default: 0] += 1 }
+        }
+        let chips = counts.filter { $0.value > 0 }.map {
+            ReactionChip(emoji: $0.key, count: $0.value, mine: mine == $0.key, faces: [], showCount: true)
+        }
+        .sorted { $0.count != $1.count ? $0.count > $1.count : $0.emoji > $1.emoji }
+        if chips.isEmpty, ctx.channelCanReact, msg.sendState == nil {
+            return [ReactionChip(emoji: ReactionChip.addToken, count: 0, mine: false, faces: [])]
+        }
+        return chips
     }
 
     private static func replyThumb(_ o: Message?) -> QuoteChrome.Thumb {

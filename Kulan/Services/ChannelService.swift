@@ -117,6 +117,19 @@ enum ChannelService {
         _ = try await fn.httpsCallable("removeChannelFollower").call(["cid": cid, "uid": uid, "ban": ban])
     }
 
+    /// React to a post (nil takes mine back). The server keeps who picked what private and answers
+    /// with the post's counts.
+    static func react(cid: String, mid: String, emoji: String?) async throws {
+        var data: [String: Any] = ["cid": cid, "mid": mid]
+        if let emoji { data["emoji"] = emoji }
+        _ = try await fn.httpsCallable("reactChannelPost").call(data)
+    }
+
+    /// The channel's reactions: "all", "some" (with up to 6) or "off".
+    static func setReactions(cid: String, mode: String, list: [String]) async throws {
+        _ = try await fn.httpsCallable("setChannelReactions").call(["cid": cid, "mode": mode, "list": list])
+    }
+
     /// Dismiss an admin (the owner, or the admin who brought them in): they go back to following.
     static func dismissAdmin(cid: String, uid: String) async throws {
         _ = try await fn.httpsCallable("dismissChannelAdmin").call(["cid": cid, "uid": uid])
@@ -182,6 +195,11 @@ final class ChannelFollows {
 
     private(set) var entries: [String: Entry] = [:]
     private var docs: [String: Conversation] = [:]
+    /// My reaction on each post, per channel (cid -> mid -> emoji), from my own entry's `rx`.
+    /// Apart from `entries` so a reaction never redraws the chat list.
+    private(set) var myReactions: [String: [String: String]] = [:]
+    /// A pick on screen before the server has it (cid -> mid -> emoji, "" = taken back).
+    private(set) var pendingReactions: [String: [String: String]] = [:]
     @ObservationIgnored private var listListener: ListenerRegistration?
     @ObservationIgnored private var docListeners: [String: ListenerRegistration] = [:]
     @ObservationIgnored private var uid: String?
@@ -216,15 +234,37 @@ final class ChannelFollows {
                     return
                 }
                 var next: [String: Entry] = [:]
+                var rx: [String: [String: String]] = [:]
                 for d in snap.documents {
                     let data = d.data()
+                    if let r = data["rx"] as? [String: String], !r.isEmpty { rx[d.documentID] = r }
                     next[d.documentID] = Entry(read: (data["read"] as? NSNumber)?.intValue ?? 0,
                                                muted: data["muted"] as? Bool ?? false,
                                                pinned: data["pinned"] as? Bool ?? false,
                                                archived: data["archived"] as? Bool ?? false)
                 }
                 self.apply(next)
+                if rx != self.myReactions { self.myReactions = rx }
             }
+    }
+
+    /// My reaction on a post as shown now: a pending pick first, then what the server holds.
+    func myReaction(_ cid: String, _ mid: String) -> String? {
+        if let p = pendingReactions[cid]?[mid] { return p.isEmpty ? nil : p }
+        return myReactions[cid]?[mid]
+    }
+    /// What the server holds (the counts on the post already include it).
+    func confirmedReaction(_ cid: String, _ mid: String) -> String? { myReactions[cid]?[mid] }
+
+    func setPendingReaction(_ cid: String, _ mid: String, _ emoji: String?) {
+        pendingReactions[cid, default: [:]][mid] = emoji ?? ""
+    }
+    /// The server answered: what it holds now, and nothing pending.
+    func settleReaction(_ cid: String, _ mid: String, confirmed: String?) {
+        pendingReactions[cid]?[mid] = nil
+        var m = myReactions[cid] ?? [:]
+        m[mid] = confirmed
+        myReactions[cid] = m
     }
 
     func stop() {
@@ -233,6 +273,8 @@ final class ChannelFollows {
         docListeners = [:]
         entries = [:]
         docs = [:]
+        myReactions = [:]
+        pendingReactions = [:]
         uid = nil
     }
 

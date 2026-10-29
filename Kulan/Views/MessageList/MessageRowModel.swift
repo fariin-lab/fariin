@@ -32,6 +32,11 @@ struct ReactionChip: Equatable {
     var count: Int
     var mine: Bool
     var faces: [ReactionFace]
+    /// A channel post shows its count from 1 up: there are never faces there (2026-10-29).
+    var showCount = false
+    /// The chip that stands for "add the first reaction" on a channel post nobody has reacted to.
+    static let addToken = "__add__"
+    var isAdd: Bool { emoji == Self.addToken }
 }
 
 /// The sender's name and avatar above/beside a bubble in a group.

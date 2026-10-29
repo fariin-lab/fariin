@@ -682,3 +682,170 @@ struct ChannelAdminCard: View {
         shareText = "Follow \u{201C}\(conv.title)\u{201D} on Fariin: " + link
     }
 }
+
+/// A channel post's reactions (2026-10-29), opened from the row under the post: every emoji with its
+/// count, mine ringed. A follower taps one to react (the same one again takes it back); an admin sees
+/// the counts. Never who reacted: nobody, not even the admins, is shown that.
+struct ChannelReactSheet: View {
+    /// What I may pick from: the channel's own six, or the quick set when any emoji goes.
+    let offered: [String]
+    let counts: [String: Int]
+    let mine: String?
+    let canReact: Bool
+    /// Any emoji allowed: a "More" circle opens the full picker.
+    let allowMore: Bool
+    let onPick: (String) -> Void
+    let onMore: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    /// The offered ones in their order, then any others already on the post, most first.
+    private var shown: [String] {
+        let extra = counts.filter { $0.value > 0 && !offered.contains($0.key) }
+            .sorted { $0.value > $1.value }.map(\.key)
+        return (canReact ? offered : offered.filter { (counts[$0] ?? 0) > 0 }) + extra
+    }
+    private var total: Int { counts.values.reduce(0, +) }
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text(total == 0 ? "Be the first to react" : (total == 1 ? "1 reaction" : "\(total) reactions"))
+                .font(.headline)
+                .padding(.top, 22)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(shown, id: \.self) { e in
+                        Button {
+                            guard canReact else { return }
+                            onPick(e)
+                            dismiss()
+                        } label: {
+                            VStack(spacing: 6) {
+                                Text(e).font(.system(size: 30))
+                                    .frame(width: 54, height: 54)
+                                    .background(Circle().fill(mine == e ? Color(hex: 0x2392FE).opacity(0.18)
+                                                                         : Color(.secondarySystemBackground)))
+                                    .overlay(Circle().stroke(mine == e ? Color(hex: 0x2392FE) : .clear, lineWidth: 2))
+                                Text("\(counts[e] ?? 0)").font(.footnote.monospacedDigit())
+                                    .foregroundStyle(mine == e ? Color(hex: 0x2392FE) : .secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(e), \(counts[e] ?? 0)")
+                    }
+                    if canReact && allowMore {
+                        Button { dismiss(); onMore() } label: {
+                            VStack(spacing: 6) {
+                                Image(systemName: "plus").font(.system(size: 20, weight: .semibold))
+                                    .frame(width: 54, height: 54)
+                                    .background(Circle().fill(Color(.secondarySystemBackground)))
+                                Text("More").font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+            Text(canReact ? "Only the numbers are shown. Nobody sees who reacted."
+                          : "Followers react here. Nobody, admins included, sees who reacted.")
+                .font(.footnote).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center).padding(.horizontal, 24)
+            Spacer(minLength: 0)
+        }
+        .presentationDetents([.height(250)])
+    }
+}
+
+/// Channel Settings > Reactions (2026-10-29): any emoji, only the ones I pick (up to 6), or none.
+struct ChannelReactionsSettingsView: View {
+    let cid: String
+    @State private var mode = "all"
+    @State private var list: [String] = []
+    @State private var loaded = false
+    @State private var saving = false
+    @State private var problem: String?
+
+    /// What an owner picks from: a wide set, so "only these" can fit any channel.
+    static let palette = ["👍", "❤️", "🔥", "😂", "😮", "😢", "🙏", "👏", "🎉", "💯", "🤔", "😍",
+                          "👎", "😡", "🤝", "💪", "✅", "⭐️", "🌙", "☀️", "⚽️", "📌", "💡", "🙌"]
+
+    var body: some View {
+        Form {
+            Section {
+                choice("all", "Any emoji", "Followers can react with any emoji.")
+                choice("some", "Only these", "Followers can react only with the ones you pick.")
+                choice("off", "Off", "No reactions on this channel's posts.")
+            } footer: {
+                Text("Followers never see who reacted, only how many.")
+            }
+            if mode == "some" {
+                Section {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 12) {
+                        ForEach(Self.palette, id: \.self) { e in
+                            let on = list.contains(e)
+                            Button { toggle(e) } label: {
+                                Text(e).font(.system(size: 28))
+                                    .frame(width: 46, height: 46)
+                                    .background(Circle().fill(on ? Color(hex: 0x2392FE).opacity(0.18) : .clear))
+                                    .overlay(Circle().stroke(on ? Color(hex: 0x2392FE) : .clear, lineWidth: 2))
+                            }
+                            .buttonStyle(.plain)
+                            .opacity(!on && list.count >= 6 ? 0.35 : 1)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                } header: {
+                    Text("Pick up to 6 (\(list.count)/6)")
+                } footer: {
+                    if list.isEmpty { Text("Pick at least one, or reactions will be off.") }
+                }
+            }
+            if let problem { Text(problem).foregroundStyle(.red) }
+        }
+        .navigationTitle("Reactions")
+        .navigationBarTitleDisplayMode(.inline)
+        .disabled(saving)
+        .onAppear {
+            guard !loaded, let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) else { return }
+            mode = c.reactMode
+            list = c.reactList
+            loaded = true
+        }
+    }
+
+    private func choice(_ value: String, _ title: String, _ line: String) -> some View {
+        Button {
+            mode = value
+            if value == "some" && list.isEmpty { list = Array(Self.palette.prefix(6)) }
+            save()
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).foregroundStyle(.primary)
+                    Text(line).font(.footnote).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if mode == value { Image(systemName: "checkmark").foregroundStyle(Color(hex: 0x2392FE)) }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func toggle(_ e: String) {
+        if let i = list.firstIndex(of: e) { list.remove(at: i) }
+        else if list.count < 6 { list.append(e) }
+        else { return }
+        save()
+    }
+
+    private func save() {
+        let m = mode, l = list
+        saving = true; problem = nil
+        Task {
+            do { try await ChannelService.setReactions(cid: cid, mode: m, list: l) }
+            catch { problem = error.localizedDescription }
+            saving = false
+        }
+    }
+}
