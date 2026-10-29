@@ -28,6 +28,8 @@ struct PublicGroupHit: Identifiable, Equatable {
     let isMember: Bool
     /// The panel's badge, from the server (older servers send none: false).
     var verified: Bool = false
+    /// A channel (2026-10-28): the count is its followers.
+    var isChannel = false
     var id: String { cid }
 
     /// "@name · 12 members", the search row's second line.
@@ -35,7 +37,8 @@ struct PublicGroupHit: Identifiable, Equatable {
     /// then, and no "0 members" when neither knows (owner 2026-10-23).
     @MainActor var subtitle: String {
         let n = memberCount > 0 ? memberCount : (GroupDirectory.cachedPreview(name: nil, cid: cid)?.memberCount ?? 0)
-        return n > 0 ? "@\(handle) · \(GroupDirectory.membersLine(n))" : "@\(handle)"
+        let line = isChannel ? GroupDirectory.followersLine(n) : GroupDirectory.membersLine(n)
+        return n > 0 ? "@\(handle) · \(line)" : "@\(handle)"
     }
 
     init?(_ row: [String: Any]) {
@@ -51,6 +54,7 @@ struct PublicGroupHit: Identifiable, Equatable {
         self.memberCount = (row["memberCount"] as? NSNumber)?.intValue ?? 0
         self.isMember = row["isMember"] as? Bool ?? false
         self.verified = row["verified"] as? Bool ?? false
+        self.isChannel = row["channel"] as? Bool ?? false
     }
 }
 

@@ -742,7 +742,7 @@ struct PublicGroupInfoView: View {
     private var membersCard: some View {
         let shown = allMembers ? p.members : Array(p.members.prefix(6))
         return VStack(alignment: .leading, spacing: 6) {
-            Text(GroupDirectory.membersLine(p.memberCount))
+            Text(p.isChannel ? GroupDirectory.followersLine(p.memberCount) : GroupDirectory.membersLine(p.memberCount))
                 .font(.headline).foregroundStyle(.secondary)
                 .padding(.leading, 32)
             VStack(spacing: 0) {
