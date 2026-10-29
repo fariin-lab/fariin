@@ -4673,7 +4673,7 @@ struct ChatRow: View, Equatable {
         let now = Date().timeIntervalSince1970 * 1000
         // A blocked group member's own "recording…" is hidden the same as their text (audit L7):
         // filtered by uid, not by the 1:1-only check above, which is always false for groups.
-        let recs = conv.others(me).filter { conv.recording[$0] == true && !lastEventHiddenByBlock(author: $0, atMillis: now) }
+        let recs = conv.others(me).filter { conv.recording[$0] == true && conv.activityFresh($0) && !lastEventHiddenByBlock(author: $0, atMillis: now) }
         guard !recs.isEmpty else { return nil }
         if !conv.isGroup { return "recording…" }
         let n = conv.names[recs[0]] ?? "Someone"
@@ -4685,7 +4685,7 @@ struct ChatRow: View, Equatable {
         guard !conv.isBlockedByMe(me) else { return nil }
         let now = Date().timeIntervalSince1970 * 1000
         // Same block filter as recordingLabel above (audit L7).
-        let typers = conv.others(me).filter { conv.typing[$0] == true && !lastEventHiddenByBlock(author: $0, atMillis: now) }
+        let typers = conv.others(me).filter { conv.typing[$0] == true && conv.activityFresh($0) && !lastEventHiddenByBlock(author: $0, atMillis: now) }
         guard !typers.isEmpty else { return nil }
         if !conv.isGroup { return "typing…" }
         let names = typers.map { u in

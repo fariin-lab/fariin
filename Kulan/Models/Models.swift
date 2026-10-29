@@ -1099,6 +1099,14 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var lastSender: String            // uid of who sent the last message ("" if unknown)
     var unreadCount: [String: Int]
     var typing: [String: Bool]
+    /// Seconds since 1970 each person's typing/recording flag was last refreshed (when known).
+    var typingAt: [String: Double] = [:]
+    /// Is `uid`'s typing or recording flag recent? Senders refresh it every few seconds while it
+    /// is on, so one older than 25 s was left behind (an app killed, an account signed out).
+    func activityFresh(_ uid: String) -> Bool {
+        guard let at = typingAt[uid], at > 0 else { return true }   // an older build: the 15 s row clock decides
+        return Date().timeIntervalSince1970 - at < 25
+    }
     // Voice-note recording rides the SAME "typing" field, as a string value ("audio-<seconds>")
     // instead of a Bool — old clients' boolMap reads it as not-typing and shows nothing.
     var recording: [String: Bool]
@@ -1322,6 +1330,13 @@ struct Conversation: Identifiable, Equatable, Hashable {
             .compactMapValues { ($0 as? Bool) == true || ($0 as? String)?.hasPrefix("text") == true ? true : nil }
         self.recording = (data["typing"] as? [String: Any] ?? [:])
             .compactMapValues { ($0 as? String)?.hasPrefix("audio") == true ? true : nil }
+        // When each flag was last refreshed ("text-<seconds>" / "audio-<seconds>"); a Bool from an
+        // older build has no time (0). See `activityFresh` (owner 2026-10-29, a flag left on by a
+        // sign-out showed "typing…" for minutes).
+        self.typingAt = (data["typing"] as? [String: Any] ?? [:]).compactMapValues { v -> Double? in
+            guard let s = v as? String, let dash = s.firstIndex(of: "-") else { return nil }
+            return Double(s[s.index(after: dash)...])
+        }
         self.typingRawKey = (data["typing"] as? [String: Any] ?? [:])
             .map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
         self.mutedBy = doubleMap(data["mutedBy"])
