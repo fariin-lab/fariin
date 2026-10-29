@@ -4140,7 +4140,18 @@ struct ThreadView: View {
         // long-pressed like a message. It is a line about the room, not a message in it; nothing on
         // that menu (reply, forward, copy, delete) means anything for it. An empty list is what stops
         // the press ripening: `beginCustomMenu` opens nothing when there is nothing to open.
-        guard !m.isSystem else { return [] }
+        // Except for the room's admins (owner 2026-10-29: "admin or owner can't delete this badges
+        // text, on long press show Select and Delete"): they may clear a notice for everyone, and a
+        // group hides its tombstones (ThreadRepository), so the line simply goes.
+        if m.isSystem {
+            guard canDeleteNotice(m) else { return [] }
+            return [
+                CMAction(title: "Select", icon: "checkmark.circle") {
+                    setUIMode(.selection); selectedIds = [m.id]
+                },
+                CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = m },
+            ]
+        }
         let mine = m.authorId == me
         let canPin = !isGroup || (conversation?.adminCan(me, .pinMessages) ?? false)
         let isPinned = repo.pinnedMessageIds.contains(m.id)
@@ -5305,6 +5316,13 @@ struct ThreadView: View {
         return c.isOwner(me) || !c.isOwner(m.authorId)
     }
 
+    /// A group notice an admin holding "Delete messages" may remove for everyone. Not a member's own
+    /// "joined" or "left" line: those are about the room, and only its admins clear them.
+    private func canDeleteNotice(_ m: Message) -> Bool {
+        guard m.isSystem, let c = conversation, c.isGroup, c.adminCan(me, .deleteMessages) else { return false }
+        return canDeleteForEveryone(m)
+    }
+
     /// 2026-10-19: a synthetic album child is "<parentId>-<n>" whose parent is a loaded message.
     /// The old test was "id has a dash", but a text's id is its UUID clientId, so every text had
     /// one and admins lost Delete for everyone on texts.
@@ -5551,7 +5569,7 @@ struct ThreadView: View {
         // one call in a selection of 76 disabled the trash for all of them, and the bar kept it red,
         // so it looked live. A single call already has Delete, and `bulkDelete` already sends calls
         // to delete-for-me (`canDeleteForEveryone` excludes them).
-        return picked.allSatisfy { !$0.isSystem }
+        return picked.allSatisfy { !$0.isSystem || canDeleteNotice($0) }
     }
 
     /// The chat's own colour for a filled tick, matching what the row builder hands the UIKit rows.
