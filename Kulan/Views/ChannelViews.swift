@@ -56,33 +56,26 @@ struct ChannelFollowerBar: View {
     /// Follow (the full-width blue bar) and "You're following this channel" (the official chat's
     /// card) as ONE glass shape, so the spring carries one into the other instead of swapping views.
     private var followMorph: some View {
+        // ⛔ NO "YOU'RE FOLLOWING" CARD (owner 2026-10-29, evening: the Follow button being gone
+        // already says you follow). At the tap the bar fades and shrinks away; once the follow lands
+        // ThreadView drops the bar and a follower's bottom is empty. A refusal brings Follow back.
         Button { follow() } label: {
-            ZStack {
-                Text("Follow")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .opacity(joined ? 0 : 1)
-                // Primary, not secondary (owner 2026-10-29: "this card use Apple liquid glass"): on
-                // glass over busy posts the grey words sank into the messages behind them.
-                Text("You're following this channel")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.center)
-                    .opacity(joined ? 1 : 0)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 18)
-            .frame(height: joined ? 48 : 50)
-            .liquidGlass(RoundedRectangle(cornerRadius: joined ? 26 : 25, style: .continuous),
-                         interactive: true, tint: joined ? nil : Color(hex: 0x2392FE))
-            .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            Text("Follow")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 18)
+                .frame(height: 50)
+                .liquidGlass(RoundedRectangle(cornerRadius: 25, style: .continuous),
+                             interactive: true, tint: Color(hex: 0x2392FE))
+                .contentShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
         }
         .buttonStyle(.plain)
-        // Not disabled once joined: the glass answers a touch the way Apple's does (`follow()`
-        // already ignores a tap while following).
-        // The Follow bar's 16 pt in from the sides; the card sits at the official chat's width.
-        .padding(.horizontal, joined ? 0 : 16)
-        .accessibilityLabel(joined ? "You're following this channel" : "Follow")
+        .padding(.horizontal, 16)
+        .opacity(joined ? 0 : 1)
+        .scaleEffect(joined ? 0.94 : 1)
+        .allowsHitTesting(!joined)
+        .accessibilityLabel("Follow")
     }
 
     /// The official chat's bottom card, word for word in style (`OfficialChatView.cannotReplyBar`).
