@@ -1532,15 +1532,18 @@ struct EditGroupView: View {
                                         // exactly the badge you used on the profile avatar";
                                         // ProfilePhotoSheet.removeBadge): a minus, 17 semibold, a 40 pt
                                         // Liquid Glass circle, the same offset. Was a small dark ✕.
+                                        // Owner 2026-10-29: smaller (30 pt) and mostly outside the photo,
+                                        // ~60% out / 40% over it. Centre sits 6 pt past the rim on the
+                                        // 45° line of the 120 pt circle.
                                         Image(systemName: "minus")
-                                            .font(.system(size: 17, weight: .semibold))
+                                            .font(.system(size: 13, weight: .semibold))
                                             .foregroundStyle(Color(.label))
-                                            .frame(width: 40, height: 40)
+                                            .frame(width: 30, height: 30)
                                             .liquidGlass(Circle(), interactive: true)
-                                            .contentShape(Circle())
+                                            .contentShape(Circle().inset(by: -7))
                                     }
                                     .buttonStyle(.plain)
-                                    .offset(x: 4, y: 8)
+                                    .offset(x: 2, y: -2)
                                     .accessibilityLabel("Remove Photo")
                                 }
                             }
