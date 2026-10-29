@@ -129,8 +129,8 @@ struct GroupStoryRow<Trailing: View>: View {
 }
 
 extension GroupStoryRow where Trailing == EmptyView {
-    init(name: String, photoUrl: String?, members: Int) {
-        self.init(name: name, photoUrl: photoUrl, members: members) { EmptyView() }
+    init(name: String, photoUrl: String?, members: Int, channel: Bool = false) {
+        self.init(name: name, photoUrl: photoUrl, members: members, channel: channel) { EmptyView() }
     }
 }
 
