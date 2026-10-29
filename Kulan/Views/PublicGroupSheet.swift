@@ -792,15 +792,9 @@ struct PublicGroupInfoView: View {
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    /// What kind of channel this is, Report, and when it was made.
+    /// Report, and when it was made. (The "Public channel / Followers are private" card is gone,
+    /// owner 2026-10-29.)
     @ViewBuilder private var channelFoot: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            channelFact("globe", "Public channel", "Anyone can find this channel and read its posts. Only its admins post.")
-            Divider().padding(.leading, 52)
-            channelFact("lock", "Followers are private", "Nobody sees who follows this channel.")
-        }
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .padding(.horizontal, 16).padding(.top, 24)
         Button { if !reported { confirmReport = true } } label: {
             Text(reported ? "Reported" : "Report Channel").foregroundStyle(reported ? Color.secondary : Color.red)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -808,7 +802,7 @@ struct PublicGroupInfoView: View {
                 .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 16).padding(.top, 16)
+        .padding(.horizontal, 16).padding(.top, 24)
         if p.createdAt > 0 {
             Text("Created \(Date(timeIntervalSince1970: p.createdAt / 1000).formatted(date: .abbreviated, time: .omitted)).")
                 .font(.footnote).foregroundStyle(.secondary)
@@ -818,18 +812,6 @@ struct PublicGroupInfoView: View {
         if let followError {
             Text(followError).font(.footnote).foregroundStyle(.red).padding(.horizontal, 32).padding(.top, 6)
         }
-    }
-
-    private func channelFact(_ icon: String, _ title: String, _ line: String) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            Image(systemName: icon).font(.system(size: 20)).frame(width: 24)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.body)
-                Text(line).font(.subheadline).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14).padding(.vertical, 12)
     }
 
     private func follow() {
