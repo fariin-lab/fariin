@@ -33,9 +33,11 @@ struct GroupLinkEditPage: View {
             Form {
                 nameSection
                 Section {
-                    Toggle("Approve New Members", isOn: $approval)
+                    Toggle(Conversation.Right.isChannel(cid) ? "Approve New Followers" : "Approve New Members", isOn: $approval)
                 } footer: {
-                    Text("An admin approves each person who asks to join with this link.")
+                    Text(Conversation.Right.isChannel(cid)
+                         ? "An admin approves each person who asks to follow with this link."
+                         : "An admin approves each person who asks to join with this link.")
                 }
                 timeSection
                 if !approval { usesSection }

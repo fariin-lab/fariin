@@ -204,15 +204,17 @@ struct GroupLinksPage: View {
 
     private func primarySection(_ p: GroupLink?) -> some View {
         Section {
-            PrimaryLinkCard(link: p, working: working,
+            PrimaryLinkCard(link: p, working: working, channel: Conversation.Right.isChannel(cid),
                             onCopy: copy, onShareInApp: { shareText = $0.url }, onQR: { qrLink = $0 },
                             onCreate: createPrimary, onJoined: { detailLink = $0 })
                 .listRowInsets(EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16))
         } header: {
             Text("Invite Link")
         } footer: {
-            Text(p == nil ? "This group has no invite link. People can only be added by its members."
-                          : "Anyone with Fariin who has this link can join the group.")
+            Text(Conversation.Right.isChannel(cid)
+                 ? (p == nil ? "This channel has no invite link." : "Anyone with Fariin who has this link can follow the channel.")
+                 : (p == nil ? "This group has no invite link. People can only be added by its members."
+                             : "Anyone with Fariin who has this link can join the group."))
         }
     }
 
@@ -240,12 +242,14 @@ struct GroupLinksPage: View {
         Section {
             // The chosen value is held until the reload after the write lands (2026-10-19 fix
             // round): the switch flicked back to the old value while the server answered.
-            Toggle("Approve New Members", isOn: Binding(
+            Toggle(Conversation.Right.isChannel(cid) ? "Approve New Followers" : "Approve New Members", isOn: Binding(
                 get: { heldApproval ?? p.requestApproval },
                 set: { on in setApproval(p, on) }))
                 .disabled(working)
         } footer: {
-            Text("When this is on, an admin approves each person before they join with this link.")
+            Text(Conversation.Right.isChannel(cid)
+                 ? "When this is on, an admin approves each person before they follow with this link."
+                 : "When this is on, an admin approves each person before they join with this link.")
         }
     }
 
@@ -423,6 +427,8 @@ private struct GroupLinksDialogs: ViewModifier {
 private struct PrimaryLinkCard: View {
     let link: GroupLink?
     let working: Bool
+    /// A channel's link: people follow, not join (2026-10-29).
+    var channel = false
     let onCopy: (GroupLink) -> Void
     let onShareInApp: (GroupLink) -> Void
     let onQR: (GroupLink) -> Void
@@ -440,7 +446,7 @@ private struct PrimaryLinkCard: View {
             if let link {
                 Button { onJoined(link) } label: {
                     HStack(spacing: 4) {
-                        JoinedFacesRow(link: link)
+                        JoinedFacesRow(link: link, channel: channel)
                         if link.usedCount > 0 {
                             Image(systemName: "chevron.right")
                                 .font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
@@ -525,6 +531,7 @@ private struct LinkCapsuleLabel: View {
 /// Up to three faces of the first people in, and how many came by the link.
 private struct JoinedFacesRow: View {
     let link: GroupLink
+    var channel = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -543,9 +550,9 @@ private struct JoinedFacesRow: View {
 
     private var line: String {
         switch link.usedCount {
-        case 0: return "No one joined yet"
-        case 1: return "1 person joined"
-        default: return "\(link.usedCount) people joined"
+        case 0: return channel ? "No one followed yet" : "No one joined yet"
+        case 1: return channel ? "1 person followed" : "1 person joined"
+        default: return "\(link.usedCount) people \(channel ? "followed" : "joined")"
         }
     }
 }

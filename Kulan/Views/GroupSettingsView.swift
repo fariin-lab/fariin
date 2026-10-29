@@ -1410,8 +1410,10 @@ struct GroupRequestsView: View {
     private var approvalLine: String {
         guard let p = links?.primary else { return "People who ask to join through a link show up here." }
         return p.requestApproval
-            ? "Approve New Members is on: people who use the link wait here for an admin."
-            : "Approve New Members is off: people who use the link join straight away."
+            ? (Conversation.Right.isChannel(cid) ? "Approve New Followers is on: people who use the link wait here for an admin."
+                                                  : "Approve New Members is on: people who use the link wait here for an admin.")
+            : (Conversation.Right.isChannel(cid) ? "Approve New Followers is off: people who use the link follow straight away."
+                                                  : "Approve New Members is off: people who use the link join straight away.")
     }
 
     // MARK: Invites
