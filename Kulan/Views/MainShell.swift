@@ -3407,6 +3407,11 @@ struct ChatsView: View {
                 // owner 2026-10-18: the sheet sizes itself to what it holds (its own detent).
                 JoinGroupSheet(code: item.code)
             }
+            // A channel admin invite link (2026-10-29): Accept / Decline, or Revoke for its admins.
+            .sheet(item: Binding(get: { router.pendingAdminInvite.map { ShareText(id: $0) } },
+                                 set: { if $0 == nil { router.pendingAdminInvite = nil } })) { t in
+                AdminInviteSheet(code: t.id)
+            }
             // 2026-10-19 groups v2: a public group from global search or a fariin.com/<name> link.
             // Pushed from the right like any page (owner 2026-10-20: it came up from the bottom).
             // ⛔ ON `path`, LIKE A CHAT (owner 2026-10-22: swipe back stuck, tab bar still up). An

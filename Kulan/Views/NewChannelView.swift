@@ -25,7 +25,8 @@ struct NewChannelView: View {
     @State private var creating = false
     @State private var error: String?
     @State private var createdCid: String?
-    @State private var addFollowers = false
+    /// The invite step's message (the channel's link); closing that sheet opens the channel.
+    @State private var inviteText: String?
     @FocusState private var nameFocused: Bool
 
     /// The reference app's limits: 255 for the description; our group names already stop at 100.
@@ -43,26 +44,15 @@ struct NewChannelView: View {
                     switch step {
                     case .details: details
                     case .type(let cid):
-                        GroupTypeView(cid: cid) { addFollowers = true }
+                        GroupTypeView(cid: cid) { Task { await inviteFollowers(cid) } }
                     }
                 }
         }
-        .sheet(isPresented: $addFollowers, onDismiss: finish) {
-            AddPeopleSheet(alreadyIn: [], actionTitle: "Add Followers") { people in
-                guard let cid = createdCid else { return }
-                let uids = people.map(\.uid)
-                Task {
-                    guard let r = try? await ChannelService.addFollowers(cid: cid, uids: uids) else {
-                        ToastNotice.show("Could not add followers. Try again from the channel.")
-                        return
-                    }
-                    if !r.refused.isEmpty {
-                        ToastNotice.show(r.refused.count == 1
-                            ? "1 person's settings don't allow being added."
-                            : "\(r.refused.count) people's settings don't allow being added.")
-                    }
-                }
-            }
+        // Step 4 INVITES (owner 2026-10-29): the channel's link goes to the chats I pick, and each
+        // person follows if they want to. Nobody is added to a channel they did not choose.
+        .sheet(item: Binding(get: { inviteText.map { ShareText(id: $0) } },
+                             set: { if $0 == nil { inviteText = nil; finish() } })) { t in
+            SendContactSheet(contactText: t.id)
         }
     }
 
@@ -263,6 +253,21 @@ struct NewChannelView: View {
     }
 
     /// Done (followers added, or skipped): into the channel.
+    /// The link to send: the public one, else the private channel's invite link. None: straight in.
+    private func inviteFollowers(_ cid: String) async {
+        var link: String?
+        if let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }), c.isPublic, !c.publicName.isEmpty {
+            link = "https://fariin.com/" + c.publicName
+        } else if let snap = try? await FirestoreHub.db.collection("conversations").document(cid).getDocument(),
+                  snap.data()?["isPublic"] as? Bool == true, let n = snap.data()?["username"] as? String, !n.isEmpty {
+            link = "https://fariin.com/" + n
+        } else if let code = try? await GroupInviteService.shareCode(cid: cid) {
+            link = KulanApp.groupLink(code: code)
+        }
+        guard let link else { finish(); return }
+        inviteText = "Follow “\(trimmedName)” on Fariin: " + link
+    }
+
     private func finish() {
         guard let cid = createdCid else { return }
         let target = ChatTarget(id: cid, name: trimmedName, photo: nil)

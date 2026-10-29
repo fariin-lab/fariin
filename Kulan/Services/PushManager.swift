@@ -397,6 +397,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     /// voice recorder already running, hands-free. Spent by `ThreadView` when that chat appears.
     var pendingVoiceNoteCid: String?
     var pendingInviteCode: String? // a kulan://g/<code> invite link to resolve into a Join sheet
+    /// A channel admin invite link, fariin.com/a/<code> (2026-10-29): its Accept / Decline sheet.
+    var pendingAdminInvite: String?
     /// 2026-09-24 decision D4: a kulan://u/<handle> link, kept like the invite code above until the
     /// app is signed in and on its main screen (RootView opens it then). A link tapped while signed
     /// out used to be dropped, because the lookup needs a session.

@@ -951,6 +951,10 @@ struct GroupInfoView: View {
         VStack(alignment: .leading, spacing: 10) {
             // A channel's admins see who follows it (2026-10-28); nobody else does.
             if isChannel, iAmAdmin || iAmOwner {
+                // Invite admins and followers, and the admin invites still waiting (2026-10-29).
+                ChannelAdminInviteRows(cid: cid, title: conv?.title ?? "Channel",
+                                       followLink: (conv?.publicName ?? "").isEmpty ? nil : "https://fariin.com/" + (conv?.publicName ?? ""),
+                                       cardColor: cardColor)
                 VStack(spacing: 0) {
                     ProfileInfoRow(title: "Followers", icon: "person.2", value: "\(conv?.followerCount ?? 0)") { showFollowers = true }
                     rowDivider

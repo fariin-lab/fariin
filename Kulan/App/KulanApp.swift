@@ -125,6 +125,8 @@ struct KulanApp: App {
             AppRouter.shared.pendingUserHandle = handle
         case .name(let name):
             openNameLink(name)
+        case .adminInvite(let code):
+            AppRouter.shared.pendingAdminInvite = code
         case .call(let key):
             joinCallLink(key: key)
         case .story(let id, let handle):
@@ -188,7 +190,7 @@ struct KulanApp: App {
     /// neither is done. Parsed now so a link shared today is a link the app already understands the
     /// day those two land, rather than one it has to be taught to recognise afterwards.
     /// `name`: a bare fariin.com/<name> (2026-10-19 groups v2), a person's or a public group's @name.
-    enum DeepLink: Equatable { case user(String), group(String), story(String, handle: String?), call(key: String), name(String) }
+    enum DeepLink: Equatable { case user(String), group(String), story(String, handle: String?), call(key: String), name(String), adminInvite(String) }
 
     /// The web host every shared link points at. One constant, because the entitlement, the
     /// apple-app-site-association file on fariin.com and the parser below must all name the same
@@ -331,6 +333,7 @@ struct KulanApp: App {
         switch kind {
         case "u": return .user(value)
         case "g": return .group(value)
+        case "a": return .adminInvite(value)   // a channel admin invite (2026-10-29)
         case "s": return .story(StoryLinkId.full(value), handle: nil)
         // The web landing page's "Open in Kulan" button, for a phone that had the app but did not
         // get the universal link: kulan://video/<22-char id>, kulan://voice/<id>, and

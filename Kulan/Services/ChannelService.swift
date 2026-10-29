@@ -378,3 +378,68 @@ final class ChannelPosting {
             }
     }
 }
+
+/// Channel admin invites (2026-10-29): invited, never added (functions-groups).
+enum ChannelAdminInvites {
+    private static var fn: Functions { Functions.functions(region: "me-central1") }
+
+    struct Info: Equatable {
+        let code: String, cid: String, title: String, photoUrl: String?
+        let expiresAt: Date?, state: String, forMe: Bool, canRevoke: Bool, fromName: String
+    }
+
+    struct Pending: Identifiable, Equatable {
+        let code: String, uid: String, name: String, photoUrl: String?, expiresAt: Date
+        var id: String { code }
+    }
+
+    static func link(_ code: String) -> String { "https://fariin.com/a/" + code }
+
+    /// Creates the invites, then sends each person the link in our 1:1 chat. Returns who was refused.
+    static func invite(cid: String, title: String, people: [CallMember]) async throws -> [String] {
+        let r = try await fn.httpsCallable("inviteChannelAdmins").call(["cid": cid, "uids": people.map(\.uid)])
+        let d = r.data as? [String: Any] ?? [:]
+        let me = Auth.auth().currentUser?.uid ?? ""
+        for row in d["invites"] as? [[String: Any]] ?? [] {
+            guard let uid = row["uid"] as? String, let code = row["code"] as? String else { continue }
+            let text = "I invited you to be an admin of \u{201C}\(title)\u{201D} on Fariin: " + link(code)
+            _ = try? await ChatService.sendText(cid: ChatService.convId(me, uid), text: text)
+        }
+        let refused = d["refused"] as? [String] ?? []
+        return people.filter { refused.contains($0.uid) }.map(\.name)
+    }
+
+    static func info(_ code: String) async throws -> Info {
+        let r = try await fn.httpsCallable("adminInviteInfo").call(["code": code])
+        let d = r.data as? [String: Any] ?? [:]
+        let photo = d["photoUrl"] as? String ?? ""
+        let exp = (d["expiresAt"] as? NSNumber)?.doubleValue ?? 0
+        return Info(code: code, cid: d["cid"] as? String ?? "", title: d["title"] as? String ?? "Channel",
+                    photoUrl: photo.isEmpty ? nil : photo,
+                    expiresAt: exp > 0 ? Date(timeIntervalSince1970: exp / 1000) : nil,
+                    state: d["state"] as? String ?? "open", forMe: d["forMe"] as? Bool ?? false,
+                    canRevoke: d["canRevoke"] as? Bool ?? false, fromName: d["fromName"] as? String ?? "Someone")
+    }
+
+    /// Accept or decline; the channel's id on accept.
+    static func answer(_ code: String, accept: Bool) async throws -> String? {
+        let r = try await fn.httpsCallable("answerAdminInvite").call(["code": code, "accept": accept])
+        return (r.data as? [String: Any])?["cid"] as? String
+    }
+
+    static func revoke(_ code: String) async throws {
+        _ = try await fn.httpsCallable("revokeAdminInvite").call(["code": code])
+    }
+
+    static func pending(cid: String) async throws -> [Pending] {
+        let r = try await fn.httpsCallable("listAdminInvites").call(["cid": cid])
+        let rows = (r.data as? [String: Any])?["invites"] as? [[String: Any]] ?? []
+        return rows.compactMap { d in
+            guard let code = d["code"] as? String, let uid = d["uid"] as? String,
+                  let exp = (d["expiresAt"] as? NSNumber)?.doubleValue else { return nil }
+            let p = d["photoUrl"] as? String ?? ""
+            return Pending(code: code, uid: uid, name: d["name"] as? String ?? "Fariin user",
+                           photoUrl: p.isEmpty ? nil : p, expiresAt: Date(timeIntervalSince1970: exp / 1000))
+        }
+    }
+}

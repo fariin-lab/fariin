@@ -4414,6 +4414,11 @@ struct ThreadView: View {
             }
             return true
         }
+        if case .adminInvite(let code)? = KulanApp.route(from: url) {
+            inputFocused = false
+            AppRouter.shared.pendingAdminInvite = code   // its Accept / Decline sheet (MainShell)
+            return true
+        }
         guard Flags.groupsEnabled, case .group(let code)? = KulanApp.route(from: url) else { return false }
         inputFocused = false
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
