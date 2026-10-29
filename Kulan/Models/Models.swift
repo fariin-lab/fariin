@@ -1545,7 +1545,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// member. The owner: anyone, admins and themselves included. An admin: needs Change group info,
     /// and never the owner's. The same test as firestore.rules `roleWriteOK`.
     func canSetRole(_ me: String, _ target: String) -> Bool {
-        guard isGroup, users.contains(target) else { return false }
+        // No tags in a channel (owner 2026-10-29): followers never see who the admins are.
+        guard isGroup, !isChannel, users.contains(target) else { return false }
         if isOwner(me) { return true }
         return adminCan(me, .changeInfo) && !isOwner(target)
     }

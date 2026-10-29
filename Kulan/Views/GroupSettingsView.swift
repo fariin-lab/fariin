@@ -874,7 +874,8 @@ struct AddAdminPage: View {
         let mine = Set(conv?.adminRightsOf(me).map(\.rawValue) ?? [])
         return Conversation.Right.allCases.filter { mine.contains($0.rawValue) && $0.applies(channel: conv?.isChannel == true) }
     }
-    private var mayTag: Bool { conv?.adminCan(me, .changeInfo) ?? false }
+    /// No tags in a channel (owner 2026-10-29).
+    private var mayTag: Bool { conv?.isChannel != true && (conv?.adminCan(me, .changeInfo) ?? false) }
 
     // ⛔ THE MEMBER CARD'S EDIT PAGE DESIGN (owner 2026-10-25: "this page is using old design"):
     // centred photo, name and the Admin badge they are about to get, "What this admin can do", the
