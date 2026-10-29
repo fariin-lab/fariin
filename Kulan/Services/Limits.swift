@@ -19,7 +19,9 @@ enum Limits {
     /// ⛔ NOT A TRUNCATION OF WHAT IS SENT. It stops the field accepting more; nothing typed is ever
     /// cut, which is the distinction he drew when he had the 20-line "Read more" collapse removed
     /// the same day.
-    static let messageMaxChars = 65_536
+    /// ⛔ 2,500 (owner 2026-10-29: "that is too much, make it 2,500"), after he heard the 65,536
+    /// above. His newer word replaces the 08-27 one.
+    static let messageMaxChars = 2_500
     static let pinnedMessagesPerChat = 3
     /// Photos or videos in one album message. Picking more starts another album rather than hiding the
     /// remainder behind a "+N" badge — 12 pictures ship as 10 + 2. Matches the ceiling the mosaic layout
