@@ -152,6 +152,8 @@ struct ChatSearchOverlay: View {
         let handle: String
         /// A public group's photo url; empty otherwise.
         var photo: String = ""
+        /// A public channel (owner 2026-10-29): its Recent row draws the channel shape and followers.
+        var channel = false
         var id: String { "\(kind.rawValue):\(key)" }
     }
 
@@ -201,7 +203,7 @@ struct ChatSearchOverlay: View {
 
     func record(group: PublicGroupHit) {
         remember(Entry(kind: .group, key: group.cid, title: group.title, handle: group.handle,
-                       photo: group.photoUrl ?? ""),
+                       photo: group.photoUrl ?? "", channel: group.isChannel),
                  twin: "\(Kind.chat.rawValue):\(group.cid)")
     }
 
@@ -240,13 +242,15 @@ struct ChatSearchOverlay: View {
         return raw.compactMap { d in
             guard let k = d["k"], let kind = Kind(rawValue: k),
                   let key = d["i"], !key.isEmpty else { return nil }
-            return Entry(kind: kind, key: key, title: d["t"] ?? "", handle: d["h"] ?? "", photo: d["p"] ?? "")
+            return Entry(kind: kind, key: key, title: d["t"] ?? "", handle: d["h"] ?? "", photo: d["p"] ?? "",
+                         channel: d["c"] == "1")
         }
     }
 
     private func persist() {
         guard !account.isEmpty else { return }
-        let raw = entries.map { ["k": $0.kind.rawValue, "i": $0.key, "t": $0.title, "h": $0.handle, "p": $0.photo] }
+        let raw = entries.map { ["k": $0.kind.rawValue, "i": $0.key, "t": $0.title, "h": $0.handle, "p": $0.photo,
+                                 "c": $0.channel ? "1" : ""] }
         UserDefaults.standard.set(raw, forKey: Self.key(for: account))
     }
 }
@@ -455,7 +459,7 @@ struct ChatSearchPage: View {
                     m.chats[e.key] = c
                     rows.append(SearchPageRow(kind: .recentChat, key: e.key))
                 } else if let hit = PublicGroupHit(["kind": "group", "cid": e.key, "handle": e.handle,
-                                                     "title": e.title, "photoUrl": e.photo]) {
+                                                     "title": e.title, "photoUrl": e.photo, "channel": e.channel]) {
                     m.groups[e.key] = hit
                     rows.append(SearchPageRow(kind: .publicGroup, key: e.key))
                     let cid = e.key
@@ -550,7 +554,8 @@ struct ChatSearchPage: View {
             if let c = m.chats[row.key] {
                 if c.isGroup {
                     RecentRow(name: c.displayName(me), photo: c.displayPhoto(me), uid: nil,
-                              line: c.memberCountLabel, groupBadge: c.showsGroupBadge, groupLabel: c.groupMod.label)
+                              line: c.memberCountLabel, groupBadge: c.showsGroupBadge, groupLabel: c.groupMod.label,
+                              squircle: c.isChannel)
                 } else {
                     RecentRow(name: c.displayName(me), photo: c.displayPhoto(me), uid: c.otherUid(me), line: nil)
                 }
@@ -780,11 +785,14 @@ private struct RecentRow: View {
     var groupBadge = false
     /// Fariin's Scam / Fake label on a group, shown in place of the tick (owner 2026-10-28).
     var groupLabel = ""
+    /// A channel's photo is the channel shape, as in the chat list (owner 2026-10-29).
+    var squircle = false
     @State private var seen: RecentLastSeen.Line?
 
     var body: some View {
         HStack(spacing: 12) {
             AvatarView(name: name, photoUrl: photo, size: 56)
+                .avatarSquircle(squircle)
                 .padding(.vertical, 12)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
@@ -916,6 +924,7 @@ struct TopPeersRow: View {
         let muted = c.isMuted(me, now: Date().timeIntervalSince1970 * 1000)
         return VStack(spacing: 4) {
             AvatarView(name: name, photoUrl: c.displayPhoto(me), size: 60)
+                .avatarSquircle(c.isChannel)
                 .overlay(alignment: .topTrailing) {
                     if unread > 0 {
                         Text(unread > 99 ? "99+" : "\(unread)")
