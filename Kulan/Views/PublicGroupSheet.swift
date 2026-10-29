@@ -597,6 +597,9 @@ struct PublicGroupInfoView: View {
     @State private var followError: String?
     @State private var confirmReport = false
     @State private var reported = false
+    /// "Following <name>  Undo" for 5 s after Follow, as the reference app does.
+    @State private var undoShown = false
+    @State private var undoTimer: Task<Void, Never>?
 
     init(guest: PublicGroupGuest) {
         self.guest = guest
@@ -677,8 +680,26 @@ struct PublicGroupInfoView: View {
             .padding(.bottom, 24)
         }
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
-        .navigationTitle("")
+        .navigationTitle(p.isChannel ? "Channel info" : "")
         .navigationBarTitleDisplayMode(.inline)
+        .overlay(alignment: .bottom) {
+            if undoShown {
+                Button { undoFollow() } label: {
+                    HStack(spacing: 14) {
+                        Text("Following “" + p.title + "”").foregroundStyle(.primary).lineLimit(1)
+                        Text("Undo").fontWeight(.semibold).foregroundStyle(Color(hex: 0x2392FE))
+                    }
+                    .font(.subheadline)
+                    .padding(.horizontal, 18).padding(.vertical, 12)
+                    .liquidGlass(Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 16).padding(.bottom, 24)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+        }
+        // Followed from here: the chat behind becomes the follower's once this page closes.
+        .onDisappear { if following { guest.joined = true } }
         // No Join here: the reference app's info page has none (its only Join is the chat's foot).
         .task {
             guard guest.readable else { return }
@@ -809,11 +830,29 @@ struct PublicGroupInfoView: View {
             do {
                 try await ChannelService.follow(cid: p.cid)
                 Haptics.notify(.success)
-                withAnimation(.easeInOut(duration: 0.25)) { guest.joined = true }
+                // Stay on this page (the reference app does); the chat behind turns into the
+                // follower's when the page closes (onDisappear), so nothing moves under me now.
+                withAnimation(.smooth(duration: 0.3)) { undoShown = true }
+                undoTimer?.cancel()
+                undoTimer = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    guard !Task.isCancelled else { return }
+                    withAnimation(.smooth(duration: 0.3)) { undoShown = false }
+                }
             } catch {
                 following = false
                 followError = error.localizedDescription
             }
+        }
+    }
+
+    private func undoFollow() {
+        undoTimer?.cancel()
+        withAnimation(.smooth(duration: 0.3)) { undoShown = false }
+        let cid = p.cid
+        Task {
+            do { try await ChannelService.unfollow(cid: cid); following = false }
+            catch { followError = "Couldn't undo. Use Unfollow on the channel page." }
         }
     }
 
