@@ -561,6 +561,9 @@ enum ChatService {
         let meta = StorageMetadata(); meta.contentType = "image/jpeg"
         _ = try await ref.putDataAsync(data, metadata: meta)
         let url = try await ref.downloadURL().absoluteString
+        // In the image cache before the group says its new address, so every avatar shows it at once
+        // instead of downloading the photo this phone just sent (owner 2026-10-29).
+        if let ui = UIImage(data: data) { DiskImageCache.shared.store(ui, data: data, for: url, owned: true) }
         try await db.collection("conversations").document(cid).updateData([
             "avatarUrl": url,
             "updatedAt": FieldValue.serverTimestamp(),

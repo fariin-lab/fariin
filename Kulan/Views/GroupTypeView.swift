@@ -14,7 +14,12 @@ struct GroupTypeView: View {
     let setupNext: (() -> Void)?
     private var repo = ConversationsRepository.shared
     private var me: String { AuthService.shared.uid ?? "" }
-    init(cid: String, setupNext: (() -> Void)? = nil) { self.cid = cid; self.setupNext = setupNext }
+    /// The photo just picked in New Channel, still uploading when this page opens (owner 2026-10-29:
+    /// the avatar came in a beat late). Drawn until the channel's own photo is there.
+    let localPhoto: UIImage?
+    init(cid: String, setupNext: (() -> Void)? = nil, localPhoto: UIImage? = nil) {
+        self.cid = cid; self.setupNext = setupNext; self.localPhoto = localPhoto
+    }
     /// A channel speaks of followers and following, a group of members and joining.
     private var isChannel: Bool { conv?.isChannel ?? (setupNext != nil) }
     private var noun: String { isChannel ? "channel" : "group" }
@@ -139,7 +144,12 @@ struct GroupTypeView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { withAnimation { copied = false } }
                 } label: {
                     HStack(spacing: 16) {
-                        AvatarView(name: conv?.title ?? "Group", photoUrl: conv?.avatarUrl, size: 76)
+                        if (conv?.avatarUrl ?? "").isEmpty, let localPhoto {
+                            Image(uiImage: localPhoto).resizable().scaledToFill()
+                                .frame(width: 76, height: 76).clipShape(Circle())
+                        } else {
+                            AvatarView(name: conv?.title ?? "Group", photoUrl: conv?.avatarUrl, size: 76)
+                        }
                         VStack(alignment: .leading, spacing: 2) {
                             Text(conv?.title ?? "Group").font(.headline).foregroundStyle(.primary).lineLimit(1)
                             // One line, no https:// (owner 2026-10-21: it broke at the "/" and left

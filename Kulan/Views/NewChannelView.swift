@@ -4,7 +4,7 @@ import FirebaseFunctions
 /// NEW CHANNEL (owner 2026-10-28). The reference app's order, our words and our parts:
 /// 1. what a channel is, 2. photo + name + description on one page (Next lights up with a name),
 /// 3. Channel Type (`GroupTypeView` in setup mode: public link or private invite link, restrict
-/// saving), 4. add followers (`AddPeopleSheet`, skippable), then the channel opens.
+/// saving), then the channel opens, its owner card holding Share (2026-10-29).
 /// The channel is made at step 2's Next: a group created the normal way, then turned into a channel
 /// by the server (`makeChannel`). From there on there is no going back, only forward.
 struct NewChannelView: View {
@@ -25,8 +25,6 @@ struct NewChannelView: View {
     @State private var creating = false
     @State private var error: String?
     @State private var createdCid: String?
-    /// The invite step's message (the channel's link); closing that sheet opens the channel.
-    @State private var inviteText: String?
     @FocusState private var nameFocused: Bool
 
     /// The reference app's limits: 255 for the description; our group names already stop at 100.
@@ -44,15 +42,13 @@ struct NewChannelView: View {
                     switch step {
                     case .details: details
                     case .type(let cid):
-                        GroupTypeView(cid: cid) { Task { await inviteFollowers(cid) } }
+                        // Next opens the channel (owner 2026-10-29: a Share sheet that came up by itself
+                        // and finished the same whether used or swiped away was confusing). Sharing is
+                        // the Share button on the owner's card at the top of the channel.
+                        GroupTypeView(cid: cid, setupNext: { finish() },
+                                      localPhoto: avatarData.flatMap(UIImage.init(data:)))
                     }
                 }
-        }
-        // Step 4 INVITES (owner 2026-10-29): the channel's link goes to the chats I pick, and each
-        // person follows if they want to. Nobody is added to a channel they did not choose.
-        .sheet(item: Binding(get: { inviteText.map { ShareText(id: $0) } },
-                             set: { if $0 == nil { inviteText = nil; finish() } })) { t in
-            SendContactSheet(contactText: t.id)
         }
     }
 
@@ -267,22 +263,7 @@ struct NewChannelView: View {
         }
     }
 
-    /// Done (followers added, or skipped): into the channel.
-    /// The link to send: the public one, else the private channel's invite link. None: straight in.
-    private func inviteFollowers(_ cid: String) async {
-        var link: String?
-        if let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }), c.isPublic, !c.publicName.isEmpty {
-            link = "https://fariin.com/" + c.publicName
-        } else if let snap = try? await FirestoreHub.db.collection("conversations").document(cid).getDocument(),
-                  snap.data()?["isPublic"] as? Bool == true, let n = snap.data()?["username"] as? String, !n.isEmpty {
-            link = "https://fariin.com/" + n
-        } else if let code = try? await GroupInviteService.shareCode(cid: cid) {
-            link = KulanApp.groupLink(code: code)
-        }
-        guard let link else { finish(); return }
-        inviteText = "Follow “\(trimmedName)” on Fariin: " + link
-    }
-
+    /// Done: into the channel.
     private func finish() {
         guard let cid = createdCid else { return }
         let target = ChatTarget(id: cid, name: trimmedName, photo: nil)
