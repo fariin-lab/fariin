@@ -4433,6 +4433,7 @@ struct ThreadView: View {
 
     /// A channel reaction goes through the server, which keeps who picked what private.
     private func sendChannelReaction(_ mid: String, _ emoji: String?) {
+        if emoji != nil { ReactionFlight.markLocal() }   // the channel picker calls here directly
         if let e = emoji, conversation?.reactMode == "some", !ChannelEmoji.contains(conversation?.reactList ?? [], e) {
             showJumpToast("This channel allows only " + (conversation?.reactList.joined(separator: " ") ?? ""))
             return
@@ -8321,6 +8322,7 @@ struct ThreadView: View {
     /// (message deleted meanwhile, server said no) used to vanish with nothing said. Same brief toast
     /// the forward and jump paths use.
     private func sendReaction(messageId: String, emoji: String?, toAuthor: String) {
+        if emoji != nil { ReactionFlight.markLocal() }   // the landing animation is for picks made here
         if conversation?.isChannel == true { sendChannelReaction(messageId, emoji); return }
         RxTrace.begin("sendReaction \(emoji ?? "remove")")   // TEMPORARY, see RxTrace
         // 2026-09-24 feature-audit: every pick feeds the quick bar's recents (bar, picker and

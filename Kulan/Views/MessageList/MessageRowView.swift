@@ -115,6 +115,13 @@ final class BubbleQuoteView: UIView {
 @MainActor enum ReactionFlight {
     static let duration: CFTimeInterval = 0.36
     private static var pending: (emoji: String?, point: CGPoint, at: CFTimeInterval)?
+    /// When I last sent a reaction from this device. ⛔ The landing animation plays only within a
+    /// moment of one: a pill can also turn "mine" because my saved picks LOADED late (a channel's
+    /// picks arrive by listener), and that must not ripple across every post on screen.
+    private static var localAt: CFTimeInterval = -10
+
+    static func markLocal() { localAt = CACurrentMediaTime() }
+    static var recentLocal: Bool { CACurrentMediaTime() - localAt < 1.5 }
 
     static func note(_ emoji: String?, screenPoint: CGPoint) {
         pending = (emoji, screenPoint, CACurrentMediaTime())
@@ -1877,7 +1884,7 @@ final class MessageRowView: UIView {
     private var fxViews: [UIView] = []
 
     private func playMyReactionFlair(_ old: ReactionBefore) {
-        guard window != nil, let chips = Self.reactionChips(model) else { return }
+        guard window != nil, ReactionFlight.recentLocal, let chips = Self.reactionChips(model) else { return }
         for chip in chips where chip.mine && !chip.isAdd && !old.mineBefore.contains(chip.emoji) {
             guard let j = chipKeys.firstIndex(of: chip.emoji), j < reactionViews.count else { continue }
             let v = reactionViews[j]
