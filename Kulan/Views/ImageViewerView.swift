@@ -600,7 +600,8 @@ struct ImageViewerView: View {
             VStack(spacing: 1) {
                 HStack(spacing: 4) {
                     Text(senderName).font(.subheadline.weight(.semibold))
-                    VerifiedMark(uid: message.authorId, size: 12)
+                    // Not in a channel (2026-10-29): the post is the channel's, not the admin's.
+                    if !Conversation.Right.isChannel(cid) { VerifiedMark(uid: message.authorId, size: 12) }
                 }
                 Text(dateLine).font(.caption2)
             }

@@ -158,9 +158,12 @@ struct GroupInfoView: View {
     }
     /// A channel (2026-10-28), and me only following it (not one of its admins).
     private var isChannel: Bool { conv?.isChannel == true }
-    // Really following, not just "not an admin" (2026-10-29: a visitor's page said Following).
-    private var isFollowerHere: Bool { isChannel && !iAmMember && ChannelFollows.shared.follows(cid) }
+    /// Outside the channel's admins: a follower, or a visitor (the follower's page, with Follow).
+    private var isFollowerHere: Bool { isChannel && !iAmMember }
+    /// Really following (2026-10-29: a visitor's page said Following and offered Muted).
+    private var followingNow: Bool { ChannelFollows.shared.follows(cid) }
     @State private var unfollowing = false
+    @State private var following = false   // a Follow from this page on its way
     @State private var confirmChannelReport = false
     @State private var showFollowers = false
     @State private var showScheduled = false
@@ -495,8 +498,15 @@ struct GroupInfoView: View {
     /// Following ✓ (tap: Unfollow?), Share, Search: equal cards, the reference app's channel row.
     private var followerActions: some View {
         HStack(spacing: 8) {
-            Button { confirmUnfollow = true } label: {
-                followerCard("checkmark", "Following", tint: Color(hex: 0x2392FE))
+            if followingNow {
+                Button { confirmUnfollow = true } label: {
+                    followerCard("checkmark", "Following", tint: Color(hex: 0x2392FE))
+                }
+            } else {
+                Button { followFromPage() } label: {
+                    followerCard("plus", following ? "Following…" : "Follow", tint: Color(hex: 0x2392FE))
+                }
+                .disabled(following)
             }
             // Our own "Share with" sheet first (chats); its corner button opens other apps.
             if let name = conv?.publicName, !name.isEmpty {
@@ -531,14 +541,28 @@ struct GroupInfoView: View {
             rowDivider
             ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
                            value: storage.map { Self.bytes($0.total) } ?? "") { showStorage = true }
-            rowDivider
-            HStack(spacing: 14) {
-                Image(systemName: "bell.slash").font(.system(size: 17)).frame(width: 26)
-                Toggle("Muted", isOn: Binding(get: { muted }, set: { ChannelService.setMuted(cid: cid, $0) }))
+            if followingNow {
+                rowDivider
+                HStack(spacing: 14) {
+                    Image(systemName: "bell.slash").font(.system(size: 17)).frame(width: 26)
+                    Toggle("Muted", isOn: Binding(get: { muted }, set: { ChannelService.setMuted(cid: cid, $0) }))
+                }
+                .padding(.horizontal, 16).padding(.vertical, 12)
             }
-            .padding(.horizontal, 16).padding(.vertical, 12)
         }
         .profileSurface(plain: cardColor)
+    }
+
+    /// Follow from the channel's page (a visitor, or after unfollowing). A private channel without
+    /// its link is refused by the server, and that is said.
+    private func followFromPage() {
+        guard !following else { return }
+        following = true
+        Task {
+            do { _ = try await ChannelService.follow(cid: cid) }
+            catch { actionError = error.localizedDescription }
+            following = false
+        }
     }
 
     private func unfollowNow(report: Bool) {
@@ -695,7 +719,9 @@ struct GroupInfoView: View {
             // Owner 2026-10-28: a group whose members are hidden still shows HOW MANY (the count
             // says nothing about who); only the faces in front of it go, with the list.
             HStack(spacing: 6) {
-                if !membersHidden, !countFaces.isEmpty {
+                // Never on a channel (2026-10-29): its members are its admins, and a channel does not
+                // show who runs it.
+                if !membersHidden, !isChannel, !countFaces.isEmpty {
                     HStack(spacing: -7) {
                         ForEach(Array(countFaces.enumerated()), id: \.element) { i, uid in
                             AvatarView(name: conv?.names[uid] ?? "", photoUrl: conv?.photos[uid], size: 22)
@@ -969,10 +995,9 @@ struct GroupInfoView: View {
                             rowDivider
                             ProfileInfoRow(title: "Report Channel", icon: "exclamationmark.octagon", tint: Self.exitRed, chevron: false) { confirmChannelReport = true }
                         }
-                    } else if conv?.isPublic == true {
-                        ProfileInfoRow(title: "Follow", icon: "person.badge.plus", chevron: false) {
-                            Task { _ = try? await ChannelService.follow(cid: cid) }
-                        }
+                    } else {
+                        ProfileInfoRow(title: following ? "Following…" : "Follow Channel", icon: "person.badge.plus",
+                                       chevron: false) { followFromPage() }
                     }
                 }
                 .profileSurface(plain: cardColor)
