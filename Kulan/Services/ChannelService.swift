@@ -127,10 +127,10 @@ enum ChannelService {
         lastWarm[cid] = Date()
         fn.httpsCallable("reactChannelPost").call(["warm": true]) { _, _ in }
         fn.httpsCallable("channelViews").call(["warm": true]) { _, _ in }
-        // Not following yet: Follow is the likely next tap, so wake it too (owner 2026-10-29).
-        if !ChannelFollows.shared.follows(cid) {
-            fn.httpsCallable("followChannel").call(["warm": true]) { _, _ in }
-        }
+        // Follow or Unfollow is the likely next tap, so wake that one too (owner 2026-10-29: both
+        // sat on "…" for seconds on a cold start).
+        let next = ChannelFollows.shared.follows(cid) ? "unfollowChannel" : "followChannel"
+        fn.httpsCallable(next).call(["warm": true]) { _, _ in }
     }
 
     /// React to a post (nil takes mine back). The server keeps who picked what private and answers
