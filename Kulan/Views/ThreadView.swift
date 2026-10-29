@@ -4545,33 +4545,48 @@ struct ThreadView: View {
         // A PUBLIC NAME LINK, fariin.com/<name> (owner 2026-10-21: it opened the browser): the group
         // page in the app, or that person when the name is a username. Same lookup as a link from
         // outside (`KulanApp.openNameLink`).
+        // ⛔ NOT INSIDE THE TAP (build 1052 and 1057 crash logs, 2026-10-29, "Thread stack size
+        // exceeded"): resigning the composer here made SwiftUI redraw the whole thread on top of the
+        // cell's tap handler (handleTap > openGroupLink > ComposerTextView.resignFirstResponder >
+        // nativeList), and the stack ran out. One run-loop turn later the tap has unwound.
         if Flags.groupsEnabled, case .name(let name)? = KulanApp.route(from: url) {
-            inputFocused = false
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-            // Looked up when the card was drawn (`GroupDirectory.prewarm(name:)`): opens at once.
-            if let cid = GroupDirectory.cachedCid(name: name) {
-                GroupDirectory.open(cid: cid, name: name, push: true)
-                return true
-            }
-            Task { @MainActor in
-                if case .group(let cid) = await GroupDirectory.resolve(name) {
+            DispatchQueue.main.async { [self] in
+                inputFocused = false
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                // Looked up when the card was drawn (`GroupDirectory.prewarm(name:)`): opens at once.
+                if let cid = GroupDirectory.cachedCid(name: name) {
                     GroupDirectory.open(cid: cid, name: name, push: true)
-                } else {
-                    openProfileHandle(name)
+                    return
                 }
+                openNamedGroup(name)
             }
             return true
         }
         if case .adminInvite(let code)? = KulanApp.route(from: url) {
-            inputFocused = false
-            AppRouter.shared.pendingAdminInvite = code   // its Accept / Decline sheet (MainShell)
+            DispatchQueue.main.async { [self] in
+                inputFocused = false
+                AppRouter.shared.pendingAdminInvite = code   // its Accept / Decline sheet (MainShell)
+            }
             return true
         }
         guard Flags.groupsEnabled, case .group(let code)? = KulanApp.route(from: url) else { return false }
-        inputFocused = false
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        GroupLinkDoor.open(code, push: true)
+        DispatchQueue.main.async { [self] in
+            inputFocused = false
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            GroupLinkDoor.open(code, push: true)
+        }
         return true
+    }
+
+    /// A public name not looked up yet: the group if it is one, else that person.
+    private func openNamedGroup(_ name: String) {
+        Task { @MainActor in
+            if case .group(let cid) = await GroupDirectory.resolve(name) {
+                GroupDirectory.open(cid: cid, name: name, push: true)
+            } else {
+                openProfileHandle(name)
+            }
+        }
     }
 
     /// ⛔ A STORY LINK OPENS THE STORY, NOT "Open link?" (owner, 2026-10-11). The link, its card and
