@@ -786,7 +786,8 @@ enum MessageRowModelBuilder {
     }
 
     /// A channel post: counts only, never faces (followers never see who reacted). My pick still on
-    /// its way moves the counts at once. Nobody yet: one "add" chip, for a follower.
+    /// its way moves the counts at once. Nobody yet: nothing (owner 2026-10-29 removed the empty
+    /// "add" chip; double tap and the long-press bar are the ways in).
     private static func channelChips(_ msg: Message, ctx: MessageRowContext) -> [ReactionChip] {
         guard ctx.channelReactionsOn, !msg.isSystem, !msg.isCall else { return [] }
         var counts = msg.reactionCounts
@@ -799,9 +800,6 @@ enum MessageRowModelBuilder {
             ReactionChip(emoji: $0.key, count: $0.value, mine: mine == $0.key, faces: [], showCount: true)
         }
         .sorted { $0.count != $1.count ? $0.count > $1.count : $0.emoji > $1.emoji }
-        if chips.isEmpty, ctx.channelCanReact, msg.sendState == nil {
-            return [ReactionChip(emoji: ReactionChip.addToken, count: 0, mine: false, faces: [])]
-        }
         return chips
     }
 

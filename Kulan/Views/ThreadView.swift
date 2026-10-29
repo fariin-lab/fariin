@@ -4448,10 +4448,14 @@ struct ThreadView: View {
             showJumpToast("Follow the channel to react")
             return
         }
-        // A follower's double tap opens the channel's own picker (owner 2026-10-29): only the emoji
-        // the owner allows, never a fixed quick reaction.
+        // ⛔ A CHANNEL'S DOUBLE TAP (owner 2026-10-29, second word, replaces "always the picker"):
+        // my quick reaction (the heart) when the channel allows it, like any chat; when the owner
+        // has left it off the channel's list, the channel's own picker opens instead.
         if conversation?.isChannel == true, channelCanReact, canReact(m) {
-            channelReactTarget = m
+            let quick = QuickReaction.current
+            let allowed = conversation?.reactMode != "some" || (conversation?.reactList.contains(quick) ?? false)
+            guard allowed else { channelReactTarget = m; return }
+            sendReaction(messageId: m.id, emoji: Self.sameEmoji(myReaction(m), quick) ? nil : quick, toAuthor: m.authorId)
             return
         }
         // 2026-09-24 feature-audit: the same `canReact` as the quick bar (was "not sending" only).
