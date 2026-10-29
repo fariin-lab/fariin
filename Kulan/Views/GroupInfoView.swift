@@ -292,9 +292,16 @@ struct GroupInfoView: View {
                                      confirmReport: $confirmReport, confirmDelete: $confirmDelete,
                                      actionError: $actionError, onGone: { dismiss() },
                                      onReported: { flashNotice("Thanks for reporting. We'll take a look.") }))
-            .sheet(isPresented: $showChannelDelete) {
-                DeleteChannelSheet(cid: cid, title: conv?.title ?? "Channel", photoUrl: conv?.avatarUrl,
-                                   followers: conv?.followerCount ?? 0) { dismiss() }
+            // ⛔ THE REFERENCE APP'S DELETE (owner 2026-10-29: "completely redesign, exactly like the
+            // reference app"). Read from its PeerInfoScreen.openDeletePeer: a system action sheet,
+            // one warning sentence, a red Delete Channel and Cancel. It replaces the full page with
+            // its password (that page was the owner's 2026-10-29 ask; this is his newer one). Our
+            // words, not theirs.
+            .confirmationDialog("Delete Channel", isPresented: $showChannelDelete, titleVisibility: .hidden) {
+                Button("Delete Channel", role: .destructive) { deleteChannel() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Delete \u{201C}\(conv?.title ?? "this channel")\u{201D}? Every post goes for all its followers. This can't be undone.")
             }
             // A full page, pushed (owner 2026-10-18), not a half sheet.
             .sheet(item: Binding(get: { shareGroupText.map { ShareText(id: $0) } },
@@ -896,6 +903,23 @@ struct GroupInfoView: View {
 
     /// The bell reads the group document, which drops a refused write by itself; the refusal is
     /// also said (2026-10-19 fix round), so a mute that did not take is not left unexplained.
+    /// The action sheet's Delete Channel: the server deletes it for everyone; the chat closes and
+    /// leaves the list, as on leaving. A refusal is said on this page.
+    private func deleteChannel() {
+        Task {
+            do {
+                try await GroupInviteService.deleteGroup(cid: cid)
+                await MainActor.run {
+                    LeaveGroupUndo.shared.closeChat(cid)
+                    ToastNotice.show("Channel deleted")
+                    dismiss()
+                }
+            } catch {
+                await MainActor.run { actionError = error.localizedDescription }
+            }
+        }
+    }
+
     private func setMuted(_ until: Double) {
         Task {
             let ok = await ChatService.setMute(cid, until: until)
