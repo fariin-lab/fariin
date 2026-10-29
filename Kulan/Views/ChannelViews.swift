@@ -6,12 +6,14 @@ import SwiftUI
 struct ChannelFollowerBar: View {
     let conv: Conversation
     @State private var follows = ChannelFollows.shared
-    @State private var phase = Phase.idle
+    /// The tap's answer shown at once, before the server's (the reference app's join: the bar is the
+    /// joined bar from the tap; a refusal springs it back).
+    @State private var optimistic = false
     @State private var problem: String?
 
-    private enum Phase { case idle, loading, done }
-
     private var following: Bool { follows.follows(conv.id) }
+    /// Drawn as followed: the server says so, or my tap is on its way.
+    private var joined: Bool { following || optimistic }
 
     /// Why Follow cannot work here, in the server's words (`followRefusal`), owner 2026-10-29 audit
     /// U4: the bar offered Follow on a private channel and to a banned person, then bounced back.
@@ -32,20 +34,52 @@ struct ChannelFollowerBar: View {
                 Text(problem).font(.system(size: 14)).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
-            if following && phase == .idle {
-                // ⛔ THE OFFICIAL FARIIN CHAT'S CARD, NO BUTTON (owner 2026-10-29: no Mute / Unmute at
-                // the bottom; then "only text, add a card exactly like official Fariin"). The same
-                // glass card as `OfficialChatView.cannotReplyBar`: its font, padding and 26 pt corner,
-                // in the composer's place. Mute is the bell at the top.
-                Self.noticeCard("You're following this channel")
-            } else if phase == .idle, let blocked = followBlocked {
+            if !joined, let blocked = followBlocked {
                 Self.noticeCard(blocked)
             } else {
-                followButton
+                // ⛔ ONE BAR THAT BECOMES THE OTHER (owner 2026-10-29: "use exactly the join animation
+                // the reference app uses"). Read from its ChatChannelSubscriberInputPanelNode: Join
+                // swaps to the joined state the moment it is tapped (`isJoining` shows the joined
+                // action), no spinner, and the same glass panel morphs on one 0.4 s spring — the blue
+                // tint goes, the words cross-fade, the size settles. Ours ends on the official chat's
+                // card (`noticeCard`, owner's ask); a refusal springs it back to Follow.
+                followMorph
             }
         }
         .frame(maxWidth: .infinity)
         .systemBarChrome()
+        .animation(.spring(response: 0.4, dampingFraction: 0.86), value: joined)
+        // The list now says so: the tap's stand-in is done (so a later unfollow shows Follow again).
+        .onChange(of: following) { _, now in if now { optimistic = false } }
+    }
+
+    /// Follow (the full-width blue bar) and "You're following this channel" (the official chat's
+    /// card) as ONE glass shape, so the spring carries one into the other instead of swapping views.
+    private var followMorph: some View {
+        Button { follow() } label: {
+            ZStack {
+                Text("Follow")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .opacity(joined ? 0 : 1)
+                Text("You're following this channel")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .opacity(joined ? 1 : 0)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 18)
+            .frame(height: joined ? 48 : 50)
+            .liquidGlass(RoundedRectangle(cornerRadius: joined ? 26 : 25, style: .continuous),
+                         interactive: !joined, tint: joined ? nil : Color(hex: 0x2392FE))
+            .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(joined)
+        // The Follow bar's 16 pt in from the sides; the card sits at the official chat's width.
+        .padding(.horizontal, joined ? 0 : 16)
+        .accessibilityLabel(joined ? "You're following this channel" : "Follow")
     }
 
     /// The official chat's bottom card, word for word in style (`OfficialChatView.cannotReplyBar`).
@@ -60,53 +94,22 @@ struct ChannelFollowerBar: View {
             .liquidGlass(RoundedRectangle(cornerRadius: 26, style: .continuous))
     }
 
-    /// Follow (owner 2026-10-29): a long blue bar; a tap draws it in to a round button with the
-    /// turning ring while the follow runs, then a check, then the bar leaves.
-    private var followButton: some View {
-        let round = phase != .idle
-        return Button { follow() } label: {
-            ZStack {
-                switch phase {
-                case .idle:
-                    Text("Follow").font(.system(size: 17, weight: .semibold)).transition(.opacity)
-                case .loading:
-                    CreatingRing(label: "Following").transition(.opacity)
-                case .done:
-                    Image(systemName: "checkmark").font(.system(size: 18, weight: .bold))
-                        .transition(.scale(scale: 0.4).combined(with: .opacity))
-                }
-            }
-            .foregroundStyle(.white)
-            .frame(maxWidth: round ? 50 : .infinity)
-            .frame(height: 50)
-            .liquidGlass(Capsule(), interactive: !round, tint: Color(hex: 0x2392FE))
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .disabled(round)
-        .padding(.horizontal, 16)
-        .accessibilityLabel(phase == .done ? "Following" : "Follow")
-    }
-
     private func follow() {
-        guard phase == .idle else { return }
+        guard !joined else { return }
         guard NetworkState.shared.isOnline else { problem = "No internet connection. Try again."; return }
         problem = nil
         let cid = conv.id
-        withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) { phase = .loading }
+        Haptics.impact(.light)
+        // Joined from the tap, as the reference app's bar is; the server's answer only confirms it.
+        optimistic = true
         Task {
             do {
                 try await ChannelService.follow(cid: cid)
-                Haptics.notify(.success)
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.7)) { phase = .done }
-                try? await Task.sleep(nanoseconds: 900_000_000)
-                // Back to idle (owner 2026-10-29 review fix): the check is seen, then the bar
-                // settles on "You're following this channel". Staying at .done left the round
-                // check up for good once ThreadView stopped removing the bar.
-                withAnimation(.smooth(duration: 0.25)) { phase = .idle }
+                // The follow list confirms it (`following`); this stays until then so the bar never
+                // blinks back to Follow between the answer and the listener.
             } catch {
                 problem = error.localizedDescription
-                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) { phase = .idle }
+                optimistic = false   // springs back to Follow (the bar's .animation on `joined`)
             }
         }
     }
