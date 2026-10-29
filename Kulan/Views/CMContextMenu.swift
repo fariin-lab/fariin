@@ -1326,6 +1326,12 @@ final class CMReactionBar: UIView {
             onSelect?(.more)
         } else {
             let emoji = allEmojis[i]
+            // Where it was picked, for the flight into its pill (`ReactionFlight`); not for a removal.
+            if emoji != config.selected, let screen = window?.screen {
+                let h = holders[i]
+                ReactionFlight.note(emoji, screenPoint: h.convert(CGPoint(x: h.bounds.midX, y: h.bounds.midY),
+                                                                  to: screen.coordinateSpace))
+            }
             // Lifting on the already-selected emoji REMOVES the reaction — .emoji(nil).
             onSelect?(.emoji(emoji == config.selected ? nil : emoji))
         }

@@ -6156,6 +6156,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             return
         }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        // The finger's point, for the flight into the pill if this tap adds my reaction (`ReactionFlight`).
+        if let screen = collectionView.window?.screen {
+            ReactionFlight.note(nil, screenPoint: collectionView.convert(loc, to: screen.coordinateSpace))
+        }
         onUikitDoubleTap(id)
     }
 

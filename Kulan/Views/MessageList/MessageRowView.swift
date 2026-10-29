@@ -106,6 +106,31 @@ final class BubbleQuoteView: UIView {
     }
 }
 
+// ── Where my reaction was picked ──
+
+/// The hand-off between the place I pick a reaction (the menu's emoji bar, a double tap) and the row
+/// that later draws its pill, which is rebuilt a moment afterwards by a different path. The picker
+/// notes the screen point; the row takes it once, if it is fresh and for the same emoji, and flies
+/// the emoji from there (owner 2026-10-29). A double tap does not know the emoji yet: nil = any.
+@MainActor enum ReactionFlight {
+    static let duration: CFTimeInterval = 0.36
+    private static var pending: (emoji: String?, point: CGPoint, at: CFTimeInterval)?
+
+    static func note(_ emoji: String?, screenPoint: CGPoint) {
+        pending = (emoji, screenPoint, CACurrentMediaTime())
+    }
+
+    static func take(_ emoji: String) -> CGPoint? {
+        guard let p = pending else { return nil }
+        pending = nil
+        guard CACurrentMediaTime() - p.at < 1.5 else { return nil }
+        if let want = p.emoji, plain(want) != plain(emoji) { return nil }
+        return p.point
+    }
+
+    private static func plain(_ e: String) -> String { e.replacingOccurrences(of: "\u{FE0F}", with: "") }
+}
+
 // ── A reaction capsule ──
 
 /// ⛔ A PILL HOLDS THE EMOJI AND WHO SENT IT — owner, 2026-09-16, with the reference app's bubble.
@@ -183,6 +208,22 @@ final class ReactionChipView: UIView {
             }
         }
         setNeedsLayout()
+    }
+
+    /// Where the emoji sits in the pill (its first character; the label is centred), for the flight
+    /// of a reaction I just made (`MessageRowView.flyIn`).
+    var emojiPoint: CGPoint {
+        guard let t = label.attributedText, t.length > 0 else { return CGPoint(x: bounds.midX, y: bounds.midY) }
+        let first = t.attributedSubstring(from: (t.string as NSString).rangeOfComposedCharacterSequence(at: 0))
+        let full = t.size().width, w = first.size().width
+        let x0 = label.frame.minX + max(0, (label.frame.width - full) / 2)
+        return CGPoint(x: x0 + w / 2, y: label.frame.midY)
+    }
+    /// The emoji's point size in the pill, so the flight lands at the pill's own size.
+    var emojiFontSize: CGFloat {
+        guard let t = label.attributedText, t.length > 0,
+              let f = t.attribute(.font, at: 0, effectiveRange: nil) as? UIFont else { return 15 }
+        return f.pointSize
     }
 
     override func layoutSubviews() {
@@ -1669,6 +1710,7 @@ final class MessageRowView: UIView {
         var chipFrames: [String: CGRect]            // surviving pills, by emoji
         var leaving: [(UIView, CGRect)]             // snapshots of pills about to go
         var arriving: Set<String>
+        var mineBefore: Set<String>                 // the pills that were already mine
     }
 
     private static func reactionKeys(_ m: MessageRowModel?) -> [String]? {
@@ -1719,7 +1761,8 @@ final class MessageRowView: UIView {
         return ReactionBefore(bubble: shownBubble, rowHeight: plan?.height ?? 0,
                               fillPath: fill.shownPath, rimPath: rimPath,
                               frames: frames, chipFrames: chipFrames, leaving: leaving,
-                              arriving: Set(newKeys).subtracting(oldKeys))
+                              arriving: Set(newKeys).subtracting(oldKeys),
+                              mineBefore: Set((Self.reactionChips(model) ?? []).filter(\.mine).map(\.emoji)))
     }
 
     private func animateReactionChange(from old: ReactionBefore, to nb: BubblePlan) {
@@ -1814,7 +1857,194 @@ final class MessageRowView: UIView {
                 self?.leavingSnaps.removeAll { $0 === snap }
             }
         }
+        playMyReactionFlair(old)
         pendingGrowth = grow
+    }
+
+    // MARK: - My own reaction landing (owner 2026-10-29: "our own animation, not copied")
+    //
+    // Ours, on top of the pill motion above, and ONLY for a pick I just made (a pill that was not
+    // mine and now is): other people's reactions arriving stay quiet. "Drop and ripple":
+    //   - the emoji flies from where I picked it (the bar's emoji, or my double-tap point) along a
+    //     short arc into its pill (`ReactionFlight`); with no recorded origin there is no flight;
+    //   - the pill lands with a small overshoot (1, 1.22, 0.94, 1), after the flight if any;
+    //   - one thin ring spreads from the pill and fades, and three dots in the emoji's own colour
+    //     drift up and out. Drawn here with Core Animation; no artwork, nothing borrowed.
+    // Reduce Motion skips all of it (no `before` is captured then).
+
+    /// Ripple, dots and flying emoji still on screen, so a recycle can take them away.
+    private var fxLayers: [CALayer] = []
+    private var fxViews: [UIView] = []
+
+    private func playMyReactionFlair(_ old: ReactionBefore) {
+        guard window != nil, let chips = Self.reactionChips(model) else { return }
+        for chip in chips where chip.mine && !chip.isAdd && !old.mineBefore.contains(chip.emoji) {
+            guard let j = chipKeys.firstIndex(of: chip.emoji), j < reactionViews.count else { continue }
+            let v = reactionViews[j]
+            guard !v.isHidden else { continue }
+            var delay: CFTimeInterval = 0
+            if let from = ReactionFlight.take(chip.emoji), flyIn(chip.emoji, from: from, to: v) {
+                delay = ReactionFlight.duration
+            }
+            popPill(v, arriving: old.arriving.contains(chip.emoji), delay: delay)
+            ripple(around: v, emoji: chip.emoji, delay: delay)
+            break   // one pick per person per message
+        }
+    }
+
+    private func popPill(_ v: UIView, arriving: Bool, delay: CFTimeInterval) {
+        let begin = CACurrentMediaTime() + delay
+        let pop = CAKeyframeAnimation(keyPath: "transform.scale")
+        pop.values = [arriving ? 0.01 : 1.0, 1.22, 0.94, 1.0]
+        pop.keyTimes = [0, 0.45, 0.75, 1]
+        pop.timingFunctions = [CAMediaTimingFunction(name: .easeOut), CAMediaTimingFunction(name: .easeInEaseOut),
+                               CAMediaTimingFunction(name: .easeInEaseOut)]
+        pop.duration = 0.45
+        pop.beginTime = begin
+        pop.fillMode = .backwards
+        // Same key as the arrival scale above, so it REPLACES it rather than fighting it.
+        v.layer.add(pop, forKey: "reaction.transform.scale")
+        if arriving && delay > 0 {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0
+            fade.toValue = 1
+            fade.duration = 0.12
+            fade.beginTime = begin
+            fade.fillMode = .backwards
+            v.layer.add(fade, forKey: "reaction.opacity")
+        }
+    }
+
+    private func ripple(around v: UIView, emoji: String, delay: CFTimeInterval) {
+        let center = v.convert(CGPoint(x: v.bounds.midX, y: v.bounds.midY), to: self)
+        let begin = CACurrentMediaTime() + delay + 0.08
+        let tint = Self.flairColor(emoji)
+
+        let ring = CAShapeLayer()
+        ring.bounds = v.bounds
+        ring.position = center
+        ring.path = UIBezierPath(roundedRect: v.bounds, cornerRadius: v.bounds.height / 2).cgPath
+        ring.fillColor = UIColor.clear.cgColor
+        ring.strokeColor = BubblePalette.accent.cgColor
+        ring.lineWidth = 1.5
+        ring.opacity = 0
+        let grow = CABasicAnimation(keyPath: "transform.scale")
+        grow.fromValue = 1
+        grow.toValue = 1.55
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0.7
+        fade.toValue = 0
+        let thin = CABasicAnimation(keyPath: "lineWidth")
+        thin.fromValue = 2
+        thin.toValue = 0.5
+        let ringGroup = CAAnimationGroup()
+        ringGroup.animations = [grow, fade, thin]
+        ringGroup.duration = 0.5
+        ringGroup.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        ringGroup.beginTime = begin
+        addFX(ring, ringGroup, life: delay + 0.65)
+
+        // Three dots, up and out, spread over the top half so they never fall into the message below.
+        let angles: [CGFloat] = [-150, -95, -35].map { ($0 + CGFloat.random(in: -12...12)) * .pi / 180 }
+        for a in angles {
+            let d: CGFloat = 4
+            let dot = CALayer()
+            dot.bounds = CGRect(x: 0, y: 0, width: d, height: d)
+            dot.cornerRadius = d / 2
+            dot.backgroundColor = tint.cgColor
+            dot.opacity = 0
+            let start = CGPoint(x: center.x + cos(a) * v.bounds.width * 0.35,
+                                y: center.y + sin(a) * v.bounds.height * 0.4)
+            let end = CGPoint(x: center.x + cos(a) * (v.bounds.width / 2 + CGFloat.random(in: 10...18)),
+                              y: center.y + sin(a) * (v.bounds.height / 2 + 14))
+            dot.position = start
+            let move = CABasicAnimation(keyPath: "position")
+            move.fromValue = NSValue(cgPoint: start)
+            move.toValue = NSValue(cgPoint: end)
+            let shrink = CABasicAnimation(keyPath: "transform.scale")
+            shrink.fromValue = 1.2
+            shrink.toValue = 0.3
+            let show = CAKeyframeAnimation(keyPath: "opacity")
+            show.values = [0, 1, 1, 0]
+            show.keyTimes = [0, 0.15, 0.6, 1]
+            let g = CAAnimationGroup()
+            g.animations = [move, shrink, show]
+            g.duration = 0.55
+            g.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            g.beginTime = begin
+            addFX(dot, g, life: delay + 0.7)
+        }
+    }
+
+    /// A short-lived effect layer on the row (not the bubble box: the ring spreads past the bubble's
+    /// edge), taken away when its time is up.
+    private func addFX(_ l: CALayer, _ a: CAAnimation, life: CFTimeInterval) {
+        layer.addSublayer(l)
+        fxLayers.append(l)
+        l.add(a, forKey: "reactionFX")
+        DispatchQueue.main.asyncAfter(deadline: .now() + life) { [weak self, weak l] in
+            guard let l else { return }
+            l.removeFromSuperlayer()
+            self?.fxLayers.removeAll { $0 === l }
+        }
+    }
+
+    /// The emoji travelling from where it was picked to its pill, in the window. False when there is
+    /// nowhere sensible to fly from (no window, or a start point off this screen).
+    private func flyIn(_ emoji: String, from screenPoint: CGPoint, to v: UIView) -> Bool {
+        guard let win = window, let chip = v as? ReactionChipView else { return false }
+        let start = win.convert(screenPoint, from: win.screen.coordinateSpace)
+        guard win.bounds.insetBy(dx: -20, dy: -20).contains(start) else { return false }
+        let end = chip.convert(chip.emojiPoint, to: win)
+        let label = UILabel()
+        label.text = emoji
+        label.font = .systemFont(ofSize: 30)
+        label.sizeToFit()
+        label.center = end
+        label.isUserInteractionEnabled = false
+        let endScale = max(0.3, min(1, chip.emojiFontSize / 30))
+        label.transform = CGAffineTransform(scaleX: endScale, y: endScale)
+        label.alpha = 0   // shown only by the flight; it never sits on the pill by itself
+        win.addSubview(label)
+        fxViews.append(label)
+
+        let dur = ReactionFlight.duration
+        let path = UIBezierPath()
+        path.move(to: start)
+        let lift = min(70, max(30, abs(end.y - start.y) * 0.35))
+        path.addQuadCurve(to: end, controlPoint: CGPoint(x: (start.x + end.x) / 2, y: min(start.y, end.y) - lift))
+        let travel = CAKeyframeAnimation(keyPath: "position")
+        travel.path = path.cgPath
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = 1.15
+        scale.toValue = endScale
+        let show = CABasicAnimation(keyPath: "opacity")
+        show.fromValue = 1
+        show.toValue = 1
+        let g = CAAnimationGroup()
+        g.animations = [travel, scale, show]
+        g.duration = dur
+        g.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 0.2, 1)
+        label.layer.add(g, forKey: "reactionFX")
+        DispatchQueue.main.asyncAfter(deadline: .now() + dur) { [weak self, weak label] in
+            guard let label else { return }
+            label.removeFromSuperview()
+            self?.fxViews.removeAll { $0 === label }
+        }
+        return true
+    }
+
+    /// The dots' colour: the emoji's own main colour for the common ones, the accent otherwise.
+    private static func flairColor(_ emoji: String) -> UIColor {
+        switch emoji.replacingOccurrences(of: "\u{FE0F}", with: "") {
+        case "\u{2764}", "😍", "🥰", "😘", "💔", "🌹", "💯": return UIColor(red: 1, green: 0.23, blue: 0.3, alpha: 1)
+        case "🔥", "🍾", "🏆": return UIColor(red: 1, green: 0.55, blue: 0.1, alpha: 1)
+        case "😢", "😭": return UIColor(red: 0.3, green: 0.6, blue: 1, alpha: 1)
+        case "😡", "🤬": return UIColor(red: 0.95, green: 0.3, blue: 0.2, alpha: 1)
+        case "👍", "👎", "😂", "🤣", "😁", "😮", "😱", "🙏", "👏", "🤩", "😅", "\u{26A1}", "🥳", "🎉", "😇":
+            return UIColor(red: 1, green: 0.78, blue: 0.15, alpha: 1)
+        default: return BubblePalette.accent
+        }
     }
 
     private func applyFailBadge(_ b: BubblePlan) {
@@ -2209,6 +2439,12 @@ final class MessageRowView: UIView {
         let snaps = leavingSnaps
         leavingSnaps.removeAll()
         snaps.forEach { $0.removeFromSuperview() }
+        // My-reaction ripple, dots and flying emoji belong to the row that made them.
+        let fx = fxLayers, fv = fxViews
+        fxLayers.removeAll()
+        fxViews.removeAll()
+        fx.forEach { $0.removeFromSuperlayer() }
+        fv.forEach { $0.removeFromSuperview() }
         pendingGrowth = 0   // chat #38: never handed to the next row this cell draws
         // The countdown belongs to one message's timer; a recycled cell must not inherit it.
         expiryRing?.isHidden = true
