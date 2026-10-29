@@ -486,7 +486,12 @@ struct GroupInfoView: View {
             // A follower's channel page (owner 2026-10-29, the reference app's): about, the media and
             // storage rows with Muted, what kind of channel it is, then Unfollow / Report.
             aboutCard
-            followerRowsCard
+            followerStorageCard
+            if !media.isEmpty {
+                ProfileMediaCard(cid: cid, media: media, cardColor: cardColor,
+                                 onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
+                                 onSeeAll: { showAllMedia = true })
+            }
             exitCard
         } else {
             memberCards
@@ -496,61 +501,41 @@ struct GroupInfoView: View {
     // MARK: A follower's channel page (owner 2026-10-29)
 
     /// Following ✓ (tap: Unfollow?), Share, Search: equal cards, the reference app's channel row.
-    private var followerActions: some View {
-        HStack(spacing: 8) {
+    /// A follower's (or visitor's) buttons, in the owner's own round circles (owner 2026-10-29: one
+    /// design for everyone, not the reference app's square cards): Following or Follow, Mute,
+    /// Search, Share.
+    private var followerCircles: some View {
+        HStack(spacing: 0) {
             if followingNow {
-                Button { confirmUnfollow = true } label: {
-                    followerCard("checkmark", "Following", tint: Color(hex: 0x2392FE))
-                }
+                Button { confirmUnfollow = true } label: { actionIcon("checkmark", "Following") }
+                    .tint(.primary)
+                    .accessibilityLabel("Following. Tap to unfollow")
+                Menu { muteMenuItems } label: { actionIcon(muted ? "ic_bell" : "ic_bell_off", muted ? "Unmute" : "Mute") }
+                    .tint(.primary)
+                    .accessibilityLabel(muted ? "Unmute" : "Mute")
             } else {
-                Button { followFromPage() } label: {
-                    followerCard("plus", following ? "Following…" : "Follow", tint: Color(hex: 0x2392FE))
-                }
-                .disabled(following)
+                Button { followFromPage() } label: { actionIcon("plus", following ? "Following…" : "Follow") }
+                    .tint(.primary)
+                    .disabled(following)
             }
-            // Our own "Share with" sheet first (chats); its corner button opens other apps.
+            Button { onSearch?() } label: { actionIcon("magnifyingglass", "Search") }
+                .tint(.primary)
+                .disabled(onSearch == nil)
+                .opacity(onSearch == nil ? 0.45 : 1)
             if let name = conv?.publicName, !name.isEmpty {
                 Button { shareGroupText = "Follow " + (conv?.title ?? "this channel") + " on Fariin: https://fariin.com/" + name } label: {
-                    followerCard("square.and.arrow.up", "Share")
+                    actionIcon("square.and.arrow.up", "Share")
                 }
-            } else {
-                followerCard("square.and.arrow.up", "Share").opacity(0.45)
-            }
-            Button { onSearch?() } label: { followerCard("magnifyingglass", "Search") }
-                .disabled(onSearch == nil)
-        }
-        .tint(.primary)
-        .padding(.horizontal, 16)
-    }
-
-    private func followerCard(_ icon: String, _ label: String, tint: Color = .primary) -> some View {
-        VStack(spacing: 6) {
-            Image(systemName: icon).font(.system(size: 20, weight: .medium)).foregroundStyle(tint)
-            Text(label).font(.system(size: 13)).foregroundStyle(.primary).lineLimit(1)
-        }
-        .frame(maxWidth: .infinity).frame(height: 68)
-        .background(cardColor, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
-
-    /// Media and Links, Storage Used, and Muted as a switch.
-    private var followerRowsCard: some View {
-        VStack(spacing: 0) {
-            ProfileInfoRow(title: "Media and Links", icon: "photo",
-                           value: media.isEmpty ? "None" : "\(media.count)") { showAllMedia = true }
-            rowDivider
-            ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
-                           value: storage.map { Self.bytes($0.total) } ?? "") { showStorage = true }
-            if followingNow {
-                rowDivider
-                HStack(spacing: 14) {
-                    Image(systemName: "bell.slash").font(.system(size: 17)).frame(width: 26)
-                    Toggle("Muted", isOn: Binding(get: { muted }, set: { ChannelService.setMuted(cid: cid, $0) }))
-                }
-                .padding(.horizontal, 16).padding(.vertical, 12)
+                .tint(.primary)
             }
         }
-        .profileSurface(plain: cardColor)
+    }
+
+    /// Storage Used, in the owner's card style. Media is the All Media strip under it; mute is a circle.
+    private var followerStorageCard: some View {
+        ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
+                       value: storage.map { Self.bytes($0.total) } ?? "") { showStorage = true }
+            .profileSurface(plain: cardColor)
     }
 
     /// Follow from the channel's page (a visitor, or after unfollowing). A private channel without
@@ -673,7 +658,7 @@ struct GroupInfoView: View {
             .overlay { GroupStoryUploadRing(active: StoriesService.shared.uploadingGroups.contains(cid)) }
             headerCaption(.primary)
             if conv?.fariinLocked != true {
-                if isFollowerHere { followerActions.padding(.top, 6) } else { actionsRow.padding(.top, 2) }
+                if isFollowerHere { followerCircles.padding(.top, 2) } else { actionsRow.padding(.top, 2) }
             }
         }
         .frame(maxWidth: .infinity)
