@@ -258,6 +258,8 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
         // A group or Fariin story does not fly into My Story (it is not there): it flies into that
         // page's photo circle, where its upload ring turns (owner 2026-10-23, the reference app's way).
         var circle: String?
+        // A channel's photo is a squircle, so the picture lands as one (owner 2026-10-29).
+        let squircle = GroupStoryCompose.target.map { $0.isChannel || Conversation.Right.isChannel($0.id) } ?? false
         if let g = GroupStoryCompose.target { circle = StoryPostFlight.groupCircleKey(g.id) }
         else if OfficialStoryCompose.active { circle = StoryPostFlight.officialCircleKey }
         OfficialStoryCompose.end()
@@ -311,7 +313,7 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
         DiagLog.add("POSTEXIT# levels=\(chain.count) heldAfterDismiss=\(held)")
         if held { DiagLog.flagForUpload() }
         StoryPostFlight.run(scene: scene, appWindow: window, source: source,
-                            chrome: chrome, sheet: sheet, circle: circle)
+                            chrome: chrome, sheet: sheet, circle: circle, squircle: squircle)
         // And if it is still up when the flight lands, it is taken down again: an invisible camera
         // left over the app would swallow every touch.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
@@ -402,7 +404,7 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
 
     static func run(scene: UIWindowScene, appWindow: UIWindow, source: Source?,
                     chrome: UIView?, sheet: (image: UIImage, frame: CGRect, radius: CGFloat)?,
-                    circle: String? = nil) {
+                    circle: String? = nil, squircle: Bool = false) {
         let bounds = appWindow.bounds
         window?.isHidden = true
         let overlay = UIWindow(windowScene: scene)
@@ -530,8 +532,17 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
                 anim.addAnimations {
                     card.center = CGPoint(x: r.midX, y: r.midY)
                     card.transform = CGAffineTransform(scaleX: scale, y: scale)
-                    card.bounds = CGRect(x: 0, y: (h - w) / 2, width: w, height: w)
-                    card.layer.cornerRadius = w / 2
+                    if squircle {
+                        // SquircleShape fills 0.90 of its box; n = 3 reads as a continuous corner of
+                        // about a third of the side. It fades over the last 0.25 s, so close is enough.
+                        let side = w * SquircleShape.scale
+                        card.bounds = CGRect(x: (w - side) / 2, y: (h - side) / 2, width: side, height: side)
+                        card.layer.cornerCurve = .continuous
+                        card.layer.cornerRadius = side * 0.34
+                    } else {
+                        card.bounds = CGRect(x: 0, y: (h - w) / 2, width: w, height: w)
+                        card.layer.cornerRadius = w / 2
+                    }
                 }
                 UIView.animate(withDuration: 0.25, delay: flight - 0.25, options: .curveEaseInOut) { card.alpha = 0 }
                 anim.addCompletion { _ in finish(nil) }

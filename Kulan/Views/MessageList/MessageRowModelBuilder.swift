@@ -917,7 +917,10 @@ enum MessageRowModelBuilder {
             }
             // A request to turn Restricted chat off answers from its own notice, as in the
             // reference app (`ThreadView` reads this target and offers Turn Off / Keep On).
-            return NoticeRow(text: ownNoticeAsYou(m, ctx: ctx), symbol: nil, style: .pill,
+            // A channel's notices say "channel" (owner 2026-10-29: "You changed the group wallpaper",
+            // "This group is now verified"): the server writes one sentence for both kinds.
+            let said = ownNoticeAsYou(m, ctx: ctx)
+            return NoticeRow(text: ctx.isChannel ? ChannelWords.apply(said) : said, symbol: nil, style: .pill,
                              tapTargetId: m.isRestrictRequest ? Self.restrictRequestTarget : nil,
                              onWallpaper: ctx.onWallpaper, wallpaperBlur: ctx.wallpaperBlur)
         }
