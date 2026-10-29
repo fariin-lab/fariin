@@ -487,8 +487,9 @@ enum MessageRowLayout {
 
         // 72% of the LIST's width, then clamped by whatever the column actually has. On a phone the
         // two are the same number; in Stage Manager they are not.
-        // A channel post takes the whole column (owner 2026-10-29, the reference app's feed).
-        let maxBubble = b.wide ? columnW : min(BubbleMetrics.maxBubbleWidth(in: rowWidth), columnW)
+        // A channel post is wider than a chat bubble but leaves a gap on the right (owner 2026-10-29,
+        // second look: edge to edge read as a wall). Left-aligned, 44 pt short of the column.
+        let maxBubble = b.wide ? max(1, columnW - 44) : min(BubbleMetrics.maxBubbleWidth(in: rowWidth), columnW)
         let hPad = BubbleMetrics.hPad, vPad = BubbleMetrics.vPad
         let maxContent = max(1, maxBubble - hPad * 2)
 
