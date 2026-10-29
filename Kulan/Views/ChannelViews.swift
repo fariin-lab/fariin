@@ -18,7 +18,11 @@ struct ChannelFollowerBar: View {
     private var followBlocked: String? {
         let me = AuthService.shared.uid ?? ""
         if !me.isEmpty, conv.bannedUids.contains(me) { return "You're banned from this channel." }
-        if !conv.isPublic { return "This channel is private. Ask an admin for an invite link." }
+        // ⛔ NO "PRIVATE" GUESS HERE (owner 2026-10-29: a public channel opened from search showed
+        // "This channel is private" in place of Follow after a visit to its profile). This page's
+        // copy of the channel cannot be trusted to carry its public name, and a wrong "you can't" is
+        // worse than a tap: Follow stays, and a truly private channel answers with the server's
+        // own refusal (`problem`), as it did before the audit's U4.
         return nil
     }
 
