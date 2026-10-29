@@ -1063,7 +1063,7 @@ struct GroupInfoView: View {
     // waiting, and only to an admin who may let people in (the owner, or `inviteUsers`). The faces
     // of the first three people asking; the row opens the requests page.
     @ViewBuilder private var groupSettingsRows: some View {
-        ProfileInfoRow(title: "Group Settings", icon: "ic_group_settings") { showSettings = true }
+        ProfileInfoRow(title: isChannel ? "Channel Settings" : "Group Settings", icon: "ic_group_settings") { showSettings = true }
         if can(.inviteUsers) && !joinReqs.isEmpty {
             rowDivider
             joinRequestsRow

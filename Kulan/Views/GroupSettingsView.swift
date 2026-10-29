@@ -124,7 +124,7 @@ struct GroupSettingsView: View {
         // owner 2026-10-27 ("space between cards is big"): the group page's own card gap (20).
         .listSectionSpacing(20)
         .contentMargins(.top, 12, for: .scrollContent)
-        .navigationTitle("Group Settings")
+        .navigationTitle(conv?.isChannel == true ? "Channel Settings" : "Group Settings")
         .navigationBarTitleDisplayMode(.inline)
         // Started once and kept while a child page is pushed; removed with the page (`ListenerBox`).
         .onAppear {
@@ -1521,7 +1521,7 @@ struct EditGroupView: View {
                 withAnimation(.smooth(duration: 0.2)) { proxy.scrollTo("descEnd", anchor: .bottom) }
             }
           }
-            .navigationTitle("Edit Group")
+            .navigationTitle(ConversationsRepository.shared.conversations.first { $0.id == cid }?.isChannel == true ? "Edit Channel" : "Edit Group")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // 2026-10-18 (owner): an X in place of Cancel, and Save in blue (New Group's Create).
