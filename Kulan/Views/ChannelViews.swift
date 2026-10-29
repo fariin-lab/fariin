@@ -513,8 +513,8 @@ struct ChannelAdminInviteRows: View {
 
     /// A private channel: its invite link, from the server.
     private func shareInviteLink() async {
-        guard let code = try? await GroupInviteService.shareCode(cid: cid) else {
-            ToastNotice.show("This channel has no invite link. Turn one on in Channel Type.")
+        guard let code = await ChannelInviteLink.code(cid) else {
+            ToastNotice.show("Couldn't get the channel's link. Check your connection and try again.")
             return
         }
         shareText = "Follow \u{201C}\(title)\u{201D} on Fariin: " + KulanApp.groupLink(code: code)
@@ -673,10 +673,10 @@ struct ChannelAdminCard: View {
         let link: String
         if conv.isPublic, !conv.publicName.isEmpty {
             link = "https://fariin.com/" + conv.publicName
-        } else if let code = try? await GroupInviteService.shareCode(cid: conv.id) {
+        } else if let code = await ChannelInviteLink.code(conv.id) {
             link = KulanApp.groupLink(code: code)
         } else {
-            ToastNotice.show("This channel has no invite link. Turn one on in Channel Type.")
+            ToastNotice.show("Couldn't get the channel's link. Check your connection and try again.")
             return
         }
         shareText = "Follow \u{201C}\(conv.title)\u{201D} on Fariin: " + link
@@ -1001,5 +1001,16 @@ struct DeleteChannelSheet: View {
                 await MainActor.run { busy = false; problem = words }
             }
         }
+    }
+}
+
+/// A private channel's invite link (2026-10-29): the one it has, or a new one made on the spot. It
+/// used to send the owner off to Channel Type when the link was missing (the one made at creation
+/// can fail on a slow line), where they had to find a switch to turn it on.
+enum ChannelInviteLink {
+    static func code(_ cid: String) async -> String? {
+        if let code = try? await GroupInviteService.shareCode(cid: cid) { return code }
+        _ = try? await GroupInviteService.createPrimaryLink(cid: cid)
+        return try? await GroupInviteService.shareCode(cid: cid)
     }
 }
