@@ -729,7 +729,9 @@ struct ShareStorySheet: View {
                 } header: {
                     Text("Post story as \(g.name)")
                 } footer: {
-                    Text("Only members of this group can see this story. It disappears after 24 hours.")
+                    Text(Conversation.Right.isChannel(g.id)
+                         ? "The channel's followers see this story. It disappears after 24 hours."
+                         : "Only members of this group can see this story. It disappears after 24 hours.")
                 }
                 Section {
                     Toggle("Block screenshots", isOn: $captureProtectedChoice)
@@ -738,9 +740,15 @@ struct ShareStorySheet: View {
                     Text(Self.captureFooter)
                 }
                 // owner 2026-10-27: a group story could not turn replies off.
-                Section {
-                    Toggle("Allow Replies", isOn: $groupAllowsReplies)
-                        .tint(Color(.systemGreen))
+                // Never for a channel (owner 2026-10-29: a channel has no replies). Its stories still
+                // post with replies ON underneath: followers get no reply field anyway (the counts
+                // footer), and the live rules refuse a story's heart when replies are off, so OFF
+                // would cost a channel story its likes until the new rules (d024d561) are live.
+                if !Conversation.Right.isChannel(g.id) {
+                    Section {
+                        Toggle("Allow Replies", isOn: $groupAllowsReplies)
+                            .tint(Color(.systemGreen))
+                    }
                 }
             }
             .floatingBottomBar { postButton }
