@@ -157,7 +157,7 @@ enum BubbleText {
         }
         // A channel post (2026-10-28): the eye and how many have seen it, before everything else.
         if let v = m.views,
-           let eye = UIImage(systemName: "eye.fill",
+           let eye = UIImage(systemName: "eye",
                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 9, weight: .semibold)) {
             let a = NSTextAttachment()
             a.image = eye.withTintColor(color, renderingMode: .alwaysOriginal)

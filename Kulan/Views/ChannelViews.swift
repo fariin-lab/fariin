@@ -513,3 +513,75 @@ struct ChannelAdminInviteRows: View {
         shareText = "Follow \u{201C}\(title)\u{201D} on Fariin: " + KulanApp.groupLink(code: code)
     }
 }
+
+/// At the top of every channel (owner 2026-10-29, the reference app's privacy notice, in our
+/// words): one centred line; a tap opens what the channel can and cannot see about you.
+struct ChannelPrivacyNotice: View {
+    @State private var open = false
+
+    var body: some View {
+        Button { open = true } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "lock.shield").font(.system(size: 13, weight: .semibold))
+                Text("Your privacy in this channel is protected. Tap to learn more.")
+                    .multilineTextAlignment(.center)
+            }
+            .font(.system(size: 14))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 14).padding(.vertical, 9)
+            .background(Color(.secondarySystemBackground).opacity(0.92),
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(.horizontal, 40)
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .sheet(isPresented: $open) { ChannelPrivacySheet() }
+    }
+}
+
+/// What a channel can and cannot see about a follower. Every line is what the app does.
+struct ChannelPrivacySheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            Image(systemName: "lock.shield.fill")
+                .font(.system(size: 54)).foregroundStyle(Color(hex: 0x2392FE))
+                .frame(maxWidth: .infinity).padding(.top, 30)
+            Text("Your privacy in channels")
+                .font(.title2.bold()).frame(maxWidth: .infinity).multilineTextAlignment(.center)
+            point("eye.slash", "Other followers can't see you",
+                  "Nobody else who follows this channel can see that you follow it, react or vote.")
+            point("envelope.badge.shield.half.filled", "Your account stays private",
+                  "Fariin has no phone numbers, and a channel's admins never see your email.")
+            point("person.crop.circle", "Admins can see your name",
+                  "A channel's admins can see your name in its follower list, and your photo if your photo privacy lets them.")
+            Spacer(minLength: 0)
+            Button { dismiss() } label: {
+                Text("OK").fontWeight(.semibold).foregroundStyle(.white)
+                    .frame(maxWidth: .infinity).frame(height: 50)
+                    .liquidGlass(Capsule(), interactive: true, tint: Color(hex: 0x2392FE))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            Button {
+                if let u = URL(string: "https://help.fariin.com/channels/your-privacy-in-channels") { WebLink.open(u) }
+            } label: {
+                Text("Learn more").frame(maxWidth: .infinity)
+            }
+            .foregroundStyle(Color(hex: 0x2392FE))
+        }
+        .padding(.horizontal, 24).padding(.bottom, 16)
+        .presentationDetents([.large])
+    }
+
+    private func point(_ icon: String, _ title: String, _ line: String) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            Image(systemName: icon).font(.system(size: 22)).frame(width: 30)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.body.weight(.semibold))
+                Text(line).font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
