@@ -3998,6 +3998,15 @@ struct ThreadView: View {
             liveRestrictRequestId ?? "-",
             // A channel draws every post as received (2026-10-28); known only once the doc is in.
             conversation?.isChannel == true ? "ch" : "-",
+            // ⛔ A CHANNEL'S REACTIONS, THE SIXTH TIME THIS FILE'S RULE WAS BROKEN (owner 2026-10-29:
+            // "when I tap my reaction it doesn't show until I leave the channel and come back", and
+            // "double tap doesn't work" after following, which was the same thing: the pick was made
+            // and never drawn). `channelMine`, `channelCounts`, `channelReactionsOn` and
+            // `channelCanReact` are all READ while building a row, so they key it, as `rowSignatures`
+            // already does for the hosted rows. Text posts are UIKit rows and only rebuild from here.
+            conversation?.isChannel == true
+                ? "\(ChannelFollows.shared.myReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.pendingReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.countOverrides[cid]?.hashValue ?? 0):\(channelReactOn)\(channelCanReact)"
+                : "-",
         ].joined(separator: "|")
         return key
     }

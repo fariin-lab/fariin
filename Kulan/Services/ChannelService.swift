@@ -419,7 +419,7 @@ final class ChannelFollows {
     /// `reactionCounts` do not have it yet, and the chip vanished or showed the old count for up to a
     /// minute. The server's answer (the post's counts with my change applied) is shown instead while
     /// the post still holds the counts it had when I tapped, for two minutes at most.
-    struct CountOverride: Equatable { let counts: [String: Int]; let base: [String: Int]; let at: Date }
+    struct CountOverride: Hashable { let counts: [String: Int]; let base: [String: Int]; let at: Date }
     private(set) var countOverrides: [String: [String: CountOverride]] = [:]
 
     func noteServerCounts(_ cid: String, _ mid: String, counts: [String: Int], base: [String: Int]) {
