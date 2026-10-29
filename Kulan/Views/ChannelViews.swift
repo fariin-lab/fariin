@@ -224,7 +224,21 @@ struct ChannelFollowersView: View {
                     }
                     .onAppear { if f == rows.last, more { Task { await load() } } }
                 }
-                if loading { HStack { Spacer(); ProgressView(); Spacer() } }
+                // ⛔ A SKELETON, NOT A SPINNER, for the first page (owner 2026-10-29): the real row's
+                // shape (40pt face, a name line), one per follower up to eight. A spinner stays
+                // only for the next page at the foot of a list already on screen.
+                if loading && rows.isEmpty {
+                    ForEach(0..<max(1, min(count, 8)), id: \.self) { i in
+                        HStack(spacing: 12) {
+                            SkeletonCircle(size: 40)
+                            SkeletonBlock(width: [140, 110, 170, 95][i % 4], height: 13)
+                            Spacer(minLength: 0)
+                        }
+                        .accessibilityHidden(true)
+                    }
+                } else if loading {
+                    HStack { Spacer(); ProgressView(); Spacer() }
+                }
                 if failed { Text("Couldn't load followers. Pull to try again.").foregroundStyle(.secondary) }
                 // Nobody yet: said, not a spinner (owner 2026-10-29: it turned on an empty list).
                 if rows.isEmpty, !loading, !failed, !more {
