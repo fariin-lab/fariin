@@ -108,9 +108,7 @@ struct GroupSettingsView: View {
 
     private var isPublicNow: Bool { conv?.isPublic ?? false }
 
-    /// Sign Posts (2026-10-28, the reference app's channel signatures): the admin's name under
-    /// each post. Off, posts are the channel speaking.
-    @State private var signOn: Bool?
+    /// The Reactions row's value: Off, Any, or the channel's own emoji.
     private var reactionsValue: String {
         switch conv?.reactMode {
         case "off": return "Off"
@@ -119,20 +117,12 @@ struct GroupSettingsView: View {
         }
     }
 
-    private var channelPostsSection: some View {
-        Section {
-            Toggle("Sign Posts", isOn: Binding(
-                get: { signOn ?? conv?.signPosts ?? false },
-                set: { v in
-                    signOn = v
-                    Task {
-                        do { try await ChatService.setGroupPermission(cid: cid, key: "signPosts", v) }
-                        catch { signOn = nil }
-                    }
-                }))
-                .disabled(!canEdit)
-            // What followers may react with (2026-10-29).
-            if canEdit {
+    // Sign Posts is gone (owner 2026-10-29: "remove this feature"): a post always comes from the
+    // channel. What is left here is Reactions.
+    @ViewBuilder private var channelPostsSection: some View {
+        if canEdit {
+            Section {
+                // What followers may react with (2026-10-29).
                 NavigationLink { ChannelReactionsSettingsView(cid: cid) } label: {
                     HStack {
                         Text("Reactions")
@@ -141,8 +131,6 @@ struct GroupSettingsView: View {
                     }
                 }
             }
-        } footer: {
-            Text("Show the name of the admin who wrote each post. Off, posts come from the channel.")
         }
     }
 
@@ -156,7 +144,7 @@ struct GroupSettingsView: View {
             // anyone but staff; the owner and admins included.
             // A channel's own admins manage its admins (2026-10-28), though its members are hidden.
             if conv?.isChannel == true || !(conv?.hideMembers == true && !AdminStore.shared.isAdmin) { peopleSection }
-            // A channel: followers have no permissions to set; its posts have Sign Posts instead.
+            // A channel: followers have no permissions to set; its posts have Reactions instead.
             if conv?.isChannel == true { channelPostsSection } else { permissionsSection }
             chatSection
         }
