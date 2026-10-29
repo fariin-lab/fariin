@@ -204,8 +204,11 @@ final class MediaBubbleView: UIView {
     private func applyVisibility(hiddenId: String?) {
         let hidden = !flightKey.isEmpty && hiddenId == flightKey
         let a: CGFloat = hidden ? 0 : 1
-        // Lifted out for the viewer: no grey box where it was (owner 2026-10-29), only the chat.
-        backgroundColor = hidden ? .clear : .secondarySystemFill
+        // ⛔ NO FILL ON THIS VIEW, LIFTED OR NOT (owner 2026-10-29: a grey/white square behind an
+        // animated sticker). 7635a146 set `.secondarySystemFill` whenever a photo came back, which
+        // painted every media bubble, stickers too, on the first visibility change. A photo's
+        // loading grey is its own picture view's; this view never had one.
+        backgroundColor = nil
         onLifted?(hidden)
         picture.alpha = a
         gif?.alpha = a
