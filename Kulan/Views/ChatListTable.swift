@@ -2243,9 +2243,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             return
         }
         guard let c = conversation(at: indexPath) else { return }
-        ChatOpenTimer.shared.begin(c.isGroup ? "group" : "chat")   // admins only, see ChatOpenTimer
         host?.parent.onOpen(c)
-        ChatOpenTimer.shared.mark("onOpen returned")
     }
 
     func tableView(_ tableView: UITableView, didDeselectRowAt indexPath: IndexPath) {
