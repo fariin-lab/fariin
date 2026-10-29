@@ -1056,7 +1056,7 @@ struct GroupInfoView: View {
 
     /// A deeper red than the system one for these rows (owner 2026-10-19: ours read pale). The
     /// system red stays at night, where the deep one would sink into the dark card.
-    private static let exitRed = Color(uiColor: UIColor { t in
+    static let exitRed = Color(uiColor: UIColor { t in
         t.userInterfaceStyle == .dark ? .systemRed : UIColor(red: 0.80, green: 0.12, blue: 0.22, alpha: 1)
     })
 
@@ -1078,7 +1078,8 @@ struct GroupInfoView: View {
         return parts.isEmpty ? nil : parts.joined(separator: "\n")
     }
 
-    private static let createdFormat: DateFormatter = {
+    /// Shared with the visitor's page (`PublicGroupInfoView`), so both say "Created …" the same way.
+    static let createdFormat: DateFormatter = {
         let f = DateFormatter()
         f.dateStyle = .medium
         f.timeStyle = .short

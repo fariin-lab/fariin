@@ -621,66 +621,15 @@ struct PublicGroupInfoView: View {
     private var me: String { AuthService.shared.uid ?? "" }
 
     var body: some View {
+        // ⛔ ONE PAGE BEFORE AND AFTER JOINING (owner 2026-10-29: "looks different before joining
+        // and after"). The member page's layout, number for number (`GroupInfoView.page`/`header`):
+        // a 16pt header rhythm, 20pt between cards, 16pt side margins, its count words, its rows.
         ScrollView {
-            VStack(spacing: 0) {
-                // A public group's stories ring its photo here, and only here, for a visitor (owner
-                // 2026-10-27); a tap opens them. Their Stories row never shows them.
-                AvatarView(name: p.title, photoUrl: p.photoUrl, size: 132).avatarSquircle(p.isChannel)
-                    .frame(width: 132, height: 132)
-                    .contentShape(Circle())
-                    .onTapGesture { if let g = stories { StoryDoor.open(g, from: "groupcircle-\(p.cid)") } }
-                    .modifier(MediaRectReporter(id: "groupcircle-\(p.cid)", scope: .storyRow, cornerRadius: 66))
-                    .overlay {
-                        if let g = stories {
-                            StoryRingView(seen: StoryPrefs.seenFlags(g.stories), lineWidth: 3, squircle: p.isChannel)
-                                .frame(width: 146, height: 146)
-                                .allowsHitTesting(false)
-                        }
-                    }
-                    .padding(.top, 12)
-                HStack(spacing: 6) {
-                    Text(p.title)
-                        .font(.system(size: 28, weight: .bold))
-                        .multilineTextAlignment(.center)
-                    GroupVerifiedMark(on: p.verified, size: 20, label: p.label)
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 14)
-                // The member page's line: the first faces in front of the count (owner 2026-10-26:
-                // a visitor saw no faces), people with a photo first.
-                HStack(spacing: 6) {
-                    if !countFaces.isEmpty {
-                        HStack(spacing: -7) {
-                            ForEach(Array(countFaces.enumerated()), id: \.element.uid) { i, m in
-                                AvatarView(name: m.name, photoUrl: m.photoUrl, size: 22)
-                                    .overlay(Circle().stroke(Color(uiColor: .systemGroupedBackground), lineWidth: 1.5))
-                                    .zIndex(Double(3 - i))
-                            }
-                        }
-                        .accessibilityHidden(true)
-                    }
-                    Text(p.isChannel ? GroupDirectory.followersLine(p.memberCount) : GroupDirectory.membersLine(p.memberCount))
-                        .font(.system(size: 16)).foregroundStyle(Color(hex: 0x8E8E93))
-                }
-                .padding(.top, 4)
-                (p.isChannel ? AnyView(channelActionsRow) : AnyView(actionsRow)).padding(.top, 16)
-                // About and the link in one card, as a member sees it (owner 2026-10-26).
-                GroupAboutCard(desc: p.description, linkName: p.username, title: p.title,
-                               cardColor: Color(.secondarySystemGroupedBackground),
-                               photo: p.photoUrl, memberCount: p.memberCount)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 24)
-                if guest.readable, !(mediaLoaded && media.isEmpty) {
-                    ProfileMediaCard(cid: p.cid, media: media, hint: mediaLoaded ? 0 : 4,
-                                     onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
-                                     onSeeAll: {})
-                        .padding(.horizontal, 16)
-                        .padding(.top, 24)
-                }
-                if !p.members.isEmpty { membersCard.padding(.top, 24) }
-                if p.isChannel { channelFoot }
+            VStack(spacing: 20) {
+                visitorHeader
+                visitorCards
             }
-            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 16)
             .padding(.bottom, 24)
         }
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
@@ -736,6 +685,76 @@ struct PublicGroupInfoView: View {
         }
     }
 
+    /// Photo, name, count, actions: `GroupInfoView.header` and `headerCaption`, same sizes and gaps.
+    private var visitorHeader: some View {
+        VStack(spacing: 16) {
+            // A public group's stories ring its photo here, and only here, for a visitor (owner
+            // 2026-10-27); a tap opens them. Their Stories row never shows them.
+            AvatarView(name: p.title, photoUrl: p.photoUrl, size: 132).avatarSquircle(p.isChannel)
+                .frame(width: 132, height: 132)
+                .contentShape(Circle())
+                .onTapGesture { if let g = stories { StoryDoor.open(g, from: "groupcircle-\(p.cid)") } }
+                .modifier(MediaRectReporter(id: "groupcircle-\(p.cid)", scope: .storyRow, cornerRadius: 66))
+                .overlay {
+                    if let g = stories {
+                        StoryRingView(seen: StoryPrefs.seenFlags(g.stories), lineWidth: 3, squircle: p.isChannel)
+                            .frame(width: 146, height: 146)
+                            .allowsHitTesting(false)
+                    }
+                }
+            VStack(spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(p.title).font(.title.weight(.bold))
+                        .lineLimit(2).multilineTextAlignment(.center)
+                    GroupVerifiedMark(on: p.verified, size: 20, label: p.label)
+                }
+                // The member page's line: the first faces in front of the count (owner 2026-10-26),
+                // never on a channel (a channel does not show who runs it).
+                HStack(spacing: 6) {
+                    if !p.isChannel, !countFaces.isEmpty {
+                        HStack(spacing: -7) {
+                            ForEach(Array(countFaces.enumerated()), id: \.element.uid) { i, m in
+                                AvatarView(name: m.name, photoUrl: m.photoUrl, size: 22)
+                                    .overlay(Circle().stroke(Color(uiColor: .systemGroupedBackground), lineWidth: 1.5))
+                                    .zIndex(Double(3 - i))
+                            }
+                        }
+                        .accessibilityHidden(true)
+                    }
+                    Text(countLine).font(.system(size: 16)).foregroundStyle(Color(hex: 0x8E8E93))
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 8)
+            (p.isChannel ? AnyView(channelActionsRow) : AnyView(actionsRow)).padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 8)
+    }
+
+    /// "1 Follower", "1.2k Members": the member page's words (`GroupInfoView.memberCountText`).
+    private var countLine: String {
+        let n = p.memberCount
+        let word = p.isChannel ? "Follower" : "Member"
+        return "\(GroupInfoView.compactCount(n)) \(word)\(n == 1 ? "" : "s")"
+    }
+
+    /// About, media, members, and a channel's foot, 20pt apart as on the member page.
+    @ViewBuilder private var visitorCards: some View {
+        // About and the link in one card, as a member sees it (owner 2026-10-26).
+        GroupAboutCard(desc: p.description, linkName: p.username, title: p.title,
+                       cardColor: Color(.secondarySystemGroupedBackground),
+                       photo: p.photoUrl, memberCount: p.memberCount)
+        if guest.readable, !(mediaLoaded && media.isEmpty) {
+            ProfileMediaCard(cid: p.cid, media: media, hint: mediaLoaded ? 0 : 4,
+                             cardColor: Color(.secondarySystemGroupedBackground),
+                             onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
+                             onSeeAll: {})
+        }
+        if !p.members.isEmpty { membersCard }
+        if p.isChannel { channelFoot }
+    }
+
     /// Up to three members for the faces beside the count, the ones with a photo first.
     private var countFaces: [PublicGroupMember] {
         let withPhoto = p.members.filter { !($0.photoUrl ?? "").isEmpty }
@@ -775,7 +794,6 @@ struct PublicGroupInfoView: View {
             } label: { circle("ellipsis", "More") }
         }
         .tint(.primary)
-        .padding(.horizontal, 12)
         .alert("Report this channel?", isPresented: $confirmReport) {
             Button("Cancel", role: .cancel) {}
             Button("Report", role: .destructive) { report() }
@@ -794,23 +812,27 @@ struct PublicGroupInfoView: View {
 
     /// Report, and when it was made. (The "Public channel / Followers are private" card is gone,
     /// owner 2026-10-29.)
+    /// The member page's foot (`GroupInfoView.exitCard`): its red row with its icon, on its card,
+    /// and its "Created …" line under it.
     @ViewBuilder private var channelFoot: some View {
-        Button { if !reported { confirmReport = true } } label: {
-            Text(reported ? "Reported" : "Report Channel").foregroundStyle(reported ? Color.secondary : Color.red)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16).frame(height: 52)
-                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 16).padding(.top, 24)
-        if p.createdAt > 0 {
-            Text("Created \(Date(timeIntervalSince1970: p.createdAt / 1000).formatted(date: .abbreviated, time: .omitted)).")
-                .font(.footnote).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 32).padding(.top, 10)
-        }
-        if let followError {
-            Text(followError).font(.footnote).foregroundStyle(.red).padding(.horizontal, 32).padding(.top, 6)
+        VStack(alignment: .leading, spacing: 10) {
+            ProfileInfoRow(title: reported ? "Reported" : "Report Channel", icon: "exclamationmark.octagon",
+                           tint: reported ? .secondary : GroupInfoView.exitRed, chevron: false) {
+                if !reported { confirmReport = true }
+            }
+            .profileSurface(plain: Color(.secondarySystemGroupedBackground))
+            if p.createdAt > 0 {
+                let at = Date(timeIntervalSince1970: p.createdAt / 1000)
+                let when = GroupInfoView.createdFormat.string(from: at)
+                // "today at…" mid-sentence, as the member page writes it.
+                let shown = (when.hasPrefix("Today") || when.hasPrefix("Yesterday"))
+                    ? when.prefix(1).lowercased() + when.dropFirst() : when
+                Text("Created \(shown).").font(.footnote).foregroundStyle(.secondary)
+                    .padding(.horizontal, 20)
+            }
+            if let followError {
+                Text(followError).font(.footnote).foregroundStyle(.red).padding(.horizontal, 20)
+            }
         }
     }
 
@@ -877,7 +899,6 @@ struct PublicGroupInfoView: View {
                 .accessibilityLabel("More")
         }
         .tint(.primary)
-        .padding(.horizontal, 12)
     }
 
     private func circle(_ icon: String, _ label: String) -> some View {
@@ -888,9 +909,9 @@ struct PublicGroupInfoView: View {
     private var membersCard: some View {
         let shown = allMembers ? p.members : Array(p.members.prefix(6))
         return VStack(alignment: .leading, spacing: 6) {
-            Text(p.isChannel ? GroupDirectory.followersLine(p.memberCount) : GroupDirectory.membersLine(p.memberCount))
+            Text(countLine)
                 .font(.headline).foregroundStyle(.secondary)
-                .padding(.leading, 32)
+                .padding(.leading, 16)
             VStack(spacing: 0) {
                 ForEach(Array(shown.enumerated()), id: \.element.id) { i, m in
                     Button { if m.uid != me { profile = m } } label: {
@@ -923,8 +944,7 @@ struct PublicGroupInfoView: View {
                 }
             }
             .background(Color(.secondarySystemGroupedBackground),
-                        in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .padding(.horizontal, 16)
+                        in: RoundedRectangle(cornerRadius: 24, style: .continuous))   // profileSurface's 24
         }
     }
 }
