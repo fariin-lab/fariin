@@ -405,11 +405,11 @@ struct PublicJoinBar: View {
                     Text(title).opacity(joining ? 0 : 1)
                     if joining { BusyArc.small(.white) }
                 }
-                    .font(.system(size: 17, weight: .medium))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(enabled || joining ? Color.white : Color.secondary)
-                    .padding(.horizontal, 19)
-                    .frame(minWidth: 166)
-                    .frame(height: 44)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: Self.barHeight)
                     .liquidGlass(Capsule(), interactive: true,
                                  tint: enabled || joining ? PublicGroupSheet.blue : nil)
                     .contentShape(Capsule())
@@ -417,12 +417,19 @@ struct PublicJoinBar: View {
             .buttonStyle(.plain)
             .disabled(!enabled && !joining)
             .allowsHitTesting(!joining)
+            .padding(.horizontal, 16)
         }
         .frame(maxWidth: .infinity)
         .systemBarChrome()
     }
 
     private var enabled: Bool { !joining && !waiting && guest.refusal == nil }
+
+    /// ⛔ ONE JOIN BUTTON (owner 2026-10-29: "sometimes small, sometimes big"). A channel opened by
+    /// link got this bar's small pill (it hugged its words); one already known got
+    /// `ChannelFollowerBar`'s full-width bar. All three bars (this, `RejoinGroupBar`, the channel's)
+    /// are now his full-width blue bar: 50pt tall, 16pt in from the sides.
+    static let barHeight: CGFloat = 50
 
     private var title: String {
         if waiting { return "Request Sent" }
@@ -494,17 +501,18 @@ struct RejoinGroupBar: View {
                     Text(requestSent ? "Request Sent" : "Join Group").opacity(joining ? 0 : 1)
                     if joining { BusyArc.small(.white) }
                 }
-                    .font(.system(size: 17, weight: .medium))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(requestSent ? Color.secondary : Color.white)
-                    .padding(.horizontal, 19)
-                    .frame(minWidth: 166)
-                    .frame(height: 44)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity)   // the one join bar (`PublicJoinBar.barHeight`)
+                    .frame(height: PublicJoinBar.barHeight)
                     .liquidGlass(Capsule(), interactive: true, tint: requestSent ? nil : PublicGroupSheet.blue)
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)
             .disabled(requestSent)
             .allowsHitTesting(!joining)
+            .padding(.horizontal, 16)
             }
         }
         .frame(maxWidth: .infinity)
