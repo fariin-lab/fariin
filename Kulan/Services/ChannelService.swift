@@ -117,6 +117,17 @@ enum ChannelService {
         _ = try await fn.httpsCallable("removeChannelFollower").call(["cid": cid, "uid": uid, "ban": ban])
     }
 
+    /// Opening a channel wakes the reaction and view steps on the server (2026-10-29): a step
+    /// nobody used for a while sleeps, and the first reaction waited a second or two for it.
+    /// At most once a minute per channel; the answer is not needed.
+    private static var lastWarm: [String: Date] = [:]
+    static func warm(cid: String) {
+        if let t = lastWarm[cid], Date().timeIntervalSince(t) < 60 { return }
+        lastWarm[cid] = Date()
+        fn.httpsCallable("reactChannelPost").call(["warm": true]) { _, _ in }
+        fn.httpsCallable("channelViews").call(["warm": true]) { _, _ in }
+    }
+
     /// React to a post (nil takes mine back). The server keeps who picked what private and answers
     /// with the post's counts.
     static func react(cid: String, mid: String, emoji: String?) async throws {

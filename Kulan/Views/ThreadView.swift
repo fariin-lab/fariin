@@ -4962,6 +4962,7 @@ struct ThreadView: View {
                 MediaAutoDownloader.noteViewport(cid: cid, rowIds: ids, items: repo.items) { repo.indexById[$0] }
                 // A channel's posts on screen count as seen (2026-10-28, ChannelViewQueue).
                 if conversation?.isChannel == true, !quiet {
+                    ChannelService.warm(cid: cid)   // wake reactions and views before they are used
                     // Real posts only: no day lines or other drawn rows.
                     ChannelViewQueue.shared.note(cid: cid, ids: ids.compactMap { r in repo.indexById[r].map { repo.items[$0].id } })
                 }
