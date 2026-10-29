@@ -1519,8 +1519,8 @@ struct EditGroupView: View {
           ScrollViewReader { proxy in
             List {
                 Section {
-                    // No badge on the photo; the "Set New Photo" capsule under it, in Liquid Glass
-                    // (owner 2026-10-19, correcting my earlier reading).
+                    // No badge on the photo; "Set New Photo" under it as plain accent text, no glass
+                    // capsule (owner 2026-10-29, replaces the 10-19 Liquid Glass capsule).
                     VStack(spacing: 12) {
                         Button { nameFocused = false; showPicker = true } label: { photo }
                             .buttonStyle(.plain)
@@ -1549,10 +1549,9 @@ struct EditGroupView: View {
                                 Button("Cancel", role: .cancel) {}
                             }
                         Button { nameFocused = false; showPicker = true } label: {
-                            Text("Set New Photo").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                            Text("Set New Photo").font(.body).foregroundStyle(Color.accentColor)
                                 .padding(.horizontal, 20).frame(height: 36)
-                                .liquidGlass(Capsule(), interactive: true)
-                                .contentShape(Capsule())
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                     }
