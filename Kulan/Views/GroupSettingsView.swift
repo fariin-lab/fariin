@@ -220,7 +220,7 @@ struct GroupSettingsView: View {
                 pendingDisappear = nil
             }
         } message: {
-            Text("New messages in this group will be deleted for all members after \(ChatService.disappearLabel(pendingDisappear ?? 86_400)). Everyone will see that you turned this on.")
+            Text(ChannelWords.forChat(cid, "New messages in this group will be deleted for all members after \(ChatService.disappearLabel(pendingDisappear ?? 86_400)). Everyone will see that you turned this on."))
         }
     }
 
@@ -245,7 +245,7 @@ struct GroupSettingsView: View {
         Section {
             Button {
                 if canEdit { showDisappear = true }
-                else if closed { actionError = conv?.groupMod.noticeText ?? "" }
+                else if closed { actionError = ChannelWords.forChat(cid, conv?.groupMod.noticeText ?? "") }
                 else { actionError = "Only admins can change this." }
             } label: {
                 HStack {
@@ -917,7 +917,7 @@ struct AddAdminPage: View {
                 Text("What this admin can do")
             } footer: {
                 if grantable.contains(.addAdmins) && !rights.contains(Conversation.Right.addAdmins.rawValue) {
-                    Text("They won't be able to make other members admins.")
+                    Text(ChannelWords.forChat(cid, "They won't be able to make other members admins."))
                 }
             }
             if mayTag {
@@ -934,7 +934,7 @@ struct AddAdminPage: View {
                 } header: {
                     Text("Tag")
                 } footer: {
-                    Text("A short word next to the name in this group, like Host or Teacher. Everyone in the group sees it.")
+                    Text(ChannelWords.forChat(cid, "A short word next to the name in this group, like Host or Teacher. Everyone in the group sees it."))
                 }
             }
         }
@@ -1375,7 +1375,7 @@ struct GroupRequestsView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 6)
             } footer: {
-                Text("People who ask to join “\(conv?.title ?? "this group")” with a group link show up here.")
+                Text("People who ask to join “\(conv?.title ?? "this groupChannelWords.forChat(cid, ")” with a group link show up here."))
             }
         } else {
             Section("Waiting to join") {
@@ -1424,7 +1424,7 @@ struct GroupRequestsView: View {
             Section { ProgressView().frame(maxWidth: .infinity) }
         } else if active.isEmpty {
             Section {
-                Text("This group has no invite link on.").foregroundStyle(.secondary)
+                Text(ChannelWords.forChat(cid, "This group has no invite link on.")).foregroundStyle(.secondary)
             }
         }
         ForEach(active) { l in
@@ -1447,7 +1447,7 @@ struct GroupRequestsView: View {
         Section {
             Button { showInvite = true } label: { Label("Share Invite Link", systemImage: "link") }
             if canAdd {
-                Button { showAdd = true } label: { Label { Text("Add Members") } icon: { Image("ic_add_members_line") } }
+                Button { showAdd = true } label: { Label { Text(ChannelWords.forChat(cid, "Add Members")) } icon: { Image("ic_add_members_line") } }
             }
         } header: {
             Text("Invite more people")
@@ -1556,7 +1556,7 @@ struct EditGroupView: View {
                                     .accessibilityLabel("Remove Photo")
                                 }
                             }
-                            .alert("Remove group photo?", isPresented: $confirmRemovePhoto) {
+                            .alert(ChannelWords.forChat(cid, "Remove group photo?"), isPresented: $confirmRemovePhoto) {
                                 Button("Remove", role: .destructive) { newPhoto = nil; removePhoto = true }
                                 Button("Cancel", role: .cancel) {}
                             }
@@ -1573,7 +1573,7 @@ struct EditGroupView: View {
                 }
                 // Name and description in ONE card (owner 2026-10-20), a line between them.
                 Section {
-                    TextField("Group Name", text: $name)
+                    TextField(ChannelWords.forChat(cid, "Group Name"), text: $name)
                         .textInputAutocapitalization(.words)
                         .submitLabel(.done)
                         .focused($nameFocused)
@@ -1597,7 +1597,7 @@ struct EditGroupView: View {
                     }
                     .id("descEnd")
                 } footer: {
-                    Text("Optional. Shown on the group's info page.")
+                    Text(ChannelWords.forChat(cid, "Optional. Shown on the group's info page."))
                 }
                 .animation(.smooth(duration: 0.22), value: descRemaining <= Self.descCounterAppearsAt)
                 if let error { Text(error).foregroundStyle(.red) }
@@ -1651,7 +1651,7 @@ struct EditGroupView: View {
                     onImage: { ui, _ in pickedImage = ui; showPicker = false },
                     onVideo: { _, _ in },   // `photosOnly`: there is no video tile to pick
                     photosOnly: true,
-                    pickLabel: "Set Group Photo")
+                    pickLabel: ChannelWords.forChat(cid, "Set Group Photo"))
                 .storyAlwaysDark()
             }
             .fullScreenCover(item: $cropItem) { c in
@@ -1659,7 +1659,7 @@ struct EditGroupView: View {
                                     onDone: { circle, _ in cropItem = nil; setPhoto(circle) },
                                     onCancel: { cropItem = nil },
                                     circleOnly: true,
-                                    circleSubtitle: "Shown in chats and on the group page")
+                                    circleSubtitle: ChannelWords.forChat(cid, "Shown in chats and on the group page"))
                     .ignoresSafeArea()
             }
         }

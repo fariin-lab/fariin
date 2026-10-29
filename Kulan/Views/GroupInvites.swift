@@ -366,7 +366,9 @@ struct JoinGroupSheet: View {
 
             // Only when someone I chat with is in it (owner 2026-10-21): strangers' faces and a
             // second "N members" under the first one told me nothing.
-            if !p.faces.isEmpty, !p.mutuals.isEmpty {
+            // Never on a channel (2026-10-29): its only members are its admins, and a channel never
+            // shows who runs it.
+            if !p.isChannel, !p.faces.isEmpty, !p.mutuals.isEmpty {
                 Divider().padding(.horizontal, 20).padding(.top, 20)
                 mutualsRow(p).padding(.top, 16).padding(.horizontal, 24)
             }

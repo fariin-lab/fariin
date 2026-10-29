@@ -637,9 +637,9 @@ struct ThreadView: View {
                     VStack(spacing: 10) {
                         Image(systemName: "exclamationmark.shield.fill")
                             .font(.system(size: 40)).foregroundStyle(.secondary)
-                        Text("This group is unavailable")
+                        Text(ChannelWords.forChat(cid, "This group is unavailable"))
                             .font(.headline).foregroundStyle(.primary)
-                        Text(conversation?.groupMod.noticeText ?? "")
+                        Text(ChannelWords.forChat(cid, conversation?.groupMod.noticeText ?? ""))
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                     .multilineTextAlignment(.center)
@@ -6665,7 +6665,7 @@ struct ThreadView: View {
         if isGroup, let conv = conversation {
             if !conv.groupMod.label.isEmpty {
                 m.titleIcon = ChatHeaderModel.warningMark()
-                let word = conv.groupMod.label == "scam" ? "Scam warning" : "Fake group warning"
+                let word = conv.groupMod.label == "scam" ? "Scam warning" : ChannelWords.forChat(cid, "Fake group warning")
                 // Not while the line says "typing…": that one is drawn in the accent colour.
                 if !m.subtitleIsLive {
                     m.subtitle = [word, m.subtitle].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
@@ -8830,7 +8830,7 @@ struct ThreadView: View {
 
     private var removedBar: some View {
         composerNotice {
-            Text("You're no longer a member of this group")
+            Text(ChannelWords.forChat(cid, "You're no longer a member of this group"))
                 .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
         }
     }
@@ -8845,7 +8845,7 @@ struct ThreadView: View {
 
     private var groupModBar: some View {
         composerNotice {
-            Text(conversation?.groupMod.noticeText ?? "")
+            Text(ChannelWords.forChat(cid, conversation?.groupMod.noticeText ?? ""))
                 .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
@@ -8934,8 +8934,8 @@ struct ThreadView: View {
     ///   generic anything else.
     /// `code` goes into the DiagLog line (`noteRefused`); `text` is what the sheet says.
     private func refusal(for m: Message?) -> (code: String, text: String) {
-        if notAMember { return ("group", "You're no longer a member of this group") }
-        if groupModBlocked, let conv = conversation { return ("group", conv.groupMod.noticeText) }
+        if notAMember { return (ChannelWords.forChat(cid, "group"), ChannelWords.forChat(cid, "You're no longer a member of this group")) }
+        if groupModBlocked, let conv = conversation { return ("group", ChannelWords.forChat(cid, conv.groupMod.noticeText)) }
         if cannotSendAnnouncement { return ("group", "Only admins can send messages") }
         if iAmMuted { return ("group", "You're muted in this group") }
         // owner 2026-10-18: a partial restriction (AdminDeleteSheet's switches) says which kinds.

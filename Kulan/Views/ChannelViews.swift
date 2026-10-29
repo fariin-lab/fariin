@@ -452,7 +452,8 @@ struct ChannelAdminInviteRows: View {
                     AvatarView(name: p.name, photoUrl: p.photoUrl, size: 40)
                     Text(p.name).lineLimit(1)
                     Spacer(minLength: 0)
-                    Text("Invited").foregroundStyle(.secondary)
+                    // What he was invited to (owner 2026-10-29: "Invited" read as "invited to follow").
+                    Text("Invited as admin").foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 16).padding(.vertical, 10)
                 .contentShape(Rectangle())

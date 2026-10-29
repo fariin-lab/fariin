@@ -465,7 +465,7 @@ struct GroupInfoView: View {
         if conv?.fariinLocked == true {
             // ⛔ UNAVAILABLE (owner 2026-10-26, the reference app's blocked group): why, and Leave.
             // Nothing else: no settings, members, media or links while the hold lasts.
-            Text(conv?.groupMod.noticeText ?? "")
+            Text(ChannelWords.forChat(cid, conv?.groupMod.noticeText ?? ""))
                 .font(.subheadline).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
@@ -915,7 +915,7 @@ struct GroupInfoView: View {
             if let link = inviteLink {
                 Button {
                     if can(.inviteUsers) { shareGroupText = link } else { showMemberLink = true }
-                } label: { Label { Text("Share Group") } icon: { MenuIcon("ic_link_share") } }
+                } label: { Label { Text(ChannelWords.forChat(cid, "Share Group")) } icon: { MenuIcon("ic_link_share") } }
                 Button { showQR = true } label: {
                     Label { Text("QR Code") } icon: { MenuIcon("ic_qr") }
                 }
@@ -1176,7 +1176,7 @@ struct GroupInfoView: View {
         if can(.inviteUsers) { showInvite = true }
         else if inviteLink != nil { showMemberLink = true }
         // Owner 2026-10-19: a member is told why there is no link for them.
-        else { flashNotice("This group is private. Only admins can share its link.") }
+        else { flashNotice(ChannelWords.forChat(cid, "This group is private. Only admins can share its link.")) }
     }
 
     // ⛔ JOIN REQUESTS UNDER GROUP SETTINGS, IN ONE CARD (owner 2026-10-20): only while someone is
@@ -1447,7 +1447,7 @@ struct GroupInfoView: View {
                         Image("ic_new_story").renderingMode(.template).resizable().scaledToFit()
                             .frame(width: 26, height: 26)
                     }
-                    .accessibilityLabel("Add group story")
+                    .accessibilityLabel(ChannelWords.forChat(cid, "Add group story"))
                 }
                 // Two buttons, not one capsule (owner 2026-10-23): iOS 26 groups neighbouring bar
                 // items into one glass shape unless a spacer splits them.
@@ -1853,7 +1853,7 @@ private struct GroupInfoDialogs: ViewModifier {
                     pendingDisappear = nil
                 }
             } message: {
-                Text("New messages in this group will be deleted for ALL members after \(ChatService.disappearLabel(pendingDisappear ?? 86_400)). Everyone will see that you turned this on.")
+                Text(ChannelWords.forChat(cid, "New messages in this group will be deleted for ALL members after \(ChatService.disappearLabel(pendingDisappear ?? 86_400)). Everyone will see that you turned this on."))
             }
     }
 }
@@ -1894,13 +1894,13 @@ private struct GroupInfoExits: ViewModifier {
     /// is still a member, else the longest-serving member). Kasim 2026-10-21: say who, before it
     /// happens, so the owner never leaves without knowing.
     private var leaveMessage: String {
-        let plain = "You won't get messages from this group any more."
+        let plain = ChannelWords.forChat(cid, "You won't get messages from this group any more.")
         guard let conv, !conv.createdBy.isEmpty, conv.createdBy == me else { return plain }
         let heir = conv.admins.first(where: { $0 != me && conv.users.contains($0) })
             ?? conv.users.first(where: { $0 != me })
         guard let heir else { return plain }
         let name = conv.names[heir].flatMap { $0.isEmpty ? nil : $0 } ?? "another member"
-        return plain + " You own this group, so \(name) will become the owner."
+        return plain + ChannelWords.forChat(cid, " You own this group, so \(name) will become the owner.")
     }
 
     /// Who a group report names: admins.first can be ME (self-report), so another admin, else the
@@ -1935,9 +1935,9 @@ private struct GroupInfoExits: ViewModifier {
             .alert("Clear this chat?", isPresented: $confirmClear) {
                 Button("Cancel", role: .cancel) {}
                 Button("Clear Chat", role: .destructive) { Task { await ChatService.deleteForMe(cid) } }
-            } message: { Text("Messages are cleared for you on all your devices. Others in the group still have them.") }
+            } message: { Text(ChannelWords.forChat(cid, "Messages are cleared for you on all your devices. Others in the group still have them.")) }
             // owner 2026-10-18: Leave, Report and Delete ask in Apple's centred alert, not a sheet.
-            .alert("Leave Group?", isPresented: $confirmLeave) {
+            .alert(ChannelWords.forChat(cid, "Leave Group?"), isPresented: $confirmLeave) {
                 Button("Cancel", role: .cancel) {}
                 // Out of the list and the screen at once, with an Undo bar; the real leave runs after
                 // 5 s (owner 2026-10-25). See `LeaveGroupUndo`.
@@ -2292,8 +2292,8 @@ struct GroupMemberSheet: View {
     /// page too (`passwordAddress`, a proven address the person can type).
     private var noPasswordMessage: String {
         AuthService.shared.passwordAddress == nil
-            ? "To transfer group ownership, your account needs a password. Add one in Settings, then try again after 5 hours."
-            : "To transfer group ownership, your account needs a password. You can transfer ownership 5 hours after you create it."
+            ? ChannelWords.forChat(cid, "To transfer group ownership, your account needs a password. Add one in Settings, then try again after 5 hours.")
+            : ChannelWords.forChat(cid, "To transfer group ownership, your account needs a password. You can transfer ownership 5 hours after you create it.")
     }
     private var noPasswordActions: [DarkAlertAction] {
         if AuthService.shared.passwordAddress == nil { return [DarkAlertAction.cancel("OK")] }
@@ -2537,7 +2537,7 @@ struct GroupMemberSheet: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("They leave the group and can't rejoin, find it in search or open it until an admin unbans them.")
+                Text(ChannelWords.forChat(cid, "They leave the group and can't rejoin, find it in search or open it until an admin unbans them."))
             }
             .alert("Could not do that", isPresented: Binding(get: { !showEdit && actionError != nil },
                                                               set: { if !$0 { actionError = nil } })) {
@@ -2646,7 +2646,7 @@ struct GroupMemberSheet: View {
                 } header: {
                     Text("Tag")
                 } footer: {
-                    Text("A short word next to the name in this group, like Host or Teacher. Everyone in the group sees it.")
+                    Text(ChannelWords.forChat(cid, "A short word next to the name in this group, like Host or Teacher. Everyone in the group sees it."))
                 }
                 if !(role?.text ?? "").isEmpty || !roleText.isEmpty {
                     Section {
@@ -2889,7 +2889,7 @@ struct GroupMemberSheet: View {
                 Button("1 day")   { mute(86400) }
                 Button("1 week")  { mute(604800) }
                 Button("Until I lift it") { mute(0) }
-            } label: { iconLabel("speaker.slash", "Mute in This Group", tint: .primary) }
+            } label: { iconLabel("speaker.slash", ChannelWords.forChat(cid, "Mute in This Group"), tint: .primary) }
             .disabled(busy)
         }
     }
@@ -3199,7 +3199,7 @@ struct ChooseNewOwnerSheet: View {
                     .disabled(checking != nil)
                 }
             } footer: {
-                Text("The person you choose becomes the owner, then you leave the group.")
+                Text(ChannelWords.forChat(cid, "The person you choose becomes the owner, then you leave the group."))
             }
         }
         .searchable(text: $search)
@@ -3248,8 +3248,8 @@ struct TransferPasswordAlert: ViewModifier {
     @State private var failure: String?
 
     private var message: String {
-        leaving ? "Enter your password to finish this. \(name) will become the owner, then you leave the group."
-            : "Enter your password to finish this. \(name) will have full control of this group, including over you."
+        leaving ? ChannelWords.forChat(cid, "Enter your password to finish this. \(name) will become the owner, then you leave the group.")
+            : ChannelWords.forChat(cid, "Enter your password to finish this. \(name) will have full control of this group, including over you.")
     }
 
     func body(content: Content) -> some View {

@@ -762,6 +762,10 @@ enum ChannelWords {
         ("Messages", "Posts"), ("messages", "posts"), ("Message", "Post"), ("message", "post"),
         ("Group", "Channel"), ("group", "channel"),
     ]
+    /// In a channel the channel's words, else as written (the shared group pages, 2026-10-29).
+    static func forChat(_ cid: String, _ s: String) -> String {
+        Conversation.Right.isChannel(cid) ? apply(s) : s
+    }
     static func apply(_ s: String) -> String {
         swaps.reduce(s) { $0.replacingOccurrences(of: $1.0, with: $1.1) }
     }
