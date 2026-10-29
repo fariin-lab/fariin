@@ -19,7 +19,6 @@ struct ChannelFollowerBar: View {
     }
 
     private var following: Bool { follows.follows(conv.id) }
-    private var muted: Bool { follows.entry(conv.id)?.muted ?? false }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -28,11 +27,11 @@ struct ChannelFollowerBar: View {
                     .multilineTextAlignment(.center)
             }
             if following && phase == .idle {
-                pill(muted ? "Unmute" : "Mute", icon: muted ? "bell" : "bell.slash") {
-                    Haptics.impact(.light)
-                    ChannelService.setMuted(cid: conv.id, !muted)
-                }
-                .accessibilityLabel(muted ? "Unmute channel" : "Mute channel")
+                // ⛔ A LINE OF TEXT, NO BUTTON (owner 2026-10-29: no Mute / Unmute at the bottom,
+                // "add text"). Mute is the bell at the top.
+                Text("You're following this channel")
+                    .font(.system(size: 15)).foregroundStyle(.secondary)
+                    .frame(height: 44)
             } else {
                 followButton
             }
@@ -67,23 +66,6 @@ struct ChannelFollowerBar: View {
         .disabled(round)
         .padding(.horizontal, 16)
         .accessibilityLabel(phase == .done ? "Following" : "Follow")
-    }
-
-    private func pill(_ title: String, icon: String?, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                if let icon { Image(systemName: icon).font(.system(size: 16, weight: .medium)) }
-                Text(title).font(.system(size: 17, weight: .medium))
-            }
-            .foregroundStyle(Color.primary)
-            // ⛔ ITS OWN SMALL SIZE (owner 2026-10-29: "don't bring back width"), not the Follow bar's.
-            .padding(.horizontal, 19)
-            .frame(minWidth: 166)
-            .frame(height: 44)
-            .liquidGlass(Capsule(), interactive: true, tint: nil)
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
     }
 
     private func follow() {
