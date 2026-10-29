@@ -198,6 +198,10 @@ struct ChannelFollowersView: View {
                 }
                 if loading { HStack { Spacer(); ProgressView(); Spacer() } }
                 if failed { Text("Couldn't load followers. Pull to try again.").foregroundStyle(.secondary) }
+                // Nobody yet: said, not a spinner (owner 2026-10-29: it turned on an empty list).
+                if rows.isEmpty, !loading, !failed, !more {
+                    Text("No followers yet. Share the channel to get your first ones.").foregroundStyle(.secondary)
+                }
             } header: {
                 Text(GroupDirectory.followersLine(count))
             } footer: {
@@ -230,6 +234,8 @@ struct ChannelFollowersView: View {
 
     private func load() async {
         guard !loading, more else { return }
+        // A channel the count says nobody follows: nothing to ask the server for.
+        if count == 0, rows.isEmpty { more = false; return }
         loading = true; failed = false
         do {
             let page = try await ChannelService.followers(cid: cid, after: rows.last?.uid)
