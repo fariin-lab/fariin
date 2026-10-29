@@ -1931,10 +1931,12 @@ struct StoryViewer: View {
                     // Its owner and admins keep the poster's bar (`plainOnly`).
                     let channelStory = !plainOnly && (s.groupId.map {
                         Conversation.Right.isChannel($0) || ChannelFollows.shared.follows($0) } ?? false)
+                    // Registered OR removed on every build, so the owner's and admins' own story never
+                    // keeps a follower's counts row from an earlier pass (2026-10-29 fix).
                     let _ = channelStory
                         ? ChannelStoryFooter.register(s.id, .init(canRepost: canRepost, canShare: canPassOn,
                                                  canLike: s.allowsReplies))
-                        : ()
+                        : ChannelStoryFooter.unregister(s.id)
                     return StoryUI.Story(
                         id: s.id,
                         mediaURL: s.mediaUrl,

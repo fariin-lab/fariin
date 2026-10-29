@@ -21,6 +21,10 @@ enum ChannelStoryFooter {
     private static var stories: [String: Info] = [:]
 
     static func register(_ storyId: String, _ info: Info) { stories[storyId] = info }
+    /// Not (or no longer) a follower's channel story: no counts row. ⛔ Called on every build of the
+    /// pages (owner 2026-10-29: his own channel story showed the counts row AND his poster bar). A
+    /// story once seen as a follower's stayed registered, and the row drew over the owner's bar.
+    static func unregister(_ storyId: String) { stories[storyId] = nil }
     static func info(_ storyId: String) -> Info? { stories[storyId] }
 
     /// The heart, handled by the viewer (it owns the like path, `handle(storyId:…)`).
