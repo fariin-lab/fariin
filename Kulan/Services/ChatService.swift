@@ -946,7 +946,8 @@ enum ChatService {
     static func blockGroup(cid: String) async throws {
         guard let me = Auth.auth().currentUser?.uid else { return }
         // Out first: a leave that fails leaves no block behind on a group I am still in (audit).
-        try await leaveGroup(cid: cid)
+        // A channel I follow is left by unfollowing (2026-10-28); addChannelFollowers reads the block.
+        if followedChannelPosts(cid) != nil { try await ChannelService.unfollow(cid: cid) } else { try await leaveGroup(cid: cid) }
         try await db.collection("users").document(me).collection("blockedGroups").document(cid)
             .setData(["at": FieldValue.serverTimestamp()])
     }
