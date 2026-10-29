@@ -212,6 +212,12 @@ struct ChannelFollowersView: View {
 
     struct Follower: Identifiable, Equatable { let uid: String; let name: String; let photoUrl: String?; var id: String { uid } }
 
+    /// May I remove and ban followers: the owner, or an admin holding `banUsers` (the server's test).
+    private var mayRemove: Bool {
+        let me = AuthService.shared.uid ?? ""
+        return ConversationsRepository.shared.conversations.first { $0.id == cid }?.adminCan(me, .banUsers) == true
+    }
+
     @State private var rows: [Follower] = []
     @State private var more = true
     @State private var loading = false
@@ -231,9 +237,13 @@ struct ChannelFollowersView: View {
                         Text(f.name).lineLimit(1)
                         Spacer(minLength: 0)
                     }
+                    // Only an admin who may remove people (the server now asks for `banUsers`,
+                    // 2026-10-29 review fix); others see the list without the swipe.
                     .swipeActions(edge: .trailing) {
-                        Button("Remove", role: .destructive) { confirm = (f, false) }
-                        Button("Ban") { confirm = (f, true) }.tint(.orange)
+                        if mayRemove {
+                            Button("Remove", role: .destructive) { confirm = (f, false) }
+                            Button("Ban") { confirm = (f, true) }.tint(.orange)
+                        }
                     }
                     .onAppear { if f == rows.last, more { Task { await load() } } }
                 }

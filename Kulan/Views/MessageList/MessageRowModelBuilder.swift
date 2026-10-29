@@ -28,6 +28,9 @@ struct MessageRowContext {
     var channelCanReact: Bool = false
     var channelMine: (String) -> String? = { _ in nil }
     var channelConfirmed: (String) -> String? = { _ in nil }
+    /// The counts to draw for a post (mid, the post's own): the server's answer to my pick while the
+    /// post has not caught up (`ChannelFollows.displayCounts`, 2026-10-29 review fix).
+    var channelCounts: (String, [String: Int]) -> [String: Int] = { $1 }
     var dark: Bool
     var selecting: Bool
     /// Their `wasShowingSelectionUI`: was selection mode up on the PREVIOUS pass. See
@@ -241,7 +244,8 @@ enum MessageRowModelBuilder {
                 options: poll.options, multiple: poll.multiple,
                 correct: poll.correct, endsAt: poll.endsAt, closed: msg.pollClosed,
                 // A channel never shows who voted (2026-10-29, S4): no faces on its poll bubble.
-                hideVoters: poll.hideVoters || ctx.isChannel))
+                hideVoters: poll.hideVoters || ctx.isChannel,
+                inChannel: ctx.isChannel))
         } else if let card = msg.contactCard {
             body = .contact(BubbleBody.ContactBody(
                 uid: card.uid, name: card.name, photo: card.photo,
@@ -793,7 +797,7 @@ enum MessageRowModelBuilder {
         guard ctx.channelReactionsOn, !msg.isSystem, !msg.isCall else { return [] }
         let mine = ctx.channelMine(msg.id), held = ctx.channelConfirmed(msg.id)
         // Same emoji with or without its variation selector = one chip, and mine (audit E3).
-        let counts = ChannelEmoji.merged(msg.reactionCounts, mine: mine, held: held)
+        let counts = ChannelEmoji.merged(ctx.channelCounts(msg.id, msg.reactionCounts), mine: mine, held: held)
         let chips = counts.map {
             ReactionChip(emoji: $0.key, count: $0.value, mine: ChannelEmoji.same(mine, $0.key), faces: [], showCount: true)
         }

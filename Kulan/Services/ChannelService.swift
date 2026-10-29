@@ -174,10 +174,16 @@ enum ChannelService {
 
     /// React to a post (nil takes mine back). The server keeps who picked what private and answers
     /// with the post's counts.
-    static func react(cid: String, mid: String, emoji: String?) async throws {
+    /// The post's counts with my change in them, as the server answers (nil if it sent none).
+    @discardableResult
+    static func react(cid: String, mid: String, emoji: String?) async throws -> [String: Int]? {
         var data: [String: Any] = ["cid": cid, "mid": mid]
         if let emoji { data["emoji"] = emoji }
-        _ = try await fn.httpsCallable("reactChannelPost").call(data)
+        let r = try await fn.httpsCallable("reactChannelPost").call(data)
+        guard let raw = (r.data as? [String: Any])?["counts"] as? [String: Any] else { return nil }
+        var out: [String: Int] = [:]
+        for (k, v) in raw { if let n = (v as? NSNumber)?.intValue, n > 0 { out[k] = n } }
+        return out
     }
 
     /// The channel's reactions: "all", "some" (with up to 6) or "off".
@@ -394,6 +400,25 @@ final class ChannelFollows {
         pendingReactions[cid, default: [:]][mid] = emoji ?? ""
     }
     /// The server answered: what it holds now, and nothing pending.
+    /// ⛔ THE SERVER'S COUNTS UNTIL THE POST CATCHES UP (2026-10-29 review fix). Others' reactions
+    /// reach the post in a once-a-minute batch now, so right after my pick lands the post's own
+    /// `reactionCounts` do not have it yet, and the chip vanished or showed the old count for up to a
+    /// minute. The server's answer (the post's counts with my change applied) is shown instead while
+    /// the post still holds the counts it had when I tapped, for two minutes at most.
+    struct CountOverride: Equatable { let counts: [String: Int]; let base: [String: Int]; let at: Date }
+    private(set) var countOverrides: [String: [String: CountOverride]] = [:]
+
+    func noteServerCounts(_ cid: String, _ mid: String, counts: [String: Int], base: [String: Int]) {
+        countOverrides[cid, default: [:]][mid] = CountOverride(counts: counts, base: base, at: Date())
+    }
+
+    /// The counts to draw for a post: the server's answer while it is newer than the post.
+    func displayCounts(_ cid: String, _ mid: String, post: [String: Int]) -> [String: Int] {
+        guard let o = countOverrides[cid]?[mid] else { return post }
+        if o.base == post, Date().timeIntervalSince(o.at) < 120 { return o.counts }
+        return post   // the batch landed (or it is too old): the post is the truth again
+    }
+
     func settleReaction(_ cid: String, _ mid: String, confirmed: String?) {
         pendingReactions[cid]?[mid] = nil
         // Into the source it came from, so the next snapshot of the OTHER listener's merge keeps it.
@@ -417,6 +442,7 @@ final class ChannelFollows {
         followRx = [:]
         adminRx = [:]
         pendingReactions = [:]
+        countOverrides = [:]
         uid = nil
     }
 
@@ -457,7 +483,10 @@ final class ChannelFollows {
         let now = Date().timeIntervalSince1970 * 1000
         let ends = entries.values.filter { $0.muted && $0.mutedUntil > now }.map { $0.mutedUntil }
         guard let next = ends.min() else { return }
-        let waitNs = UInt64(max(0, next - now) + 500) * 1_000_000
+        // At most a day per wait (review fix 2026-10-29): a far-off or absurd `mutedUntil` (the rules
+        // only ask for a number) would overflow UInt64 and trap. A longer mute simply waits again.
+        let waitMs = min(max(0, next - now) + 500, 86_400_000)
+        let waitNs = UInt64(waitMs) * 1_000_000
         muteExpiryTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: waitNs)
             guard !Task.isCancelled, let self else { return }

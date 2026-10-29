@@ -35,8 +35,10 @@ enum PollService {
     static let anonPrefix = "~voter:"
 
     /// Live map of uid → chosen option indices. Shared per poll (PollVotesHub); call on the main thread.
-    static func listen(cid: String, messageId: String, _ cb: @escaping ([String: [Int]]) -> Void) -> ListenerRegistration {
-        if Conversation.Right.isChannel(cid) { return listenChannel(cid: cid, messageId: messageId, cb) }
+    /// `channel`: the caller's own answer (the row knows); nil asks the chat list and known channels.
+    static func listen(cid: String, messageId: String, channel: Bool? = nil,
+                       _ cb: @escaping ([String: [Int]]) -> Void) -> ListenerRegistration {
+        if channel ?? Conversation.Right.isChannel(cid) { return listenChannel(cid: cid, messageId: messageId, cb) }
         return PollVotesHub.shared.subscribe(key: "\(cid)|\(messageId)", cb) {
             votesRef(cid, messageId).addSnapshotListener { snap, _ in
                 var out: [String: [Int]] = [:]
@@ -57,23 +59,37 @@ enum PollService {
     /// counted twice; until the server has counted a new vote the total can be one short for a moment.
     private static func listenChannel(cid: String, messageId: String,
                                       _ cb: @escaping ([String: [Int]]) -> Void) -> ListenerRegistration {
-        let key = "\(cid)|\(messageId)"
+        // Its own key: a group-path listener made by mistake on a cold open is never reused here.
+        let key = "\(cid)|\(messageId)|ch"
         return PollVotesHub.shared.subscribe(key: key, cb) {
             let msgRef = db.collection("conversations").document(cid).collection("messages").document(messageId)
             var counts: [Int: Int] = [:], voters = 0, mine: [Int] = []
+            var tallyAt: Double = 0, mineAt: Double = 0   // ms: when the server counted / when I voted
             let emit = {
                 var c = counts, v = voters
-                if !mine.isEmpty {
+                // My vote comes off the server's numbers only once they include it (the count was
+                // taken after I voted); before that it is simply added (review fix 2026-10-29).
+                if !mine.isEmpty, mineAt > 0, tallyAt >= mineAt {
                     for i in mine { c[i] = max(0, (c[i] ?? 0) - 1) }
                     v = max(0, v - 1)
                 }
-                // Placeholder voter k holds option i when k < its count, so each option's count and
-                // the number of voters both come out as the server's.
+                // ⛔ ROUND ROBIN (2026-10-29 review fix): each option's votes go to the NEXT
+                // placeholders in turn, wrapping at n. An option never lands twice on one placeholder
+                // (its count is at most n), and a single-choice poll gives each placeholder exactly
+                // one option, so every option's count and the number of voters are the server's.
+                // (The first cut gave placeholder k every option with count > k: three votes on
+                // three options read as one voter holding all three, "1 vote, 100% each".)
                 var out: [String: [Int]] = [:]
-                let top = max(v, c.values.max() ?? 0)
-                for k in 0..<top {
-                    let picks = c.filter { k < $0.value }.map(\.key).sorted()
-                    if !picks.isEmpty { out[anonPrefix + String(k)] = picks }
+                let n = max(v, c.values.max() ?? 0)
+                if n > 0 {
+                    var slot = 0
+                    for i in c.keys.sorted() {
+                        for _ in 0..<(c[i] ?? 0) {
+                            out[anonPrefix + String(slot % n), default: []].append(i)
+                            slot += 1
+                        }
+                    }
+                    for k in out.keys { out[k]?.sort() }
                 }
                 if !mine.isEmpty, !me.isEmpty { out[me] = mine }
                 PollVotesHub.shared.deliver(key: key, out)
@@ -86,12 +102,15 @@ enum PollService {
                 }
                 counts = next
                 voters = (d["pollVoters"] as? NSNumber)?.intValue ?? 0
+                tallyAt = (d["pollTallyAt"] as? NSNumber)?.doubleValue ?? 0
                 emit()
             }
             guard !me.isEmpty else { return postReg }
             let mineReg = votesRef(cid, messageId).document(me).addSnapshotListener { snap, _ in
                 let raw = snap?.data()?["options"]
                 mine = (raw as? [Int]) ?? ((raw as? [NSNumber])?.map(\.intValue) ?? [])
+                // A pending server timestamp reads as nil: not counted yet, so nothing is taken off.
+                mineAt = ((snap?.data()?["at"] as? Timestamp)?.dateValue().timeIntervalSince1970 ?? 0) * 1000
                 emit()
             }
             return PollCompositeRegistration([postReg, mineReg])

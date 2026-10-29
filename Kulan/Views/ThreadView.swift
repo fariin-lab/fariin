@@ -3736,7 +3736,7 @@ struct ThreadView: View {
         let liveRequest = liveRestrictRequestId
         // A channel's reactions (2026-10-29): my picks live apart from the posts, so they key too.
         let chanRx = conversation?.isChannel == true
-        let chanTok = chanRx ? "\(ChannelFollows.shared.myReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.pendingReactions[cid]?.hashValue ?? 0):\(channelReactOn)\(channelCanReact)" : "-"
+        let chanTok = chanRx ? "\(ChannelFollows.shared.myReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.pendingReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.countOverrides[cid]?.count ?? 0):\(channelReactOn)\(channelCanReact)" : "-"
         let key = "\(chanTok)|\(CallService.shared.calleeRinging)|\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)|\(liveRequest ?? "-")"   // 2026-09-24 feature-audit: edit clock
         if sigCache.key != key {
             var out: [String: String] = [:]
@@ -3761,7 +3761,10 @@ struct ThreadView: View {
                 let cluster = "\(g.first)\(g.last)|\(g.dateLabel ?? "-")|\(g.gap)"
                 var reactions = m.reactions.isEmpty ? "" : m.reactions.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
                 if chanRx {   // a channel post: its counts, my pick, and whether reactions are on (2026-10-29)
-                    reactions += "|" + m.reactionCounts.map { "\($0.key)\($0.value)" }.sorted().joined(separator: ",")
+                    // The counts as DRAWN (the server's answer while the post catches up), so the row
+                    // rebuilds when the override starts and when it gives way to the post.
+                    reactions += "|" + ChannelFollows.shared.displayCounts(cid, m.id, post: m.reactionCounts)
+                        .map { "\($0.key)\($0.value)" }.sorted().joined(separator: ",")
                         + "|\(ChannelFollows.shared.myReaction(cid, m.id) ?? "")|\(channelReactOn)\(channelCanReact)"
                 }
                 // Ticks: the same gate rowView applies before it hands the cutoffs over (mine, not
@@ -3992,6 +3995,7 @@ struct ThreadView: View {
             channelReactionsOn: channelReactOn, channelCanReact: channelCanReact,
             channelMine: { [cid] in ChannelFollows.shared.myReaction(cid, $0) },
             channelConfirmed: { [cid] in ChannelFollows.shared.confirmedReaction(cid, $0) },
+            channelCounts: { [cid] in ChannelFollows.shared.displayCounts(cid, $0, post: $1) },
             dark: dark,
             selecting: selecting, wasSelecting: wasSelecting, selectedIds: selectedIds,
             highlightId: highlightId, firstUnreadId: firstUnreadId,
@@ -4369,7 +4373,8 @@ struct ThreadView: View {
     /// A post's counts with my pick still on its way already in them (as the row draws them).
     private func channelCounts(_ m: Message) -> [String: Int] {
         let mine = ChannelFollows.shared.myReaction(cid, m.id), held = ChannelFollows.shared.confirmedReaction(cid, m.id)
-        return ChannelEmoji.merged(m.reactionCounts, mine: mine, held: held)
+        let post = ChannelFollows.shared.displayCounts(cid, m.id, post: m.reactionCounts)
+        return ChannelEmoji.merged(post, mine: mine, held: held)
     }
 
     /// A channel reaction goes through the server, which keeps who picked what private.
@@ -4382,11 +4387,18 @@ struct ThreadView: View {
         let cid = cid
         let follows = ChannelFollows.shared
         let held = follows.confirmedReaction(cid, mid)
+        // The post's counts as they stand now: the server's answer is drawn while the post still
+        // holds these (`ChannelFollows.displayCounts`, the once-a-minute batch).
+        let base = repo.items.first(where: { $0.id == mid })?.reactionCounts ?? [:]
         follows.setPendingReaction(cid, mid, emoji)
         Task {
             do {
-                try await ChannelService.react(cid: cid, mid: mid, emoji: emoji)
-                await MainActor.run { follows.settleReaction(cid, mid, confirmed: emoji) }
+                let counts = try await ChannelService.react(cid: cid, mid: mid, emoji: emoji)
+                await MainActor.run {
+                    // Together, so the chip never shows the post's older counts with my pick settled.
+                    if let counts { follows.noteServerCounts(cid, mid, counts: counts, base: base) }
+                    follows.settleReaction(cid, mid, confirmed: emoji)
+                }
             } catch {
                 let msg = error.localizedDescription
                 await MainActor.run {

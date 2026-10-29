@@ -560,7 +560,7 @@ final class PollBubbleView: UIView {
             listener?.remove()
             listeningKey = key
             votes = [:]
-            listener = PollService.listen(cid: cid, messageId: p.messageId) { [weak self] v in
+            listener = PollService.listen(cid: cid, messageId: p.messageId, channel: p.inChannel) { [weak self] v in
                 guard let self, self.listeningKey == key else { return }
                 self.votes = v
                 self.paintVotes()

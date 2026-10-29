@@ -184,6 +184,9 @@ enum BubbleBody: Equatable {
         var closed: Bool = false
         /// "Hide who voted": no voter faces on the bubble (owner 2026-10-21).
         var hideVoters: Bool = false
+        /// A channel's poll (2026-10-29 review fix): read from the post's counts, decided by the row
+        /// that knows, not guessed from the chat list (which can be empty on a cold open).
+        var inChannel: Bool = false
     }
 
     struct LocationBody: Equatable {
