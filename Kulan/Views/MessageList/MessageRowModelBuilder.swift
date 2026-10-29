@@ -661,7 +661,7 @@ enum MessageRowModelBuilder {
         // card was sent from `publicGroupDraft` ("N members"), so it gets the group card's button.
         // The tap goes through `openGroupLink`, which opens the group page in the app.
         if let u = URL(string: p.url), case .name(let name)? = KulanApp.route(from: u),
-           p.desc.range(of: #"^[0-9]+ members?$"#, options: .regularExpression) != nil {
+           p.desc.range(of: #"^[0-9.,KM]+ (members?|followers?)$"#, options: .regularExpression) != nil {
             // Looked up now so the tap opens at once, and today's count wins over the one the
             // sender's phone saw (owner 2026-10-23: the card said 8 members, Juni has 11).
             GroupDirectory.prewarm(name: name)
@@ -699,7 +699,7 @@ enum MessageRowModelBuilder {
     private static func groupLinkBody(_ p: Message.LinkPreviewData, code: String) -> BubbleBody.LinkPreview {
         GroupLinkDoor.prewarm(code)
         let sentDead = p.desc.isEmpty && p.title == "Unavailable"
-        let fromServer = p.desc.range(of: #"^[0-9]+ members?$"#, options: .regularExpression) != nil
+        let fromServer = p.desc.range(of: #"^[0-9.,KM]+ (members?|followers?)$"#, options: .regularExpression) != nil
         var title = fromServer ? p.title : "Group invite"
         var desc = fromServer ? p.desc : "Fariin group"
         var image = fromServer ? p.imageUrl : nil
