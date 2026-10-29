@@ -126,10 +126,12 @@ struct NewChannelView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                // Our white ring in the word's place, as New Group does (owner 2026-10-29: the system
+                // spinner here was not ours).
                 Button { create() } label: {
                     Text("Next").fontWeight(.semibold)
                         .opacity(creating ? 0 : 1)
-                        .overlay { if creating { ProgressView().tint(.white) } }
+                        .overlay { if creating { CreatingRing(label: "Creating channel") } }
                 }
                 .disabled(trimmedName.isEmpty && !creating)
                 .buttonStyle(.borderedProminent).tint(.blue)
@@ -218,7 +220,7 @@ struct NewChannelView: View {
                 var made = false
                 for attempt in 0..<6 {
                     if (try? await ChannelService.makeChannel(cid: cid)) != nil { made = true; break }
-                    try? await Task.sleep(nanoseconds: UInt64(600_000_000 * (attempt + 1)))
+                    try? await Task.sleep(nanoseconds: UInt64(400_000_000 * (attempt + 1)))
                 }
                 guard made else {
                     error = "Could not create the channel. Try again."
@@ -226,7 +228,6 @@ struct NewChannelView: View {
                     return
                 }
                 createdCid = cid
-                if !desc.isEmpty { try? await ChatService.setGroupDescription(cid: cid, text: desc) }
                 // The photo after the channel exists; a failed photo never undoes the channel.
                 if let photo {
                     Task.detached(priority: .utility) {
@@ -236,12 +237,13 @@ struct NewChannelView: View {
                         await MainActor.run { ToastNotice.show("The channel photo was not saved. Set it in Edit.") }
                     }
                 }
-                // Its invite link, made BEFORE the Channel Type page opens, which shows it (and its
-                // approval switch). One retry; the page can still make one if both fail.
-                if (try? await GroupInviteService.createPrimaryLink(cid: cid)) == nil {
-                    try? await Task.sleep(nanoseconds: 1_500_000_000)
-                    _ = try? await GroupInviteService.createPrimaryLink(cid: cid)
-                }
+                // The description and the invite link at the same time (owner 2026-10-29: Next took
+                // too long; they went one after the other). The link is made BEFORE the Channel Type
+                // page opens, which shows it (and its approval switch). One retry; the page can still
+                // make one if both fail.
+                async let described: Void = Self.describe(cid, desc)
+                async let linked: Void = Self.makeLink(cid)
+                _ = await (described, linked)
                 creating = false
                 // Step 3 REPLACES this page: Back can never make a second channel.
                 path = [.type(cid)]
@@ -249,6 +251,17 @@ struct NewChannelView: View {
                 self.error = "Could not create the channel. Try again."
                 creating = false
             }
+        }
+    }
+
+    private static func describe(_ cid: String, _ text: String) async {
+        if !text.isEmpty { try? await ChatService.setGroupDescription(cid: cid, text: text) }
+    }
+
+    private static func makeLink(_ cid: String) async {
+        if (try? await GroupInviteService.createPrimaryLink(cid: cid)) == nil {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            _ = try? await GroupInviteService.createPrimaryLink(cid: cid)
         }
     }
 

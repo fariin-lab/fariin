@@ -512,7 +512,9 @@ struct NewGroupView: View {
 /// A white ring turning in the Create button while the group is made (owner 2026-10-28). On a
 /// timeline, not `.repeatForever` (audit H3: the iOS 26 deadlock pattern). Reduce Motion: the
 /// system spinner.
-private struct CreatingRing: View {
+struct CreatingRing: View {
+    /// What VoiceOver says while it turns (New Channel uses it too, 2026-10-29).
+    var label = "Creating group"
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -528,7 +530,7 @@ private struct CreatingRing: View {
                     .frame(width: 18, height: 18)
                     .rotationEffect(.degrees(turn * 360))
             }
-            .accessibilityLabel("Creating group")
+            .accessibilityLabel(label)
         }
     }
 }
