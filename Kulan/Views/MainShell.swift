@@ -5034,6 +5034,7 @@ struct ChatRow: View, Equatable {
                 } else {
                     AvatarView(name: conv.displayName(me), photoUrl: conv.displayPhoto(me),
                                size: photoSize)
+                        .avatarSquircle(conv.isChannel)
                 }
             }
                 // THIS CIRCLE IS THE STORY'S DOOR: opening from here grows the viewer out of it, and

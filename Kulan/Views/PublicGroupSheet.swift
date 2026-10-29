@@ -170,7 +170,7 @@ struct PublicGroupSheet: View {
 
     @ViewBuilder private func groupBody(_ p: PublicGroupPreview) -> some View {
         VStack(spacing: 0) {
-            AvatarView(name: p.title, photoUrl: p.photoUrl, size: 100)
+            AvatarView(name: p.title, photoUrl: p.photoUrl, size: 100).avatarSquircle(p.isChannel)
                 .padding(.top, 2)
             HStack(spacing: 6) {
                 Text(p.title)
@@ -560,7 +560,7 @@ struct PublicGroupHitRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AvatarView(name: hit.title, photoUrl: hit.photoUrl, size: 56)
+            AvatarView(name: hit.title, photoUrl: hit.photoUrl, size: 56).avatarSquircle(hit.isChannel)
                 .padding(.vertical, 12)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
@@ -625,7 +625,7 @@ struct PublicGroupInfoView: View {
             VStack(spacing: 0) {
                 // A public group's stories ring its photo here, and only here, for a visitor (owner
                 // 2026-10-27); a tap opens them. Their Stories row never shows them.
-                AvatarView(name: p.title, photoUrl: p.photoUrl, size: 132)
+                AvatarView(name: p.title, photoUrl: p.photoUrl, size: 132).avatarSquircle(p.isChannel)
                     .frame(width: 132, height: 132)
                     .contentShape(Circle())
                     .onTapGesture { if let g = stories { StoryDoor.open(g, from: "groupcircle-\(p.cid)") } }

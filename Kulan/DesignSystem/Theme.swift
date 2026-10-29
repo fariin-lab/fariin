@@ -530,6 +530,25 @@ struct MenuIcon: View {
 // cell highlight for free, and costs a disclosure chevron he has already rejected) or a UIKit list.
 // Not a gesture over a Button.
 
+/// ⛔ A CHANNEL'S PHOTO IS A SQUIRCLE (owner 2026-10-29): it tells a channel from a person or a
+/// group at a glance, in the list, the header, the page and search. Apple's continuous corner at
+/// 28% of the side. People and groups stay round; the action circles stay round everywhere.
+enum AvatarShape {
+    static let cornerFraction: CGFloat = 0.28
+    static func squircle(_ side: CGFloat) -> RoundedRectangle {
+        RoundedRectangle(cornerRadius: side * cornerFraction, style: .continuous)
+    }
+}
+
+extension EnvironmentValues {
+    /// Set on a channel's avatar: `.avatarSquircle(conv.isChannel)`.
+    @Entry var avatarSquircle: Bool = false
+}
+
+extension View {
+    func avatarSquircle(_ on: Bool) -> some View { environment(\.avatarSquircle, on) }
+}
+
 struct AvatarView: View {
     let name: String
     var photoUrl: String?
@@ -542,6 +561,8 @@ struct AvatarView: View {
     @State private var image: UIImage?
     /// The flat placeholder is a bitmap, so it is drawn for the appearance it is shown in.
     @Environment(\.colorScheme) private var scheme
+    /// A channel's photo is a squircle, a person's and a group's a circle (owner 2026-10-29).
+    @Environment(\.avatarSquircle) private var squircle
 
     init(name: String, photoUrl: String? = nil, size: CGFloat = 48,
          onPhotoResolved: ((Bool) -> Void)? = nil) {
@@ -580,7 +601,7 @@ struct AvatarView: View {
             }
         }
         .frame(width: size, height: size)
-        .clipShape(Circle())
+        .clipShape(squircle ? AnyShape(AvatarShape.squircle(size)) : AnyShape(Circle()))
         .animation(.easeOut(duration: 0.25), value: image != nil)   // cross-fade in on load (no blink)
         .task(id: photoUrl) { await load() }
         // Fires on the first frame (memory-cache seed) and again when a load resolves or fails.
@@ -610,7 +631,14 @@ struct AvatarView: View {
     /// (2026-09-26, the two grey lines beside the silhouette on chat-list rows).
     private var fallback: some View {
         Group {
-            if let disc = AvatarPalette.placeholderDisc(size: size, dark: scheme == .dark) {
+            if squircle {
+                // A channel with no photo: the same grey, a megaphone, not a person's silhouette.
+                ZStack {
+                    AvatarPalette.placeholderFill
+                    Image(systemName: "megaphone.fill").font(.system(size: size * 0.38, weight: .medium))
+                        .foregroundStyle(.white)
+                }
+            } else if let disc = AvatarPalette.placeholderDisc(size: size, dark: scheme == .dark) {
                 Image(uiImage: disc).resizable().scaledToFill()
             } else {
                 AvatarPalette.placeholderFill

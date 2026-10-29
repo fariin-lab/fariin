@@ -6662,6 +6662,7 @@ struct ThreadView: View {
         var m = ChatHeaderModel(name: liveTitle, photoUrl: livePhotoUrl)
         m.subtitle = presenceSubtitle
         m.subtitleIsStrong = isGroup
+        m.squircle = conversation?.isChannel ?? guest?.preview.isChannel ?? false
         // No member faces in the chat header (owner 2026-10-26, reversing the same day's faces): only
         // "N members". The group page keeps its faces under the name.
         // ⛔ THE COLOUR IS AS MUCH A DISCLOSURE AS THE WORDS ARE.

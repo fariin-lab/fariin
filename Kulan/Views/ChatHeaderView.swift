@@ -301,6 +301,7 @@ final class ChatHeaderView: UIView {
         // The timer glyph is a template so it re-resolves through `textRows`' style like the labels
         // do; a pre-tinted image would keep light-mode grey over a black wallpaper.
         secondaryIconView.tintColor = Self.subtitleColor
+        avatarView.setSquircle(model.squircle)
         avatarView.configure(name: model.name, photoUrl: model.photoUrl, asset: model.avatarAsset)
         accessibilityLabel = model.name
     }
@@ -329,6 +330,8 @@ struct ChatHeaderModel: Equatable {
     var photoUrl: String?
     /// A bundled image instead of a photo (the official channel's mark). Wins over `photoUrl`.
     var avatarAsset: UIImage?
+    /// A channel: the avatar is a squircle (2026-10-29).
+    var squircle = false
     var subtitle: String?
     /// True while the line is "typing…", which is the one state drawn in the accent.
     var subtitleIsLive = false
@@ -389,7 +392,7 @@ struct ChatHeaderModel: Equatable {
     }
 
     static func == (a: ChatHeaderModel, b: ChatHeaderModel) -> Bool {
-        a.name == b.name && a.photoUrl == b.photoUrl && a.subtitle == b.subtitle
+        a.name == b.name && a.photoUrl == b.photoUrl && a.subtitle == b.subtitle && a.squircle == b.squircle
             && a.subtitleIsLive == b.subtitleIsLive && a.subtitleIsStrong == b.subtitleIsStrong && a.backdrop == b.backdrop
             && (a.titleIcon == nil) == (b.titleIcon == nil)
             && (a.secondaryIcon == nil) == (b.secondaryIcon == nil)
@@ -499,8 +502,31 @@ final class HeaderAvatarView: UIView {
         addSubview(imageView)
     }
 
+    /// A channel's photo is a squircle (owner 2026-10-29, `AvatarShape`): the photo's corner and the
+    /// pre-drawn placeholder both change; still one picture as layer contents, no fill or clip view.
+    private var squircle = false
+
+    func setSquircle(_ on: Bool) {
+        guard on != squircle else { return }
+        squircle = on
+        imageView.layer.cornerCurve = on ? .continuous : .circular
+        imageView.layer.cornerRadius = on ? size * AvatarShape.cornerFraction : size / 2
+        applyPlaceholder()
+    }
+
     private func applyPlaceholder() {
         let dark = traitCollection.userInterfaceStyle == .dark
+        if squircle {
+            let traits = UITraitCollection(userInterfaceStyle: dark ? .dark : .light)
+            let fill = AvatarPalette.placeholderFillUI.resolvedColor(with: traits)
+            let box = CGRect(x: 0, y: 0, width: size, height: size)
+            layer.contents = UIGraphicsImageRenderer(size: box.size).image { _ in
+                fill.setFill()
+                UIBezierPath(roundedRect: box, cornerRadius: size * AvatarShape.cornerFraction).fill()
+            }.cgImage
+            layer.contentsScale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 3
+            return
+        }
         layer.contents = AvatarPalette.placeholderDisc(size: size, dark: dark)?.cgImage
         layer.contentsScale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 3
     }

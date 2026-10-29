@@ -159,7 +159,7 @@ struct DiscoverChannelsView: View {
                 onOpen(c.cid, c.handle.isEmpty ? nil : c.handle)
             } label: {
                 HStack(spacing: 12) {
-                    AvatarView(name: c.title, photoUrl: c.photoUrl, size: 48)
+                    AvatarView(name: c.title, photoUrl: c.photoUrl, size: 48).avatarSquircle(true)
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 4) {
                             Text(c.title).font(.body.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
@@ -386,7 +386,7 @@ struct AdminInviteSheet: View {
     var body: some View {
         VStack(spacing: 14) {
             if let info {
-                AvatarView(name: info.title, photoUrl: info.photoUrl, size: 96).padding(.top, 28)
+                AvatarView(name: info.title, photoUrl: info.photoUrl, size: 96).avatarSquircle(true).padding(.top, 28)
                 Text(info.title).font(.title2.bold()).multilineTextAlignment(.center)
                 Text("Channel admin invite").font(.body).foregroundStyle(.secondary)
                 Text(stateLine(info)).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -594,7 +594,7 @@ struct ChannelAdminCard: View {
         VStack(spacing: 14) {
             VStack(spacing: 10) {
                 Button { if canEdit { showEdit = true } } label: {
-                    AvatarView(name: conv.title, photoUrl: conv.avatarUrl, size: 92)
+                    AvatarView(name: conv.title, photoUrl: conv.avatarUrl, size: 92).avatarSquircle(true)
                         .overlay(alignment: .bottomTrailing) {
                             if canEdit && (conv.avatarUrl ?? "").isEmpty {
                                 Image("ic_group_camera").renderingMode(.template).resizable().scaledToFit()
@@ -874,7 +874,7 @@ struct DeleteChannelSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 22) {
-                    AvatarView(name: title, photoUrl: photoUrl, size: 84)
+                    AvatarView(name: title, photoUrl: photoUrl, size: 84).avatarSquircle(true)
                         .padding(.top, 8)
                     Text("Delete \u{201C}\(title)\u{201D}?")
                         .font(.title2.bold()).multilineTextAlignment(.center)

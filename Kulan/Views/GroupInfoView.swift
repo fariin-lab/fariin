@@ -662,6 +662,7 @@ struct GroupInfoView: View {
                     .accessibilityAddTraits(canEditInfo ? .isButton : [])
             }
             }
+            .avatarSquircle(isChannel)
             // A group story going up turns round the group's photo here (owner 2026-10-23, the
             // reference app's way), not on My Story. The posted picture flies into this circle
             // (`StoryPostFlight`, `groupCircleKey`).
