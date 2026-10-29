@@ -4114,10 +4114,12 @@ enum ChatService {
     /// Mute until a specific epoch-ms time (0 = unmute, far-future = always).
     @discardableResult
     static func setMute(_ cid: String, until: Double) async -> Bool {
-        // A channel I follow (2026-10-28): one switch on my own entry; the server skips muted
-        // followers. A timed mute is kept as on (followers' mute has no end time yet).
+        // A channel I follow (2026-10-28): my own entry; the server skips muted followers. Timed
+        // since 2026-10-29 (`mutedUntil`); "Always" (far future) is kept as 0 = no end.
         if followedChannelPosts(cid) != nil {
-            ChannelService.setMuted(cid: cid, until > Date().timeIntervalSince1970 * 1000)
+            let now = Date().timeIntervalSince1970 * 1000
+            let always = until > now + 3600 * 24 * 365 * 5 * 1000
+            ChannelService.setMuted(cid: cid, until > now, until: always ? 0 : until)
             return true
         }
         if OfficialChannel.isOfficial(cid) {

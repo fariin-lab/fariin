@@ -66,7 +66,9 @@ struct SoundsNotificationsView: View {
                 }
                 .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
                 // True of the server (onNewMessage): a mention of you still comes through a mute.
-                if isChannel {
+                if isChannel && ChannelFollows.shared.follows(cid) {
+                    footnote("While this channel is muted, new posts come in without a sound or alert.")
+                } else if isChannel {
                     // A channel's admins are told about each other's posts; nobody is told when someone follows.
                     footnote("This only mutes posts by the other admins. It changes nothing for your followers.")
                 } else if isGroup {
@@ -130,6 +132,13 @@ struct SoundsNotificationsView: View {
         // conversation document, but this read only asked the document — so a muted Fariin channel
         // still said "Not muted" here.
         if OfficialChannel.isOfficial(cid) { muted = OfficialChannelStore.shared.state.isMutedNow; return }
+        // A channel I follow (2026-10-29): the mute is on my own entry, not the channel's document.
+        if let e = ChannelFollows.shared.entry(cid) {
+            muted = e.isMuted
+            // The page's "Always" test reads a far-future end; a follower's always is 0.
+            mutedUntil = e.isMuted ? (e.mutedUntil > 0 ? e.mutedUntil : 9_999_999_999_999) : 0
+            return
+        }
         let me = AuthService.shared.uid ?? ""
         if let snap = try? await FirestoreHub.db.collection("conversations").document(cid).getDocument(),
            let until = ((snap.data()?["mutedBy"] as? [String: Any])?[me] as? NSNumber)?.doubleValue {

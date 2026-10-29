@@ -810,7 +810,9 @@ service cloud.firestore {
         allow read: if signedIn() && request.auth.uid == uid;
         // Mine to mark: how many posts I have read, muted, pinned, archived.
         allow update: if signedIn() && request.auth.uid == uid
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'muted', 'pinned', 'archived'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'muted', 'mutedUntil', 'pinned', 'archived'])
+          // mutedUntil (2026-10-29): ms when a timed mute ends, 0 = always.
+          && request.resource.data.get('mutedUntil', 0) is number
           && request.resource.data.get('read', 0) is int && request.resource.data.get('muted', false) is bool
           && request.resource.data.get('pinned', false) is bool && request.resource.data.get('archived', false) is bool;
       }

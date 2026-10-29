@@ -5702,7 +5702,7 @@ struct ThreadView: View {
         }
         // A channel I follow: its bell, top right (owner 2026-10-29), instead of a Mute bar below.
         if let conv = conversation, conv.isChannel, !conv.users.contains(me), ChannelFollows.shared.follows(conv.id) {
-            let muted = ChannelFollows.shared.entry(conv.id)?.muted ?? false
+            let muted = ChannelFollows.shared.entry(conv.id)?.isMuted ?? false   // a timed mute that ran out is off
             let id = conv.id
             return .custom([ChatNavigationItem.BarButton(
                 id: "chbell",

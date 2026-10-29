@@ -185,12 +185,14 @@ enum ChannelService {
             }
     }
 
-    static func setMuted(cid: String, _ muted: Bool) {
+    /// `until`: ms when the mute ends, 0 = always (owner 2026-10-29: the group menu's durations).
+    static func setMuted(cid: String, _ muted: Bool, until: Double = 0) {
         let uid = me
         guard !uid.isEmpty else { return }
-        ChannelFollows.shared.noteLocal(cid, muted: muted)
+        let end = muted ? until : 0
+        ChannelFollows.shared.noteLocal(cid, muted: muted, mutedUntil: end)
         FirestoreHub.db.collection("users").document(uid).collection("channels").document(cid)
-            .updateData(["muted": muted]) { err in
+            .updateData(["muted": muted, "mutedUntil": end]) { err in
                 if let err { print("[channel] setMuted refused:", err.localizedDescription) }
             }
     }
@@ -204,7 +206,13 @@ enum ChannelService {
 final class ChannelFollows {
     static let shared = ChannelFollows()
 
-    struct Entry: Equatable { var read: Int; var muted: Bool; var pinned = false; var archived = false }
+    struct Entry: Equatable {
+        var read: Int; var muted: Bool; var pinned = false; var archived = false
+        /// When a timed mute ends, ms (owner 2026-10-29: the group menu's 1 hour … 1 week); 0 = always.
+        var mutedUntil: Double = 0
+        /// Muted now: on, and its time (if any) not yet passed.
+        var isMuted: Bool { muted && (mutedUntil <= 0 || mutedUntil > Date().timeIntervalSince1970 * 1000) }
+    }
 
     /// The most channels kept live at once (a listener each).
     static let maxLive = 300
@@ -236,7 +244,7 @@ final class ChannelFollows {
             guard let e = entries[cid] else { return nil }
             var c = c
             c.followerRead = e.read
-            c.followerMuted = e.muted
+            c.followerMuted = e.isMuted
             c.followerPinned = e.pinned
             c.followerArchived = e.archived
             return c
@@ -262,7 +270,8 @@ final class ChannelFollows {
                     next[d.documentID] = Entry(read: (data["read"] as? NSNumber)?.intValue ?? 0,
                                                muted: data["muted"] as? Bool ?? false,
                                                pinned: data["pinned"] as? Bool ?? false,
-                                               archived: data["archived"] as? Bool ?? false)
+                                               archived: data["archived"] as? Bool ?? false,
+                                               mutedUntil: (data["mutedUntil"] as? NSNumber)?.doubleValue ?? 0)
                 }
                 self.apply(next)
                 self.followRx = rx
@@ -340,10 +349,12 @@ final class ChannelFollows {
     }
 
     /// My own change, shown at once (the listener confirms it a moment later).
-    func noteLocal(_ cid: String, read: Int? = nil, muted: Bool? = nil, pinned: Bool? = nil, archived: Bool? = nil) {
+    func noteLocal(_ cid: String, read: Int? = nil, muted: Bool? = nil, mutedUntil: Double? = nil,
+                   pinned: Bool? = nil, archived: Bool? = nil) {
         guard var e = entries[cid] else { return }
         if let read { e.read = max(e.read, read) }
         if let muted { e.muted = muted }
+        if let mutedUntil { e.mutedUntil = mutedUntil }
         if let pinned { e.pinned = pinned }
         if let archived { e.archived = archived }
         entries[cid] = e

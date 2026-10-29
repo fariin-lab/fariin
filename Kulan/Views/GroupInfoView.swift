@@ -153,7 +153,7 @@ struct GroupInfoView: View {
     }
     private var title: String { conv?.title ?? "Group" }
     private var muted: Bool {
-        if isFollowerHere { return ChannelFollows.shared.entry(cid)?.muted ?? false }
+        if isFollowerHere { return ChannelFollows.shared.entry(cid)?.isMuted ?? false }
         return conv?.isMuted(me, now: Date().timeIntervalSince1970 * 1000) ?? false
     }
     /// A channel (2026-10-28), and me only following it (not one of its admins).
@@ -538,15 +538,14 @@ struct GroupInfoView: View {
 
     /// Storage Used, in the owner's card style. Media is the All Media strip under it; mute is a circle.
     private var followerStorageCard: some View {
+        // The group's card, row for row (owner 2026-10-29: "Sounds & Notifications exactly like
+        // group"; Your Privacy removed).
         VStack(spacing: 0) {
+            ProfileInfoRow(title: "Sounds & Notifications", icon: "ic_notifications",
+                           value: muted ? "Off" : "On") { showSounds = true }
+            rowDivider
             ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
                            value: storage.map { Self.bytes($0.total) } ?? "") { showStorage = true }
-            rowDivider
-            // What the channel can and cannot see about me: the Help Center article (2026-10-29,
-            // in place of the pill that sat at the top of every channel).
-            ProfileInfoRow(title: "Your Privacy", icon: "lock.shield") {
-                if let u = URL(string: "https://help.fariin.com/channels/your-privacy-in-channels") { WebLink.open(u) }
-            }
         }
         .profileSurface(plain: cardColor)
     }
@@ -872,10 +871,9 @@ struct GroupInfoView: View {
     }
 
     @ViewBuilder private var muteMenuItems: some View {
-        if isFollowerHere {
-            // A follower's mute is one switch on their own entry (ChannelService.setMuted).
-            Button(muted ? "Unmute" : "Mute") { ChannelService.setMuted(cid: cid, !muted) }
-        } else if muted {
+        // A follower gets the group's own menu (owner 2026-10-29: "exactly like group, days and
+        // weeks"); `setMuted` routes a followed channel to its own entry (`ChatService.setMute`).
+        if muted {
             Section(muteUntilLabel) {
                 Button("Unmute") { setMuted(0) }
             }
@@ -900,6 +898,16 @@ struct GroupInfoView: View {
     }
 
     private var muteUntilLabel: String {
+        // A follower's end is on their own entry (0 = always).
+        if isFollowerHere {
+            let end = ChannelFollows.shared.entry(cid)?.mutedUntil ?? 0
+            if end <= 0 { return "Muted always" }
+            let date = Date(timeIntervalSince1970: end / 1000)
+            let t = Calendar.current.isDateInToday(date)
+                ? date.formatted(date: .omitted, time: .shortened)
+                : date.formatted(date: .abbreviated, time: .shortened)
+            return "Muted until \(t)"
+        }
         let secs = (conv?.mutedBy[me] ?? 0) / 1000
         if secs > Date().addingTimeInterval(3600 * 24 * 365 * 5).timeIntervalSince1970 { return "Muted always" }
         let date = Date(timeIntervalSince1970: secs)
