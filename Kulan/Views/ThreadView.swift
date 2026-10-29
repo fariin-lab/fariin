@@ -4436,6 +4436,11 @@ struct ThreadView: View {
             voiceRestricted = true
             return
         }
+        // A visitor of a channel (2026-10-29): reacting is for followers, and that is said, not a dead tap.
+        if conversation?.isChannel == true, channelReactOn, !channelCanReact {
+            showJumpToast("Follow the channel to react")
+            return
+        }
         // 2026-09-24 feature-audit: the same `canReact` as the quick bar (was "not sending" only).
         guard canReact(m) else {
             // Which rule said no, so a "the double tap did nothing" report can be read off the log.
