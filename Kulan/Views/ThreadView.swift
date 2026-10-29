@@ -1347,6 +1347,18 @@ struct ThreadView: View {
             || (cannotMessageThem && !keyAccepted) || otherAccountDeleted
     }
 
+    /// A stand-in bar's `composerLift`: from the SAFE-AREA LINE to its top, which is what the composer
+    /// reports and what the arrow and the pills add their gap to (owner 2026-10-29, "the arrow
+    /// position is wrong" over "You're following this channel": measured from the screen's bottom it
+    /// counted the home-indicator band too, and the arrow floated that much higher).
+    static func barLift(top: CGFloat) -> CGFloat? {
+        let h = UIScreen.main.bounds.height
+        guard top > 0, top < h else { return nil }
+        let safe = (UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows).first { $0.isKeyWindow })?.safeAreaInsets.bottom ?? 0
+        return max(0, h - safe - top)
+    }
+
     @ViewBuilder private var bottomBarContent: some View {
         Group {
             if preview {
@@ -1358,8 +1370,7 @@ struct ThreadView: View {
                     // No composer reports a lift here, so the floating arrow sat where a composer
                     // would be, far above the Join bar (owner 2026-10-23). The bar's own top is it.
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
-                        let h = UIScreen.main.bounds.height
-                        if top > 0, top < h { composerLift = h - top }
+                        if let lift = Self.barLift(top: top) { composerLift = lift }
                     }
             } else if selecting {
                 selectionActionBar.transition(.opacity)
@@ -1371,8 +1382,7 @@ struct ThreadView: View {
                 // Unmute after, one bar (`ChannelFollowerBar`), the reference app's subscriber bar.
                 ChannelFollowerBar(conv: conv).transition(.opacity)
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
-                        let h = UIScreen.main.bounds.height
-                        if top > 0, top < h { composerLift = h - top }
+                        if let lift = Self.barLift(top: top) { composerLift = lift }
                     }
             } else if conversation == nil, ChannelFollows.shared.follows(cid) {
                 // A channel I follow whose doc has not loaded yet (owner 2026-10-29: a follower
