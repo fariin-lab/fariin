@@ -19,6 +19,7 @@ function mocks(conv, followerExists) {
       { function: 'exists', args: [{ exactValue: `${D}/conversations/${CID}/followers/${u}` }], result: { value: followerExists && u === F } },
     ]),
     { function: 'exists', args: [{ exactValue: `${D}/conversations/${CID}` }], result: { value: true } },
+    { function: 'get', args: [{ exactValue: `${D}/conversations/${CID}/messages/m1` }], result: { value: { data: { ...msg, pollMulti: false } } } },
     { function: 'get', args: [{ exactValue: `${D}/conversations/${CID}` }], result: { value: { data: conv } } },
   ];
 }
@@ -40,6 +41,13 @@ const cases = [
   ['I change the follow time', 'DENY', F, 'update', `users/${F}/channels/${CID}`, { at: T }, { at: '2020-01-01T00:00:00Z' }, chan, true],
   ['read as text', 'DENY', F, 'update', `users/${F}/channels/${CID}`, { at: T }, { at: T, read: 'x' }, chan, true],
   ['someone marks my entry', 'DENY', X, 'update', `users/${F}/channels/${CID}`, { at: T }, { at: T, read: 1 }, chan, true],
+  ['follower reacts (own key)', 'ALLOW', F, 'update', `conversations/${CID}/messages/m1`, msg, { ...msg, reactions: { [F]: '👍' } }, chan, true],
+  ['follower writes SOMEONE ELSES reaction', 'DENY', F, 'update', `conversations/${CID}/messages/m1`, msg, { ...msg, reactions: { [OWNER]: '👍' } }, chan, true],
+  ['stranger reacts', 'DENY', X, 'update', `conversations/${CID}/messages/m1`, msg, { ...msg, reactions: { [X]: '👍' } }, chan, false],
+  ['follower edits the post text', 'DENY', F, 'update', `conversations/${CID}/messages/m1`, msg, { ...msg, text: 'hacked', edited: true }, chan, true],
+  ['follower reacts in a SUSPENDED channel', 'DENY', F, 'update', `conversations/${CID}/messages/m1`, msg, { ...msg, reactions: { [F]: '👍' } }, suspended, true],
+  ['follower votes', 'ALLOW', F, 'create', `conversations/${CID}/messages/m1/votes/${F}`, null, { options: [0], at: T }, chan, true],
+  ['stranger votes', 'DENY', X, 'create', `conversations/${CID}/messages/m1/votes/${X}`, null, { options: [0], at: T }, chan, false],
   ['admin renames the channel (control)', 'ALLOW', OWNER, 'update', `conversations/${CID}`, chan, { ...chan, title: 'News 2' }, chan, false],
   ['admin turns a group INTO a channel', 'DENY', OWNER, 'update', `conversations/${CID}`, group, { ...group, channel: true }, group, false],
   ['admin edits followerCount', 'DENY', OWNER, 'update', `conversations/${CID}`, chan, { ...chan, followerCount: 999 }, chan, false],

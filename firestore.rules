@@ -2795,7 +2795,8 @@ service cloud.firestore {
         // (set or delete); the author's delete-for-everyone clears the map through its own branch
         // below, not this one.
         allow update: if signedIn()
-          && request.auth.uid in convData().users
+          // A channel's followers react (2026-10-28); every other branch needs the author or `users`.
+          && (request.auth.uid in convData().users || follows(convData()))
           // 2026-10-18 group moderation: in a suspended or disabled group nobody edits or reacts.
           // Delete for Everyone (the tombstone, `deleted: true`) and the call-row and upload
           // branches still pass: none of them adds anything new to read.
@@ -2916,17 +2917,15 @@ service cloud.firestore {
         // but a voter may only write their OWN vote doc — no one can forge or overwrite another's vote.
         // The poll's question/options stay E2EE in the message text; a vote is just option indices.
         match /votes/{voter} {
-          allow read: if signedIn() && request.auth.uid in convData().users;
-          // 2026-09-24 decision D-composer-3: a vote has a shape. Only `options` (1 to 10 indices,
-          // the composer's own ceiling) and `at`; and when the poll says it takes one answer
-          // (`pollMulti == false`, written in the clear by the app from today) exactly one option.
-          // A poll from before today carries no flag and keeps accepting any count. The vote doc is
-          // already the voter's own (`voter == auth.uid`); a vote on a message that does not exist
-          // is refused by the read of it.
-          allow delete: if signedIn() && request.auth.uid == voter && request.auth.uid in convData().users;
+          // Channel followers read and vote too (2026-10-28).
+          allow read: if signedIn() && (request.auth.uid in convData().users || follows(convData()));
+          // 2026-09-24 decision D-composer-3: a vote has a shape: `options` (1 to 10) and `at`; one
+          // option when `pollMulti == false`. The vote doc is the voter's own.
+          allow delete: if signedIn() && request.auth.uid == voter
+            && (request.auth.uid in convData().users || follows(convData()));
           allow create, update: if signedIn() && request.auth.uid == voter
             && !groupModBlocked(convData())   // 2026-10-18 group moderation: no votes while restricted
-            && request.auth.uid in convData().users
+            && (request.auth.uid in convData().users || follows(convData()))
             && request.resource.data.keys().hasOnly(['options', 'at'])
             && request.resource.data.options is list
             && request.resource.data.options.size() >= 1
