@@ -827,10 +827,27 @@ final class GroupCallService: ObservableObject {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 guard let self, gen == self.joinGeneration, self.isActive, !self.leaving,
                       !self.micLockedByAdmin else { return }
-                if self.room.localParticipant.isMicrophoneEnabled() { return }
+                if self.room.localParticipant.isMicrophoneEnabled() { break }
                 self.micOn = true
                 self.syncMic()
             }
+            // ⛔ AND ONE CLEAN REPUBLISH ONCE THE PERMISSION IS SURELY BACK (owner 2026-10-29: "I
+            // mute him, unmute him, his mic shows on but I can't hear him until he taps mute and
+            // unmute himself"). The unmute note can beat the restored publish permission here, so
+            // the first publish went to a server that still refused it, yet the phone counted the
+            // mic as on (`isMicrophoneEnabled`) and every retry above stopped. His own off-and-on
+            // published again after the permission was there — the only thing that ever worked.
+            // So the same off-and-on runs here, ~1.5 s after the lift, whatever the phone believes.
+            // Marked as my own change so the brief "off" is not taken for another admin's mute.
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard let self, gen == self.joinGeneration, self.isActive, !self.leaving,
+                  !self.micLockedByAdmin, self.micOn, self.micChain == nil else { return }
+            self.micChangesInFlight += 1
+            defer { self.micChangesInFlight -= 1 }
+            try? await self.room.localParticipant.setMicrophone(enabled: false)
+            guard gen == self.joinGeneration, self.isActive, !self.leaving, self.micOn else { return }
+            try? await self.room.localParticipant.setMicrophone(enabled: true)
+            GCLog.event("mic_republish", room: self.logRoom)
         }
     }
     private func noteJoinPass(_ d: [String: Any]?) {
