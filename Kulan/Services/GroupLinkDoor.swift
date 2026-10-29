@@ -119,7 +119,11 @@ private let memberCodes = OSAllocatedUnfairLock(initialState: [String: String]()
     /// Am I in the group behind `code`, as far as this phone knows right now.
     static func isMember(_ code: String) -> Bool {
         if memberCid(code) != nil { return true }
-        if case .found(let p)? = fresh(code)?.outcome { return p.isMember }
+        if case .found(let p)? = fresh(code)?.outcome {
+            // A channel I follow is mine too (2026-10-29): its card opens it, not a visitor page.
+            if let cid = p.cid, ChannelFollows.shared.follows(cid) { return true }
+            return p.isMember
+        }
         return false
     }
 

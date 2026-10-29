@@ -493,7 +493,8 @@ struct JoinGroupSheet: View {
 
     /// A member never sees the sheet: it closes and the chat opens.
     private func openIfMember(_ p: GroupLinkPreview) -> Bool {
-        guard p.isMember, let cid = p.cid else { return false }
+        // A channel I follow opens too (2026-10-29), not the follow sheet.
+        guard let cid = p.cid, p.isMember || ChannelFollows.shared.follows(cid) else { return false }
         openChat(cid, p)
         return true
     }

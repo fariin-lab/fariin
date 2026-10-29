@@ -24,11 +24,10 @@ struct ChannelFollowerBar: View {
                     ChannelService.setMuted(cid: conv.id, !muted)
                 }
                 .accessibilityLabel(muted ? "Unmute channel" : "Mute channel")
-            } else if conv.isPublic {
-                pill(busy ? "Following…" : "Follow", icon: nil, tint: Color(hex: 0x2392FE)) { follow() }
             } else {
-                Text("This channel is private. Ask an admin for its invite link.")
-                    .font(.system(size: 14)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                // Always Follow (2026-10-29: a public channel opened from an invite card said
+                // "private"); the server says no to a private channel without its link, in words.
+                pill(busy ? "Following…" : "Follow", icon: nil, tint: Color(hex: 0x2392FE)) { follow() }
             }
         }
         .frame(maxWidth: .infinity)

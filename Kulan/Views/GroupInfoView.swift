@@ -158,7 +158,8 @@ struct GroupInfoView: View {
     }
     /// A channel (2026-10-28), and me only following it (not one of its admins).
     private var isChannel: Bool { conv?.isChannel == true }
-    private var isFollowerHere: Bool { isChannel && !iAmMember }
+    // Really following, not just "not an admin" (2026-10-29: a visitor's page said Following).
+    private var isFollowerHere: Bool { isChannel && !iAmMember && ChannelFollows.shared.follows(cid) }
     @State private var unfollowing = false
     @State private var confirmChannelReport = false
     @State private var showFollowers = false
@@ -483,7 +484,6 @@ struct GroupInfoView: View {
             // storage rows with Muted, what kind of channel it is, then Unfollow / Report.
             aboutCard
             followerRowsCard
-            channelFactsCard
             exitCard
         } else {
             memberCards
@@ -539,30 +539,6 @@ struct GroupInfoView: View {
             .padding(.horizontal, 16).padding(.vertical, 12)
         }
         .profileSurface(plain: cardColor)
-    }
-
-    /// What kind of channel this is, in words.
-    private var channelFactsCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            channelFact("globe", conv?.isPublic == true ? "Public channel" : "Private channel",
-                        conv?.isPublic == true ? "Anyone can find this channel and read its posts."
-                                               : "Only people with its invite link can follow it.")
-            rowDivider
-            channelFact("lock", "Followers are private", "Nobody sees who follows this channel. Only its admins post.")
-        }
-        .profileSurface(plain: cardColor)
-    }
-
-    private func channelFact(_ icon: String, _ title: String, _ line: String) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            Image(systemName: icon).font(.system(size: 17)).frame(width: 26)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                Text(line).font(.subheadline).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 16).padding(.vertical, 14)
     }
 
     private func unfollowNow(report: Bool) {
@@ -1014,7 +990,7 @@ struct GroupInfoView: View {
                 // Leave, Report, End or Delete for a group I am not in. A public one can be joined
                 // again; leaving is never a ban.
                 if conv?.isPublic == true {
-                    ProfileInfoRow(title: rejoining ? "Joining…" : "Join Group", icon: "person.badge.plus",
+                    ProfileInfoRow(title: rejoining ? (isChannel ? "Following…" : "Joining…") : (isChannel ? "Follow Channel" : "Join Group"), icon: "person.badge.plus",
                                    chevron: false) { rejoin() }
                         .profileSurface(plain: cardColor)
                 }
