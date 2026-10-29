@@ -2684,7 +2684,8 @@ struct ThreadView: View {
         // takes the real one over any stand-in: no `updatedAt`).
         if guest == nil, !cid.contains("_"), let p = GroupDirectory.cachedPreview(name: nil, cid: cid) {
             var users = p.members.map(\.uid)
-            if !users.contains(me) { users.append(me) }
+            // A channel I just followed: I am a follower, never one of its members (2026-10-28).
+            if !users.contains(me), !p.isChannel { users.append(me) }
             var data: [String: Any] = [
                 "type": "group", "title": p.title, "e2ee": false, "users": users,
                 "admins": p.members.filter { $0.role != "member" }.map(\.uid),
@@ -2694,11 +2695,14 @@ struct ThreadView: View {
                                      uniquingKeysWith: { a, _ in a }),
             ]
             if let photo = p.photoUrl { data["avatarUrl"] = photo }
+            if p.isChannel { data["channel"] = true; data["followerCount"] = p.memberCount; data["isPublic"] = true }
             return Conversation(id: cid, data: data)
         }
         guard let g = guest?.preview else { return nil }
         var data: [String: Any] = ["type": "group", "title": g.title, "e2ee": false]
         if let p = g.photoUrl { data["avatarUrl"] = p }
+        // A channel seen from outside draws its posts as the channel's (2026-10-28).
+        if g.isChannel { data["channel"] = true; data["followerCount"] = g.memberCount; data["isPublic"] = true }
         return Conversation(id: cid, data: data)
     }
 
