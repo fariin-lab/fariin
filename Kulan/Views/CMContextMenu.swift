@@ -144,6 +144,11 @@ enum CMReactionSelection {
 struct CMReactConfig {
     let emojis: [String]        // the quick set, in order (≤6)
     let selected: String?       // my current reaction — drawn on a filled disc, tap removes
+    /// The swipe part after the quick set. Off for a channel that allows only its own emoji (owner
+    /// 2026-10-29: "3 reactions, then a swipe shows more").
+    var extras: Bool = true
+    /// The "+" for the full picker. Off in a channel (owner 2026-10-29: "channels' react bar, no +").
+    var showsMore: Bool = true
     let onPick: (CMReactionSelection) -> Void
 }
 
@@ -1123,8 +1128,14 @@ final class CMReactionBar: UIView {
     }
 
     var naturalSize: CGSize {
-        CGSize(width: CGFloat(config.emojis.count + 1) * buttonSide + padding * 2, height: barHeight)
+        CGSize(width: CGFloat(config.emojis.count + (config.showsMore ? 1 : 0)) * buttonSide + padding * 2,
+               height: barHeight)
     }
+
+    /// The "+"'s place in `holders` (always last), or nil when the bar has none.
+    private var moreIndex: Int? { config.showsMore && !holders.isEmpty ? holders.count - 1 : nil }
+    /// How many of `holders` are emoji in the strip.
+    private var emojiHolderCount: Int { moreIndex ?? holders.count }
 
     init(config: CMReactConfig) {
         self.config = config
@@ -1136,7 +1147,9 @@ final class CMReactionBar: UIView {
         // make it 15; if somebody needs more they tap +". The quick six and the next nine; the
         // full picker behind "+" has the rest. My own reaction, if it is none of the fifteen, is
         // added at the end so it can still be seen and taken off here.
-        var strip = Array((quick + Self.extraEmojis.filter { !quick.contains($0) }).prefix(Self.stripCount))
+        var strip = config.extras
+            ? Array((quick + Self.extraEmojis.filter { !quick.contains($0) }).prefix(Self.stripCount))
+            : quick   // a channel's own list, exactly (`CMReactConfig.extras`)
         if let mine = config.selected, !strip.contains(mine) { strip.append(mine) }
         self.allEmojis = strip
         // Liquid glass on iOS 26+, same as the card and same as the reference app's bar there.
@@ -1167,9 +1180,12 @@ final class CMReactionBar: UIView {
         addSubview(clip)
 
         for emoji in allEmojis { let h = makeEmoji(emoji); holders.append(h); stack.addArrangedSubview(h) }
-        let more = makeMore()
-        holders.append(more)
-        addSubview(more)
+        // The "+" only where the full picker applies (a channel has none, `CMReactConfig.showsMore`).
+        if config.showsMore {
+            let more = makeMore()
+            holders.append(more)
+            addSubview(more)
+        }
 
         // A TAP picks; a swipe scrolls the strip. The old zero-duration press claimed every touch at
         // touch-down, which is exactly what would stop the strip from ever scrolling. Sliding a
@@ -1192,7 +1208,9 @@ final class CMReactionBar: UIView {
         scroll.frame = CGRect(x: 0, y: Self.liftRoom, width: window, height: bounds.height)
         stack.frame = CGRect(x: 0, y: 0, width: CGFloat(allEmojis.count) * side, height: bounds.height)
         scroll.contentSize = stack.frame.size
-        holders.last?.frame = CGRect(x: padding + window, y: padding, width: side, height: bounds.height - padding * 2)
+        if let m = moreIndex {
+            holders[m].frame = CGRect(x: padding + window, y: padding, width: side, height: bounds.height - padding * 2)
+        }
         // ⛔ MY REACTION IS IN VIEW WHEN THE BAR OPENS — owner, 2026-09-28: a reaction picked from the
         // swipe part was highlighted out of sight, and he had to swipe to find it. Once, on the first
         // real layout, the strip scrolls so that emoji is the last one showing.
@@ -1280,14 +1298,13 @@ final class CMReactionBar: UIView {
         // floats above the message, fingers overshoot upward).
         let grace = bounds.insetBy(dx: 0, dy: -18)
         guard grace.contains(point) else { return nil }
-        // The "+" is fixed at the right end, outside the strip.
-        let last = holders.count - 1
-        if point.x >= holders[last].frame.minX { return last }
+        // The "+" is fixed at the right end, outside the strip (when the bar has one).
+        if let m = moreIndex, point.x >= holders[m].frame.minX { return m }
         // Only what the strip is SHOWING can be picked: an emoji scrolled out of the window is not
         // under the finger, whatever its frame says.
         guard point.x >= clip.frame.minX, point.x < clip.frame.maxX else { return nil }
         let x = convert(CGPoint(x: point.x, y: bounds.midY), to: stack).x
-        for i in 0..<last where holders[i].frame.minX <= x && x < holders[i].frame.maxX { return i }
+        for i in 0..<emojiHolderCount where holders[i].frame.minX <= x && x < holders[i].frame.maxX { return i }
         return nil
     }
 
@@ -1305,7 +1322,7 @@ final class CMReactionBar: UIView {
         defer { clearFocus() }
         guard let i = index(at: point) else { return false }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        if i == holders.count - 1 {
+        if i == moreIndex {
             onSelect?(.more)
         } else {
             let emoji = allEmojis[i]
@@ -1325,7 +1342,7 @@ final class CMReactionBar: UIView {
         var delay: TimeInterval = 0
         // The ripple covers what is on screen: the quick set and the "+". The emoji past the window
         // are simply there, or the "+" would wait out forty-odd steps of delay behind them.
-        let onScreen = Array(holders.prefix(config.emojis.count)) + (holders.last.map { [$0] } ?? [])
+        let onScreen = Array(holders.prefix(config.emojis.count)) + (moreIndex.map { [holders[$0]] } ?? [])
         for holder in onScreen {
             holder.alpha = 0
             holder.transform = CGAffineTransform(translationX: 0, y: 24)

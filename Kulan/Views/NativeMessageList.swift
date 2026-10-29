@@ -117,7 +117,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // CUSTOM LONG-PRESS MENU (experiment — see CMContextMenu.swift). ThreadView supplies the row's
     // actions and reaction config; the controller owns the press, the snapshot and the overlay.
     var customMenuActions: (String) -> [CMAction] = { _ in [] }
-    var customReactConfig: (String) -> (emojis: [String], selected: String?)? = { _ in nil }
+    var customReactConfig: (String) -> (emojis: [String], selected: String?, extras: Bool, more: Bool)? = { _ in nil }
     var onCustomReact: (String, CMReactionSelection) -> Void = { _, _ in }
     var onMenuCloseKeyboard: () -> Bool = { false }          // closes if open; returns whether it WAS open
     var onMenuRestoreKeyboard: () -> Void = {}
@@ -932,7 +932,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onTapNoticeAction: (String, String) -> Void = { _, _ in }
     // CUSTOM LONG-PRESS MENU (experiment — CMContextMenu.swift). Fed from SwiftUI like every callback.
     var customMenuActions: (String) -> [CMAction] = { _ in [] }
-    var customReactConfig: (String) -> (emojis: [String], selected: String?)? = { _ in nil }
+    var customReactConfig: (String) -> (emojis: [String], selected: String?, extras: Bool, more: Bool)? = { _ in nil }
     var onCustomReact: (String, CMReactionSelection) -> Void = { _, _ in }
     var onMenuCloseKeyboard: () -> Bool = { false }
     var onMenuRestoreKeyboard: () -> Void = {}
@@ -6347,7 +6347,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         container.addSubview(src.snapshot)
 
         let react = customReactConfig(id).map { cfg in
-            CMReactConfig(emojis: cfg.emojis, selected: cfg.selected) { [weak self] selection in
+            CMReactConfig(emojis: cfg.emojis, selected: cfg.selected,
+                          extras: cfg.extras, showsMore: cfg.more) { [weak self] selection in
                 self?.onCustomReact(id, selection)
             }
         }

@@ -1066,7 +1066,13 @@ enum MessageRowLayout {
                 // footer is still a line of its own under the content, and gives it back the same way.
                 let ownTextRow = plan.metaOnOwnLine
                     && (plan.text != .zero || captioned || plan.filePlan != nil)
-                let metaJoins = fitsOnRow && (!plan.metaOnOwnLine || ownTextRow)
+                // ⛔ NOT UNDER A CARD'S BUTTON (owner 2026-10-29: a reacted channel invite card, the
+                // heart chip over "Open Channel"). There the footer row sits ABOVE the button (Join
+                // Call, Open/View Group or Channel), so giving its height back from the bubble's bottom
+                // ate into the button and the pills landed on it. The footer stays put; the pills get a
+                // row of their own under the button.
+                let hasBottomButton = plan.linkPlan?.join != nil
+                let metaJoins = fitsOnRow && !hasBottomButton && (!plan.metaOnOwnLine || ownTextRow)
 
                 var grown = plan.bubble
                 if metaJoins && ownTextRow {

@@ -4291,7 +4291,7 @@ struct ThreadView: View {
     }
 
     // The bar shows exactly when this row can be reacted to: on the server, and I am not muted.
-    private func customReactInfo(for rowId: String) -> (emojis: [String], selected: String?)? {
+    private func customReactInfo(for rowId: String) -> (emojis: [String], selected: String?, extras: Bool, more: Bool)? {
         guard let idx = repo.indexById[rowId], idx < repo.items.count else { return nil }
         let m = repo.items[idx]
         // No bar on call/system rows (audit): they render no reaction badges, so a picked emoji
@@ -4318,7 +4318,13 @@ struct ThreadView: View {
         // one just used to the front. Later the same day, with a picture: "never change the default
         // emojis", so a reaction from the swipe part stays in its own place there too
         // (`CMReactionBar.init`). Recents are still recorded, for the full picker.
-        return (conversation?.isChannel == true ? channelOffered : QuickReaction.bar, myReaction(m))
+        // ⛔ A CHANNEL'S BAR (owner 2026-10-29): no "+" at all ("channels' react bar, no +"), and with
+        // only selected emoji allowed, exactly those, no swipe part ("3 reactions, then a swipe
+        // showed more"). Any-emoji channels keep the swipe part.
+        if conversation?.isChannel == true {
+            return (channelOffered, myReaction(m), conversation?.reactMode != "some", false)
+        }
+        return (QuickReaction.bar, myReaction(m), true, true)
     }
 
     private func handleCustomReact(_ rowId: String, _ selection: CMReactionSelection) {
@@ -9542,7 +9548,8 @@ struct ThreadView: View {
         s.text = input
         // 2026-09-24 decision D-composer-5: only for the very text the insertion produced.
         if let m = caretAfterMention, m.text == input { s.caret = m.at }
-        s.placeholder = conversation?.isChannel == true ? "Post"   // an admin writing to the channel (2026-10-28)
+        // An admin writing to the channel: "Broadcast" (owner 2026-10-29; was "Post", 2026-10-28).
+        s.placeholder = conversation?.isChannel == true ? "Broadcast"
             : requestStance == .firstMessage ? "Say hello" : "Message"
         s.focused = inputFocused
         s.editing = editingMessage != nil
