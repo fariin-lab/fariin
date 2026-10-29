@@ -98,6 +98,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onTapContactCard: (String) -> Void = { _ in }
     var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
+    var onTapShare: (String) -> Void = { _ in }   // a channel post's share button (2026-10-29)
     var onTapRetry: (String) -> Void = { _ in }
     /// The failed-send question, anchored to the red badge (2026-09-27). nil = fall back to onTapRetry.
     var failedActions: (String) -> FailedMessageActions? = { _ in nil }
@@ -313,6 +314,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onTapContactCard = onTapContactCard
         vc.onTapContactMessage = onTapContactMessage
         vc.onTapReactions = onTapReactions
+        vc.onTapShare = onTapShare
         vc.onTapRetry = onTapRetry
         vc.failedActions = failedActions
         vc.onCancelUpload = onCancelUpload
@@ -918,6 +920,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onTapContactCard: (String) -> Void = { _ in }
     var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
+    var onTapShare: (String) -> Void = { _ in }   // a channel post's share button (2026-10-29)
     var onTapRetry: (String) -> Void = { _ in }
     /// The failed-send question, anchored to the red badge (2026-09-27). nil = fall back to onTapRetry.
     var failedActions: (String) -> FailedMessageActions? = { _ in nil }
@@ -7158,6 +7161,11 @@ extension MessageListController: MessageRowCellDelegate {
     func rowCellDidTapReactions(_ cell: MessageRowCell) {
         guard let id = cell.rowId else { return }
         onTapReactions(id)
+    }
+
+    func rowCellDidTapShare(_ cell: MessageRowCell) {
+        guard let id = cell.rowId else { return }
+        onTapShare(id)
     }
 
     func rowCellDidTapRetry(_ cell: MessageRowCell) {

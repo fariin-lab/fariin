@@ -4795,6 +4795,10 @@ struct ThreadView: View {
                     if conversation?.isChannel == true { channelReactTarget = m } else { reactorsTarget = MessageRef(id: m.id) }
                 }
             },
+            // A channel post's share button (owner 2026-10-29): the long-press menu's Forward.
+            onTapShare: { id in
+                if let m = repo.items.first(where: { $0.rowId == id }) { forwardTarget = m }
+            },
             onTapRetry: { id in
                 // 2026-09-24 decision D14: the tap asks Resend / Delete; the automatic retries still
                 // call resend directly.

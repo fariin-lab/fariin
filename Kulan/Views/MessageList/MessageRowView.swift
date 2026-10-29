@@ -710,6 +710,9 @@ final class MessageRowView: UIView {
     private var forwardedIcon: UIImageView?
     private var tombstoneIcon: UIImageView?
     private var failBadge: UIButton?
+    /// A channel post's share button (`applyShareButton`) and where it is.
+    private var shareButton: UIView?
+    private var shareRect: CGRect?
     /// The failed badge's menu items, asked for when it is tapped. Set by the cell.
     var failMenuItems: (() -> [UIMenuElement])?
     private var reactionViews: [ReactionChipView] = []
@@ -776,6 +779,7 @@ final class MessageRowView: UIView {
 
     func apply(_ m: MessageRowModel, plan p: RowPlan, cid: String) {
         fill.layer.mask = nil; rim.layer.mask = nil   // a reused row is never left holed
+        shareButton?.isHidden = true; shareRect = nil  // the bubble path puts it back (`applyShareButton`)
         // A reaction arriving on, or leaving, the message this view is ALREADY showing. Never on a
         // recycled cell (a different id): that would be motion out of nowhere mid-scroll.
         let oldKeys = Self.reactionKeys(model), newKeys = Self.reactionKeys(m)
@@ -1064,6 +1068,42 @@ final class MessageRowView: UIView {
         applyForwarded(b)
         applyReactions(b)
         applyFailBadge(b)
+        applyShareButton(b, model: m)
+    }
+
+    /// ⛔ A SHARE BUTTON BESIDE EVERY CHANNEL POST (owner 2026-10-29, with the reference app's feed):
+    /// a small round button off the bubble's bottom-right corner, in the gap a channel post leaves on
+    /// its right (`MessageRowLayout`, `wide`). A tap opens Forward (`rowCellDidTapShare`). The cell's
+    /// own tap routing hits it (`hitsShare`), so the view takes no touches itself.
+    private func applyShareButton(_ b: BubblePlan, model m: MessageRowModel) {
+        guard case .bubble(let row) = m.content, row.wide, !row.showsFailedBadge, b.bubble.width > 0 else {
+            shareButton?.isHidden = true; shareRect = nil; return
+        }
+        let v = shareButton ?? {
+            let v = UIView()
+            v.isUserInteractionEnabled = false
+            v.layer.cornerRadius = 16
+            v.layer.cornerCurve = .circular
+            v.backgroundColor = UIColor { $0.userInterfaceStyle == .dark
+                ? UIColor(white: 1, alpha: 0.12) : UIColor(white: 0, alpha: 0.08) }
+            let icon = UIImageView(image: UIImage(systemName: "arrowshape.turn.up.right.fill",
+                                                  withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)))
+            icon.tintColor = .label
+            icon.contentMode = .center
+            icon.frame = CGRect(x: 0, y: 0, width: 32, height: 32)
+            v.addSubview(icon)
+            addSubview(v); shareButton = v; return v
+        }()
+        let r = CGRect(x: b.bubble.maxX + 8, y: b.bubble.maxY - 32, width: 32, height: 32)
+        v.isHidden = false
+        v.frame = r
+        shareRect = r
+    }
+
+    /// The share button's frame (row coordinates), nil when the row has none.
+    func hitsShare(_ point: CGPoint) -> Bool {
+        guard let r = shareRect, shareButton?.isHidden == false else { return false }
+        return r.insetBy(dx: -6, dy: -6).contains(point)
     }
 
     private func applyMedia(_ b: BubblePlan, model m: MessageRowModel, cid: String) {

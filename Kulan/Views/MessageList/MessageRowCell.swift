@@ -29,6 +29,8 @@ protocol MessageRowCellDelegate: AnyObject {
     func rowCellDidTapContactCard(_ cell: MessageRowCell)
     func rowCellDidTapContactMessage(_ cell: MessageRowCell)
     func rowCellDidTapReactions(_ cell: MessageRowCell)
+    /// A channel post's share button (owner 2026-10-29): opens Forward.
+    func rowCellDidTapShare(_ cell: MessageRowCell)
     func rowCellDidTapRetry(_ cell: MessageRowCell)
     /// The failed badge's own menu (Resend / Delete), asked for when the badge is tapped.
     func rowCellFailMenuItems(_ cell: MessageRowCell) -> [UIMenuElement]
@@ -86,6 +88,7 @@ final class MessageRowCell: UICollectionViewCell {
         case .call, .notice: return true
         case .bubble(let b):
             if b.showsFailedBadge, rowView.hitsFailBadge(p) { return true }
+            if rowView.hitsShare(p) { return true }
             if rowView.hitsReactions(p) { return true }
             if b.sender != nil, rowView.hitsSenderName(p) || rowView.hitsAvatar(p) { return true }
             if rowView.hitsPill(p) {
@@ -533,6 +536,10 @@ final class MessageRowCell: UICollectionViewCell {
             // The badge is a menu button now and opens its own menu; this tap only has to stay out
             // of its way. Kept first so nothing under the badge reacts as well.
             if b.showsFailedBadge, rowView.hitsFailBadge(p) { return }
+            if rowView.hitsShare(p) {
+                delegate?.rowCellDidTapShare(self)
+                return
+            }
             if rowView.hitsReactions(p) {
                 delegate?.rowCellDidTapReactions(self)
                 return
