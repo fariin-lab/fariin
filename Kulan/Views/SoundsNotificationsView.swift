@@ -22,6 +22,7 @@ struct SoundsNotificationsView: View {
     private var pageBackground: Color { Color(uiColor: .systemGroupedBackground) }
     @State private var mutedUntil: Double = 0   // ms
     private var isGroup: Bool { !cid.contains("_") && !OfficialChannel.isOfficial(cid) }
+    private var isChannel: Bool { ConversationsRepository.shared.conversations.first { $0.id == cid }?.isChannel == true }
     /// "Off", "Always", "Until 3:40 PM", or "Until Tue 3:40 PM" past today.
     private var muteLabel: String {
         guard muted else { return "Off" }
@@ -46,7 +47,7 @@ struct SoundsNotificationsView: View {
         // ring tone, only while the call-sound picker is on (hidden on his order 2026-08-21).
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
-                heading("Messages")
+                heading(isChannel ? "Posts by other admins" : "Messages")
                 VStack(spacing: 0) {
                     // Native dropdown Menu (real Apple context menu), not a popover dialog.
                     Menu {
@@ -65,7 +66,10 @@ struct SoundsNotificationsView: View {
                 }
                 .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
                 // True of the server (onNewMessage): a mention of you still comes through a mute.
-                if isGroup {
+                if isChannel {
+                    // A channel's admins are told about each other's posts; nobody is told when someone follows.
+                    footnote("This only mutes posts by the other admins. It changes nothing for your followers.")
+                } else if isGroup {
                     footnote("While this group is muted, you're still told when someone mentions you.")
                 }
 
