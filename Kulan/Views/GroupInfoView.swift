@@ -303,11 +303,13 @@ struct GroupInfoView: View {
             // one warning sentence, a red Delete Channel and Cancel. It replaces the full page with
             // its password (that page was the owner's 2026-10-29 ask; this is his newer one). Our
             // words, not theirs.
-            .confirmationDialog("Delete Channel", isPresented: $showChannelDelete, titleVisibility: .hidden) {
-                Button("Delete Channel", role: .destructive) { deleteChannel() }
+            // Apple's centred alert (owner 2026-10-29: "use exactly the Apple dialog"): iOS 26 drew
+            // the confirmation dialog as a popover hanging off the header, as with Report.
+            .alert("Delete \u{201C}\(conv?.title ?? "this channel")\u{201D}?", isPresented: $showChannelDelete) {
+                Button("Delete", role: .destructive) { deleteChannel() }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Delete \u{201C}\(conv?.title ?? "this channel")\u{201D}? Every post goes for all its followers. This can't be undone.")
+                Text("Every post goes for all its followers. This can't be undone.")
             }
             // A full page, pushed (owner 2026-10-18), not a half sheet.
             .sheet(item: Binding(get: { shareGroupText.map { ShareText(id: $0) } },
