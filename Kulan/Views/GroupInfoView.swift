@@ -2286,12 +2286,12 @@ struct GroupMemberSheet: View {
                 Section {
                     Label("All rights", systemImage: "crown.fill")
                 } footer: {
-                    Text("You are the owner of this group, so you can do everything in it, including adding admins and transferring ownership.")
+                    Text("You are the owner of this \(Conversation.Right.isChannel(cid) ? "channel" : "group"), so you can do everything in it, including adding admins and transferring ownership.")
                 }
             } else {
                 Section {
-                    ForEach(Conversation.Right.allCases) { r in
-                        Toggle(r.shortLabel, isOn: .constant(held.contains(r.rawValue)))
+                    ForEach(Conversation.Right.allCases.filter { $0.applies(channel: Conversation.Right.isChannel(cid)) }) { r in
+                        Toggle(r.shortLabel(channel: Conversation.Right.isChannel(cid)), isOn: .constant(held.contains(r.rawValue)))
                             .disabled(true)
                     }
                 } header: {
@@ -2350,7 +2350,7 @@ struct GroupMemberSheet: View {
     }
     /// The rights I may hand out, in the model's order (the Edit Admin Rights page's own list).
     private var shownRights: [Conversation.Right] {
-        Conversation.Right.allCases.filter { grantable.contains($0.rawValue) }
+        Conversation.Right.allCases.filter { grantable.contains($0.rawValue) && $0.applies(channel: Conversation.Right.isChannel(cid)) }
     }
     /// What goes out: only rights I may grant, as AdminRightsView.save sends them.
     private var rightsList: [String] {
@@ -2388,7 +2388,11 @@ struct GroupMemberSheet: View {
         let promote = !demote && promoting, newRights = !demote && rightsChanged
         let writeRole = roleChanged, roleWords = cleanedRole, roleEmoji = role?.emoji, roleTint = roleColor
         run {
-            if demote {
+            if demote, Conversation.Right.isChannel(cid) {
+                // A channel's only members are its admins: a dismissed one follows it again.
+                try await ChannelService.dismissAdmin(cid: cid, uid: uid)
+                await MainActor.run { ToastNotice.show("\(name) is no longer an admin") }
+            } else if demote {
                 try await ChatService.demoteGroupAdmin(cid: cid, uid: uid, name: name)
             } else if promote {
                 try await ChatService.promoteGroupAdmin(cid: cid, uid: uid, name: name, rights: list)
@@ -2594,7 +2598,7 @@ struct GroupMemberSheet: View {
             if mayEditRights && adminSelected {
                 Section {
                     ForEach(shownRights, id: \.id) { r in
-                        Toggle(r.shortLabel, isOn: Binding(
+                        Toggle(r.shortLabel(channel: Conversation.Right.isChannel(cid)), isOn: Binding(
                             get: { rights.contains(r.rawValue) },
                             set: { on in if on { rights.insert(r.rawValue) } else { rights.remove(r.rawValue) } }))
                         .disabled(busy)
@@ -2824,7 +2828,8 @@ struct GroupMemberSheet: View {
             rows.append(AnyView(iconRow("person.badge.minus", "Dismiss Admin", tint: .red) { confirmDismissAdmin = true }))
         }
         if canRemove {
-            rows.append(AnyView(iconRow("nosign", "Ban from Group", tint: .red) { confirmRemove = true }))
+            rows.append(AnyView(iconRow("nosign", Conversation.Right.isChannel(cid) ? "Ban from Channel" : "Ban from Group",
+                                        tint: .red) { confirmRemove = true }))
         }
         return rows
     }

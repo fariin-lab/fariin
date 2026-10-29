@@ -117,6 +117,11 @@ enum ChannelService {
         _ = try await fn.httpsCallable("removeChannelFollower").call(["cid": cid, "uid": uid, "ban": ban])
     }
 
+    /// Dismiss an admin (the owner, or the admin who brought them in): they go back to following.
+    static func dismissAdmin(cid: String, uid: String) async throws {
+        _ = try await fn.httpsCallable("dismissChannelAdmin").call(["cid": cid, "uid": uid])
+    }
+
     /// I have read up to `count` posts (only ever forward).
     static func markRead(cid: String, count: Int) {
         let uid = me

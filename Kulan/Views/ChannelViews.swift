@@ -434,6 +434,10 @@ struct ChannelAdminInviteRows: View {
     @State private var pickAdmins = false
     @State private var shareText: String?
     @State private var revoking: ChannelAdminInvites.Pending?
+    private var mayAddAdmins: Bool {
+        let me = AuthService.shared.uid ?? ""
+        return ConversationsRepository.shared.conversations.first { $0.id == cid }?.adminCan(me, .addAdmins) == true
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -453,8 +457,11 @@ struct ChannelAdminInviteRows: View {
                 if let followLink { shareText = "Follow \u{201C}\(title)\u{201D} on Fariin: " + followLink }
                 else { Task { await shareInviteLink() } }
             }
-            Divider().padding(.leading, 56)
-            row("plus", "Invite Admins") { pickAdmins = true }
+            // Only the owner, or an admin the owner let add admins (the server holds to the same).
+            if mayAddAdmins {
+                Divider().padding(.leading, 56)
+                row("plus", "Invite Admins") { pickAdmins = true }
+            }
         }
         .background(cardColor, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .task { await reload() }

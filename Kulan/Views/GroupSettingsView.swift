@@ -317,8 +317,15 @@ struct GroupSettingsView: View {
 
     private var peopleSection: some View {
         Section {
-            NavigationLink { GroupMembersListView(cid: cid) } label: {
-                valueRow("ic_gs_members", "Members", "\(conv?.users.count ?? 0)")
+            // A channel's people are its followers; its "members" are only the admins (2026-10-29).
+            if conv?.isChannel == true {
+                NavigationLink { ChannelFollowersView(cid: cid, count: conv?.followerCount ?? 0) } label: {
+                    valueRow("ic_gs_members", "Followers", "\(conv?.followerCount ?? 0)")
+                }
+            } else {
+                NavigationLink { GroupMembersListView(cid: cid) } label: {
+                    valueRow("ic_gs_members", "Members", "\(conv?.users.count ?? 0)")
+                }
             }
             NavigationLink { GroupAdminsView(cid: cid) } label: {
                 valueRow("ic_gs_admins", "Administrators", "\(conv?.admins.count ?? 0)")
@@ -679,6 +686,7 @@ struct GroupAdminsView: View {
     /// The member picked in Add Admin; their Add Admin page is pushed in the sheet.
     @State private var pickedAdmin: String?
     @State private var pickQuery = ""
+    @State private var showInvite = false
 
     // The group itself, live (2026-10-20): roles and rights show the moment they change.
     @State private var live = LiveGroupDoc()
@@ -705,7 +713,10 @@ struct GroupAdminsView: View {
             Section {
                 // owner 2026-10-18: the owner, or an admin the owner gave "Add new admins". In the
                 // same card as the admins (owner 2026-10-19).
-                if canAddAdmins && !others.isEmpty {
+                if canAddAdmins && conv?.isChannel == true {
+                    // A channel has no members to pick from: an admin is invited, and accepts (2026-10-29).
+                    Button { showInvite = true } label: { Label("Invite Admin", systemImage: "person.badge.plus") }
+                } else if canAddAdmins && !others.isEmpty {
                     Button { showPick = true } label: { Label("Add Admin", systemImage: "person.badge.plus") }
                 }
                 ForEach(admins, id: \.self) { uid in
@@ -714,7 +725,9 @@ struct GroupAdminsView: View {
                 }
             } footer: {
                 // Moved here from the Group Settings page (owner's picture, 2026-10-19).
-                Text("The owner decides what each admin can do. Tap an admin to see what they can do, including removing members.")
+                Text(conv?.isChannel == true
+                     ? "Admins post in the channel. The owner decides what else each admin can do. Followers never see who the admins are."
+                     : "The owner decides what each admin can do. Tap an admin to see what they can do, including removing members.")
             }
         }
         .listStyle(.insetGrouped)
@@ -728,6 +741,17 @@ struct GroupAdminsView: View {
         .navigationDestination(item: $profileUid) { uid in
             ContactInfoView(cid: ChatService.convId(me, uid), name: conv?.names[uid] ?? "User",
                             photoUrl: conv?.photos[uid], source: .calls)
+        }
+        .sheet(isPresented: $showInvite) {
+            AddPeopleSheet(alreadyIn: Set(conv?.users ?? []), actionTitle: "Invite", linkCap: 16) { people in
+                let title = conv?.title ?? "Channel"
+                Task {
+                    do {
+                        let refused = try await ChannelAdminInvites.invite(cid: cid, title: title, people: people)
+                        ToastNotice.show(refused.isEmpty ? "Invite sent." : "Invite sent. Not sent to: " + refused.joined(separator: ", "))
+                    } catch { ToastNotice.show(error.localizedDescription) }
+                }
+            }
         }
         .sheet(isPresented: $showPick, onDismiss: { pickedAdmin = nil; pickQuery = "" }) {
             // Pick a member, then their Add Admin page (rights, tag, the button), in the sheet.
@@ -779,6 +803,25 @@ extension Conversation.Right {
         case .addAdmins:      return "Add admins"
         }
     }
+    /// The same right in a channel's words (2026-10-29): posts and followers, not messages and members.
+    func shortLabel(channel: Bool) -> String {
+        guard channel else { return shortLabel }
+        switch self {
+        case .changeInfo:     return "Change channel info"
+        case .deleteMessages: return "Delete posts"
+        case .banUsers:       return "Remove followers"
+        case .inviteUsers:    return "Invite followers"
+        case .pinMessages:    return "Pin posts"
+        default:              return shortLabel
+        }
+    }
+    /// Rights that do something here: a channel has no calls and no group stories.
+    func applies(channel: Bool) -> Bool {
+        !channel || (self != .manageCalls && self != .postStories)
+    }
+    static func isChannel(_ cid: String) -> Bool {
+        ConversationsRepository.shared.conversations.first { $0.id == cid }?.isChannel == true
+    }
 }
 
 // ⛔ ADD ADMIN AS ONE PAGE (owner 2026-10-19): pick a member, then this page: who, a switch for each
@@ -809,7 +852,7 @@ struct AddAdminPage: View {
     private var name: String { conv?.names[uid] ?? "User" }
     private var grantable: [Conversation.Right] {
         let mine = Set(conv?.adminRightsOf(me).map(\.rawValue) ?? [])
-        return Conversation.Right.allCases.filter { mine.contains($0.rawValue) }
+        return Conversation.Right.allCases.filter { mine.contains($0.rawValue) && $0.applies(channel: conv?.isChannel == true) }
     }
     private var mayTag: Bool { conv?.adminCan(me, .changeInfo) ?? false }
 
@@ -846,7 +889,7 @@ struct AddAdminPage: View {
             }
             Section {
                 ForEach(grantable, id: \.id) { r in
-                    Toggle(r.shortLabel, isOn: Binding(
+                    Toggle(r.shortLabel(channel: conv?.isChannel == true), isOn: Binding(
                         get: { rights.contains(r.rawValue) },
                         set: { on in if on { rights.insert(r.rawValue) } else { rights.remove(r.rawValue) } }))
                     .disabled(busy)
@@ -950,22 +993,27 @@ struct GroupRemovedUsersView: View {
 
     @State private var busy: String?
     @State private var actionError: String?
+    /// Names of banned people the group doc does not hold (a channel's followers never were members).
+    @State private var fetched: [String: UserProfile] = [:]
 
     // The group itself, live (2026-10-20): roles and rights show the moment they change.
     @State private var live = LiveGroupDoc()
     private var conv: Conversation? { live.start(cid); return live.conv ?? repo.conversations.first { $0.id == cid } }
+    private func name(_ uid: String) -> String { conv?.names[uid] ?? fetched[uid]?.name ?? "User" }
+    private func photo(_ uid: String) -> String? { conv?.photos[uid] ?? fetched[uid]?.photoUrl }
 
     var body: some View {
         List {
             Section {
                 // The empty state sits in the card itself (owner 2026-10-19), not under it.
                 if conv?.bannedUids.isEmpty ?? true {
-                    Text("Nobody is banned from this group.").foregroundStyle(.secondary)
+                    Text(conv?.isChannel == true ? "Nobody is banned from this channel." : "Nobody is banned from this group.")
+                        .foregroundStyle(.secondary)
                 }
                 ForEach(conv?.bannedUids ?? [], id: \.self) { uid in
                     HStack(spacing: 12) {
-                        AvatarView(name: conv?.names[uid] ?? "User", photoUrl: conv?.photos[uid], size: 40)
-                        Text(conv?.names[uid] ?? "User").lineLimit(1)
+                        AvatarView(name: name(uid), photoUrl: photo(uid), size: 40)
+                        Text(name(uid)).lineLimit(1)
                         Spacer(minLength: 8)
                         if busy == uid {
                             ProgressView()
@@ -981,6 +1029,11 @@ struct GroupRemovedUsersView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Banned Users")
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: conv?.bannedUids ?? []) {
+            for uid in conv?.bannedUids ?? [] where conv?.names[uid] == nil && fetched[uid] == nil {
+                if let p = await ProfileStore.shared.fetch(uid) { fetched[uid] = p }
+            }
+        }
         .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
                                                           set: { if !$0 { actionError = nil } })) {
             Button("OK", role: .cancel) {}
@@ -1016,7 +1069,7 @@ struct AdminRightsView: View {
     @State private var actionError: String?
 
     private var shown: [Conversation.Right] {
-        Conversation.Right.allCases.filter { grantable.contains($0.rawValue) }
+        Conversation.Right.allCases.filter { grantable.contains($0.rawValue) && $0.applies(channel: Conversation.Right.isChannel(cid)) }
     }
 
     var body: some View {
@@ -1036,7 +1089,7 @@ struct AdminRightsView: View {
             }
             Section {
                 ForEach(shown) { r in
-                    Toggle(r.label, isOn: Binding(
+                    Toggle(Conversation.Right.isChannel(cid) ? r.shortLabel(channel: true) : r.label, isOn: Binding(
                         get: { rights.contains(r.rawValue) },
                         set: { on in
                             var next = rights
