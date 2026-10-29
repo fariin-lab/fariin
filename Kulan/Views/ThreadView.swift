@@ -4399,9 +4399,13 @@ struct ThreadView: View {
     private var channelReactOn: Bool { conversation?.isChannel == true && conversation?.reactMode != "off" }
     /// I may react: reactions on, and I follow it OR run it. ⛔ Admins too (owner 2026-10-29: the
     /// long press on his own post had no react bar); their pick is kept in `users/{me}/channelRx`.
+    /// ⛔ A VISITOR OF A PUBLIC CHANNEL TOO (owner 2026-10-29: "you can react in a channel you don't
+    /// follow, and double tap too"; the reference app has no membership test). The server keeps a
+    /// visitor's pick on `channelRx`; a private channel still needs the follow.
     private var channelCanReact: Bool {
         channelReactOn && guest == nil
-            && ((conversation?.users.contains(me) ?? false) || ChannelFollows.shared.follows(cid))
+            && ((conversation?.users.contains(me) ?? false) || ChannelFollows.shared.follows(cid)
+                || conversation?.isPublic == true)
     }
     /// What the bar offers in a channel: its own list, or the usual quick set.
     private var channelOffered: [String] {
