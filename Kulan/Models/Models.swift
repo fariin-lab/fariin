@@ -369,7 +369,9 @@ struct Message: Identifiable, Equatable, Codable {
     /// A "<name> asked to turn off Restricted chat" notice (2026-10-03). Tapping it lets the person
     /// it was asked of accept or decline, while the request on the chat is still pending.
     var isRestrictRequest = false
-    var edited: Bool = false                // text was edited after sending
+    /// A channel post's views (2026-10-28), counted by the server (functions-groups channelViews).
+    var views: Int = 0
+    var edited: Bool = false               // text was edited after sending
     /// Deleted for everyone. The document SURVIVES as a tombstone so both sides see that something
     /// was here and removed, the way the standard messengers do it, instead of a message silently
     /// vanishing and leaving the other person wondering what they missed. The content is stripped
@@ -826,6 +828,7 @@ struct Message: Identifiable, Equatable, Codable {
         self.disappearSeconds = (data["disappearSeconds"] as? NSNumber)?.intValue
         self.isRestrictRequest = data["restrictRequest"] as? Bool ?? false
         self.edited = data["edited"] as? Bool ?? false
+        self.views = max(0, (data["views"] as? NSNumber)?.intValue ?? 0)
         self.deleted = data["deleted"] as? Bool ?? false
         self.deletedBy = data["deletedBy"] as? String   // 2026-09-24 feature-audit
         self.forwarded = data["forwarded"] as? Bool ?? false
@@ -1770,7 +1773,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// A reaction newer than the last message → the chat list previews it ("Reacted 🙏").
     /// Hidden for silently-blocked reactors, and for reactions older than a delete-for-me.
     func freshReaction(_ me: String) -> Bool {
-        !lastReactionBy.isEmpty && lastReactionEnc != nil
+        // A channel's list line is always its last post (2026-10-28), never somebody's reaction.
+        !isChannel && !lastReactionBy.isEmpty && lastReactionEnc != nil
             && lastReactionAtMillis > updatedAtMillis
             && lastReactionAtMillis > (clearedAt[me] ?? 0)
             && !(isBlockedByMe(me) && lastReactionBy != me)

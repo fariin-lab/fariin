@@ -412,6 +412,7 @@ final class MessageRowCell: UICollectionViewCell {
                 && x.forwarded == y.forwarded && x.reactions == y.reactions
                 && x.showsFailedBadge == y.showsFailedBadge
                 && x.meta.edited == y.meta.edited && x.meta.timeText == y.meta.timeText
+                && x.meta.views == y.meta.views   // a channel post's count changes the footer's width
                 // The countdown is drawn over the footer and adds no size, so a change to it is
                 // geometry-neutral by construction — it belongs on the repaint path, which is what
                 // keeps the ring moving without ever re-measuring the row.

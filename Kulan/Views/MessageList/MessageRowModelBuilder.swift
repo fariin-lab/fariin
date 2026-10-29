@@ -372,6 +372,7 @@ enum MessageRowModelBuilder {
             // the future is never a fact about a message, it is a fact about the clock.
             meta: MetaChrome(timeText: min(msg.createdAt, Date()).formatted(date: .omitted, time: .shortened),
                              edited: msg.edited && !msg.deleted,
+                             views: ctx.isChannel && !msg.deleted ? msg.views : nil,
                              tick: tick,
                              bornAt: msg.createdAt,
                              // A tombstone is already gone; putting a countdown on one would be

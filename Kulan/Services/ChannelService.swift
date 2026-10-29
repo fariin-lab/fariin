@@ -173,3 +173,53 @@ final class ChannelFollows {
         ConversationsRepository.shared.channelsChanged()
     }
 }
+
+/// Channel post views, sent the reference app's way (2026-10-28): the posts that came on screen go
+/// into a set per channel, sent no later than 5 s after the first one, at most 100 per call
+/// (`channelViews`). A post sent once is never sent again this session; the server counts each
+/// person once per post anyway, so a resend after a relaunch only costs a read.
+final class ChannelViewQueue {
+    static let shared = ChannelViewQueue()
+
+    private let lock = NSLock()
+    private var pending: [String: Set<String>] = [:]   // cid -> post ids waiting
+    private var sent: Set<String> = []                 // "cid/mid" already sent
+    private var flushScheduled = false
+
+    func note(cid: String, ids: [String]) {
+        guard !ids.isEmpty else { return }
+        lock.lock()
+        var waiting = pending[cid] ?? []
+        for id in ids where !sent.contains("\(cid)/\(id)") { waiting.insert(id) }
+        pending[cid] = waiting
+        let schedule = !flushScheduled && !waiting.isEmpty
+        if schedule { flushScheduled = true }
+        lock.unlock()
+        guard schedule else { return }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) { [weak self] in self?.flush() }
+    }
+
+    private func flush() {
+        lock.lock()
+        let batch = pending
+        pending = [:]
+        flushScheduled = false
+        for (cid, ids) in batch { for id in ids { sent.insert("\(cid)/\(id)") } }
+        lock.unlock()
+        let fn = Functions.functions(region: "me-central1").httpsCallable("channelViews")
+        for (cid, ids) in batch where !ids.isEmpty {
+            let all = Array(ids)
+            for start in stride(from: 0, to: all.count, by: 100) {
+                let part = Array(all[start..<min(all.count, start + 100)])
+                fn.call(["cid": cid, "mids": part]) { [weak self] _, error in
+                    guard let error, let self else { return }
+                    // Not counted (offline, say): free them to go again on the next look.
+                    print("[channel] views not sent:", error.localizedDescription)
+                    self.lock.lock()
+                    for id in part { self.sent.remove("\(cid)/\(id)") }
+                    self.lock.unlock()
+                }
+            }
+        }
+    }
+}

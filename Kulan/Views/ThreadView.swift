@@ -3783,7 +3783,7 @@ struct ThreadView: View {
                 if let lp = m.linkPreview {
                     linkTok = "L\(lp.imageUrl != nil ? 1 : 0):\(lp.title.hashValue):\(lp.desc.hashValue)"
                 }
-                out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
+                out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)|\(m.views)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
             }
             sigCache.key = key
             sigCache.base = out
@@ -4824,6 +4824,11 @@ struct ThreadView: View {
             // Voice notes download by themselves around what is on screen (2026-10-23).
             onViewportRows: { ids in
                 MediaAutoDownloader.noteViewport(cid: cid, rowIds: ids, items: repo.items) { repo.indexById[$0] }
+                // A channel's posts on screen count as seen (2026-10-28, ChannelViewQueue).
+                if conversation?.isChannel == true, !quiet {
+                    // Real posts only: no day lines or other drawn rows.
+                    ChannelViewQueue.shared.note(cid: cid, ids: ids.filter { repo.indexById[$0] != nil })
+                }
             },
             canSwipeReply: { id in
                 // ⛔ NOT ON A STORY REACTION (owner 2026-10-13: "swipe reply still works"). The row

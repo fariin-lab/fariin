@@ -135,8 +135,32 @@ enum BubbleText {
     /// `solidTicks`: on a picture's dark capsule every tick is drawn at full strength, like the time
     /// beside it (owner, 2026-09-27: the faded "sent" tick read as a grey smudge there). The count
     /// still tells sent from read.
+    /// 950, 1.2K, 16K, 1.5M: a channel post's views as the footer shows them.
+    static func compactViews(_ n: Int) -> String {
+        func short(_ v: Double, _ unit: String) -> String {
+            if v >= 10 { return "\(Int(v))\(unit)" }
+            let tenths = Int((v * 10).rounded(.down))
+            return tenths % 10 == 0 ? "\(tenths / 10)\(unit)" : "\(tenths / 10).\(tenths % 10)\(unit)"
+        }
+        if n < 1000 { return "\(n)" }
+        if n < 1_000_000 { return short(Double(n) / 1000, "K") }
+        return short(Double(n) / 1_000_000, "M")
+    }
+
     static func meta(_ m: MetaChrome, isMe: Bool, color: UIColor, solidTicks: Bool = false) -> NSAttributedString {
         let s = NSMutableAttributedString()
+        // A channel post (2026-10-28): the eye and how many have seen it, before everything else.
+        if let v = m.views,
+           let eye = UIImage(systemName: "eye.fill",
+                             withConfiguration: UIImage.SymbolConfiguration(pointSize: 9, weight: .semibold)) {
+            let a = NSTextAttachment()
+            a.image = eye.withTintColor(color, renderingMode: .alwaysOriginal)
+            let cap = BubbleMetrics.metaFont.capHeight
+            a.bounds = CGRect(x: 0, y: (cap - eye.size.height) / 2, width: eye.size.width, height: eye.size.height)
+            s.append(NSAttributedString(attachment: a))
+            s.append(NSAttributedString(string: " \(compactViews(v))  ", attributes: [
+                .font: BubbleMetrics.metaFont, .foregroundColor: color]))
+        }
         if m.edited {
             s.append(NSAttributedString(string: "edited ", attributes: [
                 .font: BubbleMetrics.metaItalicFont, .foregroundColor: color]))

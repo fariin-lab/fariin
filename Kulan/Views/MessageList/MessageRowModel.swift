@@ -71,6 +71,8 @@ struct QuoteChrome: Equatable {
 struct MetaChrome: Equatable {
     var timeText: String
     var edited: Bool
+    /// A channel post's views (2026-10-28): an eye and the count before the time. Nil elsewhere.
+    var views: Int? = nil
     var tick: BubbleTicks.Kind
     /// When the message was created, so the sending clock can honour its 0.8s grace window. A
     /// healthy send flips to a tick inside that window and the clock is never seen.
