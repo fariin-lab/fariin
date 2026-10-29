@@ -3250,7 +3250,7 @@ final class StoriesRepository {
         ctxReg?.remove(); ctxReg = nil
         listeningUid = nil
         expiryTask?.cancel(); expiryTask = nil
-        othersStories = []; mineStories = []
+        othersStories = []; mineStories = []; channelStories = []
         othersByToken = []; othersByLegacyUid = []
         profileCache = [:]
         mine = nil; others = []
@@ -3562,10 +3562,54 @@ final class StoriesRepository {
         for (u, p) in blob.profiles where profileCache[u] == nil { profileCache[u] = (p.name, p.photo) }
     }
 
+    // MARK: Followed channels' stories (owner 2026-10-29)
+
+    /// ⛔ A CHANNEL'S STORIES REACH ITS FOLLOWERS, public channel or private. A follower is never in
+    /// a channel story's `recipientUids` (followers are unlimited), so the audience query cannot find
+    /// them. The server lists the live ids for every channel I follow (`groups:channelStoryIds`); the
+    /// rules let a follower read each (`followedChannelStory`). Asked when the tray starts, every five
+    /// minutes while it runs, and when I follow a channel.
+    private var channelStories: [Story] = []
+    @MainActor private var channelStoriesTask: Task<Void, Never>?
+
+    @MainActor func refreshChannelStories() {
+        guard let me = listeningUid else { return }
+        Task { @MainActor in
+            guard let res = try? await Functions.functions(region: "me-central1")
+                    .httpsCallable("channelStoryIds").call([:]),
+                  let map = (res.data as? [String: Any])?["channels"] as? [String: [String]],
+                  self.listeningUid == me else { return }
+            var found: [Story] = []
+            for (cid, ids) in map {
+                for id in ids.prefix(50) where !id.contains("/") {
+                    guard let snap = try? await db.collection("stories").document(id).getDocument(),
+                          let data = snap.data(),
+                          let s = parse(id: snap.documentID, data: data, me: me),
+                          s.groupId == cid, s.expiresAt > ServerClock.now else { continue }
+                    found.append(s)
+                }
+            }
+            guard self.listeningUid == me else { return }
+            self.channelStories = found
+            await self.rebuild()
+        }
+    }
+
+    @MainActor private func startChannelStories() {
+        channelStoriesTask?.cancel()
+        channelStoriesTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                self?.refreshChannelStories()
+                try? await Task.sleep(nanoseconds: 300_000_000_000)
+            }
+        }
+    }
+
     // Attach the three live queries (chat-list listener pattern).
     @MainActor private func start(_ me: String) {
         stop()
         listeningUid = me
+        startChannelStories()
         // ⚠️ MY TOKEN, NOT MY UID — see `StoryAudienceToken`. One `array-contains` against the same field,
         // so the query's shape, its index and its cost are exactly what they were.
         othersReg = db.collection("stories")
@@ -3650,6 +3694,7 @@ final class StoriesRepository {
         othersLegacyReg?.remove(); othersLegacyReg = nil
         mineReg?.remove(); mineReg = nil
         ctxReg?.remove(); ctxReg = nil
+        channelStoriesTask?.cancel(); channelStoriesTask = nil; channelStories = []
         listeningUid = nil
         // A new account gets a new cold start. Left true, the first empty cached snapshot after a
         // sign-in would be applied as though the server had already confirmed the row was empty.
@@ -3695,7 +3740,10 @@ final class StoriesRepository {
             // exactly: "a user can finish viewing the story and still see/open that same story".
             // Filtering the cached list as well makes the local flag bite immediately, on the
             // regroup the viewer's own close already asks for, without waiting for the server.
-            return (me, (othersStories + mineStories)
+            // A followed channel's stories (2026-10-29) join the tray; one that also came through
+            // the audience query (I am one of its admins) is not counted twice.
+            let seenIds = Set((othersStories + mineStories).map(\.id))
+            return (me, (othersStories + mineStories + channelStories.filter { !seenIds.contains($0.id) })
                         .filter { $0.expiresAt > now }
                         .filter { !($0.oneTime && $0.authorUid != me && StoryPrefs.isOneTimeUsed($0.id)) },
                     ConversationsRepository.shared.conversations,

@@ -3335,7 +3335,7 @@ service cloud.firestore {
       // write that can fail or lag). On `get` ONLY: the check reads `resource.data.authorUid`, which
       // a tray QUERY cannot prove, so putting it on `list` would refuse every tray query. The tray
       // is covered by the audience revoke taking them out of `recipientUids`.
-      allow get: if (storyReadable() || publicGroupStory())
+      allow get: if (storyReadable() || publicGroupStory() || followedChannelStory())
         && (request.auth.uid == resource.data.authorUid
             || adminCan('moderate')
             || !isBlockedByUser(resource.data.authorUid));
@@ -3345,6 +3345,14 @@ service cloud.firestore {
       function publicGroupStory() {
         let g = resource.data.get('groupId', '');
         return g != '' && publicGroupDoc(get(/databases/$(database)/documents/conversations/$(g)).data);
+      }
+      // A CHANNEL'S STORY FOR ITS FOLLOWER (owner 2026-10-29), public or private channel: a follower
+      // is not in `recipientUids` (followers are unlimited), so their follow entry is the proof. The
+      // ids come from groups:channelStoryIds.
+      function followedChannelStory() {
+        let g = resource.data.get('groupId', '');
+        return signedIn() && g != ''
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid)/channels/$(g));
       }
       function publicGroupDoc(c) {
         return c.get('type', '') == 'group' && c.get('isPublic', false) == true
@@ -3713,7 +3721,12 @@ service cloud.firestore {
           && request.auth.uid == viewerUid
           && (audienceToken(request.auth.uid) in storyData().recipientUids
               || request.auth.uid in storyData().recipientUids
-              || storyData().get('public', false) == true)
+              || storyData().get('public', false) == true
+              // A channel's story (owner 2026-10-29): its followers, and anyone on a public channel,
+              // are its audience without being in `recipientUids`; their view and heart count.
+              || (storyData().get('groupId', '') != ''
+                  && (exists(/databases/$(database)/documents/users/$(request.auth.uid)/channels/$(storyData().groupId))
+                      || publicGroupDoc(get(/databases/$(database)/documents/conversations/$(storyData().groupId)).data))))
           && !isBlockedByUser(storyData().authorUid)   // 2026-09-26: never in a blocker's Seen-by
           && !('firstAt' in request.resource.data)     // 2026-10-17: the server's to set
           && validReceipt() && reactionAllowed();

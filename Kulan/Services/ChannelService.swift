@@ -366,6 +366,11 @@ final class ChannelFollows {
         for cid in next.keys where entries[cid] == nil {
             Task { @MainActor in LeaveGroupUndo.shared.reopen(cid) }
         }
+        // A channel just followed (or unfollowed): its stories join (or leave) the tray now, not
+        // at the next five-minute ask (2026-10-29).
+        if Set(next.keys) != Set(entries.keys) {
+            Task { @MainActor in StoriesRepository.shared.refreshChannelStories() }
+        }
         for (cid, l) in docListeners where next[cid] == nil {
             l.remove()
             docListeners[cid] = nil
