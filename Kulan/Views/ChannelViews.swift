@@ -688,60 +688,62 @@ struct ChannelReactionsSettingsView: View {
     @State private var mode = "all"
     @State private var list: [String] = []
     @State private var loaded = false
-    @State private var saving = false
     @State private var problem: String?
     @State private var pickAny = false
+    /// The save in flight; a newer change cancels it (no greyed-out page while it goes).
+    @State private var saveTask: Task<Void, Never>?
 
     /// What an owner picks from: a wide set, so "only these" can fit any channel.
     /// Any other emoji comes in through the "+" (the full picker) and joins the grid.
     static let palette = ["👍", "❤️", "🔥", "😂", "😮", "😢", "🙏", "👏", "🎉", "💯", "🤔", "😍",
                           "👎", "😡", "🤝", "💪", "✅", "⭐️", "🌙", "☀️", "⚽️", "📌", "💡", "🙌"]
+    static let maxPicked = 6
+    private let blue = Color(hex: 0x2392FE)
 
+    // ⛔ REDESIGN (owner 2026-10-29: "half the reference app's design, half my new one"). From the
+    // reference: one plain list of three choices with the meaning in the footer, and the chosen set
+    // as its own row you edit in place. Ours: the live preview of what a follower sees on a post,
+    // the 6-slot meter, the palette grid with "+" for any emoji, our blue. Saves run in the
+    // background; the page is never disabled while one goes.
     var body: some View {
         Form {
+            Section { preview }
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 4, trailing: 0))
             Section {
-                choice("all", "Any emoji", "Followers can react with any emoji.")
-                choice("some", "Only these", "Followers can react only with the ones you pick.")
-                choice("off", "Off", "No reactions on this channel's posts.")
+                choice("all", "Any Emoji")
+                choice("some", "Selected Emoji")
+                choice("off", "No Reactions")
+            } header: {
+                Text("Followers Can React With")
             } footer: {
-                Text("Followers never see who reacted, only how many.")
+                Text(modeFooter)
             }
             if mode == "some" {
                 Section {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 12) {
-                        ForEach(Self.palette + list.filter { !Self.palette.contains($0) }, id: \.self) { e in
-                            let on = list.contains(e)
-                            Button { toggle(e) } label: {
-                                Text(e).font(.system(size: 28))
-                                    .frame(width: 46, height: 46)
-                                    .background(Circle().fill(on ? Color(hex: 0x2392FE).opacity(0.18) : .clear))
-                                    .overlay(Circle().stroke(on ? Color(hex: 0x2392FE) : .clear, lineWidth: 2))
-                            }
-                            .buttonStyle(.plain)
-                            .opacity(!on && list.count >= 6 ? 0.35 : 1)
-                        }
-                        // Any emoji at all (2026-10-29): the full picker.
-                        Button { pickAny = true } label: {
-                            Image(systemName: "plus").font(.system(size: 18, weight: .semibold))
-                                .frame(width: 46, height: 46)
-                                .background(Circle().fill(Color(.tertiarySystemFill)))
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(list.count >= 6)
-                        .accessibilityLabel("Choose any emoji")
-                    }
-                    .padding(.vertical, 6)
+                    selectedRow
                 } header: {
-                    Text("Pick up to 6 (\(list.count)/6)")
+                    HStack {
+                        Text("Selected")
+                        Spacer()
+                        Text("\(list.count) of \(Self.maxPicked)").monospacedDigit()
+                    }
                 } footer: {
-                    if list.isEmpty { Text("Pick at least one, or reactions will be off.") }
+                    Text(list.isEmpty ? "Pick at least one, or reactions will be off."
+                                      : "Tap one to take it off. They show in this order.")
+                }
+                Section {
+                    grid.padding(.vertical, 6)
+                } header: {
+                    Text("Choose")
                 }
             }
             if let problem { Text(problem).foregroundStyle(.red) }
         }
         .navigationTitle("Reactions")
         .navigationBarTitleDisplayMode(.inline)
-        .disabled(saving)
+        .animation(.snappy(duration: 0.25), value: mode)
+        .animation(.snappy(duration: 0.25), value: list)
         .sheet(isPresented: $pickAny) {
             EmojiMorePicker(title: "Choose Emoji") { e in
                 pickAny = false
@@ -756,19 +758,133 @@ struct ChannelReactionsSettingsView: View {
         }
     }
 
-    private func choice(_ value: String, _ title: String, _ line: String) -> some View {
+    private var modeFooter: String {
+        switch mode {
+        case "some": return "Followers can react only with the emoji you select, up to \(Self.maxPicked). Nobody sees who reacted, only how many."
+        case "off": return "No reactions on this channel's posts. Reactions already on posts are hidden."
+        default: return "Followers can react with any emoji. Nobody sees who reacted, only how many."
+        }
+    }
+
+    /// What a follower sees on a post with this setting: the bar over a sample bubble.
+    private var preview: some View {
+        let shown: [String] = mode == "some" ? list : Array(QuickReaction.bar.prefix(5))
+        return VStack(spacing: 10) {
+            Group {
+                if mode == "off" || (mode == "some" && list.isEmpty) {
+                    Label("Reactions are off", systemImage: "nosign")
+                        .font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 16).frame(height: 44)
+                } else {
+                    HStack(spacing: 6) {
+                        ForEach(shown, id: \.self) { e in
+                            Text(e).font(.system(size: 26)).frame(width: 36, height: 36)
+                                .transition(.scale.combined(with: .opacity))
+                        }
+                        if mode == "all" {
+                            Image(systemName: "chevron.down").font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 30, height: 30)
+                                .background(Circle().fill(Color(.tertiarySystemFill)))
+                        }
+                    }
+                    .padding(.horizontal, 10).frame(height: 52)
+                }
+            }
+            .background(Capsule().fill(Color(.secondarySystemGroupedBackground)))
+            .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+            // The sample post.
+            VStack(alignment: .leading, spacing: 6) {
+                RoundedRectangle(cornerRadius: 4).fill(Color(.tertiaryLabel)).frame(width: 170, height: 8)
+                RoundedRectangle(cornerRadius: 4).fill(Color(.tertiaryLabel)).frame(width: 120, height: 8)
+            }
+            .padding(14)
+            .frame(width: 220, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground)))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Preview of the reactions followers see")
+    }
+
+    /// The chosen set in order, as six slots: a filled one taps off, an empty one waits.
+    private var selectedRow: some View {
+        HStack(spacing: 0) {
+            ForEach(0..<Self.maxPicked, id: \.self) { i in
+                Group {
+                    if i < list.count {
+                        Button { toggle(list[i]) } label: {
+                            Text(list[i]).font(.system(size: 28))
+                                .frame(width: 46, height: 46)
+                                .background(Circle().fill(blue.opacity(0.16)))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Remove \(list[i])")
+                    } else {
+                        Circle().strokeBorder(Color(.tertiaryLabel), style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
+                            .frame(width: 46, height: 46)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var grid: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 12) {
+            ForEach(Self.palette + list.filter { !Self.palette.contains($0) }, id: \.self) { e in
+                let on = list.contains(e)
+                let full = list.count >= Self.maxPicked
+                Button { toggle(e) } label: {
+                    Text(e).font(.system(size: 28))
+                        .frame(width: 46, height: 46)
+                        .overlay(alignment: .bottomTrailing) {
+                            if on {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(.white, blue)
+                                    .font(.system(size: 17))
+                                    .background(Circle().fill(Color(.secondarySystemGroupedBackground)).padding(-1.5))
+                                    .offset(x: 3, y: 3)
+                                    .transition(.scale)
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+                .opacity(!on && full ? 0.3 : 1)
+                .disabled(!on && full)
+                .accessibilityLabel(e)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+            // Any emoji at all (2026-10-29): the full picker.
+            Button { pickAny = true } label: {
+                Image(systemName: "plus").font(.system(size: 18, weight: .semibold))
+                    .frame(width: 46, height: 46)
+                    .background(Circle().fill(Color(.tertiarySystemFill)))
+            }
+            .buttonStyle(.plain)
+            .disabled(list.count >= Self.maxPicked)
+            .opacity(list.count >= Self.maxPicked ? 0.3 : 1)
+            .accessibilityLabel("Choose any emoji")
+        }
+    }
+
+    private func choice(_ value: String, _ title: String) -> some View {
         Button {
+            guard mode != value else { return }
             mode = value
-            if value == "some" && list.isEmpty { list = Array(Self.palette.prefix(6)) }
+            if value == "some" && list.isEmpty { list = Array(Self.palette.prefix(Self.maxPicked)) }
+            Haptics.impact(.light)
             save()
         } label: {
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).foregroundStyle(.primary)
-                    Text(line).font(.footnote).foregroundStyle(.secondary)
-                }
+                Text(title).foregroundStyle(.primary)
                 Spacer()
-                if mode == value { Image(systemName: "checkmark").foregroundStyle(Color(hex: 0x2392FE)) }
+                if mode == value { Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(blue) }
             }
             .contentShape(Rectangle())
         }
@@ -777,18 +893,23 @@ struct ChannelReactionsSettingsView: View {
 
     private func toggle(_ e: String) {
         if let i = list.firstIndex(of: e) { list.remove(at: i) }
-        else if list.count < 6 { list.append(e) }
+        else if list.count < Self.maxPicked { list.append(e) }
         else { return }
+        Haptics.impact(.light)
         save()
     }
 
+    /// The newest state wins: a change cancels the save still waiting, and the server gets the
+    /// last one after a short pause, so tapping six emoji is one write, not six.
     private func save() {
         let m = mode, l = list
-        saving = true; problem = nil
-        Task {
+        problem = nil
+        saveTask?.cancel()
+        saveTask = Task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
             do { try await ChannelService.setReactions(cid: cid, mode: m, list: l) }
-            catch { problem = error.localizedDescription }
-            saving = false
+            catch { if !Task.isCancelled { problem = error.localizedDescription } }
         }
     }
 }
