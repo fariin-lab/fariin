@@ -54,33 +54,34 @@ struct NewChannelView: View {
 
     // MARK: 1. What a channel is
 
-    // ⛔ THE FIRST PAGE SAYS WHAT A CHANNEL IS (owner 2026-10-29: the lone icon looked cheap next to
-    // the reference app's page). Ours, not theirs: a small live-looking post at the top (a channel's
-    // name, a post, its reactions and views) instead of an illustration, then three points that are
-    // true of OUR channels, the guidelines, and Create Channel.
+    // ⛔ MINIMAL, THE REFERENCE APP'S LAYOUT (owner 2026-10-29, later: "make it minimalist exactly
+    // like the reference app"). Its intro (ComposeController.openCreateNewChannel -> a splash
+    // PermissionController) is one picture, a title, one sentence and one button, centred, no list.
+    // The picture stays ours: the small post preview (the owner found a lone icon cheap earlier the
+    // same day; the reference's is an animation we do not have). The three feature rows are gone.
+    // Our words, not theirs. The guidelines line stays (agreeing to them is ours to keep).
     private var intro: some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(spacing: 26) {
+                VStack(spacing: 22) {
                     ChannelIntroPreview()
                         .padding(.top, 8)
-                    Text("Start a channel")
-                        .font(.largeTitle.bold())
-                        .multilineTextAlignment(.center)
-                    VStack(alignment: .leading, spacing: 22) {
-                        introPoint("megaphone", "Reach everyone",
-                                   "Post news, photos and videos to as many people as you like. Only you and your admins post.")
-                        introPoint("eye.slash", "Followers stay private",
-                                   "Followers can't see each other. Fariin has no phone numbers, so there are none to show.")
-                        introPoint("globe", "Public or invite only",
-                                   "Anyone can find a public channel. A private one is followed with its invite link.")
+                    VStack(spacing: 10) {
+                        Text("Start a channel")
+                            .font(.largeTitle.bold())
+                        Text("Share news, photos and videos with as many people as you like.")
+                            .font(.body).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .padding(.horizontal, 8)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 12)
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 16)
+                .frame(maxWidth: .infinity)
             }
             .scrollBounceBehavior(.basedOnSize)
+            .defaultScrollAnchor(.center)
             VStack(spacing: 12) {
                 Text("By creating a channel you agree to the [Channel Guidelines](https://help.fariin.com/channels/channel-guidelines).")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -101,21 +102,6 @@ struct NewChannelView: View {
             ToolbarItem(placement: .topBarLeading) {
                 Button { dismiss() } label: { Image(systemName: "xmark") }
                     .accessibilityLabel("Close")
-            }
-        }
-    }
-
-    private func introPoint(_ icon: String, _ title: String, _ line: String) -> some View {
-        HStack(alignment: .top, spacing: 16) {
-            Image(systemName: icon)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(Color(hex: 0x2392FE))
-                .frame(width: 40, height: 40)
-                .background(Circle().fill(Color(hex: 0x2392FE).opacity(0.12)))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.body.weight(.semibold))
-                Text(line).font(.subheadline).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
