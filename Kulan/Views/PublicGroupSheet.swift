@@ -632,7 +632,7 @@ struct PublicGroupInfoView: View {
                     .modifier(MediaRectReporter(id: "groupcircle-\(p.cid)", scope: .storyRow, cornerRadius: 66))
                     .overlay {
                         if let g = stories {
-                            StoryRingView(seen: StoryPrefs.seenFlags(g.stories), lineWidth: 3)
+                            StoryRingView(seen: StoryPrefs.seenFlags(g.stories), lineWidth: 3, squircle: p.isChannel)
                                 .frame(width: 146, height: 146)
                                 .allowsHitTesting(false)
                         }

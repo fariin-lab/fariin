@@ -509,8 +509,15 @@ final class HeaderAvatarView: UIView {
     func setSquircle(_ on: Bool) {
         guard on != squircle else { return }
         squircle = on
-        imageView.layer.cornerCurve = on ? .continuous : .circular
-        imageView.layer.cornerRadius = on ? size * AvatarShape.cornerFraction : size / 2
+        // The true squircle (`SquircleShape`) is not a corner radius, so it is a mask.
+        imageView.layer.cornerRadius = on ? 0 : size / 2
+        if on {
+            let mask = CAShapeLayer()
+            mask.path = AvatarShape.cgPath(in: CGRect(x: 0, y: 0, width: size, height: size))
+            imageView.layer.mask = mask
+        } else {
+            imageView.layer.mask = nil
+        }
         applyPlaceholder()
     }
 
@@ -522,7 +529,7 @@ final class HeaderAvatarView: UIView {
             let box = CGRect(x: 0, y: 0, width: size, height: size)
             layer.contents = UIGraphicsImageRenderer(size: box.size).image { _ in
                 fill.setFill()
-                UIBezierPath(roundedRect: box, cornerRadius: size * AvatarShape.cornerFraction).fill()
+                UIBezierPath(cgPath: AvatarShape.cgPath(in: box)).fill()
             }.cgImage
             layer.contentsScale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 3
             return

@@ -206,6 +206,9 @@ final class LinkPreviewBubbleView: UIView {
         // the avatar pipeline cannot open; the hero view can. So it sits in the avatar's circle, over
         // the avatar's fallback. A live photo from `GroupLinkDoor` (no `imageEnc`) takes the avatar.
         var groupPhotoRect: CGRect?
+        // A channel's card wears the channel's squircle (owner 2026-10-29); its line counts
+        // followers, the same test the button's "View Channel" uses.
+        let channelCard = p.desc.contains("follower")
         switch p.shape {
         case .group, .groupUnavailable:
             if p.imageEnc != nil, p.imageUrl != nil { groupPhotoRect = plan.avatar }
@@ -216,12 +219,20 @@ final class LinkPreviewBubbleView: UIView {
             hero.frame = rect
             hero.clipsToBounds = true
             // `configure` sets the radius (and a continuous curve) from its argument.
-            hero.configure(url: p.imageUrl, enc: p.imageEnc, cid: cid, cornerRadius: rect.width / 2)
+            hero.configure(url: p.imageUrl, enc: p.imageEnc, cid: cid, cornerRadius: channelCard ? 0 : rect.width / 2)
             hero.layer.cornerCurve = .circular
+            if channelCard {
+                let mask = CAShapeLayer()
+                mask.path = AvatarShape.cgPath(in: CGRect(origin: .zero, size: rect.size))
+                hero.layer.mask = mask
+            } else {
+                hero.layer.mask = nil
+            }
             backing.insertSubview(hero, aboveSubview: avatar)   // over the fallback, under the words
         } else if let rect = plan.hero {
             hero.isHidden = false
             hero.frame = rect
+            hero.layer.mask = nil   // a reused cell may still carry a channel card's squircle
             // A story card's picture sits inside the card with its own corners; an article's runs
             // edge to edge and the card clips it.
             if case .story = p.shape {
@@ -242,6 +253,7 @@ final class LinkPreviewBubbleView: UIView {
         if let rect = plan.avatar {
             avatar.isHidden = false
             avatar.frame = rect
+            avatar.squircle = channelCard
             avatar.configure(name: p.title, photoUrl: groupPhotoRect == nil ? p.imageUrl : nil)
         } else {
             avatar.isHidden = true

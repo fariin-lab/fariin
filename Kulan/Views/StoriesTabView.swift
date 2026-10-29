@@ -990,7 +990,8 @@ struct StoriesTabView: View {
                          seen: !g.hasUnseen,
                          seenFlags: StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt),
                          rectKey: g.id,
-                         pressKey: StoryListRow.pressKey(g.id))
+                         pressKey: StoryListRow.pressKey(g.id),
+                         squircle: g.groupConvId.map(Conversation.Right.isChannel) ?? false)
         }
         .buttonStyle(.plain)
         .id(g.id)   // the scroll target while its story is open (audit #3)

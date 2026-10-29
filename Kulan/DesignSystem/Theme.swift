@@ -531,12 +531,49 @@ struct MenuIcon: View {
 // Not a gesture over a Button.
 
 /// ⛔ A CHANNEL'S PHOTO IS A SQUIRCLE (owner 2026-10-29): it tells a channel from a person or a
-/// group at a glance, in the list, the header, the page and search. Apple's continuous corner at
-/// 28% of the side. People and groups stay round; the action circles stay round everywhere.
+/// group at a glance, in the list, the header, the page and search. People and groups stay round;
+/// the action circles stay round everywhere.
+///
+/// ⛔ A TRUE SQUIRCLE, AT 92% (owner 2026-10-29, second look: "looks like square, make it real
+/// squircle, size looks big"). The first cut was a continuous rounded rect at 28%, which reads as a
+/// square, and it filled its whole frame, so beside the circles it looked a size up. Now a
+/// superellipse (|x|⁴ + |y|⁴ = 1) at 92% of the side: that is the side at which its area equals
+/// the circle's (0.927 vs π/4 of the square), so a channel sits at the same visual weight as a
+/// person. The frame (and so every layout) is unchanged; the shape is centred inside it.
 enum AvatarShape {
-    static let cornerFraction: CGFloat = 0.28
-    static func squircle(_ side: CGFloat) -> RoundedRectangle {
-        RoundedRectangle(cornerRadius: side * cornerFraction, style: .continuous)
+    static func squircle(_ side: CGFloat) -> SquircleShape { SquircleShape() }
+    /// The same outline for UIKit masks and drawn placeholders.
+    static func cgPath(in rect: CGRect) -> CGPath { SquircleShape().path(in: rect).cgPath }
+}
+
+/// A superellipse, |x|ⁿ + |y|ⁿ = 1 with n = 4, at `AvatarShape`'s 92% of the rect and centred.
+/// The path starts at the top centre and runs clockwise, so a `trim` of it starts at the top the way
+/// the story ring's rotated circle does.
+struct SquircleShape: InsettableShape {
+    static let exponent: CGFloat = 4
+    static let scale: CGFloat = 0.92
+    var insetAmount: CGFloat = 0
+
+    func path(in rect: CGRect) -> Path {
+        let side = min(rect.width, rect.height) * Self.scale
+        let a = max(0, side / 2 - insetAmount)
+        let c = CGPoint(x: rect.midX, y: rect.midY)
+        let p = 2 / Self.exponent
+        let steps = 120
+        var path = Path()
+        for i in 0...steps {
+            let t = -CGFloat.pi / 2 + 2 * .pi * CGFloat(i) / CGFloat(steps)
+            let ct = cos(t), st = sin(t)
+            let x = c.x + a * (ct < 0 ? -1 : 1) * pow(abs(ct), p)
+            let y = c.y + a * (st < 0 ? -1 : 1) * pow(abs(st), p)
+            if i == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
+        }
+        path.closeSubpath()
+        return path
+    }
+
+    func inset(by amount: CGFloat) -> SquircleShape {
+        var s = self; s.insetAmount += amount; return s
     }
 }
 
@@ -635,7 +672,7 @@ struct AvatarView: View {
                 // A channel with no photo: the same grey, a megaphone, not a person's silhouette.
                 ZStack {
                     AvatarPalette.placeholderFill
-                    Image(systemName: "megaphone.fill").font(.system(size: size * 0.38, weight: .medium))
+                    Image(systemName: "megaphone.fill").font(.system(size: size * 0.35, weight: .medium))
                         .foregroundStyle(.white)
                 }
             } else if let disc = AvatarPalette.placeholderDisc(size: size, dark: scheme == .dark) {

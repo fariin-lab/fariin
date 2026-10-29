@@ -318,9 +318,27 @@ final class RowAvatarView: UIView {
         }
     }
 
+    /// A channel's photo is a squircle (owner 2026-10-29, `AvatarShape`), a mask, not a radius.
+    var squircle = false {
+        didSet { if squircle != oldValue { setNeedsLayout() } }
+    }
+    private var maskedSide: CGFloat = 0
+
     override func layoutSubviews() {
         super.layoutSubviews()
-        layer.cornerRadius = bounds.height / 2
+        if squircle {
+            layer.cornerRadius = 0
+            if maskedSide != bounds.height || layer.mask == nil {
+                maskedSide = bounds.height
+                let mask = CAShapeLayer()
+                mask.path = AvatarShape.cgPath(in: bounds)
+                layer.mask = mask
+            }
+        } else {
+            layer.mask = nil
+            maskedSide = 0
+            layer.cornerRadius = bounds.height / 2
+        }
         glyph.frame = bounds
         // ⚠️ RE-RENDERED ONLY WHEN THE SIZE ACTUALLY CHANGES, and tracked with its own number rather
         // than read back off the image: a symbol's rendered height is its GLYPH's, not the view's, so

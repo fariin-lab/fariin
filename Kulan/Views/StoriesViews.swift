@@ -52,6 +52,8 @@ enum StoryRingGeometry {
 struct StoryRingView: View {
     let seen: [Bool]                 // per segment, oldest→newest; true = viewed (grey), false = colorful
     var lineWidth: CGFloat = 2.0     // the active line width (unseen); seen is drawn thinner
+    /// A channel's ring follows its squircle photo (owner 2026-10-29), same arcs and gaps.
+    var squircle = false
     @Environment(\.colorScheme) private var scheme
 
     /// A watched ring, in the owner's own two hex values (2026-08-03): #505052 in dark, #CACACA in
@@ -80,17 +82,33 @@ struct StoryRingView: View {
             let grey = AnyShapeStyle(seenColor)
             let gap = StoryRingGeometry.gap(count: n, diameter: d, lineWidth: activeW)
             let seg = 1.0 / CGFloat(n)
-            ZStack {
-                ForEach(0..<n, id: \.self) { i in
-                    let isSeen = i < arcs.count ? arcs[i] : false
-                    Circle()
-                        .inset(by: activeW / 2)                       // keep the stroke inside the frame
-                        .trim(from: CGFloat(i) * seg + gap / 2, to: CGFloat(i + 1) * seg - gap / 2)
-                        .stroke(isSeen ? grey : gradient,
-                                style: StrokeStyle(lineWidth: isSeen ? seenW : activeW, lineCap: .round))
+            if squircle {
+                // `SquircleShape` already starts at the top and runs clockwise: no rotation, which
+                // would also turn its corners. The ring sits at the photo's 92%, so the photo-to-ring
+                // gap is the circle's, scaled by the same 0.92.
+                ZStack {
+                    ForEach(0..<n, id: \.self) { i in
+                        let isSeen = i < arcs.count ? arcs[i] : false
+                        SquircleShape()
+                            .inset(by: activeW / 2)
+                            .trim(from: CGFloat(i) * seg + gap / 2, to: CGFloat(i + 1) * seg - gap / 2)
+                            .stroke(isSeen ? grey : gradient,
+                                    style: StrokeStyle(lineWidth: isSeen ? seenW : activeW, lineCap: .round))
+                    }
                 }
+            } else {
+                ZStack {
+                    ForEach(0..<n, id: \.self) { i in
+                        let isSeen = i < arcs.count ? arcs[i] : false
+                        Circle()
+                            .inset(by: activeW / 2)                       // keep the stroke inside the frame
+                            .trim(from: CGFloat(i) * seg + gap / 2, to: CGFloat(i + 1) * seg - gap / 2)
+                            .stroke(isSeen ? grey : gradient,
+                                    style: StrokeStyle(lineWidth: isSeen ? seenW : activeW, lineCap: .round))
+                    }
+                }
+                .rotationEffect(.degrees(-90))                            // first segment starts at the top
             }
-            .rotationEffect(.degrees(-90))                            // first segment starts at the top
         }
     }
 }

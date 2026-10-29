@@ -672,7 +672,8 @@ struct GroupInfoView: View {
             // page, one arc per story, seen ones grey; a tap on the photo opens them.
             .overlay {
                 if let g = groupStories, !StoriesService.shared.uploadingGroups.contains(cid) {
-                    StoryRingView(seen: StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt), lineWidth: 3)
+                    StoryRingView(seen: StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt), lineWidth: 3,
+                                  squircle: isChannel)
                         .frame(width: Self.photoSide + 14, height: Self.photoSide + 14)
                         .allowsHitTesting(false)
                 }

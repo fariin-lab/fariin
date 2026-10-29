@@ -343,6 +343,7 @@ struct JoinGroupSheet: View {
     @ViewBuilder private func groupBody(_ p: GroupLinkPreview) -> some View {
         VStack(spacing: 0) {
             AvatarView(name: p.title, photoUrl: p.photoUrl, size: 100)
+                .avatarSquircle(p.isChannel)
                 .padding(.top, 2)
             Text(p.title)
                 .font(.system(size: 22, weight: .semibold))

@@ -79,8 +79,12 @@ struct StoryListRow: View {
     var onCamera: (() -> Void)? = nil
     /// The whole row's press key (`pressKey(_:)`). nil = no long press on this row.
     var pressKey: String? = nil
+    /// A channel's story: the face, its gap and its ring are squircles (owner 2026-10-29).
+    var squircle = false
 
     @Environment(\.colorScheme) private var scheme
+
+    private var faceShape: AnyShape { squircle ? AnyShape(SquircleShape()) : AnyShape(Circle()) }
 
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: Self.corner, style: .continuous) }
 
@@ -252,9 +256,10 @@ struct StoryListRow: View {
     /// A page-coloured gap between face and ring, as on the reference.
     private var faceView: some View {
         AvatarView(name: authorName, photoUrl: authorPhoto, size: Self.face)
+            .avatarSquircle(squircle)
             .padding(Self.gap + Self.ring)
             // Owner 2026-10-11: the gap is pure black in dark mode, pure white in light.
-            .background(Circle().fill(scheme == .dark ? Color.black : Color.white))
+            .background(faceShape.fill(scheme == .dark ? Color.black : Color.white))
             .overlay { faceRing }
             .allowsHitTesting(false)
     }
@@ -279,7 +284,13 @@ struct StoryListRow: View {
                     .rotationEffect(.degrees(UploadCancelRing.turn(ctx.date)))
             }
         } else if !seenFlags.isEmpty {
-            StoryRingView(seen: seenFlags, lineWidth: Self.ring)
+            StoryRingView(seen: seenFlags, lineWidth: Self.ring, squircle: squircle)
+        } else if squircle {
+            SquircleShape().strokeBorder(
+                seen
+                    ? AnyShapeStyle(scheme == .dark ? Color(hex: 0x505052) : Color(hex: 0xCACACA))
+                    : AnyShapeStyle(unseenGradient),
+                lineWidth: seen ? 1.5 : Self.ring)
         } else {
             Circle().strokeBorder(
                 seen

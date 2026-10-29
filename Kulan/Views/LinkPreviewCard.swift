@@ -129,16 +129,20 @@ struct LinkPreviewCard: View {
         let line = live?.membersLine ?? (fromServer ? preview.desc : "Fariin group")
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
+                // A channel's card wears the channel's squircle (owner 2026-10-29).
+                let channel = line.contains("follower")
                 Group {
                     if let p = live?.photoUrl {
                         AvatarView(name: name, photoUrl: p, size: 44)
                     } else if fromServer, let img = preview.imageUrl, let enc = preview.imageEnc {
                         SecureImageView(imageUrl: img, enc: enc, cid: cid, smallSync: true)
-                            .frame(width: 44, height: 44).clipShape(Circle())
+                            .frame(width: 44, height: 44)
+                            .clipShape(channel ? AnyShape(SquircleShape()) : AnyShape(Circle()))
                     } else {
                         AvatarView(name: name, photoUrl: nil, size: 44)
                     }
                 }
+                .avatarSquircle(channel)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(name).font(.system(size: 15, weight: .semibold)).foregroundStyle(fg).lineLimit(1)
                     Text(line).font(.system(size: 13)).foregroundStyle(fg.opacity(0.75)).lineLimit(1)

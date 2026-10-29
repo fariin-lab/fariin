@@ -5060,7 +5060,7 @@ struct ChatRow: View, Equatable {
                         // overlay is centred and does not clip, so this overhangs by one point all
                         // round and changes no layout; the one point it takes vertically comes out
                         // of the 12pt padding below and is not visible.
-                        StoryRingView(seen: storySeen, lineWidth: 2)
+                        StoryRingView(seen: storySeen, lineWidth: 2, squircle: conv.isChannel)
                             .frame(width: Self.ringedSide, height: Self.ringedSide)
                     }
                 }
