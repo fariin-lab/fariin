@@ -2562,6 +2562,10 @@ struct ProfilePhotoViewer: View {
     /// With `landsSquare`: land as a 1:1 square the screen's width, the photo cropped to fill it,
     /// instead of at the photo's own shape (owner 2026-10-19, the group photo: "make it 1:1").
     var squareCrop: Bool = false
+    /// A CHANNEL'S PHOTO (owner 2026-10-29: "opens like a circle, and closing it turns into a circle
+    /// before my squircle"). The flight starts and ends on the avatar's own squircle and opens into
+    /// the square photo by flattening the same curve, never through a circle.
+    var squircle: Bool = false
     /// Close REQUEST from outside — the parent bumps this when its toolbar X is tapped, and the
     /// viewer runs the same reverse morph as a drag or backdrop tap. The X lives in the parent's
     /// NAVIGATION BAR because the top strip belongs to UIKit's bar, which sits above this whole
@@ -2579,7 +2583,7 @@ struct ProfilePhotoViewer: View {
     @State private var image: UIImage?
 
     init(name: String, photoUrl: String, sourceFrame: CGRect, poster: Bool = false,
-         landsSquare: Bool = false, squareCrop: Bool = false, closeSignal: Int = 0,
+         landsSquare: Bool = false, squareCrop: Bool = false, squircle: Bool = false, closeSignal: Int = 0,
          onClosingBegan: @escaping () -> Void = {}, isPresented: Binding<Bool>) {
         self.name = name
         self.photoUrl = photoUrl
@@ -2587,6 +2591,7 @@ struct ProfilePhotoViewer: View {
         self.poster = poster
         self.landsSquare = landsSquare
         self.squareCrop = squareCrop
+        self.squircle = squircle
         self.closeSignal = closeSignal
         self.onClosingBegan = onClosingBegan
         _isPresented = isPresented
@@ -2687,7 +2692,12 @@ struct ProfilePhotoViewer: View {
                     }
                 }
                 .frame(width: w, height: h)
-                .clipShape(ViewerShape(corner: corner))   // one shape from first frame to last — it never becomes a page
+                // one shape from first frame to last — it never becomes a page. A channel's: its
+                // squircle at 0, the curve flattening and filling the frame to a square at 1.
+                .clipShape(squircle
+                           ? AnyShape(SquircleShape(n: SquircleShape.exponent + 60 * progress,
+                                                    fill: SquircleShape.scale + (1 - SquircleShape.scale) * progress))
+                           : AnyShape(ViewerShape(corner: corner)))
                 .mask { liftMask }
                 .scaleEffect(zoom)
                 .position(x: x, y: y)

@@ -277,7 +277,7 @@ struct GroupInfoView: View {
                     // does in Settings (owner 2026-10-19: "now is a circle, make it like Settings").
                     ProfilePhotoViewer(name: title, photoUrl: groupPhoto ?? "",
                                        sourceFrame: artRect.rect, landsSquare: true, squareCrop: true,
-                                       closeSignal: photoCloseTick,
+                                       squircle: isChannel, closeSignal: photoCloseTick,
                                        isPresented: $showGroupPhoto)
                         .ignoresSafeArea()
                 }

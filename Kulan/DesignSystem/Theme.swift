@@ -553,19 +553,24 @@ struct SquircleShape: InsettableShape {
     static let exponent: CGFloat = 4
     static let scale: CGFloat = 0.92
     var insetAmount: CGFloat = 0
+    /// The photo viewer morphs the avatar's squircle into the square photo by raising these
+    /// (n → ~64 is a square to the eye, scale → 1 fills the frame). Everyone else keeps the defaults.
+    var n: CGFloat = SquircleShape.exponent
+    var fill: CGFloat = SquircleShape.scale
 
     func path(in rect: CGRect) -> Path {
-        let side = min(rect.width, rect.height) * Self.scale
-        let a = max(0, side / 2 - insetAmount)
+        // A non-square rect (the viewer's photo mid-flight) gets an x and a y radius of its own.
+        let ax = max(0, rect.width * fill / 2 - insetAmount)
+        let ay = max(0, rect.height * fill / 2 - insetAmount)
         let c = CGPoint(x: rect.midX, y: rect.midY)
-        let p = 2 / Self.exponent
+        let p = 2 / n
         let steps = 120
         var path = Path()
         for i in 0...steps {
             let t = -CGFloat.pi / 2 + 2 * .pi * CGFloat(i) / CGFloat(steps)
             let ct = cos(t), st = sin(t)
-            let x = c.x + a * (ct < 0 ? -1 : 1) * pow(abs(ct), p)
-            let y = c.y + a * (st < 0 ? -1 : 1) * pow(abs(st), p)
+            let x = c.x + ax * (ct < 0 ? -1 : 1) * pow(abs(ct), p)
+            let y = c.y + ay * (st < 0 ? -1 : 1) * pow(abs(st), p)
             if i == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
         }
         path.closeSubpath()
