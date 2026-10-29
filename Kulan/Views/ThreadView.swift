@@ -4963,7 +4963,7 @@ struct ThreadView: View {
                 // A channel's posts on screen count as seen (2026-10-28, ChannelViewQueue).
                 if conversation?.isChannel == true, !quiet {
                     // Real posts only: no day lines or other drawn rows.
-                    ChannelViewQueue.shared.note(cid: cid, ids: ids.filter { repo.indexById[$0] != nil })
+                    ChannelViewQueue.shared.note(cid: cid, ids: ids.compactMap { r in repo.indexById[r].map { repo.items[$0].id } })
                 }
             },
             canSwipeReply: { id in

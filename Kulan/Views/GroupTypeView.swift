@@ -104,7 +104,7 @@ struct GroupTypeView: View {
             Button("Make Private", role: .destructive) { save("") }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("fariin.com/\(conv?.publicName ?? "ChannelWords.forChat(cid, ") will stop working. The link stays reserved for this group for 30 days, then anyone can take it."))
+            Text(ChannelWords.forChat(cid, "fariin.com/\(conv?.publicName ?? "") will stop working. The link stays reserved for this group for 30 days, then anyone can take it."))
         }
         .alert("Could not save", isPresented: Binding(get: { saveError != nil },
                                                       set: { if !$0 { saveError = nil } })) {

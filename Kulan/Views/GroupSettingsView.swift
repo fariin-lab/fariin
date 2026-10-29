@@ -1375,7 +1375,7 @@ struct GroupRequestsView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 6)
             } footer: {
-                Text("People who ask to join “\(conv?.title ?? "this groupChannelWords.forChat(cid, ")” with a group link show up here."))
+                Text(ChannelWords.forChat(cid, "People who ask to join “\(conv?.title ?? "this group")” with a group link show up here."))
             }
         } else {
             Section("Waiting to join") {
