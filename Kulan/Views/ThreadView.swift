@@ -4374,9 +4374,11 @@ struct ThreadView: View {
 
     /// The channel shows reactions (not "off").
     private var channelReactOn: Bool { conversation?.isChannel == true && conversation?.reactMode != "off" }
-    /// I may react: reactions on and I follow it. Its admins post; they see the counts.
+    /// I may react: reactions on, and I follow it OR run it. ⛔ Admins too (owner 2026-10-29: the
+    /// long press on his own post had no react bar); their pick is kept in `users/{me}/channelRx`.
     private var channelCanReact: Bool {
-        channelReactOn && guest == nil && !(conversation?.users.contains(me) ?? true) && ChannelFollows.shared.follows(cid)
+        channelReactOn && guest == nil
+            && ((conversation?.users.contains(me) ?? false) || ChannelFollows.shared.follows(cid))
     }
     /// What the bar offers in a channel: its own list, or the usual quick set.
     private var channelOffered: [String] {

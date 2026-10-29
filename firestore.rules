@@ -801,6 +801,10 @@ service cloud.firestore {
         allow create, update: if signedIn() && request.auth.uid == uid
           && request.resource.data.keys().hasOnly(['silent']) && request.resource.data.silent is bool;
       }
+      // My reactions in channels I run (owner/admin, 2026-10-29), written by reactChannelPost only.
+      match /channelRx/{c} {
+        allow read: if signedIn() && request.auth.uid == uid;
+      }
       // Channels I follow (2026-10-28), written by functions-groups followChannel only.
       match /channels/{c} {
         allow read: if signedIn() && request.auth.uid == uid;

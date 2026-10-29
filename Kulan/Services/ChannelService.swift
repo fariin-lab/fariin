@@ -217,6 +217,11 @@ final class ChannelFollows {
     /// A pick on screen before the server has it (cid -> mid -> emoji, "" = taken back).
     private(set) var pendingReactions: [String: [String: String]] = [:]
     @ObservationIgnored private var listListener: ListenerRegistration?
+    /// My picks in channels I run (owner/admin, 2026-10-29): `users/{me}/channelRx`, kept apart
+    /// from follow entries because an admin is not a follower. Merged into `myReactions`.
+    @ObservationIgnored private var adminRxListener: ListenerRegistration?
+    @ObservationIgnored private var followRx: [String: [String: String]] = [:]
+    @ObservationIgnored private var adminRx: [String: [String: String]] = [:]
     @ObservationIgnored private var docListeners: [String: ListenerRegistration] = [:]
     @ObservationIgnored private var uid: String?
     /// Mark as Unread waiting for the server to agree (cid -> the lowered read count).
@@ -260,8 +265,25 @@ final class ChannelFollows {
                                                archived: data["archived"] as? Bool ?? false)
                 }
                 self.apply(next)
-                if rx != self.myReactions { self.myReactions = rx }
+                self.followRx = rx
+                self.mergeRx()
             }
+        adminRxListener = FirestoreHub.db.collection("users").document(uid).collection("channelRx")
+            .limit(to: Self.maxLive)
+            .addSnapshotListener { [weak self] snap, _ in
+                guard let self, let snap else { return }
+                var rx: [String: [String: String]] = [:]
+                for d in snap.documents {
+                    if let r = d.data()["rx"] as? [String: String], !r.isEmpty { rx[d.documentID] = r }
+                }
+                self.adminRx = rx
+                self.mergeRx()
+            }
+    }
+
+    private func mergeRx() {
+        let merged = followRx.merging(adminRx) { f, a in f.merging(a) { x, _ in x } }
+        if merged != myReactions { myReactions = merged }
     }
 
     /// My reaction on a post as shown now: a pending pick first, then what the server holds.
@@ -278,18 +300,22 @@ final class ChannelFollows {
     /// The server answered: what it holds now, and nothing pending.
     func settleReaction(_ cid: String, _ mid: String, confirmed: String?) {
         pendingReactions[cid]?[mid] = nil
-        var m = myReactions[cid] ?? [:]
-        m[mid] = confirmed
-        myReactions[cid] = m
+        // Into the source it came from, so the next snapshot of the OTHER listener's merge keeps it.
+        if follows(cid) { followRx[cid, default: [:]][mid] = confirmed }
+        else { adminRx[cid, default: [:]][mid] = confirmed }
+        mergeRx()
     }
 
     func stop() {
-        FirestoreHub.drop([listListener] + docListeners.values.map { Optional($0) })
+        FirestoreHub.drop([listListener, adminRxListener] + docListeners.values.map { Optional($0) })
         listListener = nil
+        adminRxListener = nil
         docListeners = [:]
         entries = [:]
         docs = [:]
         myReactions = [:]
+        followRx = [:]
+        adminRx = [:]
         pendingReactions = [:]
         uid = nil
     }
@@ -297,8 +323,9 @@ final class ChannelFollows {
     /// After `FirestoreHub.swapped`: the listeners belong to the stuck client. Let go of them but
     /// keep the rows on screen; the next `start` listens again on the fresh client.
     func detachForSwap() {
-        FirestoreHub.drop([listListener] + docListeners.values.map { Optional($0) })
+        FirestoreHub.drop([listListener, adminRxListener] + docListeners.values.map { Optional($0) })
         listListener = nil
+        adminRxListener = nil
         docListeners = [:]
         uid = nil
     }
