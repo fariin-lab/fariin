@@ -278,7 +278,7 @@ struct OfficialChatView: View {
             customMenuActions: { id in menuActions(id) },
             customReactConfig: { id in
                 guard !selecting, store.visible.contains(where: { $0.id == id }) else { return nil }
-                return (QuickReaction.bar, store.state.reactions[id])
+                return (QuickReaction.bar, store.state.reactions[id], true, true)
             },
             onCustomReact: { id, choice in
                 switch choice {
