@@ -2014,9 +2014,13 @@ service cloud.firestore {
       // cap can still be edited. And a group with admins never ends with none: two admins leaving at
       // the same moment each saw the other still listed and both removed themselves. The last member
       // leaving (users empty) and a group that already had no admins are exempt.
+      // owner 2026-10-29: a CHANNEL's users are its owner and admins only, and an admin comes in only
+      // through the server (groups:answerAdminInvite). No client write grows a channel's list, so a
+      // channel admin cannot put a plain member into it; followers live in `followers`.
       function groupFloorsKept() {
         return (request.resource.data.users.size() <= resource.data.users.size()
-                || request.resource.data.users.size() <= appLimit('group_members_max', 30))
+                || (resource.data.get('channel', false) != true
+                    && request.resource.data.users.size() <= appLimit('group_members_max', 30)))
           && (resource.data.get('admins', []).size() == 0
               || request.resource.data.get('admins', []).size() > 0
               || request.resource.data.users.size() == 0);
@@ -3398,8 +3402,11 @@ service cloud.firestore {
         return appLimit('group_story_min_members', 50);
       }
       function groupPoster(c) {
+        // owner 2026-10-29: a channel's size is its followers (its users are only the admins).
         return c.get('type', '') == 'group' && request.auth.uid in c.get('users', [])
-          && (c.get('users', []).size() >= groupStoryMin() || isAdmin()
+          && ((c.get('channel', false) != true && c.get('users', []).size() >= groupStoryMin())
+              || (c.get('channel', false) == true && c.get('followerCount', 0) >= groupStoryMin())
+              || isAdmin()
               || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('groupStoryOpen', false) == true)
           && request.resource.data.recipientUids.size() <= c.get('users', []).size()
           && (request.auth.uid == c.get('createdBy', '')

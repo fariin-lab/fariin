@@ -16,9 +16,10 @@ struct AddToGroupView: View {
 
     // Every group I'm a member of, alphabetical. Not a closed one (audit 2026-10-26 item 5): a group
     // its owner ended, or one Fariin limited, suspended or disabled, takes nobody new; the add only failed.
+    // Never a channel (owner 2026-10-29): people follow a channel, nobody is added to one.
     private var myGroups: [Conversation] {
         ConversationsRepository.shared.conversations
-            .filter { $0.isGroup && $0.users.contains(me) && !$0.isCleared(me) && !$0.groupMod.takesNoNewMembers() }
+            .filter { $0.isGroup && !$0.isChannel && $0.users.contains(me) && !$0.isCleared(me) && !$0.groupMod.takesNoNewMembers() }
             .sorted { $0.displayName(me).lowercased() < $1.displayName(me).lowercased() }
     }
 
@@ -93,7 +94,8 @@ struct AddToGroupView: View {
         let allowed = g.adminCan(me, .inviteUsers)
             || (g.membersCanAdd && !g.isRestricted(me, .addMembers, now: now))
         if !allowed { return "Only admins can add members" }
-        if g.users.count >= AppLimits.shared.groupMembersMax { return "Group is full" }
+        // The member cap is a group's; a channel has no member list (owner 2026-10-29).
+        if !g.isChannel && g.users.count >= AppLimits.shared.groupMembersMax { return "Group is full" }
         return nil
     }
 

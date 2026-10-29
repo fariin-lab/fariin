@@ -329,7 +329,7 @@ struct GroupInfoView: View {
             .navigationDestination(isPresented: $showSounds) { SoundsNotificationsView(cid: cid) }
             .navigationDestination(isPresented: $showSettings) { GroupSettingsView(cid: cid) }
             .navigationDestination(isPresented: $showJoinRequests) { GroupRequestsView(cid: cid) }
-            .navigationDestination(isPresented: $showStats) { GroupStatsView(cid: cid, title: title) }
+            .navigationDestination(isPresented: $showStats) { GroupStatsView(cid: cid, title: title, isChannel: conv?.isChannel ?? false) }
             .fullScreenCover(isPresented: $showCall) { GroupCallView() }
             // Nobody to call (owner 2026-10-20): said in a centred alert.
             // One wording with the chat (A11, 2026-10-23): nothing failed, there is nobody to ring.
@@ -1182,6 +1182,10 @@ struct GroupInfoView: View {
     private var showStatsRow: Bool {
         guard Flags.groupStatsEnabled, let c = conv, !c.fariinLocked else { return false }
         guard c.createdBy == me || c.isAdmin(me) else { return false }
+        // A channel counts followers against its own minimum (owner 2026-10-29); users[] is its admins.
+        if c.isChannel {
+            return c.followerCount >= AppLimits.shared.channelStatsMinFollowers || AdminStore.shared.isAdmin
+        }
         return c.users.count >= AppLimits.shared.groupStatsMinMembers || AdminStore.shared.isAdmin
     }
 

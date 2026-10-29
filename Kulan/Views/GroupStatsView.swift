@@ -163,6 +163,14 @@ enum GroupStatsParse {
         return v as? Int
     }
 
+    /// A figure that may come as Int or Double (a channel's per-post means); nil when absent or null.
+    static func optDouble(_ v: Any?) -> Double? {
+        if let n = v as? NSNumber { return n.doubleValue }
+        if let d = v as? Double { return d }
+        if let i = v as? Int { return Double(i) }
+        return nil
+    }
+
     static func dict(_ v: Any?) -> [String: Any] { v as? [String: Any] ?? [:] }
 
     static func ints(_ v: Any?, count: Int) -> [Int] {
@@ -201,6 +209,12 @@ enum GroupStatsParse {
         // No dates sent: the 30 days ending today.
         let today = Calendar.current.startOfDay(for: Date())
         return (0..<30).reversed().compactMap { Calendar.current.date(byAdding: .day, value: -$0, to: today) }
+    }
+
+    /// One "yyyy-MM-dd" (a channel chart row's `d`, the period's `from` / `to`).
+    static func day(_ v: Any?) -> Date? {
+        guard let s = v as? String else { return nil }
+        return dayParser.date(from: s)
     }
 
     static func people(_ v: Any?, detail: ([String: Any]) -> String) -> [GroupStatsPerson] {
@@ -245,13 +259,183 @@ enum GroupStatsParse {
     }
 }
 
+// MARK: - Channel data
+
+// CHANNEL STATISTICS (owner 2026-10-29). The same `groupStats` callable answers `kind: "channel"` for
+// a channel, in the shape of the reference app's channel page: an Overview of followers and per-post /
+// per-story means, day charts, views by hour, and the recent posts. A figure the server has no data for
+// comes as null and its tile or chart is left out; nothing here is made up.
+
+/// One Overview tile, ready to draw.
+struct GroupStatsChannelTile: Identifiable {
+    let id: String
+    let value: String
+    let change: (text: String, color: Color)?
+}
+
+/// One row of Recent Posts: a channel post or a channel story.
+struct GroupStatsPost: Identifiable {
+    let id: String
+    let isStory: Bool
+    let at: Date?
+    let preview: String
+    let thumb: String?
+    let views: Int?
+    let reactions: Int?
+    let shares: Int?
+}
+
+struct GroupStatsChannelData {
+    var from: Date?
+    var to: Date?
+    var tiles: [GroupStatsChannelTile] = []
+    var growth: [GroupStatsPoint] = []
+    var followers: [GroupStatsPoint] = []
+    var notifications: [GroupStatsPoint] = []
+    var hours: [GroupStatsBin] = []
+    var interactions: [GroupStatsPoint] = []
+    var emojiNames: [String] = []
+    var emoji: [GroupStatsPoint] = []
+    var storyNames: [String] = []
+    var stories: [GroupStatsPoint] = []
+    var recentPosts: [GroupStatsPost] = []
+
+    /// Defensive like the group's: a missing or null key leaves its part out, never a failure.
+    init(_ d: [String: Any]) {
+        typealias P = GroupStatsParse
+        from = P.day(d["from"])
+        to = P.day(d["to"])
+        tiles = Self.tiles(P.dict(d["overview"]))
+
+        let c = P.dict(d["charts"])
+        growth = Self.series(c["growth"], [(key: "followers", name: "Followers")])
+        followers = Self.series(c["followers"], [(key: "joined", name: "Joined"), (key: "left", name: "Left")])
+        notifications = Self.series(c["notifications"], [(key: "muted", name: "Muted"), (key: "unmuted", name: "Unmuted")])
+        interactions = Self.series(c["interactions"], [(key: "views", name: "Views"), (key: "reactions", name: "Reactions")])
+
+        // Views by hour: 24 UTC hours moved into the phone's time zone, as the group's Top Hours.
+        let utc = (c["viewsByHour"] as? [Any] ?? []).map { P.int($0) }
+        if utc.count == 24 {
+            hours = P.hourBins(P.localHourOfWeek(utc + Array(repeating: 0, count: 144)))
+        }
+
+        (emojiNames, emoji) = Self.emojiSeries(c["reactionsByEmoji"])
+
+        // Story shares only when any story was shared, so an all-zero line doesn't crowd the chart.
+        let rows = c["stories"] as? [Any] ?? []
+        let shared = rows.contains { P.int(P.dict($0)["reposts"]) > 0 }
+        var keys: [(key: String, name: String)] = [(key: "views", name: "Views"), (key: "reactions", name: "Reactions")]
+        if shared { keys.append((key: "reposts", name: "Shares")) }
+        stories = Self.series(rows, keys)
+        storyNames = stories.isEmpty ? [] : keys.map { $0.name }
+
+        recentPosts = Self.posts(d["recentPosts"])
+    }
+
+    /// The reference app's eight tiles in its order. A null figure, or a zero with no change, is left out.
+    private static func tiles(_ o: [String: Any]) -> [GroupStatsChannelTile] {
+        typealias P = GroupStatsParse
+        var out: [GroupStatsChannelTile] = []
+        func add(_ label: String, _ v: Any?) {
+            let m = P.dict(v)
+            guard let now = P.optDouble(m["now"]) else { return }
+            let change = GroupStatsTile.change(now, P.optDouble(m["prev"]))
+            if now == 0 && change == nil { return }
+            out.append(GroupStatsChannelTile(id: label, value: GroupStatsTile.number(now), change: change))
+        }
+        add("Followers", o["followers"])
+        // The share of followers who have not muted the channel; no change line, as the reference app.
+        let n = P.dict(o["enabledNotifications"])
+        if let part = P.optDouble(n["part"]), let total = P.optDouble(n["total"]), total > 0, part > 0 {
+            let pct = Int((part / total * 100).rounded())
+            out.append(GroupStatsChannelTile(id: "Enabled Notifications", value: "\(pct)%", change: nil))
+        }
+        add("Views Per Post", o["viewsPerPost"])
+        add("Views Per Story", o["viewsPerStory"])
+        add("Shares Per Post", o["sharesPerPost"])
+        add("Shares Per Story", o["sharesPerStory"])
+        add("Reactions Per Post", o["reactionsPerPost"])
+        add("Reactions Per Story", o["reactionsPerStory"])
+        return out
+    }
+
+    /// Day rows `{ d, key: n, ... }` as chart points, one series per key. No rows, no points.
+    private static func series(_ v: Any?, _ keys: [(key: String, name: String)]) -> [GroupStatsPoint] {
+        typealias P = GroupStatsParse
+        var out: [GroupStatsPoint] = []
+        for (i, item) in (v as? [Any] ?? []).enumerated() {
+            let row = P.dict(item)
+            guard let day = P.day(row["d"]) else { continue }
+            for k in keys {
+                out.append(GroupStatsPoint(id: "\(k.name)-\(i)", date: day, series: k.name, value: P.int(row[k.key])))
+            }
+        }
+        return out
+    }
+
+    /// Reactions by emoji, stacked: the ten most used each get a colour, the rest go in "Other".
+    private static func emojiSeries(_ v: Any?) -> (names: [String], points: [GroupStatsPoint]) {
+        typealias P = GroupStatsParse
+        var rows: [(day: Date, counts: [String: Int])] = []
+        var totals: [String: Int] = [:]
+        for item in (v as? [Any] ?? []) {
+            let row = P.dict(item)
+            guard let day = P.day(row["d"]) else { continue }
+            var counts: [String: Int] = [:]
+            for (e, n) in P.dict(row["counts"]) {
+                let c = P.int(n)
+                guard c > 0 else { continue }
+                counts[e] = c
+                totals[e, default: 0] += c
+            }
+            rows.append((day: day, counts: counts))
+        }
+        let ranked = totals.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }.map { $0.key }
+        guard !ranked.isEmpty else { return (names: [], points: []) }
+        let top = Array(ranked.prefix(10))
+        let names = ranked.count > top.count ? top + ["Other"] : top
+        var points: [GroupStatsPoint] = []
+        for (i, r) in rows.enumerated() {
+            for name in names {
+                let value = name == "Other"
+                    ? r.counts.filter { !top.contains($0.key) }.reduce(0) { $0 + $1.value }
+                    : (r.counts[name] ?? 0)
+                points.append(GroupStatsPoint(id: "\(name)-\(i)", date: r.day, series: name, value: value))
+            }
+        }
+        return (names: names, points: points)
+    }
+
+    private static func posts(_ v: Any?) -> [GroupStatsPost] {
+        typealias P = GroupStatsParse
+        var out: [GroupStatsPost] = []
+        for item in (v as? [Any] ?? []) {
+            guard let m = item as? [String: Any] else { continue }
+            var thumb = m["thumb"] as? String
+            if thumb?.isEmpty == true { thumb = nil }
+            out.append(GroupStatsPost(id: m["id"] as? String ?? "post\(out.count)",
+                                      isStory: (m["kind"] as? String) == "story",
+                                      at: P.date(ms: m["at"]),
+                                      preview: m["preview"] as? String ?? "",
+                                      thumb: thumb,
+                                      views: P.optInt(m["views"]),
+                                      reactions: P.optInt(m["reactions"]),
+                                      shares: P.optInt(m["shares"])))
+        }
+        return out
+    }
+}
+
 // MARK: - Page
 
 struct GroupStatsView: View {
     let cid: String
     let title: String
+    /// A channel gets the channel's words (owner 2026-10-29); the reply's `kind` decides which page draws.
+    var isChannel = false
 
     @State private var stats: GroupStatsData?
+    @State private var channel: GroupStatsChannelData?
     @State private var failure: String?
 
     var body: some View {
@@ -263,7 +447,7 @@ struct GroupStatsView: View {
             .toolbar {
                 ToolbarItem(placement: .principal) { header }
             }
-            .task { if stats == nil { await load() } }
+            .task { if stats == nil && channel == nil { await load() } }
     }
 
     private var header: some View {
@@ -274,7 +458,9 @@ struct GroupStatsView: View {
     }
 
     @ViewBuilder private var content: some View {
-        if let stats {
+        if let channel {
+            ScrollView { channelPage(channel) }
+        } else if let stats {
             ScrollView { page(stats) }
         } else if let failure {
             errorView(failure)
@@ -301,6 +487,71 @@ struct GroupStatsView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
     }
+
+    // MARK: Channel page (owner 2026-10-29)
+
+    /// The reference app's channel page: Overview, the charts the server filled, then Recent Posts.
+    /// None of the group's member sections; the same cards and charts as the group page.
+    private func channelPage(_ s: GroupStatsChannelData) -> some View {
+        VStack(spacing: 16) {
+            if !s.tiles.isEmpty { GroupStatsChannelOverviewCard(stats: s) }
+            channelFollowerCharts(s)
+            channelViewCharts(s)
+            if !s.recentPosts.isEmpty { GroupStatsPostsCard(title: "Recent Posts", posts: s.recentPosts) }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    @ViewBuilder private func channelFollowerCharts(_ s: GroupStatsChannelData) -> some View {
+        if !s.growth.isEmpty {
+            GroupStatsDayChart(title: "Growth", kind: .line,
+                               names: ["Followers"], colors: [Color.fariinBlue], points: s.growth)
+        }
+        if !s.followers.isEmpty {
+            GroupStatsDayChart(title: "Followers", kind: .bars,
+                               names: ["Joined", "Left"], colors: [Color.fariinBlue, Color.orange], points: s.followers)
+        }
+        if !s.notifications.isEmpty {
+            GroupStatsDayChart(title: "Notifications", kind: .bars,
+                               names: ["Muted", "Unmuted"], colors: [Color.fariinBlue, Color.orange], points: s.notifications)
+        }
+    }
+
+    @ViewBuilder private func channelViewCharts(_ s: GroupStatsChannelData) -> some View {
+        if !s.hours.isEmpty {
+            GroupStatsBinsCard(title: "Views by Hours", bins: s.hours,
+                               axisValues: ["0", "6", "12", "18"],
+                               caption: Self.busiestHour(s.hours), valueName: "Views")
+        }
+        if !s.interactions.isEmpty {
+            GroupStatsDayChart(title: "Views and Reactions", kind: .line,
+                               names: ["Views", "Reactions"], colors: [Color.fariinBlue, Color.orange],
+                               points: s.interactions, showsNow: false)
+        }
+        if !s.emoji.isEmpty {
+            GroupStatsDayChart(title: "Reactions", kind: .bars, names: s.emojiNames,
+                               colors: Self.emojiColors(s.emojiNames.count), points: s.emoji)
+        }
+        if !s.stories.isEmpty {
+            GroupStatsDayChart(title: "Story Views and Reactions", kind: .line, names: s.storyNames,
+                               colors: Self.storyColors(s.storyNames.count),
+                               points: s.stories, showsNow: false)
+        }
+    }
+
+    /// The languages ring's palette, one colour per emoji in order.
+    private static func emojiColors(_ n: Int) -> [Color] {
+        let p = GroupStatsLanguage.palette
+        return (0..<n).map { p[$0 % p.count] }
+    }
+
+    private static func storyColors(_ n: Int) -> [Color] {
+        let p: [Color] = [Color.fariinBlue, Color.orange, Color.teal]
+        return Array(p.prefix(n))
+    }
+
+    // MARK: Group page
 
     @ViewBuilder private func chartsSection(_ s: GroupStatsData) -> some View {
         GroupStatsDayChart(title: "Growth", kind: .line,
@@ -371,20 +622,28 @@ struct GroupStatsView: View {
             let r = try await Functions.functions(region: "me-central1")
                 .httpsCallable("groupStats").call(["cid": cid])
             let d = r.data as? [String: Any] ?? [:]
-            stats = GroupStatsData(d)
+            if (d["kind"] as? String) == "channel" {
+                channel = GroupStatsChannelData(d)
+            } else {
+                stats = GroupStatsData(d)
+            }
             failure = nil
         } catch let e as NSError where e.domain == FunctionsErrorDomain {
-            failure = Self.message(code: e.code)
+            failure = Self.message(code: e.code, channel: isChannel)
         } catch {
-            failure = Self.message(code: -1)
+            failure = Self.message(code: -1, channel: isChannel)
         }
     }
 
-    private static func message(code: Int) -> String {
+    private static func message(code: Int, channel: Bool) -> String {
         switch code {
         case FunctionsErrorCode.permissionDenied.rawValue:
-            return "Only the group's owner and admins can see statistics."
+            return channel ? "Only the channel's owner and admins can see statistics."
+                           : "Only the group's owner and admins can see statistics."
         case FunctionsErrorCode.failedPrecondition.rawValue:
+            if channel {
+                return "Statistics appear once this channel has \(AppLimits.shared.channelStatsMinFollowers) followers."
+            }
             return "Statistics appear once the group is bigger."
         default:
             return "Couldn't load statistics. Check your connection and try again."
@@ -495,11 +754,24 @@ struct GroupStatsOverviewCard: View {
     }
 
     private func tile(_ label: String, _ m: GroupStatsMetric) -> some View {
+        GroupStatsTile(label: label, value: m.value.formatted(),
+                       change: GroupStatsTile.change(Double(m.value), m.prev.map { Double($0) }))
+    }
+}
+
+/// One Overview figure: the number, its change against the period before, and its name. Shared by the
+/// group's and the channel's Overview (owner 2026-10-29), so both look the same.
+struct GroupStatsTile: View {
+    let label: String
+    let value: String
+    let change: (text: String, color: Color)?
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(m.value.formatted())
+            Text(value)
                 .font(.title2.weight(.semibold))
                 .monospacedDigit()
-            if let d = Self.change(m) {
+            if let d = change {
                 Text(d.text).font(.caption.weight(.medium)).foregroundStyle(d.color)
             }
             Text(label).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
@@ -507,14 +779,52 @@ struct GroupStatsOverviewCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// "+12 (8%)" / "−3 (2%)" against the week before; nothing when that week is unknown or zero.
-    private static func change(_ m: GroupStatsMetric) -> (text: String, color: Color)? {
-        guard let prev = m.prev, prev > 0 else { return nil }
-        let diff = m.value - prev
-        let pct = Int((Double(abs(diff)) / Double(prev) * 100).rounded())
-        if diff > 0 { return (text: "+\(diff.formatted()) (\(pct)%)", color: .green) }
-        if diff < 0 { return (text: "\u{2212}\(abs(diff).formatted()) (\(pct)%)", color: .red) }
+    /// A whole number as before; a channel's mean keeps one decimal at most ("412.5").
+    nonisolated static func number(_ v: Double) -> String {
+        v.formatted(.number.precision(.fractionLength(0...1)))
+    }
+
+    /// "+12 (8%)" / "−3 (2%)" against the period before; nothing when that period is unknown or zero.
+    nonisolated static func change(_ value: Double, _ prev: Double?) -> (text: String, color: Color)? {
+        guard let prev, prev > 0 else { return nil }
+        let diff = value - prev
+        let pct = Int((abs(diff) / prev * 100).rounded())
+        if diff > 0 { return (text: "+\(number(diff)) (\(pct)%)", color: .green) }
+        if diff < 0 { return (text: "\u{2212}\(number(abs(diff))) (\(pct)%)", color: .red) }
         return (text: "+0 (0%)", color: .secondary)
+    }
+}
+
+/// The channel's Overview: the group card and tiles, two to a row, only the tiles the server filled.
+struct GroupStatsChannelOverviewCard: View {
+    let stats: GroupStatsChannelData
+
+    var body: some View {
+        GroupStatsCard(title: "Overview", trailing: period) {
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 18) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    GridRow { cells(row) }
+                }
+            }
+        }
+    }
+
+    private var rows: [[GroupStatsChannelTile]] {
+        stride(from: 0, to: stats.tiles.count, by: 2).map { Array(stats.tiles[$0..<min($0 + 2, stats.tiles.count)]) }
+    }
+
+    @ViewBuilder private func cells(_ row: [GroupStatsChannelTile]) -> some View {
+        ForEach(row) { t in
+            GroupStatsTile(label: t.id, value: t.value, change: t.change)
+        }
+        if row.count == 1 { Color.clear.gridCellUnsizedAxes([.horizontal, .vertical]) }
+    }
+
+    /// "Sep 30 – Oct 29": the days the server counted.
+    private var period: String? {
+        guard let from = stats.from, let to = stats.to else { return nil }
+        let style = Date.FormatStyle.dateTime.month(.abbreviated).day()
+        return from.formatted(style) + " \u{2013} " + to.formatted(style)
     }
 }
 
@@ -527,6 +837,9 @@ struct GroupStatsDayChart: View {
     let names: [String]
     let colors: [Color]
     let points: [GroupStatsPoint]
+    /// A line of counts that are not a running total (a channel's views and reactions) shows the
+    /// period's totals, not "Now" (owner 2026-10-29).
+    var showsNow = true
 
     @State private var selected: Date?
 
@@ -564,7 +877,7 @@ struct GroupStatsDayChart: View {
             }
             return day.formatted(style) + ": " + parts.joined(separator: " · ")
         }
-        if kind == .line, let first = names.first, let last = points.last(where: { $0.series == first }) {
+        if kind == .line, showsNow, let first = names.first, let last = points.last(where: { $0.series == first }) {
             return "Now \(last.value.formatted())"
         }
         let parts = names.map { n in
@@ -623,6 +936,8 @@ struct GroupStatsBinsCard: View {
     let bins: [GroupStatsBin]
     let axisValues: [String]
     let caption: String
+    /// What a bar counts: messages for a group, views for a channel (owner 2026-10-29).
+    var valueName = "Messages"
 
     var body: some View {
         GroupStatsCard(title: title) {
@@ -635,7 +950,7 @@ struct GroupStatsBinsCard: View {
 
     private var chart: some View {
         Chart(bins) { b in
-            BarMark(x: .value("Time", b.label), y: .value("Messages", b.value))
+            BarMark(x: .value("Time", b.label), y: .value(valueName, b.value))
                 .foregroundStyle(Color.fariinBlue.gradient)
                 .cornerRadius(2)
         }
@@ -716,5 +1031,66 @@ struct GroupStatsPeopleCard: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, 8)
+    }
+}
+
+/// A channel's Recent Posts (owner 2026-10-29): the people list's rows, with the post's picture (or a
+/// plain mark) where the face would be, and what it got.
+struct GroupStatsPostsCard: View {
+    let title: String
+    let posts: [GroupStatsPost]
+
+    var body: some View {
+        GroupStatsCard(title: title) {
+            VStack(spacing: 0) {
+                ForEach(Array(posts.enumerated()), id: \.element.id) { i, p in
+                    if i > 0 { Divider().padding(.leading, 48) }
+                    row(p)
+                }
+            }
+        }
+    }
+
+    private func row(_ p: GroupStatsPost) -> some View {
+        HStack(spacing: 12) {
+            thumb(p)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(p.preview.isEmpty ? (p.isStory ? "Story" : "Post") : p.preview).font(.body).lineLimit(1)
+                Text(Self.detail(p)).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder private func thumb(_ p: GroupStatsPost) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+        if let s = p.thumb, let url = URL(string: s) {
+            AsyncImage(url: url) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                shape.fill(Color(uiColor: .tertiarySystemFill))
+            }
+            .frame(width: 36, height: 36)
+            .clipShape(shape)
+        } else {
+            shape.fill(Color(uiColor: .tertiarySystemFill))
+                .frame(width: 36, height: 36)
+                .overlay {
+                    Image(systemName: p.isStory ? "circle.dashed" : "text.alignleft")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+        }
+    }
+
+    /// "Oct 28 · 412 views · 12 reactions · 3 shares": only what the server counted.
+    private static func detail(_ p: GroupStatsPost) -> String {
+        var parts: [String] = []
+        if let at = p.at { parts.append(at.formatted(.dateTime.month(.abbreviated).day())) }
+        if let v = p.views { parts.append("\(v.formatted()) \(v == 1 ? "view" : "views")") }
+        if let r = p.reactions { parts.append("\(r.formatted()) \(r == 1 ? "reaction" : "reactions")") }
+        if let s = p.shares { parts.append("\(s.formatted()) \(s == 1 ? "share" : "shares")") }
+        return parts.joined(separator: " \u{00B7} ")
     }
 }

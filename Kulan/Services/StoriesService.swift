@@ -376,7 +376,9 @@ enum GroupStoryRights {
         guard c.isGroup, !uid.isEmpty, c.users.contains(uid), !c.fariinLocked else { return false }
         // owner 2026-10-23: only a group of 50 or more (panel-set) has stories, except for app
         // admins (like @v), who may post to any group they run.
-        guard c.users.count >= AppLimits.shared.groupStoryMinMembers || AdminStore.shared.isAdmin
+        // A channel's users[] is only its admins, so a channel counts its followers (owner 2026-10-29).
+        let size = c.isChannel ? c.followerCount : c.users.count
+        guard size >= AppLimits.shared.groupStoryMinMembers || AdminStore.shared.isAdmin
                 || ProfileStore.shared.me?.groupStoryOpen == true else { return false }
         if c.isOwner(uid) { return true }
         return c.adminCan(uid, .postStories)
