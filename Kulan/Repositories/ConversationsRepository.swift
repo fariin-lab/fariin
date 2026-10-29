@@ -55,6 +55,7 @@ final class ConversationsRepository {
         FirestoreHub.drop([listener] + pinnedExtraListeners.values.map { Optional($0) })
         listener = nil
         pinnedExtraListeners = [:]
+        ChannelFollows.shared.detachForSwap()   // attach() below starts it again
         listRetryWork?.cancel(); listRetryWork = nil
         listRetries = 0
         // A page asked of the stuck client never answers; `loadOlder` would wait behind it for ever.
@@ -305,6 +306,7 @@ final class ConversationsRepository {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         stop()
         listenerUid = uid
+        ChannelFollows.shared.start(uid: uid)   // 2026-10-28: the channels I follow, beside the window
         beginCatchUp()   // 2026-10-27: a fresh listener's first answers are a catch-up, not live moves
         let limit = windowLimit
         // Attach the listener IMMEDIATELY — never block the chat list behind ensureReady.
@@ -727,9 +729,21 @@ final class ConversationsRepository {
 
     /// The window plus any pinned chat that sits below it (never twice: the window wins).
     private func withPinnedExtras(_ window: [Conversation]) -> [Conversation] {
-        guard !pinnedExtraDocs.isEmpty else { return window }
-        let inWindow = Set(window.map(\.id))
-        return window + pinnedExtraDocs.values.filter { !inWindow.contains($0.id) }
+        // Channels I follow (2026-10-28) are not in `users`, so never in the window: added here.
+        let followed = ChannelFollows.shared.conversations
+        guard !pinnedExtraDocs.isEmpty || !followed.isEmpty else { return window }
+        var seen = Set(window.map(\.id))
+        var out = window
+        for c in pinnedExtraDocs.values where seen.insert(c.id).inserted { out.append(c) }
+        for c in followed where seen.insert(c.id).inserted { out.append(c) }
+        return out
+    }
+
+    /// A followed channel changed (ChannelFollows): publish the list again without a snapshot.
+    /// Unlike `blockListChanged`, also when I have no chats at all (only channels).
+    func channelsChanged() {
+        guard listener != nil, let me = Auth.auth().currentUser?.uid, BlockList.shared.isLoaded else { return }
+        publish(hideAccountBlocked(withPinnedExtras(lastRaw), me: me))
     }
 
     /// L10: the same merge `withPinnedExtras` makes for the live list, but as the raw Firestore
@@ -826,6 +840,7 @@ final class ConversationsRepository {
     /// empty-cache guard in the listener then preserved it for the NEW user forever.
     func reset() {
         stop()
+        ChannelFollows.shared.stop()   // the old account's channels
         // 2026-09-24 fix-all #6: the per-document pin listeners and the window belong to the old account.
         pinnedExtraListeners.values.forEach { $0.remove() }
         pinnedExtraListeners = [:]

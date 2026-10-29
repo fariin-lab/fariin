@@ -1152,6 +1152,16 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// Owner label from everyone but Fariin staff. Set only by staff (functions-groups
     /// setGroupHideMembers; the rules keep phones off it). Messages are unchanged.
     var hideMembers = false
+    /// A channel (2026-10-28): a group with a hat. Set once by the server (functions-groups
+    /// makeChannel), never by a phone. Admins are in `users`; followers are NOT (they live in
+    /// conversations/{cid}/followers, mirrored in users/{me}/channels for my list).
+    var isChannel = false
+    var followerCount = 0
+    /// Posts so far (server, onNewMessage). A follower's unread is this minus `followerRead`.
+    var postCount = 0
+    /// Mine as a follower, from users/{me}/channels/{cid} (ChannelFollows), nil when I am not one.
+    var followerRead: Int?
+    var followerMuted = false
     /// group: what members may send (2026-10-20), `memberSend` {photos, videos, voice, files,
     /// stickers, gifs, links, polls, location}; a missing key = allowed. firestore.rules
     /// `memberSendOk` enforces it.
@@ -1343,6 +1353,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.membersCanEditInfo = data["membersCanEditInfo"] as? Bool ?? false
         self.onlyAdminsCall = data["onlyAdminsCall"] as? Bool ?? false
         self.hideMembers = data["hideMembers"] as? Bool ?? false
+        self.isChannel = data["channel"] as? Bool ?? false
+        self.followerCount = max(0, (data["followerCount"] as? NSNumber)?.intValue ?? 0)
+        self.postCount = max(0, (data["postCount"] as? NSNumber)?.intValue ?? 0)
         self.memberSend = data["memberSend"] as? [String: Bool] ?? [:]
         self.slowModeSeconds = (data["slowMode"] as? NSNumber)?.intValue ?? 0
         func ms(_ v: Any?) -> Double {
@@ -1654,10 +1667,19 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// Header photo: group avatar for groups, the other person's photo for 1:1.
     func displayPhoto(_ me: String) -> String? { isGroup ? avatarUrl : photoUrl(for: me) }
     /// Group header subtitle, e.g. "7 members".
-    var memberCountLabel: String { "\(users.count) member\(users.count == 1 ? "" : "s")" }
+    var memberCountLabel: String {
+        if isChannel { return "\(followerCount) follower\(followerCount == 1 ? "" : "s")" }
+        return "\(users.count) member\(users.count == 1 ? "" : "s")"
+    }
+    /// I follow this channel and am not one of its admins.
+    func isFollower(_ me: String) -> Bool { isChannel && followerRead != nil && !users.contains(me) }
     /// HOW MANY messages are waiting. Never negative: a negative value is the OLD manual "mark as
     /// unread" flag (before 2026-09-24), which means a dot and no number — see `ChatService.markUnread`.
-    func unread(_ me: String) -> Int { max(0, unreadCount[me] ?? 0) }
+    /// A follower's: the channel's posts past the ones they have read.
+    func unread(_ me: String) -> Int {
+        if isFollower(me) { return max(0, postCount - (followerRead ?? 0)) }
+        return max(0, unreadCount[me] ?? 0)
+    }
     /// You marked this chat unread yourself. A reminder, not a claim that somebody sent you something,
     /// so the list shows a plain dot rather than "1".
     /// 2026-09-24 decision D13: read from its own `markedUnread` flag, so a new message (which bumps
@@ -1666,7 +1688,10 @@ struct Conversation: Identifiable, Equatable, Hashable {
     func manuallyUnread(_ me: String) -> Bool { (markedUnread[me] ?? false) || (unreadCount[me] ?? 0) < 0 }
     /// Anything at all to show in the list's badge slot, of either kind.
     func hasUnreadMark(_ me: String) -> Bool { unread(me) > 0 || manuallyUnread(me) }
-    func isMuted(_ me: String, now: Double) -> Bool { (mutedBy[me] ?? 0) > now }
+    func isMuted(_ me: String, now: Double) -> Bool {
+        if isFollower(me) { return followerMuted }
+        return (mutedBy[me] ?? 0) > now
+    }
     /// 2026-09-26 block rebuild: `me` has blocked the other person in this 1:1. The account list
     /// (`BlockList`, private to me) decides; an old copy still on the chat counts until it is moved.
     /// Called with somebody else's uid it can only see that person's OLD shared copy, which is
