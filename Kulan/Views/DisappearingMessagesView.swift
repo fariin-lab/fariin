@@ -63,7 +63,9 @@ struct DisappearingMessagesView: View {
                     // `createdAt`, so the clock starts when a message is SENT and runs whether
                     // anybody opened the chat or not. Telling people it waits for a read would have
                     // them expect a message to sit there safely until it was seen.
-                    Text("New messages in this chat disappear once the chosen time has passed since they were sent, whether or not they have been read.")
+                    Text(Conversation.Right.isChannel(cid)
+                         ? "New posts in this channel disappear for every follower once the chosen time has passed since they were posted."
+                         : "New messages in this chat disappear once the chosen time has passed since they were sent, whether or not they have been read.")
                         .font(.subheadline).foregroundStyle(.secondary)
                         .textCase(nil)   // keep normal case (not the uppercased section-header style)
                         .padding(.bottom, 6)
