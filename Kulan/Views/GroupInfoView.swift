@@ -777,8 +777,8 @@ struct GroupInfoView: View {
     private var membersHidden: Bool { conv?.hideMembers == true && !AdminStore.shared.isAdmin }
 
     private var memberCountText: String {
-        if isChannel {   // followers, never who (2026-10-28)
-            let f = conv?.followerCount ?? 0
+        if isChannel {   // followers, never who (2026-10-28); admins counted, as the reference app does
+            let f = conv?.subscriberCount ?? 0
             return "\(Self.compactCount(f)) Follower\(f == 1 ? "" : "s")"
         }
         let n = conv?.users.count ?? 0

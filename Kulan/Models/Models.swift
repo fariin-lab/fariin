@@ -1089,6 +1089,29 @@ struct GroupMod: Equatable, Hashable {
 /// had just unfollowed, got group words on a channel ("This group is unavailable"). Each decoder
 /// that reads `channel: true` notes the id here. A channel never turns back into a group, so ids
 /// are only added. Locked because conversation docs are decoded off the main thread too.
+/// My own follow (+1) or leave (−1) on a channel, shown until the channel's `followerCount` moves
+/// (the server batches it once a minute). Keyed by channel, with the count it was made against:
+/// once the count is anything else, the server has it and the bias is dropped. Any thread.
+enum ChannelCountBias {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var bias: [String: (base: Int, delta: Int)] = [:]   // guarded by `lock`
+
+    static func note(_ cid: String, base: Int, delta: Int) {
+        guard !cid.isEmpty else { return }
+        lock.withLock { bias[cid] = (base, delta) }
+    }
+
+    /// The followers to show: the stored count, plus my change while the count is still the old one.
+    static func adjusted(_ cid: String, _ count: Int) -> Int {
+        lock.withLock {
+            guard let b = bias[cid] else { return count }
+            if b.base == count { return count + b.delta }
+            bias[cid] = nil   // the batch landed: the server's number has it
+            return count
+        }
+    }
+}
+
 enum KnownChannels {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var ids: Set<String> = []   // guarded by `lock`
@@ -1725,8 +1748,19 @@ struct Conversation: Identifiable, Equatable, Hashable {
     func displayPhoto(_ me: String) -> String? { isGroup ? avatarUrl : photoUrl(for: me) }
     /// Group header subtitle, e.g. "7 members".
     var memberCountLabel: String {
-        if isChannel { return "\(followerCount) follower\(followerCount == 1 ? "" : "s")" }
+        if isChannel { return "\(subscriberCount) follower\(subscriberCount == 1 ? "" : "s")" }
         return "\(users.count) member\(users.count == 1 ? "" : "s")"
+    }
+
+    /// ⛔ A CHANNEL'S SHOWN SIZE, THE REFERENCE APP'S COUNT (owner 2026-10-29: "followers sometimes
+    /// say 0, it must work like the reference app"). Its subscriber count is every participant: the
+    /// owner and admins too, so a new channel reads "1", never "0". Ours keeps followers apart from
+    /// `users` (the admins), so the two are added here. And my own follow or leave shows at once
+    /// (`ChannelCountBias`), since `followerCount` itself lands in the server's once-a-minute batch.
+    /// Gates (statistics, story minimum) still use `followerCount`, followers only.
+    var subscriberCount: Int {
+        guard isChannel else { return users.count }
+        return max(0, ChannelCountBias.adjusted(id, followerCount) + users.count)
     }
     /// I follow this channel and am not one of its admins.
     func isFollower(_ me: String) -> Bool { isChannel && followerRead != nil && !users.contains(me) }

@@ -600,7 +600,8 @@ struct ChannelAdminCard: View {
         conv.createdBy == me ? "You created this channel" : "You're an admin of this channel"
     }
     private var followersLine: String {
-        conv.followerCount == 1 ? "1 follower" : "\(conv.followerCount) followers"
+        // Admins counted, the reference app's subscriber count (`Conversation.subscriberCount`).
+        conv.subscriberCount == 1 ? "1 follower" : "\(conv.subscriberCount) followers"
     }
 
     var body: some View {

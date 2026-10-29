@@ -95,13 +95,27 @@ enum ChannelService {
     static func follow(cid: String, code: String? = nil) async throws -> String {
         var data: [String: Any] = ["cid": cid]
         if let code, !code.isEmpty { data["code"] = code }
+        let base = await MainActor.run { knownFollowerCount(cid) }
         let r = try await fn.httpsCallable("followChannel").call(data)
-        await MainActor.run { LeaveGroupUndo.shared.reopen(cid) }   // unfollowed before: back in the list
-        return ((r.data as? [String: Any])?["status"] as? String) ?? "following"
+        let status = ((r.data as? [String: Any])?["status"] as? String) ?? "following"
+        await MainActor.run {
+            LeaveGroupUndo.shared.reopen(cid)   // unfollowed before: back in the list
+            // My follow shows in the count at once (the server batches the real one, ~1 min).
+            if status != "requested", let base { ChannelCountBias.note(cid, base: base, delta: 1) }
+        }
+        return status
     }
 
     static func unfollow(cid: String) async throws {
+        let base = await MainActor.run { knownFollowerCount(cid) }
         _ = try await fn.httpsCallable("unfollowChannel").call(["cid": cid])
+        if let base { ChannelCountBias.note(cid, base: base, delta: -1) }
+    }
+
+    /// The channel's `followerCount` as this phone has it (followed, or one I run), for the bias.
+    @MainActor private static func knownFollowerCount(_ cid: String) -> Int? {
+        ConversationsRepository.shared.conversations.first { $0.id == cid }?.followerCount
+            ?? ChannelFollows.shared.conversations.first { $0.id == cid }?.followerCount
     }
 
     /// Admins add people; anyone whose own settings refuse it is skipped and comes back in `refused`.
