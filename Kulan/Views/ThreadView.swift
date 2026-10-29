@@ -2020,7 +2020,7 @@ struct ThreadView: View {
         .sheet(item: $morePickerTarget, onDismiss: { CMOverlay.current?.dismiss(animated: true) }) { m in
             EmojiMorePicker { emoji in react(m, emoji) }
         }
-        .sheet(item: $channelReactTarget) { m in
+        .sheet(item: $channelReactTarget, onDismiss: { CMOverlay.current?.dismiss(animated: true) }) { m in
             let live = repo.items.first(where: { $0.id == m.id }) ?? m
             ChannelReactSheet(offered: channelOffered, counts: channelCounts(live), mine: myReaction(live),
                               canReact: canReact(live), allowMore: conversation?.reactMode != "some",
@@ -3509,6 +3509,7 @@ struct ThreadView: View {
                 // 2026-09-24 feature-audit: the bubble's double-tap asks the same `canReact` as the bar.
                 onReact: { emoji in
                     guard canReact(repo.items.first(where: { $0.id == msg.id }) ?? msg) else { return }
+                    if conversation?.isChannel == true { channelReactTarget = msg; return }   // the channel's picker
                     sendReaction(messageId: msg.id, emoji: emoji, toAuthor: msg.authorId)
                 },
                 onPin: { m in togglePin(m) },
@@ -4344,7 +4345,8 @@ struct ThreadView: View {
         guard canReact(m) else { return }
         switch selection {
         case .more:
-            morePickerTarget = m
+            // A channel: its own picker, the allowed emoji only (More inside it when any goes).
+            if conversation?.isChannel == true { channelReactTarget = m } else { morePickerTarget = m }
         case .emoji(let e):
             sendReaction(messageId: m.id, emoji: e, toAuthor: m.authorId)
         }
@@ -4439,6 +4441,12 @@ struct ThreadView: View {
         // A visitor of a channel (2026-10-29): reacting is for followers, and that is said, not a dead tap.
         if conversation?.isChannel == true, channelReactOn, !channelCanReact {
             showJumpToast("Follow the channel to react")
+            return
+        }
+        // A follower's double tap opens the channel's own picker (owner 2026-10-29): only the emoji
+        // the owner allows, never a fixed quick reaction.
+        if conversation?.isChannel == true, channelCanReact, canReact(m) {
+            channelReactTarget = m
             return
         }
         // 2026-09-24 feature-audit: the same `canReact` as the quick bar (was "not sending" only).
