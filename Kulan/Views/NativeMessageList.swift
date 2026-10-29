@@ -3229,7 +3229,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     func apply(rowIds rawIds: [String], scrollTarget: String? = nil) {
         ChatOpenTimer.shared.markOnce("first apply \(rawIds.count) rows")
-        defer { ChatOpenTimer.shared.markOnce("first apply done") }
+        let applyStart = CACurrentMediaTime()
+        defer {
+            ChatOpenTimer.shared.markOnce("first apply done")
+            ChatOpenTimer.shared.span("apply \(rawIds.count) rows", since: applyStart)
+        }
         // LAST LINE OF DEFENCE, AND IT IS NOT OPTIONAL. `appendItemsWithIdentifiers:` throws on a repeated
         // identifier and the throw is an abort â€” the app is gone, mid-scroll, with no recovery. The repo
         // guarantees uniqueness upstream, but this is a boundary into UIKit and a crash is far worse than

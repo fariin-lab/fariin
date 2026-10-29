@@ -2233,6 +2233,7 @@ struct ThreadView: View {
 
     var body: some View {
         let _ = ChatOpenTimer.shared.markOnce("ThreadView body")
+        let _ = ChatOpenTimer.shared.body()
         // READ-RECEIPT LIVE FIX: read otherLastReadMillis DIRECTLY in the body so a live read update re-runs
         // the view. It's otherwise only read inside the rowSignatures helper — and unlike pins/reactions
         // (read directly in the body), that wasn't enough to refresh the tick, so my ✓ stayed single until a
@@ -3749,6 +3750,7 @@ struct ThreadView: View {
         let chanTok = chanRx ? "\(ChannelFollows.shared.myReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.pendingReactions[cid]?.hashValue ?? 0):\(channelReactOn)\(channelCanReact)" : "-"
         let key = "\(chanTok)|\(CallService.shared.calleeRinging)|\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)|\(liveRequest ?? "-")"   // 2026-09-24 feature-audit: edit clock
         if sigCache.key != key {
+            let sigStart = CACurrentMediaTime()   // the open timer (admins)
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
             let now = Date()   // the builder's own clamp, `min(createdAt, Date())`, for the time token
@@ -3853,6 +3855,7 @@ struct ThreadView: View {
                 out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)|\(m.views)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
             }
             sigCache.key = key
+            ChatOpenTimer.shared.span("signatures", since: sigStart)
             sigCache.base = out
         }
         // Fast path (the overwhelmingly common state): no selection, no highlight → the cached base IS
@@ -3917,7 +3920,10 @@ struct ThreadView: View {
         // never-inlined function now, so the key's frame is gone before the rebuild's is made.
         let key = uikitModelsKey()
         if uikitModelCache.key == key { return uikitModelCache.models }
-        return rebuildUikitModels(key: key)
+        let t0 = CACurrentMediaTime()
+        let models = rebuildUikitModels(key: key)
+        ChatOpenTimer.shared.span("row models \(models.count)", since: t0)   // the open timer (admins)
+        return models
     }
 
     @inline(never) private func uikitModelsKey() -> String {

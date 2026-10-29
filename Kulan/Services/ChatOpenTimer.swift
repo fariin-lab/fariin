@@ -27,6 +27,7 @@ import UIKit
         tapAt = CACurrentMediaTime()
         running = true
         once = []
+        bodies = 0
         lines = ["tap \(what)"]
         worstGap = 0; worstEnd = 0
         lastFrame = tapAt
@@ -43,6 +44,22 @@ import UIKit
         let ms = Int((CACurrentMediaTime() - tapAt) * 1000)
         lines.append("+\(ms) \(what)")
         DiagLog.add("CHATOPEN +\(ms)ms \(what)")
+    }
+
+    /// A piece of work that took a while (owner 2026-10-29: the freeze is after onAppear; which step?).
+    /// Marked only when it took 20 ms or more, with how long, so the box names what blocked.
+    func span(_ what: String, since t0: CFTimeInterval) {
+        guard running else { return }
+        let took = Int((CACurrentMediaTime() - t0) * 1000)
+        if took >= 20 { mark("\(what) took \(took)ms") }
+    }
+
+    /// Each time the chat's body runs while an open is timed, numbered (at most 12).
+    private var bodies = 0
+    func body() {
+        guard running, bodies < 12 else { return }
+        bodies += 1
+        mark("body #\(bodies)")
     }
 
     /// The same, the first time only (for code that runs on every update).
