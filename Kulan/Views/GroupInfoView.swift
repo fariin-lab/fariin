@@ -582,13 +582,13 @@ struct GroupInfoView: View {
                 try await ChannelService.unfollow(cid: cid)
                 // The channel closes and leaves the list too (owner 2026-10-29: left open, it turned
                 // into a 1:1 chat with Voice, Video and Block).
-                // Owner 2026-10-29: a public channel stays right here, its Following circle turns
-                // into Follow and nothing moves. A private one can't be read any more, so it
-                // closes and I land in the chat list.
-                if conv?.isPublic != true {
-                    LeaveGroupUndo.shared.closeChat(cid)
-                    dismiss()
-                }
+                // ⛔ EVERY CHANNEL CLOSES ON LEAVE (owner 2026-10-29, later: "do what the reference
+                // app does: go to the chat list, the channel not appearing; only with a link can he
+                // join again"). Reverses the same day's "a public channel stays right here". Public
+                // or private, I land in the chat list and the channel is gone from it; a link (or,
+                // for a public one, its @name) brings it back.
+                LeaveGroupUndo.shared.closeChat(cid)
+                dismiss()
             }
             catch { actionError = error.localizedDescription }
             unfollowing = false
