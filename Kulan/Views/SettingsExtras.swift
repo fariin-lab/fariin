@@ -25,6 +25,7 @@ struct NotificationsSettingsView: View {
     @AppStorage("notif.inAppSound") private var inAppSound = true
     @AppStorage("notif.inAppVibrate") private var inAppVibrate = true
     @AppStorage("notif.inAppPreview") private var inAppPreview = true
+    @AppStorage(ChatSounds.sentKey) private var sentSound = true
     @State private var confirmReset = false
     @State private var resetting = false
     /// iOS itself has notifications off for the app. Audit 2026-09-24: the page never asked, so with
@@ -41,7 +42,7 @@ struct NotificationsSettingsView: View {
         // into it in four places and the default moved to Note on 2026-08-23.
         if !pushOn || !messagePreview
             || NotificationSound.resolveMessageTone(soundName).id != NotificationSound.defaultMessageTone.id
-            || !inAppSound || !inAppVibrate || !inAppPreview { return true }
+            || !inAppSound || !inAppVibrate || !inAppPreview || !sentSound { return true }
         if SoundStore.hasAnyCustom { return true }
         let now = Date().timeIntervalSince1970 * 1000
         return ConversationsRepository.shared.conversations.contains { $0.isMuted(me, now: now) }
@@ -130,6 +131,13 @@ struct NotificationsSettingsView: View {
             // IS a push, arriving while the app is open.
             .disabled(!pushOn)
 
+            // Not a notification, so not tied to push (owner 2026-10-29).
+            Section {
+                Toggle("Sound When Sent", isOn: $sentSound).tint(.green)
+            } footer: {
+                Text("A short sound when your message reaches Fariin. A photo or video makes it when it has finished sending. Silent when your iPhone is on silent.")
+            }
+
             Section {
                 Button(role: .destructive) { confirmReset = true } label: {
                     HStack {
@@ -209,6 +217,7 @@ struct NotificationsSettingsView: View {
         inAppSound = true
         inAppVibrate = true
         inAppPreview = true
+        sentSound = true
         try? await ProfileStore.shared.setNotifPrefs(preview: true, sound: NotificationSound.defaultMessageTone.id)
         resetting = false
     }

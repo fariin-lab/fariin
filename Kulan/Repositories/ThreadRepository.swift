@@ -1425,6 +1425,7 @@ final class ThreadRepository {
             if docs.count < pageSize { canLoadOlder = false }   // short first SERVER page => no history
         }
         trimWindowIfNeeded()
+        noteSentSound()
         rebuild(reason: reason)
         // ⚠️ `!$0.uploading` — THE SECOND PLACE THAT DROPS A PENDING, and it has to agree with the
         // one in `refreshItems`.
@@ -1451,6 +1452,23 @@ final class ThreadRepository {
         pending.removeAll { p in p.clientId.map(echoed.contains) ?? false }
     }
     private var echoedPending: [String: Message] = [:]
+
+    /// My messages seen before the server had them (no server time yet, or the file still going up).
+    private var unconfirmedMine: Set<String> = []
+    /// The sent sound (owner 2026-10-29): one of mine that was waiting is now on the server, its file
+    /// included. Never for a message that arrived already confirmed (opening a chat is silent).
+    private func noteSentSound() {
+        guard let me = Auth.auth().currentUser?.uid else { return }
+        var landed = false
+        for (id, m) in byId where m.authorId == me && !m.isSystem && !m.isCall {
+            if !m.hasServerTime || m.uploading {
+                unconfirmedMine.insert(id)
+            } else if unconfirmedMine.remove(id) != nil, !m.deleted {
+                landed = true
+            }
+        }
+        if landed { ChatSounds.sent() }
+    }
 
     // Incoming typing self-clears after 15s without a refresh: if the
     // sender's app crashed/lost network before writing typing=false, the bubble would otherwise stick
