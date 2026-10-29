@@ -3825,7 +3825,16 @@ enum ChatService {
     /// A privacy pref (defaults ON when never set).
     static func pref(_ key: String) -> Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
 
+    /// A channel I follow and am not an admin of (2026-10-28): its post count, else nil. A follower
+    /// may not write the channel's document, so read state goes to my own entry instead.
+    static func followedChannelPosts(_ cid: String) -> Int? {
+        guard let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }),
+              c.isFollower(uid) else { return nil }
+        return c.postCount
+    }
+
     static func setTyping(_ cid: String, _ typing: Bool) async {
+        if followedChannelPosts(cid) != nil { return }
         guard pref("typingIndicators") else { return }   // privacy: don't broadcast typing
         // ON is a CHANGING string ("text-<seconds>") like recording's, not `true`: receivers
         // self-clear after 15s and only a value that changes the doc produces a snapshot, so a
@@ -3857,6 +3866,7 @@ enum ChatService {
 
     static func resetUnread(_ cid: String) async {
         if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.markRead(); return }
+        if let posts = followedChannelPosts(cid) { ChannelService.markRead(cid: cid, count: posts); return }
         let me = uid
         var update: [String: Any] = ["unreadCount.\(me)": 0]
         // 2026-09-24 decision D13: opening the chat also clears my Mark as Unread flag. Only when the
@@ -3892,6 +3902,7 @@ enum ChatService {
         // Nobody to send a receipt to. The channel's own read state is the watermark in the person's
         // private state document, which `resetUnread` already moved.
         if OfficialChannel.isOfficial(cid) { return }
+        if followedChannelPosts(cid) != nil { return }   // a follower sends no receipts (resetUnread marks)
         guard pref("readReceipts") else { return }   // privacy: don't send read receipts
         try? await db.collection("conversations").document(cid)
             .setData(["lastRead": [uid: FieldValue.serverTimestamp()]], merge: true)

@@ -197,7 +197,7 @@ struct PublicGroupSheet: View {
     }
 
     private func headline(_ p: PublicGroupPreview) -> String {
-        let count = GroupDirectory.membersLine(p.memberCount)
+        let count = p.isChannel ? GroupDirectory.followersLine(p.memberCount) : GroupDirectory.membersLine(p.memberCount)
         return p.username.isEmpty ? count : "@\(p.username) · \(count)"
     }
 
@@ -219,6 +219,7 @@ struct PublicGroupSheet: View {
     }
 
     private func buttonTitle(_ p: PublicGroupPreview) -> String {
+        if p.isChannel { return joining ? "Following…" : "Follow" }   // 2026-10-28
         if requestSent || p.requested { return "Request Sent" }
         if joining { return p.needsApproval ? "Sending…" : "Joining…" }
         return p.needsApproval ? "Request to Join" : "Join Group"
@@ -425,6 +426,7 @@ struct PublicJoinBar: View {
 
     private var title: String {
         if waiting { return "Request Sent" }
+        if p.isChannel { return joining ? "Following…" : "Follow" }   // 2026-10-28
         if joining { return p.needsApproval ? "Sending…" : "Joining…" }
         return p.needsApproval ? "Apply to Join Group" : "Join Group"
     }
@@ -645,7 +647,7 @@ struct PublicGroupInfoView: View {
                         }
                         .accessibilityHidden(true)
                     }
-                    Text(GroupDirectory.membersLine(p.memberCount))
+                    Text(p.isChannel ? GroupDirectory.followersLine(p.memberCount) : GroupDirectory.membersLine(p.memberCount))
                         .font(.system(size: 16)).foregroundStyle(Color(hex: 0x8E8E93))
                 }
                 .padding(.top, 4)

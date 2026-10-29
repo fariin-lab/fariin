@@ -15,6 +15,9 @@ struct MessageRowContext {
     var me: String
     var cid: String
     var isGroup: Bool
+    /// A channel (2026-10-28): every post is the channel speaking, drawn as received for everyone,
+    /// its admin too (the reference app's rule), with no sender name or face.
+    var isChannel: Bool = false
     var dark: Bool
     var selecting: Bool
     /// Their `wasShowingSelectionUI`: was selection mode up on the PREVIOUS pass. See
@@ -156,7 +159,9 @@ enum MessageRowModelBuilder {
 
     private static func bubble(_ msg: Message, ctx: MessageRowContext,
                                first: Bool, last: Bool) -> BubbleRow {
-        let isMe = msg.authorId == ctx.me
+        // In a channel nobody's post is "mine" on screen; `authored` still drives its sending state.
+        let authored = msg.authorId == ctx.me
+        let isMe = authored && !ctx.isChannel
         let text = msg.safeText
 
         let body: BubbleBody
@@ -266,7 +271,9 @@ enum MessageRowModelBuilder {
         let fill: BubbleFill = isMe ? myFill(ctx) : receivedFill(ctx)
 
         let tick: BubbleTicks.Kind
-        if !isMe || msg.deleted {
+        if ctx.isChannel, authored, !msg.deleted, msg.sendState == .sending {
+            tick = .sending   // my post on its way; a sent post shows no tick (it has no reader)
+        } else if !isMe || msg.deleted {
             tick = .none
         } else {
             switch msg.sendState {
@@ -300,7 +307,7 @@ enum MessageRowModelBuilder {
             }
         }()
         var sender: SenderChrome?
-        if ctx.isGroup, !isMe {
+        if ctx.isGroup, !isMe, !ctx.isChannel {
             sender = SenderChrome(
                 uid: msg.authorId,
                 name: ctx.nameFor(msg.authorId),
@@ -375,7 +382,7 @@ enum MessageRowModelBuilder {
             storyReply: storyReply,
             forwarded: msg.forwarded && !msg.deleted,
             reactions: reactions,
-            showsFailedBadge: isMe && msg.sendState == .failed,
+            showsFailedBadge: authored && msg.sendState == .failed,
             // Theirs only, and only on a wallpaper — the reference guards it `hasWallpaper,
             // isIncoming`, and an outgoing bubble never wears one.
             rim: !isMe && ctx.onWallpaper,

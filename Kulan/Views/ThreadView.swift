@@ -1334,6 +1334,13 @@ struct ThreadView: View {
                 selectionActionBar.transition(.opacity)
             } else if searchActive {
                 searchNavBar.transition(.opacity)
+            } else if let conv = conversation, conv.isChannel, !conv.users.contains(me), !groupModHidesChat {
+                // A channel I follow (or could): Mute / Follow where the composer goes (2026-10-28).
+                ChannelFollowerBar(conv: conv).transition(.opacity)
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
+                        let h = UIScreen.main.bounds.height
+                        if top > 0, top < h { composerLift = h - top }
+                    }
             } else if notAMember {
                 // A public group I left can be joined again from here (owner 2026-10-25).
                 if conversation?.isPublic == true, !(conversation?.bannedUids.contains(me) ?? false) {
@@ -3234,7 +3241,11 @@ struct ThreadView: View {
 
     private var presenceSubtitle: String? {
         // A guest's count comes from the join page's preview (the stand-in has nobody in `users`).
-        if let g = guest?.preview { return GroupDirectory.membersLine(g.memberCount) }
+        if let g = guest?.preview {
+            return g.isChannel ? GroupDirectory.followersLine(g.memberCount) : GroupDirectory.membersLine(g.memberCount)
+        }
+        // A channel: its followers, never who is typing (only admins write, 2026-10-28).
+        if conversation?.isChannel == true { return conversation?.fariinLocked == true ? nil : conversation?.memberCountLabel }
         if isGroup {
             // owner 2026-10-27: no member count on a suspended or disabled group.
             if conversation?.fariinLocked == true { return nil }
@@ -3901,6 +3912,8 @@ struct ThreadView: View {
             "\(conversation?.roles.hashValue ?? 0)",
             // The Restricted chat request I can answer: its notice carries Reject / Accept.
             liveRestrictRequestId ?? "-",
+            // A channel draws every post as received (2026-10-28); known only once the doc is in.
+            conversation?.isChannel == true ? "ch" : "-",
         ].joined(separator: "|")
         return key
     }
@@ -3916,7 +3929,7 @@ struct ThreadView: View {
             : nil
 
         let ctx = MessageRowContext(
-            me: me, cid: cid, isGroup: isGroup, dark: dark,
+            me: me, cid: cid, isGroup: isGroup, isChannel: conversation?.isChannel == true, dark: dark,
             selecting: selecting, wasSelecting: wasSelecting, selectedIds: selectedIds,
             highlightId: highlightId, firstUnreadId: firstUnreadId,
             chatColor: chatColorSpec,
@@ -5550,7 +5563,9 @@ struct ThreadView: View {
                 callsEnabled: callsEnabled || liveWithThem)
         }
         // Group Settings "Start group call: Admins only": a member joins from the Join bar instead.
-        if isGroup && CallFeatures.groupCalls && !notAMember && !groupModHidesChat && (conversation?.canStartCall(me) ?? true) {
+        // No calls in a channel (2026-10-28): it has followers, not people in a room.
+        if isGroup && CallFeatures.groupCalls && !notAMember && !groupModHidesChat && conversation?.isChannel != true
+            && (conversation?.canStartCall(me) ?? true) {
             return .conversation(audio: { startGroupCall(video: false) },
                                  video: { startGroupCall(video: true) },
                                  callsEnabled: callsEnabled,
@@ -9330,7 +9345,8 @@ struct ThreadView: View {
         s.text = input
         // 2026-09-24 decision D-composer-5: only for the very text the insertion produced.
         if let m = caretAfterMention, m.text == input { s.caret = m.at }
-        s.placeholder = requestStance == .firstMessage ? "Say hello" : "Message"
+        s.placeholder = conversation?.isChannel == true ? "Post"   // an admin writing to the channel (2026-10-28)
+            : requestStance == .firstMessage ? "Say hello" : "Message"
         s.focused = inputFocused
         s.editing = editingMessage != nil
         s.attachBusy = sendingPhoto

@@ -72,6 +72,9 @@ struct PublicGroupPreview: Equatable {
     /// Who is in it, for a visitor's view of the group page (owner, admins, then the rest; at most
     /// 100, from `publicGroupPreview`). Empty from an older server.
     var members: [PublicGroupMember]
+    /// A channel (2026-10-28): `memberCount` is its followers, `isMember` means following, and the
+    /// button says Follow.
+    var isChannel = false
 
     init?(_ data: [String: Any]) {
         guard let cid = data["cid"] as? String, GroupDirectory.safeId(cid) else { return nil }
@@ -90,6 +93,7 @@ struct PublicGroupPreview: Equatable {
         self.label = ["scam", "fake"].contains(label) ? label : ""
         self.verified = (data["verified"] as? Bool ?? false) && label.isEmpty
         self.members = (data["members"] as? [[String: Any]] ?? []).compactMap(PublicGroupMember.init)
+        self.isChannel = data["channel"] as? Bool ?? false
     }
 }
 
@@ -144,6 +148,7 @@ enum GroupNameCheck: Equatable {
     }
 
     nonisolated static func membersLine(_ n: Int) -> String { "\(n) \(n == 1 ? "member" : "members")" }
+    nonisolated static func followersLine(_ n: Int) -> String { "\(n) \(n == 1 ? "follower" : "followers")" }
 
     /// The public link of a group with this @name.
     static func link(_ name: String) -> String {
