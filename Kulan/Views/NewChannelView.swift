@@ -123,7 +123,11 @@ struct NewChannelView: View {
                     .lineLimit(1...6)
                     .onChange(of: about) { _, v in if v.count > Self.aboutMax { about = String(v.prefix(Self.aboutMax)) } }
             } footer: {
-                Text("Optional. Tell people what your channel is about.")
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Optional. Tell people what your channel is about.")
+                    // Our rules for channels, on the Help Center (owner 2026-10-29).
+                    Text("By creating a channel you agree to the [Channel Guidelines](https://help.fariin.com/channels/channel-guidelines).")
+                }
             }
             if let error { Text(error).foregroundStyle(.red) }
         }
