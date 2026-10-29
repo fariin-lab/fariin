@@ -3747,7 +3747,7 @@ struct ThreadView: View {
         // A channel's reactions (2026-10-29): my picks live apart from the posts, so they key too.
         let chanRx = conversation?.isChannel == true
         let chanTok = chanRx ? "\(ChannelFollows.shared.myReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.pendingReactions[cid]?.hashValue ?? 0):\(channelReactOn)\(channelCanReact)" : "-"
-        let key = "\(chanTok)|\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)|\(liveRequest ?? "-")"   // 2026-09-24 feature-audit: edit clock
+        let key = "\(chanTok)|\(CallService.shared.calleeRinging)|\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)|\(liveRequest ?? "-")"   // 2026-09-24 feature-audit: edit clock
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
@@ -3808,7 +3808,7 @@ struct ThreadView: View {
                 let unread = m.id == firstUnreadId ? "U1" : "U0"
                 // Live call rows mutate in place (ringing → ongoing → final, duration, voice→video
                 // upgrade) and change no other field this string reads — same rule as `deleted`.
-                let call = m.isCall ? "\(m.callOutcome ?? "-"):\(m.callDuration ?? -1):\(m.callVideo)" : "-"
+                let call = m.isCall ? "\(m.callOutcome ?? "-"):\(m.callDuration ?? -1):\(m.callVideo):\(CallService.shared.calleeRinging)" : "-"
                 // DARK, and this is the FOURTH instance of the key-vs-value mistake named above.
                 // `dark` has been in the KEY since the mixed-palette fix, which recomputes this whole
                 // dictionary on a theme flip — but every row then produced the SAME string as before,
@@ -3998,6 +3998,7 @@ struct ThreadView: View {
         let ctx = MessageRowContext(
             me: me, cid: cid, isGroup: isGroup, isChannel: conversation?.isChannel == true,
             signPosts: conversation?.signPosts == true,
+            calleeRinging: CallService.shared.calleeRinging,
             channelReactionsOn: channelReactOn, channelCanReact: channelCanReact,
             channelMine: { [cid] in ChannelFollows.shared.myReaction(cid, $0) },
             channelConfirmed: { [cid] in ChannelFollows.shared.confirmedReaction(cid, $0) },

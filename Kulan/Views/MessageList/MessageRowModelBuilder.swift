@@ -20,6 +20,8 @@ struct MessageRowContext {
     var isChannel: Bool = false
     /// The channel signs its posts with the admin's name (Sign Posts).
     var signPosts: Bool = false
+    /// My 1:1 call: the other phone has said it is ringing (CallService.calleeRinging).
+    var calleeRinging: Bool = false
     /// A channel's reactions (2026-10-29): shown at all (not "off"), may I add one (a follower),
     /// and my pick per post, as shown and as the server holds it (the counts include the latter).
     var channelReactionsOn: Bool = false
@@ -990,7 +992,9 @@ enum MessageRowModelBuilder {
                     : (incomingMissed ? "Missed voice call" : "Voice call")
         let detail: String = {
             if silenced { return "Focus mode · \(time)" }
-            if ringing { return "Ringing · \(time)" }
+            // My own call says what the call screen says (owner 2026-10-29: the bubble said Ringing
+            // while the screen said Calling): Ringing only once the other phone has said it rings.
+            if ringing { return (mine && !ctx.calleeRinging ? "Calling" : "Ringing") + " · \(time)" }
             if ongoing { return "Ongoing · \(time)" }
             if incomingMissed { return "Call back · \(time)" }
             if missed { return "No answer · \(time)" }        // my unanswered outgoing call
