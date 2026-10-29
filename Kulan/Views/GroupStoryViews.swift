@@ -15,6 +15,7 @@ struct GroupStoryTarget: Identifiable, Equatable {
     let name: String
     let photoUrl: String?
     let memberCount: Int
+    var isChannel = false
 
     @MainActor init(_ c: Conversation) {
         let me = AuthService.shared.uid ?? ""
@@ -24,7 +25,9 @@ struct GroupStoryTarget: Identifiable, Equatable {
         // named after a member (owner 2026-10-23: Juni's stories read "zaki ali").
         name = c.displayName(me)
         photoUrl = c.displayPhoto(me)
-        memberCount = c.users.count
+        // A channel counts its followers, as its page does (owner 2026-10-29: "2 members").
+        memberCount = c.isChannel ? c.subscriberCount : c.users.count
+        isChannel = c.isChannel
     }
 }
 
@@ -72,7 +75,8 @@ struct GroupStoryPicker: View {
                         ForEach(groups) { c in
                             Button { onPick(GroupStoryTarget(c)) } label: {
                                 GroupStoryRow(name: c.displayName(me), photoUrl: c.displayPhoto(me),
-                                              members: c.users.count)
+                                              members: c.isChannel ? c.subscriberCount : c.users.count,
+                                              channel: c.isChannel)
                             }
                             .buttonStyle(.plain)
                         }
@@ -103,14 +107,17 @@ struct GroupStoryRow<Trailing: View>: View {
     let name: String
     let photoUrl: String?
     let members: Int
+    var channel = false
     @ViewBuilder var trailing: () -> Trailing
 
     var body: some View {
         HStack(spacing: 12) {
             AvatarView(name: name, photoUrl: photoUrl, size: 40)
+                .avatarSquircle(channel)
             VStack(alignment: .leading, spacing: 2) {
                 Text(name).foregroundStyle(.primary).lineLimit(1)
-                Text(members == 1 ? "1 member" : "\(members) members")
+                Text(channel ? (members == 1 ? "1 follower" : "\(members) followers")
+                             : (members == 1 ? "1 member" : "\(members) members"))
                     .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)

@@ -722,14 +722,15 @@ struct ShareStorySheet: View {
         NavigationStack {
             List {
                 Section {
-                    GroupStoryRow(name: g.name, photoUrl: g.photoUrl, members: g.memberCount) {
+                    GroupStoryRow(name: g.name, photoUrl: g.photoUrl, members: g.memberCount,
+                                  channel: g.isChannel || Conversation.Right.isChannel(g.id)) {
                         StoryTick(on: true)
                     }
                     .listRowInsets(Self.audienceRowInsets)
                 } header: {
                     Text("Post story as \(g.name)")
                 } footer: {
-                    Text(Conversation.Right.isChannel(g.id)
+                    Text(g.isChannel || Conversation.Right.isChannel(g.id)
                          ? "The channel's followers see this story. It disappears after 24 hours."
                          : "Only members of this group can see this story. It disappears after 24 hours.")
                 }
@@ -744,7 +745,7 @@ struct ShareStorySheet: View {
                 // post with replies ON underneath: followers get no reply field anyway (the counts
                 // footer), and the live rules refuse a story's heart when replies are off, so OFF
                 // would cost a channel story its likes until the new rules (d024d561) are live.
-                if !Conversation.Right.isChannel(g.id) {
+                if !(g.isChannel || Conversation.Right.isChannel(g.id)) {
                     Section {
                         Toggle("Allow Replies", isOn: $groupAllowsReplies)
                             .tint(Color(.systemGreen))
