@@ -139,6 +139,18 @@ enum ChannelService {
             }
     }
 
+    /// Mark as Unread on a followed channel: one post back (the badge shows 1).
+    static func markUnread(cid: String, posts: Int) {
+        let uid = me
+        guard !uid.isEmpty, posts > 0 else { return }
+        let back = posts - 1
+        ChannelFollows.shared.setReadBack(cid, to: back)
+        FirestoreHub.db.collection("users").document(uid).collection("channels").document(cid)
+            .updateData(["read": back]) { err in
+                if let err { print("[channel] markUnread refused:", err.localizedDescription) }
+            }
+    }
+
     static func setMuted(cid: String, _ muted: Bool) {
         let uid = me
         guard !uid.isEmpty else { return }
@@ -168,6 +180,8 @@ final class ChannelFollows {
     @ObservationIgnored private var listListener: ListenerRegistration?
     @ObservationIgnored private var docListeners: [String: ListenerRegistration] = [:]
     @ObservationIgnored private var uid: String?
+    /// Mark as Unread waiting for the server to agree (cid -> the lowered read count).
+    @ObservationIgnored private var lowered: [String: Int] = [:]
 
     func entry(_ cid: String) -> Entry? { entries[cid] }
     func follows(_ cid: String) -> Bool { entries[cid] != nil }
@@ -226,6 +240,15 @@ final class ChannelFollows {
         uid = nil
     }
 
+    /// Mark as Unread: the one place `read` goes backwards (noteLocal only moves it forward).
+    func setReadBack(_ cid: String, to read: Int) {
+        guard var e = entries[cid] else { return }
+        e.read = read
+        entries[cid] = e
+        lowered[cid] = read
+        ConversationsRepository.shared.channelsChanged()
+    }
+
     /// My own change, shown at once (the listener confirms it a moment later).
     func noteLocal(_ cid: String, read: Int? = nil, muted: Bool? = nil, pinned: Bool? = nil, archived: Bool? = nil) {
         guard var e = entries[cid] else { return }
@@ -256,9 +279,13 @@ final class ChannelFollows {
                     ConversationsRepository.shared.channelsChanged()
                 }
         }
-        // Keep what I marked locally if the server has not caught up yet.
+        // Keep what I marked locally if the server has not caught up yet (a Mark as Unread is
+        // taken as the server says once it has).
         var merged = next
         for (cid, e) in merged {
+            if let low = lowered[cid] {
+                if e.read <= low { lowered[cid] = nil } else { merged[cid]?.read = low; continue }
+            }
             if let mine = entries[cid], mine.read > e.read { merged[cid]?.read = mine.read }
         }
         entries = merged

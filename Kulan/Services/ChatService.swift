@@ -3893,6 +3893,8 @@ enum ChatService {
     /// `Conversation.manuallyUnread`) until the chat is next opened.
     static func markUnread(_ cid: String) async {
         if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.markUnread(); return }
+        // A channel I follow: the newest post counts as unread again, on my own entry (2026-10-28).
+        if let posts = followedChannelPosts(cid) { ChannelService.markUnread(cid: cid, posts: posts); return }
         try? await db.collection("conversations").document(cid)
             .updateData(["markedUnread.\(uid)": true])
     }
