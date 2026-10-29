@@ -27,7 +27,13 @@ struct GroupLinkPreview: Equatable {
     var description: String
     var faces: [Mutual]
 
-    var membersLine: String { "\(memberCount) \(memberCount == 1 ? "member" : "members")" }
+    /// A channel's link (2026-10-28): `memberCount` is its followers and the button says Follow.
+    var isChannel = false
+
+    var membersLine: String {
+        isChannel ? "\(memberCount) \(memberCount == 1 ? "follower" : "followers")"
+                  : "\(memberCount) \(memberCount == 1 ? "member" : "members")"
+    }
 
     init(code: String, data: [String: Any]) {
         self.code = code
@@ -39,6 +45,7 @@ struct GroupLinkPreview: Equatable {
         self.photoUrl = p.isEmpty ? nil : p
         self.memberCount = (data["memberCount"] as? NSNumber)?.intValue ?? 0
         self.isMember = data["isMember"] as? Bool ?? false
+        self.isChannel = data["channel"] as? Bool ?? false
         self.needsApproval = data["needsApproval"] as? Bool ?? false
         self.requested = data["requested"] as? Bool ?? false
         self.mutuals = (data["mutuals"] as? [[String: Any]] ?? []).compactMap { m in

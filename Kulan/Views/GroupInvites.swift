@@ -393,6 +393,7 @@ struct JoinGroupSheet: View {
     }
 
     private func buttonTitle(_ p: GroupLinkPreview) -> String {
+        if p.isChannel { return joining ? "Following…" : "Follow Channel" }   // 2026-10-28
         if requestSent || p.requested { return "Request Sent" }
         if joining { return p.needsApproval ? "Sending…" : "Joining…" }
         return p.needsApproval ? "Request to Join" : "Join Group"
@@ -509,7 +510,7 @@ struct JoinGroupSheet: View {
             do {
                 let r = try await GroupInviteService.joinViaInvite(code: code)
                 switch r.status {
-                case "joined", "already":
+                case "joined", "already", "following":   // "following": a channel's link (2026-10-28)
                     GroupLinkDoor.noteJoined(code, cid: r.cid)
                     openChat(r.cid, p)
                 case "requested":
