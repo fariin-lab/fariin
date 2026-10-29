@@ -534,24 +534,28 @@ struct MenuIcon: View {
 /// group at a glance, in the list, the header, the page and search. People and groups stay round;
 /// the action circles stay round everywhere.
 ///
-/// ⛔ A TRUE SQUIRCLE, AT 92% (owner 2026-10-29, second look: "looks like square, make it real
+/// ⛔ A TRUE SQUIRCLE, AREA-MATCHED (owner 2026-10-29, second look: "looks like square, make it real
 /// squircle, size looks big"). The first cut was a continuous rounded rect at 28%, which reads as a
 /// square, and it filled its whole frame, so beside the circles it looked a size up. Now a
-/// superellipse (|x|⁴ + |y|⁴ = 1) at 92% of the side: that is the side at which its area equals
-/// the circle's (0.927 vs π/4 of the square), so a channel sits at the same visual weight as a
-/// person. The frame (and so every layout) is unchanged; the shape is centred inside it.
+/// superellipse (his curve, n and size in `SquircleShape`) drawn smaller than its frame, at the side
+/// where its area equals the circle's, so a channel sits at the same visual weight as a person.
+/// The frame (and so every layout) is unchanged; the shape is centred inside it.
 enum AvatarShape {
     static func squircle(_ side: CGFloat) -> SquircleShape { SquircleShape() }
     /// The same outline for UIKit masks and drawn placeholders.
     static func cgPath(in rect: CGRect) -> CGPath { SquircleShape().path(in: rect).cgPath }
 }
 
-/// A superellipse, |x|ⁿ + |y|ⁿ = 1 with n = 4, at `AvatarShape`'s 92% of the rect and centred.
+/// A superellipse, |x|ⁿ + |y|ⁿ = 1 (n = `exponent`), at `scale` of the rect and centred.
 /// The path starts at the top centre and runs clockwise, so a `trim` of it starts at the top the way
 /// the story ring's rotated circle does.
 struct SquircleShape: InsettableShape {
-    static let exponent: CGFloat = 4
-    static let scale: CGFloat = 0.92
+    /// ⛔ n = 6, HIS CURVE (owner 2026-10-29, a plot: "exactly use this"). Measured off it: the corner
+    /// crosses the diagonal at ~0.89 of the half-side, which is |x|⁶ + |y|⁶ = 1 (n = 4 gives 0.84,
+    /// rounder than his). At n = 6 the shape fills 0.964 of its square, so it draws at 0.90 of the
+    /// frame to keep a circle's area beside the people's photos.
+    static let exponent: CGFloat = 6
+    static let scale: CGFloat = 0.90
     var insetAmount: CGFloat = 0
     /// The photo viewer morphs the avatar's squircle into the square photo by raising these
     /// (n → ~64 is a square to the eye, scale → 1 fills the frame). Everyone else keeps the defaults.
