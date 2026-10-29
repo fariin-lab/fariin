@@ -902,8 +902,9 @@ enum MessageRowModelBuilder {
             if let action = restrictedAction(m.text) {
                 let who = m.authorId == ctx.me ? "You" : ctx.nameFor(m.authorId)
                 // His wording: "Restricted Chat", as the profile row names it.
-                let words = action.replacingOccurrences(of: "Restricted chat", with: "Restricted Chat")
+                let said = action.replacingOccurrences(of: "Restricted chat", with: "Restricted Chat")
                     .replacingOccurrences(of: "Restricted group", with: "Restricted Group")
+                let words = ctx.isChannel ? ChannelWords.apply(said) : said   // a channel's words (2026-10-29)
                 // ⛔ THE OPEN REQUEST CARRIES ITS ANSWER (owner, 2026-10-12): Reject and Accept under
                 // the request, for the person it was asked of, while it is open. Only the one notice
                 // ThreadView names live gets them; older requests and the asker's own copy are a

@@ -530,6 +530,13 @@ final class HeaderAvatarView: UIView {
             layer.contents = UIGraphicsImageRenderer(size: box.size).image { _ in
                 fill.setFill()
                 UIBezierPath(cgPath: AvatarShape.cgPath(in: box)).fill()
+                // The megaphone `AvatarView` draws for a channel with no photo (owner 2026-10-29:
+                // "channel icon is not appearing" at the top of the chat).
+                let cfg = UIImage.SymbolConfiguration(pointSize: size * 0.35, weight: .medium)
+                if let m = UIImage(systemName: "megaphone.fill", withConfiguration: cfg)?
+                    .withTintColor(.white, renderingMode: .alwaysOriginal) {
+                    m.draw(at: CGPoint(x: (size - m.size.width) / 2, y: (size - m.size.height) / 2))
+                }
             }.cgImage
             layer.contentsScale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 3
             return
