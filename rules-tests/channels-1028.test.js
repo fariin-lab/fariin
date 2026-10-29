@@ -54,6 +54,7 @@ const cases = [
   ['admin renames the channel (control)', 'ALLOW', OWNER, 'update', `conversations/${CID}`, chan, { ...chan, title: 'News 2' }, chan, false],
   ['admin turns a group INTO a channel', 'DENY', OWNER, 'update', `conversations/${CID}`, group, { ...group, channel: true }, group, false],
   ['admin edits followerCount', 'DENY', OWNER, 'update', `conversations/${CID}`, chan, { ...chan, followerCount: 999 }, chan, false],
+  ['admin moves the channel to another country', 'DENY', OWNER, 'update', `conversations/${CID}`, chan, { ...chan, country: 'US' }, chan, false],
   ['admin edits postCount', 'DENY', OWNER, 'update', `conversations/${CID}`, chan, { ...chan, postCount: 5 }, chan, false],
 ];
 

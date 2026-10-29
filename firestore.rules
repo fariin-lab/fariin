@@ -1778,7 +1778,7 @@ service cloud.firestore {
         // 2026-10-19 groups v2: the group type and its public @name are written only by
         // functions-username setGroupUsername, which claims the name in `usernames` in the same step.
         // `joinApproval` (a public group files join requests instead of adding) is server-only too.
-        && !request.resource.data.keys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'hideMembers', 'hideMembersBy', 'channel', 'followerCount', 'postCount'])
+        && !request.resource.data.keys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'hideMembers', 'hideMembersBy', 'channel', 'followerCount', 'postCount', 'country'])
         // 2026-10-19 groups v2 (owner): groups are not end-to-end encrypted. A new group may say so
         // itself (`e2ee: false`, written by the app's createGroup), and nothing else: `e2ee` is
         // false-only and groups-only, and the switch time `e2eeOffAt` is the server's alone.
@@ -2133,7 +2133,7 @@ service cloud.firestore {
         // `e2eeOffAt`) is the server's to change (the groupsE2eeOff migration). In the same list, not
         // a line of its own: a second diff here pushed a busy admin write past the rules engine's
         // 1,000-expression ceiling (rules-tests/role-1018).
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt', 'memberSince', 'endedAt', 'hideMembers', 'hideMembersBy', 'channel', 'followerCount', 'postCount'])
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt', 'memberSince', 'endedAt', 'hideMembers', 'hideMembersBy', 'channel', 'followerCount', 'postCount', 'country'])
         && groupModWriteOK()
         && groupAddOK()   // audit F4: no adding someone with a block either way
         // owner 2026-10-18: the group wallpaper, groups only and a known shape (groupWallpaperOK).
