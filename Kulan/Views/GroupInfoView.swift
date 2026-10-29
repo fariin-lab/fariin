@@ -159,6 +159,7 @@ struct GroupInfoView: View {
     private var isChannel: Bool { conv?.isChannel == true }
     private var isFollowerHere: Bool { isChannel && !iAmMember }
     @State private var unfollowing = false
+    @State private var confirmChannelReport = false
     @State private var showFollowers = false
     @State private var showScheduled = false
     @State private var confirmUnfollow = false
@@ -472,6 +473,106 @@ struct GroupInfoView: View {
     }
 
     @ViewBuilder private var unlockedCards: some View {
+        if isFollowerHere {
+            // A follower's channel page (owner 2026-10-29, the reference app's): about, the media and
+            // storage rows with Muted, what kind of channel it is, then Unfollow / Report.
+            aboutCard
+            followerRowsCard
+            channelFactsCard
+            exitCard
+        } else {
+            memberCards
+        }
+    }
+
+    // MARK: A follower's channel page (owner 2026-10-29)
+
+    /// Following ✓ (tap: Unfollow?), Share, Search: equal cards, the reference app's channel row.
+    private var followerActions: some View {
+        HStack(spacing: 8) {
+            Button { confirmUnfollow = true } label: {
+                followerCard("checkmark", "Following", tint: Color(hex: 0x2392FE))
+            }
+            if let name = conv?.publicName, !name.isEmpty, let url = URL(string: "https://fariin.com/" + name) {
+                ShareLink(item: url) { followerCard("square.and.arrow.up", "Share") }
+            } else {
+                followerCard("square.and.arrow.up", "Share").opacity(0.45)
+            }
+            Button { onSearch?() } label: { followerCard("magnifyingglass", "Search") }
+                .disabled(onSearch == nil)
+        }
+        .tint(.primary)
+        .padding(.horizontal, 16)
+    }
+
+    private func followerCard(_ icon: String, _ label: String, tint: Color = .primary) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon).font(.system(size: 20, weight: .medium)).foregroundStyle(tint)
+            Text(label).font(.system(size: 13)).foregroundStyle(.primary).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity).frame(height: 68)
+        .background(cardColor, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    /// Media and Links, Storage Used, and Muted as a switch.
+    private var followerRowsCard: some View {
+        VStack(spacing: 0) {
+            ProfileInfoRow(title: "Media and Links", icon: "photo",
+                           value: media.isEmpty ? "None" : "\(media.count)") { showAllMedia = true }
+            rowDivider
+            ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
+                           value: storage.map { Self.bytes($0.total) } ?? "") { showStorage = true }
+            rowDivider
+            HStack(spacing: 14) {
+                Image(systemName: "bell.slash").font(.system(size: 17)).frame(width: 26)
+                Toggle("Muted", isOn: Binding(get: { muted }, set: { ChannelService.setMuted(cid: cid, $0) }))
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+        }
+        .profileSurface(plain: cardColor)
+    }
+
+    /// What kind of channel this is, in words.
+    private var channelFactsCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            channelFact("globe", conv?.isPublic == true ? "Public channel" : "Private channel",
+                        conv?.isPublic == true ? "Anyone can find this channel and read its posts."
+                                               : "Only people with its invite link can follow it.")
+            rowDivider
+            channelFact("lock", "Followers are private", "Nobody sees who follows this channel. Only its admins post.")
+        }
+        .profileSurface(plain: cardColor)
+    }
+
+    private func channelFact(_ icon: String, _ title: String, _ line: String) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: icon).font(.system(size: 17)).frame(width: 26)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Text(line).font(.subheadline).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 14)
+    }
+
+    private func unfollowNow(report: Bool) {
+        unfollowing = true
+        Task {
+            if report { await ChatService.report(reportedUid: "", cid: cid, reason: "channel") }
+            do { try await ChannelService.unfollow(cid: cid); dismiss() }
+            catch { actionError = error.localizedDescription }
+            unfollowing = false
+        }
+    }
+
+    private func reportChannel() {
+        Task { await ChatService.report(reportedUid: "", cid: cid, reason: "channel") }
+        flashNotice("Thanks. Fariin's moderators will review this channel.")
+    }
+
+    @ViewBuilder private var memberCards: some View {
         // The description and a public group's own link (copy, share, QR) share one card.
         aboutCard
         settingsCard
@@ -551,7 +652,9 @@ struct GroupInfoView: View {
             }
             .overlay { GroupStoryUploadRing(active: StoriesService.shared.uploadingGroups.contains(cid)) }
             headerCaption(.primary)
-            if conv?.fariinLocked != true { actionsRow.padding(.top, 2) }
+            if conv?.fariinLocked != true {
+                if isFollowerHere { followerActions.padding(.top, 6) } else { actionsRow.padding(.top, 2) }
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 8)
@@ -860,11 +963,11 @@ struct GroupInfoView: View {
                 // A channel I follow (2026-10-28): Leave Channel unfollows; Follow if I am not.
                 VStack(spacing: 0) {
                     if ChannelFollows.shared.follows(cid) {
-                        ProfileInfoRow(title: unfollowing ? "Leaving…" : "Leave Channel", icon: "rectangle.portrait.and.arrow.right",
+                        ProfileInfoRow(title: unfollowing ? "Unfollowing…" : "Unfollow Channel", icon: "rectangle.portrait.and.arrow.right",
                                        tint: Self.exitRed, chevron: false) { confirmUnfollow = true }
                         if conv?.groupNoReport != true {
                             rowDivider
-                            ProfileInfoRow(title: "Report Spam", icon: "exclamationmark.octagon", tint: Self.exitRed, chevron: false) { confirmReport = true }
+                            ProfileInfoRow(title: "Report Channel", icon: "exclamationmark.octagon", tint: Self.exitRed, chevron: false) { confirmChannelReport = true }
                         }
                     } else if conv?.isPublic == true {
                         ProfileInfoRow(title: "Follow", icon: "person.badge.plus", chevron: false) {
@@ -873,17 +976,15 @@ struct GroupInfoView: View {
                     }
                 }
                 .profileSurface(plain: cardColor)
-                .alert("Leave Channel?", isPresented: $confirmUnfollow) {
+                .alert("Unfollow", isPresented: $confirmUnfollow) {
+                    Button("Unfollow Channel", role: .destructive) { unfollowNow(report: false) }
                     Button("Cancel", role: .cancel) {}
-                    Button("Leave", role: .destructive) {
-                        unfollowing = true
-                        Task {
-                            do { try await ChannelService.unfollow(cid: cid); dismiss() }
-                            catch { actionError = error.localizedDescription }
-                            unfollowing = false
-                        }
-                    }
-                } message: { Text("You won't see this channel's posts in your chats any more.") }
+                } message: { Text("Are you sure you want to unfollow “\(conv?.title ?? "this channel")”?") }
+                .confirmationDialog("Report this channel?", isPresented: $confirmChannelReport, titleVisibility: .visible) {
+                    Button("Report and Unfollow", role: .destructive) { unfollowNow(report: true) }
+                    Button("Report") { reportChannel() }
+                    Button("Cancel", role: .cancel) {}
+                } message: { Text("No one in the channel will know about this report.") }
             } else if !iAmMember {
                 // A group I left (owner 2026-10-25, "make leave work like the reference app"): no
                 // Leave, Report, End or Delete for a group I am not in. A public one can be joined
@@ -939,7 +1040,8 @@ struct GroupInfoView: View {
     private var createdLine: String? {
         guard let c = conv else { return nil }
         var parts: [String] = []
-        if !c.createdBy.isEmpty {
+        // A channel never names its admins to its followers.
+        if !c.createdBy.isEmpty, !(c.isChannel && !c.users.contains(me)) {
             let who = c.createdBy == me ? "you" : (c.names[c.createdBy] ?? "")
             if !who.isEmpty { parts.append("Created by \(who).") }
         }
