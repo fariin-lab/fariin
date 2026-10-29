@@ -85,6 +85,8 @@ enum RecentActionKind: String, CaseIterable, Identifiable {
 
 struct GroupRecentActionsView: View {
     let cid: String
+    /// A channel's log speaks of the channel, followers and posts (owner 2026-10-29).
+    private var isChannel: Bool { Conversation.Right.isChannel(cid) }
     @State private var events: [GroupAdminLogEvent] = []
     @State private var names: [String: String] = [:]
     @State private var next: [String: Any]?
@@ -212,7 +214,7 @@ struct GroupRecentActionsView: View {
         }
         .sheet(isPresented: $showFilter) {
             RecentActionsFilterSheet(people: filterPeople, kinds: kinds, actors: actors,
-                                     name: name, photo: photo) { k, a in kinds = k; actors = a }
+                                     name: name, photo: photo, channel: isChannel) { k, a in kinds = k; actors = a }
         }
         .task { if events.isEmpty { await load(more: false) } }
         .refreshable { await load(more: false) }
@@ -252,7 +254,7 @@ struct GroupRecentActionsView: View {
                     Text(e.at.formatted(date: .omitted, time: .shortened))
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Text(action(e)).font(.subheadline).foregroundStyle(.primary)
+                Text(isChannel ? ChannelWords.apply(action(e)) : action(e)).font(.subheadline).foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
                 if !more.isEmpty { detailView(more).padding(.top, 4) }
             }
@@ -288,7 +290,7 @@ struct GroupRecentActionsView: View {
         VStack(alignment: .leading, spacing: 6) {
             if let quote = d.quote {
                 VStack(alignment: .leading, spacing: 1) {
-                    if let label = d.quoteLabel { Text(label).font(.caption).foregroundStyle(.secondary) }
+                    if let label = d.quoteLabel { Text(isChannel ? ChannelWords.apply(label) : label).font(.caption).foregroundStyle(.secondary) }
                     Text(quote).font(.subheadline).foregroundStyle(.primary).lineLimit(4)
                 }
                 .padding(.leading, 10)
@@ -299,10 +301,10 @@ struct GroupRecentActionsView: View {
             if let url = d.photoUrl {
                 HStack(spacing: 10) {
                     AvatarView(name: conv?.title ?? "", photoUrl: url, size: 44)
-                    Text("Current group photo").font(.caption).foregroundStyle(.secondary)
+                    Text(isChannel ? "Current channel photo" : "Current group photo").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if let note = d.note { Text(note).font(.footnote).foregroundStyle(.secondary) }
+            if let note = d.note { Text(isChannel ? ChannelWords.apply(note) : note).font(.footnote).foregroundStyle(.secondary) }
             if !d.bullets.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(d.bullets, id: \.self) { b in
@@ -641,13 +643,15 @@ private struct RecentActionsFilterSheet: View {
     let name: (String) -> String
     let photo: (String) -> String?
     let apply: (Set<RecentActionKind>?, Set<String>?) -> Void
+    var channel = false
     @State private var kinds: Set<RecentActionKind>
     @State private var actors: Set<String>
     @Environment(\.dismiss) private var dismiss
 
     init(people: [String], kinds: Set<RecentActionKind>?, actors: Set<String>?,
-         name: @escaping (String) -> String, photo: @escaping (String) -> String?,
+         name: @escaping (String) -> String, photo: @escaping (String) -> String?, channel: Bool = false,
          apply: @escaping (Set<RecentActionKind>?, Set<String>?) -> Void) {
+        self.channel = channel
         self.people = people
         self.name = name
         self.photo = photo
@@ -675,7 +679,7 @@ private struct RecentActionsFilterSheet: View {
                             if kinds.contains(k) { kinds.remove(k) } else { kinds.insert(k) }
                         } label: {
                             icon(k.icon)
-                            Text(k.title)
+                            Text(channel ? ChannelWords.apply(k.title) : k.title)
                         }
                     }
                 }
@@ -745,5 +749,27 @@ private struct RecentActionsFilterSheet: View {
         } else {
             Image(systemName: name).font(.system(size: 21)).frame(width: 26)
         }
+    }
+}
+
+/// A group's words in a channel's (2026-10-29): the admin log and its filter are shared with groups.
+enum ChannelWords {
+    private static let swaps: [(String, String)] = [
+        ("Join Requests", "Follow Requests"), ("join requests", "follow requests"),
+        ("Join Request", "Follow Request"), ("join request", "follow request"),
+        ("New Members", "New Followers"), ("Members", "Followers"), ("members", "followers"),
+        ("Member", "Follower"), ("member", "follower"),
+        ("Messages", "Posts"), ("messages", "posts"), ("Message", "Post"), ("message", "post"),
+        ("Group", "Channel"), ("group", "channel"),
+    ]
+    static func apply(_ s: String) -> String {
+        swaps.reduce(s) { $0.replacingOccurrences(of: $1.0, with: $1.1) }
+    }
+    static func apply(_ s: AttributedString) -> AttributedString {
+        var out = s
+        for (from, to) in swaps {
+            while let r = out.range(of: from) { out.characters.replaceSubrange(r, with: to) }
+        }
+        return out
     }
 }
