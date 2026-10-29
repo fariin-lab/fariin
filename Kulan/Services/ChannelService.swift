@@ -88,6 +88,17 @@ enum ChannelService {
             }
     }
 
+    /// Pinned / archived on my own entry (a follower may not write the channel's document).
+    static func setFlag(cid: String, _ key: String, _ on: Bool) {
+        let uid = me
+        guard !uid.isEmpty, key == "pinned" || key == "archived" else { return }
+        ChannelFollows.shared.noteLocal(cid, pinned: key == "pinned" ? on : nil, archived: key == "archived" ? on : nil)
+        FirestoreHub.db.collection("users").document(uid).collection("channels").document(cid)
+            .updateData([key: on]) { err in
+                if let err { print("[channel] \(key) refused:", err.localizedDescription) }
+            }
+    }
+
     static func setMuted(cid: String, _ muted: Bool) {
         let uid = me
         guard !uid.isEmpty else { return }
@@ -107,7 +118,7 @@ enum ChannelService {
 final class ChannelFollows {
     static let shared = ChannelFollows()
 
-    struct Entry: Equatable { var read: Int; var muted: Bool }
+    struct Entry: Equatable { var read: Int; var muted: Bool; var pinned = false; var archived = false }
 
     /// The most channels kept live at once (a listener each).
     static let maxLive = 300
@@ -128,6 +139,8 @@ final class ChannelFollows {
             var c = c
             c.followerRead = e.read
             c.followerMuted = e.muted
+            c.followerPinned = e.pinned
+            c.followerArchived = e.archived
             return c
         }
     }
@@ -147,7 +160,9 @@ final class ChannelFollows {
                 for d in snap.documents {
                     let data = d.data()
                     next[d.documentID] = Entry(read: (data["read"] as? NSNumber)?.intValue ?? 0,
-                                               muted: data["muted"] as? Bool ?? false)
+                                               muted: data["muted"] as? Bool ?? false,
+                                               pinned: data["pinned"] as? Bool ?? false,
+                                               archived: data["archived"] as? Bool ?? false)
                 }
                 self.apply(next)
             }
@@ -172,10 +187,12 @@ final class ChannelFollows {
     }
 
     /// My own change, shown at once (the listener confirms it a moment later).
-    func noteLocal(_ cid: String, read: Int? = nil, muted: Bool? = nil) {
+    func noteLocal(_ cid: String, read: Int? = nil, muted: Bool? = nil, pinned: Bool? = nil, archived: Bool? = nil) {
         guard var e = entries[cid] else { return }
         if let read { e.read = max(e.read, read) }
         if let muted { e.muted = muted }
+        if let pinned { e.pinned = pinned }
+        if let archived { e.archived = archived }
         entries[cid] = e
         ConversationsRepository.shared.channelsChanged()
     }

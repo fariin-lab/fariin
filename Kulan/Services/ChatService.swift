@@ -4046,6 +4046,8 @@ enum ChatService {
             if full { return false }
         }
         if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.setPinned(value); return true }
+        // A channel I follow keeps its pin on my own entry (2026-10-28): not mine to write on it.
+        if followedChannelPosts(cid) != nil { ChannelService.setFlag(cid: cid, "pinned", value); return true }
         await MainActor.run {
             if value { Self.justUnpinned.remove(cid) } else { Self.justUnpinned.insert(cid) }
         }
@@ -4092,6 +4094,7 @@ enum ChatService {
     @discardableResult
     static func setArchived(_ cid: String, _ value: Bool) async -> Bool {
         if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.setArchived(value); return true }
+        if followedChannelPosts(cid) != nil { ChannelService.setFlag(cid: cid, "archived", value); return true }
         return await settingWrite("archive", cid, ["archivedBy": [uid: value]])
     }
 
@@ -4313,6 +4316,12 @@ enum ChatService {
     /// "Delete for me" — hides the thread until a newer message arrives (clearedAt).
     static func deleteForMe(_ cid: String) async {
         if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.clearHistory(); return }
+        // Deleting a channel I follow from my chats is leaving it (2026-10-28).
+        if followedChannelPosts(cid) != nil {
+            do { try await ChannelService.unfollow(cid: cid) }
+            catch { await MainActor.run { ToastNotice.show("Couldn't leave the channel. Try again.") } }
+            return
+        }
         try? await db.collection("conversations").document(cid).setData([
             "clearedAt": [uid: Date().timeIntervalSince1970 * 1000],
             "unreadCount": [uid: 0],

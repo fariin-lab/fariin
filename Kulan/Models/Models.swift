@@ -1165,6 +1165,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// Mine as a follower, from users/{me}/channels/{cid} (ChannelFollows), nil when I am not one.
     var followerRead: Int?
     var followerMuted = false
+    var followerPinned = false
+    var followerArchived = false
     /// group: what members may send (2026-10-20), `memberSend` {photos, videos, voice, files,
     /// stickers, gifs, links, polls, location}; a missing key = allowed. firestore.rules
     /// `memberSendOk` enforces it.
@@ -1730,12 +1732,12 @@ struct Conversation: Identifiable, Equatable, Hashable {
     func leaksBlocked(_ me: String) -> Bool { hiddenLastSince(me) != nil }
     /// Sort/time key that ignores the blocked person's held-back messages (freezes at block time).
     func displayUpdatedAt(_ me: String) -> Double { hiddenLastSince(me) ?? updatedAtMillis }
-    func isPinned(_ me: String) -> Bool { pinnedBy[me] ?? false }
+    func isPinned(_ me: String) -> Bool { isFollower(me) ? followerPinned : (pinnedBy[me] ?? false) }
     /// Manual order for pinned chats; defaults to recency so never-moved pins stay sensible.
     /// FROZEN recency (audit): the raw fallback let a silently-blocked pinned chat jump to the top
     /// of the pinned block on each of their messages — exactly the activity the freeze hides.
     func pinRank(_ me: String) -> Double { pinOrder[me] ?? displayUpdatedAt(me) }
-    func isArchived(_ me: String) -> Bool { archivedBy[me] ?? false }
+    func isArchived(_ me: String) -> Bool { isFollower(me) ? followerArchived : (archivedBy[me] ?? false) }
     /// "delete for me" until a newer message arrives (parity with RN Db.isCleared).
     func isCleared(_ me: String) -> Bool { updatedAtMillis <= (clearedAt[me] ?? 0) }
     /// My message is the most recent one — show delivery/read ticks for it in the list.

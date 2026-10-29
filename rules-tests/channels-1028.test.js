@@ -38,6 +38,8 @@ const cases = [
   ['I read someone else\'s followed list', 'DENY', X, 'get', `users/${F}/channels/${CID}`, { at: T }, null, chan, true],
   ['I write my own followed list', 'DENY', F, 'create', `users/${F}/channels/${CID}`, null, { at: T }, chan, true],
   ['I mark read + muted on my entry', 'ALLOW', F, 'update', `users/${F}/channels/${CID}`, { at: T }, { at: T, read: 12, muted: true }, chan, true],
+  ['I pin and archive my entry', 'ALLOW', F, 'update', `users/${F}/channels/${CID}`, { at: T }, { at: T, pinned: true, archived: false }, chan, true],
+  ['pinned as text', 'DENY', F, 'update', `users/${F}/channels/${CID}`, { at: T }, { at: T, pinned: 'y' }, chan, true],
   ['I change the follow time', 'DENY', F, 'update', `users/${F}/channels/${CID}`, { at: T }, { at: '2020-01-01T00:00:00Z' }, chan, true],
   ['read as text', 'DENY', F, 'update', `users/${F}/channels/${CID}`, { at: T }, { at: T, read: 'x' }, chan, true],
   ['someone marks my entry', 'DENY', X, 'update', `users/${F}/channels/${CID}`, { at: T }, { at: T, read: 1 }, chan, true],

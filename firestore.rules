@@ -804,10 +804,11 @@ service cloud.firestore {
       // Channels I follow (2026-10-28), written by functions-groups followChannel only.
       match /channels/{c} {
         allow read: if signedIn() && request.auth.uid == uid;
-        // Mine to mark: how many posts I have read, and muted.
+        // Mine to mark: how many posts I have read, muted, pinned, archived.
         allow update: if signedIn() && request.auth.uid == uid
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'muted'])
-          && request.resource.data.get('read', 0) is int && request.resource.data.get('muted', false) is bool;
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'muted', 'pinned', 'archived'])
+          && request.resource.data.get('read', 0) is int && request.resource.data.get('muted', false) is bool
+          && request.resource.data.get('pinned', false) is bool && request.resource.data.get('archived', false) is bool;
       }
       match /blockedGroups/{gid} {
         allow read, delete: if signedIn() && request.auth.uid == uid;
