@@ -9,9 +9,15 @@ import FirebaseFirestore
 
 struct GroupTypeView: View {
     let cid: String
+    /// Creating a channel (2026-10-28): this is its second step, "Next" instead of "Save", and the
+    /// flow goes on (add followers) instead of closing the page.
+    let setupNext: (() -> Void)?
     private var repo = ConversationsRepository.shared
     private var me: String { AuthService.shared.uid ?? "" }
-    init(cid: String) { self.cid = cid }
+    init(cid: String, setupNext: (() -> Void)? = nil) { self.cid = cid; self.setupNext = setupNext }
+    /// A channel speaks of followers and following, a group of members and joining.
+    private var isChannel: Bool { conv?.isChannel ?? (setupNext != nil) }
+    private var noun: String { isChannel ? "channel" : "group" }
     @Environment(\.dismiss) private var dismiss
 
     @State private var wantsPublic: Bool?
@@ -44,13 +50,22 @@ struct GroupTypeView: View {
         List {
             typeSection
             if showPublic { linkSection; linkAndContentSections } else { privateSections }
+            if isChannel { protectContentSection }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("Group Type")
+        .navigationTitle(isChannel ? "Channel Type" : "Group Type")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(setupNext != nil)   // the channel exists; there is no going back
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                if saving { ProgressView() } else {
+                if saving { ProgressView() } else if let next = setupNext {
+                    // Public: the link must be free first. Private: straight on.
+                    Button("Next") {
+                        if showPublic, nameChanged { save(name) } else { next() }
+                    }
+                    .disabled(showPublic && (name.isEmpty || (nameChanged && check != .available)))
+                    .buttonStyle(.glassProminent).tint(Color(hex: 0x2392FE))
+                } else {
                     // Blue, as the tag page's Done (owner 2026-10-20).
                     Button("Save") { save(name) }.disabled(!canSave)
                         .buttonStyle(.glassProminent).tint(Color(hex: 0x2392FE))
@@ -147,12 +162,13 @@ struct GroupTypeView: View {
                 .buttonStyle(.plain)
                 .sheet(isPresented: $showSend) { SendContactSheet(contactText: url) }   // the app's own Share with sheet (owner 2026-10-21)
             } else {
-                Text("This group has no invite link on.").foregroundStyle(.secondary)
+                Text("This \(noun) has no invite link on.").foregroundStyle(.secondary)
             }
         } header: {
             Text("Invite link")
         } footer: {
-            Text("People can join your group with this link. You can reset it any time.")
+            Text(isChannel ? "People can follow your channel with this link. You can reset it any time."
+                           : "People can join your group with this link. You can reset it any time.")
         }
         .listRowSeparator(.hidden)
         linkAndContentSections
@@ -161,7 +177,8 @@ struct GroupTypeView: View {
     /// Invite Links, under either type (owner 2026-10-20: a public group shows it under its public
     /// link too). Protect Content left this page on the 10-21 mockup; it stays on Permissions.
     @ViewBuilder private var linkAndContentSections: some View {
-        Section {
+        // Not for a channel yet: a following does not count against a link's limits.
+        if !isChannel { Section {
             NavigationLink {
                 InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
                                 initialCode: shareCode ?? conv?.inviteCode ?? "", embedded: true)
@@ -173,7 +190,7 @@ struct GroupTypeView: View {
             }
         } footer: {
             Text("Make extra links that end after a time or a number of people.")
-        }
+        } }
     }
 
     /// Kept for a later home; not shown (owner mockup 2026-10-21 has no Protect Content here).
@@ -192,25 +209,28 @@ struct GroupTypeView: View {
                 }))
                 .onChange(of: conv?.isRestricted) { _, now in if now == protectOn { protectOn = nil } }
         } header: {
-            Text("Forwarding from this group")
+            Text(isChannel ? "Saving and copying" : "Forwarding from this group")
         } footer: {
+            let who = isChannel ? "Followers" : "Members"
             Text((conv?.isRestricted ?? false)
-                 ? "Members can't forward, copy, save or screenshot content from this group."
-                 : "Members can copy, save and forward content from this group.")
+                 ? "\(who) can't forward, copy, save or screenshot content from this \(noun)."
+                 : "\(who) can copy, save and forward content from this \(noun).")
         }
     }
 
     private var typeSection: some View {
         Section {
             // Public first (owner 2026-10-21).
-            typeRow("Public Group", selected: showPublic) { pick(publicType: true) }
-            typeRow("Private Group", selected: !showPublic) { pick(publicType: false) }
+            typeRow(isChannel ? "Public Channel" : "Public Group", selected: showPublic) { pick(publicType: true) }
+            typeRow(isChannel ? "Private Channel" : "Private Group", selected: !showPublic) { pick(publicType: false) }
         } header: {
-            Text("Group Type")
+            Text(isChannel ? "Channel Type" : "Group Type")
         } footer: {
-            Text(showPublic
-                 ? "Anyone can find this group in search and join it without an invite."
-                 : "People can join only with an invite link, or when an admin adds them.")
+            Text(isChannel
+                 ? (showPublic ? "Anyone can find this channel in search and follow it."
+                               : "People can follow only with an invite link, or when an admin adds them.")
+                 : (showPublic ? "Anyone can find this group in search and join it without an invite."
+                               : "People can join only with an invite link, or when an admin adds them."))
         }
     }
 
@@ -247,7 +267,7 @@ struct GroupTypeView: View {
 
     @ViewBuilder private var linkFooter: some View {
         if !nameChanged && !name.isEmpty {
-            Text("People can open this group with fariin.com/\(name).")
+            Text("People can open this \(noun) with fariin.com/\(name).")
         } else if check != .idle {
             Text(check.text).foregroundStyle(checkColor)
         } else {
@@ -306,8 +326,9 @@ struct GroupTypeView: View {
                 if value.isEmpty { name = "" }
                 check = .idle
                 // Saved: back to Group Settings (owner 2026-10-20: the page stayed after Save).
+                // Creating a channel: on to the next step instead.
                 saving = false
-                dismiss()
+                if let next = setupNext { next() } else { dismiss() }
                 return
             } catch {
                 saveError = error.localizedDescription

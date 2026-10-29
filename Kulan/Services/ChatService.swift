@@ -197,7 +197,8 @@ enum ChatService {
     /// record, so there is no second write or second notice for it.
     static func createGroup(title: String, memberIds: [String], avatarUrl: String? = nil,
                             disappearSeconds: Int = 0,
-                            permissions: [String: Bool] = [:]) async throws -> String {
+                            permissions: [String: Bool] = [:],
+                            createdText: String? = nil) async throws -> String {
         // Their "Groups" privacy first (owner 2026-10-26: No One still let people add him).
         let refused = await groupAddRefusers(memberIds.filter { $0 != uid })
         var memberSet = Set(memberIds).subtracting(refused.keys); memberSet.insert(uid)
@@ -252,7 +253,7 @@ enum ChatService {
         let cid = ref.documentID
         Task.detached(priority: .userInitiated) {
             // Greet the new group with a system event (also gives the chat list a real preview).
-            try? await writeSystemMessage(cid: cid, text: "\(myName()) created the group")
+            try? await writeSystemMessage(cid: cid, text: createdText ?? "\(myName()) created the group")
             if disappearSeconds > 0 { await setDisappear(cid, seconds: disappearSeconds) }
         }
         return cid

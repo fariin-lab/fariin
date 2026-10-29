@@ -20,6 +20,7 @@ struct NewChatView: View {
     @State private var searching = false
     @State private var error: String?
     @State private var showNewGroup = false
+    @State private var showNewChannel = false
     @State private var showNewContact = false
     /// @handles for the people in the list, read from Firestore's ON-DISK cache only.
     ///
@@ -93,6 +94,8 @@ struct NewChatView: View {
                         Section {
                             if Flags.groupCreateEnabled {
                                 Button { showNewGroup = true } label: { actionRow("person.2", "New group") }   // outline, like Invite (owner 2026-10-18)
+                                    .tint(.primary)
+                                Button { showNewChannel = true } label: { actionRow("megaphone", "New channel") }   // 2026-10-28
                                     .tint(.primary)
                             }
                             // New contact and Scan QR code rows removed (owner 2026-09-30): scanning
@@ -179,6 +182,9 @@ struct NewChatView: View {
                 // Message page showed for a moment first). Dismissing this page takes the New Group
                 // sheet on top of it down with it.
                 NewGroupView { t in dismiss(); onOpen(t) }
+            }
+            .sheet(isPresented: $showNewChannel) {
+                NewChannelView { t in dismiss(); onOpen(t) }
             }
             .sheet(isPresented: $showNewContact) {
                 NewContactView { t in showNewContact = false; dismiss(); onOpen(t) }
