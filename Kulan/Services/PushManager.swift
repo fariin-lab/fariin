@@ -288,6 +288,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         let from = (content.userInfo["aid"] as? String) ?? (content.userInfo["from"] as? String)
             ?? (cid.contains("_") ? cid.split(separator: "_").map(String.init).first { $0 != me } : nil)
         if let from, BlockList.snapshot.contains(from) { return [] }
+        // My own message coming back (owner 2026-10-29): a phone whose token also sits under the
+        // other account got their banner for what I had just sent. Never show me my own message.
+        if let author = content.userInfo["aid"] as? String, !me.isEmpty, author == me { return [] }
         // THE THREE IN-APP TOGGLES ARE READ HERE (audit). They were only ever read by
         // InAppNotify.process, whose feed was removed, so Settings > Notifications > In-App Sounds /
         // Vibrate / Preview did nothing at all: the banner appeared and the tone played regardless,
