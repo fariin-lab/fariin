@@ -1360,22 +1360,14 @@ struct ThreadView: View {
             } else if searchActive {
                 searchNavBar.transition(.opacity)
             } else if let conv = conversation, conv.isChannel, !conv.users.contains(me), !groupModHidesChat {
-                if ChannelFollows.shared.follows(conv.id), !ChannelFollowerBar.Hold.shared.ids.contains(conv.id) {
-                    // Following: nothing at the bottom, the posts get the whole screen. Mute is the
-                    // bell at the top (owner 2026-10-29, "keep the screen clear").
-                    Color.clear.frame(height: 0)
-                        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
-                            let h = UIScreen.main.bounds.height
-                            if top > 0, top <= h { composerLift = h - top }
-                        }
-                } else {
-                    // Not following yet: Follow where the composer goes (2026-10-28).
-                    ChannelFollowerBar(conv: conv).transition(.opacity)
-                        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
-                            let h = UIScreen.main.bounds.height
-                            if top > 0, top < h { composerLift = h - top }
-                        }
-                }
+                // ⛔ A BAR FOR A FOLLOWER TOO (owner 2026-10-29, later: "when I joined, the bottom is
+                // empty"; reverses the same day's "keep the screen clear"). Follow before, Mute /
+                // Unmute after, one bar (`ChannelFollowerBar`), the reference app's subscriber bar.
+                ChannelFollowerBar(conv: conv).transition(.opacity)
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
+                        let h = UIScreen.main.bounds.height
+                        if top > 0, top < h { composerLift = h - top }
+                    }
             } else if conversation == nil, ChannelFollows.shared.follows(cid) {
                 // A channel I follow whose doc has not loaded yet (owner 2026-10-29: a follower
                 // got the composer in that gap, typed, and the post was refused). Nothing until it
