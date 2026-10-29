@@ -45,6 +45,8 @@ struct ChatComposerState: Equatable {
     /// A channel I post in (2026-10-28): my posts go out without sound when true. Nil anywhere
     /// else, and the bell in the field is not shown.
     var channelSilent: Bool? = nil
+    /// A channel admin may hold Post to schedule the text for later (2026-10-28).
+    var canSchedule = false
     /// Reply / edit / link cards stacked above the field, in this order. Empty while recording.
     var banners: [ChatComposerBanner] = []
 
@@ -159,6 +161,8 @@ struct ChatComposerActions {
     var pauseOrResumeRecording: () -> Void = {}
     /// The channel bell in the field: posts with or without sound (2026-10-28).
     var toggleChannelSilent: () -> Void = {}
+    /// Hold Post > Schedule Post (a channel admin, with text written).
+    var schedulePost: () -> Void = {}
     var seekPreview: (Double) -> Void = { _ in }
     var toggleVoiceOnce: () -> Void = {}
 }

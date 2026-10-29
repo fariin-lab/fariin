@@ -1082,6 +1082,17 @@ final class ChatComposerView: UIView {
         bellButton.icon.image = UIImage(systemName: s.channelSilent == true ? "bell.slash" : "bell")
         bellButton.accessibilityLabel = s.channelSilent == true ? "Posting without sound" : "Posting with sound"
         if bellSlot != bellShown { bellSlot = bellShown; setNeedsLayout() }
+        // Hold Post to schedule it (a channel admin with words written; 2026-10-28). A tap still
+        // sends: a UIButton's menu opens on a long press while it is not the primary action.
+        let schedules = s.canSchedule && s.hasText && !s.editing && !s.recordLocked
+        if schedules != (sendButton.menu != nil) {
+            sendButton.menu = schedules ? UIMenu(children: [
+                UIAction(title: "Schedule Post", image: UIImage(systemName: "calendar.badge.clock")) { [weak self] _ in
+                    self?.actions.schedulePost()
+                },
+            ]) : nil
+            sendButton.showsMenuAsPrimaryAction = false
+        }
         // The mic sits ABOVE the pill now, so it must go when the locked strip takes the pill (the "1"
         // lives in its slot then). While a finger holds it only the glyph fades — the view stays, so
         // the gesture keeps tracking; a lock ends the gesture, and then the whole button can leave.

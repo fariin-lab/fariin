@@ -90,6 +90,8 @@ struct ThreadView: View {
 
     @State private var repo: ThreadRepository
     @State private var input = ""
+    /// Hold Post > Schedule Post in a channel (2026-10-28).
+    @State private var showSchedulePost = false
     // Inserted "@name" -> the uids picked under it, in pick order (groups). A list: two members
     // with the same name kept only the last pick, so "@Ahmed" twice pinged the second one twice
     // and the first never (audit 2026-10-20).
@@ -614,6 +616,18 @@ struct ThreadView: View {
                 }
             }
             .overlay(alignment: .top) { ChatOpenTimerBox() }   // admins only (owner 2026-10-28)
+            .sheet(isPresented: $showSchedulePost) {
+                SchedulePostSheet(text: input) { date in
+                    let words = input.trimmingCharacters(in: .whitespacesAndNewlines)
+                    Task {
+                        do {
+                            try await ChannelService.schedule(cid: cid, text: words, at: date)
+                            input = ""
+                            ToastNotice.show("Scheduled for \(date.formatted(date: .abbreviated, time: .shortened)).")
+                        } catch { ToastNotice.show(error.localizedDescription) }
+                    }
+                }
+            }
             .overlay {
                 if groupModHidesChat {
                     // ⛔ AN OPAQUE PAGE (owner 2026-10-26): the hidden list left the chat see-through, so
@@ -9364,8 +9378,10 @@ struct ThreadView: View {
         if conversation?.isChannel == true && conversation?.users.contains(me) == true {
             ChannelPosting.shared.load(cid)   // once per launch; the answer lands a moment later
             s.channelSilent = ChannelPosting.shared.isSilent(cid)
+            s.canSchedule = true
         } else {
             s.channelSilent = nil
+            s.canSchedule = false
         }
         s.banners = composerBanners
         // The bar is shown the REVEALED hold, not the raw touch-down — see `holdRevealed`.
@@ -9556,6 +9572,7 @@ struct ThreadView: View {
         a.sendRecording = { sendRecording() }
         a.togglePreview = { togglePreview() }
         a.pauseOrResumeRecording = { if reviewingNote { resumeRecording() } else { beginPreview() } }
+        a.schedulePost = { showSchedulePost = true }
         a.toggleChannelSilent = {
             let on = !ChannelPosting.shared.isSilent(cid)
             ChannelPosting.shared.setSilent(cid, on)

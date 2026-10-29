@@ -77,6 +77,27 @@ enum ChannelService {
         return (added, refused)
     }
 
+    /// A text post waiting to go out (functions-groups scheduleChannelPost).
+    struct ScheduledPost: Identifiable, Equatable { let id: String; let text: String; let at: Date }
+
+    static func schedule(cid: String, text: String, at: Date) async throws {
+        _ = try await fn.httpsCallable("scheduleChannelPost")
+            .call(["cid": cid, "text": text, "at": (at.timeIntervalSince1970 * 1000).rounded()])
+    }
+
+    static func scheduled(cid: String) async throws -> [ScheduledPost] {
+        let r = try await fn.httpsCallable("listScheduledPosts").call(["cid": cid])
+        let rows = (r.data as? [String: Any])?["posts"] as? [[String: Any]] ?? []
+        return rows.compactMap { d in
+            guard let id = d["id"] as? String, let ms = (d["at"] as? NSNumber)?.doubleValue else { return nil }
+            return ScheduledPost(id: id, text: d["text"] as? String ?? "", at: Date(timeIntervalSince1970: ms / 1000))
+        }
+    }
+
+    static func cancelScheduled(id: String) async throws {
+        _ = try await fn.httpsCallable("cancelScheduledPost").call(["id": id])
+    }
+
     /// Admins: a page of followers, newest first.
     static func followers(cid: String, after: String?) async throws -> (rows: [ChannelFollowersView.Follower], more: Bool) {
         var data: [String: Any] = ["cid": cid]

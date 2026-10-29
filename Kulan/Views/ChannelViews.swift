@@ -240,3 +240,85 @@ struct ChannelFollowersView: View {
         loading = false
     }
 }
+
+/// Hold Post > Schedule Post (2026-10-28): when this text goes out. A minute from now at the
+/// earliest, a year at the latest (the server holds the same line).
+struct SchedulePostSheet: View {
+    let text: String
+    let onSchedule: (Date) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var when = Date().addingTimeInterval(3600)
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(text).lineLimit(4).foregroundStyle(.secondary)
+                }
+                Section {
+                    DatePicker("Post on", selection: $when,
+                               in: Date().addingTimeInterval(120)...Date().addingTimeInterval(364 * 86_400))
+                        .datePickerStyle(.graphical)
+                } footer: {
+                    Text("Followers get it at that time, the way a post you send now arrives.")
+                }
+            }
+            .navigationTitle("Schedule Post")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Schedule") { onSchedule(when); dismiss() }.fontWeight(.semibold)
+                }
+            }
+        }
+        .presentationDetents([.large])
+    }
+}
+
+/// A channel's posts waiting to go out, for its admins (2026-10-28): swipe to cancel.
+struct ScheduledPostsView: View {
+    let cid: String
+    @State private var posts: [ChannelService.ScheduledPost] = []
+    @State private var loading = true
+    @State private var failed = false
+
+    var body: some View {
+        List {
+            if loading && posts.isEmpty {
+                HStack { Spacer(); ProgressView(); Spacer() }.listRowBackground(Color.clear)
+            } else if failed && posts.isEmpty {
+                Text("Couldn't load. Pull to try again.").foregroundStyle(.secondary)
+            } else if posts.isEmpty {
+                Text("Nothing scheduled. Hold Post in the channel to schedule one.").foregroundStyle(.secondary)
+            } else {
+                ForEach(posts) { p in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(p.at.formatted(date: .abbreviated, time: .shortened))
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(Color(hex: 0x2392FE))
+                        Text(p.text).lineLimit(3)
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button("Cancel", role: .destructive) {
+                            Task {
+                                do { try await ChannelService.cancelScheduled(id: p.id); posts.removeAll { $0.id == p.id } }
+                                catch { ToastNotice.show(error.localizedDescription) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Scheduled Posts")
+        .navigationBarTitleDisplayMode(.inline)
+        .refreshable { await load() }
+        .task { await load() }
+    }
+
+    private func load() async {
+        loading = true
+        do { posts = try await ChannelService.scheduled(cid: cid); failed = false } catch { failed = true }
+        loading = false
+    }
+}
