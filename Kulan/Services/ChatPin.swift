@@ -1,5 +1,6 @@
 import Foundation
 import FirebaseAuth
+import FirebaseCore
 import FirebaseFunctions
 
 /// CHAT PIN — owner's spec, 2026-09-11, with the reference app's four screens as the look.
@@ -133,6 +134,22 @@ enum ChatPin {
         await MainActor.run { ChatPinState.shared.changed() }
         SecurityCheckup.settingChanged()
         return pin
+    }
+
+    /// Boots `generateChatPin` while the Chat Key page is open, so Reset does not wait on a cold
+    /// start (owner 2026-10-29: "this loading is taking time"). Makes nothing and is fire-and-forget.
+    /// ⛔ SENT WITHOUT SIGN-IN, ON PURPOSE: the callable SDK attaches the user's token, and a server
+    /// deployed before `warm` existed ignores the body, so a signed call there would make a new key
+    /// on every page open. Unsigned, that server refuses it and nothing happens.
+    static func warmGenerate() {
+        guard let project = FirebaseApp.app()?.options.projectID,
+              let url = URL(string: "https://me-central1-\(project).cloudfunctions.net/generateChatPin")
+        else { return }
+        var req = URLRequest(url: url, timeoutInterval: 20)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = Data(#"{"data":{"warm":true}}"#.utf8)
+        URLSession.shared.dataTask(with: req).resume()
     }
 
     /// May this account choose its own digits? Fariin Plus (not sold yet) or Fariin staff, the same

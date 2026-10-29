@@ -554,7 +554,7 @@ struct ChatPinPage: View {
         // `@State isSet` is seeded once, so a page SwiftUI had kept alive went on showing what the
         // server said the first time: remove the key on another phone, come back here, and this one
         // still offered to "Change" a key that no longer existed. `onAppear` is the re-entry.
-        .task { await refresh() }
+        .task { ChatPin.warmGenerate(); await refresh() }
         .onAppear { Task { await refresh() } }
         .sheet(isPresented: $explaining, onDismiss: {
             // Only when "Got it" was pressed; the ✕ leaves this false and nothing follows.
