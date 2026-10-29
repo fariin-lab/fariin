@@ -445,7 +445,11 @@ actor LinkPreviewService {
             ?? ""
 
         var image: UIImage?
-        if let raw = metaContent(html, property: "og:image") ?? metaContent(html, property: "twitter:image"),
+        // ⛔ THE ADDRESS IS HTML-ESCAPED TOO (owner 2026-10-29: X links came with no photo). x.com
+        // writes og:image as "…?format=webp&amp;name=large"; read as-is that asks pbs.twimg.com for
+        // a parameter named "amp;name" and gets 404, so the card arrived text-only. Decoded, 200.
+        if let raw = (metaContent(html, property: "og:image") ?? metaContent(html, property: "twitter:image"))
+            .map(decodeEntities),
            let imgUrl = URL(string: raw, relativeTo: url)?.absoluteURL, imgUrl.scheme == "https",
            !isPrivateHost(imgUrl) {   // 2026-09-24 decision D-composer-6: a page cannot aim us inward
             image = await fetchImage(imgUrl, pageURL: url)
