@@ -84,8 +84,8 @@ struct StoryRingView: View {
             let seg = 1.0 / CGFloat(n)
             if squircle {
                 // `SquircleShape` already starts at the top and runs clockwise: no rotation, which
-                // would also turn its corners. The ring sits at the photo's 92%, so the photo-to-ring
-                // gap is the circle's, scaled by the same 0.92.
+                // would also turn its corners. The ring sits at the photo's same scale, so the photo-to-ring
+                // gap is the circle's, scaled by the same `SquircleShape.scale`.
                 ZStack {
                     ForEach(0..<n, id: \.self) { i in
                         let isSeen = i < arcs.count ? arcs[i] : false
