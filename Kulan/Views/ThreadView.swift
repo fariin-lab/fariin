@@ -3371,7 +3371,9 @@ struct ThreadView: View {
     private var otherHasKey: Bool { otherKeyKnown && MsgPolicy.shared.chatKeyVisible }
     @State private var cachedConv: Conversation?
     private var conversation: Conversation? { cachedConv }
-    private var isGroup: Bool { conversation?.isGroup ?? false }
+    // A 1:1 id is two uids joined by "_"; anything else is a group or a channel, even when its
+    // conversation is gone from the list (owner 2026-10-29: an unfollowed channel drew as a 1:1).
+    private var isGroup: Bool { conversation?.isGroup ?? (!cid.contains("_") && !OfficialChannel.isOfficial(cid)) }
     private var groupMembers: [String] { conversation?.users ?? [] }
 
     // Extracted from `body` so the type-checker can handle the screen (the inline ForEach

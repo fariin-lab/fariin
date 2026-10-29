@@ -569,7 +569,13 @@ struct GroupInfoView: View {
         unfollowing = true
         Task {
             if report { await ChatService.report(reportedUid: "", cid: cid, reason: "channel") }
-            do { try await ChannelService.unfollow(cid: cid); dismiss() }
+            do {
+                try await ChannelService.unfollow(cid: cid)
+                // The channel closes and leaves the list too (owner 2026-10-29: left open, it turned
+                // into a 1:1 chat with Voice, Video and Block).
+                LeaveGroupUndo.shared.closeChat(cid)
+                dismiss()
+            }
             catch { actionError = error.localizedDescription }
             unfollowing = false
         }
