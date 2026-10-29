@@ -592,6 +592,11 @@ struct PublicGroupInfoView: View {
     @State private var allMembers = false
     /// "Join the group to …" for a circle a visitor cannot use yet.
     @State private var joinNotice: String?
+    /// A channel seen from outside (owner 2026-10-29): Follow from this page, and Report.
+    @State private var following = false
+    @State private var followError: String?
+    @State private var confirmReport = false
+    @State private var reported = false
 
     init(guest: PublicGroupGuest) {
         self.guest = guest
@@ -651,7 +656,7 @@ struct PublicGroupInfoView: View {
                         .font(.system(size: 16)).foregroundStyle(Color(hex: 0x8E8E93))
                 }
                 .padding(.top, 4)
-                actionsRow.padding(.top, 16)
+                (p.isChannel ? AnyView(channelActionsRow) : AnyView(actionsRow)).padding(.top, 16)
                 // About and the link in one card, as a member sees it (owner 2026-10-26).
                 GroupAboutCard(desc: p.description, linkName: p.username, title: p.title,
                                cardColor: Color(.secondarySystemGroupedBackground),
@@ -666,6 +671,7 @@ struct PublicGroupInfoView: View {
                         .padding(.top, 24)
                 }
                 if !p.members.isEmpty { membersCard.padding(.top, 24) }
+                if p.isChannel { channelFoot }
             }
             .frame(maxWidth: .infinity)
             .padding(.bottom, 24)
@@ -710,6 +716,114 @@ struct PublicGroupInfoView: View {
 
     /// The member page's circles, the same five in the same place (owner 2026-10-23: "the full group
     /// profile"). What needs membership says so instead of being missing; Share works for anyone.
+    // MARK: A channel from outside (owner 2026-10-29, the reference app's channel info page)
+
+    private var link: URL? { p.username.isEmpty ? nil : URL(string: "https://fariin.com/\(p.username)") }
+
+    /// Follow, Share, Search, More: four equal cards, no calls (a channel has none).
+    private var channelActionsRow: some View {
+        HStack(spacing: 8) {
+            Button { follow() } label: {
+                channelCard(following ? "checkmark" : "plus", following ? "Following" : "Follow", tint: Color(hex: 0x2392FE))
+            }
+            .disabled(following)
+            if let link {
+                ShareLink(item: link) { channelCard("square.and.arrow.up", "Share") }
+            } else {
+                channelCard("square.and.arrow.up", "Share").opacity(0.45)
+            }
+            Button { joinNotice = "Follow the channel to search its posts." } label: {
+                channelCard("magnifyingglass", "Search")
+            }
+            Menu {
+                if let link {
+                    Button { UIPasteboard.general.string = link.absoluteString } label: { Label("Copy Link", systemImage: "doc.on.doc") }
+                }
+                Button(role: .destructive) { confirmReport = true } label: { Label("Report Channel", systemImage: "exclamationmark.octagon") }
+            } label: { channelCard("ellipsis", "More") }
+        }
+        .tint(.primary)
+        .padding(.horizontal, 16)
+        .alert("Report this channel?", isPresented: $confirmReport) {
+            Button("Cancel", role: .cancel) {}
+            Button("Report", role: .destructive) { report() }
+        } message: { Text("Fariin's moderators will review it.") }
+    }
+
+    private func channelCard(_ icon: String, _ label: String, tint: Color = .primary) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon).font(.system(size: 20, weight: .medium)).foregroundStyle(tint)
+            Text(label).font(.system(size: 13)).foregroundStyle(.primary).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity).frame(height: 68)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    /// What kind of channel this is, Report, and when it was made.
+    @ViewBuilder private var channelFoot: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            channelFact("globe", "Public channel", "Anyone can find this channel and read its posts. Only its admins post.")
+            Divider().padding(.leading, 52)
+            channelFact("lock", "Followers are private", "Nobody sees who follows this channel.")
+        }
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.horizontal, 16).padding(.top, 24)
+        Button { if !reported { confirmReport = true } } label: {
+            Text(reported ? "Reported" : "Report Channel").foregroundStyle(reported ? Color.secondary : Color.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16).frame(height: 52)
+                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 16).padding(.top, 16)
+        if p.createdAt > 0 {
+            Text("Created \(Date(timeIntervalSince1970: p.createdAt / 1000).formatted(date: .abbreviated, time: .omitted)).")
+                .font(.footnote).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 32).padding(.top, 10)
+        }
+        if let followError {
+            Text(followError).font(.footnote).foregroundStyle(.red).padding(.horizontal, 32).padding(.top, 6)
+        }
+    }
+
+    private func channelFact(_ icon: String, _ title: String, _ line: String) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: icon).font(.system(size: 20)).frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.body)
+                Text(line).font(.subheadline).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+    }
+
+    private func follow() {
+        guard !following else { return }
+        guard NetworkState.shared.isOnline else { followError = "No internet connection. Try again."; return }
+        followError = nil
+        following = true
+        Task {
+            do {
+                try await ChannelService.follow(cid: p.cid)
+                Haptics.notify(.success)
+                withAnimation(.easeInOut(duration: 0.25)) { guest.joined = true }
+            } catch {
+                following = false
+                followError = error.localizedDescription
+            }
+        }
+    }
+
+    private func report() {
+        reported = true
+        let cid = p.cid
+        Task { await ChatService.report(reportedUid: "", cid: cid, reason: "channel") }
+        ToastNotice.show("Thanks. Fariin's moderators will review this channel.")
+    }
+
     private var actionsRow: some View {
         HStack(spacing: 0) {
             Button { joinNotice = "Join the group to start a call." } label: { circle("phone.fill", "Voice") }

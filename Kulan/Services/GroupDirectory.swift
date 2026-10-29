@@ -79,6 +79,8 @@ struct PublicGroupPreview: Equatable {
     /// A channel (2026-10-28): `memberCount` is its followers, `isMember` means following, and the
     /// button says Follow.
     var isChannel = false
+    /// When the channel was made (ms), for "Created …" on a stranger's channel page; 0 = unknown.
+    var createdAt: Double = 0
 
     init?(_ data: [String: Any]) {
         guard let cid = data["cid"] as? String, GroupDirectory.safeId(cid) else { return nil }
@@ -98,6 +100,7 @@ struct PublicGroupPreview: Equatable {
         self.verified = (data["verified"] as? Bool ?? false) && label.isEmpty
         self.members = (data["members"] as? [[String: Any]] ?? []).compactMap(PublicGroupMember.init)
         self.isChannel = data["channel"] as? Bool ?? false
+        self.createdAt = (data["createdAt"] as? NSNumber)?.doubleValue ?? 0
     }
 }
 
