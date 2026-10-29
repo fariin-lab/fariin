@@ -151,7 +151,15 @@ struct GroupInfoView: View {
             || (c.membersCanAdd && !c.isRestricted(me, .addMembers, now: Date().timeIntervalSince1970 * 1000))
     }
     private var title: String { conv?.title ?? "Group" }
-    private var muted: Bool { conv?.isMuted(me, now: Date().timeIntervalSince1970 * 1000) ?? false }
+    private var muted: Bool {
+        if isFollowerHere { return ChannelFollows.shared.entry(cid)?.muted ?? false }
+        return conv?.isMuted(me, now: Date().timeIntervalSince1970 * 1000) ?? false
+    }
+    /// A channel (2026-10-28), and me only following it (not one of its admins).
+    private var isChannel: Bool { conv?.isChannel == true }
+    private var isFollowerHere: Bool { isChannel && !iAmMember }
+    @State private var unfollowing = false
+    @State private var confirmUnfollow = false
     private var pageBackground: Color { Color(uiColor: .systemGroupedBackground) }
     /// The group's photo, only when there is a real one: it decides the big header and the colour.
     private var groupPhoto: String? {
@@ -605,7 +613,7 @@ struct GroupInfoView: View {
                 // (owner 2026-10-19). It opens Edit Group, as the Edit button does.
                 Button { editAtDescription = true; showEdit = true } label: {
                     // A grey prompt, not a blue link (owner 2026-10-20, from the reference app).
-                    Text("Add group description...").font(.body).foregroundStyle(Color(hex: 0x8E8E93))
+                    Text(isChannel ? "Add channel description..." : "Add group description...").font(.body).foregroundStyle(Color(hex: 0x8E8E93))
                         .multilineTextAlignment(.center)
                 }
                 .buttonStyle(.plain)
@@ -632,6 +640,10 @@ struct GroupInfoView: View {
     private var membersHidden: Bool { conv?.hideMembers == true && !AdminStore.shared.isAdmin }
 
     private var memberCountText: String {
+        if isChannel {   // followers, never who (2026-10-28)
+            let f = conv?.followerCount ?? 0
+            return "\(Self.compactCount(f)) Follower\(f == 1 ? "" : "s")"
+        }
         let n = conv?.users.count ?? 0
         return "\(Self.compactCount(n)) Member\(n == 1 ? "" : "s")"
     }
@@ -656,6 +668,8 @@ struct GroupInfoView: View {
     /// the members card has its own Add Members row (owner 2026-10-19).
     private var actionsRow: some View {
         HStack(spacing: 0) {
+            // No calls in a channel (2026-10-28).
+            if !isChannel {
             Button { callTapped(video: false) } label: { actionIcon("phone.fill", "Voice") }
                 .tint(.primary)
                 .opacity(callReady ? 1 : 0.45)
@@ -664,6 +678,7 @@ struct GroupInfoView: View {
                 .tint(.primary)
                 .opacity(callReady ? 1 : 0.45)
                 .accessibilityLabel("Video Call")
+            }
             // The person profile's own bells (owner 2026-10-21: "use exactly the icons of the chat profile").
             Menu { muteMenuItems } label: { actionIcon(muted ? "ic_bell" : "ic_bell_off", muted ? "Unmute" : "Mute") }
                 .tint(.primary)
@@ -723,7 +738,10 @@ struct GroupInfoView: View {
     }
 
     @ViewBuilder private var muteMenuItems: some View {
-        if muted {
+        if isFollowerHere {
+            // A follower's mute is one switch on their own entry (ChannelService.setMuted).
+            Button(muted ? "Unmute" : "Mute") { ChannelService.setMuted(cid: cid, !muted) }
+        } else if muted {
             Section(muteUntilLabel) {
                 Button("Unmute") { setMuted(0) }
             }
@@ -823,7 +841,35 @@ struct GroupInfoView: View {
     /// owner. Red words and red icons, the rows the rest of the page uses.
     private var exitCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if !iAmMember {
+            if isFollowerHere {
+                // A channel I follow (2026-10-28): Leave Channel unfollows; Follow if I am not.
+                VStack(spacing: 0) {
+                    if ChannelFollows.shared.follows(cid) {
+                        ProfileInfoRow(title: unfollowing ? "Leaving…" : "Leave Channel", icon: "rectangle.portrait.and.arrow.right",
+                                       tint: Self.exitRed, chevron: false) { confirmUnfollow = true }
+                        if conv?.groupNoReport != true {
+                            rowDivider
+                            ProfileInfoRow(title: "Report Spam", icon: "exclamationmark.octagon", tint: Self.exitRed, chevron: false) { confirmReport = true }
+                        }
+                    } else if conv?.isPublic == true {
+                        ProfileInfoRow(title: "Follow", icon: "person.badge.plus", chevron: false) {
+                            Task { _ = try? await ChannelService.follow(cid: cid) }
+                        }
+                    }
+                }
+                .profileSurface(plain: cardColor)
+                .alert("Leave Channel?", isPresented: $confirmUnfollow) {
+                    Button("Cancel", role: .cancel) {}
+                    Button("Leave", role: .destructive) {
+                        unfollowing = true
+                        Task {
+                            do { try await ChannelService.unfollow(cid: cid); onGone() }
+                            catch { actionError = error.localizedDescription }
+                            unfollowing = false
+                        }
+                    }
+                } message: { Text("You won't see this channel's posts in your chats any more.") }
+            } else if !iAmMember {
                 // A group I left (owner 2026-10-25, "make leave work like the reference app"): no
                 // Leave, Report, End or Delete for a group I am not in. A public one can be joined
                 // again; leaving is never a ban.
@@ -834,7 +880,7 @@ struct GroupInfoView: View {
                 }
             } else {
             VStack(spacing: 0) {
-                ProfileInfoRow(title: "Leave Group", icon: "rectangle.portrait.and.arrow.right",
+                ProfileInfoRow(title: isChannel ? "Leave Channel" : "Leave Group", icon: "rectangle.portrait.and.arrow.right",
                                tint: Self.exitRed, chevron: false) { confirmLeave = true }
                 // Kasim 2026-10-21: an admin or the owner reporting their own group is odd (the
                 // reference app hides Report for both too), so Report is for plain members only.
@@ -849,12 +895,13 @@ struct GroupInfoView: View {
             .profileSurface(plain: cardColor)
             if iAmOwner {
                 VStack(spacing: 0) {
-                    if !(conv?.groupMod.state == "ended") {
+                    // A channel is deleted, not ended (it has no members to keep its history for).
+                    if !(conv?.groupMod.state == "ended"), !isChannel {
                         ProfileInfoRow(title: "End Group", icon: "xmark.circle", tint: Self.exitRed, chevron: false) { confirmEnd = true }
                         rowDivider
                     }
                     // Only the owner can permanently delete the whole group (for everyone).
-                    ProfileInfoRow(title: "Delete Group", icon: "trash", tint: Self.exitRed, chevron: false) { confirmDelete = true }
+                    ProfileInfoRow(title: isChannel ? "Delete Channel" : "Delete Group", icon: "trash", tint: Self.exitRed, chevron: false) { confirmDelete = true }
                 }
                 .profileSurface(plain: cardColor)
                 .padding(.top, 10)

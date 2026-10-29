@@ -4704,7 +4704,8 @@ struct ChatRow: View, Equatable {
     }
 
     private var lastSenderPrefix: String {
-        guard conv.isGroup, !conv.lastSender.isEmpty, conv.lastSender != me else { return "" }
+        // A channel speaks as itself (2026-10-28): no "Name: " before its posts.
+        guard conv.isGroup, !conv.isChannel, !conv.lastSender.isEmpty, conv.lastSender != me else { return "" }
         // A blocked member's name is hidden along with their message (audit L2) — otherwise a
         // hidden plain-text message (an "enc" cipher, so the badge branch below never runs) still
         // named its sender in front of the now-empty preview.
@@ -5159,7 +5160,7 @@ struct ChatRow: View, Equatable {
                     // call" — but a call is not a message and has no sent/read state, so a tick
                     // beside one would be reporting delivery of something that was never sent. The
                     // field used to be cleared to prevent exactly this; the guard lives here now.
-                    if conv.lastIsMine(me), !lastIsCall { ticksView.padding(.top, 1) }
+                    if conv.lastIsMine(me), !lastIsCall, !conv.isChannel { ticksView.padding(.top, 1) }   // a channel post has no reader ticks
                     // ⛔ NO PIN GLYPH — owner, 2026-09-02, off build 725: "remove pin icon, now
                     // already everyone can see pinned, no need". He is right about the mechanism:
                     // the icon existed because pinned chats were only SORTED to the top with
