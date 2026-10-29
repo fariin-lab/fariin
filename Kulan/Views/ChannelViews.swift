@@ -527,32 +527,6 @@ struct ChannelAdminInviteRows: View {
     }
 }
 
-/// At the top of every channel (owner 2026-10-29, the reference app's privacy notice, in our
-/// words): one centred line; a tap opens what the channel can and cannot see about you.
-struct ChannelPrivacyNotice: View {
-    var body: some View {
-        // Straight to the Help Center article (owner 2026-10-29: the sheet in between looked cheap).
-        Button {
-            if let u = URL(string: "https://help.fariin.com/channels/your-privacy-in-channels") { WebLink.open(u) }
-        } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: "lock.shield").font(.system(size: 13, weight: .semibold))
-                (Text("Your privacy in this channel is protected. ") + Text("Learn more").foregroundColor(Color(hex: 0x2392FE)))   // blue: it is a link (owner 2026-10-29)
-                    .multilineTextAlignment(.center)
-            }
-            .font(.system(size: 14))
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 14).padding(.vertical, 9)
-            .background(Color(.secondarySystemBackground).opacity(0.92),
-                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .padding(.horizontal, 40)
-        }
-        .buttonStyle(.plain)
-        .frame(maxWidth: .infinity)
-    }
-}
-
-
 /// The top of a channel for its owner and admins (owner 2026-10-29): the channel, how many follow
 /// it, and the two things that grow it, Share and Edit. Followers never see this card.
 struct ChannelAdminCard: View {

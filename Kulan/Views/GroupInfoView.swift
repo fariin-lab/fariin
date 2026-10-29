@@ -533,9 +533,17 @@ struct GroupInfoView: View {
 
     /// Storage Used, in the owner's card style. Media is the All Media strip under it; mute is a circle.
     private var followerStorageCard: some View {
-        ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
-                       value: storage.map { Self.bytes($0.total) } ?? "") { showStorage = true }
-            .profileSurface(plain: cardColor)
+        VStack(spacing: 0) {
+            ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
+                           value: storage.map { Self.bytes($0.total) } ?? "") { showStorage = true }
+            rowDivider
+            // What the channel can and cannot see about me: the Help Center article (2026-10-29,
+            // in place of the pill that sat at the top of every channel).
+            ProfileInfoRow(title: "Your Privacy", icon: "lock.shield") {
+                if let u = URL(string: "https://help.fariin.com/channels/your-privacy-in-channels") { WebLink.open(u) }
+            }
+        }
+        .profileSurface(plain: cardColor)
     }
 
     /// Follow from the channel's page (a visitor, or after unfollowing). A private channel without

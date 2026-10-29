@@ -1165,19 +1165,17 @@ struct ThreadView: View {
     /// whole history is loaded (`!repo.canLoadOlder`), so it is never wedged between pages; scrolling
     /// up to the start shows it. The empty chat keeps the centred card (`encryptionNotice`).
     private var groupHistoryCard: (view: AnyView, key: String)? {
-        // A channel opens with its privacy notice at the top, for everyone (owner 2026-10-29).
+        // A channel's start (owner 2026-10-29): no privacy pill (it read as the reference app's; the
+        // article is a row on the channel's page). Its owner and admins get the channel's card:
+        // share it, edit it. A follower sees the posts from "Channel created" on.
         if let conv = conversation, conv.isChannel, repo.didInitialLoad, !preview,
            !repo.canLoadOlder || repo.cacheLooksWhole {
-            // Its owner and admins also get the channel's card: share it, edit it (owner 2026-10-29).
             if conv.admins.contains(me) || conv.isOwner(me) {
                 let key = ["chadm", conv.title, conv.avatarUrl ?? "", conv.groupDescription, "\(conv.followerCount)",
                            conv.publicName, "\(conv.isPublic)", "\(dark)"].joined(separator: "|")
-                return (AnyView(VStack(spacing: 14) {
-                    ChannelPrivacyNotice()
-                    ChannelAdminCard(conv: conv, me: me)
-                }.padding(.vertical, 14)), key)
+                return (AnyView(ChannelAdminCard(conv: conv, me: me).padding(.vertical, 14)), key)
             }
-            return (AnyView(ChannelPrivacyNotice().padding(.vertical, 14)), "chpriv|\(dark)")
+            return nil
         }
         // `cacheLooksWhole` (owner 2026-10-28): from the saved copy, before the server has answered.
         guard repo.didInitialLoad, isGroup, !notAMember, !preview, !repo.canLoadOlder || repo.cacheLooksWhole,
