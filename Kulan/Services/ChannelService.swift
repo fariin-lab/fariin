@@ -57,6 +57,7 @@ enum ChannelService {
         var data: [String: Any] = ["cid": cid]
         if let code, !code.isEmpty { data["code"] = code }
         let r = try await fn.httpsCallable("followChannel").call(data)
+        await MainActor.run { LeaveGroupUndo.shared.reopen(cid) }   // unfollowed before: back in the list
         return ((r.data as? [String: Any])?["status"] as? String) ?? "following"
     }
 
@@ -319,6 +320,10 @@ final class ChannelFollows {
     }
 
     private func apply(_ next: [String: Entry]) {
+        // A channel followed again by any road (link, public page, Follow): back in the list.
+        for cid in next.keys where entries[cid] == nil {
+            Task { @MainActor in LeaveGroupUndo.shared.reopen(cid) }
+        }
         for (cid, l) in docListeners where next[cid] == nil {
             l.remove()
             docListeners[cid] = nil

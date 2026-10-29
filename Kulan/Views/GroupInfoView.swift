@@ -575,6 +575,12 @@ struct GroupInfoView: View {
                 // into a 1:1 chat with Voice, Video and Block).
                 LeaveGroupUndo.shared.closeChat(cid)
                 dismiss()
+                // A public channel stays open to look at, as a visitor with Follow (the reference
+                // apps): its page comes up once the chat has closed. A private one is gone.
+                if conv?.isPublic == true {
+                    let cid = cid, name = conv?.publicName
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { GroupDirectory.open(cid: cid, name: name) }
+                }
             }
             catch { actionError = error.localizedDescription }
             unfollowing = false
