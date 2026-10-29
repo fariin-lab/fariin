@@ -1521,7 +1521,7 @@ struct EditGroupView: View {
                 withAnimation(.smooth(duration: 0.2)) { proxy.scrollTo("descEnd", anchor: .bottom) }
             }
           }
-            .navigationTitle(ConversationsRepository.shared.conversations.first { $0.id == cid }?.isChannel == true ? "Edit Channel" : "Edit Group")
+            .navigationTitle(ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.isChannel == true ? "Edit Channel" : "Edit Group")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // 2026-10-18 (owner): an X in place of Cancel, and Save in blue (New Group's Create).
