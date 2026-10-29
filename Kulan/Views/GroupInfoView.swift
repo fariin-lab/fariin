@@ -605,8 +605,12 @@ struct GroupInfoView: View {
                 // join again"). Reverses the same day's "a public channel stays right here". Public
                 // or private, I land in the chat list and the channel is gone from it; a link (or,
                 // for a public one, its @name) brings it back.
+                // ⛔ ONE STEP TO THE CHAT LIST (owner 2026-10-29: "it goes back to the channel feed,
+                // then the chat list, two steps"). `closeChat` makes ThreadView dismiss itself, and
+                // that pops this page with it in one animation; dismissing here first was the extra
+                // step. Opened from a story there is no chat under this page, so it closes itself.
                 LeaveGroupUndo.shared.closeChat(cid)
-                dismiss()
+                if fromStory { dismiss() }
             }
             catch { actionError = error.localizedDescription }
             unfollowing = false
@@ -925,7 +929,8 @@ struct GroupInfoView: View {
                 await MainActor.run {
                     LeaveGroupUndo.shared.closeChat(cid)
                     ToastNotice.show("Channel deleted")
-                    dismiss()
+                    // One step to the chat list, as on unfollow (`unfollowNow`).
+                    if fromStory { dismiss() }
                 }
             } catch {
                 await MainActor.run { actionError = error.localizedDescription }
