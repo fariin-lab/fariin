@@ -1101,8 +1101,17 @@ final class MessageRowView: UIView {
             addSubview(v); shareButton = v; return v
         }()
         let r = CGRect(x: b.bubble.maxX + 8, y: b.bubble.maxY - 32, width: 32, height: 32)
-        v.isHidden = false
-        v.frame = r
+        // ⛔ IN PLACE WHEN IT FIRST SHOWS (owner 2026-10-29: on a post just sent the button sat
+        // inside the bubble, by the time). It appears when the send lands, inside the row's own
+        // layout animation, so a new or hidden button flew in from its old frame (0,0 for a new
+        // one). Only a button already showing moves with the bubble.
+        if v.isHidden || v.frame == .zero {
+            UIView.performWithoutAnimation { v.frame = r; v.alpha = 0 }
+            v.isHidden = false
+            UIView.animate(withDuration: 0.18) { v.alpha = 1 }
+        } else {
+            v.frame = r
+        }
         shareRect = r
     }
 

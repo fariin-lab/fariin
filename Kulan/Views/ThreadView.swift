@@ -6855,9 +6855,44 @@ struct ThreadView: View {
         return uids
     }
 
+    /// Text longer than one bubble holds (`Limits.messageBubbleChars`), cut into bubbles in reading
+    /// order: at the last line break in the window, else the last space past its middle, else at a
+    /// character boundary (never inside an emoji). Each piece is trimmed; empty pieces are dropped.
+    static func splitForBubbles(_ text: String, max: Int = Limits.messageBubbleChars) -> [String] {
+        var out: [String] = []
+        var rest = Substring(text)
+        while rest.count > max {
+            let window = rest.prefix(max)
+            var cut = window.endIndex
+            if let nl = window.lastIndex(of: "\n"),
+               window.distance(from: window.startIndex, to: nl) > max / 2 { cut = nl }
+            else if let sp = window.lastIndex(where: { $0 == " " }),
+                    window.distance(from: window.startIndex, to: sp) > max / 2 { cut = sp }
+            let piece = rest[rest.startIndex..<cut].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !piece.isEmpty { out.append(piece) }
+            rest = rest[cut...]
+            rest = rest.drop(while: { $0.isWhitespace || $0.isNewline })
+        }
+        let last = rest.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !last.isEmpty { out.append(last) }
+        return out
+    }
+
     private func send() {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        // ⛔ ONE BUBBLE HOLDS 2,500 (owner 2026-10-29, the reference app's way): longer text goes out as
+        // several bubbles, in order, each through this same path (the send line, `SendTurn`, keeps
+        // the order). The reply quote and the link card ride the first one only.
+        let parts = Self.splitForBubbles(text)
+        if parts.count > 1 {
+            for part in parts {
+                input = part
+                send()
+                if !input.isEmpty { return }   // held back (slow mode, links off): the rest stays in the field
+            }
+            return
+        }
         // Links off for me (the group's switch or my own restriction): the server would refuse
         // the whole message, so it stays in the field and the notice says why (2026-10-19).
         if LinkPreviewService.firstURL(in: text) != nil || text.range(of: "www.", options: .caseInsensitive) != nil,

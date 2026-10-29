@@ -19,9 +19,11 @@ enum Limits {
     /// ⛔ NOT A TRUNCATION OF WHAT IS SENT. It stops the field accepting more; nothing typed is ever
     /// cut, which is the distinction he drew when he had the 20-line "Read more" collapse removed
     /// the same day.
-    /// ⛔ 2,500 (owner 2026-10-29: "that is too much, make it 2,500"), after he heard the 65,536
-    /// above. His newer word replaces the 08-27 one.
-    static let messageMaxChars = 2_500
+    /// ⛔ 6,400 IN THE FIELD, 2,500 A BUBBLE (owner 2026-10-29, the reference app's way: "you paste
+    /// and send more, but each bubble is 2,500; up to 6,400 is about 3 bubbles"). His newer word
+    /// replaces the 08-27 one (65,536) and the same day's flat 2,500. `ThreadView.send` splits.
+    static let messageMaxChars = 6_400
+    static let messageBubbleChars = 2_500
     static let pinnedMessagesPerChat = 3
     /// Photos or videos in one album message. Picking more starts another album rather than hiding the
     /// remainder behind a "+N" badge — 12 pictures ship as 10 + 2. Matches the ceiling the mosaic layout
