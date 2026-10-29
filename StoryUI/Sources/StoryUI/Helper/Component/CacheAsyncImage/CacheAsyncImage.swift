@@ -57,10 +57,14 @@ struct CacheAsyncImage: View {
     /// Which url `image` belongs to, so a changed url never keeps the previous person's picture.
     @State private var shownFor: String?
 
-    init(urlString: String?, name: String = "", size: CGFloat = 38) {
+    /// nil = a circle; a channel's ring hands its squircle (`StoryAvatarShapeSeam`).
+    private let shape: AnyShape?
+
+    init(urlString: String?, name: String = "", size: CGFloat = 38, shape: AnyShape? = nil) {
         self.urlString = urlString
         self.name = name
         self.size = size
+        self.shape = shape
         let seed = urlString.flatMap { StoryUIImages.cachedNow?($0) }
         _image = State(initialValue: seed)
         _shownFor = State(initialValue: seed == nil ? nil : urlString)
@@ -83,7 +87,7 @@ struct CacheAsyncImage: View {
             }
         }
         .frame(width: size, height: size)
-        .clipShape(Circle())
+        .clipShape(shape ?? AnyShape(Circle()))
         // ⚠️ `.task(id:)`, NOT A MODEL BUILT IN `init`. This used to hold an `@ObservedObject`
         // constructed in the initialiser, and this view's parent re-renders on the progress tick —
         // twenty times a second — so it built a fresh model, dropped the image it had, and started

@@ -226,7 +226,8 @@ struct UserView: View {
             // with the reference app's press (`StoryPressStyle`); the repost line inside is its own.
             Button { onProfile?() } label: {
             HStack(spacing: Constant.UserView.hStackSpace) {
-                CacheAsyncImage(urlString: image, name: name)   // 38×38 circle
+                // 38×38 circle; a channel's squircle (owner 2026-10-29) when the app says so.
+                CacheAsyncImage(urlString: image, name: name, shape: StoryAvatarShapeSeam.shape?(userId))
                 VStack(alignment: .leading, spacing: 2) {
                     // TWO SHAPES, AND THE AUDIENCE DECIDES WHICH. With a line to fit underneath,
                     // the name and the time share the top row: the time is a detail about the name,

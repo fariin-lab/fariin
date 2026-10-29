@@ -87,6 +87,15 @@ final class StoryNotifyStore {
         StoryGroupStaffSeam.noReport = { key in
             MainActor.assumeIsolated { GroupStoryStaff.noReport(ringKey: key) }
         }
+        // A channel's story header wears its squircle (owner 2026-10-29), like everywhere else.
+        StoryAvatarShapeSeam.shape = { key in
+            guard key.hasPrefix(StoryGroup.groupKeyPrefix) else { return nil }
+            let cid = String(key.dropFirst(StoryGroup.groupKeyPrefix.count))
+            let channel = MainActor.assumeIsolated {
+                Conversation.Right.isChannel(cid) || ChannelFollows.shared.follows(cid)
+            }
+            return channel ? AnyShape(SquircleShape()) : nil
+        }
     }
 }
 

@@ -3513,7 +3513,11 @@ struct StoryViewer: View {
         case "glowers": return StoryAudienceBadge(systemImage: "sparkles", text: text)
         // The header's name is already the group's (owner 2026-10-25: "the group name appears twice"),
         // so the line under it says what kind of story it is instead.
-        case "group": return StoryAudienceBadge(systemImage: "person.3.fill", text: "Group story")
+        // A channel's says so (owner 2026-10-29), with the channel's megaphone.
+        case "group":
+            let channel = s.groupId.map { Conversation.Right.isChannel($0) || ChannelFollows.shared.follows($0) } ?? false
+            return channel ? StoryAudienceBadge(systemImage: "megaphone.fill", text: "Channel story")
+                           : StoryAudienceBadge(systemImage: "person.3.fill", text: "Group story")
         case "custom":
             // The owner's own folder drawing (2026-08-07). OUTLINE here: this pill is a thin line of
             // white over a photograph, next to a light-weight name, and the filled version reads as a

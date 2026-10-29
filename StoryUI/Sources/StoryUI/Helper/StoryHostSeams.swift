@@ -79,6 +79,12 @@ public enum StoryNotifySeam {
     public static var isOn: ((String) -> Bool?)?
 }
 
+/// The header photo's shape for a ring (key "g:" + group id), nil = the usual circle. A channel's is
+/// the app's squircle (owner 2026-10-29); the library draws whatever shape it is handed.
+public enum StoryAvatarShapeSeam {
+    public static var shape: ((String) -> AnyShape?)?
+}
+
 /// Is the viewer the owner or an admin of the group whose ring this is (key "g:" + group id)? Then
 /// the menu has no Hide Stories or Report: it is their own group (owner 2026-10-26).
 public enum StoryGroupStaffSeam {
