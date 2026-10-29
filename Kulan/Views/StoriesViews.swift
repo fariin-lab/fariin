@@ -2168,7 +2168,7 @@ struct StoryViewer: View {
         }
         .sheet(item: $groupPage) { p in
             NavigationStack {
-                GroupInfoView(cid: p.id)
+                GroupInfoView(cid: p.id, fromStory: true)
                     .toolbar {
                         ToolbarItem(placement: .topBarLeading) {
                             Button { groupPage = nil } label: {

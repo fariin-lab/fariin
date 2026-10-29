@@ -26,7 +26,13 @@ struct GroupInfoView: View {
     let cid: String
     /// The chat's search, opened from the Search tile (the profile's own wiring).
     let onSearch: (() -> Void)?
-    init(cid: String, onSearch: (() -> Void)? = nil) { self.cid = cid; self.onSearch = onSearch }
+    /// Opened from inside the story viewer (its header photo). The viewer keeps the photo it opened
+    /// from hidden while it is up, and that is this page's "groupcircle-" slot, so here the photo
+    /// reports under no key (owner 2026-10-29: "after profile opened the avatar is not appearing").
+    let fromStory: Bool
+    init(cid: String, onSearch: (() -> Void)? = nil, fromStory: Bool = false) {
+        self.cid = cid; self.onSearch = onSearch; self.fromStory = fromStory
+    }
     @Environment(\.dismiss) private var dismiss
     private var repo = ConversationsRepository.shared
     private var me: String { AuthService.shared.uid ?? "" }
@@ -678,7 +684,8 @@ struct GroupInfoView: View {
             // A group story going up turns round the group's photo here (owner 2026-10-23, the
             // reference app's way), not on My Story. The posted picture flies into this circle
             // (`StoryPostFlight`, `groupCircleKey`).
-            .modifier(MediaRectReporter(id: "groupcircle-\(cid)", scope: .storyRow, cornerRadius: Self.photoSide / 2))
+            .modifier(MediaRectReporter(id: fromStory ? "" : "groupcircle-\(cid)", scope: .storyRow,
+                                        cornerRadius: Self.photoSide / 2))
             // ⛔ THE GROUP'S STORIES RING ITS PHOTO (owner 2026-10-23: "when the upload completes the
             // story is not appearing"; they were only in the Stories row). The same ring as a person's
             // page, one arc per story, seen ones grey; a tap on the photo opens them.
