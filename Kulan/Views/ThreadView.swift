@@ -4004,7 +4004,7 @@ struct ThreadView: View {
         let m = repo.items[idx]
         if m.isStoryReaction { return nil }   // no long press on a story reaction (owner 2026-10-13)
         var items: [UIMenuElement] = []
-        if !m.isStoryReaction {   // a story react-bar emoji takes no reply (see Message.isStoryReaction)
+        if !m.isStoryReaction, mayReplyHere {   // a story react-bar emoji takes no reply (see Message.isStoryReaction)
             items.append(UIAction(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left")) { _ in
                 beginReply(to: m)
             })
@@ -4160,7 +4160,7 @@ struct ThreadView: View {
         // resolves, and Reply sealed a quote pointing at an id the other device has never seen.
         // Edit and Info already had this guard; Reply, Forward and Pin now share it.
         let delivered = m.sendState == nil
-        if delivered, !m.isStoryReaction {   // a story react-bar emoji takes no reply
+        if delivered, !m.isStoryReaction, mayReplyHere {   // a story react-bar emoji takes no reply
             out.append(CMAction(title: "Reply", icon: "arrowshape.turn.up.left") { beginReply(to: m) })
         }
         // Both forward paths now ask `canForward` and nothing else — see the note on it. This one
@@ -4863,7 +4863,7 @@ struct ThreadView: View {
                 // ⛔ NOT ON A STORY REACTION (owner 2026-10-13: "swipe reply still works"). The row
                 // model's `canSwipeToReply` said no, but the swipe pan asks THIS closure and never read
                 // the model, so the earlier fix had nothing listening to it.
-                guest == nil && (repo.indexById[id].map { repo.items[$0].sendState == nil && !repo.items[$0].isStoryReaction } ?? false)
+                guest == nil && mayReplyHere && (repo.indexById[id].map { repo.items[$0].sendState == nil && !repo.items[$0].isStoryReaction } ?? false)
             },
             onSwipeReply: { id in
                 if let idx = repo.indexById[id], idx < repo.items.count { beginReply(to: repo.items[idx]) }
@@ -8727,6 +8727,12 @@ struct ThreadView: View {
                 .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
+    }
+
+    /// No Reply where I cannot send (2026-10-29): a channel I follow, an admins-only group.
+    private var mayReplyHere: Bool {
+        guard let conv = conversation, conv.isGroup else { return true }
+        return conv.canSend(AuthService.shared.uid ?? "")
     }
 
     // Announcement mode: a non-admin member can't send (enforced server-side too).
