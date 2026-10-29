@@ -1772,8 +1772,10 @@ service cloud.firestore {
       // groups), with the previous rules as the control, where the two fix cases FAIL.
       // A channel's followers are not in `users` (2026-10-28): conversations/{cid}/followers/{uid},
       // server-written by followChannel. They read the channel and its posts, nothing else.
+      // 2026-10-29 audit S8: + ban list.
       function follows(c) {
         return c.get('channel', false) == true
+          && !(request.auth.uid in c.get('bannedUids', []))
           && exists(/databases/$(database)/documents/conversations/$(cid)/followers/$(request.auth.uid));
       }
       allow read: if signedIn() && (
@@ -2812,8 +2814,8 @@ service cloud.firestore {
         // (set or delete); the author's delete-for-everyone clears the map through its own branch
         // below, not this one.
         allow update: if signedIn()
-          // A channel's followers react (2026-10-28); every other branch needs the author or `users`.
-          && (request.auth.uid in convData().users || follows(convData()))
+          // 2026-10-29 audit S3: followers write no posts; channel reactions go via reactChannelPost.
+          && request.auth.uid in convData().users
           // 2026-10-18 group moderation: in a suspended or disabled group nobody edits or reacts.
           // Delete for Everyone (the tombstone, `deleted: true`) and the call-row and upload
           // branches still pass: none of them adds anything new to read.
@@ -2823,6 +2825,7 @@ service cloud.firestore {
               || request.resource.data.get('deleted', false) == true)
           && (
             (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
+             && convData().get('channel', false) != true   // S3
              && ownKeyOnly('reactions')
              // 2026-09-24 fix-all: `sendReactions` restricts ADDING or changing a reaction; taking my
              // own back stays allowed.
@@ -2934,8 +2937,10 @@ service cloud.firestore {
         // but a voter may only write their OWN vote doc — no one can forge or overwrite another's vote.
         // The poll's question/options stay E2EE in the message text; a vote is just option indices.
         match /votes/{voter} {
-          // Channel followers read and vote too (2026-10-28).
-          allow read: if signedIn() && (request.auth.uid in convData().users || follows(convData()));
+          // 2026-10-29 audit S4: in a channel only my own vote; tallies = post pollCounts/pollVoters.
+          allow read: if signedIn() && (
+            (convData().get('channel', false) != true && request.auth.uid in convData().users)
+            || (request.auth.uid == voter && (request.auth.uid in convData().users || follows(convData()))));
           // 2026-09-24 decision D-composer-3: a vote has a shape: `options` (1 to 10) and `at`; one
           // option when `pollMulti == false`. The vote doc is the voter's own.
           allow delete: if signedIn() && request.auth.uid == voter
@@ -3306,15 +3311,8 @@ service cloud.firestore {
       function storyData() {
         return get(/databases/$(database)/documents/stories/$(storyId)).data;
       }
-      // ⚠️ `public == true` IS NOT A READ CLAUSE ANY MORE, and taking it out is a SECURITY FIX.
-      //
-      // It granted any signed-in user the WHOLE document, and the document carries `recipientUids` —
-      // the uid of every person the author has an accepted chat with. So one read of one "Everyone"
-      // story handed a stranger the author's entire contact graph. A rule cannot hide one field of a
-      // document it grants, so the clause had to go rather than be narrowed.
-      //
-      // Public reach is not lost: it moved to `users/{uid}/publicStories/{storyId}`, a mirror that
-      // carries the media and nothing about the audience. See that block, and `postStory`.
+      // ⚠️ `public == true` IS NOT A READ CLAUSE (security fix): it handed any signed-in user the whole
+      // doc, `recipientUids` included. Public reach is `users/{uid}/publicStories/{storyId}` (postStory).
       // ⛔ THE AUDIENCE IS A LIST OF TOKENS NOW, AND THAT IS A SECURITY FIX RATHER THAN A TIDY-UP.
       //
       // A rule cannot grant a document while hiding one field of it, so for as long as
@@ -3349,14 +3347,37 @@ service cloud.firestore {
       // A CHANNEL'S STORY FOR ITS FOLLOWER (owner 2026-10-29), public or private channel: a follower
       // is not in `recipientUids` (followers are unlimited), so their follow entry is the proof. The
       // ids come from groups:channelStoryIds.
+      // 2026-10-29 audit F5/S8: not banned, not locked or ended.
       function followedChannelStory() {
         let g = resource.data.get('groupId', '');
         return signedIn() && g != ''
+          && channelFollowerOf(get(/databases/$(database)/documents/conversations/$(g)).data, g);
+      }
+      function channelFollowerOf(c, g) {
+        return c.get('channel', false) == true
+          && !groupFariinLocked(c) && c.get('endedAt', null) == null
+          && !(request.auth.uid in c.get('bannedUids', []))
           && exists(/databases/$(database)/documents/users/$(request.auth.uid)/channels/$(g));
       }
+      // 2026-10-29 audit S9: + ban list.
       function publicGroupDoc(c) {
         return c.get('type', '') == 'group' && c.get('isPublic', false) == true
-          && c.get('username', '') != '' && c.get('endedAt', null) == null;
+          && c.get('username', '') != '' && c.get('endedAt', null) == null
+          && !(request.auth.uid in c.get('bannedUids', []));
+      }
+      // 2026-10-29 audit S11/S7: who reads a channel story's meta/public; is `st` a channel's story.
+      function channelStoryCountsReader(st) {
+        let g = st.get('groupId', '');
+        let c = get(/databases/$(database)/documents/conversations/$(g)).data;
+        return g != '' && c.get('channel', false) == true
+          && (request.auth.uid == st.authorUid
+              || groupAdminOf(c)
+              || publicGroupDoc(c)
+              || channelFollowerOf(c, g));
+      }
+      function isChannelStory(st) {
+        return st.get('groupId', '') != ''
+          && get(/databases/$(database)/documents/conversations/$(st.groupId)).data.get('channel', false) == true;
       }
       function storyReadable() { return signedIn() && (
         request.auth.uid == resource.data.authorUid
@@ -3636,7 +3657,7 @@ service cloud.firestore {
       match /meta/{docId} {
         // `public` (2026-10-29): a channel story's bare numbers (views, likes, reposts), no uids,
         // written by mirrorChannelStoryCounts only. Every follower sees them by design.
-        allow read: if signedIn() && (docId == 'public' || storyViewsReader());
+        allow read: if signedIn() && ((docId == 'public' && channelStoryCountsReader(storyData())) || storyViewsReader());
       }
       // Views and meta: the author, and for a group story its owner and admins (owner 2026-10-23).
       function storyViewsReader() {
@@ -3694,29 +3715,13 @@ service cloud.firestore {
         function reactionAllowed() {
           return !('reaction' in request.resource.data)
             || request.resource.data.reaction == ''
-            || storyData().get('allowsReplies', true) == true;
+            || storyData().get('allowsReplies', true) == true
+            || isChannelStory(storyData());   // 2026-10-29 R4: a like on a channel story is no reply
         }
-        // ⚠️ PUBLIC STORIES COUNT THEIR VIEWERS NOW. This required membership of `recipientUids`,
-        // and somebody who reached an "Everyone" story from a profile is not in that list — so the
-        // one audience whose entire purpose is reach was the one audience that could not measure it.
-        // Their write was refused, silently, and the author's Seen-by never showed them.
-        // ⛔ THE AUDIENCE IS A LIST OF TOKENS, AND THIS CLAUSE WAS STILL ASKING FOR A RAW UID.
-        //
-        // When the audience was anonymised (`recipientUids` holds
-        // `sha256('fariin-audience-v1:' + uid)` per person) the story's own READ rule was moved to
-        // `audienceToken(...)`. This one, in the same file a hundred lines below, was not. So for
-        // every story that is not public — My Friends, a custom list, one-time — the viewer's
-        // receipt write has been DENIED, and denied silently: the client writes it with `try?`.
-        //
-        // What that cost, and it is not small: "Seen by" empty on every friends-only story, the view
-        // count stuck at zero, and the heart unable to land either (a reaction is a field on this
-        // same receipt, so a refused create refuses the reaction with it). Only "Everyone" stories
-        // kept working, through the `public` clause below — and stories posted before the audience
-        // was tokenised kept working too, which is exactly the 24 hours that would hide it from a
-        // test.
-        //
-        // Both forms are accepted: the raw one has to stay while stories written by an older build
-        // are still alive, the same migration the story read rule carries.
+        // Public stories count their viewers too (a profile visitor is not in `recipientUids`).
+        // The audience is hashed tokens (`audienceToken`), as the story read rule; the raw-uid form
+        // stays for stories an older build wrote. (2026-10-29: shortened for the 256 KiB ruleset cap;
+        // the full history of this clause is in git.)
         allow create: if signedIn()
           && request.auth.uid == viewerUid
           && (audienceToken(request.auth.uid) in storyData().recipientUids
@@ -3725,7 +3730,7 @@ service cloud.firestore {
               // A channel's story (owner 2026-10-29): its followers, and anyone on a public channel,
               // are its audience without being in `recipientUids`; their view and heart count.
               || (storyData().get('groupId', '') != ''
-                  && (exists(/databases/$(database)/documents/users/$(request.auth.uid)/channels/$(storyData().groupId))
+                  && (channelFollowerOf(get(/databases/$(database)/documents/conversations/$(storyData().groupId)).data, storyData().groupId)
                       || publicGroupDoc(get(/databases/$(database)/documents/conversations/$(storyData().groupId)).data))))
           && !isBlockedByUser(storyData().authorUid)   // 2026-09-26: never in a blocker's Seen-by
           && !('firstAt' in request.resource.data)     // 2026-10-17: the server's to set
@@ -3734,9 +3739,7 @@ service cloud.firestore {
           && !isBlockedByUser(storyData().authorUid)   // 2026-09-26: no reaction after a block
           && request.resource.data.get('firstAt', null) == resource.data.get('firstAt', null)
           && validReceipt() && reactionAllowed();  // set/clear reaction
-        // NO delete — a view receipt is not something a viewer takes back. (Second stray paste of the
-        // message-request decline rule; it read conversation fields off a view receipt, so it could
-        // only ever error. Removed 2026-08-04, no behaviour change.)
+        // NO delete: a view receipt is not something a viewer takes back.
       }
 
       // A ONE-TIME STORY, BURNED. The recipient says "I have opened this"; `onStoryConsumed` then
