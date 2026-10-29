@@ -378,7 +378,8 @@ final class ChannelViewQueue {
         if schedule { flushScheduled = true }
         lock.unlock()
         guard schedule else { return }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) { [weak self] in self?.flush() }
+        // 1.5 s (owner 2026-10-29: the first look should count right away), still one call per screenful.
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.flush() }
     }
 
     private func flush() {
