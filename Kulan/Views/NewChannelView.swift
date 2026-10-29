@@ -242,12 +242,11 @@ struct NewChannelView: View {
                         await MainActor.run { ToastNotice.show("The channel photo was not saved. Set it in Edit.") }
                     }
                 }
-                // Its invite link, made now so the Channel Type page opens with it.
-                Task.detached(priority: .utility) {
-                    if (try? await GroupInviteService.createPrimaryLink(cid: cid)) == nil {
-                        try? await Task.sleep(nanoseconds: 2_000_000_000)
-                        _ = try? await GroupInviteService.createPrimaryLink(cid: cid)
-                    }
+                // Its invite link, made BEFORE the Channel Type page opens, which shows it (and its
+                // approval switch). One retry; the page can still make one if both fail.
+                if (try? await GroupInviteService.createPrimaryLink(cid: cid)) == nil {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    _ = try? await GroupInviteService.createPrimaryLink(cid: cid)
                 }
                 creating = false
                 // Step 3 REPLACES this page: Back can never make a second channel.

@@ -393,7 +393,11 @@ struct JoinGroupSheet: View {
     }
 
     private func buttonTitle(_ p: GroupLinkPreview) -> String {
-        if p.isChannel { return joining ? "Following…" : "Follow Channel" }   // 2026-10-28
+        if p.isChannel {   // 2026-10-28
+            if requestSent || p.requested { return "Request Sent" }
+            if joining { return p.needsApproval ? "Sending…" : "Following…" }
+            return p.needsApproval ? "Request to Follow" : "Follow Channel"
+        }
         if requestSent || p.requested { return "Request Sent" }
         if joining { return p.needsApproval ? "Sending…" : "Joining…" }
         return p.needsApproval ? "Request to Join" : "Join Group"

@@ -110,6 +110,9 @@ struct GroupTypeView: View {
     // MARK: Private: the invite link and content protection here (owner 2026-10-20)
 
     @State private var shareCode: String?
+    /// The channel's main link, for its approval switch (2026-10-28).
+    @State private var primaryLink: GroupLink?
+    @State private var approveOn: Bool?
     @State private var protectOn: Bool?
     @State private var showSend = false
     @State private var copied = false
@@ -121,6 +124,7 @@ struct GroupTypeView: View {
 
     private func loadShareCode() async {
         shareCode = try? await GroupInviteService.shareCode(cid: cid)
+        if isChannel { primaryLink = (try? await GroupInviteService.listLinks(cid: cid))?.primary }
     }
 
     // Owner's mockup 2026-10-21: group photo, name and the full link in one card, Share Link under it.
@@ -171,6 +175,22 @@ struct GroupTypeView: View {
                            : "People can join your group with this link. You can reset it any time.")
         }
         .listRowSeparator(.hidden)
+        // A private channel (2026-10-28): its link can ask an admin first ("Approve New Followers").
+        if isChannel, let primary = primaryLink {
+            Section {
+                Toggle("Approve New Followers", isOn: Binding(
+                    get: { approveOn ?? primary.requestApproval },
+                    set: { v in
+                        approveOn = v
+                        Task {
+                            do { primaryLink = try await GroupInviteService.editLink(cid: cid, code: primary.code, changes: ["requestApproval": v]) }
+                            catch { approveOn = nil; saveError = GroupInviteService.errorText(error, "Couldn't change that. Try again.") }
+                        }
+                    }))
+            } footer: {
+                Text("Turn this on and people who open the link ask first; an admin approves them.")
+            }
+        }
         linkAndContentSections
     }
 
