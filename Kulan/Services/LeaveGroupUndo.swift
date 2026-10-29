@@ -66,6 +66,10 @@ final class LeaveGroupUndo {
         }
     }
 
+    /// A group or channel I deleted (owner 2026-10-29): off my list and screens at once, which closes
+    /// its chat (ThreadView watches `hiddenIds`). Nothing to undo; the server already removed it.
+    func closeChat(_ cid: String) { hiddenIds.insert(cid) }
+
     /// Hide the group now; leave for real in 5 s unless `undo()` comes first. A second leave while one
     /// is waiting commits the first straight away, so two bars never stack.
     func start(cid: String, title: String) {

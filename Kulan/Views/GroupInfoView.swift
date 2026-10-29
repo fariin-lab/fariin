@@ -580,7 +580,7 @@ struct GroupInfoView: View {
         aboutCard
         settingsCard
         // The bubble cloud is the admin panel's call (config/features memberCloud), live.
-        if Flags.memberCloud(for: cid), !membersHidden { memberCloudCard }
+        if Flags.memberCloud(for: cid), !membersHidden, !isChannel { memberCloudCard }
         if !media.isEmpty {
             ProfileMediaCard(cid: cid, media: media, cardColor: cardColor,
                              onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
@@ -588,7 +588,7 @@ struct GroupInfoView: View {
         }
         // Fariin staff only: the switch that hides this group's members (2026-10-27).
         // Members between All Media and the red rows (owner's mockup 2026-10-19).
-        if !membersHidden { membersSection }
+        if !membersHidden, !isChannel { membersSection }   // a channel shows followers, not members
         exitCard
     }
 
@@ -1002,6 +1002,8 @@ struct GroupInfoView: View {
                         .profileSurface(plain: cardColor)
                 }
             } else {
+            // A channel's owner deletes it; leaving would hand followers to nobody (2026-10-29).
+            if !(isChannel && iAmOwner) {
             VStack(spacing: 0) {
                 ProfileInfoRow(title: isChannel ? "Leave Channel" : "Leave Group", icon: "rectangle.portrait.and.arrow.right",
                                tint: Self.exitRed, chevron: false) { confirmLeave = true }
@@ -1016,6 +1018,7 @@ struct GroupInfoView: View {
                 }
             }
             .profileSurface(plain: cardColor)
+            }
             if iAmOwner {
                 VStack(spacing: 0) {
                     // A channel is deleted, not ended (it has no members to keep its history for).
@@ -1975,10 +1978,22 @@ private struct GroupInfoExits: ViewModifier {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("The group will be reported to moderators for review. If you leave too, nobody in it can add you back.") }
-            .alert("Delete Group?", isPresented: $confirmDelete) {
+            .alert(conv?.isChannel == true ? "Delete Channel?" : "Delete Group?", isPresented: $confirmDelete) {
                 Button("Cancel", role: .cancel) {}
-                Button("Delete for Everyone", role: .destructive) { run { try await GroupInviteService.deleteGroup(cid: cid) } }
-            } message: { Text("This permanently deletes the group and all its messages for everyone. This cannot be undone.") }
+                Button("Delete for Everyone", role: .destructive) {
+                    let cid = cid
+                    run {
+                        try await GroupInviteService.deleteGroup(cid: cid)
+                        // Its chat closes too, not only this page (owner 2026-10-29: after Delete
+                        // Channel he was left on the channel's page).
+                        await MainActor.run { LeaveGroupUndo.shared.closeChat(cid) }
+                    }
+                }
+            } message: {
+                Text(conv?.isChannel == true
+                     ? "This permanently deletes the channel and all its posts for everyone. Its followers lose it too. This cannot be undone."
+                     : "This permanently deletes the group and all its messages for everyone. This cannot be undone.")
+            }
             .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
                                                               set: { if !$0 { actionError = nil } })) {
                 Button("OK", role: .cancel) {}
