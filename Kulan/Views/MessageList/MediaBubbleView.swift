@@ -198,9 +198,15 @@ final class MediaBubbleView: UIView {
 
     /// Everything the flying copy replaces — the picture and the badges drawn over it. The caption
     /// is not on the copy, so it stays put; it belongs to the bubble, not to the photograph.
+    /// The row empties the bubble behind the picture while it is lifted (owner 2026-10-29).
+    var onLifted: ((Bool) -> Void)?
+
     private func applyVisibility(hiddenId: String?) {
         let hidden = !flightKey.isEmpty && hiddenId == flightKey
         let a: CGFloat = hidden ? 0 : 1
+        // Lifted out for the viewer: no grey box where it was (owner 2026-10-29), only the chat.
+        backgroundColor = hidden ? .clear : .secondarySystemFill
+        onLifted?(hidden)
         picture.alpha = a
         gif?.alpha = a
         sticker?.alpha = a

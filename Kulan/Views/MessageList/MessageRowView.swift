@@ -631,6 +631,26 @@ final class MessageRowView: UIView {
     private let metaLabel = UILabel()
 
     private var mediaView: MediaBubbleView?
+
+    /// While the picture is lifted into the viewer, the bubble shows nothing where it was: the
+    /// fill and the rim get a hole the picture's size (owner 2026-10-29, "hide that empty
+    /// background"). The caption under it keeps its bubble.
+    private func setMediaLifted(_ lifted: Bool) {
+        guard lifted, let mv = mediaView, !mv.isHidden else {
+            fill.layer.mask = nil; rim.layer.mask = nil
+            return
+        }
+        func holed(_ v: UIView) -> CALayer {
+            let m = CAShapeLayer()
+            let p = UIBezierPath(rect: v.bounds)
+            p.append(UIBezierPath(rect: mv.convert(mv.bounds, to: v)))
+            m.path = p.cgPath
+            m.fillRule = .evenOdd
+            return m
+        }
+        fill.layer.mask = holed(fill)
+        rim.layer.mask = holed(rim)
+    }
     /// The animated sticker this row shows, for the long-press lift (owner 2026-10-21).
     var stickerView: RowStickerView? { (mediaView?.isHidden ?? true) ? nil : mediaView?.stickerView }
     /// What this row draws over the bubble from outside it (sender name, mark, role chip, forwarded
@@ -755,6 +775,7 @@ final class MessageRowView: UIView {
     // MARK: - Apply
 
     func apply(_ m: MessageRowModel, plan p: RowPlan, cid: String) {
+        fill.layer.mask = nil; rim.layer.mask = nil   // a reused row is never left holed
         // A reaction arriving on, or leaving, the message this view is ALREADY showing. Never on a
         // recycled cell (a different id): that would be motion out of nowhere mid-scroll.
         let oldKeys = Self.reactionKeys(model), newKeys = Self.reactionKeys(m)
@@ -1056,7 +1077,9 @@ final class MessageRowView: UIView {
         let v = mediaView ?? {
             // BELOW the fill's siblings but above the fill itself: the picture is the bubble's
             // surface here, and the rim and the flash still have to sit over it.
-            let v = MediaBubbleView(); bubbleBox.insertSubview(v, aboveSubview: fill); mediaView = v; return v
+            let v = MediaBubbleView(); bubbleBox.insertSubview(v, aboveSubview: fill); mediaView = v
+            v.onLifted = { [weak self] lifted in self?.setMediaLifted(lifted) }
+            return v
         }()
         v.isHidden = false
         v.frame = CGRect(origin: .zero, size: b.bubble.size)
