@@ -161,7 +161,9 @@ final class ReactionChipView: UIView {
         } else if onMyBubble {
             backgroundColor = UIColor.white.withAlphaComponent(mine ? 0.45 : 0.22)
         } else {
-            backgroundColor = BubblePalette.accent.withAlphaComponent(mine ? 0.18 : 0.08)
+            // Mine is the solid accent (owner 2026-10-29: "show a different badge colour so the
+            // user feels they reacted"); 0.18 against 0.08 was too close to see.
+            backgroundColor = mine ? BubblePalette.accent : BubblePalette.accent.withAlphaComponent(0.08)
         }
         ring.strokeColor = UIColor.clear.cgColor
         faceCount = faces.count

@@ -979,7 +979,9 @@ enum MessageRowLayout {
                 if chip.count > 1 || chip.showCount, chip.faces.isEmpty {
                     s.append(NSAttributedString(string: " \(chip.count)", attributes: [
                         .font: UIFont.systemFont(ofSize: 12, weight: .semibold),
-                        .foregroundColor: chip.mine ? BubblePalette.accent : UIColor.secondaryLabel]))
+                        // On the solid accent pill of mine (see `ReactionChipView.configure`), white.
+                        .foregroundColor: chip.mine ? (inside && !b.isMe ? UIColor.white : BubblePalette.accent)
+                                                    : UIColor.secondaryLabel]))
                 }
                 return (s, chip.mine, chip.faces)   // the faces on pictures too (owner, 2026-09-27)
             }
