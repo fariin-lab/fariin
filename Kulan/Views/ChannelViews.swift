@@ -538,7 +538,7 @@ struct ChannelPrivacyNotice: View {
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: "lock.shield").font(.system(size: 13, weight: .semibold))
-                Text("Your privacy in this channel is protected. Tap to learn more.")
+                (Text("Your privacy in this channel is protected. ") + Text("Learn more").foregroundColor(Color(hex: 0x2392FE)))   // blue: it is a link (owner 2026-10-29)
                     .multilineTextAlignment(.center)
             }
             .font(.system(size: 14))
