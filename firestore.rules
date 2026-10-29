@@ -2660,7 +2660,7 @@ service cloud.firestore {
           // far-future time would have been an edit window that never closed.
           // 2026-10-23: nor with `rk`, the group keys only releaseGroupKeys writes (every update
           // branch below is an allowlist without it).
-          && !request.resource.data.keys().hasAny(['edits', 'editedAt', 'rk'])
+          && !request.resource.data.keys().hasAny(['edits', 'editedAt', 'rk', 'views'])   // views: channelViews only
           // ⛔ A STORY MENTION ONLY INTO A CHAT THAT ALREADY EXISTS — owner 2026-10-16: "mentioning
           // someone in my story must not message people I have never chatted with, and must not
           // create a chat". `exists`/`get` read the state BEFORE this write (and before the batch
