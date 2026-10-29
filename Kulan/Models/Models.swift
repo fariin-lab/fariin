@@ -11,6 +11,10 @@ import UIKit   // the inline thumbnail is decoded here, next to the field that c
 // in the project but every user-reachable door (create, join link, filter tab,
 // contact-screen section, group header tap) is closed until this flips to true.
 enum Flags {
+    /// Channel Schedule Post (Hold Post > Schedule Post, Channel Settings > Scheduled Posts).
+    /// HIDDEN, owner 2026-10-29: "remove or hide, I don't need it now". The code stays; true brings
+    /// both doors back.
+    static let schedulePosts = false
     /// Unfinished: the admin panel can only switch it OFF (RemoteFeatures, next open).
     /// ON for testing — owner 2026-10-18: "turn on all group doors, will turn off later". Off again
     /// from the panel (config/features groups=false, next open) or by flipping this back.

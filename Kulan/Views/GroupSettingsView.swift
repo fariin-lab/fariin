@@ -329,9 +329,12 @@ struct GroupSettingsView: View {
                 NavigationLink { ChannelFollowersView(cid: cid, count: conv?.followerCount ?? 0) } label: {
                     valueRow("ic_gs_members", "Followers", "\(conv?.followerCount ?? 0)")
                 }
-                // Moved here off the channel's info page (owner 2026-10-29).
-                NavigationLink { ScheduledPostsView(cid: cid) } label: {
-                    valueRow("calendar.badge.clock", "Scheduled Posts", "")
+                // Moved here off the channel's info page (owner 2026-10-29); hidden with the
+                // feature (`Flags.schedulePosts`).
+                if Flags.schedulePosts {
+                    NavigationLink { ScheduledPostsView(cid: cid) } label: {
+                        valueRow("calendar.badge.clock", "Scheduled Posts", "")
+                    }
                 }
             } else {
                 NavigationLink { GroupMembersListView(cid: cid) } label: {

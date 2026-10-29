@@ -1087,7 +1087,7 @@ final class ChatComposerView: UIView {
         if bellSlot != bellShown { bellSlot = bellShown; setNeedsLayout() }
         // Hold Post to schedule it (a channel admin with words written; 2026-10-28). A tap still
         // sends: a UIButton's menu opens on a long press while it is not the primary action.
-        let schedules = s.canSchedule && s.hasText && !s.editing && !s.recordLocked
+        let schedules = Flags.schedulePosts && s.canSchedule && s.hasText && !s.editing && !s.recordLocked
         if schedules != (sendButton.menu != nil) {
             sendButton.menu = schedules ? UIMenu(children: [
                 UIAction(title: "Schedule Post", image: UIImage(systemName: "calendar.badge.clock")) { [weak self] _ in
