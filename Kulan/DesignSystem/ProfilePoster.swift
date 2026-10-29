@@ -677,6 +677,8 @@ struct PosterActionIcon: View {
     var onPhoto: Bool = true
     /// The action's name under the circle (owner 2026-10-19: group page and person profile).
     var label: String? = nil
+    /// The turning ring in place of the glyph while the action runs (channel Follow, 2026-10-29).
+    var busy: Bool = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -691,7 +693,10 @@ struct PosterActionIcon: View {
 
     private var circle: some View {
         Group {
-            if icon.hasPrefix("ic_") {
+            if busy {
+                CreatingRing(label: label ?? "Loading", color: onPhoto ? .white : .primary)
+                    .transition(.opacity)
+            } else if icon.hasPrefix("ic_") {
                 Image(icon).renderingMode(.template).resizable().scaledToFit()
                     .frame(width: diameter * 0.42, height: diameter * 0.42)
             } else {

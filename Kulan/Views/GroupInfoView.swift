@@ -514,7 +514,11 @@ struct GroupInfoView: View {
                     .tint(.primary)
                     .accessibilityLabel(muted ? "Unmute" : "Mute")
             } else {
-                Button { followFromPage() } label: { actionIcon("plus", following ? "Following…" : "Follow") }
+                // While it runs the plus turns into the ring (owner 2026-10-29: "Following…" under a
+                // plus looked broken); when it lands the circle becomes Following ✓ and Mute slides in.
+                Button { followFromPage() } label: {
+                    PosterActionIcon(icon: "plus", onPhoto: false, label: "Follow", busy: following)
+                }
                     .tint(.primary)
                     .disabled(following)
             }
@@ -529,6 +533,8 @@ struct GroupInfoView: View {
                 .tint(.primary)
             }
         }
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: followingNow)
+        .animation(.smooth(duration: 0.2), value: following)
     }
 
     /// Storage Used, in the owner's card style. Media is the All Media strip under it; mute is a circle.
@@ -552,7 +558,15 @@ struct GroupInfoView: View {
         guard !following else { return }
         following = true
         Task {
-            do { _ = try await ChannelService.follow(cid: cid) }
+            do {
+                _ = try await ChannelService.follow(cid: cid)
+                // The follow list arrives by listener: keep the ring until it does (up to 5 s), so
+                // the plus never flashes back between the server's yes and the Following circle.
+                for _ in 0..<25 where !ChannelFollows.shared.follows(cid) {
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                }
+                Haptics.notify(.success)
+            }
             catch { actionError = error.localizedDescription }
             following = false
         }

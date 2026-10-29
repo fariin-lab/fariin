@@ -516,18 +516,20 @@ struct NewGroupView: View {
 struct CreatingRing: View {
     /// What VoiceOver says while it turns (New Channel uses it too, 2026-10-29).
     var label = "Creating group"
+    /// White on the blue buttons; the profile circles pass `.primary`.
+    var color: Color = .white
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         if reduceMotion {
-            ProgressView().tint(.white)
+            ProgressView().tint(color)
         } else {
             TimelineView(.animation) { ctx in
                 // One turn every 0.8 s.
                 let turn = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.8) / 0.8
                 Circle()
                     .trim(from: 0, to: 0.72)
-                    .stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .stroke(color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                     .frame(width: 18, height: 18)
                     .rotationEffect(.degrees(turn * 360))
             }
