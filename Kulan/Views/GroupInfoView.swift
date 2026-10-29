@@ -1038,7 +1038,9 @@ struct GroupInfoView: View {
                     Button("Leave Channel", role: .destructive) { unfollowNow(report: false) }
                     Button("Cancel", role: .cancel) {}
                 } message: { Text("Are you sure you want to leave “\(conv?.title ?? "this channel")”? You'll stop getting its posts.") }
-                .confirmationDialog("Report this channel?", isPresented: $confirmChannelReport, titleVisibility: .visible) {
+                // Apple's centred system alert (owner 2026-10-29: "use the real Apple design"), not a
+                // confirmation dialog, which iOS 26 draws as a bubble pointing at the row.
+                .alert("Report this channel?", isPresented: $confirmChannelReport) {
                     Button("Report and Leave", role: .destructive) { unfollowNow(report: true) }
                     Button("Report") { reportChannel() }
                     Button("Cancel", role: .cancel) {}
