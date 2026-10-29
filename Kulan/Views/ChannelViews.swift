@@ -6,8 +6,17 @@ import SwiftUI
 struct ChannelFollowerBar: View {
     let conv: Conversation
     @State private var follows = ChannelFollows.shared
-    @State private var busy = false
+    @State private var phase = Phase.idle
     @State private var problem: String?
+
+    private enum Phase { case idle, loading, done }
+
+    /// Channels whose bar stays up a moment after the follow lands, so the check is seen before the
+    /// bar goes (ThreadView keeps the bar while the id is here).
+    @MainActor @Observable final class Hold {
+        static let shared = Hold()
+        var ids: Set<String> = []
+    }
 
     private var following: Bool { follows.follows(conv.id) }
     private var muted: Bool { follows.entry(conv.id)?.muted ?? false }
@@ -18,46 +27,83 @@ struct ChannelFollowerBar: View {
                 Text(problem).font(.system(size: 14)).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
-            if following {
-                pill(muted ? "Unmute" : "Mute", icon: muted ? "bell" : "bell.slash", tint: nil) {
+            if following && phase == .idle {
+                pill(muted ? "Unmute" : "Mute", icon: muted ? "bell" : "bell.slash") {
                     Haptics.impact(.light)
                     ChannelService.setMuted(cid: conv.id, !muted)
                 }
                 .accessibilityLabel(muted ? "Unmute channel" : "Mute channel")
             } else {
-                // Always Follow (2026-10-29: a public channel opened from an invite card said
-                // "private"); the server says no to a private channel without its link, in words.
-                pill(busy ? "Following…" : "Follow", icon: nil, tint: Color(hex: 0x2392FE)) { follow() }
+                followButton
             }
         }
         .frame(maxWidth: .infinity)
         .systemBarChrome()
     }
 
-    private func pill(_ title: String, icon: String?, tint: Color?, action: @escaping () -> Void) -> some View {
+    /// Follow (owner 2026-10-29): a long blue bar; a tap draws it in to a round button with the
+    /// turning ring while the follow runs, then a check, then the bar leaves.
+    private var followButton: some View {
+        let round = phase != .idle
+        return Button { follow() } label: {
+            ZStack {
+                switch phase {
+                case .idle:
+                    Text("Follow").font(.system(size: 17, weight: .semibold)).transition(.opacity)
+                case .loading:
+                    CreatingRing(label: "Following").transition(.opacity)
+                case .done:
+                    Image(systemName: "checkmark").font(.system(size: 18, weight: .bold))
+                        .transition(.scale(scale: 0.4).combined(with: .opacity))
+                }
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: round ? 50 : .infinity)
+            .frame(height: 50)
+            .liquidGlass(Capsule(), interactive: !round, tint: Color(hex: 0x2392FE))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(round)
+        .padding(.horizontal, 16)
+        .accessibilityLabel(phase == .done ? "Following" : "Follow")
+    }
+
+    private func pill(_ title: String, icon: String?, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 8) {
                 if let icon { Image(systemName: icon).font(.system(size: 16, weight: .medium)) }
                 Text(title).font(.system(size: 17, weight: .medium))
             }
-            .foregroundStyle(tint == nil ? Color.primary : Color.white)
+            .foregroundStyle(Color.primary)
             .padding(.horizontal, 19)
             .frame(minWidth: 166)
             .frame(height: 44)
-            .liquidGlass(Capsule(), interactive: true, tint: tint)
+            .liquidGlass(Capsule(), interactive: true, tint: nil)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .disabled(busy)
     }
 
     private func follow() {
-        guard !busy else { return }
+        guard phase == .idle else { return }
         guard NetworkState.shared.isOnline else { problem = "No internet connection. Try again."; return }
-        busy = true; problem = nil
+        problem = nil
+        let cid = conv.id
+        Hold.shared.ids.insert(cid)
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) { phase = .loading }
         Task {
-            do { try await ChannelService.follow(cid: conv.id) } catch { problem = error.localizedDescription }
-            busy = false
+            do {
+                try await ChannelService.follow(cid: cid)
+                Haptics.notify(.success)
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.7)) { phase = .done }
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                withAnimation(.smooth(duration: 0.25)) { _ = Hold.shared.ids.remove(cid) }
+            } catch {
+                problem = error.localizedDescription
+                Hold.shared.ids.remove(cid)
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) { phase = .idle }
+            }
         }
     }
 }

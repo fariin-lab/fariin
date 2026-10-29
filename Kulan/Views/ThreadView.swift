@@ -1362,7 +1362,7 @@ struct ThreadView: View {
             } else if searchActive {
                 searchNavBar.transition(.opacity)
             } else if let conv = conversation, conv.isChannel, !conv.users.contains(me), !groupModHidesChat {
-                if ChannelFollows.shared.follows(conv.id) {
+                if ChannelFollows.shared.follows(conv.id), !ChannelFollowerBar.Hold.shared.ids.contains(conv.id) {
                     // Following: nothing at the bottom, the posts get the whole screen. Mute is the
                     // bell at the top (owner 2026-10-29, "keep the screen clear").
                     Color.clear.frame(height: 0)
