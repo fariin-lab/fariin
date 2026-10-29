@@ -1897,7 +1897,8 @@ struct ChatsView: View {
                 .padding(.vertical, 12)
             VStack(alignment: .leading, spacing: 1) {
                 Text(u.name.isEmpty ? u.handle : u.name).font(.headline).foregroundStyle(.primary)
-                Text("@\(u.handle)").font(.subheadline).foregroundStyle(.secondary)
+                // Blue like a channel's @name in the same list (owner 2026-10-29).
+                Text("@\(u.handle)").font(.subheadline).foregroundStyle(Color(hex: 0x2392FE))
             }
             Spacer(minLength: 0)
         }
