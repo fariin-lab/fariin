@@ -2968,7 +2968,9 @@ struct ThreadView: View {
 
     private var rowGeometry: [RowGeometry] {
         let items = repo.items
-        let key = "\(repo.itemsVersion)|\(items.count)|\(dayTick)"
+        let channel = conversation?.isChannel == true
+        let unreadId = firstUnreadId
+        let key = "\(repo.itemsVersion)|\(items.count)|\(dayTick)|\(channel)|\(unreadId ?? "-")"
         if geoCache.key == key { return geoCache.rows }
 
         // owner audit 2026-10-06 chat #48. A row the server has not stamped yet carries THIS phone's
@@ -3004,9 +3006,15 @@ struct ThreadView: View {
         if n > 1 {
             for i in 1..<n {
                 sameDay[i] = Self.cal.isDate(when[i - 1], inSameDayAs: when[i])
+                // Learnt from the reference app's grouping code (2026-10-29): a channel's posts all
+                // come from the channel, so which admin wrote one never splits a run; the "unread"
+                // line splits it (a bubble's tail never runs across it); and a forwarded message
+                // does not join one of the sender's own.
                 joins[i] = sameDay[i]
-                    && items[i - 1].authorId == items[i].authorId
+                    && (channel || items[i - 1].authorId == items[i].authorId)
                     && !breaks[i - 1] && !breaks[i]
+                    && items[i].id != unreadId
+                    && items[i - 1].forwarded == items[i].forwarded
                     && when[i].timeIntervalSince(when[i - 1]) <= Self.clusterGap
             }
         }
