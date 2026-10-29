@@ -487,7 +487,8 @@ enum MessageRowLayout {
 
         // 72% of the LIST's width, then clamped by whatever the column actually has. On a phone the
         // two are the same number; in Stage Manager they are not.
-        let maxBubble = min(BubbleMetrics.maxBubbleWidth(in: rowWidth), columnW)
+        // A channel post takes the whole column (owner 2026-10-29, the reference app's feed).
+        let maxBubble = b.wide ? columnW : min(BubbleMetrics.maxBubbleWidth(in: rowWidth), columnW)
         let hPad = BubbleMetrics.hPad, vPad = BubbleMetrics.vPad
         let maxContent = max(1, maxBubble - hPad * 2)
 
@@ -1371,7 +1372,8 @@ enum MessageRowLayout {
                               senderNameAttr: NSAttributedString?, senderNameSize: CGSize,
                               forwardedSize: CGSize, forwardedIconW: CGFloat) -> BubbleResult {
         var y = startY
-        let box = mediaBox(m, maxBubbleWidth: maxBubble)
+        // A channel post's picture fills the bubble's width (taller ones up to 1.25 × as high).
+        let box = b.wide ? wideMediaBox(m, width: maxBubble) : mediaBox(m, maxBubbleWidth: maxBubble)
         let bubbleW = min(maxBubble, box.width)
 
         // The quote sits ABOVE the picture, inset like the text bubble's, in its own band.
@@ -2655,6 +2657,17 @@ enum MessageRowLayout {
             }
         }
         return CGSize(width: w.rounded(), height: h.rounded())
+    }
+
+    /// A channel post's photo or video (owner 2026-10-29): the full width, its own shape, a tall
+    /// one capped at 1.25 × the width and a wide one at 2.5 : 1. Gifs and stickers keep their size.
+    static func wideMediaBox(_ m: BubbleBody.MediaBody, width: CGFloat) -> CGSize {
+        guard m.kind == .photo || m.kind == .video else { return mediaBox(m, maxBubbleWidth: width) }
+        let aspect: CGFloat = {
+            guard let w = m.pixelWidth, let h = m.pixelHeight, w > 0, h > 0 else { return 1 }
+            return min(max(CGFloat(w / h), 0.8), 2.5)
+        }()
+        return CGSize(width: width.rounded(), height: (width / aspect).rounded())
     }
 
     /// The box for whichever kind this is.

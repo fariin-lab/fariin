@@ -393,6 +393,9 @@ struct BubbleRow: Equatable {
     var canSwipeToReply: Bool
     var opensOnTap: Bool               // media opens something → no double-tap recogniser
     var canDoubleTapReact: Bool
+    /// A channel post (owner 2026-10-29, the reference app's channel feed): the bubble takes the
+    /// column's whole width and a photo or video fills it edge to edge.
+    var wide: Bool = false
 }
 
 /// A centred capsule notice: the day separator, a system event, a pin notice.

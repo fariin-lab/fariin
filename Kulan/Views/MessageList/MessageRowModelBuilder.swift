@@ -395,7 +395,8 @@ enum MessageRowModelBuilder {
             // sits and opens nothing, so there is no tap for the recogniser to hold up — which is
             // why it keeps the double-tap shortcut and the others give it away.
             opensOnTap: msg.isImage || msg.isVideo || msg.isAlbum || msg.isFile,
-            canDoubleTapReact: msg.sendState == nil && !msg.deleted && !msg.isStoryReaction)
+            canDoubleTapReact: msg.sendState == nil && !msg.deleted && !msg.isStoryReaction,
+            wide: ctx.isChannel && !msg.deleted)
     }
 
     /// ⛔ THE TIMER ICON FROM THE FIRST FRAME — owner, 2026-09-29: messages sent right after the

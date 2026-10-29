@@ -413,6 +413,7 @@ final class MessageRowCell: UICollectionViewCell {
                 && x.showsFailedBadge == y.showsFailedBadge
                 && x.meta.edited == y.meta.edited && x.meta.timeText == y.meta.timeText
                 && x.meta.views == y.meta.views   // a channel post's count changes the footer's width
+                && x.wide == y.wide                 // a channel post takes the whole width
                 && x.meta.signature == y.meta.signature
                 // The countdown is drawn over the footer and adds no size, so a change to it is
                 // geometry-neutral by construction — it belongs on the repaint path, which is what
