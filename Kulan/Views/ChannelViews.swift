@@ -781,42 +781,32 @@ struct ChannelReactionsSettingsView: View {
     static let maxPicked = 6
     private let blue = Color(hex: 0x2392FE)
 
-    // ⛔ REDESIGN (owner 2026-10-29: "half the reference app's design, half my new one"). From the
-    // reference: one plain list of three choices with the meaning in the footer, and the chosen set
-    // as its own row you edit in place. Ours: the live preview of what a follower sees on a post,
-    // the 6-slot meter, the palette grid with "+" for any emoji, our blue. Saves run in the
-    // background; the page is never disabled while one goes.
+    // Three plain choices and, for Selected, one palette grid with "+" for any emoji (owner
+    // 2026-10-29, made minimal later the same day). Saves run in the background; the page is never
+    // disabled while one goes.
     var body: some View {
         Form {
-            Section { preview }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 4, trailing: 0))
+            // ⛔ MINIMAL (owner 2026-10-29: "make this page minimalist"): the three choices, and for
+            // Selected one grid whose ticks are the selection. The preview card and the separate
+            // "Selected" slot row are gone (they said again what the ticks say).
             Section {
                 choice("all", "Any Emoji")
                 choice("some", "Selected Emoji")
                 choice("off", "No Reactions")
-            } header: {
-                Text("Followers Can React With")
             } footer: {
-                Text(modeFooter)
+                Text("Nobody sees who reacted, only how many.")
             }
             if mode == "some" {
                 Section {
-                    selectedRow
-                } header: {
-                    HStack {
-                        Text("Selected")
-                        Spacer()
-                        Text("\(list.count) of \(Self.maxPicked)").monospacedDigit()
-                    }
-                } footer: {
-                    Text(list.isEmpty ? "Pick at least one, or reactions will be off."
-                                      : "Tap one to take it off. They show in this order.")
-                }
-                Section {
                     grid.padding(.vertical, 6)
                 } header: {
-                    Text("Choose")
+                    HStack {
+                        Text("Choose up to \(Self.maxPicked)")
+                        Spacer()
+                        Text("\(list.count)/\(Self.maxPicked)").monospacedDigit()
+                    }
+                } footer: {
+                    if list.isEmpty { Text("Pick at least one, or reactions will be off.") }
                 }
             }
             if let problem { Text(problem).foregroundStyle(.red) }
@@ -839,82 +829,6 @@ struct ChannelReactionsSettingsView: View {
             savedList = c.reactList
             loaded = true
         }
-    }
-
-    private var modeFooter: String {
-        switch mode {
-        case "some": return "Followers can react only with the emoji you select, up to \(Self.maxPicked). Nobody sees who reacted, only how many."
-        case "off": return "No reactions on this channel's posts. Reactions already on posts are hidden."
-        default: return "Followers can react with any emoji. Nobody sees who reacted, only how many."
-        }
-    }
-
-    /// What a follower sees on a post with this setting: the bar over a sample bubble.
-    private var preview: some View {
-        let shown: [String] = mode == "some" ? list : Array(QuickReaction.bar.prefix(5))
-        return VStack(spacing: 10) {
-            Group {
-                if mode == "off" || (mode == "some" && list.isEmpty) {
-                    Label("Reactions are off", systemImage: "nosign")
-                        .font(.footnote.weight(.medium)).foregroundStyle(.secondary)
-                        .padding(.horizontal, 16).frame(height: 44)
-                } else {
-                    HStack(spacing: 6) {
-                        ForEach(shown, id: \.self) { e in
-                            Text(e).font(.system(size: 26)).frame(width: 36, height: 36)
-                                .transition(.scale.combined(with: .opacity))
-                        }
-                        if mode == "all" {
-                            Image(systemName: "chevron.down").font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 30, height: 30)
-                                .background(Circle().fill(Color(.tertiarySystemFill)))
-                        }
-                    }
-                    .padding(.horizontal, 10).frame(height: 52)
-                }
-            }
-            .background(Capsule().fill(Color(.secondarySystemGroupedBackground)))
-            .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
-            // The sample post.
-            VStack(alignment: .leading, spacing: 6) {
-                RoundedRectangle(cornerRadius: 4).fill(Color(.tertiaryLabel)).frame(width: 170, height: 8)
-                RoundedRectangle(cornerRadius: 4).fill(Color(.tertiaryLabel)).frame(width: 120, height: 8)
-            }
-            .padding(14)
-            .frame(width: 220, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground)))
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Preview of the reactions followers see")
-    }
-
-    /// The chosen set in order, as six slots: a filled one taps off, an empty one waits.
-    private var selectedRow: some View {
-        HStack(spacing: 0) {
-            ForEach(0..<Self.maxPicked, id: \.self) { i in
-                Group {
-                    if i < list.count {
-                        Button { toggle(list[i]) } label: {
-                            Text(list[i]).font(.system(size: 28))
-                                .frame(width: 46, height: 46)
-                                .background(Circle().fill(blue.opacity(0.16)))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Remove \(list[i])")
-                    } else {
-                        Circle().strokeBorder(Color(.tertiaryLabel), style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
-                            .frame(width: 46, height: 46)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-            }
-        }
-        .padding(.vertical, 6)
     }
 
     private var grid: some View {
