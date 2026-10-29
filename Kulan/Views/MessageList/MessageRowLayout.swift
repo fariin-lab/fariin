@@ -831,7 +831,10 @@ enum MessageRowLayout {
         var bottomButton: String?
         switch linkCard?.shape {
         case .call?: bottomButton = "Join Call"
-        case .group(_, let member)?: bottomButton = member ? "Open Group" : "View Group"
+        // A channel's link says Channel (2026-10-29): its line counts followers, a group's members.
+        case .group(_, let member)?:
+            let channel = linkCard?.desc.contains("follower") == true
+            bottomButton = member ? (channel ? "Open Channel" : "Open Group") : (channel ? "View Channel" : "View Group")
         default: break
         }
         if let bottomButton, var placed = linkPlan {
@@ -2060,7 +2063,8 @@ enum MessageRowLayout {
                              .foregroundColor: textColor])
             let subAttr = NSAttributedString(
                 string: unavailable ? unavailableLine
-                                    : isGroupInvite ? (p.desc.isEmpty ? "Group invite" : "Group invite · \(p.desc)")
+                                    : isGroupInvite ? (p.desc.isEmpty ? "Group invite"
+                                        : (p.desc.contains("follower") ? "Channel invite · \(p.desc)" : "Group invite · \(p.desc)"))
                                     : (p.desc.isEmpty ? "@\(handleText)" : p.desc),
                 attributes: [.font: UIFont.systemFont(ofSize: 13),
                              .foregroundColor: textColor.withAlphaComponent(0.75)])

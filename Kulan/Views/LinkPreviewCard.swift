@@ -124,7 +124,7 @@ struct LinkPreviewCard: View {
     /// photo, name, "N members", View Group or Open Group. Tapping opens `GroupLinkDoor`.
     @ViewBuilder private func groupCard(_ code: String) -> some View {
         let live = GroupLinkDoor.lastFound(code)
-        let fromServer = preview.desc.range(of: #"^[0-9]+ members?$"#, options: .regularExpression) != nil
+        let fromServer = preview.desc.range(of: #"^[0-9.,KM]+ (members?|followers?)$"#, options: .regularExpression) != nil
         let name = live?.title ?? (fromServer ? preview.title : "Group invite")
         let line = live?.membersLine ?? (fromServer ? preview.desc : "Fariin group")
         VStack(alignment: .leading, spacing: 0) {
@@ -147,7 +147,8 @@ struct LinkPreviewCard: View {
             }
             .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 8)
             Divider().overlay(fg.opacity(0.12))
-            Text(GroupLinkDoor.isMember(code) ? "Open Group" : "View Group")
+            Text(line.contains("follower") ? (GroupLinkDoor.isMember(code) ? "Open Channel" : "View Channel")
+                 : (GroupLinkDoor.isMember(code) ? "Open Group" : "View Group"))
                 .font(.system(size: 14, weight: .semibold)).foregroundStyle(fg)
                 .frame(maxWidth: .infinity).frame(height: 40)
         }
