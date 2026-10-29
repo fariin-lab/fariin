@@ -613,7 +613,8 @@ struct ChatSearchPage: View {
             // A group I am in opens the way a chat row does (owner 2026-10-23: a Recent group
             // dropped him on a blank list with no tab bar). The router door pushed the chat a turn
             // later, while the search was closing, and the stack came out half pushed.
-            if let c = repo.conversations.first(where: { $0.id == g.cid }), c.users.contains(me) {
+            // A channel I follow too (2026-10-28): followers are not in `users`.
+            if let c = repo.conversations.first(where: { $0.id == g.cid }), c.users.contains(me) || c.isFollower(me) {
                 onOpenChat(c)
                 dismissSearch()
                 return

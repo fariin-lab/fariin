@@ -396,7 +396,7 @@ enum GroupNameCheck: Equatable {
     static func open(cid: String?, name: String?, push: Bool = false) {
         guard Flags.groupsEnabled else { return }
         if let cid, let mine = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }),
-           mine.users.contains(AuthService.shared.uid ?? "") {
+           mine.users.contains(AuthService.shared.uid ?? "") || mine.isFollower(AuthService.shared.uid ?? "") {
             openChat(cid, title: mine.title, photo: mine.avatarUrl, push: push)
             return
         }
