@@ -599,6 +599,7 @@ struct PublicGroupInfoView: View {
     @State private var reported = false
     /// "Following <name>  Undo" for 5 s after Follow, as the reference app does.
     @State private var undoShown = false
+    @State private var shareText: String?
     @State private var undoTimer: Task<Void, Never>?
 
     init(guest: PublicGroupGuest) {
@@ -698,6 +699,9 @@ struct PublicGroupInfoView: View {
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
+        .sheet(item: Binding(get: { shareText.map { ShareText(id: $0) } }, set: { shareText = $0?.id })) { t in
+            SendContactSheet(contactText: t.id)
+        }
         // Followed from here: the chat behind becomes the follower's once this page closes.
         .onDisappear { if following { guest.joined = true } }
         // No Join here: the reference app's info page has none (its only Join is the chat's foot).
@@ -748,8 +752,11 @@ struct PublicGroupInfoView: View {
                 channelCard(following ? "checkmark" : "plus", following ? "Following" : "Follow", tint: Color(hex: 0x2392FE))
             }
             .disabled(following)
+            // Our own "Share with" sheet first (chats); its corner button opens other apps.
             if let link {
-                ShareLink(item: link) { channelCard("square.and.arrow.up", "Share") }
+                Button { shareText = "Follow " + p.title + " on Fariin: " + link.absoluteString } label: {
+                    channelCard("square.and.arrow.up", "Share")
+                }
             } else {
                 channelCard("square.and.arrow.up", "Share").opacity(0.45)
             }

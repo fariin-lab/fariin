@@ -493,8 +493,11 @@ struct GroupInfoView: View {
             Button { confirmUnfollow = true } label: {
                 followerCard("checkmark", "Following", tint: Color(hex: 0x2392FE))
             }
-            if let name = conv?.publicName, !name.isEmpty, let url = URL(string: "https://fariin.com/" + name) {
-                ShareLink(item: url) { followerCard("square.and.arrow.up", "Share") }
+            // Our own "Share with" sheet first (chats); its corner button opens other apps.
+            if let name = conv?.publicName, !name.isEmpty {
+                Button { shareGroupText = "Follow " + (conv?.title ?? "this channel") + " on Fariin: https://fariin.com/" + name } label: {
+                    followerCard("square.and.arrow.up", "Share")
+                }
             } else {
                 followerCard("square.and.arrow.up", "Share").opacity(0.45)
             }
@@ -2892,7 +2895,7 @@ struct GroupMemberSheet: View {
 }
 
 /// The text handed to Share Group's sheet, as an `Identifiable` for `.sheet(item:)`.
-private struct ShareText: Identifiable { let id: String }
+struct ShareText: Identifiable { let id: String }
 
 // MARK: - Members sheet (search / See All)
 
