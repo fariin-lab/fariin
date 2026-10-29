@@ -85,7 +85,7 @@ struct DiscoverChannelsView: View {
                     Text("Couldn't load channels. Check your connection and try again.")
                         .foregroundStyle(.secondary).listRowBackground(Color.clear)
                 } else if rows.isEmpty {
-                    Text("No public channels yet. Create the first one!")
+                    Text("No public channels yet. Only public channels show here: to list yours, open it, tap its name, then Channel Settings > Channel Type > Public.")
                         .foregroundStyle(.secondary).listRowBackground(Color.clear)
                 } else {
                     Section {
