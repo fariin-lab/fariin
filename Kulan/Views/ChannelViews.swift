@@ -76,14 +76,14 @@ struct ChannelFollowerBar: View {
                 Text(title).font(.system(size: 17, weight: .medium))
             }
             .foregroundStyle(Color.primary)
-            // The Follow bar's size (owner 2026-10-29: one join/follow bar, never a size jump).
-            .frame(maxWidth: .infinity)
-            .frame(height: 50)
+            // ⛔ ITS OWN SMALL SIZE (owner 2026-10-29: "don't bring back width"), not the Follow bar's.
+            .padding(.horizontal, 19)
+            .frame(minWidth: 166)
+            .frame(height: 44)
             .liquidGlass(Capsule(), interactive: true, tint: nil)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 16)
     }
 
     private func follow() {
