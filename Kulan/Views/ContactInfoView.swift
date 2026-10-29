@@ -2526,18 +2526,32 @@ struct SharedMediaGridView: View {
 // through behind; release far enough closes into the avatar, otherwise it springs back.
 /// One shape for both morphs: a rounded rect whose radius is animated, which at half the shorter
 /// side IS a circle. The classic viewer keeps its circle by holding the radius at w/2 the whole way;
-/// the poster holds it at zero. Nothing branches at draw time.
-private struct ViewerShape: Shape {
+/// the poster holds it at zero. A channel's photo takes the squircle branch instead.
+/// The viewer's one clip, round or squircle, with BOTH numbers animatable (owner 2026-10-29 review
+/// fix). The squircle branch used to be `AnyShape(SquircleShape(n:fill:))`: `SquircleShape` has no
+/// `animatableData`, so the curve was drawn only at the end value and the morph jumped (a near
+/// square from the first frame when opening, the small squircle at full size when closing). Here
+/// `morph` (0 = the avatar's squircle, 1 = a square) is interpolated per frame like `corner`, and
+/// the shape is never type-erased, so the clip really travels.
+private struct ViewerClip: Shape {
     var corner: CGFloat
+    var morph: CGFloat
+    let squircle: Bool
 
-    var animatableData: CGFloat {
-        get { corner }
-        set { corner = newValue }
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(corner, morph) }
+        set { corner = newValue.first; morph = newValue.second }
     }
 
     func path(in rect: CGRect) -> Path {
-        let r = min(corner, min(rect.width, rect.height) / 2)
-        return Path(roundedRect: rect, cornerRadius: r, style: .circular)
+        guard squircle else {
+            let r = min(corner, min(rect.width, rect.height) / 2)
+            return Path(roundedRect: rect, cornerRadius: r, style: .circular)
+        }
+        let m = min(max(morph, 0), 1)
+        let n = SquircleShape.exponent + 60 * m
+        let fill = SquircleShape.scale + (1 - SquircleShape.scale) * m
+        return SquircleShape(n: n, fill: fill).path(in: rect)
     }
 }
 
@@ -2694,10 +2708,7 @@ struct ProfilePhotoViewer: View {
                 .frame(width: w, height: h)
                 // one shape from first frame to last — it never becomes a page. A channel's: its
                 // squircle at 0, the curve flattening and filling the frame to a square at 1.
-                .clipShape(squircle
-                           ? AnyShape(SquircleShape(n: SquircleShape.exponent + 60 * progress,
-                                                    fill: SquircleShape.scale + (1 - SquircleShape.scale) * progress))
-                           : AnyShape(ViewerShape(corner: corner)))
+                .clipShape(ViewerClip(corner: corner, morph: progress, squircle: squircle))
                 .mask { liftMask }
                 .scaleEffect(zoom)
                 .position(x: x, y: y)

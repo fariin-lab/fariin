@@ -790,14 +790,11 @@ enum MessageRowModelBuilder {
     /// "add" chip; double tap and the long-press bar are the ways in).
     private static func channelChips(_ msg: Message, ctx: MessageRowContext) -> [ReactionChip] {
         guard ctx.channelReactionsOn, !msg.isSystem, !msg.isCall else { return [] }
-        var counts = msg.reactionCounts
         let mine = ctx.channelMine(msg.id), held = ctx.channelConfirmed(msg.id)
-        if mine != held {
-            if let h = held { counts[h] = max(0, (counts[h] ?? 0) - 1) }
-            if let m = mine { counts[m, default: 0] += 1 }
-        }
-        let chips = counts.filter { $0.value > 0 }.map {
-            ReactionChip(emoji: $0.key, count: $0.value, mine: mine == $0.key, faces: [], showCount: true)
+        // Same emoji with or without its variation selector = one chip, and mine (audit E3).
+        let counts = ChannelEmoji.merged(msg.reactionCounts, mine: mine, held: held)
+        let chips = counts.map {
+            ReactionChip(emoji: $0.key, count: $0.value, mine: ChannelEmoji.same(mine, $0.key), faces: [], showCount: true)
         }
         .sorted { $0.count != $1.count ? $0.count > $1.count : $0.emoji > $1.emoji }
         return chips

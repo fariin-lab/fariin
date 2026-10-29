@@ -144,7 +144,9 @@ enum BubbleText {
         }
         if n < 1000 { return "\(n)" }
         if n < 1_000_000 { return short(Double(n) / 1000, "K") }
-        return short(Double(n) / 1_000_000, "M")
+        // A B step (audit E9): a billion read "1000M".
+        if n < 1_000_000_000 { return short(Double(n) / 1_000_000, "M") }
+        return short(Double(n) / 1_000_000_000, "B")
     }
 
     static func meta(_ m: MetaChrome, isMe: Bool, color: UIColor, solidTicks: Bool = false) -> NSAttributedString {

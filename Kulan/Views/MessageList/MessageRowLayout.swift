@@ -834,7 +834,7 @@ enum MessageRowLayout {
         case .call?: bottomButton = "Join Call"
         // A channel's link says Channel (2026-10-29): its line counts followers, a group's members.
         case .group(_, let member)?:
-            let channel = linkCard?.desc.contains("follower") == true
+            let channel = GroupDirectory.isChannelLine(linkCard?.desc ?? "")
             bottomButton = member ? (channel ? "Open Channel" : "Open Group") : (channel ? "View Channel" : "View Group")
         default: break
         }
@@ -2065,7 +2065,7 @@ enum MessageRowLayout {
             let subAttr = NSAttributedString(
                 string: unavailable ? unavailableLine
                                     : isGroupInvite ? (p.desc.isEmpty ? "Group invite"
-                                        : (p.desc.contains("follower") ? "Channel invite · \(p.desc)" : "Group invite · \(p.desc)"))
+                                        : (GroupDirectory.isChannelLine(p.desc) ? "Channel invite · \(p.desc)" : "Group invite · \(p.desc)"))
                                     : (p.desc.isEmpty ? "@\(handleText)" : p.desc),
                 attributes: [.font: UIFont.systemFont(ofSize: 13),
                              .foregroundColor: textColor.withAlphaComponent(0.75)])

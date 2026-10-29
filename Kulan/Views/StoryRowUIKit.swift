@@ -375,12 +375,8 @@ final class StoryRowCountView: UIView {
 
     func fittedSize() -> CGSize { stack.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize) }
 
-    static func compact(_ n: Int) -> String {
-        if n >= 1000 {
-            return String(format: "%.1fK", Double(n) / 1000).replacingOccurrences(of: ".0K", with: "K")
-        }
-        return "\(n)"
-    }
+    /// The posts' formatter (audit E9): "%.1fK" rounded 999,950 up to "1000K" and had no M step.
+    static func compact(_ n: Int) -> String { BubbleText.compactViews(n) }
 }
 
 // MARK: - One card

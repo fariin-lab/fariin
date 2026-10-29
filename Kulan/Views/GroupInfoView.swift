@@ -540,10 +540,14 @@ struct GroupInfoView: View {
     private var followerStorageCard: some View {
         // The group's card, row for row (owner 2026-10-29: "Sounds & Notifications exactly like
         // group"; Your Privacy removed).
+        // Sounds only while following (owner 2026-10-29 audit U2): a visitor, or someone who just
+        // unfollowed, has nothing to mute, and the page's Mute was refused and snapped back.
         VStack(spacing: 0) {
-            ProfileInfoRow(title: "Sounds & Notifications", icon: "ic_notifications",
-                           value: muted ? "Off" : "On") { showSounds = true }
-            rowDivider
+            if followingNow {
+                ProfileInfoRow(title: "Sounds & Notifications", icon: "ic_notifications",
+                               value: muted ? "Off" : "On") { showSounds = true }
+                rowDivider
+            }
             ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
                            value: storage.map { Self.bytes($0.total) } ?? "") { showStorage = true }
         }
@@ -790,7 +794,9 @@ struct GroupInfoView: View {
         }
         if n < 1000 { return "\(n)" }
         if n < 1_000_000 { return short(Double(n) / 1000, "k") }
-        return short(Double(n) / 1_000_000, "M")
+        // A B step (audit E9): a billion read "1000M".
+        if n < 1_000_000_000 { return short(Double(n) / 1_000_000, "M") }
+        return short(Double(n) / 1_000_000_000, "B")
     }
 
     // MARK: Actions
@@ -990,7 +996,7 @@ struct GroupInfoView: View {
                 // A channel I follow (2026-10-28): Leave Channel unfollows; Follow if I am not.
                 VStack(spacing: 0) {
                     if ChannelFollows.shared.follows(cid) {
-                        ProfileInfoRow(title: unfollowing ? "Unfollowing…" : "Unfollow Channel", icon: "rectangle.portrait.and.arrow.right",
+                        ProfileInfoRow(title: unfollowing ? "Leaving…" : "Leave Channel", icon: "rectangle.portrait.and.arrow.right",
                                        tint: Self.exitRed, chevron: false) { confirmUnfollow = true }
                         if conv?.groupNoReport != true {
                             rowDivider
@@ -1002,12 +1008,14 @@ struct GroupInfoView: View {
                     }
                 }
                 .profileSurface(plain: cardColor)
-                .alert("Unfollow", isPresented: $confirmUnfollow) {
-                    Button("Unfollow Channel", role: .destructive) { unfollowNow(report: false) }
+                // One word for one action (owner 2026-10-29 audit U9): the circle says Leave, so the
+                // row, the alert and its button say it too.
+                .alert("Leave Channel?", isPresented: $confirmUnfollow) {
+                    Button("Leave Channel", role: .destructive) { unfollowNow(report: false) }
                     Button("Cancel", role: .cancel) {}
-                } message: { Text("Are you sure you want to unfollow “\(conv?.title ?? "this channel")”?") }
+                } message: { Text("Are you sure you want to leave “\(conv?.title ?? "this channel")”? You'll stop getting its posts.") }
                 .confirmationDialog("Report this channel?", isPresented: $confirmChannelReport, titleVisibility: .visible) {
-                    Button("Report and Unfollow", role: .destructive) { unfollowNow(report: true) }
+                    Button("Report and Leave", role: .destructive) { unfollowNow(report: true) }
                     Button("Report") { reportChannel() }
                     Button("Cancel", role: .cancel) {}
                 } message: { Text("No one in the channel will know about this report.") }

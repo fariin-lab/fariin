@@ -1076,7 +1076,11 @@ final class MessageRowView: UIView {
     /// its right (`MessageRowLayout`, `wide`). A tap opens Forward (`rowCellDidTapShare`). The cell's
     /// own tap routing hits it (`hitsShare`), so the view takes no touches itself.
     private func applyShareButton(_ b: BubblePlan, model m: MessageRowModel) {
-        guard case .bubble(let row) = m.content, row.wide, !row.showsFailedBadge, b.bubble.width > 0 else {
+        // Not on a post still sending (Forward would open on something not out yet), and not while
+        // selecting, where the button sat under the selection tap (owner 2026-10-29 review fix).
+        // `canSwipeToReply` is the builder's "sent" flag (sendState nil, not deleted).
+        guard case .bubble(let row) = m.content, row.wide, !row.showsFailedBadge, row.canSwipeToReply,
+              !m.selecting, !m.wasSelecting, b.bubble.width > 0 else {
             shareButton?.isHidden = true; shareRect = nil; return
         }
         let v = shareButton ?? {

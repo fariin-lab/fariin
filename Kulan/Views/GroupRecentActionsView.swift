@@ -760,19 +760,42 @@ enum ChannelWords {
         ("New Members", "New Followers"), ("Members", "Followers"), ("members", "followers"),
         ("Member", "Follower"), ("member", "follower"),
         ("Messages", "Posts"), ("messages", "posts"), ("Message", "Post"), ("message", "post"),
+        // The plurals too: whole-word matching no longer finds "Group" inside "Groups".
+        ("Groups", "Channels"), ("groups", "channels"),
         ("Group", "Channel"), ("group", "channel"),
     ]
     /// In a channel the channel's words, else as written (the shared group pages, 2026-10-29).
     static func forChat(_ cid: String, _ s: String) -> String {
         Conversation.Right.isChannel(cid) ? apply(s) : s
     }
+    /// Whole words only (owner 2026-10-29 audit): a plain substring swap would turn "remember"
+    /// into "refollower" and "messages" inside a longer word into nonsense.
     static func apply(_ s: String) -> String {
-        swaps.reduce(s) { $0.replacingOccurrences(of: $1.0, with: $1.1) }
+        swaps.reduce(s) { text, swap in
+            text.replacingOccurrences(of: "\\b" + NSRegularExpression.escapedPattern(for: swap.0) + "\\b",
+                                      with: swap.1, options: .regularExpression)
+        }
     }
     static func apply(_ s: AttributedString) -> AttributedString {
         var out = s
         for (from, to) in swaps {
-            while let r = out.range(of: from) { out.characters.replaceSubrange(r, with: to) }
+            // Offsets, not indices: an index into `out` is not valid after `out` is changed.
+            var startOffset = 0
+            while true {
+                let chars = out.characters
+                guard startOffset < chars.count else { break }
+                let start = chars.index(chars.startIndex, offsetBy: startOffset)
+                guard let r = out[start...].range(of: from) else { break }
+                let lower = chars.distance(from: chars.startIndex, to: r.lowerBound)
+                let wordBefore = r.lowerBound > chars.startIndex && chars[chars.index(before: r.lowerBound)].isLetter
+                let wordAfter = r.upperBound < chars.endIndex && chars[r.upperBound].isLetter
+                if wordBefore || wordAfter {
+                    startOffset = lower + 1
+                } else {
+                    out.characters.replaceSubrange(r, with: to)
+                    startOffset = lower + to.count
+                }
+            }
         }
         return out
     }

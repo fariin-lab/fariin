@@ -10,7 +10,14 @@ import FirebaseFirestore
 /// the viewer registers each channel story here as it builds the pages (`register`).
 @MainActor
 enum ChannelStoryFooter {
-    struct Info { var canRepost: Bool; var canShare: Bool }
+    struct Info {
+        var canRepost: Bool
+        var canShare: Bool
+        /// The story's `allowsReplies` (owner 2026-10-29 review fix): the rules refuse the like
+        /// (`reactionAllowed`) when the poster turned replies off, so the heart must not turn red
+        /// and move the count for a write that never lands.
+        var canLike: Bool = true
+    }
     private static var stories: [String: Info] = [:]
 
     static func register(_ storyId: String, _ info: Info) { stories[storyId] = info }
@@ -51,6 +58,15 @@ final class ChannelStoryCounts {
             }
     }
 
+    /// Sign-out (audit P15): let go of the last story's listener and the old account's numbers.
+    func stop() {
+        listener?.remove()
+        listener = nil
+        watchId = ""
+        counts = [:]
+        likeDelta = [:]
+    }
+
     func noteLike(_ storyId: String, _ liked: Bool) {
         likeDelta[storyId, default: 0] += liked ? 1 : -1
     }
@@ -70,15 +86,9 @@ struct ChannelStoryFooterView: View {
         let c = model.counts[storyId] ?? .init()
         HStack(spacing: 22) {
             stat(Image(systemName: "eye"), c.views)
+                .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(c.views) views")
-            Button {
-                guard info.canRepost else { return }
-                NotificationCenter.default.post(name: .init("storyRepostTapped"), object: storyId)
-            } label: {
-                stat(Image("ic_repost").renderingMode(.template).resizable(), c.reposts)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Repost, \(c.reposts) reposts")
+            repostItem(c.reposts)
             Button(action: toggleLike) {
                 HStack(spacing: 7) {
                     Image(systemName: liked ? "heart.fill" : "heart")
@@ -86,7 +96,7 @@ struct ChannelStoryFooterView: View {
                         .foregroundStyle(liked ? Color.red : Color.white)
                         .scaleEffect(liked ? 1.12 : 1)
                         .animation(.spring(response: 0.3, dampingFraction: 0.45), value: liked)
-                    Text("\(model.likes(storyId))").font(.system(size: 17, weight: .medium)).monospacedDigit()
+                    Text(BubbleText.compactViews(model.likes(storyId))).font(.system(size: 17, weight: .medium)).monospacedDigit()
                         .contentTransition(.numericText())
                 }
                 .frame(height: 44).contentShape(Rectangle())
@@ -116,10 +126,30 @@ struct ChannelStoryFooterView: View {
         }
     }
 
+    /// Repost when it is allowed; otherwise the count alone, not a button that does nothing
+    /// (owner 2026-10-29 audit U6).
+    @ViewBuilder private func repostItem(_ n: Int) -> some View {
+        let icon = Image("ic_repost").renderingMode(.template).resizable()
+        if info.canRepost {
+            Button {
+                NotificationCenter.default.post(name: .init("storyRepostTapped"), object: storyId)
+            } label: {
+                stat(icon, n)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Repost, \(n) reposts")
+        } else {
+            stat(icon, n)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(n) reposts")
+        }
+    }
+
     private func stat(_ icon: Image, _ n: Int) -> some View {
         HStack(spacing: 7) {
             icon.scaledToFit().font(.system(size: 21)).frame(width: 24, height: 24)
-            Text("\(n)").font(.system(size: 17, weight: .medium)).monospacedDigit()
+            // 1.2K, 3.4M (audit E9), the posts' own formatter.
+            Text(BubbleText.compactViews(n)).font(.system(size: 17, weight: .medium)).monospacedDigit()
                 .contentTransition(.numericText())
         }
         .frame(height: 44).contentShape(Rectangle())
@@ -130,6 +160,12 @@ struct ChannelStoryFooterView: View {
         // `handle`), so the heart says so instead of turning red for nothing.
         guard StoryPrefs.viewReceiptsOn else {
             ToastNotice.show("Turn on Read Receipts for stories to like them.")
+            return
+        }
+        // Replies off = likes off on the server (`reactionAllowed`). Taking back a like I already
+        // gave is allowed (an empty reaction), so only a new like is stopped.
+        guard info.canLike || liked else {
+            ToastNotice.show("Likes are turned off for this story.")
             return
         }
         liked.toggle()

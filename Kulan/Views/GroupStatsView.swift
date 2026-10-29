@@ -494,6 +494,13 @@ struct GroupStatsView: View {
     /// None of the group's member sections; the same cards and charts as the group page.
     private func channelPage(_ s: GroupStatsChannelData) -> some View {
         VStack(spacing: 16) {
+            // Nothing at all to show: said, not a blank page (owner 2026-10-29 audit U14).
+            if Self.isEmpty(s) {
+                Text("No activity in the last 30 days yet. Numbers show here once the channel gets follows and views.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16).padding(.top, 40)
+            }
             if !s.tiles.isEmpty { GroupStatsChannelOverviewCard(stats: s) }
             channelFollowerCharts(s)
             channelViewCharts(s)
@@ -538,6 +545,12 @@ struct GroupStatsView: View {
                                colors: Self.storyColors(s.storyNames.count),
                                points: s.stories, showsNow: false)
         }
+    }
+
+    private static func isEmpty(_ s: GroupStatsChannelData) -> Bool {
+        s.tiles.isEmpty && s.growth.isEmpty && s.followers.isEmpty && s.notifications.isEmpty
+            && s.hours.isEmpty && s.interactions.isEmpty && s.emoji.isEmpty && s.stories.isEmpty
+            && s.recentPosts.isEmpty
     }
 
     /// The languages ring's palette, one colour per emoji in order.

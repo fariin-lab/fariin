@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Where the composer goes for someone who is not an admin of a channel (2026-10-28). Following:
-/// one centred glass pill, Mute / Unmute (the reference app's channel footer). Not following (I
-/// unfollowed, or opened it from a link I have not used): Follow, for a public channel.
+/// a grey line, "You're following this channel" (owner 2026-10-29; mute is the bell at the top).
+/// Not following (I unfollowed, or opened it from a link I have not used): Follow.
 struct ChannelFollowerBar: View {
     let conv: Conversation
     @State private var follows = ChannelFollows.shared
@@ -11,14 +11,16 @@ struct ChannelFollowerBar: View {
 
     private enum Phase { case idle, loading, done }
 
-    /// Channels whose bar stays up a moment after the follow lands, so the check is seen before the
-    /// bar goes (ThreadView keeps the bar while the id is here).
-    @MainActor @Observable final class Hold {
-        static let shared = Hold()
-        var ids: Set<String> = []
-    }
-
     private var following: Bool { follows.follows(conv.id) }
+
+    /// Why Follow cannot work here, in the server's words (`followRefusal`), owner 2026-10-29 audit
+    /// U4: the bar offered Follow on a private channel and to a banned person, then bounced back.
+    private var followBlocked: String? {
+        let me = AuthService.shared.uid ?? ""
+        if !me.isEmpty, conv.bannedUids.contains(me) { return "You're banned from this channel." }
+        if !conv.isPublic { return "This channel is private. Ask an admin for an invite link." }
+        return nil
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -32,6 +34,12 @@ struct ChannelFollowerBar: View {
                 Text("You're following this channel")
                     .font(.system(size: 15)).foregroundStyle(.secondary)
                     .frame(height: 44)
+            } else if phase == .idle, let blocked = followBlocked {
+                Text(blocked)
+                    .font(.system(size: 15)).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 44)
             } else {
                 followButton
             }
@@ -73,7 +81,6 @@ struct ChannelFollowerBar: View {
         guard NetworkState.shared.isOnline else { problem = "No internet connection. Try again."; return }
         problem = nil
         let cid = conv.id
-        Hold.shared.ids.insert(cid)
         withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) { phase = .loading }
         Task {
             do {
@@ -81,10 +88,12 @@ struct ChannelFollowerBar: View {
                 Haptics.notify(.success)
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.7)) { phase = .done }
                 try? await Task.sleep(nanoseconds: 900_000_000)
-                withAnimation(.smooth(duration: 0.25)) { _ = Hold.shared.ids.remove(cid) }
+                // Back to idle (owner 2026-10-29 review fix): the check is seen, then the bar
+                // settles on "You're following this channel". Staying at .done left the round
+                // check up for good once ThreadView stopped removing the bar.
+                withAnimation(.smooth(duration: 0.25)) { phase = .idle }
             } catch {
                 problem = error.localizedDescription
-                Hold.shared.ids.remove(cid)
                 withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) { phase = .idle }
             }
         }
@@ -208,6 +217,10 @@ struct ChannelFollowersView: View {
     @State private var loading = false
     @State private var failed = false
     @State private var confirm: (Follower, Bool)?
+    /// Taken off the header's count on each Remove / Ban (owner 2026-10-29 audit U10: `count` is the
+    /// number when the page opened, and it did not go down).
+    @State private var removed = 0
+    private var shownCount: Int { max(0, count - removed) }
 
     var body: some View {
         List {
@@ -245,7 +258,7 @@ struct ChannelFollowersView: View {
                     Text("No followers yet. Share the channel to get your first ones.").foregroundStyle(.secondary)
                 }
             } header: {
-                Text(GroupDirectory.followersLine(count))
+                Text(GroupDirectory.followersLine(shownCount))
             } footer: {
                 Text("Only admins can see who follows this channel.")
             }
@@ -265,6 +278,7 @@ struct ChannelFollowersView: View {
                     do {
                         try await ChannelService.removeFollower(cid: cid, uid: f.uid, ban: ban)
                         rows.removeAll { $0.uid == f.uid }
+                        removed += 1
                     } catch { ToastNotice.show(error.localizedDescription) }
                 }
             }
@@ -472,12 +486,16 @@ struct AdminInviteSheet: View {
 
 /// The admin invites still waiting, on a channel's Administrators page (owner 2026-10-29: moved off
 /// the channel's info page, with Invite Followers / Invite Admins, which Share and Add Admin cover).
-/// Tap one to revoke it. `reloadTick` changes after an invite is sent, to show it at once.
+/// Tap one to revoke it.
+///
+/// ⛔ A PLAIN VALUE, NO STATE (owner 2026-10-29 review fix). This section used to load its own list
+/// with `.task` and carry the revoke `.alert`. Inside a List, a Section hands its modifiers to its
+/// rows, so with no rows yet the task never ran ("Waiting to Accept" never filled), and with rows
+/// there was one alert per row. The page loads the list (`ChannelPendingAdminsLoader` on its List)
+/// and passes it in.
 struct ChannelPendingAdminsSection: View {
-    let cid: String
-    var reloadTick = 0
-    @State private var pending: [ChannelAdminInvites.Pending] = []
-    @State private var revoking: ChannelAdminInvites.Pending?
+    let pending: [ChannelAdminInvites.Pending]
+    let onTap: (ChannelAdminInvites.Pending) -> Void
 
     var body: some View {
         Section {
@@ -490,24 +508,51 @@ struct ChannelPendingAdminsSection: View {
                     Text("Invited as admin").foregroundStyle(.secondary)
                 }
                 .contentShape(Rectangle())
-                .onTapGesture { revoking = p }
+                .onTapGesture { onTap(p) }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Revokes the invite")
             }
         } header: {
-            if !pending.isEmpty { Text("Waiting to Accept") }
+            Text("Waiting to Accept")
         }
-        .task(id: reloadTick) { await reload() }
-        .alert("Revoke admin invite for \(revoking?.name ?? "")?",
-               isPresented: Binding(get: { revoking != nil }, set: { if !$0 { revoking = nil } })) {
-            Button("Cancel", role: .cancel) {}
-            Button("Revoke", role: .destructive) {
-                guard let p = revoking else { return }
-                Task {
-                    try? await ChannelAdminInvites.revoke(p.code)
-                    await reload()
-                }
+    }
+}
+
+/// Loads the waiting admin invites for `ChannelPendingAdminsSection` and owns its revoke alert. Put
+/// on the page's List, not on the Section, so the load runs even while the list is empty.
+/// `tick` changes after an invite is sent, to show it at once.
+struct ChannelPendingAdminsLoader: ViewModifier {
+    let cid: String
+    let on: Bool
+    let tick: Int
+    @Binding var pending: [ChannelAdminInvites.Pending]
+    @Binding var revoking: ChannelAdminInvites.Pending?
+
+    func body(content: Content) -> some View {
+        content
+            .task(id: LoadKey(on: on, tick: tick)) {
+                guard on else { return }
+                await reload()
             }
-        } message: {
-            Text("If you revoke it, \(revoking?.name ?? "they") can no longer use it to become an admin of this channel.")
+            .alert("Revoke admin invite for \(revoking?.name ?? "")?",
+                   isPresented: Binding(get: { revoking != nil }, set: { if !$0 { revoking = nil } })) {
+                Button("Cancel", role: .cancel) {}
+                Button("Revoke", role: .destructive) { revoke() }
+            } message: {
+                Text("If you revoke it, \(revoking?.name ?? "they") can no longer use it to become an admin of this channel.")
+            }
+    }
+
+    private struct LoadKey: Equatable { let on: Bool; let tick: Int }
+
+    private func revoke() {
+        guard let p = revoking else { return }
+        Task {
+            // A refused revoke used to fail without a word (owner 2026-10-29 audit U11).
+            do { try await ChannelAdminInvites.revoke(p.code) }
+            catch { ToastNotice.show(error.localizedDescription) }
+            await reload()
         }
     }
 
@@ -596,6 +641,10 @@ struct ChannelAdminCard: View {
         let link: String
         if conv.isPublic, !conv.publicName.isEmpty {
             link = "https://fariin.com/" + conv.publicName
+        } else if !conv.adminCan(me, .inviteUsers) {
+            // Said as it is (owner 2026-10-29 audit U16): it used to blame the connection.
+            ToastNotice.show("This channel is private. Only admins who can invite followers can share its link.")
+            return
         } else if let code = await ChannelInviteLink.code(conv.id) {
             link = KulanApp.groupLink(code: code)
         } else {
@@ -623,10 +672,15 @@ struct ChannelReactSheet: View {
 
     /// The offered ones in their order, then any others already on the post, most first.
     private var shown: [String] {
-        let extra = counts.filter { $0.value > 0 && !offered.contains($0.key) }
+        let extra = counts.filter { $0.value > 0 && !ChannelEmoji.contains(offered, $0.key) }
             .sorted { $0.value > $1.value }.map(\.key)
-        return (canReact ? offered : offered.filter { (counts[$0] ?? 0) > 0 }) + extra
+        return (canReact ? offered : offered.filter { count(of: $0) > 0 }) + extra
     }
+    /// Matched the server's way, with or without the variation selector (audit E3).
+    private func count(of e: String) -> Int {
+        counts.first { ChannelEmoji.same($0.key, e) }?.value ?? 0
+    }
+    private func isMine(_ e: String) -> Bool { ChannelEmoji.same(mine, e) }
     private var total: Int { counts.values.reduce(0, +) }
 
     var body: some View {
@@ -645,15 +699,15 @@ struct ChannelReactSheet: View {
                             VStack(spacing: 6) {
                                 Text(e).font(.system(size: 30))
                                     .frame(width: 54, height: 54)
-                                    .background(Circle().fill(mine == e ? Color(hex: 0x2392FE).opacity(0.18)
+                                    .background(Circle().fill(isMine(e) ? Color(hex: 0x2392FE).opacity(0.18)
                                                                          : Color(.secondarySystemBackground)))
-                                    .overlay(Circle().stroke(mine == e ? Color(hex: 0x2392FE) : .clear, lineWidth: 2))
-                                Text("\(counts[e] ?? 0)").font(.footnote.monospacedDigit())
-                                    .foregroundStyle(mine == e ? Color(hex: 0x2392FE) : .secondary)
+                                    .overlay(Circle().stroke(isMine(e) ? Color(hex: 0x2392FE) : .clear, lineWidth: 2))
+                                Text("\(count(of: e))").font(.footnote.monospacedDigit())
+                                    .foregroundStyle(isMine(e) ? Color(hex: 0x2392FE) : .secondary)
                             }
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("\(e), \(counts[e] ?? 0)")
+                        .accessibilityLabel("\(e), \(count(of: e))")
                     }
                     if canReact && allowMore {
                         Button { dismiss(); onMore() } label: {
@@ -689,6 +743,10 @@ struct ChannelReactionsSettingsView: View {
     @State private var pickAny = false
     /// The save in flight; a newer change cancels it (no greyed-out page while it goes).
     @State private var saveTask: Task<Void, Never>?
+    /// The last choice the server took, put back when a save fails (owner 2026-10-29 audit U5: the
+    /// page kept the refused choice while Channel Settings showed the saved one).
+    @State private var savedMode = "all"
+    @State private var savedList: [String] = []
 
     /// What an owner picks from: a wide set, so "only these" can fit any channel.
     /// Any other emoji comes in through the "+" (the full picker) and joins the grid.
@@ -751,6 +809,8 @@ struct ChannelReactionsSettingsView: View {
             guard !loaded, let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) else { return }
             mode = c.reactMode
             list = c.reactList
+            savedMode = c.reactMode
+            savedList = c.reactList
             loaded = true
         }
     }
@@ -837,8 +897,9 @@ struct ChannelReactionsSettingsView: View {
                 let on = list.contains(e)
                 let full = list.count >= Self.maxPicked
                 Button { toggle(e) } label: {
+                    // Up to 46pt, narrower when six columns get less (a 375pt phone gives ~44).
                     Text(e).font(.system(size: 28))
-                        .frame(width: 46, height: 46)
+                        .frame(maxWidth: 46).frame(height: 46)
                         .overlay(alignment: .bottomTrailing) {
                             if on {
                                 Image(systemName: "checkmark.circle.fill")
@@ -860,8 +921,8 @@ struct ChannelReactionsSettingsView: View {
             // Any emoji at all (2026-10-29): the full picker.
             Button { pickAny = true } label: {
                 Image(systemName: "plus").font(.system(size: 18, weight: .semibold))
-                    .frame(width: 46, height: 46)
-                    .background(Circle().fill(Color(.tertiarySystemFill)))
+                    .frame(maxWidth: 46).frame(height: 46)
+                    .background(Circle().fill(Color(.tertiarySystemFill)))   // a Circle stays round in a narrower frame
             }
             .buttonStyle(.plain)
             .disabled(list.count >= Self.maxPicked)
@@ -905,8 +966,20 @@ struct ChannelReactionsSettingsView: View {
         saveTask = Task {
             try? await Task.sleep(nanoseconds: 350_000_000)
             guard !Task.isCancelled else { return }
-            do { try await ChannelService.setReactions(cid: cid, mode: m, list: l) }
-            catch { if !Task.isCancelled { problem = error.localizedDescription } }
+            do {
+                let kept = try await ChannelService.setReactions(cid: cid, mode: m, list: l)
+                let km = kept?.mode ?? m, kl = kept?.list ?? l
+                savedMode = km
+                savedList = kl
+                // What the server kept, on screen (audit E2: a refused emoji, or none left = off),
+                // unless a newer change is already waiting.
+                if !Task.isCancelled, mode == m, list == l { mode = km; list = kl }
+            } catch {
+                guard !Task.isCancelled else { return }
+                problem = error.localizedDescription
+                mode = savedMode
+                list = savedList
+            }
         }
     }
 }

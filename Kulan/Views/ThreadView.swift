@@ -4337,8 +4337,8 @@ struct ThreadView: View {
     /// the handler before it writes. Two places asking the same question separately is how the two
     /// drifted, and the drift only shows in the window where they can disagree.
     static func sameEmoji(_ a: String?, _ b: String) -> Bool {
-        guard let a else { return false }
-        return a.replacingOccurrences(of: "\u{FE0F}", with: "") == b.replacingOccurrences(of: "\u{FE0F}", with: "")
+        // Both variation selectors, the server's rule (`ChannelEmoji`, audit E3).
+        ChannelEmoji.same(a, b)
     }
 
     private func canReact(_ m: Message) -> Bool {
@@ -4368,18 +4368,13 @@ struct ThreadView: View {
     }
     /// A post's counts with my pick still on its way already in them (as the row draws them).
     private func channelCounts(_ m: Message) -> [String: Int] {
-        var counts = m.reactionCounts
         let mine = ChannelFollows.shared.myReaction(cid, m.id), held = ChannelFollows.shared.confirmedReaction(cid, m.id)
-        if mine != held {
-            if let h = held { counts[h] = max(0, (counts[h] ?? 0) - 1) }
-            if let x = mine { counts[x, default: 0] += 1 }
-        }
-        return counts.filter { $0.value > 0 }
+        return ChannelEmoji.merged(m.reactionCounts, mine: mine, held: held)
     }
 
     /// A channel reaction goes through the server, which keeps who picked what private.
     private func sendChannelReaction(_ mid: String, _ emoji: String?) {
-        if let e = emoji, conversation?.reactMode == "some", !(conversation?.reactList.contains(e) ?? false) {
+        if let e = emoji, conversation?.reactMode == "some", !ChannelEmoji.contains(conversation?.reactList ?? [], e) {
             showJumpToast("This channel allows only " + (conversation?.reactList.joined(separator: " ") ?? ""))
             return
         }
@@ -4431,7 +4426,7 @@ struct ThreadView: View {
         // has left it off the channel's list, the channel's own picker opens instead.
         if conversation?.isChannel == true, channelCanReact, canReact(m) {
             let quick = QuickReaction.current
-            let allowed = conversation?.reactMode != "some" || (conversation?.reactList.contains(quick) ?? false)
+            let allowed = conversation?.reactMode != "some" || ChannelEmoji.contains(conversation?.reactList ?? [], quick)
             guard allowed else { channelReactTarget = m; return }
             sendReaction(messageId: m.id, emoji: Self.sameEmoji(myReaction(m), quick) ? nil : quick, toAuthor: m.authorId)
             return
@@ -4448,7 +4443,7 @@ struct ThreadView: View {
         var quick = QuickReaction.current
         // A channel with its own list: its first one when my quick one is not on it.
         if conversation?.isChannel == true, conversation?.reactMode == "some",
-           let list = conversation?.reactList, !list.contains(quick), let first = list.first { quick = first }
+           let list = conversation?.reactList, !ChannelEmoji.contains(list, quick), let first = list.first { quick = first }
         let emoji: String? = Self.sameEmoji(myReaction(m), quick) ? nil : quick
         sendReaction(messageId: m.id, emoji: emoji, toAuthor: m.authorId)
     }
@@ -4973,7 +4968,8 @@ struct ThreadView: View {
             onViewportRows: { ids in
                 MediaAutoDownloader.noteViewport(cid: cid, rowIds: ids, items: repo.items) { repo.indexById[$0] }
                 // A channel's posts on screen count as seen (2026-10-28, ChannelViewQueue).
-                if conversation?.isChannel == true, !quiet {
+                // Followers and admins only (audit F7): a visitor's views are refused by the server.
+                if let c = conversation, c.isChannel, !quiet, c.users.contains(me) || ChannelFollows.shared.follows(cid) {
                     ChannelService.warm(cid: cid)   // wake reactions and views before they are used
                     // Real posts only: no day lines or other drawn rows.
                     ChannelViewQueue.shared.note(cid: cid, ids: ids.compactMap { r in repo.indexById[r].map { repo.items[$0].id } })

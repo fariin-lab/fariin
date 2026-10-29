@@ -310,6 +310,17 @@ final class MessageRowCell: UICollectionViewCell {
         // The whole row is the target in selection mode, and toggling it is the action.
         accessibilityTraits = m.selecting ? [.button] : []
         accessibilityValue = m.selecting ? (m.selected ? "Selected" : "Not selected") : nil
+        // A channel post's share button is drawn, not a control, so VoiceOver could not reach it
+        // (owner 2026-10-29 audit U7). The same rule as the button: sent, not selecting.
+        if case .bubble(let b) = m.content, b.wide, !b.showsFailedBadge, b.canSwipeToReply, !m.selecting {
+            accessibilityCustomActions = [UIAccessibilityCustomAction(name: "Share") { [weak self] _ in
+                guard let self else { return false }
+                self.delegate?.rowCellDidTapShare(self)
+                return true
+            }]
+        } else {
+            accessibilityCustomActions = nil
+        }
     }
 
     static func spokenLabel(_ m: MessageRowModel) -> String {

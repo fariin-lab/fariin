@@ -130,7 +130,7 @@ struct LinkPreviewCard: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 // A channel's card wears the channel's squircle (owner 2026-10-29).
-                let channel = line.contains("follower")
+                let channel = live?.isChannel ?? GroupDirectory.isChannelLine(line)
                 Group {
                     if let p = live?.photoUrl {
                         AvatarView(name: name, photoUrl: p, size: 44)
@@ -151,7 +151,7 @@ struct LinkPreviewCard: View {
             }
             .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 8)
             Divider().overlay(fg.opacity(0.12))
-            Text(line.contains("follower") ? (GroupLinkDoor.isMember(code) ? "Open Channel" : "View Channel")
+            Text((live?.isChannel ?? GroupDirectory.isChannelLine(line)) ? (GroupLinkDoor.isMember(code) ? "Open Channel" : "View Channel")
                  : (GroupLinkDoor.isMember(code) ? "Open Group" : "View Group"))
                 .font(.system(size: 14, weight: .semibold)).foregroundStyle(fg)
                 .frame(maxWidth: .infinity).frame(height: 40)

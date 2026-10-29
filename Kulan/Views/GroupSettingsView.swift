@@ -698,6 +698,9 @@ struct GroupAdminsView: View {
     @State private var showPick = false
     /// Bumped after a channel admin invite goes out, so the waiting list shows it at once.
     @State private var invitesTick = 0
+    /// A channel's admin invites still waiting, and the one being revoked (`ChannelPendingAdminsLoader`).
+    @State private var pendingAdmins: [ChannelAdminInvites.Pending] = []
+    @State private var revokingAdmin: ChannelAdminInvites.Pending?
     @State private var actionError: String?
     /// The member picked in Add Admin; their Add Admin page is pushed in the sheet.
     @State private var pickedAdmin: String?
@@ -747,11 +750,14 @@ struct GroupAdminsView: View {
                      : "The owner decides what each admin can do. Tap an admin to see what they can do, including removing members.")
             }
             // A channel's admin invites not yet accepted (moved here off the info page, 2026-10-29).
-            if conv?.isChannel == true && canAddAdmins {
-                ChannelPendingAdminsSection(cid: cid, reloadTick: invitesTick)
+            if conv?.isChannel == true && canAddAdmins && !pendingAdmins.isEmpty {
+                ChannelPendingAdminsSection(pending: pendingAdmins) { revokingAdmin = $0 }
             }
         }
         .listStyle(.insetGrouped)
+        .modifier(ChannelPendingAdminsLoader(cid: cid, on: conv?.isChannel == true && canAddAdmins,
+                                             tick: invitesTick, pending: $pendingAdmins,
+                                             revoking: $revokingAdmin))
         .navigationTitle("Administrators")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: Binding(get: { opened.map { Opened(id: $0) } }, set: { opened = $0?.id })) { o in
@@ -838,12 +844,17 @@ extension Conversation.Right {
         default:              return shortLabel
         }
     }
-    /// Rights that do something here: a channel has no calls and no group stories.
+    /// Rights that do something here: a channel has no calls. It does have stories (owner
+    /// 2026-10-29 audit F4): an admin's Add story switch was hidden, so only the owner could post one.
+    /// Needs the server's CHANNEL_ADMIN_RIGHTS to carry postStories too (server lane).
     func applies(channel: Bool) -> Bool {
-        !channel || (self != .manageCalls && self != .postStories)
+        !channel || self != .manageCalls
     }
+    /// The chat list first, then any channel this device has decoded (a visitor's page, a link,
+    /// a channel I just unfollowed: `KnownChannels`, owner 2026-10-29 audit U1).
     static func isChannel(_ cid: String) -> Bool {
         ConversationsRepository.shared.conversations.first { $0.id == cid }?.isChannel == true
+            || KnownChannels.contains(cid)
     }
 }
 

@@ -88,7 +88,8 @@ struct PublicGroupSheet: View {
                     .overlay {
                         if !g.readable {
                             // The reference app's words for a group it cannot show from outside.
-                            Text("You need to join this group to view its messages.")
+                            Text(g.preview.isChannel ? "Follow this channel to see its posts."
+                                 : "You need to join this group to view its messages.")
                                 .font(.subheadline).foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal, 16).padding(.vertical, 10)
@@ -624,6 +625,8 @@ struct PublicGroupInfoView: View {
     }
     @State private var viewerImage: Message?
     @State private var viewerVideo: Message?
+    /// See All on the media card: the member page's All Media (owner 2026-10-29 audit U3; it was dead).
+    @State private var showAllMedia = false
     @State private var profile: PublicGroupMember?
     @State private var stories: StoryGroup?
     private var me: String { AuthService.shared.uid ?? "" }
@@ -681,6 +684,9 @@ struct PublicGroupInfoView: View {
         }
         .fullScreenCover(item: $viewerImage) { msg in
             ImageViewerView(message: msg, cid: p.cid, rectScope: .profile)
+        }
+        .navigationDestination(isPresented: $showAllMedia) {
+            MediaGalleryView(cid: p.cid, title: p.title, photoUrl: p.photoUrl)
         }
         .fullScreenCover(item: $viewerVideo) { msg in
             VideoPlayerScreen(message: msg, cid: p.cid, clipProvider: { nil }, rectScope: .profile)
@@ -757,7 +763,7 @@ struct PublicGroupInfoView: View {
             ProfileMediaCard(cid: p.cid, media: media, hint: mediaLoaded ? 0 : 4,
                              cardColor: Color(.secondarySystemGroupedBackground),
                              onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
-                             onSeeAll: {})
+                             onSeeAll: { showAllMedia = true })
         }
         if !p.members.isEmpty { membersCard }
         if p.isChannel { channelFoot }
@@ -791,8 +797,9 @@ struct PublicGroupInfoView: View {
             } else {
                 circle("square.and.arrow.up", "Share").opacity(0.45)
             }
+            // Dimmed like the group visitor's Search (owner 2026-10-29 audit U17): it only explains.
             Button { joinNotice = "Follow the channel to search its posts." } label: {
-                circle("magnifyingglass", "Search")
+                circle("magnifyingglass", "Search").opacity(0.45)
             }
             Menu {
                 if let link {
@@ -875,7 +882,7 @@ struct PublicGroupInfoView: View {
         let cid = p.cid
         Task {
             do { try await ChannelService.unfollow(cid: cid); following = false }
-            catch { followError = "Couldn't undo. Use Unfollow on the channel page." }
+            catch { followError = "Couldn't undo. Use Leave Channel on the channel page." }
         }
     }
 

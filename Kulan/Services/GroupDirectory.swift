@@ -100,6 +100,7 @@ struct PublicGroupPreview: Equatable {
         self.verified = (data["verified"] as? Bool ?? false) && label.isEmpty
         self.members = (data["members"] as? [[String: Any]] ?? []).compactMap(PublicGroupMember.init)
         self.isChannel = data["channel"] as? Bool ?? false
+        if self.isChannel { KnownChannels.note(cid) }
         self.createdAt = (data["createdAt"] as? NSNumber)?.doubleValue ?? 0
     }
 }
@@ -156,6 +157,13 @@ enum GroupNameCheck: Equatable {
 
     nonisolated static func membersLine(_ n: Int) -> String { "\(n) \(n == 1 ? "member" : "members")" }
     nonisolated static func followersLine(_ n: Int) -> String { "\(n) \(n == 1 ? "follower" : "followers")" }
+    /// A link card's line is a channel's when it is exactly `followersLine` ("1 follower",
+    /// "1.2K followers"), owner 2026-10-29 review fix. The cards used `contains("follower")`, which
+    /// also caught any group or person card whose text mentions followers. The stored preview
+    /// carries no channel flag, so this is the test for cards already sent.
+    nonisolated static func isChannelLine(_ line: String) -> Bool {
+        line.range(of: #"^[0-9][0-9.,KMB]* followers?$"#, options: .regularExpression) != nil
+    }
 
     /// The public link of a group with this @name.
     static func link(_ name: String) -> String {

@@ -46,6 +46,7 @@ struct GroupLinkPreview: Equatable {
         self.memberCount = (data["memberCount"] as? NSNumber)?.intValue ?? 0
         self.isMember = data["isMember"] as? Bool ?? false
         self.isChannel = data["channel"] as? Bool ?? false
+        if self.isChannel { KnownChannels.note(cid) }
         self.needsApproval = data["needsApproval"] as? Bool ?? false
         self.requested = data["requested"] as? Bool ?? false
         self.mutuals = (data["mutuals"] as? [[String: Any]] ?? []).compactMap { m in

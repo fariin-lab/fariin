@@ -1084,6 +1084,21 @@ struct GroupMod: Equatable, Hashable {
     }
 }
 
+/// ⛔ EVERY CHANNEL THIS DEVICE HAS SEEN, NOT ONLY THE CHAT LIST'S (owner 2026-10-29 audit U1).
+/// `Conversation.Right.isChannel(cid)` looked only in the chat list, so a visitor, or someone who
+/// had just unfollowed, got group words on a channel ("This group is unavailable"). Each decoder
+/// that reads `channel: true` notes the id here. A channel never turns back into a group, so ids
+/// are only added. Locked because conversation docs are decoded off the main thread too.
+enum KnownChannels {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var ids: Set<String> = []   // guarded by `lock`
+    static func note(_ id: String) {
+        guard !id.isEmpty else { return }
+        lock.withLock { _ = ids.insert(id) }
+    }
+    static func contains(_ id: String) -> Bool { lock.withLock { ids.contains(id) } }
+}
+
 struct Conversation: Identifiable, Equatable, Hashable {
     let id: String            // cid ("uidA_uidB")
     var users: [String]
@@ -1181,6 +1196,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// Mine as a follower, from users/{me}/channels/{cid} (ChannelFollows), nil when I am not one.
     var followerRead: Int?
     var followerMuted = false
+    /// When that mute ends (ms), 0 = always (audit E7: the list asks the clock, not a copy).
+    var followerMutedUntil: Double = 0
     var followerPinned = false
     var followerArchived = false
     /// Admins' names under their posts (Channel Settings > Sign Posts).
@@ -1387,6 +1404,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.onlyAdminsCall = data["onlyAdminsCall"] as? Bool ?? false
         self.hideMembers = data["hideMembers"] as? Bool ?? false
         self.isChannel = data["channel"] as? Bool ?? false
+        if self.isChannel { KnownChannels.note(id) }
         self.signPosts = data["signPosts"] as? Bool ?? false
         if let rs = data["reactSet"] as? [String: Any] {
             self.reactMode = (rs["mode"] as? String).flatMap { ["all", "some", "off"].contains($0) ? $0 : nil } ?? "all"
@@ -1728,7 +1746,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// Anything at all to show in the list's badge slot, of either kind.
     func hasUnreadMark(_ me: String) -> Bool { unread(me) > 0 || manuallyUnread(me) }
     func isMuted(_ me: String, now: Double) -> Bool {
-        if isFollower(me) { return followerMuted }
+        if isFollower(me) { return followerMuted && (followerMutedUntil <= 0 || followerMutedUntil > now) }
         return (mutedBy[me] ?? 0) > now
     }
     /// 2026-09-26 block rebuild: `me` has blocked the other person in this 1:1. The account list

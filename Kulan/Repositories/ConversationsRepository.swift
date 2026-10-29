@@ -841,6 +841,8 @@ final class ConversationsRepository {
     func reset() {
         stop()
         ChannelFollows.shared.stop()   // the old account's channels
+        ChannelViewQueue.shared.reset()   // and the views it sent (audit P14)
+        Task { @MainActor in ChannelStoryCounts.shared.stop() }   // its story numbers (audit P15)
         // 2026-09-24 fix-all #6: the per-document pin listeners and the window belong to the old account.
         pinnedExtraListeners.values.forEach { $0.remove() }
         pinnedExtraListeners = [:]

@@ -3571,17 +3571,35 @@ final class StoriesRepository {
     /// minutes while it runs, and when I follow a channel.
     private var channelStories: [Story] = []
     @MainActor private var channelStoriesTask: Task<Void, Never>?
+    /// The one refresh in flight, and its number (owner 2026-10-29 audit P10): two runs used to
+    /// overlap (launch ran it twice), and the older one could land last and bring back the stories
+    /// of a channel I had just unfollowed. A newer run cancels the older, and only the newest may
+    /// write `channelStories`.
+    @MainActor private var channelStoriesRun: Task<Void, Never>?
+    @MainActor private var channelStoriesGen = 0
 
     @MainActor func refreshChannelStories() {
         guard let me = listeningUid else { return }
-        Task { @MainActor in
+        channelStoriesRun?.cancel()
+        channelStoriesGen += 1
+        let gen = channelStoriesGen
+        // Stories already fetched are kept, not read again: only new ids cost a read (each refresh
+        // used to read every live story again, one by one, every five minutes).
+        var known: [String: Story] = [:]
+        for s in channelStories { known[s.id] = s }
+        channelStoriesRun = Task { @MainActor in
             guard let res = try? await Functions.functions(region: "me-central1")
                     .httpsCallable("channelStoryIds").call([:]),
                   let map = (res.data as? [String: Any])?["channels"] as? [String: [String]],
-                  self.listeningUid == me else { return }
+                  !Task.isCancelled, self.listeningUid == me, self.channelStoriesGen == gen else { return }
             var found: [Story] = []
             for (cid, ids) in map {
                 for id in ids.prefix(50) where !id.contains("/") {
+                    if let s = known[id] {
+                        if s.groupId == cid, s.expiresAt > ServerClock.now { found.append(s) }
+                        continue
+                    }
+                    guard !Task.isCancelled else { return }
                     guard let snap = try? await db.collection("stories").document(id).getDocument(),
                           let data = snap.data(),
                           let s = parse(id: snap.documentID, data: data, me: me),
@@ -3589,7 +3607,7 @@ final class StoriesRepository {
                     found.append(s)
                 }
             }
-            guard self.listeningUid == me else { return }
+            guard !Task.isCancelled, self.listeningUid == me, self.channelStoriesGen == gen else { return }
             self.channelStories = found
             await self.rebuild()
         }
@@ -3695,6 +3713,7 @@ final class StoriesRepository {
         mineReg?.remove(); mineReg = nil
         ctxReg?.remove(); ctxReg = nil
         channelStoriesTask?.cancel(); channelStoriesTask = nil; channelStories = []
+        channelStoriesRun?.cancel(); channelStoriesRun = nil; channelStoriesGen += 1
         listeningUid = nil
         // A new account gets a new cold start. Left true, the first empty cached snapshot after a
         // sign-in would be applied as though the server had already confirmed the row was empty.

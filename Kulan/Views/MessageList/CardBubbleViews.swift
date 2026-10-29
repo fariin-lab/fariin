@@ -208,7 +208,7 @@ final class LinkPreviewBubbleView: UIView {
         var groupPhotoRect: CGRect?
         // A channel's card wears the channel's squircle (owner 2026-10-29); its line counts
         // followers, the same test the button's "View Channel" uses.
-        let channelCard = p.desc.contains("follower")
+        let channelCard = GroupDirectory.isChannelLine(p.desc)
         switch p.shape {
         case .group, .groupUnavailable:
             if p.imageEnc != nil, p.imageUrl != nil { groupPhotoRect = plan.avatar }

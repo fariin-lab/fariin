@@ -3,6 +3,45 @@ import FirebaseAuth
 import FirebaseFirestore
 import FirebaseFunctions
 
+/// ⛔ A CHANNEL'S EMOJI, COMPARED THE SERVER'S WAY (owner 2026-10-29 audit E2/E3). "❤" and "❤️"
+/// differ only by a variation selector (U+FE0F, or U+FE0E for the text style), and the server
+/// (`canonEmoji`) treats them as one. The app compared them exactly: an allowed "❤️" refused a
+/// typed "❤", my pick was not marked as mine on its chip, and an old post with both keys drew two
+/// chips. Every channel comparison and count merge goes through here.
+enum ChannelEmoji {
+    static func key(_ e: String) -> String {
+        e.replacingOccurrences(of: "\u{FE0F}", with: "").replacingOccurrences(of: "\u{FE0E}", with: "")
+    }
+    static func same(_ a: String?, _ b: String?) -> Bool {
+        guard let a, let b else { return false }
+        return key(a) == key(b)
+    }
+    static func contains(_ list: [String], _ e: String) -> Bool { list.contains { same($0, e) } }
+
+    /// A post's counts as shown: keys that are the same emoji folded into one (shown in the form
+    /// with the selector), and my pick still on its way moved in at once.
+    static func merged(_ base: [String: Int], mine: String?, held: String?) -> [String: Int] {
+        var shown: [String: String] = [:]   // key -> the form drawn
+        var total: [String: Int] = [:]      // key -> count
+        for (e, n) in base {
+            let k = key(e)
+            if let cur = shown[k], cur.unicodeScalars.count >= e.unicodeScalars.count {} else { shown[k] = e }
+            total[k, default: 0] += n
+        }
+        if (mine != nil || held != nil) && !same(mine, held) {
+            if let h = held { total[key(h)] = max(0, (total[key(h)] ?? 0) - 1) }
+            if let x = mine {
+                let k = key(x)
+                if shown[k] == nil { shown[k] = x }
+                total[k, default: 0] += 1
+            }
+        }
+        var out: [String: Int] = [:]
+        for (k, n) in total where n > 0 { out[shown[k] ?? k] = n }
+        return out
+    }
+}
+
 /// CHANNELS (owner 2026-10-28): a group with a hat. Only admins post, nobody sees who follows, and
 /// followers are not members: they live in conversations/{cid}/followers/{uid} (server-written),
 /// mirrored in users/{me}/channels/{cid} with my `read` count and `muted`. The server calls live in
@@ -142,8 +181,13 @@ enum ChannelService {
     }
 
     /// The channel's reactions: "all", "some" (with up to 6) or "off".
-    static func setReactions(cid: String, mode: String, list: [String]) async throws {
-        _ = try await fn.httpsCallable("setChannelReactions").call(["cid": cid, "mode": mode, "list": list])
+    /// Returns the set the server kept (audit E2): it drops emoji it refuses, and "some" with none
+    /// left comes back "off". nil when the answer has no set (an older server).
+    @discardableResult
+    static func setReactions(cid: String, mode: String, list: [String]) async throws -> (mode: String, list: [String])? {
+        let r = try await fn.httpsCallable("setChannelReactions").call(["cid": cid, "mode": mode, "list": list])
+        guard let d = r.data as? [String: Any], let m = d["mode"] as? String else { return nil }
+        return (m, d["list"] as? [String] ?? [])
     }
 
     /// Dismiss an admin (the owner, or the admin who brought them in): they go back to following.
@@ -169,7 +213,14 @@ enum ChannelService {
         ChannelFollows.shared.noteLocal(cid, pinned: key == "pinned" ? on : nil, archived: key == "archived" ? on : nil)
         FirestoreHub.db.collection("users").document(uid).collection("channels").document(cid)
             .updateData([key: on]) { err in
-                if let err { print("[channel] \(key) refused:", err.localizedDescription) }
+                guard let err else { return }
+                print("[channel] \(key) refused:", err.localizedDescription)
+                // Said and undone (owner 2026-10-29 audit U12): it used to flip back later in silence.
+                DispatchQueue.main.async {
+                    ChannelFollows.shared.noteLocal(cid, pinned: key == "pinned" ? !on : nil,
+                                                    archived: key == "archived" ? !on : nil)
+                    ToastNotice.show("Couldn't change that. Try again.")
+                }
             }
     }
 
@@ -190,10 +241,20 @@ enum ChannelService {
         let uid = me
         guard !uid.isEmpty else { return }
         let end = muted ? until : 0
+        let before = ChannelFollows.shared.entry(cid)
         ChannelFollows.shared.noteLocal(cid, muted: muted, mutedUntil: end)
         FirestoreHub.db.collection("users").document(uid).collection("channels").document(cid)
             .updateData(["muted": muted, "mutedUntil": end]) { err in
-                if let err { print("[channel] setMuted refused:", err.localizedDescription) }
+                guard let err else { return }
+                print("[channel] setMuted refused:", err.localizedDescription)
+                // Said and undone (owner 2026-10-29 audit U12): the bell had already said "Channel
+                // muted", then flipped back later with no word.
+                DispatchQueue.main.async {
+                    if let before {
+                        ChannelFollows.shared.noteLocal(cid, muted: before.muted, mutedUntil: before.mutedUntil)
+                    }
+                    ToastNotice.show("Couldn't change that. Try again.")
+                }
             }
     }
 }
@@ -214,8 +275,14 @@ final class ChannelFollows {
         var isMuted: Bool { muted && (mutedUntil <= 0 || mutedUntil > Date().timeIntervalSince1970 * 1000) }
     }
 
-    /// The most channels kept live at once (a listener each).
+    /// The most channels kept live at once (a listener each on the channel's own document).
     static let maxLive = 300
+    /// The most follow entries read (owner 2026-10-29 audit E4). Was 300, the same as `maxLive`, so
+    /// the 301st channel followed was missing everywhere: no bell, no reactions, no stories, and
+    /// `follows` said no. Now every entry up to this many is known (`follows`, mute, reactions);
+    /// only the chat-list row needs a live document, and those go to the pinned ones first, then
+    /// the most recently followed `maxLive`.
+    static let maxEntries = 1000
 
     private(set) var entries: [String: Entry] = [:]
     private var docs: [String: Conversation] = [:]
@@ -234,8 +301,21 @@ final class ChannelFollows {
     @ObservationIgnored private var uid: String?
     /// Mark as Unread waiting for the server to agree (cid -> the lowered read count).
     @ObservationIgnored private var lowered: [String: Int] = [:]
+    /// When each entry was followed (ms), to choose which channels get a live document (E4).
+    @ObservationIgnored private var followedAt: [String: Double] = [:]
+    /// The first follow-list snapshot has been applied. The launch's first snapshot does not ask
+    /// for channel stories again: the tray's own start already did (audit P10, a double run).
+    @ObservationIgnored private var listLoaded = false
+    /// One chat-list rebuild per burst (audit P9): at launch every channel's document arrives on
+    /// its own, and each one rebuilt the whole list.
+    @ObservationIgnored private var listRebuildQueued = false
+    /// Redraws once the earliest timed mute ends (audit E7/U13): `isMuted` depends on the clock,
+    /// and nothing else changes when the hour is up.
+    @ObservationIgnored private var muteExpiryTask: Task<Void, Never>?
+    /// Bumped when a timed mute ends; read by `entry`, so every view that asks redraws then.
+    private(set) var muteTick = 0
 
-    func entry(_ cid: String) -> Entry? { entries[cid] }
+    func entry(_ cid: String) -> Entry? { _ = muteTick; return entries[cid] }
     func follows(_ cid: String) -> Bool { entries[cid] != nil }
 
     /// Each followed channel as a conversation carrying my read count and mute.
@@ -244,7 +324,11 @@ final class ChannelFollows {
             guard let e = entries[cid] else { return nil }
             var c = c
             c.followerRead = e.read
+            // Muted as of this build, AND its end, so `Conversation.isMuted(me, now:)` also asks the
+            // clock (audit E7). The value as of now makes the row differ once a mute runs out, so
+            // the list redraws it at `scheduleMuteExpiry`'s rebuild.
             c.followerMuted = e.isMuted
+            c.followerMutedUntil = e.mutedUntil
             c.followerPinned = e.pinned
             c.followerArchived = e.archived
             return c
@@ -256,7 +340,7 @@ final class ChannelFollows {
         stop()
         self.uid = uid
         listListener = FirestoreHub.db.collection("users").document(uid).collection("channels")
-            .limit(to: Self.maxLive)
+            .limit(to: Self.maxEntries)
             .addSnapshotListener { [weak self] snap, error in
                 guard let self, let snap else {
                     if let error { print("[channel] follow list error:", error.localizedDescription) }
@@ -264,15 +348,18 @@ final class ChannelFollows {
                 }
                 var next: [String: Entry] = [:]
                 var rx: [String: [String: String]] = [:]
+                var at: [String: Double] = [:]
                 for d in snap.documents {
                     let data = d.data()
                     if let r = data["rx"] as? [String: String], !r.isEmpty { rx[d.documentID] = r }
+                    at[d.documentID] = ((data["at"] as? Timestamp)?.dateValue().timeIntervalSince1970 ?? 0) * 1000
                     next[d.documentID] = Entry(read: (data["read"] as? NSNumber)?.intValue ?? 0,
                                                muted: data["muted"] as? Bool ?? false,
                                                pinned: data["pinned"] as? Bool ?? false,
                                                archived: data["archived"] as? Bool ?? false,
                                                mutedUntil: (data["mutedUntil"] as? NSNumber)?.doubleValue ?? 0)
                 }
+                self.followedAt = at
                 self.apply(next)
                 self.followRx = rx
                 self.mergeRx()
@@ -320,6 +407,10 @@ final class ChannelFollows {
         listListener = nil
         adminRxListener = nil
         docListeners = [:]
+        muteExpiryTask?.cancel()
+        muteExpiryTask = nil
+        listLoaded = false
+        followedAt = [:]
         entries = [:]
         docs = [:]
         myReactions = [:]
@@ -348,6 +439,34 @@ final class ChannelFollows {
         ConversationsRepository.shared.channelsChanged()
     }
 
+    /// The snapshot-driven list rebuild, coalesced to one per 100 ms (audit P9). My own changes
+    /// (`noteLocal`, `setReadBack`) still rebuild at once.
+    private func queueListRebuild() {
+        guard !listRebuildQueued else { return }
+        listRebuildQueued = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.listRebuildQueued = false
+            ConversationsRepository.shared.channelsChanged()
+        }
+    }
+
+    /// One wake-up at the earliest timed mute still to end; it redraws and plans the next.
+    private func scheduleMuteExpiry() {
+        muteExpiryTask?.cancel()
+        muteExpiryTask = nil
+        let now = Date().timeIntervalSince1970 * 1000
+        let ends = entries.values.filter { $0.muted && $0.mutedUntil > now }.map { $0.mutedUntil }
+        guard let next = ends.min() else { return }
+        let waitNs = UInt64(max(0, next - now) + 500) * 1_000_000
+        muteExpiryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: waitNs)
+            guard !Task.isCancelled, let self else { return }
+            self.muteTick += 1
+            ConversationsRepository.shared.channelsChanged()
+            self.scheduleMuteExpiry()
+        }
+    }
+
     /// My own change, shown at once (the listener confirms it a moment later).
     func noteLocal(_ cid: String, read: Int? = nil, muted: Bool? = nil, mutedUntil: Double? = nil,
                    pinned: Bool? = nil, archived: Bool? = nil) {
@@ -359,6 +478,7 @@ final class ChannelFollows {
         if let archived { e.archived = archived }
         entries[cid] = e
         ConversationsRepository.shared.channelsChanged()
+        if muted != nil || mutedUntil != nil { scheduleMuteExpiry() }
     }
 
     private func apply(_ next: [String: Entry]) {
@@ -368,25 +488,34 @@ final class ChannelFollows {
         }
         // A channel just followed (or unfollowed): its stories join (or leave) the tray now, not
         // at the next five-minute ask (2026-10-29).
-        if Set(next.keys) != Set(entries.keys) {
+        if listLoaded, Set(next.keys) != Set(entries.keys) {
             Task { @MainActor in StoriesRepository.shared.refreshChannelStories() }
         }
-        for (cid, l) in docListeners where next[cid] == nil {
+        listLoaded = true
+        // A live document for the pinned channels first, then the most recently followed, up to
+        // `maxLive` (audit E4). The rest are still followed and known, just not listed live.
+        let ranked = next.keys.sorted { a, b in
+            let pa = next[a]?.pinned == true, pb = next[b]?.pinned == true
+            if pa != pb { return pa }
+            return (followedAt[a] ?? 0) > (followedAt[b] ?? 0)
+        }
+        let live = Set(ranked.prefix(Self.maxLive))
+        for (cid, l) in docListeners where !live.contains(cid) {
             l.remove()
             docListeners[cid] = nil
             docs[cid] = nil
         }
-        for cid in next.keys where docListeners[cid] == nil {
+        for cid in live where docListeners[cid] == nil {
             docListeners[cid] = FirestoreHub.db.collection("conversations").document(cid)
                 .addSnapshotListener { [weak self] snap, _ in
                     guard let self else { return }
                     // A deleted (or no longer readable) channel just drops off the list.
                     guard let snap, snap.exists, let data = snap.data(with: .estimate) else {
-                        if self.docs.removeValue(forKey: cid) != nil { ConversationsRepository.shared.channelsChanged() }
+                        if self.docs.removeValue(forKey: cid) != nil { self.queueListRebuild() }
                         return
                     }
                     self.docs[cid] = Conversation(id: cid, data: data)
-                    ConversationsRepository.shared.channelsChanged()
+                    self.queueListRebuild()
                 }
         }
         // Keep what I marked locally if the server has not caught up yet (a Mark as Unread is
@@ -399,7 +528,8 @@ final class ChannelFollows {
             if let mine = entries[cid], mine.read > e.read { merged[cid]?.read = mine.read }
         }
         entries = merged
-        ConversationsRepository.shared.channelsChanged()
+        queueListRebuild()
+        scheduleMuteExpiry()
     }
 }
 
@@ -414,6 +544,14 @@ final class ChannelViewQueue {
     private var pending: [String: Set<String>] = [:]   // cid -> post ids waiting
     private var sent: Set<String> = []                 // "cid/mid" already sent
     private var flushScheduled = false
+
+    /// Sign-out (audit P14): the next account's views are its own, not skipped as already sent.
+    func reset() {
+        lock.lock()
+        pending = [:]
+        sent = []
+        lock.unlock()
+    }
 
     func note(cid: String, ids: [String]) {
         guard !ids.isEmpty else { return }
@@ -443,8 +581,15 @@ final class ChannelViewQueue {
                 let part = Array(all[start..<min(all.count, start + 100)])
                 fn.call(["cid": cid, "mids": part]) { [weak self] _, error in
                     guard let error, let self else { return }
-                    // Not counted (offline, say): free them to go again on the next look.
                     print("[channel] views not sent:", error.localizedDescription)
+                    // A refusal (not a follower, banned, channel closed) stays refused: those posts
+                    // are not sent again this session (owner 2026-10-29 audit F7: a visitor's views
+                    // were refused and re-sent every 1.5 s while they scrolled). Only a failure
+                    // that may pass (offline, busy) frees them to go again on the next look.
+                    let code = FunctionsErrorCode(rawValue: (error as NSError).code)
+                    let refused: Set<FunctionsErrorCode> = [.permissionDenied, .failedPrecondition,
+                                                            .notFound, .invalidArgument, .unauthenticated]
+                    if (error as NSError).domain == FunctionsErrorDomain, let code, refused.contains(code) { return }
                     self.lock.lock()
                     for id in part { self.sent.remove("\(cid)/\(id)") }
                     self.lock.unlock()

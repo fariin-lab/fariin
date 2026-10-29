@@ -1932,7 +1932,8 @@ struct StoryViewer: View {
                     let channelStory = !plainOnly && (s.groupId.map {
                         Conversation.Right.isChannel($0) || ChannelFollows.shared.follows($0) } ?? false)
                     let _ = channelStory
-                        ? ChannelStoryFooter.register(s.id, .init(canRepost: canRepost, canShare: canPassOn))
+                        ? ChannelStoryFooter.register(s.id, .init(canRepost: canRepost, canShare: canPassOn,
+                                                 canLike: s.allowsReplies))
                         : ()
                     return StoryUI.Story(
                         id: s.id,
