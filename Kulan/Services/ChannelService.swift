@@ -147,16 +147,43 @@ enum ChannelService {
     }
 
     /// Admins add people; anyone whose own settings refuse it is skipped and comes back in `refused`.
-    static func addFollowers(cid: String, uids: [String]) async throws -> (added: [String], refused: [String]) {
-        var added: [String] = [], refused: [String] = []
+    /// `linkOnly`: the refused whose only reason is their own "Who can add me" (owner 2026-10-30):
+    /// they can be sent the invite link instead. The count moves with the server's own numbers.
+    static func addFollowers(cid: String, uids: [String]) async throws
+        -> (added: [String], refused: [String], linkOnly: [String]) {
+        var added: [String] = [], refused: [String] = [], linkOnly: [String] = []
         for start in stride(from: 0, to: uids.count, by: 50) {
             let part = Array(uids[start..<min(uids.count, start + 50)])
             let r = try await fn.httpsCallable("addChannelFollowers").call(["cid": cid, "uids": part])
             let d = r.data as? [String: Any] ?? [:]
             added += d["added"] as? [String] ?? []
             refused += d["refused"] as? [String] ?? []
+            linkOnly += d["linkOnly"] as? [String] ?? []
+            await adoptServerCount(cid, r: d)
         }
-        return (added, refused)
+        return (added, refused, linkOnly)
+    }
+
+    /// The link that brings someone to this channel: its public name, else its invite link (made if
+    /// it has none). Nil when I may not share a private channel or the server cannot be reached.
+    @MainActor static func shareLink(_ conv: Conversation) async -> String? {
+        if conv.isPublic, !conv.publicName.isEmpty { return "https://fariin.com/" + conv.publicName }
+        guard conv.adminCan(AuthService.shared.uid ?? "", .inviteUsers) else { return nil }
+        guard let code = await ChannelInviteLink.code(conv.id) else { return nil }
+        return KulanApp.groupLink(code: code)
+    }
+
+    /// "Send Invite Link" (owner 2026-10-30): the channel's link, as a message in each person's chat
+    /// with me. Returns how many went.
+    static func sendInviteLink(_ conv: Conversation, to uids: [String]) async -> Int {
+        guard let link = await shareLink(conv) else { return 0 }
+        let me = AuthService.shared.uid ?? ""
+        let text = "Follow \u{201C}\(conv.title)\u{201D} on Fariin: " + link
+        var sent = 0
+        for u in uids where !u.isEmpty && u != me {
+            do { try await ChatService.sendText(cid: ChatService.convId(me, u), text: text); sent += 1 } catch {}
+        }
+        return sent
     }
 
     /// A text post waiting to go out (functions-groups scheduleChannelPost).

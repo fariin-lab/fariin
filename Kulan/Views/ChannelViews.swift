@@ -237,6 +237,16 @@ struct ChannelFollowersView: View {
     /// Taken off the header's count on each Remove / Ban (owner 2026-10-29 audit U10: `count` is the
     /// number when the page opened, and it did not go down).
     @State private var removed = 0
+    /// Added from this page (owner 2026-10-30, Add Followers): on top of `count`, which is the number
+    /// when the page opened.
+    @State private var added = 0
+    @State private var showAdd = false
+    @State private var adding = false
+    /// People whose own settings refused the add: offered the link instead (`InviteInsteadSheet`).
+    @State private var linkInstead: [CallMember] = []
+    @State private var shareText: String?
+    /// May I add people: the owner, or an admin holding "Add users" (the server's own test).
+    private var mayInvite: Bool { conv?.adminCan(AuthService.shared.uid ?? "", .inviteUsers) == true }
     /// ⛔ THE ADMINS ARE ON THE LIST AND IN ITS COUNT (owner 2026-10-29: the page said "3 Followers",
     /// the list showed one). The reference app counts a channel's admins among its subscribers and
     /// lists them first, marked; `Conversation.subscriberCount` already counts them the same way.
@@ -248,10 +258,24 @@ struct ChannelFollowersView: View {
             return (c.names[a] ?? "").lowercased() < (c.names[b] ?? "").lowercased()
         }
     }
-    private var shownCount: Int { max(0, count - removed) + admins.count }
+    private var shownCount: Int { max(0, count - removed + added) + admins.count }
 
     var body: some View {
         List {
+            // ⛔ ADD FOLLOWERS (owner 2026-10-30: "there's no way to add people, only the link").
+            // Public or private: pick people from my chats; anyone whose own "Who can add me" refuses
+            // it is offered the channel's link instead. Admins with "Add users" only.
+            if mayInvite {
+                Section {
+                    Button { showAdd = true } label: {
+                        Label { Text(adding ? "Adding…" : "Add Followers") } icon: { Image(systemName: "person.badge.plus") }
+                    }
+                    .disabled(adding)
+                    Button { Task { await shareInvite() } } label: {
+                        Label { Text("Invite via Link") } icon: { Image(systemName: "link") }
+                    }
+                }
+            }
             Section {
                 ForEach(admins, id: \.self) { uid in
                     HStack(spacing: 12) {
@@ -327,12 +351,61 @@ struct ChannelFollowersView: View {
             Text(confirm?.1 == true ? "They stop following and can't follow again."
                                     : "They stop following. They can follow again if the channel is public.")
         }
+        .sheet(isPresented: $showAdd) {
+            AddPeopleSheet(alreadyIn: Set(admins + rows.map(\.uid)), actionTitle: "Add") { people in
+                Task { await add(people) }
+            }
+        }
+        .sheet(isPresented: Binding(get: { !linkInstead.isEmpty }, set: { if !$0 { linkInstead = [] } })) {
+            if let c = conv {
+                InviteInsteadSheet(conv: c, people: linkInstead) { linkInstead = [] }
+                    .presentationDetents([.medium, .large])
+            }
+        }
+        .sheet(item: Binding(get: { shareText.map { ShareText(id: $0) } }, set: { shareText = $0?.id })) { t in
+            SendContactSheet(contactText: t.id)
+        }
+    }
+
+    private func add(_ people: [CallMember]) async {
+        guard !people.isEmpty else { return }
+        adding = true
+        defer { adding = false }
+        do {
+            let r = try await ChannelService.addFollowers(cid: cid, uids: people.map(\.uid))
+            added += r.added.count
+            let linkOnly = Set(r.linkOnly)
+            let others = r.refused.filter { !linkOnly.contains($0) }.count
+            if !r.added.isEmpty {
+                Haptics.notify(.success)
+                ToastNotice.show(r.added.count == 1 ? "1 follower added" : "\(r.added.count) followers added")
+                rows = []; more = true
+                await load()
+            } else if r.refused.isEmpty {
+                ToastNotice.show(people.count == 1 ? "Already following" : "They already follow this channel")
+            }
+            if others > 0 {
+                ToastNotice.show(others == 1 ? "1 person couldn't be added" : "\(others) people couldn't be added")
+            }
+            linkInstead = people.filter { linkOnly.contains($0.uid) }
+        } catch {
+            ToastNotice.show(error.localizedDescription)
+        }
+    }
+
+    private func shareInvite() async {
+        guard let c = conv else { return }
+        guard let link = await ChannelService.shareLink(c) else {
+            ToastNotice.show("Couldn't get the channel's link. Check your connection and try again.")
+            return
+        }
+        shareText = "Follow \u{201C}\(c.title)\u{201D} on Fariin: " + link
     }
 
     private func load() async {
         guard !loading, more else { return }
         // A channel the count says nobody follows: nothing to ask the server for.
-        if count == 0, rows.isEmpty { more = false; return }
+        if count == 0, added == 0, rows.isEmpty { more = false; return }
         loading = true; failed = false
         do {
             let page = try await ChannelService.followers(cid: cid, after: rows.last?.uid)
@@ -342,6 +415,93 @@ struct ChannelFollowersView: View {
         } catch { failed = true }
         loading = false
     }
+}
+
+/// People whose own "Who can add me" refused an add to a channel (owner 2026-10-30): they are sent
+/// the channel's link in their chat with me instead, each one ticked by default. Our own card, not
+/// the reference app's: the people first, one plain sentence, one button.
+struct InviteInsteadSheet: View {
+    let conv: Conversation
+    let people: [CallMember]
+    let onDone: () -> Void
+    @State private var picked: Set<String>
+    @State private var sending = false
+    @Environment(\.dismiss) private var dismiss
+
+    init(conv: Conversation, people: [CallMember], onDone: @escaping () -> Void) {
+        self.conv = conv
+        self.people = people
+        self.onDone = onDone
+        _picked = State(initialValue: Set(people.map(\.uid)))
+    }
+
+    private var names: String {
+        let n = people.map { ContactNames.shared.name(for: $0.uid) ?? $0.name }
+        return n.count <= 2 ? n.joined(separator: " and ") : "\(n[0]) and \(n.count - 1) others"
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(people) { p in
+                        Button {
+                            if picked.contains(p.uid) { picked.remove(p.uid) } else { picked.insert(p.uid) }
+                        } label: {
+                            HStack(spacing: 12) {
+                                AvatarView(name: p.name, photoUrl: p.photoUrl, size: 40)
+                                Text(ContactNames.shared.name(for: p.uid) ?? p.name).foregroundStyle(.primary).lineLimit(1)
+                                Spacer(minLength: 8)
+                                Image(systemName: picked.contains(p.uid) ? "checkmark.circle.fill" : "circle")
+                                    .font(.title3)
+                                    .foregroundStyle(picked.contains(p.uid) ? Color(hex: 0x2392FE) : Color.secondary)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("\(names) only \(people.count == 1 ? "lets" : "let") certain people add them to channels. Send the channel's link in your chat instead.")
+                        .textCase(nil)
+                }
+            }
+            .navigationTitle("Send the Link")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button { close() } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("Close")
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                Button { Task { await send() } } label: {
+                    Text(sending ? "Sending…" : (picked.count > 1 ? "Send Link to \(picked.count)" : "Send Link"))
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(Color(hex: 0x2392FE), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(picked.isEmpty || sending)
+                .opacity(picked.isEmpty ? 0.5 : 1)
+                .padding(.horizontal, 16).padding(.bottom, 8)
+            }
+        }
+    }
+
+    private func send() async {
+        sending = true
+        let sent = await ChannelService.sendInviteLink(conv, to: Array(picked))
+        sending = false
+        if sent > 0 {
+            Haptics.notify(.success)
+            ToastNotice.show(sent == 1 ? "Link sent" : "Link sent to \(sent) people")
+            close()
+        } else {
+            ToastNotice.show("Couldn't send the link. Check your connection and try again.")
+        }
+    }
+
+    private func close() { onDone(); dismiss() }
 }
 
 /// Hold Post > Schedule Post (2026-10-28): when this text goes out. A minute from now at the
