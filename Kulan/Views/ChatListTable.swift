@@ -999,6 +999,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// bar sees the list at its top and keeps the field open by itself. The trick is gone.
     override func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
+        tableView.bottomEdgeEffect.isHidden = false   // see `viewWillDisappear`
         // Only when the bar's page does not already know this table: re-registering the same view
         // during a pop is the flicker the 2026-09-11 audit note above warns about.
         var page: UIViewController = self
@@ -1022,6 +1023,13 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         super.viewWillDisappear(animated)
         guard !isMovingFromParent, !isBeingDismissed else { return }
         releaseContentScrollView()
+        // ⛔ NO SOFT BOTTOM EDGE WHILE A CHAT SLIDES OVER (owner 2026-10-30, two recordings frame by
+        // frame: tapping any chat drew a black soft band under the tab bar for a few frames before
+        // the chat slid in). This table's own bottom edge effect turned dark for the start of the
+        // push. Proven on the simulator by video: hidden, the band is gone. It is hidden only while
+        // the list is covered and comes back as the list reappears, so at rest the tab bar keeps
+        // its soft fade.
+        tableView.bottomEdgeEffect.isHidden = true
     }
 
     private func releaseContentScrollView() {
@@ -2236,6 +2244,14 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // (Settings, Mail lists) holds nothing: the system's own grey shows under the finger and fades
         // out by itself as the chat opens. With no selection kept there is nothing left to get stuck.
         tableView.deselectRow(at: indexPath, animated: true)
+        // A chat is about to slide over: no soft bottom edge until the list is back (see
+        // `viewWillDisappear`; the black band came at the tap, before the push began).
+        tableView.bottomEdgeEffect.isHidden = true
+        // A tap that opened nothing leaves the list on screen: the edge comes back by itself.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self, self.view.window != nil else { return }
+            self.tableView.bottomEdgeEffect.isHidden = false
+        }
         // A stranger from the search opens — and creates — the chat with them.
         if ChatListSection(rawValue: indexPath.section) == .people {
             guard let id = rowId(at: indexPath), let u = host?.person(id) else { return }
