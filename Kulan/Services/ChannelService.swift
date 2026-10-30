@@ -351,6 +351,7 @@ final class ChannelFollows {
             c.followerMutedUntil = e.mutedUntil
             c.followerPinned = e.pinned
             c.followerArchived = e.archived
+            c.followedAtMillis = followedAt[cid] ?? 0
             return c
         }
     }

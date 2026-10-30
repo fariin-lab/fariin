@@ -2119,9 +2119,9 @@ struct ChatsView: View {
             // Both pinned: manual order (higher rank = higher in list).
             if a.isPinned(me) && b.isPinned(me) {
                 if a.pinRank(me) != b.pinRank(me) { return a.pinRank(me) > b.pinRank(me) }
-                return a.displayUpdatedAt(me) > b.displayUpdatedAt(me)
+                return a.listSortDate(me) > b.listSortDate(me)
             }
-            return a.displayUpdatedAt(me) > b.displayUpdatedAt(me)   // recency (frozen if blocked)
+            return a.listSortDate(me) > b.listSortDate(me)   // recency (frozen if blocked; a channel's follow time)
         }
     }
 

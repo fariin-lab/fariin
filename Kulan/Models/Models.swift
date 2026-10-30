@@ -1223,6 +1223,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var followerMutedUntil: Double = 0
     var followerPinned = false
     var followerArchived = false
+    /// When I followed this channel, ms (`ChannelFollows`, from my follow entry's `at`); 0 otherwise.
+    var followedAtMillis: Double = 0
     /// Admins' names under their posts (Channel Settings > Sign Posts).
     var signPosts = false
     /// A channel's reactions (2026-10-29): "all", "some" (only `reactList`, up to 6) or "off".
@@ -1818,6 +1820,13 @@ struct Conversation: Identifiable, Equatable, Hashable {
     func leaksBlocked(_ me: String) -> Bool { hiddenLastSince(me) != nil }
     /// Sort/time key that ignores the blocked person's held-back messages (freezes at block time).
     func displayUpdatedAt(_ me: String) -> Double { hiddenLastSince(me) ?? updatedAtMillis }
+    /// ⛔ WHERE THE CHAT LIST PUTS IT (owner 2026-10-29: "when I follow it should come to the top").
+    /// A channel I follow sits by its last post OR the moment I followed, whichever is newer, as the
+    /// reference app places a channel just joined; it then slides down like any chat. The row's
+    /// TIME still says the last post (`displayUpdatedAt`).
+    func listSortDate(_ me: String) -> Double {
+        isFollower(me) ? max(displayUpdatedAt(me), followedAtMillis) : displayUpdatedAt(me)
+    }
     func isPinned(_ me: String) -> Bool { isFollower(me) ? followerPinned : (pinnedBy[me] ?? false) }
     /// Manual order for pinned chats; defaults to recency so never-moved pins stay sensible.
     /// FROZEN recency (audit): the raw fallback let a silently-blocked pinned chat jump to the top
