@@ -1131,6 +1131,13 @@ enum ChannelCountBias {
         ChannelCountTick.bump()
     }
 
+    /// My change not yet tied to a stored count (a follow tapped while the channel is still shown from
+    /// its search preview, guest mode): the guest header adds it, so the number moves at the tap.
+    static func pendingDelta(_ cid: String) -> Int {
+        _ = ChannelCountTick.shared.n
+        return lock.withLock { (bias[cid].map { $0.base == nil ? $0.delta : 0 }) ?? 0 }
+    }
+
     /// The followers to show: the stored count, plus my change while the count is still the old one.
     static func adjusted(_ cid: String, _ count: Int) -> Int {
         lock.withLock {

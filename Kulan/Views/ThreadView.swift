@@ -3311,7 +3311,9 @@ struct ThreadView: View {
     private var presenceSubtitle: String? {
         // A guest's count comes from the join page's preview (the stand-in has nobody in `users`).
         if let g = guest?.preview {
-            return g.isChannel ? GroupDirectory.followersLine(g.memberCount) : GroupDirectory.membersLine(g.memberCount)
+            // A channel's follow tapped here shows at once (owner 2026-10-30, `pendingDelta`).
+            return g.isChannel ? GroupDirectory.followersLine(max(0, g.memberCount + ChannelCountBias.pendingDelta(g.cid)))
+                               : GroupDirectory.membersLine(g.memberCount)
         }
         // A channel: its followers, never who is typing (only admins write, 2026-10-28).
         if conversation?.isChannel == true { return conversation?.fariinLocked == true ? nil : conversation?.memberCountLabel }

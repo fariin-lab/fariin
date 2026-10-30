@@ -363,7 +363,17 @@ struct PublicGroupSheet: View {
         joinError = nil
         Task {
             do {
-                switch try await GroupDirectory.join(cid: p.cid) {
+                // ⛔ A CHANNEL FOLLOWS THE CHANNEL WAY (owner 2026-10-30, reproduced on the rented
+                // Mac: following from search kept "2 followers" for a minute). This used the public
+                // GROUP join, which never passed through `ChannelService.follow`, so my +1 and the
+                // server's exact count never reached the header. One follow path for a channel.
+                let outcome: GroupDirectory.JoinResult
+                if p.isChannel {
+                    outcome = try await ChannelService.follow(cid: p.cid) == "requested" ? .requested : .joined
+                } else {
+                    outcome = try await GroupDirectory.join(cid: p.cid)
+                }
+                switch outcome {
                 case .joined, .already: openChat(p)
                 case .requested: requestSent = true
                 }
@@ -451,7 +461,17 @@ struct PublicJoinBar: View {
         joinError = nil
         Task {
             do {
-                switch try await GroupDirectory.join(cid: p.cid) {
+                // ⛔ A CHANNEL FOLLOWS THE CHANNEL WAY (owner 2026-10-30, reproduced on the rented
+                // Mac: following from search kept "2 followers" for a minute). This used the public
+                // GROUP join, which never passed through `ChannelService.follow`, so my +1 and the
+                // server's exact count never reached the header. One follow path for a channel.
+                let outcome: GroupDirectory.JoinResult
+                if p.isChannel {
+                    outcome = try await ChannelService.follow(cid: p.cid) == "requested" ? .requested : .joined
+                } else {
+                    outcome = try await GroupDirectory.join(cid: p.cid)
+                }
+                switch outcome {
                 case .joined, .already:
                     // ⛔ THE MEMBER'S CHAT AT ONCE (owner 2026-10-23: the bar stayed on "Joining…"
                     // after the server had added him in under 2s). It used to wait for the chat list
