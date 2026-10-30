@@ -657,6 +657,19 @@ struct PublicGroupInfoView: View {
     private var me: String { AuthService.shared.uid ?? "" }
 
     var body: some View {
+        // ⛔ A CHANNEL I FOLLOW SHOWS THE CHANNEL'S OWN PAGE (owner 2026-10-30: followed from this
+        // page, it kept "✓ Following" and the preview's old count instead of Leave / Mute and the
+        // live number). The moment the follow is made (or the follow list says so), this is the same
+        // page the channel's chat opens: one design, one count, from every way in.
+        if p.isChannel && (following || ChannelFollows.shared.follows(p.cid)) {
+            GroupInfoView(cid: p.cid)
+                .onDisappear { guest.joined = true }
+        } else {
+            visitorPage
+        }
+    }
+
+    private var visitorPage: some View {
         // ⛔ ONE PAGE BEFORE AND AFTER JOINING (owner 2026-10-29: "looks different before joining
         // and after"). The member page's layout, number for number (`GroupInfoView.page`/`header`):
         // a 16pt header rhythm, 20pt between cards, 16pt side margins, its count words, its rows.
@@ -773,7 +786,8 @@ struct PublicGroupInfoView: View {
 
     /// "1 Follower", "1.2k Members": the member page's words (`GroupInfoView.memberCountText`).
     private var countLine: String {
-        let n = p.memberCount
+        // My follow / unfollow tapped a moment ago, before the count is tied (`pendingDelta`).
+        let n = max(0, p.memberCount + (p.isChannel ? ChannelCountBias.pendingDelta(p.cid) : 0))
         let word = p.isChannel ? "Follower" : "Member"
         return "\(GroupInfoView.compactCount(n)) \(word)\(n == 1 ? "" : "s")"
     }

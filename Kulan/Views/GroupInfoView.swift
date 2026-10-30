@@ -525,7 +525,7 @@ struct GroupInfoView: View {
                     PosterActionIcon(icon: "ic_channel_leave", onPhoto: false, label: "Leave", tint: .red)
                 }
                     .tint(.primary)
-                    .accessibilityLabel("Following. Tap to unfollow")
+                    .accessibilityLabel("Leave channel")
                 Menu { muteMenuItems } label: { actionIcon(muted ? "ic_bell" : "ic_bell_off", muted ? "Unmute" : "Mute") }
                     .tint(.primary)
                     .accessibilityLabel(muted ? "Unmute" : "Mute")
