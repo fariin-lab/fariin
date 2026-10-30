@@ -267,7 +267,7 @@ struct CallView: View {
         // A decline reads as a ring-out (owner's order): rejections are never exposed. That rule is
         // untouched — this only splits the case where there was nothing to decline.
         case .declined: return neverRang ? "Couldn't reach them" : "No answer"
-        case .failed:   return "Call failed"
+        case .failed:   return call.connectedDate == nil ? "Couldn't connect" : "Call failed"
         case .missed:   return neverRang ? "Couldn't reach them" : "No answer"
         default:        return "Call ended"
         }
@@ -916,7 +916,7 @@ struct CallView: View {
 
                 VStack(spacing: 0) {
                     topBar(safeTop: winInsets.top)
-                        // The No answer page has only its three buttons (owner, 2026-10-14).
+                        // The No answer page has only its own card (owner, 2026-10-14; card 2026-10-30).
                         .opacity(call.noAnswerHold ? 0 : 1)
                         .allowsHitTesting(!call.noAnswerHold)
                         // Landscape: clear the notch side and the far side (both zero in portrait).
@@ -1236,42 +1236,49 @@ struct CallView: View {
 
     // MARK: - No answer page
 
-    /// ⛔ THE NO ANSWER PAGE — owner, 2026-10-14, with a picture: a call I placed that nobody picked
-    /// up stays on screen (`CallService.noAnswerHold`) with the avatar, the name and "No answer"
-    /// above, and three liquid-glass circles below: Cancel, Record voice message (opens the chat
-    /// with the recorder running, his choice) and Call again. Our own call background stays.
+    /// ⛔ THE NO ANSWER PAGE — owner, 2026-10-14; OUR OWN DESIGN since 2026-10-30 ("do not copy
+    /// it"): the first version was the reference app's row of three circles. A call I placed that
+    /// nobody picked up, or that never connected, stays on screen (`CallService.noAnswerHold`) with
+    /// the avatar, the name and "No answer" / "Couldn't connect" above, and one glass card below:
+    /// the main way forward as one wide green button (Call again, or Try again after a failed
+    /// connect), and under it Voice message (opens the chat with the recorder running) and Close.
     private var noAnswerBar: some View {
-        HStack(alignment: .top, spacing: 0) {
-            noAnswerButton("xmark", "Cancel", tint: .white, ink: .black) { call.closeNoAnswer() }
-            noAnswerButton("mic.fill", "Record voice\nmessage", tint: nil, ink: .white) { recordVoiceNoteAfterNoAnswer() }
-            noAnswerButton("phone.fill", "Call again", tint: .green, ink: .white) { callAgainAfterNoAnswer() }
+        let retry = call.endReason == .failed ? "Try again" : "Call again"
+        return VStack(spacing: 10) {
+            Button { callAgainAfterNoAnswer() } label: {
+                Label(retry, systemImage: call.isVideoCall ? "video.fill" : "phone.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 54)
+                    .glassEffect(.regular.tint(Color(hex: 0x22C55E)).interactive(), in: .capsule)
+            }
+            .buttonStyle(.plain)
+            HStack(spacing: 10) {
+                noAnswerSecondary("mic.fill", "Voice message") { recordVoiceNoteAfterNoAnswer() }
+                noAnswerSecondary("xmark", "Close") { call.closeNoAnswer() }
+            }
         }
-        .padding(.horizontal, 20)
+        .padding(12)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .padding(.horizontal, 16)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
         // Nobody is looking at it once the app has gone; it closes the way the old tail did.
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
             call.closeNoAnswer()
         }
     }
 
-    private func noAnswerButton(_ icon: String, _ label: String, tint: Color?, ink: Color,
-                                action: @escaping () -> Void) -> some View {
-        VStack(spacing: 10) {
-            Button(action: action) {
-                Image(systemName: icon)
-                    .font(.system(size: 26, weight: .medium))
-                    .foregroundStyle(ink)
-                    .frame(width: 72, height: 72)
-                    .glassEffect(tint.map { Glass.regular.tint($0).interactive() } ?? .regular.interactive(), in: .circle)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(label.replacingOccurrences(of: "\n", with: " "))
-            Text(label)
-                .font(.system(size: 15))
-                .foregroundStyle(.white.opacity(0.6))
-                .multilineTextAlignment(.center)
-                .accessibilityHidden(true)
+    private func noAnswerSecondary(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(label, systemImage: icon)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 46)
+                .glassEffect(.regular.interactive(), in: .capsule)
         }
-        .frame(maxWidth: .infinity)
+        .buttonStyle(.plain)
     }
 
     /// Same person, same kind of call. `startCall` closes the No answer page itself.

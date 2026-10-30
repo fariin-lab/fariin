@@ -7771,8 +7771,13 @@ final class CallService: NSObject {
         // tapped, instead of closing after a second. Only on the full call screen in front of me:
         // minimized or in the background there is nobody looking at it, and it closes as before.
         // A new call (either way) still cuts it short through `closeEndedTail`.
-        if isCaller, !micDenied, !minimized, reason == .missed || reason == .declined,
-           UIApplication.shared.applicationState == .active {
+        // 2026-10-30 (owner: he went back to the chat while it rang, it rang out, and the call just
+        // vanished): a call shrunk into the card opens back up for it, and a call that never
+        // connected ("Couldn't connect") gets it too, with Try again. Still only with the app in
+        // front: in the background nobody is looking.
+        if isCaller, !micDenied, UIApplication.shared.applicationState == .active,
+           reason == .missed || reason == .declined || (reason == .failed && connectedDate == nil) {
+            if minimized { minimized = false }
             noAnswerHold = true
             return
         }
