@@ -95,21 +95,49 @@ enum ChannelService {
     static func follow(cid: String, code: String? = nil) async throws -> String {
         var data: [String: Any] = ["cid": cid]
         if let code, !code.isEmpty { data["code"] = code }
+        // ⛔ MY +1 IS NOTED BEFORE THE SERVER ANSWERS (owner 2026-10-30: following from the feed,
+        // the header said 2 for about a minute, then 3). My follow entry's snapshot can redraw the
+        // channel before this call returns, and nothing redrew it after the +1 was noted, so it was
+        // known and never shown. Noted first, taken back if the follow fails or only files a request.
         let base = await MainActor.run { knownFollowerCount(cid) }
-        let r = try await fn.httpsCallable("followChannel").call(data)
-        let status = ((r.data as? [String: Any])?["status"] as? String) ?? "following"
+        ChannelCountBias.note(cid, base: base, delta: 1)
+        let status: String
+        let rData: [String: Any]
+        do {
+            let r = try await fn.httpsCallable("followChannel").call(data)
+            rData = r.data as? [String: Any] ?? [:]
+            status = (rData["status"] as? String) ?? "following"
+        } catch {
+            ChannelCountBias.note(cid, base: base, delta: -1)
+            throw error
+        }
+        if status == "requested" { ChannelCountBias.note(cid, base: base, delta: -1) }
+        else { await adoptServerCount(cid, r: rData) }
         await MainActor.run {
             LeaveGroupUndo.shared.reopen(cid)   // unfollowed before: back in the list
-            // My follow shows in the count at once (the server batches the real one, ~1 min).
-            if status != "requested" { ChannelCountBias.note(cid, base: base, delta: 1) }
         }
         return status
     }
 
     static func unfollow(cid: String) async throws {
         let base = await MainActor.run { knownFollowerCount(cid) }
-        _ = try await fn.httpsCallable("unfollowChannel").call(["cid": cid])
-        await MainActor.run { ChannelCountBias.note(cid, base: base, delta: -1) }
+        ChannelCountBias.note(cid, base: base, delta: -1)   // first, for the same reason as `follow`
+        do {
+            let r = try await fn.httpsCallable("unfollowChannel").call(["cid": cid])
+            await adoptServerCount(cid, r: r.data as? [String: Any] ?? [:])
+        } catch {
+            ChannelCountBias.note(cid, base: base, delta: 1)
+            throw error
+        }
+    }
+
+    /// The server's count in its answer (stored + what the buffer will add) replaces the guess, and
+    /// every page showing this channel redraws with it now, not when the next snapshot happens by.
+    private static func adoptServerCount(_ cid: String, r: [String: Any]) async {
+        guard let stored = (r["followerCount"] as? NSNumber)?.intValue,
+              let pending = (r["pending"] as? NSNumber)?.intValue else { return }
+        ChannelCountBias.set(cid, stored: stored, pending: pending)
+        await MainActor.run { ConversationsRepository.shared.channelsChanged() }
     }
 
     /// The channel's `followerCount` as this phone has it (followed, or one I run), for the bias.

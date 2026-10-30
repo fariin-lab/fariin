@@ -1092,6 +1092,15 @@ struct GroupMod: Equatable, Hashable {
 /// My own follow (+1) or leave (−1) on a channel, shown until the channel's `followerCount` moves
 /// (the server batches it once a minute). Keyed by channel, with the count it was made against:
 /// once the count is anything else, the server has it and the bias is dropped. Any thread.
+/// Bumped whenever my follow or unfollow changes a channel's shown count, so every page that reads
+/// the count redraws at once: the count itself lives in a lock-guarded dictionary nothing observes
+/// (owner 2026-10-30: the header kept the old number until something else happened to redraw it).
+@Observable final class ChannelCountTick {
+    static let shared = ChannelCountTick()
+    var n = 0
+    static func bump() { DispatchQueue.main.async { shared.n &+= 1 } }
+}
+
 enum ChannelCountBias {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var bias: [String: (base: Int?, delta: Int)] = [:]   // guarded by `lock`
@@ -1110,6 +1119,16 @@ enum ChannelCountBias {
                 bias[cid] = (base, delta)
             }
         }
+        ChannelCountTick.bump()
+    }
+
+    /// The server's own word, from its answer to my follow or unfollow: the stored count and what the
+    /// count buffer will add to it (mine included). Replaces any guess, so it never depends on which
+    /// copy of the channel this phone happened to see first (owner 2026-10-30).
+    static func set(_ cid: String, stored: Int, pending: Int) {
+        guard !cid.isEmpty else { return }
+        lock.withLock { bias[cid] = (stored, pending) }
+        ChannelCountTick.bump()
     }
 
     /// The followers to show: the stored count, plus my change while the count is still the old one.
@@ -1777,6 +1796,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// Gates (statistics, story minimum) still use `followerCount`, followers only.
     var subscriberCount: Int {
         guard isChannel else { return users.count }
+        _ = ChannelCountTick.shared.n   // read so a view showing this redraws when my change lands
         return max(0, ChannelCountBias.adjusted(id, followerCount) + users.count)
     }
     /// I follow this channel and am not one of its admins.
