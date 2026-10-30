@@ -188,6 +188,17 @@ enum GroupNameCheck: Equatable {
 
     // MARK: - The group's own name (admins with change-info)
 
+    /// Opening the Type page wakes the check and the save on the server (owner 2026-10-30:
+    /// "Checking..." and Save sat for seconds while a step nobody had used lately woke up).
+    /// At most once a minute; the answer is not needed.
+    private static var lastWarm: Date?
+    static func warmLink() {
+        if let t = lastWarm, Date().timeIntervalSince(t) < 60 { return }
+        lastWarm = Date()
+        fns.httpsCallable("checkGroupUsername").call(["warm": true]) { _, _ in }
+        fns.httpsCallable("setGroupUsername").call(["warm": true]) { _, _ in }
+    }
+
     static func check(cid: String, name: String) async -> GroupNameCheck {
         if let p = localProblem(name) { return p }
         do {

@@ -168,7 +168,10 @@ struct DiscoverChannelsView: View {
                             Text(c.title).font(.body.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
                             GroupVerifiedMark(on: c.verified, size: 14, label: c.label)
                         }
-                        Text(GroupDirectory.followersLine(c.followerCount))
+                        // The live count, my own follow from here included (owner 2026-10-30: followed
+                        // from this list and it still said 3), the one every channel page uses.
+                        Text(GroupDirectory.followersLine(ChannelCountBias.visitorCount(
+                            c.cid, memberCount: c.followerCount, followerCount: max(0, c.followerCount - c.admins))))
                             .font(.subheadline).foregroundStyle(.secondary)
                         if !c.description.isEmpty {
                             Text(c.description).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)

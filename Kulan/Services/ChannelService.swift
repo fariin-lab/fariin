@@ -66,6 +66,8 @@ enum ChannelService {
         let photoUrl: String?
         let description: String
         let followerCount: Int
+        /// The admins inside `followerCount` (0 from an older server).
+        var admins: Int = 0
         let verified: Bool
         let label: String
         var id: String { cid }
@@ -85,6 +87,7 @@ enum ChannelService {
                               photoUrl: photo.isEmpty ? nil : photo,
                               description: d["description"] as? String ?? "",
                               followerCount: (d["followerCount"] as? NSNumber)?.intValue ?? 0,
+                              admins: (d["admins"] as? NSNumber)?.intValue ?? 0,
                               verified: d["verified"] as? Bool ?? false,
                               label: d["label"] as? String ?? "")
         }

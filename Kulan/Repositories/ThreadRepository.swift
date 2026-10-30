@@ -1657,12 +1657,36 @@ final class ThreadRepository {
         burnDue()
     }
 
+    /// ⛔ A CHANNEL SHOWS ITS OWN NEWS, NOT ITS ADMINS' WORK (owner 2026-10-30, as a visitor: "it
+    /// shows the admin changed the wallpaper; that is for groups"). In a channel only the channel's
+    /// own events stay, worded without the admin's name: created, renamed, photo removed. Pins and
+    /// timer lines stay as they are. Everything else an admin did (wallpaper, who may post, adds and
+    /// removals, restrictions) is hidden here for everyone; admins have Recent Actions for that.
+    static func channelNotice(_ m: Message) -> Message? {
+        guard m.isSystem, m.pinNotice == nil, m.disappearSeconds == nil, m.localNoticeSymbol == nil else { return m }
+        let t = m.text
+        let said: String
+        if t == "Channel created" || t.hasSuffix(" created the group") || t.hasSuffix(" created the channel") {
+            said = "Channel created"
+        } else if let r = t.range(of: " renamed the group to ") {
+            said = "Channel name changed to " + t[r.upperBound...]
+        } else if t.hasSuffix(" removed the group photo") {
+            said = "Channel photo removed"
+        } else {
+            return nil
+        }
+        var out = m
+        out.text = said
+        return out
+    }
+
     private func rebuild(reason: MessageListUpdateReason = .live) {
         // BEFORE anything is sorted: measure each person's clock against the server's, from the whole
         // window rather than the filtered view, so a blocked or expired message still contributes a
         // sample. `refreshItems` reuses whatever this leaves behind.
         recomputeClockOffsets(byId.values)
         var msgs = byId.values.filter { !hiddenByBlock($0) }
+        if Conversation.Right.isChannel(cid) { msgs = msgs.compactMap(Self.channelNotice) }
         // Deletes the user has made but the server has not confirmed yet (see markDeletedLocally).
         // Ids for messages that are no longer here at all cost nothing and are pruned on the next
         // confirmed snapshot.

@@ -57,6 +57,12 @@ struct GroupTypeView: View {
             if showPublic { linkSection; linkAndContentSections } else { privateSections }
             if isChannel { protectContentSection }
         }
+        // Public/Private moves the tick and slides the link section in and out, the check line
+        // fades between its states, Save eases into its spinner (owner 2026-10-30: "missing
+        // animations").
+        .animation(.snappy(duration: 0.3), value: showPublic)
+        .animation(.easeInOut(duration: 0.2), value: check)
+        .animation(.easeInOut(duration: 0.2), value: saving)
         .listStyle(.insetGrouped)
         .navigationTitle(isChannel ? "Channel Type" : "Group Type")
         .navigationBarTitleDisplayMode(.inline)
@@ -272,6 +278,7 @@ struct GroupTypeView: View {
                 if selected {
                     Image(systemName: "checkmark").font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.primary)
+                        .transition(.scale(scale: 0.4).combined(with: .opacity))
                 }
             }
             .contentShape(Rectangle())
@@ -299,7 +306,18 @@ struct GroupTypeView: View {
         if !nameChanged && !name.isEmpty {
             Text("People can open this \(noun) with fariin.com/\(name).")
         } else if check != .idle {
-            Text(check.text).foregroundStyle(checkColor)
+            HStack(spacing: 5) {
+                switch check {
+                case .checking: ProgressView().controlSize(.mini)
+                case .available: Image(systemName: "checkmark.circle.fill")
+                case .taken, .tooShort, .invalid: Image(systemName: "xmark.circle.fill")
+                default: EmptyView()
+                }
+                Text(check.text)
+            }
+            .foregroundStyle(checkColor)
+            .transition(.opacity)
+            .id(check.text)
         } else {
             Text("Pick a link of \(GroupDirectory.nameMin) to \(GroupDirectory.nameMax) characters: letters, numbers and _.")
         }
@@ -316,6 +334,7 @@ struct GroupTypeView: View {
     // MARK: - Work
 
     private func start() {
+        GroupDirectory.warmLink()
         if !seeded { seeded = true; name = conv?.publicName ?? "" }
         guard convListener == nil else { return }
         convListener = FirestoreHub.db.collection("conversations").document(cid)
