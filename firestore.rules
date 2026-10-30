@@ -652,6 +652,13 @@ service cloud.firestore {
         allow write: if false;
       }
 
+      // 2026-10-30, one phone per account: written only by the server (`enforceDeviceLimit`) when a
+      // newer sign-in signed this phone out; the phone reads it to say so.
+      match /deviceReplaced/{deviceId} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow write: if false;
+      }
+
       // 2026-10-13: the app's own connection log (DiagLog), sent after a "dead until relaunch"
       // episode. Write-once by the owner, small, and read only by the admin console (server side).
       match /diag/{id} {
@@ -2912,14 +2919,14 @@ service cloud.firestore {
                      ['enc', 'imageUrl', 'videoUrl', 'thumbUrl', 'audioUrl', 'fileUrl', 'album',
                       'fileName', 'fileSize', 'waveform', 'duration', 'blurhash', 'thumb',
                       'linkPreview', 'poll', 'locationCard', 'contactCard', 'replyTo', 'reactions',
-                      'videoEnc', 'thumbEnc', 'viewOnce', 'mentions', 'forwarded',
+                      'videoEnc', 'thumbEnc', 'viewOnce', 'mentions', 'forwarded', 'fwdChannel',
                       'edits'])   // 2026-09-24 feature-audit: the edit history is content too
                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
                      ['deleted', 'text', 'type', 'enc', 'imageUrl', 'videoUrl', 'thumbUrl',
                       'audioUrl', 'fileUrl', 'album', 'fileName', 'fileSize', 'waveform',
                       'duration', 'blurhash', 'thumb', 'linkPreview', 'poll', 'locationCard',
                       'contactCard', 'replyTo', 'reactions', 'videoEnc', 'thumbEnc',
-                      'viewOnce', 'mentions', 'forwarded', 'edits', 'editedAt',
+                      'viewOnce', 'mentions', 'forwarded', 'fwdChannel', 'edits', 'editedAt',
                       'deletedBy']))   // 2026-09-24 feature-audit: the admin's signature
             // LIVE CALL ROW (2026-08-12): a call record is created at ring time ("Ringing") and the
             // SAME doc is finalised later (ongoing / answered / missed, duration, voice→video

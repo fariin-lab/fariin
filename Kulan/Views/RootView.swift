@@ -38,6 +38,8 @@ struct RootView: View {
     @State private var endedBySuspension = false
     /// The server refused this phone: the account is already on `DeviceRegistry.maxDevices` devices.
     @State private var endedByDeviceLimit = false
+    /// A newer sign-in on another phone took this account over (one phone per account, 2026-10-30).
+    @State private var endedByNewPhone = false
     @State private var userLinkAlert: String?   // 2026-09-24 fix-all #167
     /// audit M-098, 2026-10-07: true while the lock or the switcher blank is drawn in its own window
     /// above the call screens (see `PrivacyShield`); the in-tree copies below are then skipped.
@@ -281,11 +283,13 @@ struct RootView: View {
             guard revoked else { return }
             // Read before the teardown, which resets it.
             let overLimit = DeviceRegistry.shared.refusedForLimit
+            let newPhone = DeviceRegistry.shared.replacedByNewPhone
             Task {
                 await DeviceRegistry.shared.performRevokedSignOut()
                 await route()
                 endedBySuspension = false
                 endedByDeviceLimit = overLimit
+                endedByNewPhone = newPhone
                 showRevokedNotice = true
             }
         }
@@ -316,15 +320,19 @@ struct RootView: View {
                 await route()
                 endedBySuspension = suspended
                 endedByDeviceLimit = false
+                endedByNewPhone = false
                 showRevokedNotice = true
             }
         }
         .alert(endedBySuspension ? "Account suspended"
+               : endedByNewPhone ? "Logged in on another phone"
                : endedByDeviceLimit ? "Too many devices" : "Logged out", isPresented: $showRevokedNotice) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(endedBySuspension
                  ? "This account can't be used right now. If you think this is a mistake, contact us at fariin.com/help."
+                 : endedByNewPhone
+                 ? "Your account was logged in on another phone, so it was logged out here. Fariin works on one phone at a time. To use it here again, log in."
                  : endedByDeviceLimit
                  ? "Your account is already logged in on \(DeviceRegistry.maxDevices) devices. On one of them, open Settings > Devices and log out a device you no longer use, then log in here again."
                  : "This device was logged out from another device.")

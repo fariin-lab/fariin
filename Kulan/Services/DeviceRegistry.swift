@@ -112,6 +112,17 @@ final class DeviceRegistry: ObservableObject {
     @Published private(set) var refusedForLimit = false
     nonisolated static let maxDevices = 5
 
+    /// Set together with `revoked` when a newer sign-in on another phone signed this one out (one
+    /// phone per account, owner 2026-10-30), so the notice says that.
+    @Published private(set) var replacedByNewPhone = false
+
+    /// The server's note that a newer sign-in replaced this phone (`enforceDeviceLimit`).
+    private func wasReplaced(_ uid: String) async -> Bool {
+        let ref = db.collection("users").document(uid).collection("deviceReplaced").document(Self.thisDeviceId)
+        guard let snap = try? await ref.getDocument(source: .server) else { return false }
+        return snap.exists
+    }
+
     /// The server's note that it removed this phone's new record for the device limit.
     private func wasRefusedForLimit(_ uid: String) async -> Bool {
         let ref = db.collection("users").document(uid).collection("deviceRefusals").document(Self.thisDeviceId)
@@ -167,6 +178,7 @@ final class DeviceRegistry: ObservableObject {
             existing = fromServer
             if !fromServer.exists && hadRegistered {
                 refusedForLimit = await wasRefusedForLimit(uid)
+                replacedByNewPhone = await wasReplaced(uid)
                 revoked = true
                 return
             }
@@ -325,7 +337,10 @@ final class DeviceRegistry: ObservableObject {
             // missing. Only the SERVER's word that it is gone counts as a sign-out.
             guard let snap, !snap.metadata.isFromCache, !snap.exists else { return }
             Task { @MainActor in
-                if let uid = self.uid { self.refusedForLimit = await self.wasRefusedForLimit(uid) }
+                if let uid = self.uid {
+                    self.refusedForLimit = await self.wasRefusedForLimit(uid)
+                    self.replacedByNewPhone = await self.wasReplaced(uid)
+                }
                 self.revoked = true
             }
         }
@@ -341,6 +356,7 @@ final class DeviceRegistry: ObservableObject {
         SessionWipe.wipeAccountData()
         revoked = false
         refusedForLimit = false
+        replacedByNewPhone = false
     }
 
     /// Normal sign-out on this phone: drop our own record so it does not linger as a ghost

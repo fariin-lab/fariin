@@ -304,6 +304,18 @@ final class Crypto {
             let snap = try await db.collection("users").document(uid).getDocument()
             let published = snap.data()?["publicKey"] as? String
             if published != b64 {
+                // ⛔ NOT FROM A PHONE A NEWER SIGN-IN REPLACED (owner 2026-10-30, one phone per
+                // account). A phone signed out while it was closed runs this at its next launch,
+                // before DeviceRegistry notices its record is gone, and would take the account's key
+                // back from the phone now in use. This install registered before (the marker) and
+                // its record is gone on the server: it is on its way out, so it publishes nothing.
+                let device = DeviceRegistry.thisDeviceId
+                if !device.isEmpty, UserDefaults.standard.bool(forKey: "device.registered.\(uid)"),
+                   let rec = try? await db.collection("users").document(uid).collection("devices")
+                       .document(device).getDocument(source: .server),
+                   !rec.exists {
+                    return
+                }
                 // The key it replaces goes into `publicKeyHistory`, with this one, so a phone that
                 // never saw the old key can still open messages sealed with it (`pubRingDefaultsKey`).
                 let keep = [published, b64].compactMap { $0 }
