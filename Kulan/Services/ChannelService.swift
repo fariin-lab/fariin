@@ -101,7 +101,7 @@ enum ChannelService {
         await MainActor.run {
             LeaveGroupUndo.shared.reopen(cid)   // unfollowed before: back in the list
             // My follow shows in the count at once (the server batches the real one, ~1 min).
-            if status != "requested", let base { ChannelCountBias.note(cid, base: base, delta: 1) }
+            if status != "requested" { ChannelCountBias.note(cid, base: base, delta: 1) }
         }
         return status
     }
@@ -109,7 +109,7 @@ enum ChannelService {
     static func unfollow(cid: String) async throws {
         let base = await MainActor.run { knownFollowerCount(cid) }
         _ = try await fn.httpsCallable("unfollowChannel").call(["cid": cid])
-        if let base { ChannelCountBias.note(cid, base: base, delta: -1) }
+        await MainActor.run { ChannelCountBias.note(cid, base: base, delta: -1) }
     }
 
     /// The channel's `followerCount` as this phone has it (followed, or one I run), for the bias.

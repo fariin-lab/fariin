@@ -1094,18 +1094,33 @@ struct GroupMod: Equatable, Hashable {
 /// once the count is anything else, the server has it and the bias is dropped. Any thread.
 enum ChannelCountBias {
     private static let lock = NSLock()
-    nonisolated(unsafe) private static var bias: [String: (base: Int, delta: Int)] = [:]   // guarded by `lock`
+    nonisolated(unsafe) private static var bias: [String: (base: Int?, delta: Int)] = [:]   // guarded by `lock`
 
-    static func note(_ cid: String, base: Int, delta: Int) {
+    /// ⛔ MY CHANGES ADD UP UNTIL THE SERVER'S NUMBER MOVES (owner 2026-10-30: follow, unfollow,
+    /// follow again inside a minute and the channel said 2 where 3 was right). It kept only the LAST
+    /// change, and a follow made from the search page, where the channel's live count is not known
+    /// yet, kept nothing at all. Now the changes against one stored count are summed (one person, so
+    /// -1...+1), and a change made before the count is known takes the count it first sees as base.
+    static func note(_ cid: String, base: Int?, delta: Int) {
         guard !cid.isEmpty else { return }
-        lock.withLock { bias[cid] = (base, delta) }
+        lock.withLock {
+            if let b = bias[cid], base == nil || b.base == nil || b.base == base {
+                bias[cid] = (b.base ?? base, max(-1, min(1, b.delta + delta)))
+            } else {
+                bias[cid] = (base, delta)
+            }
+        }
     }
 
     /// The followers to show: the stored count, plus my change while the count is still the old one.
     static func adjusted(_ cid: String, _ count: Int) -> Int {
         lock.withLock {
             guard let b = bias[cid] else { return count }
-            if b.base == count { return count + b.delta }
+            guard let base = b.base else {
+                bias[cid] = (count, b.delta)   // first sight of the count since my change: that is the base
+                return max(0, count + b.delta)
+            }
+            if base == count { return max(0, count + b.delta) }
             bias[cid] = nil   // the batch landed: the server's number has it
             return count
         }
