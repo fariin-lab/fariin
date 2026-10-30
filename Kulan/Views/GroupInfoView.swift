@@ -521,7 +521,9 @@ struct GroupInfoView: View {
         HStack(spacing: 0) {
             if followingNow {
                 // His leave icon and word (owner 2026-10-29), was a checkmark + "Following".
-                Button { confirmUnfollow = true } label: { actionIcon("ic_channel_leave", "Leave") }
+                Button { confirmUnfollow = true } label: {
+                    PosterActionIcon(icon: "ic_channel_leave", onPhoto: false, label: "Leave", tint: .red)
+                }
                     .tint(.primary)
                     .accessibilityLabel("Following. Tap to unfollow")
                 Menu { muteMenuItems } label: { actionIcon(muted ? "ic_bell" : "ic_bell_off", muted ? "Unmute" : "Mute") }

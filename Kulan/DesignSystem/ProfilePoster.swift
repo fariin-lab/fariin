@@ -679,13 +679,16 @@ struct PosterActionIcon: View {
     var label: String? = nil
     /// The turning ring in place of the glyph while the action runs (channel Follow, 2026-10-29).
     var busy: Bool = false
+    /// A colour for the glyph and its name: red for a step that cannot simply be undone, the way
+    /// iOS marks a destructive action (channel Leave, owner 2026-10-29). Nil keeps the usual colour.
+    var tint: Color? = nil
 
     var body: some View {
         VStack(spacing: 8) {
             circle
             if let label {
                 Text(label).font(.footnote).lineLimit(1).minimumScaleFactor(0.7)
-                    .foregroundStyle(onPhoto ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                    .foregroundStyle(tint.map { AnyShapeStyle($0) } ?? (onPhoto ? AnyShapeStyle(.white) : AnyShapeStyle(.primary)))
             }
         }
         .frame(maxWidth: .infinity)
@@ -708,7 +711,7 @@ struct PosterActionIcon: View {
         // the same value anyway: it is pinned dark, so `.primary` has only ever resolved to white
         // here. Nothing about the glyph changes; it just stops depending on a scheme that is now
         // being set for the glass's benefit rather than the icon's.
-        .foregroundStyle(onPhoto ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+        .foregroundStyle(tint.map { AnyShapeStyle($0) } ?? (onPhoto ? AnyShapeStyle(.white) : AnyShapeStyle(.primary)))
         .frame(width: diameter, height: diameter)
         // LIQUID GLASS, AND ONLY HERE. These circles sit on the photograph, where glass has
         // something to refract and where the owner's standing rule puts it; the cards further down
