@@ -4436,7 +4436,10 @@ struct ThreadView: View {
     /// A channel reaction goes through the server, which keeps who picked what private.
     private func sendChannelReaction(_ mid: String, _ emoji: String?) {
         if emoji != nil { ReactionFlight.markLocal() }   // the channel picker calls here directly
-        if let e = emoji, conversation?.reactMode == "some", !ChannelEmoji.contains(conversation?.reactList ?? [], e) {
+        // An emoji the post already shows stays tappable when the list no longer has it (owner
+        // 2026-10-30): only a post without it refuses it, as the server does (reactRefusal).
+        let onPost = emoji.map { e in repo.items.first(where: { $0.id == mid }).map { channelCounts($0).keys.contains { ChannelEmoji.same($0, e) } } ?? false } ?? false
+        if let e = emoji, !onPost, conversation?.reactMode == "some", !ChannelEmoji.contains(conversation?.reactList ?? [], e) {
             showJumpToast("This channel allows only " + (conversation?.reactList.joined(separator: " ") ?? ""))
             return
         }
