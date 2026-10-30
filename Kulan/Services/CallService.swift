@@ -924,7 +924,7 @@ final class CallService: NSObject {
     /// marker strings `decrypt` returns for those are never valid SDP or candidate JSON.
     private func openSignal(_ raw: String?) -> String? {
         guard let raw, raw.hasPrefix("enc1:"), !otherUid.isEmpty else { return nil }
-        let out = Crypto.shared.decrypt(raw, cid: signalCid)
+        let out = Crypto.shared.decryptLive(raw, cid: signalCid)   // a live signal proves the sender's key (2026-10-30)
         guard out != raw, out != "…", out != "🔒", out != "[old message]" else {
             warmSignalKey()
             return nil

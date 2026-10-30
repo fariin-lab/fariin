@@ -119,9 +119,30 @@ final class Crypto {
                                    recipientSecretKey: sk, nonce: nonce) { return o }
         for old in earlierKeys(uid) where old != current {
             if let o = sodium.box.open(authenticatedCipherText: box, senderPublicKey: old,
-                                       recipientSecretKey: sk, nonce: nonce) { return o }
+                                       recipientSecretKey: sk, nonce: nonce) {
+                recheckKeyAfterOldOpen(uid)
+                return o
+            }
         }
         return nil
+    }
+
+    // ⛔ OPENED ONLY WITH AN OLD KEY: ASK THE SERVER AGAIN (owner 2026-10-30: his calls stuck on
+    // "Connecting…"). His account's key moved to another device and back; the other phone kept the
+    // stray key as his CURRENT one. Everything he sent still opened (with an earlier key from the
+    // ring), so nothing ever failed on that phone and nothing refetched, but everything it SEALED to
+    // him (the call answer, its network routes, messages) went to the stray key and his phone could
+    // not open it. A message that opens only with an earlier key means my current key for the sender
+    // may be stale: refetch it from the server, at most once in five minutes per person (old
+    // messages legitimately open with old keys all the time).
+    private var lastOldOpenRecheck: [String: Date] = [:]   // guarded by `lock`
+    private func recheckKeyAfterOldOpen(_ uid: String) {
+        let due: Bool = lock.withLock {
+            if let t = lastOldOpenRecheck[uid], Date().timeIntervalSince(t) < 300 { return false }
+            lastOldOpenRecheck[uid] = Date()
+            return true
+        }
+        if due { refreshKeyAfterFailure(uid) }
     }
 
     var isReady: Bool { mySecretKey != nil }
@@ -643,6 +664,32 @@ final class Crypto {
             return "🔒"
         }
         return text
+    }
+
+    /// A LIVE call signal (offer, answer, network route): as `decrypt`, and when it opens only with
+    /// an earlier key of the sender, that key becomes their current one at once (owner 2026-10-30,
+    /// calls stuck on "Connecting…"). A signal of a call ringing now can only come from the device
+    /// the sender is using now, so the key that opened it is the one to seal back to; the answer
+    /// and routes are sealed within half a second of the ring, before any server read could land.
+    /// Old messages never do this (they open with old keys by right): only call signalling calls it.
+    func decryptLive(_ raw: String, cid: String) -> String {
+        guard raw.hasPrefix("enc1:") else { return decrypt(raw, cid: cid) }
+        warmIfNeeded()
+        let uid = otherUid(cid)
+        guard let sk = mySecretKey, let current = lock.withLock({ pubCache[uid] }) else { return decrypt(raw, cid: cid) }
+        let parts = raw.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 3, let nonce = Data(base64Encoded: parts[1]), let box = Data(base64Encoded: parts[2]),
+              sodium.box.open(authenticatedCipherText: Bytes(box), senderPublicKey: current,
+                              recipientSecretKey: sk, nonce: Bytes(nonce)) == nil else { return decrypt(raw, cid: cid) }
+        for old in earlierKeys(uid) where old != current {
+            if let o = sodium.box.open(authenticatedCipherText: Bytes(box), senderPublicKey: old,
+                                       recipientSecretKey: sk, nonce: Bytes(nonce)),
+               let text = String(bytes: o, encoding: .utf8) {
+                _ = adoptKey(uid, Data(old))
+                return text
+            }
+        }
+        return decrypt(raw, cid: cid)
     }
 
     // Memoized decrypt for hot, repeatedly-rendered text — the chat-list last-message
