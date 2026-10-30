@@ -1885,8 +1885,8 @@ final class MessageRowView: UIView {
     //   - the emoji flies from where I picked it (the bar's emoji, or my double-tap point) along a
     //     short arc into its pill (`ReactionFlight`); with no recorded origin there is no flight;
     //   - the pill lands with a small overshoot (1, 1.22, 0.94, 1), after the flight if any;
-    //   - one thin ring spreads from the pill and fades, and three dots in the emoji's own colour
-    //     drift up and out. Drawn here with Core Animation; no artwork, nothing borrowed.
+    //   - a big copy of the emoji swells above the pill and sinks back in, with small copies
+    //     spraying out (`ripple`, 2026-10-30). Core Animation on system emoji; no artwork borrowed.
     // Reduce Motion skips all of it (no `before` is captured then).
 
     /// Ripple, dots and flying emoji still on screen, so a recycle can take them away.
@@ -1945,79 +1945,86 @@ final class MessageRowView: UIView {
         }
     }
 
+    // ⛔ THE BIG EMOJI AND ITS SHOWER (owner 2026-10-30: "copy the reference app's reaction
+    // animation"). Its motion, rebuilt with the system emoji; none of its artwork. The picked emoji
+    // swells to a large copy just above its pill, holds a beat, then sinks back into the pill,
+    // while small copies of it spray out around the pill and fade. It plays in the window so it
+    // can spill past the bubble, the row and the bars.
     private func ripple(around v: UIView, emoji: String, delay: CFTimeInterval) {
-        let center = v.convert(CGPoint(x: v.bounds.midX, y: v.bounds.midY), to: self)
-        let begin = CACurrentMediaTime() + delay + 0.08
-        let tint = Self.flairColor(emoji)
+        guard let win = window, let chip = v as? ReactionChipView else { return }
+        let center = chip.convert(chip.emojiPoint, to: win)
+        let begin = CACurrentMediaTime() + delay
+        let bigSize: CGFloat = 64
+        let small = max(0.2, chip.emojiFontSize / bigSize)
 
-        let ring = CAShapeLayer()
-        ring.bounds = v.bounds
-        ring.position = center
-        ring.path = UIBezierPath(roundedRect: v.bounds, cornerRadius: v.bounds.height / 2).cgPath
-        ring.fillColor = UIColor.clear.cgColor
-        ring.strokeColor = BubblePalette.accent.cgColor
-        ring.lineWidth = 2
-        ring.opacity = 0
-        let grow = CABasicAnimation(keyPath: "transform.scale")
-        grow.fromValue = 1
-        grow.toValue = 1.55
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 0.9
-        fade.toValue = 0
-        let thin = CABasicAnimation(keyPath: "lineWidth")
-        thin.fromValue = 3
-        thin.toValue = 0.5
-        let ringGroup = CAAnimationGroup()
-        ringGroup.animations = [grow, fade, thin]
-        ringGroup.duration = 0.5
-        ringGroup.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        ringGroup.beginTime = begin
-        addFX(ring, ringGroup, life: delay + 0.65)
+        let big = fxLabel(emoji, size: bigSize, at: center, in: win)
+        let keys: [NSNumber] = [0, 0.2, 0.32, 0.4, 0.72, 1]
+        let scale = CAKeyframeAnimation(keyPath: "transform.scale")
+        scale.values = [small, 1.12, 0.95, 1.0, 1.0, small]
+        scale.keyTimes = keys
+        let rise = CAKeyframeAnimation(keyPath: "position.y")
+        let up = center.y - 36
+        rise.values = [center.y, up - 4, up + 2, up, up, center.y]
+        rise.keyTimes = keys
+        let show = CAKeyframeAnimation(keyPath: "opacity")
+        show.values = [0, 1, 1, 0]
+        show.keyTimes = [0, 0.08, 0.9, 1]
+        let g = CAAnimationGroup()
+        g.animations = [scale, rise, show]
+        g.duration = 0.95
+        g.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        g.beginTime = begin
+        g.fillMode = .backwards
+        playFX(big, g, life: delay + g.duration)
 
-        // ⛔ EIGHT DOTS ALL THE WAY ROUND, BIG ENOUGH TO SEE (owner 2026-10-29: three 4 pt dots were
-        // invisible in his recording). Ours stays dots in the emoji's colour, not a shower of
-        // emoji, so it is not the reference app's effect; it is just large enough to read.
-        let angles: [CGFloat] = (0..<8).map { (CGFloat($0) * 45 + CGFloat.random(in: -14...14)) * .pi / 180 }
-        for a in angles {
-            let d = CGFloat.random(in: 5...7)
-            let dot = CALayer()
-            dot.bounds = CGRect(x: 0, y: 0, width: d, height: d)
-            dot.cornerRadius = d / 2
-            dot.backgroundColor = tint.cgColor
-            dot.opacity = 0
-            let start = CGPoint(x: center.x + cos(a) * v.bounds.width * 0.35,
-                                y: center.y + sin(a) * v.bounds.height * 0.4)
-            let end = CGPoint(x: center.x + cos(a) * (v.bounds.width / 2 + CGFloat.random(in: 16...28)),
-                              y: center.y + sin(a) * (v.bounds.height / 2 + CGFloat.random(in: 16...26)))
-            dot.position = start
+        // Seven small copies, all the way round, a little more upward than down.
+        for i in 0..<7 {
+            let a = (CGFloat(i) / 7 * 360 + CGFloat.random(in: -18...18)) * .pi / 180
+            let dist = CGFloat.random(in: 44...72)
+            let end = CGPoint(x: center.x + cos(a) * dist, y: center.y - 30 + sin(a) * dist * 0.8)
+            let bit = fxLabel(emoji, size: CGFloat.random(in: 16...22), at: center, in: win)
             let move = CABasicAnimation(keyPath: "position")
-            move.fromValue = NSValue(cgPoint: start)
+            move.fromValue = NSValue(cgPoint: CGPoint(x: center.x, y: center.y - 30))
             move.toValue = NSValue(cgPoint: end)
-            let shrink = CABasicAnimation(keyPath: "transform.scale")
-            shrink.fromValue = 1.2
-            shrink.toValue = 0.3
-            let show = CAKeyframeAnimation(keyPath: "opacity")
-            show.values = [0, 1, 1, 0]
-            show.keyTimes = [0, 0.15, 0.6, 1]
-            let g = CAAnimationGroup()
-            g.animations = [move, shrink, show]
-            g.duration = 0.6
-            g.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            g.beginTime = begin
-            addFX(dot, g, life: delay + 0.75)
+            move.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.8, 0.3, 1)
+            let size = CAKeyframeAnimation(keyPath: "transform.scale")
+            size.values = [0.3, 1.1, 0.5]
+            size.keyTimes = [0, 0.3, 1]
+            let turn = CABasicAnimation(keyPath: "transform.rotation.z")
+            turn.fromValue = 0
+            turn.toValue = CGFloat.random(in: -0.6...0.6)
+            let fade = CAKeyframeAnimation(keyPath: "opacity")
+            fade.values = [0, 1, 1, 0]
+            fade.keyTimes = [0, 0.12, 0.6, 1]
+            let pg = CAAnimationGroup()
+            pg.animations = [move, size, turn, fade]
+            pg.duration = 0.8
+            pg.beginTime = begin + 0.1
+            pg.fillMode = .backwards
+            playFX(bit, pg, life: delay + 0.1 + pg.duration)
         }
     }
 
-    /// A short-lived effect layer on the row (not the bubble box: the ring spreads past the bubble's
-    /// edge), taken away when its time is up.
-    private func addFX(_ l: CALayer, _ a: CAAnimation, life: CFTimeInterval) {
-        layer.addSublayer(l)
-        fxLayers.append(l)
-        l.add(a, forKey: "reactionFX")
-        DispatchQueue.main.asyncAfter(deadline: .now() + life) { [weak self, weak l] in
-            guard let l else { return }
-            l.removeFromSuperlayer()
-            self?.fxLayers.removeAll { $0 === l }
+    /// One emoji of the effect, invisible until its animation shows it, never in the way of a touch.
+    private func fxLabel(_ emoji: String, size: CGFloat, at p: CGPoint, in win: UIWindow) -> UILabel {
+        let l = UILabel()
+        l.text = emoji
+        l.font = .systemFont(ofSize: size)
+        l.sizeToFit()
+        l.center = p
+        l.isUserInteractionEnabled = false
+        l.layer.opacity = 0
+        win.addSubview(l)
+        fxViews.append(l)
+        return l
+    }
+
+    private func playFX(_ v: UIView, _ a: CAAnimation, life: CFTimeInterval) {
+        v.layer.add(a, forKey: "reactionFX")
+        DispatchQueue.main.asyncAfter(deadline: .now() + life + 0.05) { [weak self, weak v] in
+            guard let v else { return }
+            v.removeFromSuperview()
+            self?.fxViews.removeAll { $0 === v }
         }
     }
 
@@ -2064,19 +2071,6 @@ final class MessageRowView: UIView {
             self?.fxViews.removeAll { $0 === label }
         }
         return true
-    }
-
-    /// The dots' colour: the emoji's own main colour for the common ones, the accent otherwise.
-    private static func flairColor(_ emoji: String) -> UIColor {
-        switch emoji.replacingOccurrences(of: "\u{FE0F}", with: "") {
-        case "\u{2764}", "😍", "🥰", "😘", "💔", "🌹", "💯": return UIColor(red: 1, green: 0.23, blue: 0.3, alpha: 1)
-        case "🔥", "🍾", "🏆": return UIColor(red: 1, green: 0.55, blue: 0.1, alpha: 1)
-        case "😢", "😭": return UIColor(red: 0.3, green: 0.6, blue: 1, alpha: 1)
-        case "😡", "🤬": return UIColor(red: 0.95, green: 0.3, blue: 0.2, alpha: 1)
-        case "👍", "👎", "😂", "🤣", "😁", "😮", "😱", "🙏", "👏", "🤩", "😅", "\u{26A1}", "🥳", "🎉", "😇":
-            return UIColor(red: 1, green: 0.78, blue: 0.15, alpha: 1)
-        default: return BubblePalette.accent
-        }
     }
 
     private func applyFailBadge(_ b: BubblePlan) {
