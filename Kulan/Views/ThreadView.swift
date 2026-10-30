@@ -5060,8 +5060,10 @@ struct ThreadView: View {
             onViewportRows: { ids in
                 MediaAutoDownloader.noteViewport(cid: cid, rowIds: ids, items: repo.items) { repo.indexById[$0] }
                 // A channel's posts on screen count as seen (2026-10-28, ChannelViewQueue).
-                // Followers and admins only (audit F7): a visitor's views are refused by the server.
-                if let c = conversation, c.isChannel, !quiet, c.users.contains(me) || ChannelFollows.shared.follows(cid) {
+                // Followers and admins, and a visitor of a PUBLIC channel (owner 2026-10-29: "other apps
+                // do that"; the server counts them too). A private channel's visitor is still refused.
+                if let c = conversation, c.isChannel, !quiet,
+                   c.users.contains(me) || ChannelFollows.shared.follows(cid) || c.isPublic {
                     ChannelService.warm(cid: cid)   // wake reactions and views before they are used
                     // Real posts only: no day lines or other drawn rows.
                     ChannelViewQueue.shared.note(cid: cid, ids: ids.compactMap { r in repo.indexById[r].map { repo.items[$0].id } })
