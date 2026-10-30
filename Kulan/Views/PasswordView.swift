@@ -108,7 +108,9 @@ struct PasswordView: View {
         .toolbar(.hidden, for: .tabBar)
         .task { await proveItIsYou() }
         .alert("Password saved", isPresented: $done) {
-            Button("Done") { dismiss() }
+            // A beat after the alert has gone: asked while it is still closing, the dismiss is dropped
+            // (owner 2026-10-29, the reset flow's twin of this bug).
+            Button("Done") { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { dismiss() } }
         } message: {
             Text(isFirstPassword
                  ? "You can now sign in with \(address) and this password."
@@ -191,7 +193,11 @@ struct PasswordView: View {
         .navigationDestination(isPresented: $resetCodeOpen) {
             PasswordResetCodeView(address: resetAddress) {
                 // The password is changed; this whole flow is done, so leave together.
-                dismiss()
+                // ⛔ AFTER THE ALERT HAS GONE (owner 2026-10-29: "Password saved", Done, and he stayed on
+                // the page). Done runs while its own alert is still being dismissed, and a dismiss asked
+                // for in that moment is dropped by SwiftUI. Asked a beat later, it pops this page and the
+                // code page above it in one move.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { dismiss() }
             }
         }
     }
