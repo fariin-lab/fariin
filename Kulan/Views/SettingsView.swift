@@ -1372,8 +1372,10 @@ struct PrivacySettingsView: View {
                 audienceRow("Bio", key: "bio", value: privBio,
                             footerText: "Who can see the few words about you. " + Self.threeChoiceFooter)
                 if Flags.groupsEnabled {
-                    audienceRow("Groups", key: "groups", value: privGroups,
-                                footerText: "Who can add you to groups. " + Self.threeChoiceFooter)
+                    // One setting for both (owner 2026-10-30): the server reads it for a channel's
+                    // Add Followers as for a group add.
+                    audienceRow("Groups & Channels", key: "groups", value: privGroups,
+                                footerText: "Who can add you to groups and channels. My Chats means people you have a one-to-one chat with. A shared group or channel doesn't count.")
                 }
                 // Shows its value like every other row here. It was the one row with a bare title, so
                 // it read as broken next to five rows that each state their setting (user: "messages

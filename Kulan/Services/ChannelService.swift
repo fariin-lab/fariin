@@ -152,9 +152,10 @@ enum ChannelService {
     /// Admins add people; anyone whose own settings refuse it is skipped and comes back in `refused`.
     /// `linkOnly`: the refused whose only reason is their own "Who can add me" (owner 2026-10-30):
     /// they can be sent the invite link instead. The count moves with the server's own numbers.
+    /// `capped`: past the channel's ten adds (owner 2026-10-30); they can follow by the link only.
     static func addFollowers(cid: String, uids: [String]) async throws
-        -> (added: [String], refused: [String], linkOnly: [String]) {
-        var added: [String] = [], refused: [String] = [], linkOnly: [String] = []
+        -> (added: [String], refused: [String], linkOnly: [String], capped: [String]) {
+        var added: [String] = [], refused: [String] = [], linkOnly: [String] = [], capped: [String] = []
         for start in stride(from: 0, to: uids.count, by: 50) {
             let part = Array(uids[start..<min(uids.count, start + 50)])
             let r = try await fn.httpsCallable("addChannelFollowers").call(["cid": cid, "uids": part])
@@ -162,9 +163,10 @@ enum ChannelService {
             added += d["added"] as? [String] ?? []
             refused += d["refused"] as? [String] ?? []
             linkOnly += d["linkOnly"] as? [String] ?? []
+            capped += d["capped"] as? [String] ?? []
             await adoptServerCount(cid, r: d)
         }
-        return (added, refused, linkOnly)
+        return (added, refused, linkOnly, capped)
     }
 
     /// The link that brings someone to this channel: its public name, else its invite link (made if

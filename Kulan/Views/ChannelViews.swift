@@ -370,6 +370,8 @@ struct ChannelFollowersView: View {
         }
     }
 
+    static let addsFull = "This channel has added 10 people, the most it can. Others can follow it with its link."
+
     private func add(_ people: [CallMember]) async {
         guard !people.isEmpty else { return }
         adding = true
@@ -384,13 +386,17 @@ struct ChannelFollowersView: View {
                 ToastNotice.show(r.added.count == 1 ? "1 follower added" : "\(r.added.count) followers added")
                 rows = []; more = true
                 await load()
-            } else if r.refused.isEmpty {
+            } else if r.refused.isEmpty && r.capped.isEmpty {
                 ToastNotice.show(people.count == 1 ? "Already following" : "They already follow this channel")
             }
             if others > 0 {
                 ToastNotice.show(others == 1 ? "1 person couldn't be added" : "\(others) people couldn't be added")
             }
-            linkInstead = people.filter { linkOnly.contains($0.uid) }
+            // Past the ten adds (owner 2026-10-30): said, and they are offered the link like those
+            // whose own setting refused the add.
+            if !r.capped.isEmpty { ToastNotice.show(Self.addsFull) }
+            let viaLink = linkOnly.union(r.capped)
+            linkInstead = people.filter { viaLink.contains($0.uid) }
         } catch {
             ToastNotice.show(error.localizedDescription)
         }

@@ -534,9 +534,10 @@ struct GroupInfoView: View {
     private var followerCircles: some View {
         HStack(spacing: 0) {
             if followingNow {
-                // His leave icon and word (owner 2026-10-29), was a checkmark + "Following".
+                // His leave icon and word (owner 2026-10-29), was a checkmark + "Following". In the
+                // row's own colour like its neighbours, not red (owner 2026-10-30).
                 Button { confirmUnfollow = true } label: {
-                    PosterActionIcon(icon: "ic_channel_leave", onPhoto: false, label: "Leave", tint: .red)
+                    PosterActionIcon(icon: "ic_channel_leave", onPhoto: false, label: "Leave")
                 }
                     .tint(.primary)
                     .accessibilityLabel("Leave channel")

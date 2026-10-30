@@ -200,7 +200,7 @@ struct AudiencePage: View {
         case "lastSeen": return "Who can see my last seen"
         case "photo":    return "Who can see my profile photo"
         case "bio":      return "Who can see my bio"
-        case "groups":   return "Who can add me to groups"
+        case "groups":   return "Who can add me to groups and channels"
         default:         return nil
         }
     }
