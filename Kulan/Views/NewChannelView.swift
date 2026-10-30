@@ -25,6 +25,9 @@ struct NewChannelView: View {
     @State private var creating = false
     @State private var error: String?
     @State private var createdCid: String?
+    /// The group made by a try whose channel step failed: the next try finishes THIS one instead of
+    /// making another (owner 2026-10-30 audit: each "Try again" left a plain group behind).
+    @State private var halfMadeCid: String?
     @FocusState private var nameFocused: Bool
 
     /// The reference app's limits: 255 for the description; our group names already stop at 100.
@@ -50,6 +53,9 @@ struct NewChannelView: View {
                     }
                 }
         }
+        // No swipe-away once the channel is being made or made (owner 2026-10-30 audit): a swipe on
+        // Channel Type skipped `finish()`, and one mid-creation landed on a page that then jumped.
+        .interactiveDismissDisabled(creating || createdCid != nil)
     }
 
     // MARK: 1. What a channel is
@@ -181,7 +187,8 @@ struct NewChannelView: View {
                                 onDone: { circle, _ in cropItem = nil; setPhoto(circle) },
                                 onCancel: { cropItem = nil },
                                 circleOnly: true,
-                                circleSubtitle: "Shown in chats and on the channel page")
+                                circleSubtitle: "Shown in chats and on the channel page",
+                                squircle: true)
                 .ignoresSafeArea()
         }
     }
@@ -191,14 +198,15 @@ struct NewChannelView: View {
             if let avatarData, let ui = UIImage(data: avatarData) {
                 Image(uiImage: ui).resizable().scaledToFill()
             } else {
-                Circle().fill(Color.accentColor.opacity(0.12))
+                SquircleShape().fill(Color.accentColor.opacity(0.12))
                 Image("ic_group_camera").renderingMode(.template).resizable().scaledToFit()
                     .frame(width: 28, height: 28).foregroundStyle(Color.accentColor)
             }
         }
         .frame(width: 64, height: 64)
-        .clipShape(Circle())
-        .contentShape(Circle())
+        // The channel's own shape, as everywhere it is shown (owner 2026-10-30 audit).
+        .clipShape(SquircleShape())
+        .contentShape(SquircleShape())
     }
 
     private func setPhoto(_ ui: UIImage) {
@@ -232,8 +240,14 @@ struct NewChannelView: View {
             }
             do {
                 // Only me in it, and only admins send, from the very first write.
-                let cid = try await ChatService.createGroup(title: title, memberIds: [], permissions: ["onlyAdminsSend": true],
-                                                           createdText: "Channel created")
+                let cid: String
+                if let half = halfMadeCid {
+                    cid = half
+                } else {
+                    cid = try await ChatService.createGroup(title: title, memberIds: [], permissions: ["onlyAdminsSend": true],
+                                                            createdText: "Channel created")
+                    halfMadeCid = cid
+                }
                 // The group's write may still be on its way to the server: a few tries.
                 var made = false
                 for attempt in 0..<6 {
@@ -245,6 +259,7 @@ struct NewChannelView: View {
                     creating = false
                     return
                 }
+                halfMadeCid = nil
                 createdCid = cid
                 // The photo after the channel exists; a failed photo never undoes the channel.
                 if let photo {
