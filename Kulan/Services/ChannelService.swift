@@ -70,10 +70,13 @@ enum ChannelService {
         var admins: Int = 0
         let verified: Bool
         let label: String
+        /// The official Fariin channel (owner 2026-10-30): pinned first by the server's ranking.
+        var official: Bool = false
         var id: String { cid }
     }
 
-    /// Public channels, most followed first, this phone's country first (`discoverChannels`).
+    /// Public channels in the server's ranked order (`discoverChannels`, `rankChannels`): the official
+    /// channel, then this phone's country, then everyone's.
     static func discover() async throws -> [Discovered] {
         var data: [String: Any] = [:]
         if let region = Locale.current.region?.identifier, region.count == 2 { data["country"] = region }
@@ -89,7 +92,8 @@ enum ChannelService {
                               followerCount: (d["followerCount"] as? NSNumber)?.intValue ?? 0,
                               admins: (d["admins"] as? NSNumber)?.intValue ?? 0,
                               verified: d["verified"] as? Bool ?? false,
-                              label: d["label"] as? String ?? "")
+                              label: d["label"] as? String ?? "",
+                              official: d["official"] as? Bool ?? false)
         }
     }
 

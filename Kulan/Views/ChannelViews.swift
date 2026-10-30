@@ -121,7 +121,7 @@ struct ChannelFollowerBar: View {
     }
 }
 
-/// FIND CHANNELS (2026-10-28): public channels, most followed first, this country's first (the
+/// FIND CHANNELS (2026-10-28): public channels in the server ranking (2026-10-30), this country's first (the
 /// reference directory's country filter). A tap opens the channel to look at before following
 /// (`GroupDirectory.open`, the public group page's way); Follow follows from the list.
 struct DiscoverChannelsView: View {
@@ -156,7 +156,7 @@ struct DiscoverChannelsView: View {
                     Section {
                         ForEach(rows) { row($0) }
                     } footer: {
-                        Text("Public channels anyone can follow. Only their admins post.")
+                        Text("Public channels anyone can follow. Only their admins post. Active channels from your country come first.")
                     }
                 }
             }
@@ -186,6 +186,10 @@ struct DiscoverChannelsView: View {
                         HStack(spacing: 4) {
                             Text(c.title).font(.body.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
                             GroupVerifiedMark(on: c.verified, size: 14, label: c.label)
+                            // The official channel says so (owner 2026-10-30), in the app's grey.
+                            if c.official {
+                                Text("Official").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            }
                         }
                         // The live count, my own follow from here included (owner 2026-10-30: followed
                         // from this list and it still said 3), the one every channel page uses.

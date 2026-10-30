@@ -261,7 +261,7 @@ struct ChatSearchOverlay: View {
 /// live when the cell is built, so a row never carries a frozen copy of a conversation.
 struct SearchPageRow: Identifiable, Equatable {
     /// `publicGroup` (2026-10-19 groups v2): a public group I am not in, from the server's search.
-    enum Kind: String, CaseIterable, Equatable { case chat, group, person, recentChat, recentPerson, showMore, publicGroup }
+    enum Kind: String, CaseIterable, Equatable { case chat, group, person, recentChat, recentPerson, showMore, publicGroup, findChannels }
     let kind: Kind
     /// Conversation id for a chat or a group (a public group too), uid for a person.
     let key: String
@@ -329,6 +329,7 @@ struct ChatSearchPage: View {
     @State private var recentPersonOpenFailed = false
     /// Show More tapped on the Global Search section; collapses again when the query changes.
     @State private var showAllPeople = false
+    @State private var showFindChannels = false
     /// Global results shown before Show More (the reference collapses its global section past 3).
     static let globalCollapsed = 3
     /// 2026-10-19 groups v2: public groups whose @name starts with the query (GroupDirectory.search),
@@ -381,6 +382,14 @@ struct ChatSearchPage: View {
             }
         }
         .onAppear { recents.start() }
+        .sheet(isPresented: $showFindChannels) {
+            // A channel opens the way a public result does, behind the sheet, then the search closes.
+            DiscoverChannelsView { cid, handle in
+                showFindChannels = false
+                onOpenPublicGroup(PublicGroupTarget(cid: cid, name: handle))
+                dismissSearch()
+            }
+        }
         .onChange(of: query) { _, _ in showAllPeople = false }
         .task(id: query) { await lookUpGroups(query) }
         .alert("Couldn't open", isPresented: $recentPersonOpenFailed) {
@@ -399,7 +408,8 @@ struct ChatSearchPage: View {
         var people: [String: UserProfile] = [:]
         var groups: [String: PublicGroupHit] = [:]
         var recents: [String: RecentSearches.Entry] = [:]
-        var isEmpty: Bool { sections.allSatisfy { $0.rows.isEmpty } }
+        /// The Find Channels door does not count: with nothing else, the empty state still shows.
+        var isEmpty: Bool { sections.allSatisfy { $0.rows.allSatisfy { $0.kind == .findChannels } } }
     }
 
     private func buildModel() -> PageModel {
@@ -467,8 +477,11 @@ struct ChatSearchPage: View {
                 }
             }
         }
+        // ⛔ THE DOOR TO PUBLIC CHANNELS, FIRST ON THE EMPTY SEARCH (owner 2026-10-30: "where will
+        // channels show up"). It was only under New Chat. Searching is where people go looking.
+        m.sections = [SearchPageSection(title: nil, rows: [SearchPageRow(kind: .findChannels, key: "find-channels")])]
         if !rows.isEmpty {
-            m.sections = [SearchPageSection(title: "Recent", showsClear: true, rows: rows)]
+            m.sections.append(SearchPageSection(title: "Recent", showsClear: true, rows: rows))
         }
         return m
     }
@@ -477,13 +490,18 @@ struct ChatSearchPage: View {
         var m = PageModel()
         var chatRows: [SearchPageRow] = []
         var groupRows: [SearchPageRow] = []
+        /// Channels I follow or run, a section of their own (owner 2026-10-30: they sat under Groups
+        /// or Chats).
+        var channelRows: [SearchPageRow] = []
 
         // ⚠️ ALREADY FILTERED AND SORTED. `visible` has applied the query, the archive rule, the
         // never-messaged rule and the list filter; this only splits it the way their two sections
         // do. Nothing here decides which chats match.
         for c in chats() {
             m.chats[c.id] = c
-            if c.isGroup {
+            if c.isChannel || Conversation.Right.isChannel(c.id) {
+                channelRows.append(SearchPageRow(kind: .group, key: c.id))
+            } else if c.isGroup {
                 groupRows.append(SearchPageRow(kind: .group, key: c.id))
             } else {
                 chatRows.append(SearchPageRow(kind: .chat, key: c.id))
@@ -510,6 +528,7 @@ struct ChatSearchPage: View {
         }
         chatRows = recentFirst(chatRows)
         groupRows = recentFirst(groupRows)
+        channelRows = recentFirst(channelRows)
         personRows = recentFirst(personRows)
         // Public groups from the server join the people under Global Search, minus the ones I am in.
         let mine = Set(repo.conversations.filter { $0.isGroup && $0.users.contains(me) }.map { $0.id })
@@ -519,7 +538,8 @@ struct ChatSearchPage: View {
         for g in groupHits where g.isMember || mine.contains(g.cid) {
             guard m.chats[g.cid] == nil, let c = repo.conversations.first(where: { $0.id == g.cid }) else { continue }
             m.chats[g.cid] = c
-            groupRows.append(SearchPageRow(kind: .group, key: g.cid))
+            if c.isChannel { channelRows.append(SearchPageRow(kind: .group, key: g.cid)) }
+            else { groupRows.append(SearchPageRow(kind: .group, key: g.cid)) }
         }
         for g in groupHits where !g.isMember && !mine.contains(g.cid) {
             m.groups[g.cid] = g
@@ -536,6 +556,7 @@ struct ChatSearchPage: View {
         var out: [SearchPageSection] = []
         if !chatRows.isEmpty { out.append(SearchPageSection(title: "Chats", rows: chatRows)) }
         if !groupRows.isEmpty { out.append(SearchPageSection(title: "Groups", rows: groupRows)) }
+        if !channelRows.isEmpty { out.append(SearchPageSection(title: "Channels", rows: channelRows)) }
         if !personRows.isEmpty { out.append(SearchPageSection(title: "Global Search", rows: personRows)) }
         m.sections = out
         return m
@@ -581,6 +602,21 @@ struct ChatSearchPage: View {
             }
             .padding(.horizontal, 16).padding(.vertical, 12)
             .contentShape(Rectangle())
+        case .findChannels:
+            HStack(spacing: 12) {
+                Image(systemName: "megaphone.fill").font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+                    .background(SquircleShape().fill(Color.accentColor))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Find Channels").font(.body.weight(.semibold)).foregroundStyle(.primary)
+                    Text("Public channels to follow").font(.subheadline).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 8)
+            .contentShape(Rectangle())
         }
     }
 
@@ -599,6 +635,8 @@ struct ChatSearchPage: View {
     /// pretend it is their behaviour.
     private func select(_ row: SearchPageRow, _ m: PageModel) {
         switch row.kind {
+        case .findChannels:
+            showFindChannels = true
         case .showMore:
             showAllPeople = true
         case .chat, .group, .recentChat:
