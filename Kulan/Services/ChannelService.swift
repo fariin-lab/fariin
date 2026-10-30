@@ -476,8 +476,18 @@ final class ChannelFollows {
         if let p = pendingReactions[cid]?[mid] { return p.isEmpty ? nil : p }
         return myReactions[cid]?[mid]
     }
-    /// What the server holds (the counts on the post already include it).
-    func confirmedReaction(_ cid: String, _ mid: String) -> String? { myReactions[cid]?[mid] }
+    /// What the counts being drawn already include: while the server's answer is the one drawn
+    /// (`displayCounts`), the pick that answer was for; otherwise what the server holds.
+    /// ⛔ FROM THE SAME ANSWER AS THE COUNTS (owner 2026-10-30, fast taps on one pill still showed
+    /// wrong numbers): the follow list's listener could hand over a pick one step ahead of or behind
+    /// the counts on screen, and mixing the two put the count off by one per step.
+    func confirmedReaction(_ cid: String, _ mid: String) -> String? {
+        if let o = countOverrides[cid]?[mid], Date().timeIntervalSince(o.at) < 120,
+           lastPost[cid + "/" + mid].map({ $0 == o.base }) ?? true {
+            return o.pick
+        }
+        return myReactions[cid]?[mid]
+    }
 
     func setPendingReaction(_ cid: String, _ mid: String, _ emoji: String?) {
         pendingReactions[cid, default: [:]][mid] = emoji ?? ""
@@ -488,15 +498,19 @@ final class ChannelFollows {
     /// `reactionCounts` do not have it yet, and the chip vanished or showed the old count for up to a
     /// minute. The server's answer (the post's counts with my change applied) is shown instead while
     /// the post still holds the counts it had when I tapped, for two minutes at most.
-    struct CountOverride: Hashable { let counts: [String: Int]; let base: [String: Int]; let at: Date }
+    struct CountOverride: Hashable { let counts: [String: Int]; let base: [String: Int]; let at: Date; var pick: String? = nil }
     private(set) var countOverrides: [String: [String: CountOverride]] = [:]
 
-    func noteServerCounts(_ cid: String, _ mid: String, counts: [String: Int], base: [String: Int]) {
-        countOverrides[cid, default: [:]][mid] = CountOverride(counts: counts, base: base, at: Date())
+    func noteServerCounts(_ cid: String, _ mid: String, counts: [String: Int], base: [String: Int], pick: String?) {
+        countOverrides[cid, default: [:]][mid] = CountOverride(counts: counts, base: base, at: Date(), pick: pick)
     }
+    /// The post's own counts as last drawn, so `confirmedReaction` knows whether the answer is
+    /// still the one on screen. Not observed: it is written while drawing.
+    @ObservationIgnored private var lastPost: [String: [String: Int]] = [:]
 
     /// The counts to draw for a post: the server's answer while it is newer than the post.
     func displayCounts(_ cid: String, _ mid: String, post: [String: Int]) -> [String: Int] {
+        lastPost[cid + "/" + mid] = post
         guard let o = countOverrides[cid]?[mid] else { return post }
         if o.base == post, Date().timeIntervalSince(o.at) < 120 { return o.counts }
         return post   // the batch landed (or it is too old): the post is the truth again
@@ -537,9 +551,10 @@ final class ChannelFollows {
                 do {
                     let counts = try await ChannelService.react(cid: cid, mid: mid, emoji: e)
                     onServer = e
+                    // Every answer, even one the next tap has already overtaken: the counts on screen
+                    // and the pick they include must always come from the same answer.
+                    if let counts { noteServerCounts(cid, mid, counts: counts, base: base, pick: e) }
                     guard pendingReactions[cid]?[mid] == want else { continue }   // tapped again meanwhile
-                    // Together, so the chip never shows the post's older counts with my pick settled.
-                    if let counts { noteServerCounts(cid, mid, counts: counts, base: base) }
                     settleReaction(cid, mid, confirmed: e)
                 } catch {
                     settleReaction(cid, mid, confirmed: onServer)
