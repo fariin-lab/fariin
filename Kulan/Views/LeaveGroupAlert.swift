@@ -41,6 +41,13 @@ struct LeaveGroupAlert: View {
     @State private var shown = false
     private var me: String { AuthService.shared.uid ?? "" }
     private var name: String { conv.displayName(me) }
+    /// ⛔ A CHANNEL IS LEFT AS A CHANNEL (owner 2026-10-30: "places where the channel takes the group
+    /// way"). From the chat list a channel said "Delete Group" and ran the group leave, which a
+    /// follower (not a member) cannot do, so he stayed following. A follower unfollows here, as the
+    /// channel page's Leave does; words say channel.
+    private var isChannel: Bool { conv.isChannel }
+    private var followerOnly: Bool { conv.isChannel && conv.isFollower(me) }
+    private var actionTitle: String { isChannel ? "Leave Channel" : "Delete Group" }
 
     /// The heir `ChatService.leaveGroup` picks: the longest-serving admin still a member, else the
     /// longest-serving member.
@@ -49,7 +56,7 @@ struct LeaveGroupAlert: View {
         guard let heir = conv.admins.first(where: { $0 != me && conv.users.contains($0) })
                 ?? conv.users.first(where: { $0 != me }) else { return nil }
         let who = conv.names[heir].flatMap { $0.isEmpty ? nil : $0 } ?? "another member"
-        return "You own this group, so \(who) will become the owner."
+        return "You own this \(isChannel ? "channel" : "group"), so \(who) will become the owner."
     }
 
     var body: some View {
@@ -69,8 +76,9 @@ struct LeaveGroupAlert: View {
     private var card: some View {
         VStack(spacing: 0) {
             AvatarView(name: name, photoUrl: conv.displayPhoto(me), size: 64)
+                .avatarSquircle(isChannel)
                 .padding(.top, 22)
-            Text("Delete Group")
+            Text(actionTitle)
                 .font(.system(size: 17, weight: .semibold))
                 .padding(.top, 12)
             (Text("Are you sure you want to leave ") + Text(name).bold() + Text("?"))
@@ -84,8 +92,20 @@ struct LeaveGroupAlert: View {
                     .padding(.top, 6).padding(.horizontal, 20)
             }
             VStack(spacing: 8) {
-                button("Delete Group", color: .red, weight: .semibold) {
-                    LeaveGroupUndo.shared.start(cid: conv.id, title: name)
+                button(actionTitle, color: .red, weight: .semibold) {
+                    if followerOnly {
+                        let cid = conv.id
+                        Task {
+                            do {
+                                try await ChannelService.unfollow(cid: cid)
+                                await MainActor.run { LeaveGroupUndo.shared.closeChat(cid) }
+                            } catch {
+                                await MainActor.run { ToastNotice.show(error.localizedDescription) }
+                            }
+                        }
+                    } else {
+                        LeaveGroupUndo.shared.start(cid: conv.id, title: name)
+                    }
                     close()
                 }
                 button("Cancel", color: .primary, weight: .regular) { close() }

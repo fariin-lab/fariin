@@ -129,10 +129,18 @@ struct GroupInfoView: View {
         rejoining = true
         Task {
             do {
-                switch try await GroupDirectory.join(cid: cid) {
+                // A channel follows the channel way (owner 2026-10-30: the group join skipped
+                // `ChannelService.follow`, so the count and the follow list lagged a minute).
+                let outcome: GroupDirectory.JoinResult
+                if isChannel {
+                    outcome = try await ChannelService.follow(cid: cid) == "requested" ? .requested : .joined
+                } else {
+                    outcome = try await GroupDirectory.join(cid: cid)
+                }
+                switch outcome {
                 case .joined, .already:
                     FormerGroups.removed[cid] = nil
-                    flashNotice("You joined the group.")
+                    flashNotice(isChannel ? "You're following this channel." : "You joined the group.")
                 case .requested:
                     flashNotice("Your request is waiting for an admin.")
                 }

@@ -133,7 +133,7 @@ enum ChannelService {
 
     /// The server's count in its answer (stored + what the buffer will add) replaces the guess, and
     /// every page showing this channel redraws with it now, not when the next snapshot happens by.
-    private static func adoptServerCount(_ cid: String, r: [String: Any]) async {
+    static func adoptServerCount(_ cid: String, r: [String: Any]) async {
         guard let stored = (r["followerCount"] as? NSNumber)?.intValue,
               let pending = (r["pending"] as? NSNumber)?.intValue else { return }
         ChannelCountBias.set(cid, stored: stored, pending: pending)

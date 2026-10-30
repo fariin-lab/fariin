@@ -218,6 +218,11 @@ enum GroupInviteService {
     static func joinViaInvite(code: String) async throws -> (status: String, cid: String) {
         let res = try await fns.httpsCallable("joinGroupViaInvite").call(["code": code])
         let d = res.data as? [String: Any] ?? [:]
+        // A channel's link makes a follower: its count shows my +1 at once, from the server's own
+        // numbers in this answer (owner 2026-10-30: the channel way, not the group way).
+        if d["channel"] as? Bool == true, let cid = d["cid"] as? String, d["status"] as? String == "following" {
+            await ChannelService.adoptServerCount(cid, r: d)
+        }
         return (d["status"] as? String ?? "", d["cid"] as? String ?? "")
     }
 

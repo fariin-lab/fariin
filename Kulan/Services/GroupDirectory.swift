@@ -387,6 +387,10 @@ enum GroupNameCheck: Equatable {
             let callable = fns.httpsCallable("joinPublicGroup")
             callable.timeoutInterval = 20
             let res = try await callable.call(["cid": cid])
+            // A channel joined this way is followed: its count from the server's answer (2026-10-30).
+            if let d = res.data as? [String: Any], d["channel"] as? Bool == true {
+                await ChannelService.adoptServerCount(cid, r: d)
+            }
             switch (res.data as? [String: Any])?["status"] as? String {
             case "requested": return .requested
             case "already": return .already
