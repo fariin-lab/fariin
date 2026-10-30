@@ -4494,10 +4494,17 @@ struct ThreadView: View {
         // my quick reaction (the heart) when the channel allows it, like any chat; when the owner
         // has left it off the channel's list, the channel's own picker opens instead.
         if conversation?.isChannel == true, channelCanReact, canReact(m) {
-            let quick = QuickReaction.current
-            let allowed = conversation?.reactMode != "some" || ChannelEmoji.contains(conversation?.reactList ?? [], quick)
-            guard allowed else { channelReactTarget = m; return }
-            sendReaction(messageId: m.id, emoji: Self.sameEmoji(myReaction(m), quick) ? nil : quick, toAuthor: m.authorId)
+            // ⛔ A DOUBLE TAP ALWAYS REACTS (owner 2026-10-30, his own channel with a limited list: the
+            // double tap opened the picker card). My quick reaction when the channel allows it, else
+            // the FIRST one on the channel's own list (the owner's order), as the reference app falls
+            // back; the long press still offers every allowed one. A second double tap takes mine back.
+            var quick = QuickReaction.current
+            if conversation?.reactMode == "some", !ChannelEmoji.contains(conversation?.reactList ?? [], quick) {
+                guard let first = conversation?.reactList.first else { channelReactTarget = m; return }
+                quick = first
+            }
+            let mine = myReaction(m)
+            sendReaction(messageId: m.id, emoji: mine != nil ? nil : quick, toAuthor: m.authorId)
             return
         }
         // 2026-09-24 feature-audit: the same `canReact` as the quick bar (was "not sending" only).
