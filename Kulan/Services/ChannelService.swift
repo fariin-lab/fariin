@@ -454,7 +454,15 @@ final class ChannelFollows {
     }
 
     private func mergeRx() {
-        let merged = followRx.merging(adminRx) { f, a in f.merging(a) { x, _ in x } }
+        var merged = followRx.merging(adminRx) { f, a in f.merging(a) { x, _ in x } }
+        // A pick settled in the last few seconds wins over a listener echo of an earlier step.
+        let now = Date()
+        settledAt = settledAt.filter { now.timeIntervalSince($0.value.at) < 5 }
+        for (key, s) in settledAt {
+            let parts = key.split(separator: "/", maxSplits: 1).map(String.init)
+            guard parts.count == 2, s.emoji != nil || merged[parts[0]] != nil else { continue }
+            merged[parts[0], default: [:]][parts[1]] = s.emoji
+        }
         if merged != myReactions { myReactions = merged }
     }
 
@@ -491,10 +499,50 @@ final class ChannelFollows {
 
     func settleReaction(_ cid: String, _ mid: String, confirmed: String?) {
         pendingReactions[cid]?[mid] = nil
+        settledAt[cid + "/" + mid] = (confirmed, Date())
         // Into the source it came from, so the next snapshot of the OTHER listener's merge keeps it.
         if follows(cid) { followRx[cid, default: [:]][mid] = confirmed }
         else { adminRx[cid, default: [:]][mid] = confirmed }
         mergeRx()
+    }
+
+    // ⛔ ONE REACTION REQUEST PER POST AT A TIME (owner 2026-10-30 video: fast taps on one heart made
+    // its count jump 2, 1, 3, 4, 2). Every tap used to send its own request; the answers raced, an
+    // older one wiped the newer tap's pending pick and drew its stale count, and the server could
+    // even apply them out of order. Now a tap only changes what I want (`pendingReactions`); one
+    // request travels at a time, and when it lands while the wish has moved on, the newest wish is
+    // sent next and nothing stale is drawn. Only the answer that matches the last tap is shown.
+    @ObservationIgnored private var rxInFlight: Set<String> = []
+    /// What I last settled on a post, and when: a listener echo of an earlier step that lands just
+    /// after must not undo it.
+    @ObservationIgnored private var settledAt: [String: (emoji: String?, at: Date)] = [:]
+
+    /// `base`: the post's counts when the first tap was made (see `displayCounts`).
+    @MainActor
+    func react(cid: String, mid: String, emoji: String?, base: [String: Int], failed: @escaping (String) -> Void) {
+        let held = confirmedReaction(cid, mid)
+        setPendingReaction(cid, mid, emoji)
+        let key = cid + "/" + mid
+        guard !rxInFlight.contains(key) else { return }
+        rxInFlight.insert(key)
+        Task { @MainActor in
+            var onServer = held   // what the server holds after the last request that went through
+            while let want = pendingReactions[cid]?[mid] {
+                let e: String? = want.isEmpty ? nil : want
+                do {
+                    let counts = try await ChannelService.react(cid: cid, mid: mid, emoji: e)
+                    onServer = e
+                    guard pendingReactions[cid]?[mid] == want else { continue }   // tapped again meanwhile
+                    // Together, so the chip never shows the post's older counts with my pick settled.
+                    if let counts { noteServerCounts(cid, mid, counts: counts, base: base) }
+                    settleReaction(cid, mid, confirmed: e)
+                } catch {
+                    settleReaction(cid, mid, confirmed: onServer)
+                    failed(error.localizedDescription)
+                }
+            }
+            rxInFlight.remove(key)
+        }
     }
 
     func stop() {

@@ -4441,28 +4441,12 @@ struct ThreadView: View {
             return
         }
         if let e = emoji { ReactionRecents.add(e) }
-        let cid = cid
-        let follows = ChannelFollows.shared
-        let held = follows.confirmedReaction(cid, mid)
         // The post's counts as they stand now: the server's answer is drawn while the post still
         // holds these (`ChannelFollows.displayCounts`, the once-a-minute batch).
         let base = repo.items.first(where: { $0.id == mid })?.reactionCounts ?? [:]
-        follows.setPendingReaction(cid, mid, emoji)
-        Task {
-            do {
-                let counts = try await ChannelService.react(cid: cid, mid: mid, emoji: emoji)
-                await MainActor.run {
-                    // Together, so the chip never shows the post's older counts with my pick settled.
-                    if let counts { follows.noteServerCounts(cid, mid, counts: counts, base: base) }
-                    follows.settleReaction(cid, mid, confirmed: emoji)
-                }
-            } catch {
-                let msg = error.localizedDescription
-                await MainActor.run {
-                    follows.settleReaction(cid, mid, confirmed: held)
-                    showJumpToast(msg)
-                }
-            }
+        // One request per post at a time, the newest tap wins (`ChannelFollows.react`).
+        ChannelFollows.shared.react(cid: cid, mid: mid, emoji: emoji, base: base) { msg in
+            showJumpToast(msg)
         }
     }
 
