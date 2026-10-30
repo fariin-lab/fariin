@@ -663,7 +663,13 @@ struct PublicGroupInfoView: View {
         // page, it kept "✓ Following" and the preview's old count instead of Leave / Mute and the
         // live number). The moment the follow is made (or the follow list says so), this is the same
         // page the channel's chat opens: one design, one count, from every way in.
-        if p.isChannel && (following || ChannelFollows.shared.follows(p.cid)) {
+        // ⛔ ONLY ONCE THE CHANNEL ITSELF IS HERE (owner 2026-10-30, his recording: Follow flashed a
+        // blank "Group · 0 Members" page). At the tap the follow list does not hold the channel yet,
+        // and the member page with nothing to read draws as an empty group. The visitor page stays
+        // until the channel has arrived, then hands over.
+        if p.isChannel && (following || ChannelFollows.shared.follows(p.cid))
+            && (ChannelFollows.shared.conversations.contains { $0.id == p.cid }
+                || ConversationsRepository.shared.conversations.contains { $0.id == p.cid }) {
             GroupInfoView(cid: p.cid)
                 .onDisappear { guest.joined = true }
         } else {
