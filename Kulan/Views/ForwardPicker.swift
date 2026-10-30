@@ -107,6 +107,7 @@ struct ForwardPicker: View {
                     HStack(spacing: -8) {
                         ForEach(people.filter { selected.contains($0.id) }) { c in
                             AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 28)
+                                .avatarSquircle(c.isChannel)
                                 .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2))
                         }
                     }
@@ -215,6 +216,7 @@ struct ForwardPicker: View {
         return Button { toggle(c.id) } label: {
             HStack(spacing: 12) {
                 AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 40)
+                    .avatarSquircle(c.isChannel)   // a channel in its own shape (owner 2026-10-30)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {
                         Text(c.displayName(me)).font(.system(size: 17)).foregroundStyle(.primary)

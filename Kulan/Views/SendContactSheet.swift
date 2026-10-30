@@ -279,10 +279,17 @@ struct SendContactSheet: View {
         let picked = selected.contains(c.id)
         VStack(spacing: 4) {   // their gap, from source: avatar, 4pt, name
             ZStack(alignment: .bottomTrailing) {
+                // A channel in its own shape, with the megaphone when it has no photo (owner
+                // 2026-10-30: the share grid drew channels round, one with a person's silhouette).
                 AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: Self.face)
+                    .avatarSquircle(c.isChannel)
                     .overlay {
                         // The ring is the selection, not a tick floating over a face.
-                        Circle().strokeBorder(picked ? Color.accentColor : .clear, lineWidth: 3)
+                        if c.isChannel {
+                            SquircleShape().strokeBorder(picked ? Color.accentColor : .clear, lineWidth: 3)
+                        } else {
+                            Circle().strokeBorder(picked ? Color.accentColor : .clear, lineWidth: 3)
+                        }
                     }
                 if picked {
                     Image(systemName: "checkmark.circle.fill")

@@ -6693,6 +6693,7 @@ struct StoryForwardSheet: View {
                 } label: {
                     HStack(spacing: 12) {
                         AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 44)
+                            .avatarSquircle(c.isChannel)
                         Text(c.displayName(me)).font(.body)
                         Spacer()
                         Image(systemName: selected.contains(c.id) ? "checkmark.circle.fill" : "circle")

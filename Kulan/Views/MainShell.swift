@@ -1551,6 +1551,7 @@ struct NewCallView: View {
     private func callRow(_ c: Conversation) -> some View {
         HStack(spacing: 12) {
             AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 40)   // the Glowers list size (owner, 2026-10-07)
+                .avatarSquircle(c.isChannel)
             Text(c.displayName(me)).font(.system(size: 17)).lineLimit(1)
             Spacer(minLength: 8)
             HStack(spacing: 0) {

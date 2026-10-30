@@ -161,7 +161,7 @@ struct GroupLinkQRSheet: View {
 
     private var card: some View {
         GroupQRCardFace(title: title, photo: photo, memberCount: memberCount, link: link, ink: theme.ink,
-                        inks: theme.inks, themeKey: themeIndex, subtitleText: faceSubtitle, hint: faceHint)
+                        inks: theme.inks, themeKey: themeIndex, subtitleText: faceSubtitle, hint: faceHint, squircle: followers != nil)
             .padding(.horizontal, 28)
             .scaleEffect(cardDip ? 0.94 : 1)
     }
@@ -239,7 +239,7 @@ struct GroupLinkQRSheet: View {
             QRGround(theme: theme)
             GroupQRCardFace(title: title, photo: photo, memberCount: memberCount, link: link, ink: theme.ink,
                             inks: theme.inks, photoImage: photoFull ?? photo.flatMap { DiskImageCache.shared.smallImageSync($0) },
-                            subtitleText: faceSubtitle, hint: faceHint)
+                            subtitleText: faceSubtitle, hint: faceHint, squircle: followers != nil)
                 .padding(.horizontal, 32)
                 .padding(.top, 40)
         }
@@ -295,6 +295,10 @@ private struct GroupQRCardFace: View {
     var photoImage: UIImage? = nil
     var subtitleText: String? = nil
     var hint: String = "Scan with the camera to join"
+    /// A channel's photo in the channel's shape, with the megaphone when it has none (owner
+    /// 2026-10-30: the channel's code wore a round photo and a person's silhouette).
+    var squircle = false
+    private var faceShape: AnyShape { squircle ? AnyShape(SquircleShape()) : AnyShape(Circle()) }
 
     private var subtitle: String {
         if let subtitleText { return subtitleText }
@@ -343,7 +347,7 @@ private struct GroupQRCardFace: View {
         .shadow(color: .black.opacity(0.22), radius: 20, y: 12)
         .overlay(alignment: .top) {
             avatar
-                .overlay(Circle().stroke(.white, lineWidth: 5))
+                .overlay(faceShape.stroke(.white, lineWidth: 5))
                 .offset(y: -46)
         }
     }
@@ -351,9 +355,9 @@ private struct GroupQRCardFace: View {
     @ViewBuilder private var avatar: some View {
         if let photoImage {
             Image(uiImage: photoImage).resizable().scaledToFill()
-                .frame(width: 92, height: 92).clipShape(Circle())
+                .frame(width: 92, height: 92).clipShape(faceShape)
         } else {
-            AvatarView(name: title, photoUrl: photo, size: 92)
+            AvatarView(name: title, photoUrl: photo, size: 92).avatarSquircle(squircle)
         }
     }
 }
