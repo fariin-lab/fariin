@@ -1190,9 +1190,21 @@ final class ThreadRepository {
         // .attachLinkPreview). Without it here the cached card-less Message was reused forever.
         let lp = data["linkPreview"] as? [String: Any]
         let link = lp.map { "L" + ($0["imageUrl"] as? String ?? "") } ?? "-"
+        // ⛔ A CHANNEL POST'S COUNTS, THE FIFTH INSTANCE (owner 2026-10-30: a new post kept "👁 0"
+        // while the server already held views 1; proved with a read of the post). The server writes
+        // `views`, `reactionCounts` and the poll tallies onto the post AFTER it is first seen (the
+        // author's view at once, everyone else's once a minute), and none of them was here, so the
+        // cached Message with the old numbers was handed back until the channel was reopened.
+        let views = String((data["views"] as? NSNumber)?.intValue ?? 0)
+        let rc = (data["reactionCounts"] as? [String: Any]) ?? [:]
+        let counts = rc.keys.sorted().map { "\($0)=\((rc[$0] as? NSNumber)?.intValue ?? 0)" }.joined(separator: ",")
+        let pc = (data["pollCounts"] as? [String: Any]) ?? [:]
+        let polls = pc.keys.sorted().map { "\($0)=\((pc[$0] as? NSNumber)?.intValue ?? 0)" }.joined(separator: ",")
+            + ":" + String((data["pollVoters"] as? NSNumber)?.intValue ?? 0)
         return (data["text"] as? String ?? "") + "|" + String(data["edited"] as? Bool ?? false)
             + "|" + reactions + "|" + albumSig + "|" + deleted + "|" + type + "|" + call
             + "|" + uploading + "|" + media + "|" + stamp + "|" + link
+            + "|" + views + "|" + counts + "|" + polls
     }
 
     // Build a message, reusing the cached copy unless a mutable field (reactions / edit) changed.

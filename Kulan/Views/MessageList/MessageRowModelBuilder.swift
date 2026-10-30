@@ -387,7 +387,12 @@ enum MessageRowModelBuilder {
             // the future is never a fact about a message, it is a fact about the clock.
             meta: MetaChrome(timeText: min(msg.createdAt, Date()).formatted(date: .omitted, time: .shortened),
                              edited: msg.edited && !msg.deleted,
-                             views: ctx.isChannel && !msg.deleted ? msg.views : nil,
+                             // ⛔ MY OWN POST SHOWS 1 THE MOMENT IT LANDS (owner 2026-10-30: "it counts
+                             // now but a bit behind other apps"). The server counts the author's view
+                             // as the post is created (onNewMessage), so 1 is already true; waiting for
+                             // the server's write only made it appear late.
+                             views: ctx.isChannel && !msg.deleted
+                                 ? (msg.authorId == ctx.me ? max(msg.views, 1) : msg.views) : nil,
                              signature: ctx.isChannel && ctx.signPosts && !msg.deleted ? ctx.nameFor(msg.authorId) : nil,
                              tick: tick,
                              bornAt: msg.createdAt,
