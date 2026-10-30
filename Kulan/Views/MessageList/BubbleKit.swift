@@ -708,6 +708,7 @@ final class BubbleFillView: UIView {
                 return s
             }()
             v.isHidden = false
+            SliceFollower.cancel(v)   // a new layout wins over a growth still being followed
             v.frame = CGRect(origin: .zero, size: b.size)
             v.state = state
             v.maskPath = p
@@ -751,6 +752,71 @@ final class BubbleFillView: UIView {
             // bubbles have no blur view and never come here.
             BlurFollower.start(shape: shape, blur: bv, mask: blurMask, duration: duration)
         }
+        // ⛔ AND THE WALLPAPER SLICE TOO (owner 2026-10-29, frames of a reaction on a captioned photo
+        // in a wallpapered channel: lines where the card and its outline did not match, growing and
+        // shrinking). The slice "simply landed" at the final shape while the rim eased, so for the
+        // whole growth the card and the outline were two different sizes. Same cure as the blur:
+        // follow the shape's in-flight frame and path every frame, then land.
+        if let sv = sliceView, !sv.isHidden {
+            SliceFollower.start(shape: shape, slice: sv, duration: duration)
+        }
+    }
+}
+
+/// `BlurFollower` for a wallpaper slice: drives its frame and mask from the shape layer's
+/// presentation for one reaction growth, re-cutting the wallpaper under it each frame.
+@MainActor private final class SliceFollower: NSObject {
+    private weak var shape: CAShapeLayer?
+    private weak var slice: WallpaperBlurSliceView?
+    private let finalFrame: CGRect
+    private let finalPath: UIBezierPath?
+    private let endsAt: CFTimeInterval
+    private var link: CADisplayLink?
+    private static var live: [ObjectIdentifier: SliceFollower] = [:]
+
+    static func cancel(_ slice: UIView) { live[ObjectIdentifier(slice)]?.stop() }
+
+    static func start(shape: CAShapeLayer, slice: WallpaperBlurSliceView, duration: CFTimeInterval) {
+        let key = ObjectIdentifier(slice)
+        live[key]?.stop()
+        let f = SliceFollower(shape: shape, slice: slice, duration: duration)
+        live[key] = f
+        f.tick()
+        let link = CADisplayLink(target: f, selector: #selector(SliceFollower.tick))
+        link.add(to: .main, forMode: .common)
+        f.link = link
+    }
+
+    private init(shape: CAShapeLayer, slice: WallpaperBlurSliceView, duration: CFTimeInterval) {
+        self.shape = shape; self.slice = slice
+        finalFrame = slice.frame
+        finalPath = slice.maskPath
+        endsAt = CACurrentMediaTime() + duration + 0.02
+        super.init()
+    }
+
+    @objc private func tick() {
+        guard let shape, let slice else { stop(); return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if CACurrentMediaTime() >= endsAt || shape.animation(forKey: "reactionGrow.path") == nil {
+            slice.frame = finalFrame
+            slice.maskPath = finalPath
+            slice.reposition()
+            CATransaction.commit()
+            stop()
+            return
+        }
+        let pres = shape.presentation() ?? shape
+        slice.frame = pres.frame
+        if let path = pres.path { slice.maskPath = UIBezierPath(cgPath: path) }
+        slice.reposition()
+        CATransaction.commit()
+    }
+
+    private func stop() {
+        link?.invalidate(); link = nil
+        if let slice { Self.live[ObjectIdentifier(slice)] = nil }
     }
 }
 
