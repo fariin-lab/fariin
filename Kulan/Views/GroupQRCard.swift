@@ -67,8 +67,13 @@ struct GroupLinkQRSheet: View {
     var hint: String = "Scan with the camera to join"
     /// A Scan circle beside the others (the profile's code, owner 2026-10-20).
     var onScan: (() -> Void)? = nil
+    /// A channel's code (owner 2026-10-30: it said "Group · N members" and "to join"): its follower
+    /// count turns the card into "Channel · N followers" and "to follow". Also read from the
+    /// environment, for the cards that open this sheet without knowing they are on a channel.
+    var channelFollowers: Int? = nil
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.groupQRChannelFollowers) private var envChannelFollowers
     @AppStorage("groupQR.theme") private var themeIndex = 0
     @State private var toast: String?
     @State private var saving = false
@@ -78,6 +83,15 @@ struct GroupLinkQRSheet: View {
     @State private var cardDip = false
 
     private var theme: QRTheme { QRTheme.all[min(max(themeIndex, 0), QRTheme.all.count - 1)] }
+
+    private var followers: Int? { channelFollowers ?? envChannelFollowers }
+    /// The line under the name: the caller's own, else a channel's followers, else the group's size.
+    private var faceSubtitle: String? {
+        if let subtitle { return subtitle }
+        guard let n = followers else { return nil }
+        return "Channel · \(n) follower\(n == 1 ? "" : "s")"
+    }
+    private var faceHint: String { followers != nil ? "Scan with the camera to follow" : hint }
 
     var body: some View {
         ZStack {
@@ -147,7 +161,7 @@ struct GroupLinkQRSheet: View {
 
     private var card: some View {
         GroupQRCardFace(title: title, photo: photo, memberCount: memberCount, link: link, ink: theme.ink,
-                        inks: theme.inks, themeKey: themeIndex, subtitleText: subtitle, hint: hint)
+                        inks: theme.inks, themeKey: themeIndex, subtitleText: faceSubtitle, hint: faceHint)
             .padding(.horizontal, 28)
             .scaleEffect(cardDip ? 0.94 : 1)
     }
@@ -225,7 +239,7 @@ struct GroupLinkQRSheet: View {
             QRGround(theme: theme)
             GroupQRCardFace(title: title, photo: photo, memberCount: memberCount, link: link, ink: theme.ink,
                             inks: theme.inks, photoImage: photoFull ?? photo.flatMap { DiskImageCache.shared.smallImageSync($0) },
-                            subtitleText: subtitle, hint: hint)
+                            subtitleText: faceSubtitle, hint: faceHint)
                 .padding(.horizontal, 32)
                 .padding(.top, 40)
         }
@@ -341,5 +355,19 @@ private struct GroupQRCardFace: View {
         } else {
             AvatarView(name: title, photoUrl: photo, size: 92)
         }
+    }
+}
+
+/// A channel's follower count for any QR sheet opened below (owner 2026-10-30). The about card's
+/// link row opens the sheet itself and only knows a member count, so the channel page sets this
+/// on the card instead of threading a flag through the shared card.
+private struct GroupQRChannelFollowersKey: EnvironmentKey {
+    static let defaultValue: Int? = nil
+}
+
+extension EnvironmentValues {
+    var groupQRChannelFollowers: Int? {
+        get { self[GroupQRChannelFollowersKey.self] }
+        set { self[GroupQRChannelFollowersKey.self] = newValue }
     }
 }

@@ -787,10 +787,14 @@ struct PublicGroupInfoView: View {
     }
 
     /// "1 Follower", "1.2k Members": the member page's words (`GroupInfoView.memberCountText`).
+    /// A channel's follower count as this page shows it; my follow / unfollow tapped a moment ago
+    /// counts before the server ties it (`pendingDelta`).
+    private var followerCount: Int {
+        ChannelCountBias.visitorCount(p.cid, memberCount: p.memberCount, followerCount: p.followerCount)
+    }
+
     private var countLine: String {
-        // My follow / unfollow tapped a moment ago, before the count is tied (`pendingDelta`).
-        let n = p.isChannel ? ChannelCountBias.visitorCount(p.cid, memberCount: p.memberCount, followerCount: p.followerCount)
-                            : p.memberCount
+        let n = p.isChannel ? followerCount : p.memberCount
         let word = p.isChannel ? "Follower" : "Member"
         return "\(GroupInfoView.compactCount(n)) \(word)\(n == 1 ? "" : "s")"
     }
@@ -801,6 +805,17 @@ struct PublicGroupInfoView: View {
         GroupAboutCard(desc: p.description, linkName: p.username, title: p.title,
                        cardColor: Color(.secondarySystemGroupedBackground),
                        photo: p.photoUrl, memberCount: p.memberCount)
+            // The link row's QR card: "Channel · N followers" on a channel (owner 2026-10-30).
+            .environment(\.groupQRChannelFollowers, p.isChannel ? followerCount : nil)
+        // The follower page's Sounds & Notifications row (`GroupInfoView.followerStorageCard`),
+        // so the page looks the same before following (owner 2026-10-30). No storage row: a
+        // visitor has no saved posts to count.
+        if p.isChannel {
+            ProfileInfoRow(title: "Sounds & Notifications", icon: "ic_notifications", value: "On") {
+                ToastNotice.show("Follow this channel to change its notifications.")
+            }
+            .profileSurface(plain: Color(.secondarySystemGroupedBackground))
+        }
         if guest.readable, !(mediaLoaded && media.isEmpty) {
             ProfileMediaCard(cid: p.cid, media: media, hint: mediaLoaded ? 0 : 4,
                              cardColor: Color(.secondarySystemGroupedBackground),
@@ -900,7 +915,13 @@ struct PublicGroupInfoView: View {
         following = true
         Task {
             do {
-                try await ChannelService.follow(cid: p.cid)
+                // A channel that approves each follower only files a request (owner 2026-10-30):
+                // not a follow, so no follower page and no Undo; say it went to the admins.
+                if try await ChannelService.follow(cid: p.cid) == "requested" {
+                    following = false
+                    ToastNotice.show("Request sent. An admin will review it.")
+                    return
+                }
                 Haptics.notify(.success)
                 // Stay on this page (the reference app does); the chat behind turns into the
                 // follower's when the page closes (onDisappear), so nothing moves under me now.

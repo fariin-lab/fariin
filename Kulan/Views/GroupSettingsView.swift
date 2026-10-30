@@ -234,6 +234,8 @@ struct GroupSettingsView: View {
             Button {
                 if canEdit { showDisappear = true }
                 else if closed { actionError = ChannelWords.forChat(cid, conv?.groupMod.noticeText ?? "") }
+                // An admin without the info right is an admin: the reason is the right (audit 2026-10-30).
+                else if conv?.admins.contains(me) == true { actionError = "You need the Change info right to change this." }
                 else { actionError = "Only admins can change this." }
             } label: {
                 HStack {
@@ -459,18 +461,23 @@ struct GroupSettingsView: View {
             }
             .buttonStyle(.plain)
             Spacer(minLength: 8)
-            Toggle("", isOn: Binding(get: { mediaOnCount > 0 }, set: { setAllMedia($0) }))
+            // Through `bool` like the other switches (owner 2026-10-30 audit: it sprang back until
+            // the server confirmed, then flipped seconds later).
+            Toggle("", isOn: bool("media.all", get: { c in Conversation.SendKind.allCases.contains { c.membersMaySend($0) } },
+                                  set: { on in try await writeAllMedia(on) }))
                 .labelsHidden()
                 .disabled(!canEdit)
         }
     }
 
     /// One kind: a tick (allowed) or an empty circle (admins only); tap flips it.
+    /// Held at the tapped value while its write is out (`bool`), so it does not snap back.
     private func mediaTickRow(_ k: Conversation.SendKind) -> some View {
-        let on = conv?.membersMaySend(k) ?? true
+        let tick = bool("media." + k.rawValue, get: { $0.membersMaySend(k) }, set: { v in try await writeKind(k, v) })
+        let on = conv == nil ? true : tick.wrappedValue
         return Button {
-            guard canEdit else { return }
-            run { try await writeKind(k, !on) }
+            guard canEdit, inFlight["media." + k.rawValue] == nil else { return }
+            tick.wrappedValue = !on
         } label: {
             HStack(spacing: 14) {
                 Image(systemName: on ? "checkmark.circle.fill" : "circle")
@@ -517,7 +524,12 @@ struct GroupSettingsView: View {
                         // The thumb stays where it was let go until the server answers; refused or
                         // not confirmed, it goes back (audit 2026-10-26 item 20).
                         Task {
-                            do { try await GroupSettingWrite.confirmed { try await ChatService.setGroupSlowMode(cid: cid, seconds: secs) } }
+                            do {
+                                try await GroupSettingWrite.confirmed { try await ChatService.setGroupSlowMode(cid: cid, seconds: secs) }
+                                // As `bool` does: a moment more if the confirmed copy is behind, so
+                                // the thumb does not jump back and forward (owner 2026-10-30 audit).
+                                if (conv?.slowModeSeconds ?? 0) != secs { try? await Task.sleep(nanoseconds: 1_000_000_000) }
+                            }
                             catch { actionError = error.localizedDescription }
                             slowDraft = nil
                         }
@@ -553,9 +565,9 @@ struct GroupSettingsView: View {
     private var mediaPage: some View {
         List {
             Section {
-                Toggle(isOn: Binding(
-                    get: { mediaOnCount == Conversation.SendKind.allCases.count },
-                    set: { on in setAllMedia(on) })) {
+                Toggle(isOn: bool("media.allowAll",
+                                  get: { c in Conversation.SendKind.allCases.allSatisfy { c.membersMaySend($0) } },
+                                  set: { on in try await writeAllMedia(on) })) {
                     Text("Allow all").fontWeight(.semibold)
                 }
                 .disabled(!canEdit)
@@ -590,12 +602,10 @@ struct GroupSettingsView: View {
         try await ChatService.setMemberSendKind(cid: cid, k.rawValue, on, pair: pair)
     }
 
-    private func setAllMedia(_ on: Bool) {
+    private func writeAllMedia(_ on: Bool) async throws {
         let all = Dictionary(uniqueKeysWithValues: Conversation.SendKind.allCases.map { ($0.rawValue, on) })
-        run {
-            try await ChatService.setMemberSend(cid: cid, all,
-                                                notice: on ? "allowed all media" : "turned off all media for members")
-        }
+        try await ChatService.setMemberSend(cid: cid, all,
+                                            notice: on ? "allowed all media" : "turned off all media for members")
     }
 
     /// One switch, written at once through `bool`, which says so if the write is refused.
@@ -1349,7 +1359,7 @@ struct GroupRequestsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             guard reqListener == nil else { return }
-            reqListener = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
+            reqListener = GroupInviteService.joinRequests(cid: cid) { takeRequests($0) }
         }
         .onDisappear { reqListener?.remove(); reqListener = nil }
         // 2026-10-20 (owner): after `FirestoreHub.swap` the requests listener belongs to the stuck
@@ -1358,7 +1368,7 @@ struct GroupRequestsView: View {
             busyReqs = []   // an answer waiting on the stuck client never returns; free the rows
             guard reqListener != nil else { return }
             FirestoreHub.drop([reqListener])
-            reqListener = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
+            reqListener = GroupInviteService.joinRequests(cid: cid) { takeRequests($0) }
         }
         .task { await loadShareCode() }
         .task { links = try? await GroupInviteService.listLinks(cid: cid) }
@@ -1383,11 +1393,21 @@ struct GroupRequestsView: View {
 
     // MARK: Requests
 
+    private var isChannel: Bool { Conversation.Right.isChannel(cid) }
+
+    /// A request answered here stays hidden only until the server drops it; then the person may ask
+    /// again and must show (audit 2026-10-30: `answeredReqs` was never cleared, so a second request
+    /// from the same person stayed hidden while the page was open).
+    private func takeRequests(_ reqs: [JoinRequest]) {
+        joinReqs = reqs
+        answeredReqs.formIntersection(Set(reqs.map(\.uid)))
+    }
+
     @ViewBuilder private var requestsSections: some View {
         if shownReqs.isEmpty {
             // ⛔ ONE QUIET CARD (owner 2026-10-20, with a screenshot): a line in the card, a note under.
             Section {
-                Text("No one is waiting to join.")
+                Text(isChannel ? "No one is waiting to follow." : "No one is waiting to join.")
                     .font(.body).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 6)
@@ -1395,7 +1415,7 @@ struct GroupRequestsView: View {
                 Text(ChannelWords.forChat(cid, "People who ask to join “\(conv?.title ?? "this group")” with a group link show up here."))
             }
         } else {
-            Section("Waiting to join") {
+            Section(isChannel ? "Waiting to follow" : "Waiting to join") {
                 ForEach(shownReqs) { r in
                     HStack(spacing: 12) {
                         AvatarView(name: r.name, photoUrl: r.photo, size: 40)
@@ -1681,7 +1701,8 @@ struct EditGroupView: View {
                                     onDone: { circle, _ in cropItem = nil; setPhoto(circle) },
                                     onCancel: { cropItem = nil },
                                     circleOnly: true,
-                                    circleSubtitle: ChannelWords.forChat(cid, "Shown in chats and on the group page"))
+                                    circleSubtitle: ChannelWords.forChat(cid, "Shown in chats and on the group page"),
+                                    squircle: isChannel)
                     .ignoresSafeArea()
             }
         }

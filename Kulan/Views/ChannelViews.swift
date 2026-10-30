@@ -90,6 +90,9 @@ struct ChannelFollowerBar: View {
             .liquidGlass(RoundedRectangle(cornerRadius: 26, style: .continuous))
     }
 
+    /// Said when Follow only filed a join request (the bar and Find Channels say the same words).
+    static let requestSent = "Request sent. An admin will review it."
+
     private func follow() {
         guard !joined else { return }
         guard NetworkState.shared.isOnline else { problem = "No internet connection. Try again."; return }
@@ -100,9 +103,16 @@ struct ChannelFollowerBar: View {
         optimistic = true
         Task {
             do {
-                try await ChannelService.follow(cid: cid)
-                // The follow list confirms it (`following`); this stays until then so the bar never
-                // blinks back to Follow between the answer and the listener.
+                let status = try await ChannelService.follow(cid: cid)
+                // A channel that needs approval only files a request (owner 2026-10-30: the bar faded
+                // away for good and nothing said a request went out). No follow will land, so the bar
+                // comes back and the toast says what happened.
+                if status == "requested" {
+                    optimistic = false
+                    ToastNotice.show(Self.requestSent)
+                }
+                // Otherwise the follow list confirms it (`following`); this stays until then so the
+                // bar never blinks back to Follow between the answer and the listener.
             } catch {
                 problem = error.localizedDescription
                 optimistic = false   // springs back to Follow (the bar's .animation on `joined`)
@@ -122,7 +132,14 @@ struct DiscoverChannelsView: View {
     @State private var loading = true
     @State private var failed = false
     @State private var busy: Set<String> = []
+    /// Followed from this list, before the follow list says so; each id goes once the listener has it.
+    @State private var justFollowed: Set<String> = []
     @State private var follows = ChannelFollows.shared
+
+    /// The ids the follow list confirms, so `justFollowed` can let go of them.
+    private var confirmedIds: Set<String> {
+        Set(justFollowed.filter { follows.follows($0) })
+    }
 
     var body: some View {
         NavigationStack {
@@ -153,6 +170,8 @@ struct DiscoverChannelsView: View {
             }
             .refreshable { await load() }
             .task { await load() }
+            // The listener has it now: the stand-in goes, so a later unfollow shows Follow again.
+            .onChange(of: confirmedIds) { _, ids in if !ids.isEmpty { justFollowed.subtract(ids) } }
         }
     }
 
@@ -190,11 +209,23 @@ struct DiscoverChannelsView: View {
     @ViewBuilder private func followButton(_ c: ChannelService.Discovered) -> some View {
         let mine = follows.follows(c.cid)
             || ConversationsRepository.shared.conversations.contains { $0.id == c.cid && $0.users.contains(AuthService.shared.uid ?? "") }
+            || justFollowed.contains(c.cid)
         Button {
             guard !mine, !busy.contains(c.cid) else { return }
             busy.insert(c.cid)
             Task {
-                do { try await ChannelService.follow(cid: c.cid); Haptics.notify(.success) }
+                do {
+                    let status = try await ChannelService.follow(cid: c.cid)
+                    if status == "requested" {
+                        // Only a request (owner 2026-10-30): said, and the button stays Follow.
+                        ToastNotice.show(ChannelFollowerBar.requestSent)
+                    } else {
+                        // Held as Following until the follow list catches up (owner 2026-10-30: it
+                        // flickered back to Follow between the answer and the listener).
+                        justFollowed.insert(c.cid)
+                        Haptics.notify(.success)
+                    }
+                }
                 catch { ToastNotice.show(error.localizedDescription) }
                 busy.remove(c.cid)
             }
@@ -222,7 +253,15 @@ struct DiscoverChannelsView: View {
 /// (or remove and keep out). Nobody else sees who follows.
 struct ChannelFollowersView: View {
     let cid: String
-    let count: Int
+    /// ⛔ THE COUNT AS THE PAGE OPENED, HELD ONCE (owner 2026-10-30): the parent passes a live value,
+    /// so once the server's count landed each Remove / Ban / Add was in it AND in `removed` / `added`,
+    /// counted twice. `@State` keeps the first value for the page's life; only this page adjusts it.
+    @State private var count: Int
+
+    init(cid: String, count: Int) {
+        self.cid = cid
+        _count = State(initialValue: count)
+    }
 
     struct Follower: Identifiable, Equatable { let uid: String; let name: String; let photoUrl: String?; var id: String { uid } }
 
@@ -237,6 +276,8 @@ struct ChannelFollowersView: View {
     @State private var loading = false
     @State private var failed = false
     @State private var confirm: (Follower, Bool)?
+    /// Ban or plain Remove, copied in as the alert opens so its words hold while it fades.
+    @State private var confirmBan = false
     /// Taken off the header's count on each Remove / Ban (owner 2026-10-29 audit U10: `count` is the
     /// number when the page opened, and it did not go down).
     @State private var removed = 0
@@ -261,6 +302,8 @@ struct ChannelFollowersView: View {
             return (c.names[a] ?? "").lowercased() < (c.names[b] ?? "").lowercased()
         }
     }
+    /// The loaded followers who are not admins (the admins are listed above them).
+    private var followerRows: [Follower] { rows.filter { !(conv?.users.contains($0.uid) ?? false) } }
     private var shownCount: Int { max(0, count - removed + added) + admins.count }
 
     var body: some View {
@@ -289,7 +332,7 @@ struct ChannelFollowersView: View {
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
-                ForEach(rows.filter { !(conv?.users.contains($0.uid) ?? false) }) { f in
+                ForEach(followerRows) { f in
                     HStack(spacing: 12) {
                         AvatarView(name: f.name, photoUrl: f.photoUrl, size: 40)
                         Text(f.name).lineLimit(1)
@@ -299,8 +342,8 @@ struct ChannelFollowersView: View {
                     // 2026-10-29 review fix); others see the list without the swipe.
                     .swipeActions(edge: .trailing) {
                         if mayRemove {
-                            Button("Remove", role: .destructive) { confirm = (f, false) }
-                            Button("Ban") { confirm = (f, true) }.tint(.orange)
+                            Button("Remove", role: .destructive) { confirmBan = false; confirm = (f, false) }
+                            Button("Ban") { confirmBan = true; confirm = (f, true) }.tint(.orange)
                         }
                     }
                     .onAppear { if f == rows.last, more { Task { await load() } } }
@@ -322,7 +365,9 @@ struct ChannelFollowersView: View {
                 }
                 if failed { Text("Couldn't load followers. Pull to try again.").foregroundStyle(.secondary) }
                 // Nobody yet: said, not a spinner (owner 2026-10-29: it turned on an empty list).
-                if rows.isEmpty, admins.isEmpty, !loading, !failed, !more {
+                // The followers list alone (owner 2026-10-30): `admins` always holds the owner, so
+                // testing it too meant this line could never show.
+                if followerRows.isEmpty, !loading, !failed, !more {
                     Text("No followers yet. Share the channel to get your first ones.").foregroundStyle(.secondary)
                 }
             } header: {
@@ -336,10 +381,12 @@ struct ChannelFollowersView: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { rows = []; more = true; await load() }
         .task { if rows.isEmpty { await load() } }
-        .alert(confirm?.1 == true ? "Remove and ban?" : "Remove follower?",
+        // The words come from `confirmBan`, set when the alert opens and never cleared (owner
+        // 2026-10-30): `confirm` goes nil as the alert closes, and the text flipped during the fade.
+        .alert(confirmBan ? "Remove and ban?" : "Remove follower?",
                isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } })) {
             Button("Cancel", role: .cancel) {}
-            Button(confirm?.1 == true ? "Ban" : "Remove", role: .destructive) {
+            Button(confirmBan ? "Ban" : "Remove", role: .destructive) {
                 guard let pick = confirm else { return }
                 let f = pick.0, ban = pick.1
                 Task {
@@ -351,7 +398,7 @@ struct ChannelFollowersView: View {
                 }
             }
         } message: {
-            Text(confirm?.1 == true ? "They stop following and can't follow again."
+            Text(confirmBan ? "They stop following and can't follow again."
                                     : "They stop following. They can follow again if the channel is public.")
         }
         .sheet(isPresented: $showAdd) {
@@ -413,8 +460,8 @@ struct ChannelFollowersView: View {
 
     private func load() async {
         guard !loading, more else { return }
-        // A channel the count says nobody follows: nothing to ask the server for.
-        if count == 0, added == 0, rows.isEmpty { more = false; return }
+        // ⛔ ALWAYS ASK THE SERVER (owner 2026-10-30): the stored count lags about a minute, so a
+        // "0" skip hid the first followers and made pull-to-refresh do nothing.
         loading = true; failed = false
         do {
             let page = try await ChannelService.followers(cid: cid, after: rows.last?.uid)
@@ -745,14 +792,19 @@ struct ChannelPendingAdminsLoader: ViewModifier {
                 guard on else { return }
                 await reload()
             }
-            .alert("Revoke admin invite for \(revoking?.name ?? "")?",
+            // The name falls back to `shownName`, the last one asked about (owner 2026-10-30):
+            // `revoking` goes nil as the alert closes, and the words flipped to "" / "they" mid-fade.
+            .alert("Revoke admin invite for \(revoking?.name ?? shownName)?",
                    isPresented: Binding(get: { revoking != nil }, set: { if !$0 { revoking = nil } })) {
                 Button("Cancel", role: .cancel) {}
                 Button("Revoke", role: .destructive) { revoke() }
             } message: {
-                Text("If you revoke it, \(revoking?.name ?? "they") can no longer use it to become an admin of this channel.")
+                Text("If you revoke it, \(revoking?.name ?? shownName) can no longer use it to become an admin of this channel.")
             }
+            .onChange(of: revoking?.name) { _, name in if let name { shownName = name } }
     }
+
+    @State private var shownName = ""
 
     private struct LoadKey: Equatable { let on: Bool; let tick: Int }
 
@@ -815,7 +867,9 @@ struct ChannelAdminCard: View {
                         .multilineTextAlignment(.center)
                 }
             }
-            if conv.followerCount == 0 {
+            // From the same number as the line above (owner 2026-10-30): the raw `followerCount` lags
+            // the adjusted one, so a channel showing followers still offered this hint. Only admins.
+            if conv.subscriberCount <= conv.users.count {
                 Text("Share your channel so people can follow it.")
                     .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
@@ -958,6 +1012,8 @@ struct ChannelReactionsSettingsView: View {
     /// page kept the refused choice while Channel Settings showed the saved one).
     @State private var savedMode = "all"
     @State private var savedList: [String] = []
+    /// The last non-empty pick list on this page, put back when Selected Emoji is chosen again.
+    @State private var lastPicks: [String] = []
 
     /// What an owner picks from: a wide set, so "only these" can fit any channel.
     /// Any other emoji comes in through the "+" (the full picker) and joins the grid.
@@ -1006,14 +1062,21 @@ struct ChannelReactionsSettingsView: View {
                 if !list.contains(e) { toggle(e) }
             }
         }
-        .onAppear {
-            guard !loaded, let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) else { return }
-            mode = c.reactMode
-            list = c.reactList
-            savedMode = c.reactMode
-            savedList = c.reactList
-            loaded = true
-        }
+        .onAppear { loadFromList() }
+        // Not in the list yet when the page opened: taken as soon as it arrives.
+        .onChange(of: ConversationsRepository.shared.conversations.contains(where: { $0.id == cid })) { _, _ in loadFromList() }
+        .onChange(of: list) { _, l in if !l.isEmpty { lastPicks = l } }
+    }
+
+    /// The channel's real setting, once. Until then the rows are disabled (`loaded`).
+    private func loadFromList() {
+        guard !loaded, let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) else { return }
+        mode = c.reactMode
+        list = c.reactList
+        savedMode = c.reactMode
+        savedList = c.reactList
+        if !c.reactList.isEmpty { lastPicks = c.reactList }
+        loaded = true
     }
 
     private var grid: some View {
@@ -1058,9 +1121,13 @@ struct ChannelReactionsSettingsView: View {
 
     private func choice(_ value: String, _ title: String) -> some View {
         Button {
-            guard mode != value else { return }
+            guard loaded, mode != value else { return }
             mode = value
-            if value == "some" && list.isEmpty { list = Array(Self.palette.prefix(Self.maxPicked)) }
+            // The earlier picks come back (owner 2026-10-30): after Any / No Reactions the server
+            // answers with an empty list, and Selected used to start over from the palette.
+            if value == "some" && list.isEmpty {
+                list = lastPicks.isEmpty ? Array(Self.palette.prefix(Self.maxPicked)) : lastPicks
+            }
             Haptics.impact(.light)
             save()
         } label: {
@@ -1072,6 +1139,10 @@ struct ChannelReactionsSettingsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // ⛔ NO WRITE BEFORE THE REAL SETTING IS KNOWN (owner 2026-10-30): with the channel not in
+        // the list yet the page showed the default "Any Emoji", and one tap overwrote the real one.
+        .disabled(!loaded)
+        .opacity(loaded ? 1 : 0.4)
     }
 
     private func toggle(_ e: String) {

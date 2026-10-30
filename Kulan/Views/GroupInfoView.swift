@@ -181,6 +181,7 @@ struct GroupInfoView: View {
     private var followingNow: Bool { ChannelFollows.shared.follows(cid) }
     @State private var unfollowing = false
     @State private var following = false   // a Follow from this page on its way
+    @State private var deletingChannel = false   // Delete Channel sent, the server not answered yet
     @State private var confirmChannelReport = false
     @State private var confirmUnfollow = false
     private var pageBackground: Color { Color(uiColor: .systemGroupedBackground) }
@@ -264,7 +265,9 @@ struct GroupInfoView: View {
             .sheet(isPresented: $showEncryption) { ChatEncryptionSheet() }
             .sheet(isPresented: $showQR) {
                 if let link = inviteLink {
-                    GroupLinkQRSheet(title: title, link: link, photo: conv?.avatarUrl, memberCount: conv?.users.count)
+                    // A channel's card counts followers and says "follow" (owner 2026-10-30).
+                    GroupLinkQRSheet(title: title, link: link, photo: conv?.avatarUrl, memberCount: conv?.users.count,
+                                     channelFollowers: isChannel ? (conv?.subscriberCount ?? 0) : nil)
                 }
             }
             .sheet(isPresented: $showSimilar) {
@@ -466,6 +469,8 @@ struct GroupInfoView: View {
     private var aboutCard: some View {
         GroupAboutCard(desc: desc, linkName: conv?.publicName ?? "", title: title, cardColor: cardColor,
                        photo: conv?.avatarUrl, memberCount: conv?.users.count, openURL: descLinkAction)
+            // The link row's QR card: "Channel · N followers" on a channel (owner 2026-10-30).
+            .environment(\.groupQRChannelFollowers, isChannel ? (conv?.subscriberCount ?? 0) : nil)
     }
 
     /// Links and @usernames in the description (owner 2026-10-21): a web link in the in-app browser,
@@ -575,12 +580,13 @@ struct GroupInfoView: View {
         // Shown before following too (owner 2026-10-29: "before joining sound and notification is
         // not appearing"), so the page looks the same either way. A visitor has no follow record to
         // mute yet (audit U2: the page's Mute was refused and snapped back), so their tap says to
-        // follow first instead of opening a page that cannot save.
+        // follow first instead of opening a page that cannot save. A plain notice, not the
+        // "Could not do that" alert (owner 2026-10-30): nothing went wrong.
         VStack(spacing: 0) {
             ProfileInfoRow(title: "Sounds & Notifications", icon: "ic_notifications",
                            value: muted ? "Off" : "On") {
                 if followingNow { showSounds = true }
-                else { actionError = "Follow this channel to change its notifications." }
+                else { ToastNotice.show("Follow this channel to change its notifications.") }
             }
             rowDivider
             ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
@@ -596,7 +602,14 @@ struct GroupInfoView: View {
         following = true
         Task {
             do {
-                _ = try await ChannelService.follow(cid: cid)
+                // A channel that approves each follower files a request (owner 2026-10-30: the ring
+                // waited 5 s for a follow that never comes, then the plus came back without a word).
+                // Say so and stop at once, as `rejoin()` does.
+                if try await ChannelService.follow(cid: cid) == "requested" {
+                    following = false
+                    ToastNotice.show("Request sent. An admin will review it.")
+                    return
+                }
                 // The follow list arrives by listener: keep the ring until it does (up to 5 s), so
                 // the plus never flashes back between the server's yes and the Following circle.
                 for _ in 0..<25 where !ChannelFollows.shared.follows(cid) {
@@ -707,8 +720,11 @@ struct GroupInfoView: View {
             // A group story going up turns round the group's photo here (owner 2026-10-23, the
             // reference app's way), not on My Story. The posted picture flies into this circle
             // (`StoryPostFlight`, `groupCircleKey`).
+            // A channel's photo is the squircle, so its story lands as one (owner 2026-10-30: it
+            // landed as a circle): about a third of the drawn side, as `StoryCameraDoor` lands it.
             .modifier(MediaRectReporter(id: fromStory ? "" : "groupcircle-\(cid)", scope: .storyRow,
-                                        cornerRadius: Self.photoSide / 2))
+                                        cornerRadius: isChannel ? Self.photoSide * SquircleShape.scale * 0.34
+                                                                : Self.photoSide / 2))
             // ⛔ THE GROUP'S STORIES RING ITS PHOTO (owner 2026-10-23: "when the upload completes the
             // story is not appearing"; they were only in the Stories row). The same ring as a person's
             // page, one arc per story, seen ones grey; a tap on the photo opens them.
@@ -939,18 +955,23 @@ struct GroupInfoView: View {
     /// also said (2026-10-19 fix round), so a mute that did not take is not left unexplained.
     /// The action sheet's Delete Channel: the server deletes it for everyone; the chat closes and
     /// leaves the list, as on leaving. A refusal is said on this page.
+    /// One delete at a time, and the row says "Deleting…" until the server answers (owner
+    /// 2026-10-30: nothing showed it was working, and a second tap sent it again).
     private func deleteChannel() {
+        guard !deletingChannel else { return }
+        deletingChannel = true
         Task {
             do {
                 try await GroupInviteService.deleteGroup(cid: cid)
                 await MainActor.run {
+                    deletingChannel = false
                     LeaveGroupUndo.shared.closeChat(cid)
                     ToastNotice.show("Channel deleted")
                     // One step to the chat list, as on unfollow (`unfollowNow`).
                     if fromStory { dismiss() }
                 }
             } catch {
-                await MainActor.run { actionError = error.localizedDescription }
+                await MainActor.run { deletingChannel = false; actionError = error.localizedDescription }
             }
         }
     }
@@ -1115,10 +1136,12 @@ struct GroupInfoView: View {
                         rowDivider
                     }
                     // Only the owner can permanently delete the whole group (for everyone).
-                    ProfileInfoRow(title: isChannel ? "Delete Channel" : "Delete Group", icon: "trash", tint: Self.exitRed, chevron: false) {
+                    ProfileInfoRow(title: isChannel ? (deletingChannel ? "Deleting…" : "Delete Channel") : "Delete Group",
+                                   icon: "trash", tint: Self.exitRed, chevron: false) {
                         // A channel: its own page with the password (owner 2026-10-29).
-                        if isChannel { showChannelDelete = true } else { confirmDelete = true }
+                        if isChannel { if !deletingChannel { showChannelDelete = true } } else { confirmDelete = true }
                     }
+                    .disabled(deletingChannel)
                 }
                 .profileSurface(plain: cardColor)
                 .padding(.top, 10)
@@ -1290,7 +1313,8 @@ struct GroupInfoView: View {
                 // The owner's request icon (2026-10-21), as on Group Settings.
                 Image("ic_gs_join_requests").renderingMode(.template).resizable().scaledToFit()
                     .frame(width: 24, height: 24).frame(width: 26)
-                Text("Join Requests")
+                // A channel's are follow requests (owner 2026-10-30).
+                Text(ChannelWords.forChat(cid, "Join Requests"))
                 Spacer()
                 HStack(spacing: -8) {
                     ForEach(Array(joinReqs.prefix(3).enumerated()), id: \.element.uid) { i, r in
@@ -1311,13 +1335,17 @@ struct GroupInfoView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Join Requests, \(joinReqs.count) waiting")
+        .accessibilityLabel(ChannelWords.forChat(cid, "Join Requests") + ", \(joinReqs.count) waiting")
     }
 
     /// The requests listener, for admins who may answer them; started once per page.
     private func followJoinRequests() {
         guard joinReqBox.reg == nil, can(.inviteUsers) else { return }
-        joinReqBox.reg = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
+        // In an animation, so the row's .opacity transition plays when the first request lands
+        // (owner 2026-10-30: it popped in).
+        joinReqBox.reg = GroupInviteService.joinRequests(cid: cid) { reqs in
+            withAnimation(.easeInOut(duration: 0.25)) { joinReqs = reqs }
+        }
     }
 
     /// The person profile's flat card colour and separator (ContactInfoView `cardColor`,
@@ -2940,6 +2968,12 @@ struct GroupMemberSheet: View {
         if member.id != me {
             rows.append(AnyView(iconRow("person.crop.circle", "Open Profile") { openProfile() }))
         }
+        // Lift Restrictions for a restricted member (owner 2026-10-30: once restricted, nothing on
+        // the page could undo it). Only the lift: the 2026-10-19 "no Mute row" still holds, so an
+        // unrestricted member gets no row here.
+        if canMuteRow && isMuted {
+            rows.append(AnyView(muteRow))
+        }
         if showsRemoveAdmin {
             rows.append(AnyView(iconRow("person.badge.minus", "Dismiss Admin", tint: .red) { confirmDismissAdmin = true }))
         }
@@ -3433,7 +3467,9 @@ private struct HideMembersSection: View {
             .tint(.green)
             .disabled(busy)
         } footer: {
-            Text("Fariin staff only. Members, admins and the owner won't see the member list, the count or who the admins are. Messages don't change.")
+            // The count stays on the page (owner 2026-10-28), so the footer no longer says it goes
+            // (owner 2026-10-30).
+            Text("Fariin staff only. Members, admins and the owner won't see the member list. Messages don't change.")
         }
         .alert("Couldn't change that", isPresented: Binding(get: { error != nil },
                                                            set: { if !$0 { error = nil } })) {

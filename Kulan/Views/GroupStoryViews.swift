@@ -81,7 +81,10 @@ struct GroupStoryPicker: View {
                             .buttonStyle(.plain)
                         }
                     } footer: {
-                        Text("Only the members of the group you pick can see the story.")
+                        // Channels are on the list too (owner 2026-10-30): their followers see it.
+                        Text(groups.contains(where: \.isChannel)
+                             ? "Members of the group you pick can see the story. On a channel, its followers can."
+                             : "Only the members of the group you pick can see the story.")
                     }
                 }
             }

@@ -30,6 +30,9 @@ struct ProfilePhotoCropper: View {
     /// hands the circle back as both images.
     var circleOnly = false
     var circleSubtitle = "Shown in chats, stories and groups"
+    /// A channel's photo is a squircle everywhere (owner 2026-10-30 audit: the round window here
+    /// did not match what the channel then showed); the window takes that shape.
+    var squircle = false
 
     enum Stage { case avatar, poster }
 
@@ -65,7 +68,7 @@ struct ProfilePhotoCropper: View {
                 // Everything outside the window goes quiet. An even-odd fill, so the picture keeps
                 // showing through underneath instead of being hidden — you can see what you are
                 // cutting off.
-                CutoutShape(hole: hole, radius: stage == .avatar ? size.width / 2 : 0)
+                CutoutShape(hole: hole, radius: stage == .avatar ? size.width * (squircle ? 0.34 : 0.5) : 0)
                     .fill(Color.black.opacity(0.55), style: FillStyle(eoFill: true))
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
@@ -88,7 +91,7 @@ struct ProfilePhotoCropper: View {
     }
 
     private var title: String {
-        circleOnly ? "Group photo" : stage == .avatar ? "Avatar" : "Profile photo"
+        circleOnly ? (squircle ? "Channel photo" : "Group photo") : stage == .avatar ? "Avatar" : "Profile photo"
     }
 
     private var subtitle: String {
