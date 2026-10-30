@@ -5200,6 +5200,19 @@ struct ChatRow: View, Equatable {
                             .foregroundStyle(.secondary)
                             .transition(.scale.combined(with: .opacity))
                     }
+                    // ⛔ THE REPLY SIGN (owner 2026-10-30, the reference app's list): someone in this
+                    // group answered one of my messages and I have not read it yet. A round mark in
+                    // the unread number's own colour and size, just before it, as that list puts its
+                    // mention sign. Server-counted (`Conversation.hasUnreadReply`).
+                    if conv.hasUnreadReply(me) {
+                        Image(systemName: "arrowshape.turn.up.left.fill")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(Theme.onAccent(dark))
+                            .frame(width: 20, height: 20)
+                            .background(Theme.accent(dark)).clipShape(Circle())
+                            .accessibilityLabel("Someone replied to you")
+                            .transition(.scale.combined(with: .opacity))
+                    }
                     if unread > 0 {
                         Text(unread > 99 ? "99+" : "\(unread)")
                             // ⛔ `.footnote` — 13pt, theirs (`unreadCounterLabelConfig` takes

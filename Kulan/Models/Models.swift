@@ -1207,6 +1207,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     struct ListThumb: Hashable { let url: String; let enc: EncMeta }
     var lastSender: String            // uid of who sent the last message ("" if unknown)
     var unreadCount: [String: Int]
+    /// Replies to each member's messages since they last read the group, server-written
+    /// (onNewMessage, owner 2026-10-30): the chat row's reply sign. See `hasUnreadReply`.
+    var replyUnread: [String: Int] = [:]
     var typing: [String: Bool]
     /// Seconds since 1970 each person's typing/recording flag was last refreshed (when known).
     var typingAt: [String: Double] = [:]
@@ -1438,6 +1441,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         }
         self.lastSender = data["lastSender"] as? String ?? ""
         self.unreadCount = intMap(data["unreadCount"])
+        self.replyUnread = intMap(data["replyUnread"])
         // Typing = Bool true (older builds) OR the "text-<seconds>" refresh string senders now write.
         self.typing = (data["typing"] as? [String: Any] ?? [:])
             .compactMapValues { ($0 as? Bool) == true || ($0 as? String)?.hasPrefix("text") == true ? true : nil }
@@ -1847,6 +1851,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// `unreadCount`) no longer cancels it. A chat still carrying the old -1 counts as marked until
     /// it is next opened, which writes the count back to 0.
     func manuallyUnread(_ me: String) -> Bool { (markedUnread[me] ?? false) || (unreadCount[me] ?? 0) < 0 }
+    /// Someone replied to my message in this group and I have not read the chat since: the list's
+    /// reply sign. Only while there is something unread, so reading the chat takes it off at once.
+    func hasUnreadReply(_ me: String) -> Bool { isGroup && unread(me) > 0 && (replyUnread[me] ?? 0) > 0 }
     /// Anything at all to show in the list's badge slot, of either kind.
     func hasUnreadMark(_ me: String) -> Bool { unread(me) > 0 || manuallyUnread(me) }
     func isMuted(_ me: String, now: Double) -> Bool {
