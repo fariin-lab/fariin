@@ -22,6 +22,8 @@ struct InChatSearchRow: Identifiable {
     let outgoing: Bool
     let read: Bool
     let thumb: UIImage?
+    /// A channel's row: its photo in the channel's shape (owner 2026-10-30).
+    var squircle = false
 }
 
 struct InChatSearchList: View {
@@ -53,6 +55,7 @@ struct InChatSearchList: View {
     private func rowView(_ row: InChatSearchRow) -> some View {
         HStack(spacing: Self.gap) {
             AvatarView(name: row.name, photoUrl: row.photoUrl, size: Self.avatar)
+                .avatarSquircle(row.squircle)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 4) {
                     Text(row.name)

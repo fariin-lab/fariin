@@ -8783,6 +8783,12 @@ struct ThreadView: View {
             let live = byId[m.id]
             let photo = conversation?.photos[m.authorId] ?? (mine ? myPhoto : (isGroup ? nil : photoUrl))
             let media = live.flatMap { ($0.type == "image" || $0.type == "video") && !$0.viewOnce ? $0.previewImage : nil }
+            // ⛔ A CHANNEL'S POSTS ARE THE CHANNEL'S (owner 2026-10-30): the list showed the admin who
+            // posted, name and face. The channel's name and photo, in its shape, and no read ticks.
+            if let c = conversation, c.isChannel {
+                return InChatSearchRow(id: m.id, name: c.title, photoUrl: c.avatarUrl, date: m.date,
+                                       text: m.text, outgoing: false, read: false, thumb: media, squircle: true)
+            }
             return InChatSearchRow(id: m.id, name: personName(m.authorId), photoUrl: photo, date: m.date,
                                    text: m.text, outgoing: mine,
                                    read: mine && m.date.timeIntervalSince1970 * 1000 <= repo.otherLastReadMillis,
