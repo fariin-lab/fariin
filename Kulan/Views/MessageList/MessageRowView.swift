@@ -184,6 +184,7 @@ final class ReactionChipView: UIView {
     /// heavier of the two fills on each side, which is their rule and one less thing on screen.
     func configure(_ attr: NSAttributedString, mine: Bool, onMyBubble: Bool, faces: [ReactionFace],
                    freeform: Bool = false) {
+        endRoll()
         label.attributedText = attr
         isFreeform = freeform
         if freeform {
@@ -226,6 +227,99 @@ final class ReactionChipView: UIView {
         let x0 = label.frame.minX + max(0, (label.frame.width - full) / 2)
         return CGPoint(x: x0 + w / 2, y: label.frame.midY)
     }
+    // ⛔ THE COUNT ROLLS, THE COLOUR FADES (owner 2026-10-30: "react badge animation like the
+    // reference app"). A pill that stays but changes: its number slides out and the new one slides
+    // in (up when it grows, down when it shrinks) while the emoji holds still, and its fill eases
+    // to the new colour (mine / not mine) instead of snapping. Our own code on UIKit views.
+
+    /// The text drawn before this pass, read by the row ahead of `configure`.
+    var shownText: NSAttributedString? { rollTarget ?? label.attributedText }
+    private var rollBox: UIView?
+    /// Mid-roll the label's number is hidden; this is the text it really shows.
+    private var rollTarget: NSAttributedString?
+
+    private func endRoll() {
+        rollBox?.removeFromSuperview()
+        rollBox = nil
+        rollTarget = nil
+    }
+
+    func animateChange(fromText old: NSAttributedString?, fromColor: UIColor?) {
+        if let fromColor, let now = backgroundColor, fromColor != now {
+            let a = CABasicAnimation(keyPath: "backgroundColor")
+            a.fromValue = fromColor.cgColor
+            a.duration = 0.25
+            a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            layer.add(a, forKey: "reaction.backgroundColor")
+        }
+        guard let old, let new = label.attributedText, old.string != new.string,
+              let ro = Self.countRange(old), let rn = Self.countRange(new),
+              (old.string as NSString).substring(to: ro.location) == (new.string as NSString).substring(to: rn.location)
+        else { return }
+        layoutIfNeeded()
+        let up = Self.countValue(new.string, rn) >= Self.countValue(old.string, ro)
+        let newRect = countRect(new, rn), oldRect = countRect(old, ro)
+
+        let box = UIView(frame: bounds)
+        box.clipsToBounds = true
+        box.isUserInteractionEnabled = false
+        let was = UILabel(frame: oldRect)
+        was.attributedText = old.attributedSubstring(from: ro)
+        let comes = UILabel(frame: newRect)
+        comes.attributedText = new.attributedSubstring(from: rn)
+        box.addSubview(was)
+        box.addSubview(comes)
+        addSubview(box)
+        rollBox = box
+
+        // The label keeps the emoji; its own number stays hidden while the copies roll.
+        let held = NSMutableAttributedString(attributedString: new)
+        held.addAttribute(.foregroundColor, value: UIColor.clear, range: rn)
+        label.attributedText = held
+        rollTarget = new
+
+        let dy = bounds.height * 0.6 * (up ? 1 : -1)
+        comes.transform = CGAffineTransform(translationX: 0, y: dy)
+        comes.alpha = 0
+        UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseOut, .beginFromCurrentState], animations: {
+            was.transform = CGAffineTransform(translationX: 0, y: -dy)
+            was.alpha = 0
+            comes.transform = .identity
+            comes.alpha = 1
+        }, completion: { [weak self, weak box] _ in
+            guard let self, let box, self.rollBox === box else { return }
+            self.endRoll()
+            self.label.attributedText = new
+        })
+    }
+
+    /// The number at the end of a pill's text ("12", "1.2K"), nil when the pill shows faces instead.
+    private static func countRange(_ t: NSAttributedString) -> NSRange? {
+        let s = t.string as NSString
+        var start = s.length
+        while start > 0, let u = Unicode.Scalar(s.character(at: start - 1)),
+              CharacterSet.decimalDigits.contains(u) || ".,KMkm".unicodeScalars.contains(u) {
+            start -= 1
+        }
+        guard start < s.length, start > 0 else { return nil }
+        return NSRange(location: start, length: s.length - start)
+    }
+
+    private static func countValue(_ s: String, _ r: NSRange) -> Double {
+        let n = (s as NSString).substring(with: r).uppercased().replacingOccurrences(of: ",", with: ".")
+        let k: Double = n.hasSuffix("K") ? 1_000 : n.hasSuffix("M") ? 1_000_000 : 1
+        return (Double(n.trimmingCharacters(in: CharacterSet(charactersIn: "KM"))) ?? 0) * k
+    }
+
+    /// Where a text's number sits in the pill, the label being centred.
+    private func countRect(_ t: NSAttributedString, _ r: NSRange) -> CGRect {
+        let full = t.size().width
+        let lead = t.attributedSubstring(from: NSRange(location: 0, length: r.location)).size().width
+        let x0 = label.frame.minX + max(0, (label.frame.width - full) / 2)
+        return CGRect(x: x0 + lead, y: label.frame.minY,
+                      width: t.attributedSubstring(from: r).size().width + 1, height: label.frame.height)
+    }
+
     /// The emoji's point size in the pill, so the flight lands at the pill's own size.
     var emojiFontSize: CGFloat {
         guard let t = label.attributedText, t.length > 0,
@@ -1718,6 +1812,7 @@ final class MessageRowView: UIView {
         var leaving: [(UIView, CGRect)]             // snapshots of pills about to go
         var arriving: Set<String>
         var mineBefore: Set<String>                 // the pills that were already mine
+        var chipLooks: [String: (text: NSAttributedString?, color: UIColor?)] = [:]   // surviving pills, as drawn
     }
 
     private static func reactionKeys(_ m: MessageRowModel?) -> [String]? {
@@ -1753,9 +1848,11 @@ final class MessageRowView: UIView {
         }
         var chipFrames: [String: CGRect] = [:]
         var leaving: [(UIView, CGRect)] = []
+        var looks: [String: (text: NSAttributedString?, color: UIColor?)] = [:]
         for (k, v) in zip(chipKeys, reactionViews) where !k.isEmpty && !v.isHidden {
             if newKeys.contains(k) {
                 chipFrames[k] = Self.drawnFrame(v)
+                looks[k] = (v.shownText, v.backgroundColor)
             } else if let snap = v.snapshotView(afterScreenUpdates: false) {
                 leaving.append((snap, v.frame))
             }
@@ -1769,7 +1866,8 @@ final class MessageRowView: UIView {
                               fillPath: fill.shownPath, rimPath: rimPath,
                               frames: frames, chipFrames: chipFrames, leaving: leaving,
                               arriving: Set(newKeys).subtracting(oldKeys),
-                              mineBefore: Set((Self.reactionChips(model) ?? []).filter(\.mine).map(\.emoji)))
+                              mineBefore: Set((Self.reactionChips(model) ?? []).filter(\.mine).map(\.emoji)),
+                              chipLooks: looks)
     }
 
     private func animateReactionChange(from old: ReactionBefore, to nb: BubblePlan) {
@@ -1860,6 +1958,7 @@ final class MessageRowView: UIView {
                 if abs(boxDX) > 0.5 { add(v.layer, "transform.translation.x", -boxDX) }
             } else if let f = old.chipFrames[k] {
                 move(v, from: f)
+                if let look = old.chipLooks[k] { v.animateChange(fromText: look.text, fromColor: look.color) }
             }
         }
         for (snap, f) in old.leaving {
