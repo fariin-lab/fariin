@@ -3254,6 +3254,13 @@ struct ChatsView: View {
             .onChange(of: path.count) {
                 showHeaderIcons = path.isEmpty
             }
+            // ⛔ LEAVING A GROUP OR CHANNEL LANDS ON THE CHAT LIST IN ONE MOVE (owner 2026-10-29: after
+            // Leave on a channel's page he stayed on that page). The chat's own dismiss is ignored by
+            // SwiftUI while its info page is pushed on top of it, so the stack is emptied here instead:
+            // one pop, chat and info page together. Only a NEW hidden id counts (a reopen removes one).
+            .onChange(of: LeaveGroupUndo.shared.hiddenIds) { old, new in
+                if !new.subtracting(old).isEmpty, !path.isEmpty { path = NavigationPath() }
+            }
             // Add Story opens the CAMERA, full screen (owner 2026-08-03). It was a bottom sheet
             // holding a picker; a camera in a card with the chat list showing behind it is not a
             // camera, and the sheet's own drag-to-dismiss would fight the preview.
