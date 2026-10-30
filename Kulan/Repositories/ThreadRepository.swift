@@ -193,7 +193,17 @@ final class ThreadRepository {
     var pending: [Message] = [] {
         didSet { ThreadMessageCache.shared.storePending(cid, pending) }
     }
-    var canLoadOlder = true
+    var canLoadOlder = true {
+        // The oldest message at the moment the whole history was known, for the next open's seed.
+        didSet { if !canLoadOlder, let first = messages.first?.id { Self.wholeFrom[cid] = first } }
+    }
+    /// ⛔ A REOPEN REMEMBERS THE HISTORY WAS WHOLE (owner 2026-10-30, his recording: scrolled to a
+    /// channel's first post, back, open again, and the chat jumped). The repository is made fresh on
+    /// every open and starts at `canLoadOlder = true`, so the card at the start of the history
+    /// (`groupHistoryCard`) waited for the server and then pushed the whole page down under a reader
+    /// sitting at the top. Per chat: the oldest message id when nothing older was left. A seed that
+    /// still starts at that message holds the whole history.
+    nonisolated(unsafe) private static var wholeFrom: [String: String] = [:]   // main thread only, as the repository
     /// The phone's saved copy opened with less than a page and the server has not answered yet: the
     /// whole history is almost certainly here already. The group's welcome card (ThreadView
     /// `groupHistoryCard`) shows on that instead of waiting for the server (owner 2026-10-28: "the
@@ -422,6 +432,7 @@ final class ThreadRepository {
         // armed for whatever is still counting down.
         let now = Date()
         messages = cached.filter { m in m.expiresAt.map { now < $0 } ?? true }
+        if let first = messages.first?.id, Self.wholeFrom[cid] == first { cacheLooksWhole = true }
         didInitialLoad = true
         refreshItems(reason: .initial)
         scheduleNextBurn()
