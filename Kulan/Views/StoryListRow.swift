@@ -261,6 +261,10 @@ struct StoryListRow: View {
             // Owner 2026-10-11: the gap is pure black in dark mode, pure white in light.
             .background(faceShape.fill(scheme == .dark ? Color.black : Color.white))
             .overlay { faceRing }
+            // ⛔ AS WIDE AS A ROUND FACE (owner 2026-10-30, his story list: the channel's squircle
+            // badge looked smaller than the person's circle beside it). The squircle is drawn at
+            // `SquircleShape.scale` of its box; here it is grown back so both edges line up.
+            .scaleEffect(squircle ? 1 / SquircleShape.scale : 1)
             .allowsHitTesting(false)
     }
 
