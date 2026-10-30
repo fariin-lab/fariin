@@ -210,6 +210,12 @@ struct ChatNavigationItem: UIViewRepresentable {
         // MARK: Install
 
         func install(from marker: UIView) {
+            // ⛔ A REMOVED HEADER NEVER COMES BACK (owner 2026-10-30, recorded on the rented Mac: a
+            // channel followed from search showed "3 followers", then "2" again for good). The visitor
+            // chat is swapped for the follower chat on the same page; the visitor's header still had
+            // an install queued (`updateUIView`'s async one, a deferred assert) and it ran AFTER the
+            // follower's header went up, putting the old header and its old count back.
+            guard !removed else { return }
             // The OWNING (pushed) controller, not navigationController.topViewController — during a
             // push that is still the previous screen, and the title would land after the transition.
             guard let vc = marker.owningViewController else { return }
@@ -242,7 +248,7 @@ struct ChatNavigationItem: UIViewRepresentable {
         /// The one place that writes. Each property is set only when it differs, so a re-assert that
         /// finds everything in place touches nothing and triggers no further KVO.
         private func assertAll() {
-            guard let item = target?.navigationItem else { return }
+            guard !removed, let item = target?.navigationItem else { return }
             var changed = false
             // The header owns the title area except in selection mode, where theirs hands it back
             // to the bar so Delete All and Cancel sit alone.
@@ -317,7 +323,11 @@ struct ChatNavigationItem: UIViewRepresentable {
         // `configureWithDefaultBackground()` carried. With no appearance object there is no shadow
         // to clear. This app is iOS 26 only, so there is no older branch to keep the material for.
 
+        /// Set by `remove()`: any install or assert still queued from before is dropped.
+        private var removed = false
+
         func remove() {
+            removed = true
             observations.forEach { $0.invalidate() }
             observations = []
             guard let item = target?.navigationItem else { return }

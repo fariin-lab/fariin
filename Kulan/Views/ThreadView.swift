@@ -3312,7 +3312,7 @@ struct ThreadView: View {
         // A guest's count comes from the join page's preview (the stand-in has nobody in `users`).
         if let g = guest?.preview {
             // A channel's follow tapped here shows at once (owner 2026-10-30, `pendingDelta`).
-            return g.isChannel ? GroupDirectory.followersLine(max(0, g.memberCount + ChannelCountBias.pendingDelta(g.cid)))
+            return g.isChannel ? GroupDirectory.followersLine(ChannelCountBias.visitorCount(g.cid, memberCount: g.memberCount, followerCount: g.followerCount))
                                : GroupDirectory.membersLine(g.memberCount)
         }
         // A channel: its followers, never who is typing (only admins write, 2026-10-28).

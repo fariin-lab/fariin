@@ -66,6 +66,8 @@ struct PublicGroupPreview: Equatable {
     var photoUrl: String?
     var description: String
     var memberCount: Int
+    /// A channel's followers alone (its admins are the rest of `memberCount`), from the server.
+    var followerCount: Int = 0
     var isMember: Bool
     var needsApproval: Bool
     var requested: Bool
@@ -92,6 +94,7 @@ struct PublicGroupPreview: Equatable {
         self.photoUrl = p.isEmpty ? nil : p
         self.description = (data["description"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         self.memberCount = (data["memberCount"] as? NSNumber)?.intValue ?? 0
+        self.followerCount = (data["followerCount"] as? NSNumber)?.intValue ?? 0
         self.isMember = data["isMember"] as? Bool ?? false
         self.needsApproval = data["needsApproval"] as? Bool ?? false
         self.requested = data["requested"] as? Bool ?? false
@@ -309,6 +312,7 @@ enum GroupNameCheck: Equatable {
 
     @MainActor fileprivate static func remember(_ p: PublicGroupPreview) {
         previews["c:" + p.cid] = p
+        if p.isChannel { ChannelCountBias.noteKnown(p.cid, followers: p.followerCount) }
         if !p.username.isEmpty { previews["n:" + p.username.lowercased()] = p }
     }
 

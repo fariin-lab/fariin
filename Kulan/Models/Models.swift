@@ -1113,6 +1113,7 @@ enum ChannelCountBias {
     static func note(_ cid: String, base: Int?, delta: Int) {
         guard !cid.isEmpty else { return }
         lock.withLock {
+            taps[cid] = max(-1, min(1, (taps[cid] ?? 0) + delta))
             if let b = bias[cid], base == nil || b.base == nil || b.base == base {
                 bias[cid] = (b.base ?? base, max(-1, min(1, b.delta + delta)))
             } else {
@@ -1127,8 +1128,33 @@ enum ChannelCountBias {
     /// copy of the channel this phone happened to see first (owner 2026-10-30).
     static func set(_ cid: String, stored: Int, pending: Int) {
         guard !cid.isEmpty else { return }
-        lock.withLock { bias[cid] = (stored, pending) }
+        lock.withLock { bias[cid] = (stored, pending); known[cid] = max(0, stored + pending); taps[cid] = 0 }
         ChannelCountTick.bump()
+    }
+
+    /// ⛔ THE LATEST FOLLOWER NUMBER THE SERVER GAVE, FROM ANY ANSWER (owner 2026-10-30: left a
+    /// channel, came back as a visitor and it said 3, followed and it said 4 then 3). A visitor page
+    /// used the preview saved before I left. Every follow / unfollow answer and every fresh preview
+    /// writes here (followers only, the buffer's pending included); the newest write wins, and the
+    /// visitor pages show this plus the admins.
+    nonisolated(unsafe) private static var known: [String: Int] = [:]   // guarded by `lock`
+    /// My follow / unfollow taps since the server last answered (one person: -1...+1). Cleared by
+    /// each answer, which already counts them.
+    nonisolated(unsafe) private static var taps: [String: Int] = [:]   // guarded by `lock`
+    static func noteKnown(_ cid: String, followers: Int) {
+        guard !cid.isEmpty else { return }
+        lock.withLock { known[cid] = max(0, followers); taps[cid] = 0 }
+        ChannelCountTick.bump()
+    }
+    /// What a visitor page shows: the newest known followers (plus my change still on its way) and
+    /// the admins, else the preview's own total.
+    static func visitorCount(_ cid: String, memberCount: Int, followerCount: Int) -> Int {
+        _ = ChannelCountTick.shared.n
+        let k: Int? = lock.withLock { known[cid] }
+        let admins = max(0, memberCount - followerCount)
+        let t: Int = lock.withLock { taps[cid] ?? 0 }
+        guard let k else { return max(0, memberCount + t) }
+        return max(0, k + t) + admins
     }
 
     /// My change not yet tied to a stored count (a follow tapped while the channel is still shown from

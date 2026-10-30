@@ -203,7 +203,9 @@ struct PublicGroupSheet: View {
         // behind and blind to my own follow a second ago; the live channel (one I follow or run) is
         // what the channel's own page shows, so when the app has it, this page shows the same.
         let live = p.isChannel ? ConversationsRepository.shared.conversations.first(where: { $0.id == p.cid })?.subscriberCount : nil
-        let count = p.isChannel ? GroupDirectory.followersLine(live ?? p.memberCount) : GroupDirectory.membersLine(p.memberCount)
+        let count = p.isChannel
+            ? GroupDirectory.followersLine(live ?? ChannelCountBias.visitorCount(p.cid, memberCount: p.memberCount, followerCount: p.followerCount))
+            : GroupDirectory.membersLine(p.memberCount)
         return p.username.isEmpty ? count : "@\(p.username) · \(count)"
     }
 
@@ -787,7 +789,8 @@ struct PublicGroupInfoView: View {
     /// "1 Follower", "1.2k Members": the member page's words (`GroupInfoView.memberCountText`).
     private var countLine: String {
         // My follow / unfollow tapped a moment ago, before the count is tied (`pendingDelta`).
-        let n = max(0, p.memberCount + (p.isChannel ? ChannelCountBias.pendingDelta(p.cid) : 0))
+        let n = p.isChannel ? ChannelCountBias.visitorCount(p.cid, memberCount: p.memberCount, followerCount: p.followerCount)
+                            : p.memberCount
         let word = p.isChannel ? "Follower" : "Member"
         return "\(GroupInfoView.compactCount(n)) \(word)\(n == 1 ? "" : "s")"
     }
