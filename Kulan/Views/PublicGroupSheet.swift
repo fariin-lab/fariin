@@ -198,7 +198,12 @@ struct PublicGroupSheet: View {
     }
 
     private func headline(_ p: PublicGroupPreview) -> String {
-        let count = p.isChannel ? GroupDirectory.followersLine(p.memberCount) : GroupDirectory.membersLine(p.memberCount)
+        // ⛔ ONE NUMBER ON EVERY PAGE (owner 2026-10-30: the same channel said 1, 2 and 3 followers
+        // depending on which page he opened). The preview is the server's answer, up to a minute
+        // behind and blind to my own follow a second ago; the live channel (one I follow or run) is
+        // what the channel's own page shows, so when the app has it, this page shows the same.
+        let live = p.isChannel ? ConversationsRepository.shared.conversations.first(where: { $0.id == p.cid })?.subscriberCount : nil
+        let count = p.isChannel ? GroupDirectory.followersLine(live ?? p.memberCount) : GroupDirectory.membersLine(p.memberCount)
         return p.username.isEmpty ? count : "@\(p.username) · \(count)"
     }
 
