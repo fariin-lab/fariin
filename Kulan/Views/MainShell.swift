@@ -2099,6 +2099,7 @@ struct ChatsView: View {
                 || AudioRecorder.draftIndex[c.id] != nil   // a parked voice draft keeps its chat listed
                 || c.id == live   // ...and so does a call: ringing someone you have never texted
         }                         //   otherwise the "Active call" row has no chat to sit on
+        PinnedDropTrace.check(all: repo.conversations, kept: out, me: me, leaving: leaving)
         out = out.filter { searchMatches($0) }
         out = out.filter { (c: Conversation) -> Bool in   // Filter: 0 All, 1 Unread, 2 Groups, 3 Channels
             switch chatFilter {
@@ -5434,6 +5435,40 @@ private struct ChatPeekPreview: View {
             then()
         default:
             root.dismiss(animated: true) { then() }
+        }
+    }
+}
+
+
+/// ⛔ A PINNED CHAT THAT LEFT THE LIST SAYS WHY (owner 2026-10-30: his pinned chat with a friend is
+/// sometimes missing until he searches for it; the data read showed it pinned, not cleared, not
+/// archived, not hidden, with a last message). Each launch, the first time a chat pinned by me is in
+/// the repository but not in the list, the rule that dropped it goes to the diagnostics log, which
+/// is uploaded on the next launch. Off the hot path once a chat has been reported.
+@MainActor enum PinnedDropTrace {
+    private static var reported = Set<String>()
+
+    static func check(all: [Conversation], kept: [Conversation], me: String, leaving: Set<String>) {
+        guard !me.isEmpty else { return }
+        let keptIds = Set(kept.map(\.id))
+        for c in all where c.isPinned(me) && !keptIds.contains(c.id) && !reported.contains(c.id) {
+            reported.insert(c.id)
+            var why: [String] = []
+            if c.isCleared(me) { why.append("cleared") }
+            if c.isArchived(me) { why.append("archived") }
+            if leaving.contains(c.id) { why.append("leaving") }
+            if MessageRequests.stance(c, myUid: me) == .incoming { why.append("incoming-request") }
+            if c.lastMessageCipher.isEmpty { why.append("empty-preview") }
+            if c.isGroup && !Flags.groupsEnabled { why.append("groups-off") }
+            DiagLog.add("PINDROP# cid=\(c.id.suffix(6)) why=\(why.isEmpty ? "unknown" : why.joined(separator: ","))"
+                        + " cipherLen=\(c.lastMessageCipher.count) updated=\(Int(c.updatedAtMillis))")
+        }
+        // Pinned chats the repository no longer has at all: the window, not a filter.
+        let have = Set(all.map(\.id))
+        for id in (UserDefaults.standard.stringArray(forKey: "pinnedChatIds-\(me)") ?? [])
+        where !have.contains(id) && !reported.contains(id) {
+            reported.insert(id)
+            DiagLog.add("PINDROP# cid=\(id.suffix(6)) why=not-in-repository")
         }
     }
 }

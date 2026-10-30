@@ -81,6 +81,9 @@ struct GroupInfoView: View {
     @State private var showSounds = false
     @State private var showSettings = false
     @State private var showStats = false
+    /// The channel's Followers page, from its own row (owner 2026-10-30: Add Followers was hidden
+    /// inside Channel Settings, he could not find it).
+    @State private var showFollowers = false
     /// People asking to join, for the admins' Join Requests row (owner 2026-10-20). A class box in
     /// @State, so the listener lives as long as the page.
     @State private var joinReqs: [JoinRequest] = []
@@ -352,6 +355,9 @@ struct GroupInfoView: View {
             .navigationDestination(isPresented: $showSounds) { SoundsNotificationsView(cid: cid) }
             .navigationDestination(isPresented: $showSettings) { GroupSettingsView(cid: cid) }
             .navigationDestination(isPresented: $showJoinRequests) { GroupRequestsView(cid: cid) }
+            .navigationDestination(isPresented: $showFollowers) {
+                ChannelFollowersView(cid: cid, count: conv?.followerCount ?? 0)
+            }
             .navigationDestination(isPresented: $showStats) { GroupStatsView(cid: cid, title: title, isChannel: conv?.isChannel ?? false) }
             .fullScreenCover(isPresented: $showCall) { GroupCallView() }
             // Nobody to call (owner 2026-10-20): said in a centred alert.
@@ -1264,6 +1270,11 @@ struct GroupInfoView: View {
     // waiting, and only to an admin who may let people in (the owner, or `inviteUsers`). The faces
     // of the first three people asking; the row opens the requests page.
     @ViewBuilder private var groupSettingsRows: some View {
+        // A channel's followers, with Add Followers and Invite via Link at the top of that page.
+        if isChannel {
+            ProfileInfoRow(title: "Followers", icon: "person.2", value: "\(conv?.subscriberCount ?? 0)") { showFollowers = true }
+            rowDivider
+        }
         ProfileInfoRow(title: isChannel ? "Channel Settings" : "Group Settings", icon: "ic_group_settings") { showSettings = true }
         if can(.inviteUsers) && !joinReqs.isEmpty {
             rowDivider
