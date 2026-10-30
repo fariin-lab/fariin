@@ -1807,6 +1807,16 @@ final class MessageRowView: UIView {
                 move(rim, from: oldLocal); add(rim.shape, "path", rp)
                 move(highlight, from: oldLocal); add(highlight.shape, "path", rp)
             }
+            // ⛔ THE PICTURE'S CUT-OUT RIDES THE SAME CURVE (owner 2026-10-29, a frame of his
+            // recording: un-reacting on a photo with a caption showed the white card already small
+            // inside a still-large dark outline). The media view is clipped by the bubble's path
+            // (`bubbleMask`), set at the FINAL size; its frame eased but the mask did not, so the
+            // card snapped while the rim eased. The mask's path now eases from the old shape.
+            if let mv = mediaView, !mv.isHidden, let m = mv.layer.mask as? CAShapeLayer {
+                let from = nb.isCapsule ? BubbleShape.capsulePath(old.bubble.size)
+                                        : BubbleShape.path(old.bubble.size, nb.radii, continuous: true)
+                add(m, "path", from.cgPath)
+            }
         }
         // ⛔ AND THE ROW'S OWN CHROME ABOVE THE BUBBLE — owner, 2026-09-27, a frame of his recording:
         // the date pill over this row sat ON the bubble mid-animation. When the bubble grows from its
