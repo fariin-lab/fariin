@@ -1889,12 +1889,22 @@ final class MessageRowView: UIView {
             guard let j = chipKeys.firstIndex(of: chip.emoji), j < reactionViews.count else { continue }
             let v = reactionViews[j]
             guard !v.isHidden else { continue }
-            var delay: CFTimeInterval = 0
-            if let from = ReactionFlight.take(chip.emoji), flyIn(chip.emoji, from: from, to: v) {
-                delay = ReactionFlight.duration
-            }
+            // ⛔ THE FLIGHT AND THE BURST ARE AIMED A BEAT LATER (owner 2026-10-29, his recording next
+            // to the reference app's: the heart flew past the message to the composer and the chip
+            // appeared somewhere else). At this moment the row has its new size but the list has not
+            // yet moved it into place, so the pill's spot on screen is not where it will settle.
+            // The pill is held hidden for the flight now; where to fly is asked once layout is done.
+            let from = ReactionFlight.take(chip.emoji)
+            let settle: CFTimeInterval = 0.06
+            let delay = from == nil ? 0 : ReactionFlight.duration + settle
             popPill(v, arriving: old.arriving.contains(chip.emoji), delay: delay)
-            ripple(around: v, emoji: chip.emoji, delay: delay)
+            let emoji = chip.emoji
+            DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self, weak v] in
+                guard let self, let v, self.window != nil, !v.isHidden else { return }
+                self.layoutIfNeeded()
+                if let from { _ = self.flyIn(emoji, from: from, to: v) }
+                self.ripple(around: v, emoji: emoji, delay: from == nil ? 0 : ReactionFlight.duration)
+            }
             break   // one pick per person per message
         }
     }
@@ -1933,16 +1943,16 @@ final class MessageRowView: UIView {
         ring.path = UIBezierPath(roundedRect: v.bounds, cornerRadius: v.bounds.height / 2).cgPath
         ring.fillColor = UIColor.clear.cgColor
         ring.strokeColor = BubblePalette.accent.cgColor
-        ring.lineWidth = 1.5
+        ring.lineWidth = 2
         ring.opacity = 0
         let grow = CABasicAnimation(keyPath: "transform.scale")
         grow.fromValue = 1
         grow.toValue = 1.55
         let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 0.7
+        fade.fromValue = 0.9
         fade.toValue = 0
         let thin = CABasicAnimation(keyPath: "lineWidth")
-        thin.fromValue = 2
+        thin.fromValue = 3
         thin.toValue = 0.5
         let ringGroup = CAAnimationGroup()
         ringGroup.animations = [grow, fade, thin]
@@ -1951,10 +1961,12 @@ final class MessageRowView: UIView {
         ringGroup.beginTime = begin
         addFX(ring, ringGroup, life: delay + 0.65)
 
-        // Three dots, up and out, spread over the top half so they never fall into the message below.
-        let angles: [CGFloat] = [-150, -95, -35].map { ($0 + CGFloat.random(in: -12...12)) * .pi / 180 }
+        // ⛔ EIGHT DOTS ALL THE WAY ROUND, BIG ENOUGH TO SEE (owner 2026-10-29: three 4 pt dots were
+        // invisible in his recording). Ours stays dots in the emoji's colour, not a shower of
+        // emoji, so it is not the reference app's effect; it is just large enough to read.
+        let angles: [CGFloat] = (0..<8).map { (CGFloat($0) * 45 + CGFloat.random(in: -14...14)) * .pi / 180 }
         for a in angles {
-            let d: CGFloat = 4
+            let d = CGFloat.random(in: 5...7)
             let dot = CALayer()
             dot.bounds = CGRect(x: 0, y: 0, width: d, height: d)
             dot.cornerRadius = d / 2
@@ -1962,8 +1974,8 @@ final class MessageRowView: UIView {
             dot.opacity = 0
             let start = CGPoint(x: center.x + cos(a) * v.bounds.width * 0.35,
                                 y: center.y + sin(a) * v.bounds.height * 0.4)
-            let end = CGPoint(x: center.x + cos(a) * (v.bounds.width / 2 + CGFloat.random(in: 10...18)),
-                              y: center.y + sin(a) * (v.bounds.height / 2 + 14))
+            let end = CGPoint(x: center.x + cos(a) * (v.bounds.width / 2 + CGFloat.random(in: 16...28)),
+                              y: center.y + sin(a) * (v.bounds.height / 2 + CGFloat.random(in: 16...26)))
             dot.position = start
             let move = CABasicAnimation(keyPath: "position")
             move.fromValue = NSValue(cgPoint: start)
@@ -1976,10 +1988,10 @@ final class MessageRowView: UIView {
             show.keyTimes = [0, 0.15, 0.6, 1]
             let g = CAAnimationGroup()
             g.animations = [move, shrink, show]
-            g.duration = 0.55
+            g.duration = 0.6
             g.timingFunction = CAMediaTimingFunction(name: .easeOut)
             g.beginTime = begin
-            addFX(dot, g, life: delay + 0.7)
+            addFX(dot, g, life: delay + 0.75)
         }
     }
 
