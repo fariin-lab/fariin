@@ -1912,7 +1912,10 @@ final class MessageRowView: UIView {
     private func popPill(_ v: UIView, arriving: Bool, delay: CFTimeInterval) {
         let begin = CACurrentMediaTime() + delay
         let pop = CAKeyframeAnimation(keyPath: "transform.scale")
-        pop.values = [arriving ? 0.01 : 1.0, 1.22, 0.94, 1.0]
+        // ⛔ NOT FROM A DOT (owner 2026-10-29: "you see the small one, round and black, while it
+        // grows; not cool"). A new pill starts at 0.5, not 0.01, and is see-through until it is
+        // nearly full size (the fade below), so its solid fill never shows as a swelling blob.
+        pop.values = [arriving ? 0.5 : 1.0, 1.18, 0.95, 1.0]
         pop.keyTimes = [0, 0.45, 0.75, 1]
         pop.timingFunctions = [CAMediaTimingFunction(name: .easeOut), CAMediaTimingFunction(name: .easeInEaseOut),
                                CAMediaTimingFunction(name: .easeInEaseOut)]
@@ -1921,11 +1924,11 @@ final class MessageRowView: UIView {
         pop.fillMode = .backwards
         // Same key as the arrival scale above, so it REPLACES it rather than fighting it.
         v.layer.add(pop, forKey: "reaction.transform.scale")
-        if arriving && delay > 0 {
-            let fade = CABasicAnimation(keyPath: "opacity")
-            fade.fromValue = 0
-            fade.toValue = 1
-            fade.duration = 0.12
+        if arriving {
+            let fade = CAKeyframeAnimation(keyPath: "opacity")
+            fade.values = [0, 0, 1]
+            fade.keyTimes = [0, 0.2, 0.5]
+            fade.duration = 0.45
             fade.beginTime = begin
             fade.fillMode = .backwards
             v.layer.add(fade, forKey: "reaction.opacity")
