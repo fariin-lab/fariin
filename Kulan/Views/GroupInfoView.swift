@@ -281,7 +281,7 @@ struct GroupInfoView: View {
     }
 
     private var core: some View {
-        page
+        Group { if conv == nil { notYetPage } else { page } }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
@@ -494,6 +494,32 @@ struct GroupInfoView: View {
             default: return .discarded
             }
             return .handled
+        }
+    }
+
+    // ⛔ NOTHING GUESSED BEFORE THE DETAILS ARRIVE (owner 2026-10-30, his recording: Follow flashed
+    // "Group · 0 Members", Voice and Video, Leave Group). This one page serves groups and channels,
+    // and with no conversation yet every question it asks answers "group": the title fell back to
+    // "Group", the count to 0, the buttons and rows to a group's. The reference app's profile page
+    // likewise draws nothing of the peer until its data is in (PeerInfoScreen marks itself ready
+    // only once `data` is set, and every action starts with `guard let data`). So: an empty page
+    // with the system spinner until the conversation lands, and a plain line if it never does.
+    @State private var notYetTimedOut = false
+
+    private var notYetPage: some View {
+        VStack(spacing: 12) {
+            if notYetTimedOut {
+                Text("This isn't available right now.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                ProgressView()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(pageBackground.ignoresSafeArea())
+        .task {
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            if conv == nil { notYetTimedOut = true }
         }
     }
 
