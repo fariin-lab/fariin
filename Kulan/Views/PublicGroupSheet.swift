@@ -816,12 +816,19 @@ struct PublicGroupInfoView: View {
                        photo: p.photoUrl, memberCount: p.memberCount)
             // The link row's QR card: "Channel · N followers" on a channel (owner 2026-10-30).
             .environment(\.groupQRChannelFollowers, p.isChannel ? followerCount : nil)
-        // The follower page's Sounds & Notifications row (`GroupInfoView.followerStorageCard`),
-        // so the page looks the same before following (owner 2026-10-30). No storage row: a
-        // visitor has no saved posts to count.
+        // The follower page's Sounds & Notifications card (`GroupInfoView.followerStorageCard`),
+        // so the page looks the same before following (owner 2026-10-30). ⛔ WITH ITS STORAGE ROW
+        // TOO (owner 2026-10-31, frame by frame: on Follow the follower page took over with one row
+        // more, and everything under it jumped). A visitor's row reads None and says to follow.
         if p.isChannel {
-            ProfileInfoRow(title: "Sounds & Notifications", icon: "ic_notifications", value: "On") {
-                ToastNotice.show("Follow this channel to change its notifications.")
+            VStack(spacing: 0) {
+                ProfileInfoRow(title: "Sounds & Notifications", icon: "ic_notifications", value: "On") {
+                    ToastNotice.show("Follow this channel to change its notifications.")
+                }
+                Divider().padding(.leading, 56)
+                ProfileInfoRow(title: "Storage Used", icon: "internaldrive", value: "None") {
+                    ToastNotice.show("Follow this channel to see what it keeps on this phone.")
+                }
             }
             .profileSurface(plain: Color(.secondarySystemGroupedBackground))
         }

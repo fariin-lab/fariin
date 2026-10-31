@@ -32,6 +32,11 @@ struct GroupInfoView: View {
     let fromStory: Bool
     init(cid: String, onSearch: (() -> Void)? = nil, fromStory: Bool = false) {
         self.cid = cid; self.onSearch = onSearch; self.fromStory = fromStory
+        // ⛔ THE MEDIA ALREADY FETCHED, FROM THE FIRST FRAME (owner 2026-10-31, frame by frame: on
+        // Follow the All Media card vanished as this page took over from the visitor page, the rows
+        // below jumped up, then it came back and pushed them down). The visitor page fetches this
+        // channel's media (`PublicGroupSheet.prefetchMedia`); this page used to start empty and wait.
+        _media = State(initialValue: ChatService.cachedSharedMedia(cid) ?? [])
     }
     @Environment(\.dismiss) private var dismiss
     private var repo = ConversationsRepository.shared
