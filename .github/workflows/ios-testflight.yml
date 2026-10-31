@@ -79,6 +79,7 @@ jobs:
             Channels: tapping Follow no longer flashes a "Group · 0 Members" page; a plain loading page shows until the channel is ready.
             Chats: the dark band that appeared under the tab bar when opening a chat is gone.
             Official Chat: it can no longer be blocked (it carries Fariin news and your own account alerts). Mute still works.
+            QR scanner: the white corners pulse slowly while it looks for a code.
             PLEASE TEST: open Search, tap Find Channels, follow Fariin News. Open a few chats from the list and watch the bottom for a dark band. Open the Fariin Official Chat info: only Clear Chat should be there.
 
             EARLIER: LEAVING A GROUP HAS AN UNDO.

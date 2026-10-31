@@ -280,8 +280,10 @@ struct GroupInfoView: View {
                 storage: storage, confirmClearStorage: $confirmClearStorage, onClearStorage: clearStorage))
     }
 
-    private var core: some View {
-        Group { if conv == nil { notYetPage } else { page } }
+    /// The page and its look. Split from `core` (2026-10-31): the one long chain timed out the
+    /// release compiler's type check after the not-yet page joined it.
+    private var coreBase: some View {
+        Group { if conv == nil { AnyView(notYetPage) } else { AnyView(page) } }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
@@ -302,6 +304,10 @@ struct GroupInfoView: View {
                         .ignoresSafeArea()
                 }
             }
+    }
+
+    private var coreMid: some View {
+        coreBase
             .modifier(GroupInfoDialogs(cid: cid, current: conv?.disappearSeconds ?? 0,
                                        showDescEdit: $showDescEdit, descText: $descText,
                                        showDisappear: $showDisappear, pendingDisappear: $pendingDisappear,
@@ -347,6 +353,10 @@ struct GroupInfoView: View {
             .fullScreenCover(item: $viewerVideo) { msg in
                 VideoPlayerScreen(message: msg, cid: cid, clipProvider: { nil }, rectScope: .profile)
             }
+    }
+
+    private var core: some View {
+        coreMid
             .navigationDestination(isPresented: $showStorage) {
                 ChatStorageView(cid: cid, title: title, messages: storageMessages) {
                     Task { await loadMediaFigures() }
