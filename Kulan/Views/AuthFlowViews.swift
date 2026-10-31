@@ -1002,7 +1002,10 @@ struct EmailAuthView: View {
                 // `dismissesKeyboardOnTap`.)
             }
             .scrollDismissesKeyboard(.interactively)
-            .scrollBounceBehavior(.basedOnSize)
+            // ⛔ ALWAYS PULLS (owner 2026-10-31: "the keyboard opens and you can't close it"). With
+            // tap-to-close gone (2026-10-18), pulling the page down is the way to put the keys away,
+            // and `.basedOnSize` froze a page that fits the screen, so the pull did nothing.
+            .scrollBounceBehavior(.always)
             // Above the keyboard: the ScrollView ends at the keyboard, so its bottom inset does too.
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 let chips = domainChips
