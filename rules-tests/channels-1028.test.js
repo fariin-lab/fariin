@@ -43,7 +43,9 @@ const cases = [
   ['I change the follow time', 'DENY', F, 'update', `users/${F}/channels/${CID}`, { at: T }, { at: '2020-01-01T00:00:00Z' }, chan, true],
   ['read as text', 'DENY', F, 'update', `users/${F}/channels/${CID}`, { at: T }, { at: T, read: 'x' }, chan, true],
   ['someone marks my entry', 'DENY', X, 'update', `users/${F}/channels/${CID}`, { at: T }, { at: T, read: 1 }, chan, true],
-  ['follower reacts (own key)', 'ALLOW', F, 'update', `conversations/${CID}/messages/m1`, msg, { ...msg, reactions: { [F]: '👍' } }, chan, true],
+  // 2026-10-29 audit S3: channel reactions go through reactChannelPost (the channel's emoji list),
+  // never a direct write, so even a follower's own key is refused here now.
+  ['follower reacts (own key)', 'DENY', F, 'update', `conversations/${CID}/messages/m1`, msg, { ...msg, reactions: { [F]: '👍' } }, chan, true],
   ['follower writes SOMEONE ELSES reaction', 'DENY', F, 'update', `conversations/${CID}/messages/m1`, msg, { ...msg, reactions: { [OWNER]: '👍' } }, chan, true],
   ['stranger reacts', 'DENY', X, 'update', `conversations/${CID}/messages/m1`, msg, { ...msg, reactions: { [X]: '👍' } }, chan, false],
   ['follower edits the post text', 'DENY', F, 'update', `conversations/${CID}/messages/m1`, msg, { ...msg, text: 'hacked', edited: true }, chan, true],
