@@ -386,9 +386,7 @@ struct AuthMethodView: View {
             VStack(spacing: 0) {
                 // On the doors the top gap is held short, so the mark sits high (see the split below).
                 Spacer().frame(maxHeight: accountsFace ? .infinity : 96)
-                // ⛔ THE SWITCH IS SEEN (owner 2026-10-31: "tap Log in and it changes, but nobody
-                // would notice"). Only the title's words changed. The whole middle now slides across,
-                // forward to Log in, back to Create, like turning a page.
+                // (Create / Log in are separate pages now, pushed from the foot button.)
                 // The mark stays put while the words and doors slide (owner 2026-10-31: two logos
                 // showed mid-slide).
                 if !accountsFace {
@@ -455,10 +453,6 @@ struct AuthMethodView: View {
                 }
                 }
                 }
-                .id(accountsFace ? "accounts" : (mode == .create ? "create" : "login"))
-                .transition(.asymmetric(
-                    insertion: .move(edge: mode == .create ? .leading : .trailing).combined(with: .opacity),
-                    removal: .move(edge: mode == .create ? .trailing : .leading).combined(with: .opacity)))
 
                 // Space always kept, spinner faded in (owner, 2026-09-25): inserting it on Google's
                 // tap grew this centred block and slid every card up, then back down when it went.
@@ -501,9 +495,11 @@ struct AuthMethodView: View {
                     // The other way in, on every face: Create account under Log in, Log in under
                     // Create account.
                     let toCreate = accountsFace || mode == .login
-                    Button {
-                        error = nil
-                        withAnimation(.smooth(duration: 0.35)) { mode = toCreate ? .create : .login }
+                    // ⛔ THE OTHER PAGE IS ITS OWN PAGE (owner 2026-10-31: "what do the big apps do?").
+                    // They open it with the system's push, from the right with a back arrow, so the
+                    // change is unmistakable; no switch in place, no moving logo.
+                    NavigationLink {
+                        AuthMethodView(mode: toCreate ? .create : .login, showDoors: true, onAuthed: onAuthed)
                     } label: {
                         Text(toCreate ? "Create account" : "Log in")
                             .font(.body.weight(.semibold))
