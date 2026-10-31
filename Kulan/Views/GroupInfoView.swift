@@ -991,23 +991,27 @@ struct GroupInfoView: View {
     /// also said (2026-10-19 fix round), so a mute that did not take is not left unexplained.
     /// The action sheet's Delete Channel: the server deletes it for everyone; the chat closes and
     /// leaves the list, as on leaving. A refusal is said on this page.
-    /// One delete at a time, and the row says "Deleting…" until the server answers (owner
-    /// 2026-10-30: nothing showed it was working, and a second tap sent it again).
+    /// ⛔ GONE AT THE TAP (owner 2026-10-31: "Deleting…" sat on the row, slow and ugly). The chat
+    /// closes and leaves the list the moment Delete is confirmed, as the big apps do; the server
+    /// deletes behind. If it refuses, the channel comes back to the list and the toast says so.
+    /// `deletingChannel` still stops a second delete.
     private func deleteChannel() {
         guard !deletingChannel else { return }
         deletingChannel = true
+        let id = cid
+        LeaveGroupUndo.shared.closeChat(id)
+        ToastNotice.show("Channel deleted")
+        // One step to the chat list, as on unfollow (`unfollowNow`).
+        if fromStory { dismiss() }
         Task {
             do {
-                try await GroupInviteService.deleteGroup(cid: cid)
-                await MainActor.run {
-                    deletingChannel = false
-                    LeaveGroupUndo.shared.closeChat(cid)
-                    ToastNotice.show("Channel deleted")
-                    // One step to the chat list, as on unfollow (`unfollowNow`).
-                    if fromStory { dismiss() }
-                }
+                try await GroupInviteService.deleteGroup(cid: id)
             } catch {
-                await MainActor.run { deletingChannel = false; actionError = error.localizedDescription }
+                await MainActor.run {
+                    LeaveGroupUndo.shared.reopen(id)
+                    ToastNotice.show("The channel was not deleted. Try again.")
+                    deletingChannel = false
+                }
             }
         }
     }
@@ -1172,7 +1176,7 @@ struct GroupInfoView: View {
                         rowDivider
                     }
                     // Only the owner can permanently delete the whole group (for everyone).
-                    ProfileInfoRow(title: isChannel ? (deletingChannel ? "Deleting…" : "Delete Channel") : "Delete Group",
+                    ProfileInfoRow(title: isChannel ? "Delete Channel" : "Delete Group",
                                    icon: "trash", tint: Self.exitRed, chevron: false) {
                         // A channel: its own page with the password (owner 2026-10-29).
                         if isChannel { if !deletingChannel { showChannelDelete = true } } else { confirmDelete = true }
