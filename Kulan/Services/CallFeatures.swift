@@ -39,7 +39,8 @@ enum AppFeatures {
     /// The sticker panel's GIFs | Stickers switch and its GIF grid (owner 2026-10-19: "remove the GIF
     /// and Sticker tabs, keep only one sticker panel"; GIFs stay in the attach sheet, a GIF feature of
     /// his own comes later). Off = the panel is stickers only. The GIF grid code is kept.
-    static let stickerPanelGifs = false
+    /// Back on 2026-10-31 (owner): GIFs browse in the panel; Search opens the GIF sheet.
+    static let stickerPanelGifs = true
     /// Drag to grow / shrink the sticker panel (owner 2026-10-19, third report of "the same thing
     /// overlapping" the panel). Growing lifts the panel's card out of the keyboard into a window, and
     /// the keyboard's own backdrop stays drawn over it, so a lift left the panel looking doubled. Off

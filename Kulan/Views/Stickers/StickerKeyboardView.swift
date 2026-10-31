@@ -47,6 +47,8 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     var onCreate: () -> Void = {}
     /// A GIF tapped in the panel's own GIFs tab.
     var onSendGif: (GiphyService.Gif) -> Void = { _ in }
+    /// Search in the GIFs tab hands off to the host's GIF sheet when set.
+    var onOpenGifSearch: (() -> Void)?
     /// Host window and focus hand-offs for growing GIF search to full screen in place.
     var hostWindow: () -> UIWindow? = { nil }
     var onTouch: () -> Void = {}
@@ -227,7 +229,13 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             self?.onSendGif(g)
             self?.collapseExpansion()   // a send shrinks the grown panel, as the reference app's does
         }
-        gifGrid.onSearch = { [weak self] in self?.expandForGifSearch() }
+        // ⛔ SEARCH OPENS THE GIF SHEET (owner 2026-10-31): browsing stays in the panel like stickers;
+        // Search closes the panel and brings up the tall GIF sheet, and swiping that down just closes
+        // it, no keyboard forced back. The grow-in-place search stays for a host that sets no sheet.
+        gifGrid.onSearch = { [weak self] in
+            guard let self else { return }
+            if let open = self.onOpenGifSearch { open() } else { self.expandForGifSearch() }
+        }
         gifGrid.onCancelSearch = { [weak self] in self?.collapseGifSearch() }
         gifGrid.onSearchFieldEnded = { [weak self] in
             guard let self, self.searchingGifs else { return }

@@ -232,6 +232,8 @@ struct ThreadView: View {
     @State private var pollAwaitingDismiss: String?
     @State private var showFileImporter = false
     @State private var showGifPicker = false
+    /// The GIF sheet opens on its search field (the sticker panel's Search, owner 2026-10-31).
+    @State private var gifPickerSearching = false
     @State private var filePreview: PreviewFile?
     @State private var pdfDoc: PDFDocWrap?           // received PDF → custom PDFKit reader (Liquid Glass)
     @State private var showLibrary = false
@@ -1919,7 +1921,7 @@ struct ThreadView: View {
         // One picker, one presentation: its own full page, which is what it was before tonight and
         // what he asked to have back. Both doors — the composer's button and the attach panel's GIF
         // tile — hand the pick to `sendGif`.
-        .sheet(isPresented: $showGifPicker) {
+        .sheet(isPresented: $showGifPicker, onDismiss: { gifPickerSearching = false }) {
             // ⛔ THE PHONE'S SCHEME, NOT THE CHAT'S — owner, 2026-09-02: "the GIF bar is always
             // using dark mode, make it both".
             //
@@ -1941,7 +1943,8 @@ struct ThreadView: View {
                               showGifPicker = false
                           },
                           embedded: true,
-                          onBack: { showGifPicker = false })
+                          onBack: { showGifPicker = false },
+                          startSearching: gifPickerSearching)
                 .presentationDragIndicator(.visible)
                 .environment(\.colorScheme, scheme)
         }
@@ -9813,6 +9816,14 @@ struct ThreadView: View {
             } else {
                 showGifPicker = true
             }
+        }
+        // The sticker panel's GIF Search (owner 2026-10-31): the panel goes down with the field and
+        // the same GIF sheet comes up on its search. Closing it leaves the keyboard down.
+        a.gifSearch = {
+            if sendHeldBack(.sendStickers, .gifs) { return }
+            gifPickerSearching = true
+            inputFocused = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { showGifPicker = true }
         }
         // 2026-10-17 sticker keyboard: the panel sends in place (it stays up, as in the reference
         // app); the reply being written goes with the sticker and is then done.

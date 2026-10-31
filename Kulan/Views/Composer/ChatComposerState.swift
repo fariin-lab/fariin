@@ -141,6 +141,8 @@ struct ChatComposerActions {
     var barTouched: () -> Void = {}
     var attach: () -> Void = {}
     var gif: () -> Void = {}
+    /// The sticker panel's GIF Search: the same sheet as `gif`, opened on its search field.
+    var gifSearch: () -> Void = {}
     /// 2026-10-17 sticker keyboard: a sticker tapped in the panel, and its "Create Sticker" tile.
     /// The panel's GIFs tab still calls `gif` (today's picker).
     var sendSticker: (Sticker) -> Void = { _ in }

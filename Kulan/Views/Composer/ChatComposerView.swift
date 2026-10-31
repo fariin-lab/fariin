@@ -1765,6 +1765,7 @@ extension ChatComposerView: UITextViewDelegate {
             panel.onSend = { [weak self] s in self?.actions.sendSticker(s) }
             panel.onCreate = { [weak self] in self?.actions.createSticker() }
             panel.onSendGif = { [weak self] g in self?.actions.sendGif(g) }
+            panel.onOpenGifSearch = { [weak self] in self?.actions.gifSearch() }
             // GIF search grows this panel in place (owner 2026-10-18), no more hand-off to the picker.
             panel.hostWindow = { [weak self] in self?.window }
             panel.onTouch = { [weak self] in self?.actions.barTouched() }

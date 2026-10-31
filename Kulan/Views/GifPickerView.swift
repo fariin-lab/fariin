@@ -116,6 +116,9 @@ struct GifPickerView: View {
     var embedded: Bool = false
     var onBack: (() -> Void)? = nil
     var onWantsFullHeight: (() -> Void)? = nil
+    /// Opened from the sticker panel's GIF Search (owner 2026-10-31): the sheet comes up with the
+    /// search field already open and typing.
+    var startSearching = false
     @State private var searching = false
     /// Drives `NativeSearchField` (a UIKit field, so a plain flag rather than @FocusState).
     @State private var searchFocused = false
@@ -386,6 +389,11 @@ struct GifPickerView: View {
             }
         }
         .task { await loadFirst() }
+        .onAppear {
+            guard startSearching, !searching else { return }
+            searching = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { searchFocused = true }
+        }
     }
 
     /// The empty / offline / no-result pages, shared by both layouts.
