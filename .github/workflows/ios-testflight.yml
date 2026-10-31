@@ -74,7 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: CHANNELS LAUNCH.
+            THIS BUILD: SIGN-IN PAGES, SMOOTHER CHANNELS.
+            Sign-in: new look. The Fariin logo on top, light account cards with "Last used" on the one you used last, "+ Add account" on one line, and Create account / Log in as their own pages with a back arrow (the button sits at the bottom). The welcome screen has one short line instead of the age sentence.
+            Signing in and out: the screen fades to plain white (black in dark mode) with the turning ring, instead of words over the page.
+            Login: pulling the page down now closes the keyboard. Settings > Password: the cursor starts in Current password.
+            Channels: Follow turns straight into Leave / Mute in one smooth change (no blank page, no checkmark step, no 4-5-4 count). In Find Channels, Follow shows Following at the tap and the channel opens without the chat list flashing first.
+            New Channel: the photo-card intro; Next is quicker; Delete Channel closes it at once. The link check uses the ring: green tick when free, red cross when taken.
+            PLEASE TEST: sign out and back in; follow a channel from its page and from Find Channels; create and delete a test channel; type a channel link and watch the ring.
+
+            EARLIER: CHANNELS LAUNCH.
             Search: the empty search page starts with "Find Channels" (public channels to follow), and results have their own Channels section. Verified channels show right after an exact name match; the official one is marked "Official".
             Channels: tapping Follow no longer flashes a "Group · 0 Members" page; a plain loading page shows until the channel is ready.
             Chats: the dark band that appeared under the tab bar when opening a chat is gone.
