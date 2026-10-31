@@ -332,66 +332,215 @@ struct NewChannelView: View {
     }
 }
 
-/// New Channel's opening picture (owner 2026-10-29): what a channel looks like, drawn from our own
-/// parts. A channel's header, one post with lines for its words, its reactions and its views, on a
-/// soft blue card. Decorative: VoiceOver skips it, the three points under it say the same.
+/// New Channel's opening picture (owner 2026-10-29; 2026-10-30: "add fake photos, high end, not AI
+/// slop"). What a channel looks like, all drawn here, no image files: one post on the front card with
+/// a drawn sunset coast, its caption, reactions and views; two earlier posts fanned behind it (a
+/// night city, a mountain lake). Landscapes only, no people. Decorative: VoiceOver skips it.
 struct ChannelIntroPreview: View {
     private let blue = Color(hex: 0x2392FE)
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                ZStack {
-                    Circle().fill(LinearGradient(colors: [blue, blue.opacity(0.65)],
-                                                 startPoint: .topLeading, endPoint: .bottomTrailing))
-                    Image(systemName: "megaphone.fill").font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-                }
-                .frame(width: 36, height: 36)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Your channel").font(.subheadline.weight(.semibold))
-                    Text("12.4K followers").font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "bell").font(.system(size: 14, weight: .semibold)).foregroundStyle(.secondary)
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(LinearGradient(colors: [blue.opacity(0.35), blue.opacity(0.12)],
-                                         startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .frame(height: 74)
-                    .overlay(Image(systemName: "photo").font(.system(size: 22)).foregroundStyle(blue.opacity(0.7)))
-                line(0.92); line(0.7)
-                HStack(spacing: 6) {
-                    chip("👍 248"); chip("❤️ 96")
-                    Spacer(minLength: 0)
-                    Image(systemName: "eye").font(.system(size: 11))
-                    Text("9.1K").font(.caption2.monospacedDigit())
-                }
-                .foregroundStyle(.secondary)
-            }
-            .padding(10)
-            .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        ZStack {
+            photoCard { NightCityScene() }
+                .rotationEffect(.degrees(-11)).offset(x: -78, y: -6)
+            photoCard { LakeScene() }
+                .rotationEffect(.degrees(10)).offset(x: 80, y: 4)
+            post
         }
-        .padding(14)
-        .frame(maxWidth: 300)
-        .background(blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(blue.opacity(0.15), lineWidth: 1))
-        .rotationEffect(.degrees(-2))
-        .shadow(color: blue.opacity(0.18), radius: 18, y: 8)
+        .frame(height: 300)
+        .frame(maxWidth: .infinity)
         .accessibilityHidden(true)
     }
 
-    private func line(_ fraction: CGFloat) -> some View {
-        GeometryReader { g in
-            Capsule().fill(Color(.tertiarySystemFill)).frame(width: g.size.width * fraction, height: 8)
+    /// An earlier post peeking out behind: just its photo, in a white frame.
+    private func photoCard<S: View>(@ViewBuilder _ scene: () -> S) -> some View {
+        scene()
+            .frame(width: 150, height: 190)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(5)
+            .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
+    }
+
+    private var post: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 9) {
+                ZStack {
+                    SquircleShape().fill(LinearGradient(colors: [blue, Color(hex: 0x6C5CE7)],
+                                                         startPoint: .topLeading, endPoint: .bottomTrailing))
+                    Image(systemName: "megaphone.fill").font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 30, height: 30)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Your channel").font(.footnote.weight(.semibold))
+                    Text("12.4K followers").font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            SunsetScene()
+                .frame(height: 118)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            Text("Golden hour on the coast tonight")
+                .font(.footnote).lineLimit(1)
+            HStack(spacing: 6) {
+                chip("👍 248"); chip("❤️ 96")
+                Spacer(minLength: 0)
+                Image(systemName: "eye").font(.system(size: 10))
+                Text("9.1K").font(.caption2.monospacedDigit())
+            }
+            .foregroundStyle(.secondary)
         }
-        .frame(height: 8)
+        .padding(11)
+        .frame(width: 214)
+        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.primary.opacity(0.06), lineWidth: 1))
+        .shadow(color: blue.opacity(0.22), radius: 22, y: 10)
+        .rotationEffect(.degrees(-1.5))
     }
 
     private func chip(_ s: String) -> some View {
         Text(s).font(.caption2.weight(.semibold))
-            .padding(.horizontal, 8).padding(.vertical, 4)
+            .padding(.horizontal, 7).padding(.vertical, 3)
             .background(Capsule().fill(Color(.tertiarySystemFill)))
+    }
+}
+
+/// A ridge line across a scene: `points` are (x, y) in 0...1 of the box, filled down to the bottom.
+private struct Ridge: Shape {
+    let points: [CGPoint]
+    func path(in r: CGRect) -> Path {
+        func at(_ q: CGPoint) -> CGPoint { CGPoint(x: r.minX + q.x * r.width, y: r.minY + q.y * r.height) }
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX, y: r.maxY))
+        guard let first = points.first else { return p }
+        p.addLine(to: at(first))
+        for k in 1..<points.count {
+            let a = at(points[k - 1]), b = at(points[k])
+            p.addQuadCurve(to: CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2), control: a)
+        }
+        if let last = points.last { p.addLine(to: at(last)) }
+        p.addLine(to: CGPoint(x: r.maxX, y: r.maxY))
+        p.closeSubpath()
+        return p
+    }
+}
+
+private func ridgePoints(_ a: [(CGFloat, CGFloat)]) -> [CGPoint] { a.map { CGPoint(x: $0.0, y: $0.1) } }
+
+/// Sun low over the sea, headlands either side, the sun's path on the water.
+private struct SunsetScene: View {
+    var body: some View {
+        GeometryReader { g in
+            let w = g.size.width, h = g.size.height
+            ZStack {
+                LinearGradient(colors: [Color(hex: 0x3B2A6B), Color(hex: 0xC8507A), Color(hex: 0xF6A35B), Color(hex: 0xFFD89A)],
+                               startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.64))
+                Circle().fill(RadialGradient(colors: [Color(hex: 0xFFF3C4).opacity(0.85), .clear],
+                                             center: .center, startRadius: 0, endRadius: h * 0.55))
+                    .frame(width: h * 1.1, height: h * 1.1).position(x: w * 0.6, y: h * 0.62)
+                Circle().fill(Color(hex: 0xFFF1C9)).frame(width: h * 0.26, height: h * 0.26)
+                    .position(x: w * 0.6, y: h * 0.6)
+                // the sea, from the horizon down
+                Rectangle().fill(LinearGradient(colors: [Color(hex: 0xE58A6A), Color(hex: 0x5A3D7A), Color(hex: 0x2A2350)],
+                                                startPoint: .top, endPoint: .bottom))
+                    .frame(width: w, height: h * 0.36).position(x: w / 2, y: h * 0.82)
+                ForEach(0..<5, id: \.self) { k in
+                    Capsule().fill(Color(hex: 0xFFE3A8).opacity(0.75 - Double(k) * 0.12))
+                        .frame(width: h * (0.24 - CGFloat(k) * 0.03), height: 2)
+                        .position(x: w * 0.6, y: h * (0.69 + CGFloat(k) * 0.055))
+                }
+                Ridge(points: ridgePoints([(0, 0.5), (0.12, 0.44), (0.26, 0.56), (0.36, 0.65), (0.42, 0.66)]))
+                    .fill(Color(hex: 0x2B1E45))
+                    .frame(width: w * 0.42, height: h).position(x: w * 0.21, y: h / 2)
+                Ridge(points: ridgePoints([(0, 0.66), (0.4, 0.56), (0.8, 0.48), (1, 0.5)]))
+                    .fill(Color(hex: 0x33244F))
+                    .frame(width: w * 0.22, height: h).position(x: w * 0.89, y: h / 2)
+            }
+        }
+    }
+}
+
+/// Towers at night with lit windows, stars and a moon.
+private struct NightCityScene: View {
+    private let towers: [(x: CGFloat, w: CGFloat, top: CGFloat)] =
+        [(0.0, 0.2, 0.5), (0.17, 0.16, 0.34), (0.32, 0.2, 0.58), (0.5, 0.15, 0.26), (0.63, 0.2, 0.46), (0.81, 0.19, 0.38)]
+
+    var body: some View {
+        GeometryReader { g in
+            let w = g.size.width, h = g.size.height
+            ZStack(alignment: .topLeading) {
+                LinearGradient(colors: [Color(hex: 0x0B1330), Color(hex: 0x23306B), Color(hex: 0x6B4E9B)],
+                               startPoint: .top, endPoint: .bottom)
+                ForEach(0..<14, id: \.self) { k in
+                    Circle().fill(Color.white.opacity(0.4 + Double(k % 3) * 0.2))
+                        .frame(width: 1.6 + CGFloat(k % 2), height: 1.6 + CGFloat(k % 2))
+                        .offset(x: CGFloat((k * 37) % 100) / 100 * w, y: CGFloat((k * 23) % 30) / 100 * h + 6)
+                }
+                Circle().fill(Color(hex: 0xF3EEDB)).frame(width: w * 0.16, height: w * 0.16)
+                    .shadow(color: Color(hex: 0xF3EEDB).opacity(0.7), radius: 10)
+                    .offset(x: w * 0.7, y: h * 0.1)
+                ForEach(0..<towers.count, id: \.self) { k in
+                    tower(seed: k)
+                        .frame(width: towers[k].w * w, height: (1 - towers[k].top) * h)
+                        .offset(x: towers[k].x * w, y: towers[k].top * h)
+                }
+            }
+        }
+    }
+
+    private func tower(seed: Int) -> some View {
+        ZStack(alignment: .top) {
+            Rectangle().fill(LinearGradient(colors: [Color(hex: 0x1C2350), Color(hex: 0x0E1230)],
+                                            startPoint: .top, endPoint: .bottom))
+            VStack(spacing: 5) {
+                ForEach(0..<14, id: \.self) { r in
+                    HStack(spacing: 4) {
+                        ForEach(0..<3, id: \.self) { c in
+                            RoundedRectangle(cornerRadius: 0.5)
+                                .fill((r * 7 + c * 5 + seed * 3) % 4 != 0
+                                      ? Color(hex: 0xFFD27A).opacity(0.85) : Color.white.opacity(0.06))
+                                .frame(height: 4)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 4).padding(.top, 6)
+        }
+        .clipped()
+    }
+}
+
+/// Snow peaks over a still lake, their faded reflection, and a dark tree line.
+private struct LakeScene: View {
+    private let peaks = ridgePoints([(0, 0.52), (0.18, 0.3), (0.32, 0.42), (0.52, 0.16), (0.7, 0.4), (0.86, 0.3), (1, 0.46)])
+
+    var body: some View {
+        GeometryReader { g in
+            let w = g.size.width, h = g.size.height
+            ZStack {
+                LinearGradient(colors: [Color(hex: 0x6FB7F2), Color(hex: 0xBFE3FA), Color(hex: 0xEAF6FD)],
+                               startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.6))
+                Ridge(points: peaks)
+                    .fill(LinearGradient(colors: [.white, Color(hex: 0x9CB3C9), Color(hex: 0x5E7891)],
+                                         startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.6)))
+                Ridge(points: ridgePoints([(0, 0.6), (0.25, 0.55), (0.5, 0.6), (0.75, 0.54), (1, 0.58)]))
+                    .fill(Color(hex: 0x2F5D50))
+                // the lake below the tree line
+                Rectangle().fill(LinearGradient(colors: [Color(hex: 0x4F8FBF), Color(hex: 0x24506F)],
+                                                startPoint: .top, endPoint: .bottom))
+                    .frame(width: w, height: h * 0.36).position(x: w / 2, y: h * 0.82)
+                Ridge(points: peaks)
+                    .fill(Color.white.opacity(0.16))
+                    .frame(width: w, height: h * 0.6)
+                    .scaleEffect(x: 1, y: -1)
+                    .position(x: w / 2, y: h * 0.64 + h * 0.3)
+                    .mask(Rectangle().frame(width: w, height: h * 0.36).position(x: w / 2, y: h * 0.82))
+                ForEach(0..<3, id: \.self) { k in
+                    Capsule().fill(Color.white.opacity(0.35)).frame(width: w * 0.3, height: 1.2)
+                        .position(x: w * (0.3 + CGFloat(k) * 0.2), y: h * (0.74 + CGFloat(k) * 0.07))
+                }
+            }
+        }
     }
 }
