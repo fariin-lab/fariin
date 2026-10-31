@@ -386,11 +386,14 @@ struct AuthMethodView: View {
             VStack(spacing: 0) {
                 Spacer()
                 if accountsFace {
-                    // ⛔ OWNER, 2026-09-27: the app's name on top like the doors page, no "or" under
-                    // the cards; "Sign up" below is enough.
-                    Text("Fariin")
-                        .font(.system(size: 22, weight: .semibold)).foregroundStyle(.primary)
-                        .padding(.bottom, 28)
+                    // ⛔ THE MARK, NOT THE WORD (owner 2026-10-31, comparing a large app's account
+                    // page: its icon says which app this is before anything is read). His black logo,
+                    // white when the phone is dark, as the log-in page wears it (`logoPage`).
+                    Image("LaunchLogo")
+                        .resizable().scaledToFit()
+                        .frame(width: 76, height: 76)
+                        .accessibilityLabel("Fariin")
+                        .padding(.bottom, 36)
                     VStack(spacing: 16) {
                         ForEach(saved) { savedAccountRow($0) }
                         addAnotherAccountRow
@@ -456,10 +459,33 @@ struct AuthMethodView: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 24)
+                // The saved accounts have their own Create account button at the foot instead.
+                .opacity(accountsFace ? 0 : 1)
+                .allowsHitTesting(!accountsFace)
+                .accessibilityHidden(accountsFace)
                 // (The shared spinner that sat above "Sign up" is gone, owner 2026-10-24: the button
                 // that was used spins instead, see `spinningDoor`.)
 
                 Spacer()
+                // ⛔ A REAL BUTTON TO MAKE AN ACCOUNT (owner 2026-10-31, comparing a large app's
+                // account page): under the saved accounts, "Don't have an account? Sign up" was a
+                // small line easy to miss. An outlined pill at the foot, in the action blue.
+                if accountsFace {
+                    Button {
+                        error = nil
+                        withAnimation(.easeInOut(duration: 0.2)) { mode = .create }
+                    } label: {
+                        Text("Create account")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(Color(hex: 0x2C6BED))
+                            .frame(maxWidth: .infinity).frame(height: 54)
+                            .overlay(Capsule().strokeBorder(Color(hex: 0x2C6BED), lineWidth: 1.5))
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(busy)
+                    .padding(.bottom, 12)
+                }
                 // Sign up only (owner, 2026-09-27): making an account is the moment consent matters,
                 // and the agreement screen already covered this install. On Log In it was clutter.
                 Text("By continuing, you agree to our [Terms of Service](https://fariin.com/terms) and [Privacy Policy](https://fariin.com/privacy).")
@@ -556,7 +582,16 @@ struct AuthMethodView: View {
                                 .accessibilityLabel("Verified")
                         }
                     }
-                    Text("@\(info.handle)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    // The account used last says so (owner 2026-10-31: each card should tell you
+                    // something, as the large apps' do), the others keep their @name.
+                    if saved.count > 1 && saved.first?.uid == info.uid {
+                        HStack(spacing: 6) {
+                            Circle().fill(Color(hex: 0x2C6BED)).frame(width: 7, height: 7)
+                            Text("Last used").font(.subheadline).foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text("@\(info.handle)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 8)
                 // ⛔ THE SPINNER WHERE THE TAP WAS — owner 2026-10-13: it sat squeezed between "Add
@@ -568,7 +603,10 @@ struct AuthMethodView: View {
                 }
             }
             .padding(.horizontal, 16).frame(height: 72)
-            .background(AuthPalette.raised, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            // Light card, soft edge (owner 2026-10-31): the grey fill read heavy.
+            .background(AuthPalette.page, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
             .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -591,45 +629,21 @@ struct AuthMethodView: View {
         NavigationLink {
             AuthMethodView(mode: .login, showDoors: true, onAuthed: onAuthed)
         } label: {
-            HStack(spacing: 14) {
-                Image(systemName: "plus")
-                    .font(.system(size: 20, weight: .medium))
-                    .frame(width: 48)
-                Text("Add another account")
-                    .font(.body.weight(.medium))
-                    .lineLimit(1)
-                    // The words win the width: the badges are what gives way (owner, 2026-09-27:
-                    // the badges wrapped this line, which is why they once came out).
-                    .layoutPriority(1)
-                Spacer(minLength: 8)
-                // ⛔ THE THREE DOORS, BACK AND SMALLER — owner, 2026-10-03, with a reference: Google,
-                // Apple and email as overlapping circles at the end of the row, saying what the
-                // tap leads to without a word.
-                HStack(spacing: -7) {
-                    doorBadge { Image("google-g").resizable().scaledToFit().frame(width: 14, height: 14) }
-                    doorBadge { Image(systemName: "apple.logo").font(.system(size: 13, weight: .medium)) }
-                    doorBadge { Image(systemName: "envelope").font(.system(size: 11, weight: .medium)) }
-                }
-                .accessibilityHidden(true)
+            // ⛔ ONE SHORT LINE, AN ACTION NOT AN ACCOUNT (owner 2026-10-31, comparing a large app's
+            // page): "Add another ac…" was cut off by the three door badges, and with an outline it
+            // looked like one more account. Now a soft grey pill, centred, the badges gone (the
+            // next page shows the doors anyway).
+            HStack(spacing: 8) {
+                Image(systemName: "plus").font(.system(size: 17, weight: .semibold))
+                Text("Add account").font(.body.weight(.semibold)).lineLimit(1)
             }
             .foregroundStyle(.primary)
-            .padding(.horizontal, 16).frame(height: 72)
-            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.14), lineWidth: 1))
-            .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .frame(maxWidth: .infinity).frame(height: 56)
+            .background(AuthPalette.raised, in: Capsule())
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .disabled(busy)
-    }
-
-    /// One small round badge in the "Add another account" row: the page's own background with a
-    /// hairline, so the three overlap cleanly on any appearance.
-    private func doorBadge<Icon: View>(@ViewBuilder _ icon: () -> Icon) -> some View {
-        icon()
-            .foregroundStyle(.primary)
-            .frame(width: 28, height: 28)
-            .background(Color(.systemBackground), in: Circle())
-            .overlay(Circle().strokeBorder(Color.primary.opacity(0.14), lineWidth: 1))
     }
 
     /// ⛔ ONE TAP, NO QUESTIONS — owner, 2026-09-25. The account's device key first
