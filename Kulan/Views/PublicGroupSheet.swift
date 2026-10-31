@@ -480,7 +480,10 @@ struct PublicJoinBar: View {
                     // to bring the group in; the member's chat reads its own group document, so it
                     // does not need the list. `joining` goes back too, in case this bar outlives it.
                     joining = false
-                    withAnimation(.easeInOut(duration: 0.25)) { guest.joined = true }
+                    // In one frame, not a cross-fade (owner 2026-10-31, frame by frame: the visitor's
+                    // and the follower's chats showed through each other for a quarter second).
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { guest.joined = true }
                     return
                 case .requested:
                     requestSent = true

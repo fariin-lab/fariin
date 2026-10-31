@@ -1143,7 +1143,15 @@ enum ChannelCountBias {
     nonisolated(unsafe) private static var taps: [String: Int] = [:]   // guarded by `lock`
     static func noteKnown(_ cid: String, followers: Int) {
         guard !cid.isEmpty else { return }
-        lock.withLock { known[cid] = max(0, followers); taps[cid] = 0 }
+        // ⛔ A PREVIEW THAT DOES NOT HAVE MY TAP YET KEEPS IT (owner 2026-10-31, his recording: Follow,
+        // 3 → 4 → 3 → 4). The preview fetched again right after the tap carried the same number as
+        // before it, and clearing `taps` here took my +1 away until the follow's own answer put it
+        // back. Only a number that moved means the server has counted me.
+        lock.withLock {
+            let prev = known[cid]
+            if prev == nil || prev != max(0, followers) { taps[cid] = 0 }
+            known[cid] = max(0, followers)
+        }
         ChannelCountTick.bump()
     }
     /// What a visitor page shows: the newest known followers (plus my change still on its way) and
