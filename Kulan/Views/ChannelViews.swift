@@ -217,24 +217,29 @@ struct DiscoverChannelsView: View {
         Button {
             guard !mine, !busy.contains(c.cid) else { return }
             busy.insert(c.cid)
+            // ⛔ FOLLOWING AT THE TAP (owner 2026-10-31: the button shrank to "…" and said nothing).
+            // As the in-chat Follow bar does: the answer comes behind, and only a request or a
+            // refusal takes it back. Held until the follow list catches up (owner 2026-10-30: it
+            // flickered back to Follow between the answer and the listener).
+            justFollowed.insert(c.cid)
+            Haptics.notify(.success)
             Task {
                 do {
                     let status = try await ChannelService.follow(cid: c.cid)
                     if status == "requested" {
-                        // Only a request (owner 2026-10-30): said, and the button stays Follow.
+                        // Only a request (owner 2026-10-30): said, and the button goes back to Follow.
+                        justFollowed.remove(c.cid)
                         ToastNotice.show(ChannelFollowerBar.requestSent)
-                    } else {
-                        // Held as Following until the follow list catches up (owner 2026-10-30: it
-                        // flickered back to Follow between the answer and the listener).
-                        justFollowed.insert(c.cid)
-                        Haptics.notify(.success)
                     }
                 }
-                catch { ToastNotice.show(error.localizedDescription) }
+                catch {
+                    justFollowed.remove(c.cid)
+                    ToastNotice.show(error.localizedDescription)
+                }
                 busy.remove(c.cid)
             }
         } label: {
-            Text(mine ? "Following" : (busy.contains(c.cid) ? "…" : "Follow"))
+            Text(mine ? "Following" : "Follow")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(mine ? Color.secondary : Color.white)
                 .padding(.horizontal, 14).frame(height: 32)
