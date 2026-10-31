@@ -3964,7 +3964,8 @@ struct ArchivedChatsView: View {
                 if !hasAnyArchived && archivedStories.isEmpty && repo.loadingWholeList {
                     // 2026-09-24 feature-audit: older chats are still arriving and may hold archived
                     // ones; "Nothing archived" is only true once they have.
-                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Chat rows on their way, as the chat list shows them (owner 2026-10-31).
+                    ChatListSkeleton()
                 } else if !hasAnyArchived && archivedStories.isEmpty {
                     // ⛔ THE MESSAGE REQUESTS EMPTY PAGE'S TYPE — owner 2026-10-16: "just update the
                     // font size, exactly like the message requests page". Title 17 semibold, line 15

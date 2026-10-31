@@ -191,7 +191,10 @@ struct DiscoverChannelsView: View {
     private var content: some View {
             List {
                 if loading && rows.isEmpty {
-                    HStack { Spacer(); ProgressView(); Spacer() }.listRowBackground(Color.clear)
+                    // Rows shaped like the channels on their way, not a spinner (owner 2026-10-31).
+                    ForEach(0..<8, id: \.self) { i in
+                        DiscoverRowSkeleton(nameWidth: [130, 100, 160, 115][i % 4])
+                    }
                 } else if failed && rows.isEmpty {
                     Text("Couldn't load channels. Check your connection and try again.")
                         .foregroundStyle(.secondary).listRowBackground(Color.clear)

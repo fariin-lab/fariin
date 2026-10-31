@@ -16,6 +16,7 @@ struct KulanApp: App {
                 // with no tint of its own took it. One rule here instead of one per screen.
                 .toggleStyle(SystemGreenSwitch())
                 .tint(.primary)   // monochrome: no iOS system-blue anywhere
+                .progressViewStyle(FariinSpinnerStyle())   // one spinner everywhere (owner 2026-10-31)
                 .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? nil)
                 .onOpenURL { url in handleDeepLink(url) }
                 // Someone still on one of the removed tri-arrow icons has a name iOS can no longer

@@ -341,7 +341,8 @@ struct JoinGroupSheet: View {
                 }
             }
         } else {
-            ProgressView().frame(height: 220)
+            // The card's own shape while it loads (owner 2026-10-31).
+            GroupCardSkeleton()
         }
     }
 

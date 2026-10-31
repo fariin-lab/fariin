@@ -66,7 +66,8 @@ struct OfficialChatView: View {
             // answered, then the chat list's own empty line. Both used to be the same blank screen.
             .overlay {
                 if !store.hasLoaded {
-                    ProgressView()
+                    // Bubbles, the way every chat opens (owner 2026-10-31), not a spinner.
+                    ThreadSkeleton()
                 } else if store.visible.isEmpty {
                     Text("No messages yet").font(.subheadline).foregroundStyle(.secondary)
                 }

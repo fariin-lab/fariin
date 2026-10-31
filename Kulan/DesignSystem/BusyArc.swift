@@ -48,3 +48,41 @@ struct BusyOverlay: View {
         .transition(.opacity)
     }
 }
+
+/// ⛔ ONE SPINNER IN THE WHOLE APP — owner 2026-10-31: about ninety screens drew the system's
+/// ticking spinner beside our arc. Set once at the root (`KulanApp`), this turns every plain
+/// `ProgressView()` into the arc, in the screen's tint (black / white, or the white a screen over a
+/// photo asks for with `.tint(.white)`), sized by `controlSize`. A bar with a value keeps the bar.
+struct FariinSpinnerStyle: ProgressViewStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        if configuration.fractionCompleted != nil {
+            ProgressView(configuration).progressViewStyle(.linear)
+        } else {
+            FariinSpinner()
+        }
+    }
+}
+
+private struct FariinSpinner: View {
+    @Environment(\.controlSize) private var controlSize
+    private var size: CGFloat {
+        switch controlSize {
+        case .mini: return 12
+        case .small: return 16
+        case .large, .extraLarge: return 30
+        default: return 20
+        }
+    }
+    var body: some View {
+        TimelineView(.animation) { t in
+            let turn = t.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.1) / 1.1
+            Circle()
+                .trim(from: 0, to: 0.78)
+                .stroke(.tint, style: StrokeStyle(lineWidth: max(2, size / 8), lineCap: .round))
+                .frame(width: size, height: size)
+                .rotationEffect(.degrees(turn * 360))
+        }
+        .frame(width: size + 4, height: size + 4)
+        .accessibilityLabel("Loading")
+    }
+}

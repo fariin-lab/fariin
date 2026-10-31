@@ -236,3 +236,44 @@ final class SkeletonShimmerView: UIView {
         band.colors = [clear, hi, clear]
     }
 }
+
+// MARK: - Find Channels (mirrors DiscoverChannelsView.row: 48 squircle + name + followers + Follow)
+
+/// Owner 2026-10-31: the list showed one spinner on an empty page while it loaded.
+struct DiscoverRowSkeleton: View {
+    var nameWidth: CGFloat = 130
+    var body: some View {
+        HStack(spacing: 12) {
+            SkeletonBlock(width: 48, height: 48, radius: 14)
+            VStack(alignment: .leading, spacing: 8) {
+                SkeletonBlock(width: nameWidth, height: 13)
+                SkeletonBlock(width: 80, height: 10)
+            }
+            Spacer(minLength: 8)
+            SkeletonBlock(width: 76, height: 32, radius: 16)
+        }
+        .padding(.vertical, 4)
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - A group or channel's card before joining (mirrors groupBody: 100 photo, name, count)
+
+/// Same height as the card it stands in for, so the Join button below does not move when it lands.
+struct GroupCardSkeleton: View {
+    var squircle = false
+    var body: some View {
+        VStack(spacing: 0) {
+            Group {
+                if squircle { SkeletonBlock(width: 100, height: 100, radius: 28) } else { SkeletonCircle(size: 100) }
+            }
+            .padding(.top, 2)
+            SkeletonBlock(width: 170, height: 20, radius: 8).padding(.top, 18)
+            SkeletonBlock(width: 100, height: 12).padding(.top, 10)
+            SkeletonBlock(width: 240, height: 12).padding(.top, 20)
+            SkeletonBlock(width: 190, height: 12).padding(.top, 8)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityHidden(true)
+    }
+}
