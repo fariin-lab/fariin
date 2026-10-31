@@ -384,7 +384,11 @@ enum MessageRowLayout {
         // pass that slides the circle out, and gone on the next. Keying it on `selecting` alone is
         // what left the row no space to animate out through.
         let selectionUI = m.selecting || m.wasSelecting
-        let shift = selectionUI ? selectionShift : 0
+        // ⛔ THE CONTENT GOES BACK WITH THE CIRCLE (owner 2026-10-31: on X the circles slid out, then
+        // the messages jumped back in one step). The circle keeps its lane for the leaving pass, but
+        // the content's shift follows `selecting` alone, so the leaving pass, which the cell animates,
+        // slides the messages back while the circle slides out, and the next pass changes nothing.
+        let shift = m.selecting ? selectionShift : 0
         // ⚠️ NO TRAILING INSET. Theirs puts a FLEXIBLE spacer between the selection column and an
         // outgoing bubble, so the bubble's right edge does not move at all when selection opens —
         // only its cap shrinks. Ours took 4pt off the trailing side as well, which walked every
