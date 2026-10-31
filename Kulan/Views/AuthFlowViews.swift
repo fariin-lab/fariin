@@ -399,9 +399,18 @@ struct AuthMethodView: View {
                         addAnotherAccountRow
                     }
                 } else {
-                Text("Fariin")
-                    .font(.system(size: 22, weight: .semibold)).foregroundStyle(.primary)
-                    .padding(.bottom, 28)
+                // ⛔ THE MARK AND WHAT THIS PAGE IS FOR (owner 2026-10-31: "make this page high end").
+                // The saved-accounts page wears the mark; this one does too, with a title that says
+                // which way you are going instead of the bare app name.
+                Image("LaunchLogo")
+                    .resizable().scaledToFit()
+                    .frame(width: 76, height: 76)
+                    .accessibilityHidden(true)
+                Text(mode == .create ? "Create your account" : "Log in to Fariin")
+                    .font(.system(size: 28, weight: .bold)).foregroundStyle(.primary)
+                    .padding(.top, 22)
+                    .padding(.bottom, 36)
+                    .contentTransition(.opacity)
 
                 VStack(spacing: 14) {
                     appleButton
@@ -487,18 +496,8 @@ struct AuthMethodView: View {
                     .disabled(busy)
                     .padding(.bottom, 12)
                 }
-                // Sign up only (owner, 2026-09-27): making an account is the moment consent matters,
-                // and the agreement screen already covered this install. On Log In it was clutter.
-                Text("By continuing, you agree to our [Terms of Service](https://fariin.com/terms) and [Privacy Policy](https://fariin.com/privacy).")
-                    .font(.footnote).foregroundStyle(.secondary)
-                    .tint(.primary)
-                    .environment(\.openURL, OpenURLAction { url in WebLink.open(url); return .handled })
-                    .multilineTextAlignment(.center)
-                    .padding(.bottom, 8)
-                    // Faded, not removed, so flipping modes does not slide the centred block.
-                    .opacity(mode == .create ? 1 : 0)
-                    .allowsHitTesting(mode == .create)
-                    .accessibilityHidden(mode != .create)
+                // (The terms line that sat here is gone, owner 2026-10-31: the welcome screen's
+                // "By continuing, you agree…" already covers it, once is enough.)
             }
             .padding(.horizontal, 24)
         }
