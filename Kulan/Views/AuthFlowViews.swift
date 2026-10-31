@@ -384,7 +384,8 @@ struct AuthMethodView: View {
         ZStack {
             AuthPalette.page.ignoresSafeArea()
             VStack(spacing: 0) {
-                Spacer()
+                // On the doors the top gap is held short, so the mark sits high (see the split below).
+                Spacer().frame(maxHeight: accountsFace ? .infinity : 96)
                 if accountsFace {
                     // ⛔ THE MARK, NOT THE WORD (owner 2026-10-31, comparing a large app's account
                     // page: its icon says which app this is before anything is read). His black logo,
@@ -409,8 +410,10 @@ struct AuthMethodView: View {
                 Text(mode == .create ? "Create your account" : "Log in to Fariin")
                     .font(.system(size: 28, weight: .bold)).foregroundStyle(.primary)
                     .padding(.top, 22)
-                    .padding(.bottom, 36)
                     .contentTransition(.opacity)
+                // The room splits here (owner 2026-10-31, the empty top ringed: "we have big room"):
+                // the mark and title ride up, the doors sit low where the thumb is.
+                Spacer(minLength: 36)
 
                 VStack(spacing: 14) {
                     appleButton
@@ -468,23 +471,27 @@ struct AuthMethodView: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 24)
-                // The saved accounts have their own Create account button at the foot instead.
-                .opacity(accountsFace ? 0 : 1)
-                .allowsHitTesting(!accountsFace)
-                .accessibilityHidden(accountsFace)
+                // Replaced by the outlined button at the foot on every face (owner 2026-10-31: "push
+                // it down, like the Create account option"). Kept, hidden, so nothing shifts.
+                .opacity(0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
                 // (The shared spinner that sat above "Sign up" is gone, owner 2026-10-24: the button
                 // that was used spins instead, see `spinningDoor`.)
 
-                Spacer()
+                Spacer().frame(maxHeight: accountsFace ? .infinity : 24)
                 // ⛔ A REAL BUTTON TO MAKE AN ACCOUNT (owner 2026-10-31, comparing a large app's
                 // account page): under the saved accounts, "Don't have an account? Sign up" was a
                 // small line easy to miss. An outlined pill at the foot.
-                if accountsFace {
+                do {
+                    // The other way in, on every face: Create account under Log in, Log in under
+                    // Create account.
+                    let toCreate = accountsFace || mode == .login
                     Button {
                         error = nil
-                        withAnimation(.easeInOut(duration: 0.2)) { mode = .create }
+                        withAnimation(.easeInOut(duration: 0.2)) { mode = toCreate ? .create : .login }
                     } label: {
-                        Text("Create account")
+                        Text(toCreate ? "Create account" : "Log in")
                             .font(.body.weight(.semibold))
                             // Black on a light phone, white on a dark one (owner 2026-10-31).
                             .foregroundStyle(.primary)
