@@ -85,7 +85,7 @@ struct DisappearingMessagesView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { onApply(selected); dismiss() } label: {
-                        Image(systemName: "checkmark").font(.headline).foregroundStyle(Color.accentColor)
+                        Image(systemName: "checkmark").font(.headline).foregroundStyle(Color.fariinAction)
                     }
                 }
             }
@@ -100,7 +100,7 @@ struct DisappearingMessagesView: View {
     // row's text to the right.
     @ViewBuilder private func checkSlot(_ on: Bool) -> some View {
         ZStack {
-            if on { Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(Color.accentColor) }
+            if on { Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(Color.fariinAction) }
         }
         .frame(width: 34, alignment: .leading)
     }
@@ -198,7 +198,7 @@ private struct CustomTimePicker: View {
                     // and plain `Button("Set")` inherits the sheet's, which came out black.
                     Button("Set") { onDone(value * unit.mult); dismiss() }
                         .fontWeight(.semibold)
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(Color.fariinAction)
                 }
             }
             .presentationDetents([.height(320)])

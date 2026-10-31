@@ -143,7 +143,7 @@ struct AutoDownloadPage: View {
                             Spacer()
                             if selection == p {
                                 Image(systemName: "checkmark").fontWeight(.semibold)
-                                    .foregroundStyle(Color.accentColor)
+                                    .foregroundStyle(Color.fariinAction)
                             }
                         }
                         .contentShape(Rectangle())
@@ -176,7 +176,7 @@ struct SentMediaQualityPage: View {
                             Spacer()
                             if quality == tag {
                                 Image(systemName: "checkmark").fontWeight(.semibold)
-                                    .foregroundStyle(Color.accentColor)
+                                    .foregroundStyle(Color.fariinAction)
                             }
                         }
                         .contentShape(Rectangle())
@@ -224,7 +224,7 @@ struct UseLessDataPage: View {
                             Spacer()
                             if lessData == v {
                                 Image(systemName: "checkmark").fontWeight(.semibold)
-                                    .foregroundStyle(Color.accentColor)
+                                    .foregroundStyle(Color.fariinAction)
                             }
                         }
                         .contentShape(Rectangle())

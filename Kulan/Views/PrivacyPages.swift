@@ -298,7 +298,7 @@ struct ProfileLayoutPage: View {
                             Spacer()
                             if layout == style.rawValue {
                                 Image(systemName: "checkmark").fontWeight(.semibold)
-                                    .foregroundStyle(Color.accentColor)
+                                    .foregroundStyle(Color.fariinAction)
                             }
                         }
                         .contentShape(Rectangle())
@@ -317,10 +317,10 @@ struct ProfileLayoutPage: View {
     private func sketch(_ style: ProfileLayoutStyle) -> some View {
         VStack(spacing: 3) {
             if style == .modern {
-                RoundedRectangle(cornerRadius: 3).fill(Color.accentColor.opacity(0.75))
+                RoundedRectangle(cornerRadius: 3).fill(Color.fariinAction.opacity(0.75))
                     .frame(width: 34, height: 24)
             } else {
-                Circle().fill(Color.accentColor.opacity(0.75)).frame(width: 15, height: 15)
+                Circle().fill(Color.fariinAction.opacity(0.75)).frame(width: 15, height: 15)
                     .frame(height: 24)
             }
             Capsule().fill(Color.secondary.opacity(0.45)).frame(width: 22, height: 3)

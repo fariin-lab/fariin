@@ -249,7 +249,7 @@ struct NotificationSoundView: View {
                             // The old version spelled the legacy-"default" case out by hand here.
                             if NotificationSound.resolveMessageTone(soundName).id == s.id {
                                 Image(systemName: "checkmark").fontWeight(.semibold)
-                                    .foregroundStyle(Color.accentColor)
+                                    .foregroundStyle(Color.fariinAction)
                             }
                         }
                         .contentShape(Rectangle())

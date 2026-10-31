@@ -1066,7 +1066,7 @@ struct MyFriendsPrivacyView: View {
                 }
                 Spacer()
                 if a.mode == m && m != .all {
-                    Text("Edit").font(.subheadline).foregroundStyle(Color.accentColor)
+                    Text("Edit").font(.subheadline).foregroundStyle(Color.fariinAction)
                 }
             }
             .contentShape(Rectangle())

@@ -61,6 +61,8 @@ struct SendContactSheet: View {
             // Same two exclusions as the forward picker (audit, 2026-09-24): no blocked person, and
             // no demo chat, whose id is not a real conversation.
             .filter { !$0.isBlockedByMe(me) && !DemoMode.isDemoConversation($0.id) }
+            // Only where I can post (owner 2026-10-31), the forward picker's rule.
+            .filter { $0.canPostHere(me) }
             // 2026-09-24 decision D10: no incoming request I have not answered; sending the link
             // into it would accept it silently.
             .filter { MessageRequests.stance($0, myUid: me) != .incoming }
@@ -286,16 +288,16 @@ struct SendContactSheet: View {
                     .overlay {
                         // The ring is the selection, not a tick floating over a face.
                         if c.isChannel {
-                            SquircleShape().strokeBorder(picked ? Color.accentColor : .clear, lineWidth: 3)
+                            SquircleShape().strokeBorder(picked ? Color.fariinAction : .clear, lineWidth: 3)
                         } else {
-                            Circle().strokeBorder(picked ? Color.accentColor : .clear, lineWidth: 3)
+                            Circle().strokeBorder(picked ? Color.fariinAction : .clear, lineWidth: 3)
                         }
                     }
                 if picked {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 18))
                         .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white, Color.accentColor)
+                        .foregroundStyle(Color.onFariinAction, Color.fariinAction)
                         .offset(x: 2, y: 2)
                 }
             }
@@ -358,7 +360,7 @@ struct SendContactSheet: View {
                 // quieter of the two states; the text does not have to say it twice.
                 // Black on the light-mode Copy Link, white everywhere else — on the blue Send in
                 // both themes, and on the dark-mode wash his 2026-08-21 white-text rule was about.
-                .foregroundStyle(Color.white)
+                .foregroundStyle(Color.onFariinAction)
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
                 // ⛔ GREY WHILE IT COPIES, BLUE ONCE IT SENDS (owner 2026-08-22: "make it grey
@@ -378,8 +380,8 @@ struct SendContactSheet: View {
                 //
                 // Dark keeps the system's own wash, which reads perfectly well there and is what he
                 // signed off.
-                // Blue in both states now (owner 2026-10-20: "copy link button make blue").
-                .background(Color.accentColor, in: Capsule())
+                // The one action colour in both states (owner 2026-10-31: black, white at night).
+                .background(Color.fariinAction, in: Capsule())
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)

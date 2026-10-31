@@ -325,7 +325,7 @@ struct MediaGalleryView: View {
         // bar's own material and its glass buttons read; and the tint is what the back chevron
         // reads, which the profile pins to white so it survives its own bar's material flip.
         .toolbarColorScheme(pageScheme, for: .navigationBar)
-        .tint(Color.accentColor)
+        .tint(Color.fariinAction)
         .toolbar { toolbar }
         // ⛔ AFTER `.toolbar`, NOT BEFORE IT — owner, 2026-09-28, build 793: the title came back but
         // the back and ••• buttons were still dark discs with white glyphs. An environment value
@@ -934,7 +934,7 @@ struct MediaGalleryView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(url?.host ?? "Link").font(.system(size: 16, weight: .medium)).foregroundStyle(.primary)
                 Text(m.text).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
-                if let url { Text(url.absoluteString).font(.caption2).foregroundStyle(Color.accentColor).lineLimit(1) }
+                if let url { Text(url.absoluteString).font(.caption2).foregroundStyle(Color.fariinAction).lineLimit(1) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -978,8 +978,8 @@ struct MediaGalleryView: View {
         return HStack(spacing: 12) {
             if selecting { checkbox(selected) }
             Image(systemName: "doc.fill")
-                .font(.system(size: 18)).foregroundStyle(Color.accentColor)
-                .frame(width: 44, height: 44).background(Color.accentColor.opacity(0.12), in: Circle())
+                .font(.system(size: 18)).foregroundStyle(Color.fariinAction)
+                .frame(width: 44, height: 44).background(Color.fariinAction.opacity(0.12), in: Circle())
             VStack(alignment: .leading, spacing: 2) {
                 Text(m.fileName ?? "Document")
                     .font(.system(size: 16, weight: .medium)).foregroundStyle(.primary).lineLimit(1)

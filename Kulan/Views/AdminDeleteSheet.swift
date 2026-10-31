@@ -225,9 +225,9 @@ struct AdminDeleteSheet: View {
             }
             .safeAreaInset(edge: .bottom) {
                 Button(action: proceed) {
-                    Text("Proceed").font(.body.weight(.semibold)).foregroundStyle(.white)
+                    Text("Proceed").font(.body.weight(.semibold)).foregroundStyle(Color.onFariinAction)
                         .frame(maxWidth: .infinity).frame(height: 50)
-                        .background(Color.accentColor, in: Capsule())
+                        .background(Color.fariinAction, in: Capsule())
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -306,7 +306,7 @@ struct AdminDeleteSheet: View {
     private func tick(_ on: Bool, partial: Bool) -> some View {
         Image(systemName: on ? (partial ? "minus.circle.fill" : "checkmark.circle.fill") : "circle")
             .font(.title3)
-            .foregroundStyle(on ? Color.accentColor : Color.secondary)
+            .foregroundStyle(on ? Color.fariinAction : Color.secondary)
     }
 
     private var restrictSection: some View {

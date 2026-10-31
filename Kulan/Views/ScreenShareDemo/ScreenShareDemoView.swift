@@ -126,10 +126,10 @@ struct ScreenShareDemoView: View {
             Button { engine.start() } label: {
                 Text("Start Screen Share")
                     .font(.headline)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.onFariinAction)
                     .padding(.horizontal, 22)
                     .frame(height: 48)
-                    .background(Color.accentColor, in: Capsule())
+                    .background(Color.fariinAction, in: Capsule())
             }
         case .picking:
             Button { engine.stopSharing() } label: {

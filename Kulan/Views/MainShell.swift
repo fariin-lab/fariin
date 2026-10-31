@@ -3019,7 +3019,7 @@ struct ChatsView: View {
                         Text(leave.barKind == .deleteGroup ? "Group deleted."
                              : leave.barKind == .deleteChannel ? "Channel deleted." : "You left the group.")
                             .foregroundStyle(.primary)
-                        Text("Undo").fontWeight(.semibold).foregroundStyle(Color.accentColor)
+                        Text("Undo").fontWeight(.semibold).foregroundStyle(Color.fariinAction)
                     }
                     .font(.subheadline)
                     .padding(.horizontal, 18).padding(.vertical, 12)
@@ -3058,7 +3058,7 @@ struct ChatsView: View {
                 } label: {
                     HStack(spacing: 10) {
                         Text("Card hidden").foregroundStyle(.secondary)
-                        Text("Undo").fontWeight(.semibold).foregroundStyle(Color.accentColor)
+                        Text("Undo").fontWeight(.semibold).foregroundStyle(Color.fariinAction)
                     }
                     .font(.subheadline)
                     .padding(.horizontal, 18).padding(.vertical, 12)

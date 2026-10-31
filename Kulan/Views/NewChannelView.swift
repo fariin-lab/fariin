@@ -241,9 +241,9 @@ struct NewChannelView: View {
             if let avatarData, let ui = UIImage(data: avatarData) {
                 Image(uiImage: ui).resizable().scaledToFill()
             } else {
-                SquircleShape().fill(Color.accentColor.opacity(0.12))
+                SquircleShape().fill(Color.fariinAction.opacity(0.12))
                 Image("ic_group_camera").renderingMode(.template).resizable().scaledToFit()
-                    .frame(width: 28, height: 28).foregroundStyle(Color.accentColor)
+                    .frame(width: 28, height: 28).foregroundStyle(Color.fariinAction)
             }
         }
         .frame(width: 64, height: 64)

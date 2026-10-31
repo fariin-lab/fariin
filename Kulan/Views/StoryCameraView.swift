@@ -1811,7 +1811,7 @@ struct StoryCameraView: View {
                         .font(.system(size: 17, weight: .bold))
                         .foregroundStyle(hasText ? Color(.systemBackground) : .white)
                         .frame(width: 40, height: 40)
-                        .background(hasText ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color.white.opacity(0.18)),
+                        .background(hasText ? AnyShapeStyle(Color.fariinAction) : AnyShapeStyle(Color.white.opacity(0.18)),
                                     in: Circle())
                         .contentShape(Circle())
                 }

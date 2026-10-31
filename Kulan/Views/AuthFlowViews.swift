@@ -210,7 +210,7 @@ extension View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(AuthPalette.page)
                     .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(Color.accentColor, in: Capsule())
+                    .background(Color.fariinAction, in: Capsule())
                     // SwiftUI places the badge so its guide lands on the parent's edge, so the sign
                     // of each number is the opposite of what it looks like. `.top + 6` puts the
                     // guide 6pt down the badge, which lifts the badge 6pt ABOVE the capsule — the

@@ -930,7 +930,7 @@ struct AccountSettingsView: View {
         Button("Connect") { startConnect(method) }
             .font(.subheadline.weight(.semibold))
             .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
+            .foregroundStyle(Color.fariinAction)
             .disabled(connecting != nil)
             // Apple must be triggered by its own button to get the authorization sheet; it's
             // overlaid transparently so the row still reads as a plain "Connect".
@@ -1212,7 +1212,7 @@ struct AppearanceSettingsView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .strokeBorder(isSel ? Color.accentColor : .clear, lineWidth: 2.5)
+                                .strokeBorder(isSel ? Color.fariinAction : .clear, lineWidth: 2.5)
                         )
                         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }

@@ -722,7 +722,7 @@ private struct AnnouncementAudienceView: View {
                             Text(scope.label).foregroundStyle(.primary)
                             Spacer()
                             if audience.scope == scope {
-                                Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                                Image(systemName: "checkmark").foregroundStyle(Color.fariinAction)
                             }
                         }
                     }
@@ -752,7 +752,7 @@ private struct AnnouncementAudienceView: View {
                                 Text(c.name).foregroundStyle(.primary)
                                 Spacer()
                                 if audience.countries.contains(c.code) {
-                                    Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                                    Image(systemName: "checkmark").foregroundStyle(Color.fariinAction)
                                 }
                             }
                         }
@@ -788,7 +788,7 @@ private struct AnnouncementAudienceView: View {
                                 }
                                 Spacer()
                                 if chosen.contains(where: { $0.id == person.id }) {
-                                    Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                                    Image(systemName: "checkmark").foregroundStyle(Color.fariinAction)
                                 }
                             }
                         }
@@ -1060,7 +1060,7 @@ private struct AddAdminView: View {
                                 }
                                 Spacer()
                                 if picked?.id == person.id {
-                                    Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                                    Image(systemName: "checkmark").foregroundStyle(Color.fariinAction)
                                 }
                             }
                         }

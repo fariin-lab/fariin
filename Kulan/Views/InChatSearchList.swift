@@ -98,7 +98,7 @@ struct InChatSearchList: View {
             if read { Image(systemName: "checkmark").offset(x: 5) }
         }
         .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(read ? Color.accentColor : Color.secondary)
+        .foregroundStyle(read ? Color.fariinAction : Color.secondary)
         .padding(.trailing, read ? 5 : 0)
     }
 

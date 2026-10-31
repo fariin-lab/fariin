@@ -871,7 +871,7 @@ struct OfficialChatInfoView: View {
                     // is the way to quiet it. Somebody who blocked it before keeps Unblock to get it back.
                     if store.state.blocked {
                         Divider().padding(.horizontal, 18)
-                        dangerRow("Unblock", color: .accentColor) { store.setBlocked(false) }
+                        dangerRow("Unblock", color: Color.fariinAction) { store.setBlocked(false) }
                     }
                 }
             }
@@ -931,7 +931,7 @@ struct OfficialAvatar: View {
                 // The mark is compiled into the app, so this cannot happen in a shipped build. It is
                 // here so a missing asset degrades to a letter instead of an empty hole.
                 ZStack {
-                    Color.accentColor
+                    Color.fariinAction
                     Text("F").font(.system(size: size * 0.45, weight: .semibold)).foregroundStyle(.white)
                 }
             }

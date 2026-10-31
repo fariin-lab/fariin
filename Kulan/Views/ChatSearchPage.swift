@@ -613,7 +613,7 @@ struct ChatSearchPage: View {
             }
         case .showMore:
             HStack {
-                Text("Show More").foregroundStyle(Color.accentColor)
+                Text("Show More").foregroundStyle(Color.fariinAction)
                 Spacer()
             }
             .padding(.horizontal, 16).padding(.vertical, 12)
@@ -621,9 +621,9 @@ struct ChatSearchPage: View {
         case .findChannels:
             HStack(spacing: 12) {
                 Image(systemName: "megaphone.fill").font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.onFariinAction)
                     .frame(width: 40, height: 40)
-                    .background(SquircleShape().fill(Color.accentColor))
+                    .background(SquircleShape().fill(Color.fariinAction))
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Find Channels").font(.body.weight(.semibold)).foregroundStyle(.primary)
                     Text("Public channels to follow").font(.subheadline).foregroundStyle(.secondary)
@@ -1011,10 +1011,10 @@ struct TopPeersRow: View {
                     if unread > 0 {
                         Text(unread > 99 ? "99+" : "\(unread)")
                             .font(.system(size: 14))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(muted ? Color.white : Color.onFariinAction)
                             .padding(.horizontal, 5)
                             .frame(minWidth: 20, minHeight: 20)
-                            .background(Capsule().fill(muted ? Color(.systemGray) : Color.accentColor))
+                            .background(Capsule().fill(muted ? Color(.systemGray) : Color.fariinAction))
                             .overlay(Capsule().stroke(Color(.systemBackground), lineWidth: 2))
                             .offset(x: 4, y: -2)
                     }

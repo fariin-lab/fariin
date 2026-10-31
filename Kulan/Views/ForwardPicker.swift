@@ -58,6 +58,9 @@ struct ForwardPicker: View {
             // the composer away from a blocked chat, but this list still offered it, so a forward
             // walked round the block; a demo id is not a real conversation and every send to it fails.
             .filter { !$0.isBlockedByMe(me) && !DemoMode.isDemoConversation($0.id) }
+            // Only where I can post (owner 2026-10-31): not a channel I only follow, not a group
+            // that keeps me from sending.
+            .filter { $0.canPostHere(me) }
             // 2026-09-24 decision D10: not an incoming request I have not answered. Sending into it
             // would accept it silently, and those chats are kept out of the main list anyway.
             .filter { MessageRequests.stance($0, myUid: me) != .incoming }
@@ -459,5 +462,19 @@ struct ForwardPicker: View {
             }
             if anyFailed { await MainActor.run { failed() } }
         }
+    }
+}
+
+
+extension Conversation {
+    /// ⛔ ONLY CHATS I CAN POST IN (owner 2026-10-31: Share and Forward listed channels he only
+    /// follows and groups that keep him from sending). A 1:1 always; a channel only for its own
+    /// people (the admins, who are its members; followers are not); a group when it lets me send
+    /// right now (announcement mode, a restriction on me, the platform's hold).
+    func canPostHere(_ me: String) -> Bool {
+        guard isGroup else { return true }
+        if isChannel && !users.contains(me) { return false }
+        let now = Date().timeIntervalSince1970 * 1000
+        return canSend(me, now: now) && !groupMod.blocksSending()
     }
 }

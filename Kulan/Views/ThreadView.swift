@@ -684,7 +684,7 @@ struct ThreadView: View {
                         .font(.system(size: 13, weight: .medium)).lineLimit(1)
                     Spacer(minLength: 4)
                     if !isGroup {
-                        Text("Verify").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.accentColor)
+                        Text("Verify").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.fariinAction)
                     }
                 }
                 .foregroundStyle(.primary)
@@ -3159,7 +3159,7 @@ struct ThreadView: View {
                 if ids.count > 1 {
                     VStack(spacing: 2) {
                         ForEach(0..<ids.count, id: \.self) { i in
-                            Capsule().fill(i == idx ? Color.accentColor : Color.secondary.opacity(0.4))
+                            Capsule().fill(i == idx ? Color.fariinAction : Color.secondary.opacity(0.4))
                                 .frame(width: 2.5, height: i == idx ? 16 : 7)
                         }
                     }
@@ -3411,7 +3411,7 @@ struct ThreadView: View {
                     Label("Add Members", systemImage: "person.badge.plus")
                         .font(.subheadline.weight(.medium))
                         .padding(.horizontal, 18).padding(.vertical, 9)
-                        .background(Color.accentColor.opacity(0.12), in: Capsule())
+                        .background(Color.fariinAction.opacity(0.12), in: Capsule())
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 2)
@@ -8122,10 +8122,10 @@ struct ThreadView: View {
     // "Unread Messages" divider (our design) — a thin accent line + label.
     private var unreadDivider: some View {
         HStack(spacing: 8) {
-            Rectangle().fill(Color.accentColor.opacity(0.3)).frame(height: 1)
+            Rectangle().fill(Color.fariinAction.opacity(0.3)).frame(height: 1)
             Text("Unread Messages").font(.caption.weight(.semibold))
-                .foregroundStyle(Color.accentColor).fixedSize()
-            Rectangle().fill(Color.accentColor.opacity(0.3)).frame(height: 1)
+                .foregroundStyle(Color.fariinAction).fixedSize()
+            Rectangle().fill(Color.fariinAction.opacity(0.3)).frame(height: 1)
         }
         .padding(.vertical, 8)
     }
@@ -11561,12 +11561,12 @@ struct MessageBubble: View, Equatable {
                         Text(r.emoji).font(.system(size: 14))
                         if r.count > 1 {
                             Text("\(r.count)").font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(r.mine ? Color.accentColor : .secondary)
+                                .foregroundStyle(r.mine ? Color.fariinAction : .secondary)
                         }
                     }
                     .padding(.horizontal, 6).padding(.vertical, 3)
-                    .background(r.mine ? Color.accentColor.opacity(0.18) : Theme.received(dark), in: Capsule())
-                    .overlay(Capsule().stroke(Color.accentColor.opacity(r.mine ? 0.9 : 0), lineWidth: 1))
+                    .background(r.mine ? Color.fariinAction.opacity(0.18) : Theme.received(dark), in: Capsule())
+                    .overlay(Capsule().stroke(Color.fariinAction.opacity(r.mine ? 0.9 : 0), lineWidth: 1))
                 }
                 if extra > 0 {
                     Text("+\(extra)").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
@@ -13007,11 +13007,11 @@ struct RecordingBubble: View {
         HStack(spacing: 7) {
             Image(systemName: "mic.fill")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(Color.fariinAction)
             TimelineView(.animation) { ctx in
                 HStack(spacing: 3) {
                     ForEach(0..<3, id: \.self) { i in
-                        Capsule().fill(Color.accentColor)
+                        Capsule().fill(Color.fariinAction)
                             .frame(width: 3, height: 14)
                             .scaleEffect(y: 0.35 + 0.65 * pulse(ctx.date, period: 0.5, delay: Double(i) * 0.15))
                     }

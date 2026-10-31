@@ -42,12 +42,12 @@ struct NightModePage: View {
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(isSel ? Color.accentColor : Color.primary.opacity(0.08),
+                            .strokeBorder(isSel ? Color.fariinAction : Color.primary.opacity(0.08),
                                           lineWidth: isSel ? 2 : 1)
                     )
                 Text(mode.label)
                     .font(.footnote.weight(isSel ? .semibold : .regular))
-                    .foregroundStyle(isSel ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(isSel ? Color.fariinAction : Color.secondary)
             }
             .contentShape(Rectangle())
         }
@@ -866,11 +866,11 @@ struct AppIconPage: View {
                                     .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                            .strokeBorder(current == icon.name ? Color.accentColor : Color.primary.opacity(0.1),
+                                            .strokeBorder(current == icon.name ? Color.fariinAction : Color.primary.opacity(0.1),
                                                           lineWidth: current == icon.name ? 2.5 : 1)
                                     )
                                 Text(icon.label).font(.caption)
-                                    .foregroundStyle(current == icon.name ? Color.accentColor : .secondary)
+                                    .foregroundStyle(current == icon.name ? Color.fariinAction : .secondary)
                             }
                             .contentShape(Rectangle())
                         }
@@ -1003,8 +1003,8 @@ struct QuickReactionPage: View {
                                 .frame(width: 56, height: 56)
                                 .background {
                                     if emoji == e {
-                                        Circle().fill(Color.accentColor.opacity(0.18))
-                                            .overlay(Circle().stroke(Color.accentColor, lineWidth: 2))
+                                        Circle().fill(Color.fariinAction.opacity(0.18))
+                                            .overlay(Circle().stroke(Color.fariinAction, lineWidth: 2))
                                     } else {
                                         Circle().fill(Color(.secondarySystemGroupedBackground))
                                     }

@@ -42,7 +42,7 @@ struct VoiceNoteBar: View {
                     // only colour on the strip, so it reads as the control and nothing else does.
                     Image(systemName: engine.playing ? "pause.fill" : "play.fill")
                         .font(.system(size: 15, weight: .regular))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(Color.fariinAction)
                         .contentTransition(.symbolEffect(.replace))
                         .frame(width: 48, height: Self.height)
                         .contentShape(Rectangle())

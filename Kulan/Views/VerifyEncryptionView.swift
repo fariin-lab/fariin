@@ -132,7 +132,7 @@ struct VerifyEncryptionView: View {
                 }
                 Image(systemName: verified ? "checkmark.seal.fill" : "lock.fill")
                     .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(verified ? Color.accentColor : .primary)
+                    .foregroundStyle(verified ? Color.fariinAction : .primary)
                     .contentTransition(.symbolEffect(.replace))
                     .frame(width: 26, height: 26)
                     .liquidGlass(Circle())

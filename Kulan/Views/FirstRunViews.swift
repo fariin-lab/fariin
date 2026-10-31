@@ -79,7 +79,7 @@ struct NotificationsExplainerView: View {
                 // ARTWORK: owner to supply
                 Image(systemName: "bell.badge")
                     .font(.system(size: 64, weight: .regular))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(Color.fariinAction)
                     .frame(width: 108, height: 108)
                 Text("Allow notifications so you don't miss messages")
                     .font(.system(size: 26, weight: .bold))

@@ -170,9 +170,9 @@ private struct ChatKeyContinueButton: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.white)
+        .foregroundStyle(Color.onFariinAction)
         // Grey while there is nothing to submit, the same two states the other capsule has.
-        .background(enabled ? Color.accentColor : Color(.systemGray3), in: Capsule())
+        .background(enabled ? Color.fariinAction : Color(.systemGray3), in: Capsule())
         .disabled(!enabled || busy)
     }
 }

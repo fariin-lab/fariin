@@ -1487,7 +1487,7 @@ struct ContactInfoView: View {
                         // leaves room for the tail, so the label always lands ON the second line
                         // instead of being pushed off by the system's own truncation.
                         (Text(Self.noteCollapsedPrefix(note, width: noteWidth) + "… ")
-                            + Text("More").foregroundStyle(Color.accentColor).fontWeight(.semibold))
+                            + Text("More").foregroundStyle(Color.fariinAction).fontWeight(.semibold))
                             // audit P4: this tap target had no VoiceOver label or button trait.
                             .accessibilityLabel("Show more")
                             .accessibilityAddTraits(.isButton)
@@ -1519,7 +1519,7 @@ struct ContactInfoView: View {
                         withAnimation(.easeInOut(duration: 0.2)) { noteExpanded = false }
                     }
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(Color.fariinAction)
                     .buttonStyle(.plain)
                     .accessibilityLabel("Show less")
                 }

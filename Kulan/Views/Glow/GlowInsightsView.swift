@@ -417,7 +417,7 @@ struct GlowInsightsView: View {
             Chart(points, id: \.date) { p in
                 BarMark(x: .value("Day", Self.chartDate(p.date), unit: .day),
                         y: .value("Value", p.value))
-                    .foregroundStyle(Color.accentColor.gradient)
+                    .foregroundStyle(Color.fariinAction.gradient)
                     .cornerRadius(2)
             }
             .chartXAxis {
@@ -645,7 +645,7 @@ struct GlowInsightsView: View {
             } else {
                 Chart(localBlocks(report.hoursUTC), id: \.label) { block in
                     BarMark(x: .value("Time", block.label), y: .value("Views", block.views))
-                        .foregroundStyle(Color.accentColor.gradient)
+                        .foregroundStyle(Color.fariinAction.gradient)
                         .cornerRadius(6)
                 }
                 .chartYAxis(.hidden)

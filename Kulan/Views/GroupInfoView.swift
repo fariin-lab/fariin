@@ -1956,7 +1956,7 @@ struct RoleChip: View {
     let role: GroupRole
     var body: some View {
         // Its own colour when it has one (owner 2026-10-20), else the plain chip as before.
-        let tint = GroupRole.rgb(role.color).map { Color(hex: $0) } ?? Color.accentColor
+        let tint = GroupRole.rgb(role.color).map { Color(hex: $0) } ?? Color.fariinAction
         Text(role.display)
             .font(.subheadline)
             .lineLimit(1)
@@ -2341,7 +2341,7 @@ struct AddMembersSheet: View {
                 Spacer(minLength: 8)
                 Image(systemName: selected.contains(id) ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 22, weight: .light))
-                    .foregroundStyle(selected.contains(id) ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(selected.contains(id) ? Color.fariinAction : Color.secondary)
             }
             .frame(minHeight: 44)
             .contentShape(Rectangle())

@@ -256,7 +256,7 @@ struct GroupLinksPage: View {
     private func moreSection(_ links: [GroupLink]) -> some View {
         Section("More Links") {
             Button { editTarget = LinkEditTarget(link: nil) } label: {
-                Label("Create a New Link", systemImage: "plus").foregroundStyle(Color.accentColor)
+                Label("Create a New Link", systemImage: "plus").foregroundStyle(Color.fariinAction)
             }
             ForEach(links) { l in
                 Button { detailLink = l } label: { GroupLinkRow(link: l) }

@@ -215,7 +215,7 @@ struct NewGroupView: View {
                 Spacer(minLength: 8)
                 Image(systemName: selected[p.id] != nil ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 22, weight: .light))
-                    .foregroundStyle(selected[p.id] != nil ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(selected[p.id] != nil ? Color.fariinAction : Color.secondary)
             }
             .frame(minHeight: 44)
             .contentShape(Rectangle())
@@ -415,9 +415,9 @@ struct NewGroupView: View {
             if let avatarData, let ui = UIImage(data: avatarData) {
                 Image(uiImage: ui).resizable().scaledToFill()
             } else {
-                Circle().fill(Color.accentColor.opacity(0.12))
+                Circle().fill(Color.fariinAction.opacity(0.12))
                 Image("ic_group_camera").renderingMode(.template).resizable().scaledToFit()   // his icon (owner 2026-10-18)
-                    .frame(width: 28, height: 28).foregroundStyle(Color.accentColor)
+                    .frame(width: 28, height: 28).foregroundStyle(Color.fariinAction)
             }
         }
         .frame(width: 64, height: 64)

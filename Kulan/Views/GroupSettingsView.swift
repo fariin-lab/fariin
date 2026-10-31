@@ -482,7 +482,7 @@ struct GroupSettingsView: View {
             HStack(spacing: 14) {
                 Image(systemName: on ? "checkmark.circle.fill" : "circle")
                     .font(.title3)
-                    .foregroundStyle(on ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(on ? Color.fariinAction : Color.secondary)
                 Text(k.label).foregroundStyle(.primary)
                 Spacer()
             }
@@ -1916,7 +1916,7 @@ struct ChatHistoryForNewMembersPage: View {
             HStack {
                 Text(title).foregroundStyle(.primary)
                 Spacer()
-                if on { Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(Color.accentColor) }
+                if on { Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(Color.fariinAction) }
             }
             .contentShape(Rectangle())
         }

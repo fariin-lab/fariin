@@ -235,7 +235,7 @@ struct SoundPickerView: View {
             HStack {
                 Text(s.name).foregroundStyle(.primary)
                 Spacer()
-                if selectedId == s.id { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
+                if selectedId == s.id { Image(systemName: "checkmark").foregroundStyle(Color.fariinAction) }
             }
             // The WHOLE ROW is the target. Without this the hit area collapsed onto the label's own
             // content - the name text and the checkmark - so tapping the empty middle of a row did

@@ -673,7 +673,7 @@ struct LockScreen: View {
                     // which is the worst screen in the app to lose a button on.
                     Label("Unlock", systemImage: unlockIcon).font(.body.weight(.semibold))
                         .padding(.horizontal, 24).frame(height: 48)
-                        .background(Color.accentColor, in: Capsule())
+                        .background(Color.fariinAction, in: Capsule())
                         .foregroundStyle(Theme.onAccent(scheme == .dark))
                 }
             }
@@ -754,7 +754,7 @@ struct HandleCheckRing: View {
 
     private var tint: Color {
         switch state {
-        case .checking: return .accentColor
+        case .checking: return Color.fariinAction
         case .free: return .green
         case .taken: return .red
         }
