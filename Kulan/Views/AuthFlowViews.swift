@@ -411,9 +411,10 @@ struct AuthMethodView: View {
                     .font(.system(size: 28, weight: .bold)).foregroundStyle(.primary)
                     .padding(.top, 22)
                     .contentTransition(.opacity)
-                // The room splits here (owner 2026-10-31, the empty top ringed: "we have big room"):
-                // the mark and title ride up, the doors sit low where the thumb is.
-                Spacer(minLength: 36)
+                    .padding(.bottom, 36)
+                // The doors sit right under the title, the free room goes between them and the
+                // outlined button at the foot (owner 2026-10-31, second pass: "close under Create
+                // account", so the foot button does not read as one more door).
 
                 VStack(spacing: 14) {
                     appleButton
@@ -479,7 +480,7 @@ struct AuthMethodView: View {
                 // (The shared spinner that sat above "Sign up" is gone, owner 2026-10-24: the button
                 // that was used spins instead, see `spinningDoor`.)
 
-                Spacer().frame(maxHeight: accountsFace ? .infinity : 24)
+                Spacer()
                 // ⛔ A REAL BUTTON TO MAKE AN ACCOUNT (owner 2026-10-31, comparing a large app's
                 // account page): under the saved accounts, "Don't have an account? Sign up" was a
                 // small line easy to miss. An outlined pill at the foot.
