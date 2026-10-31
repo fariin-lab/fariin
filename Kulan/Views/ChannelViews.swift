@@ -1152,15 +1152,17 @@ struct ChannelReactionsSettingsView: View {
     @State private var savedList: [String] = []
     /// The last non-empty pick list on this page, put back when Selected Emoji is chosen again.
     @State private var lastPicks: [String] = []
+    /// The place in the bar being replaced (nil = the "+": a new one at the end).
+    @State private var replacing: Int?
 
     /// What an owner picks from: a wide set, so "only these" can fit any channel.
-    /// Any other emoji comes in through the "+" (the full picker) and joins the grid.
+    /// Any other emoji comes in through the emoji sheet.
     static let palette = ["👍", "❤️", "🔥", "😂", "😮", "😢", "🙏", "👏", "🎉", "💯", "🤔", "😍",
                           "👎", "😡", "🤝", "💪", "✅", "⭐️", "🌙", "☀️", "⚽️", "📌", "💡", "🙌"]
     static let maxPicked = 6
     private let blue = Color.fariinAction
 
-    // Three plain choices and, for Selected, one palette grid with "+" for any emoji (owner
+    // Three plain choices and, for Selected, the bar of picks (owner
     // 2026-10-29, made minimal later the same day). Saves run in the background; the page is never
     // disabled while one goes.
     var body: some View {
@@ -1176,16 +1178,18 @@ struct ChannelReactionsSettingsView: View {
                 Text("Nobody sees who reacted, only how many.")
             }
             if mode == "some" {
+                // ⛔ THE PICKS IN ONE BAR (owner 2026-10-31, his drawing): the chosen emoji in a
+                // rounded bar, "Tap to replace an emoji" under it, a tap opens the emoji sheet for
+                // that one. A "+" fills a free place while fewer than six are chosen.
                 Section {
-                    grid.padding(.vertical, 6)
-                } header: {
-                    HStack {
-                        Text("Choose up to \(Self.maxPicked)")
-                        Spacer()
-                        Text("\(list.count)/\(Self.maxPicked)").monospacedDigit()
-                    }
+                    reactionBar
+                        .frame(maxWidth: .infinity)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 4, trailing: 0))
                 } footer: {
-                    if list.isEmpty { Text("Pick at least one, or reactions will be off.") }
+                    Text(list.isEmpty ? "Pick at least one, or reactions will be off." : "Tap to replace an emoji")
+                        .frame(maxWidth: .infinity)
+                        .multilineTextAlignment(.center)
                 }
             }
             if let problem { Text(problem).foregroundStyle(.red) }
@@ -1194,10 +1198,10 @@ struct ChannelReactionsSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .animation(.snappy(duration: 0.25), value: mode)
         .animation(.snappy(duration: 0.25), value: list)
-        .sheet(isPresented: $pickAny) {
+        .sheet(isPresented: $pickAny, onDismiss: { replacing = nil }) {
             EmojiMorePicker(title: "Choose Emoji") { e in
                 pickAny = false
-                if !list.contains(e) { toggle(e) }
+                place(e)
             }
         }
         .onAppear { loadFromList() }
@@ -1217,46 +1221,42 @@ struct ChannelReactionsSettingsView: View {
         loaded = true
     }
 
-    private var grid: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 12) {
-            ForEach(Self.palette + list.filter { !Self.palette.contains($0) }, id: \.self) { e in
-                let on = list.contains(e)
-                let full = list.count >= Self.maxPicked
-                Button { toggle(e) } label: {
-                    // Up to 46pt, narrower when six columns get less (a 375pt phone gives ~44).
-                    Text(e).font(.system(size: 28))
-                        .frame(maxWidth: 46).frame(height: 46)
-                        .overlay(alignment: .bottomTrailing) {
-                            if on {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .symbolRenderingMode(.palette)
-                                    // The tick in the circle's opposite (owner 2026-10-31: at night it
-                                    // was white on white, a plain dot).
-                                    .foregroundStyle(Color.onFariinAction, blue)
-                                    .font(.system(size: 17))
-                                    .background(Circle().fill(Color(.secondarySystemGroupedBackground)).padding(-1.5))
-                                    .offset(x: 3, y: 3)
-                                    .transition(.scale)
-                            }
-                        }
+    /// The chosen emoji in one rounded bar; each one opens the emoji sheet to replace it.
+    private var reactionBar: some View {
+        HStack(spacing: 6) {
+            ForEach(Array(list.enumerated()), id: \.offset) { i, e in
+                Button { replacing = i; pickAny = true } label: {
+                    Text(e).font(.system(size: 30)).frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
-                .opacity(!on && full ? 0.3 : 1)
-                .disabled(!on && full)
-                .accessibilityLabel(e)
-                .accessibilityAddTraits(on ? .isSelected : [])
+                .accessibilityLabel("Replace \(e)")
             }
-            // Any emoji at all (2026-10-29): the full picker.
-            Button { pickAny = true } label: {
-                Image(systemName: "plus").font(.system(size: 18, weight: .semibold))
-                    .frame(maxWidth: 46).frame(height: 46)
-                    .background(Circle().fill(Color(.tertiarySystemFill)))   // a Circle stays round in a narrower frame
+            if list.count < Self.maxPicked {
+                Button { replacing = nil; pickAny = true } label: {
+                    Image(systemName: "plus").font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .background(Circle().fill(Color(.tertiarySystemFill)))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Add an emoji")
             }
-            .buttonStyle(.plain)
-            .disabled(list.count >= Self.maxPicked)
-            .opacity(list.count >= Self.maxPicked ? 0.3 : 1)
-            .accessibilityLabel("Choose any emoji")
         }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Capsule().fill(Color(.secondarySystemGroupedBackground)))
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+    }
+
+    /// The emoji sheet's pick: it takes the tapped place (an emoji already in the bar swaps places
+    /// with it), or joins the end from the "+".
+    private func place(_ e: String) {
+        if let i = replacing, list.indices.contains(i) {
+            if let j = list.firstIndex(of: e) { list.swapAt(i, j) } else { list[i] = e }
+        } else if !list.contains(e), list.count < Self.maxPicked {
+            list.append(e)
+        } else { return }
+        replacing = nil
+        save()
     }
 
     private func choice(_ value: String, _ title: String) -> some View {
@@ -1283,14 +1283,6 @@ struct ChannelReactionsSettingsView: View {
         // the list yet the page showed the default "Any Emoji", and one tap overwrote the real one.
         .disabled(!loaded)
         .opacity(loaded ? 1 : 0.4)
-    }
-
-    private func toggle(_ e: String) {
-        if let i = list.firstIndex(of: e) { list.remove(at: i) }
-        else if list.count < Self.maxPicked { list.append(e) }
-        else { return }
-        Haptics.impact(.light)
-        save()
     }
 
     /// The newest state wins: a change cancels the save still waiting, and the server gets the
