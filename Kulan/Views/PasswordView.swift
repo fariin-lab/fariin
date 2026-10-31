@@ -134,12 +134,14 @@ struct PasswordView: View {
     @ViewBuilder private var form: some View {
         Form {
             Section {
+                // The cursor starts in the first box shown (owner 2026-10-31: it jumped past
+                // Current password to New password): Current when there is one, New otherwise.
                 if !isFirstPassword {
                     revealRow("Current password", text: $currentPassword,
-                              reveal: $showCurrent, content: .password)
+                              reveal: $showCurrent, content: .password, focus: true)
                 }
                 revealRow("New password", text: $password,
-                          reveal: $showNew, content: .newPassword, focus: true)
+                          reveal: $showNew, content: .newPassword, focus: isFirstPassword)
                 revealRow("Confirm new password", text: $confirm,
                           reveal: $showConfirm, content: .newPassword)
             } footer: {
