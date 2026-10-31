@@ -2542,6 +2542,15 @@ struct StoryEditorView: View {
             // dismissing the keyboard (it used to hide with the toolbar → no way to send).
             HStack(alignment: .bottom, spacing: 10) {
                 captionBar
+                    // ⛔ THE RING SITS OUTSIDE THE BAR'S GLASS (owner 2026-10-31, twice: "the caption
+                    // bar disappears"). Inside it, iOS 26 grew the menu out of the bar's own glass
+                    // shape, so the whole bar turned into the menu. Laid over the bar from outside,
+                    // the menu grows from the ring alone and the bar stays.
+                    .overlay(alignment: .bottomTrailing) {
+                        if AdminStore.shared.isAdmin && !captionFocused {
+                            storyLifetimeMenu.padding(.trailing, 4)
+                        }
+                    }
                 // While typing, a SMALL round send button (not the wide NEXT pill) so the caption
                 // field keeps most of the width.
                 if captionFocused { compactSendButton }
@@ -2694,12 +2703,16 @@ struct StoryEditorView: View {
     private var storyLifetimeMenu: some View {
         Menu {
             // The question as the menu's own heading, over the four lifetimes (owner 2026-10-31).
-            Section("Choose how long the story will be visible.") {
-                Picker("", selection: $storyHours) {
-                    ForEach([6.0, 12, 24, 48], id: \.self) { h in Text("\(Int(h)) Hours").tag(h) }
+            // Buttons with a tick, not a Picker: a Picker's label never shows inside a menu.
+            Section {
+                ForEach([6.0, 12, 24, 48], id: \.self) { h in
+                    Button { storyHours = h } label: {
+                        if storyHours == h { Label("\(Int(h)) Hours", systemImage: "checkmark") }
+                        else { Text("\(Int(h)) Hours") }
+                    }
                 }
-                .pickerStyle(.inline)
-                .labelsHidden()
+            } header: {
+                Text("Choose how long the story will be visible.")
             }
         } label: {
             ZStack {
@@ -2716,6 +2729,8 @@ struct StoryEditorView: View {
             .frame(width: 32, height: 40)
             .contentShape(Rectangle())
         }
+        // 6 at the top in both directions (it opens upward, which flipped the order).
+        .menuOrder(.fixed)
         .accessibilityLabel("Story visible for \(Int(storyHours)) hours")
     }
 
@@ -2760,11 +2775,6 @@ struct StoryEditorView: View {
         // makes theirs feel instant: there is no way to miss.
         .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
         .onTapGesture { captionFocused = true }
-        // How long the story stays up (owner 2026-10-31), app admins only for now. Over the bar,
-        // not inside its tap: tapping it shows the menu and leaves the caption bar where it is.
-        .overlay(alignment: .bottomTrailing) {
-            if AdminStore.shared.isAdmin { storyLifetimeMenu.padding(.trailing, 4) }
-        }
         // LIQUID GLASS, TINTED DARK (owner 2026-08-03: "in story caption bar make it liquid
         // glass"). Plain glass was here once and came back off: on a bright photo it went pale
         // and the white placeholder disappeared into it, which he photographed. `tint` is
