@@ -1489,7 +1489,10 @@ struct SimilarChannelsStrip: View {
     @State private var loaded = false
 
     var body: some View {
-        Group {
+        // A zero-height stand-in while empty: an empty Group is no view at all, so its `.task`
+        // never ran and the list was never asked for (found on the simulator, 2026-10-31).
+        VStack(spacing: 0) {
+            Color.clear.frame(height: 0)
             if !list.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
@@ -1550,7 +1553,10 @@ struct SimilarChannelsSection: View {
     @State private var list: [ChannelService.Discovered] = []
 
     var body: some View {
-        Group {
+        // A zero-height stand-in while empty: an empty Group is no view at all, so its `.task`
+        // never ran and the list was never asked for (found on the simulator, 2026-10-31).
+        VStack(spacing: 0) {
+            Color.clear.frame(height: 0)
             if !list.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Similar Channels").font(.headline).foregroundStyle(.secondary)
