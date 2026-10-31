@@ -389,6 +389,14 @@ struct AuthMethodView: View {
                 // ⛔ THE SWITCH IS SEEN (owner 2026-10-31: "tap Log in and it changes, but nobody
                 // would notice"). Only the title's words changed. The whole middle now slides across,
                 // forward to Log in, back to Create, like turning a page.
+                // The mark stays put while the words and doors slide (owner 2026-10-31: two logos
+                // showed mid-slide).
+                if !accountsFace {
+                    Image("LaunchLogo")
+                        .resizable().scaledToFit()
+                        .frame(width: 76, height: 76)
+                        .accessibilityHidden(true)
+                }
                 Group {
                 if accountsFace {
                     // ⛔ THE MARK, NOT THE WORD (owner 2026-10-31, comparing a large app's account
@@ -407,10 +415,6 @@ struct AuthMethodView: View {
                 // ⛔ THE MARK AND WHAT THIS PAGE IS FOR (owner 2026-10-31: "make this page high end").
                 // The saved-accounts page wears the mark; this one does too, with a title that says
                 // which way you are going instead of the bare app name.
-                Image("LaunchLogo")
-                    .resizable().scaledToFit()
-                    .frame(width: 76, height: 76)
-                    .accessibilityHidden(true)
                 Text(mode == .create ? "Create your account" : "Log in to Fariin")
                     .font(.system(size: 28, weight: .bold)).foregroundStyle(.primary)
                     .padding(.top, 22)
