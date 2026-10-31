@@ -469,7 +469,7 @@ struct AuthMethodView: View {
                 Spacer()
                 // ⛔ A REAL BUTTON TO MAKE AN ACCOUNT (owner 2026-10-31, comparing a large app's
                 // account page): under the saved accounts, "Don't have an account? Sign up" was a
-                // small line easy to miss. An outlined pill at the foot, in the action blue.
+                // small line easy to miss. An outlined pill at the foot.
                 if accountsFace {
                     Button {
                         error = nil
@@ -477,9 +477,10 @@ struct AuthMethodView: View {
                     } label: {
                         Text("Create account")
                             .font(.body.weight(.semibold))
-                            .foregroundStyle(Color(hex: 0x2C6BED))
+                            // Black on a light phone, white on a dark one (owner 2026-10-31).
+                            .foregroundStyle(.primary)
                             .frame(maxWidth: .infinity).frame(height: 54)
-                            .overlay(Capsule().strokeBorder(Color(hex: 0x2C6BED), lineWidth: 1.5))
+                            .overlay(Capsule().strokeBorder(Color.primary, lineWidth: 1.5))
                             .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
