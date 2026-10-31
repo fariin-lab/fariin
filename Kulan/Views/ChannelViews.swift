@@ -134,6 +134,13 @@ struct DiscoverChannelsView: View {
     @State private var busy: Set<String> = []
     /// Followed from this list, before the follow list says so; each id goes once the listener has it.
     @State private var justFollowed: Set<String> = []
+    /// ⛔ THE CHANNEL OPENS IN HERE (owner 2026-10-31: "open a channel from Find Channels, leave it,
+    /// and it takes me to the chat list instead of back where I came from"). A row opened inside this
+    /// sheet's own stack, the way the contact page opens a chat inside itself, so Back and Leave come
+    /// back to the list. Only when the caller asks for it (`opensInPlace`); otherwise `onOpen` as before.
+    @State private var openFollowed: ChatTarget?
+    @State private var openVisitor: PublicGroupTarget?
+    var opensInPlace = false
     @State private var follows = ChannelFollows.shared
 
     /// The ids the follow list confirms, so `justFollowed` can let go of them.
@@ -172,23 +179,46 @@ struct DiscoverChannelsView: View {
             .task { await load() }
             // The listener has it now: the stand-in goes, so a later unfollow shows Follow again.
             .onChange(of: confirmedIds) { _, ids in if !ids.isEmpty { justFollowed.subtract(ids) } }
+            // Left from inside (its page's Leave): back to the list at once, not a chat I no longer follow.
+            .onChange(of: openFollowed.map { follows.follows($0.id) }) { _, now in
+                if now == false { openFollowed = nil }
+            }
+            .navigationDestination(item: $openFollowed) { t in
+                ThreadView(cid: t.id, title: t.name, photoUrl: t.photo)
+            }
+            .navigationDestination(item: $openVisitor) { t in
+                PublicGroupSheet(target: t, pushed: true)
+            }
         }
     }
 
     private func row(_ c: ChannelService.Discovered) -> some View {
         HStack(spacing: 12) {
             Button {
-                onOpen(c.cid, c.handle.isEmpty ? nil : c.handle)
+                if opensInPlace {
+                    if follows.follows(c.cid) {
+                        openFollowed = ChatTarget(id: c.cid, name: c.title, photo: c.photoUrl)
+                    } else {
+                        openVisitor = PublicGroupTarget(cid: c.cid, name: c.handle.isEmpty ? nil : c.handle)
+                    }
+                } else {
+                    onOpen(c.cid, c.handle.isEmpty ? nil : c.handle)
+                }
             } label: {
                 HStack(spacing: 12) {
                     AvatarView(name: c.title, photoUrl: c.photoUrl, size: 48).avatarSquircle(true)
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 4) {
                             Text(c.title).font(.body.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+                                .layoutPriority(1)
                             GroupVerifiedMark(on: c.verified, size: 14, label: c.label)
-                            // The official channel says so (owner 2026-10-30), in the app's grey.
+                            // The official channel says so (owner 2026-10-30), in the app's grey. It gives
+                            // way first when the row is narrow (owner 2026-10-31: "Fariin N…" was cut off).
                             if c.official {
-                                Text("Official").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                ViewThatFits(in: .horizontal) {
+                                    Text("Official").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                    Color.clear.frame(width: 0, height: 0)
+                                }
                             }
                         }
                         // The live count, my own follow from here included (owner 2026-10-30: followed

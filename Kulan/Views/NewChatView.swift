@@ -196,7 +196,7 @@ struct NewChatView: View {
                 // 2026-10-31: the sheets closed, the bare chat list showed, and only then did the
                 // channel open, with nothing saying it was coming). The shell pushes behind this
                 // sheet and closes it, the order New Group already uses.
-                DiscoverChannelsView { cid, handle in
+                DiscoverChannelsView(onOpen: { cid, handle in
                     let me = AuthService.shared.uid ?? ""
                     if let c = convRepo.conversations.first(where: { $0.id == cid }),
                        c.users.contains(me) || c.isFollower(me) {
@@ -208,7 +208,7 @@ struct NewChatView: View {
                         dismiss()
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { GroupDirectory.open(cid: cid, name: handle) }
                     }
-                }
+                }, opensInPlace: true)
             }
             .sheet(isPresented: $showNewChannel) {
                 NewChannelView { t in dismiss(); onOpen(t) }

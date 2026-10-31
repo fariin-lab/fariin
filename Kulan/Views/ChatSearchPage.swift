@@ -384,11 +384,11 @@ struct ChatSearchPage: View {
         .onAppear { recents.start() }
         .sheet(isPresented: $showFindChannels) {
             // A channel opens the way a public result does, behind the sheet, then the search closes.
-            DiscoverChannelsView { cid, handle in
+            DiscoverChannelsView(onOpen: { cid, handle in
                 showFindChannels = false
                 onOpenPublicGroup(PublicGroupTarget(cid: cid, name: handle))
                 dismissSearch()
-            }
+            }, opensInPlace: true)
         }
         .onChange(of: query) { _, _ in showAllPeople = false }
         .task(id: query) { await lookUpGroups(query) }
