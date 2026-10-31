@@ -28,6 +28,9 @@ struct NewChannelView: View {
     /// The group made by a try whose channel step failed: the next try finishes THIS one instead of
     /// making another (owner 2026-10-30 audit: each "Try again" left a plain group behind).
     @State private var halfMadeCid: String?
+    /// The owned-count check, asked as the page opens rather than at Next (owner 2026-10-31: Next
+    /// "takes a bit longer"). Its answer is waiting by the time the name is typed.
+    @State private var earlyCheck: Task<[String: Any]?, Never>?
     @FocusState private var nameFocused: Bool
 
     /// The reference app's limits: 255 for the description; our group names already stop at 100.
@@ -167,6 +170,23 @@ struct NewChannelView: View {
             }
         }
         .task {
+            // ⛔ WAKE THE SERVER WHILE THE NAME IS TYPED (owner 2026-10-31). Next ran three server
+            // steps in a row and each started cold, about 1.5 s apiece (logs 05:56Z: groupcreatecheck
+            // then makechannel each "Starting new instance"). The check is asked now for real; the
+            // two later steps get an empty call that they refuse at once, which is enough to start
+            // their servers. Nothing is created by it.
+            if earlyCheck == nil {
+                earlyCheck = Task {
+                    let r = try? await Functions.functions(region: "me-central1").httpsCallable("groupCreateCheck").call()
+                    return r?.data as? [String: Any]
+                }
+                Task.detached(priority: .utility) {
+                    let fn = Functions.functions(region: "me-central1")
+                    async let a = try? fn.httpsCallable("makeChannel").call([String: Any]())
+                    async let b = try? fn.httpsCallable("createGroupLink").call([String: Any]())
+                    _ = await (a, b)
+                }
+            }
             try? await Task.sleep(for: .milliseconds(600))   // after the push (NewGroupView's lesson)
             if !Task.isCancelled { nameFocused = true }
         }
@@ -231,8 +251,13 @@ struct NewChannelView: View {
         let photo = avatarData
         Task {
             // The same "at most N owned" check a new group asks (a channel counts as one).
-            if let r = try? await Functions.functions(region: "me-central1").httpsCallable("groupCreateCheck").call(),
-               let d = r.data as? [String: Any], d["ok"] as? Bool == false {
+            // The answer asked when the page opened; a fresh ask only when there is none.
+            var answer = await earlyCheck?.value
+            earlyCheck = nil   // used once: a later try asks again
+            if answer == nil {
+                answer = (try? await Functions.functions(region: "me-central1").httpsCallable("groupCreateCheck").call())?.data as? [String: Any]
+            }
+            if let d = answer, d["ok"] as? Bool == false {
                 let max = (d["max"] as? Int) ?? AppLimits.shared.groupsOwnedMax
                 error = "You can own up to \(max) groups and channels. Delete one to create a new one."
                 creating = false
