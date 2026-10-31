@@ -224,7 +224,7 @@ struct DiscoverChannelsView: View {
             // The listener has it now: the stand-in goes, so a later unfollow shows Follow again.
             .onChange(of: confirmedIds) { _, ids in if !ids.isEmpty { justFollowed.subtract(ids) } }
             // Left from inside (its page's Leave): back to the list at once, not a chat I no longer follow.
-            .onChange(of: openFollowed.map { follows.follows($0.id) }) { _, now in
+            .onChange(of: openFollowed.map { isMine($0.id) }) { _, now in
                 if now == false { openFollowed = nil }
             }
             .navigationDestination(item: $openFollowed) { t in
@@ -239,7 +239,7 @@ struct DiscoverChannelsView: View {
         HStack(spacing: 12) {
             Button {
                 if opensInPlace {
-                    if follows.follows(c.cid) {
+                    if isMine(c.cid) {
                         openFollowed = ChatTarget(id: c.cid, name: c.title, photo: c.photoUrl)
                     } else {
                         openVisitor = PublicGroupTarget(cid: c.cid, name: c.handle.isEmpty ? nil : c.handle)
@@ -283,10 +283,16 @@ struct DiscoverChannelsView: View {
         .padding(.vertical, 2)
     }
 
+    /// Followed, or one of its admins (owner 2026-10-31: tapping his own Fariin News here went to the
+    /// visitor page, which handed off to the chat and closed everything onto the chat list). An admin
+    /// is a member, not a follower, so "follows" alone was false for the people who run the channel.
+    private func isMine(_ cid: String) -> Bool {
+        follows.follows(cid)
+            || ConversationsRepository.shared.conversations.contains { $0.id == cid && $0.users.contains(AuthService.shared.uid ?? "") }
+    }
+
     @ViewBuilder private func followButton(_ c: ChannelService.Discovered) -> some View {
-        let mine = follows.follows(c.cid)
-            || ConversationsRepository.shared.conversations.contains { $0.id == c.cid && $0.users.contains(AuthService.shared.uid ?? "") }
-            || justFollowed.contains(c.cid)
+        let mine = isMine(c.cid) || justFollowed.contains(c.cid)
         Button {
             guard !mine, !busy.contains(c.cid) else { return }
             busy.insert(c.cid)
