@@ -1599,6 +1599,8 @@ struct ChatsView: View {
     @ObservedObject private var groupCall = GroupCallService.shared   // ObservableObject, so it needs the wrapper
     @Environment(\.colorScheme) private var scheme
     @State private var showNew = false
+    /// The Undo bar following a finger down (swiped away = done now).
+    @State private var undoDragY: CGFloat = 0
     /// Find Channels from the empty Channels filter (owner 2026-10-31: an empty page gives one next step).
     @State private var showFindChannelsFromEmpty = false
     @State private var chatFilter = 0   // 0 = all, 1 = unread
@@ -3070,6 +3072,16 @@ struct ChatsView: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 16)
+                // Swipe down to send it away: the leave or delete runs now (owner 2026-10-31).
+                .offset(y: undoDragY)
+                .gesture(DragGesture(minimumDistance: 8)
+                    .onChanged { undoDragY = max(0, $0.translation.height) }
+                    .onEnded { v in
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                            if v.translation.height > 24 || v.predictedEndTranslation.height > 60 { leave.commit() }
+                            undoDragY = 0
+                        }
+                    })
                 .accessibilityLabel("\(title). Undo")
                 // Rises from below and settles, sinks away the same way.
                 .transition(.move(edge: .bottom).combined(with: .opacity).combined(with: .scale(scale: 0.9, anchor: .bottom)))

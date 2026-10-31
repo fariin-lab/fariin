@@ -32,8 +32,9 @@ final class LeaveGroupUndo {
     /// When the bar's time runs out, for its countdown ring.
     private(set) var barEnds = Date()
 
-    /// ⛔ 8 s, NOT 5 (owner 2026-10-31: he looked for Undo, found it late, and lost his channel).
-    static let window: TimeInterval = 8
+    /// 5 s, the reference app's time (owner 2026-10-31: 8 felt long). The bar is now solid with a
+    /// countdown, so it is seen at once; a swipe down sends it away early (`commit`).
+    static let window: TimeInterval = 5
     /// A leave that failed when it finally ran: shown so it is never silent.
     var failure: String?
 
