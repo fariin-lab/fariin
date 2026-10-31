@@ -2704,13 +2704,13 @@ struct StoryEditorView: View {
                 Circle()
                     .strokeBorder(style: StrokeStyle(lineWidth: 1.6, dash: [2.6, 2.2]))
                 Text("\(Int(storyHours))")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
                     .monospacedDigit()
             }
             .foregroundStyle(.white)
-            .frame(width: 26, height: 26)
+            .frame(width: 28, height: 28)
             .shadow(color: .black.opacity(0.35), radius: 1.5)
-            .frame(width: 36, height: 40)
+            .frame(width: 34, height: 40)
             .contentShape(Rectangle())
         }
         .accessibilityLabel("Story visible for \(Int(storyHours)) hours")
@@ -2740,7 +2740,9 @@ struct StoryEditorView: View {
         // added 9pt of its own padding above and below it, so `minHeight: 40` never bit —
         // the content was already taller than the floor it was being held to. The + now
         // measures 40 itself, which sets the height and keeps a full-height touch target.
-        .padding(.leading, 6).padding(.trailing, 18).frame(minHeight: 40)
+        // The lifetime ring sits close to the bar's right end (owner 2026-10-31), so the trailing
+        // gutter is the ring's own when it shows.
+        .padding(.leading, 6).padding(.trailing, AdminStore.shared.isAdmin ? 4 : 18).frame(minHeight: 40)
         // ⚠️ THE WHOLE PILL TAKES THE TAP, AND THIS IS THE OTHER HALF OF "the keyboard opens late".
         //
         // A SwiftUI `TextField` only claims its own text rectangle. Inside a 40pt pill that leaves
