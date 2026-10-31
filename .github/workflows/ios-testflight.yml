@@ -74,7 +74,12 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: KINDER EMPTY, ERROR AND SLOW PAGES; UNDO DELETE.
+            THIS BUILD: FACES ON NOTIFICATIONS, CHANNEL FIXES.
+            Notifications: the sender's photo with the small Fariin badge, now also for reactions; someone with no photo gets a grey person circle (a group, a people circle).
+            Channels: a follower gets no Select / Delete on posts. Your own channel opens inside Find Channels instead of dropping you on the chat list. Storage Used shows the real number before and after Follow, no jump. A private channel's page says to ask an admin for an invite link.
+            PLEASE TEST: get a message and a reaction from someone with a photo and from someone without; long-press a post in a channel you follow; open your own channel from Find Channels.
+
+            EARLIER: KINDER EMPTY, ERROR AND SLOW PAGES; UNDO DELETE.
             Delete Group / Delete Channel: gone at the tap, with "Group deleted. Undo" for 5 seconds before it is really deleted.
             Scan QR with the camera off: the page says so, with Open Settings and the photo button, instead of a black screen.
             Errors: about forty short "Couldn't ..." messages now say what to do next.

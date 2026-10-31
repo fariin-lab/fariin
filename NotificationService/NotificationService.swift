@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import Intents
 import Sodium
+import UIKit
 import UserNotifications
 
 /// Runs on this phone for every message notification (the push carries `mutable-content`), even
@@ -149,7 +150,9 @@ final class NotificationService: UNNotificationServiceExtension {
         // 3. The Communication Notification. If iOS refuses, the readable text above still shows.
         let sender = INPerson(personHandle: INPersonHandle(value: aid, type: .unknown),
                               nameComponents: nil, displayName: shownSender,
-                              image: photos[0].map { INImage(imageData: $0) },
+                              // No photo: a grey person circle, so the banner still has a face with
+                              // the small app badge (owner 2026-10-31, as the reference app does).
+                              image: INImage(imageData: photos[0] ?? Avatars.placeholder(group: false)),
                               contactIdentifier: nil, customIdentifier: aid)
         let mePerson = INPerson(personHandle: INPersonHandle(value: me.isEmpty ? "me" : me, type: .unknown),
                                 nameComponents: nil, displayName: nil, image: nil,
@@ -169,8 +172,9 @@ final class NotificationService: UNNotificationServiceExtension {
                                          serviceName: nil,
                                          sender: sender,
                                          attachments: nil)
-        if isGroup, let g = photos[1] {
-            intent.setImage(INImage(imageData: g), forParameterNamed: \.speakableGroupName)
+        if isGroup {
+            intent.setImage(INImage(imageData: photos[1] ?? Avatars.placeholder(group: true)),
+                            forParameterNamed: \.speakableGroupName)
         }
         let interaction = INInteraction(intent: intent, response: nil)
         interaction.direction = .incoming
@@ -255,6 +259,24 @@ final class NotificationService: UNNotificationServiceExtension {
     /// folder on sign-out. Downloads run together and give up after `timeout`.
     private enum Avatars {
         static let maxBytes = 2_000_000
+
+        /// The face for someone (or a group) with no photo: a soft grey circle with the person or
+        /// people glyph, the way the app's own avatar draws it. PNG, drawn once per banner.
+        static func placeholder(group: Bool) -> Data {
+            let size = CGSize(width: 180, height: 180)
+            let img = UIGraphicsImageRenderer(size: size).image { _ in
+                UIColor(red: 0.86, green: 0.86, blue: 0.88, alpha: 1).setFill()
+                UIBezierPath(ovalIn: CGRect(origin: .zero, size: size)).fill()
+                let cfg = UIImage.SymbolConfiguration(pointSize: group ? 70 : 84, weight: .regular)
+                if let glyph = UIImage(systemName: group ? "person.2.fill" : "person.fill", withConfiguration: cfg)?
+                    .withTintColor(UIColor(red: 0.62, green: 0.62, blue: 0.65, alpha: 1), renderingMode: .alwaysOriginal) {
+                    let g = glyph.size
+                    glyph.draw(in: CGRect(x: (size.width - g.width) / 2, y: (size.height - g.height) / 2 + 6,
+                                          width: g.width, height: g.height))
+                }
+            }
+            return img.pngData() ?? Data()
+        }
 
         /// Results land here from the download callbacks (a class, so a late callback after the
         /// wait gave up writes into it harmlessly instead of into a captured local).
