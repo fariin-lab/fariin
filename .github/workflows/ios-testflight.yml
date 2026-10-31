@@ -74,7 +74,17 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: SIGN-IN PAGES, SMOOTHER CHANNELS.
+            THIS BUILD: ONE COLOUR, GIFS BACK, SMOOTHER PAGES.
+            One colour: buttons, links, checkmarks, the selected tab, the compose button and every spinner are black (white in dark mode) instead of blue. Chat bubbles, the verified badge and read ticks keep their colours.
+            Stickers and GIFs: the panel has GIFs | Stickers on top again, search on the left. GIFs browse in the panel with Recent, Favorites, Trending and five moods at the bottom; Search opens the tall GIF sheet, and swiping it down leaves the keyboard closed. The panel opens on the tab you used last.
+            New chat: New Group, New Channel and New Contact slide in from the right inside the same card, with swipe back. Find Channels lives in Search only.
+            Sign-in: Create account and Log in switch on the same page (no pile of pages to swipe back through). Tapping outside the boxes closes the keyboard. The email pages show the black logo.
+            Channels: followers see a card at the top with the channel's photo, name, @name and the date it began.
+            Loading: Find Channels, a channel or group before joining, the official chat and Archived Chats show the page's shape while loading instead of a spinner. One spinner style everywhere.
+            Settings: the version shows 1.0 only; the test rows (test error, test crash, Uploads (testing)) are gone.
+            PLEASE TEST: sign out and in (Create account / Log in back and forth, tap outside the boxes); open the sticker panel, try GIFs, a mood and Search; New chat > New Group / New Channel and swipe back; open Fariin News from a follower account; check a few screens in dark mode.
+
+            EARLIER: SIGN-IN PAGES, SMOOTHER CHANNELS.
             Sign-in: new look. The Fariin logo on top, light account cards with "Last used" on the one you used last, "+ Add account" on one line, and Create account / Log in as their own pages with a back arrow (the button sits at the bottom). The welcome screen has one short line instead of the age sentence.
             Signing in and out: the screen fades to plain white (black in dark mode) with the turning ring, instead of words over the page.
             Login: pulling the page down now closes the keyboard. Settings > Password: the cursor starts in Current password.
