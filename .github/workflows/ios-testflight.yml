@@ -74,7 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: LEAVING A GROUP HAS AN UNDO.
+            THIS BUILD: CHANNELS LAUNCH.
+            Search: the empty search page starts with "Find Channels" (public channels to follow), and results have their own Channels section. Verified channels show right after an exact name match; the official one is marked "Official".
+            Channels: tapping Follow no longer flashes a "Group · 0 Members" page; a plain loading page shows until the channel is ready.
+            Chats: the dark band that appeared under the tab bar when opening a chat is gone.
+            Official Chat: it can no longer be blocked (it carries Fariin news and your own account alerts). Mute still works.
+            PLEASE TEST: open Search, tap Find Channels, follow Fariin News. Open a few chats from the list and watch the bottom for a dark band. Open the Fariin Official Chat info: only Clear Chat should be there.
+
+            EARLIER: LEAVING A GROUP HAS AN UNDO.
             Groups: when you leave a group it disappears from your chats and you land back on the chat list, with a "You left the group. Undo" bar for 5 seconds. Tap Undo to stay; otherwise the leave goes through. Before, you stayed inside the chat of a group you had just left.
             PLEASE TEST: open a group, tap its name, Leave Group, then Leave. You should be on the chat list with the bar. Try Undo once (the group should come back) and once without Undo (it should be gone for good after a few seconds).
 
