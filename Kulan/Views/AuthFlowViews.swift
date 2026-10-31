@@ -343,8 +343,14 @@ struct AuthMethodView: View {
     init(mode: Mode, showDoors: Bool = false, onAuthed: @escaping () -> Void) {
         _mode = State(initialValue: mode)
         _showDoors = State(initialValue: showDoors)
+        pushed = showDoors
         self.onAuthed = onAuthed
     }
+
+    /// This page was pushed from another one (the accounts list or the other door page). Its foot
+    /// button then switches it in place instead of pushing again, so Create / Log in tapped back and
+    /// forth never piles up pages and Back always lands where the user came from (owner 2026-10-31).
+    private let pushed: Bool
 
     @Environment(\.colorScheme) private var scheme
     @State private var busy = false
@@ -498,16 +504,24 @@ struct AuthMethodView: View {
                     // ⛔ THE OTHER PAGE IS ITS OWN PAGE (owner 2026-10-31: "what do the big apps do?").
                     // They open it with the system's push, from the right with a back arrow, so the
                     // change is unmistakable; no switch in place, no moving logo.
-                    NavigationLink {
-                        AuthMethodView(mode: toCreate ? .create : .login, showDoors: true, onAuthed: onAuthed)
-                    } label: {
-                        Text(toCreate ? "Create account" : "Log in")
-                            .font(.body.weight(.semibold))
-                            // Black on a light phone, white on a dark one (owner 2026-10-31).
-                            .foregroundStyle(.primary)
-                            .frame(maxWidth: .infinity).frame(height: 54)
-                            .overlay(Capsule().strokeBorder(Color.primary, lineWidth: 1.5))
-                            .contentShape(Capsule())
+                    let footLabel = Text(toCreate ? "Create account" : "Log in")
+                        .font(.body.weight(.semibold))
+                        // Black on a light phone, white on a dark one (owner 2026-10-31).
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity).frame(height: 54)
+                        .overlay(Capsule().strokeBorder(Color.primary, lineWidth: 1.5))
+                        .contentShape(Capsule())
+                    Group {
+                        if pushed {
+                            Button {
+                                error = nil
+                                withAnimation(.easeInOut(duration: 0.25)) { mode = toCreate ? .create : .login }
+                            } label: { footLabel }
+                        } else {
+                            NavigationLink {
+                                AuthMethodView(mode: toCreate ? .create : .login, showDoors: true, onAuthed: onAuthed)
+                            } label: { footLabel }
+                        }
                     }
                     .buttonStyle(.plain)
                     .disabled(busy)

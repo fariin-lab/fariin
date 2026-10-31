@@ -103,8 +103,8 @@ struct NewChatView: View {
                                     .tint(.primary)
                                 Button { showNewChannel = true } label: { actionRow("megaphone", "New channel") }   // 2026-10-28
                                     .tint(.primary)
-                                Button { showDiscover = true } label: { actionRow("safari", "Find channels") }
-                                    .tint(.primary)
+                                // Find channels row removed (owner 2026-10-31): this card is for making
+                                // things; finding channels lives in Search.
                             }
                             // New contact and Scan QR code rows removed (owner 2026-09-30): scanning
                             // lives on the top-right button already.
