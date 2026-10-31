@@ -81,6 +81,7 @@ struct ChatListSkeleton: View {
             }
         }
         .scrollDisabled(true)
+        .overlay(alignment: .top) { SlowLoadNote().padding(.top, 12) }
     }
 }
 
@@ -149,6 +150,7 @@ struct ThreadSkeleton: View {
             .frame(width: g.size.width, height: g.size.height, alignment: .bottom)
             .clipped()
         }
+        .overlay(alignment: .top) { SlowLoadNote().padding(.top, 110) }
     }
 }
 
@@ -274,6 +276,39 @@ struct GroupCardSkeleton: View {
             SkeletonBlock(width: 190, height: 12).padding(.top, 8)
         }
         .frame(maxWidth: .infinity)
+        .overlay(alignment: .bottom) { SlowLoadNote().offset(y: 56) }
         .accessibilityHidden(true)
+    }
+}
+
+
+// MARK: - Slow connection
+
+/// ⛔ A SLOW LOAD SAYS SO (owner 2026-10-31: "slow network: show real progress and a lighter path").
+/// Nothing for the first 4 s, which is a normal load; after that one quiet line on the skeleton:
+/// offline, it says the page fills in when the phone is back online; online, that the connection is
+/// slow and what is saved on the phone still works.
+struct SlowLoadNote: View {
+    @State private var show = false
+    @State private var offline = false
+    var body: some View {
+        Group {
+            if show {
+                Label(offline ? "You're offline. This fills in when you're back online."
+                              : "Still loading. Your connection looks slow.",
+                      systemImage: offline ? "wifi.slash" : "tortoise")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .liquidGlass(Capsule())
+                    .transition(.opacity)
+            }
+        }
+        .task {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            offline = !NetworkState.shared.isOnline
+            withAnimation(.easeOut(duration: 0.3)) { show = true }
+        }
+        .accessibilityHidden(!show)
     }
 }

@@ -1599,6 +1599,8 @@ struct ChatsView: View {
     @ObservedObject private var groupCall = GroupCallService.shared   // ObservableObject, so it needs the wrapper
     @Environment(\.colorScheme) private var scheme
     @State private var showNew = false
+    /// Find Channels from the empty Channels filter (owner 2026-10-31: an empty page gives one next step).
+    @State private var showFindChannelsFromEmpty = false
     @State private var chatFilter = 0   // 0 = all, 1 = unread
     /// The page's own search box (2026-08-30): Apple's field in the top bar, exactly as Stories and
     /// Calls have it — owner, 2026-09-26, "make it exactly like the Stories search". For one day
@@ -2908,10 +2910,22 @@ struct ChatsView: View {
                                                 }
                                             } description: {
                                                 Text("Groups you join will appear here.")
+                                            } actions: {
+                                                // One next step (owner 2026-10-31).
+                                                Button("New Group") { showNew = true }
+                                                    .font(.subheadline.weight(.semibold))
+                                                    .foregroundStyle(Color.fariinAction)
                                             }
                                         } else if chatFilter == 3 {
-                                            ContentUnavailableView("No channels yet", systemImage: "megaphone",
-                                                                   description: Text("Channels you follow or run will appear here."))
+                                            ContentUnavailableView {
+                                                Label("No channels yet", systemImage: "megaphone")
+                                            } description: {
+                                                Text("Channels you follow or run will appear here.")
+                                            } actions: {
+                                                Button("Find Channels") { showFindChannelsFromEmpty = true }
+                                                    .font(.subheadline.weight(.semibold))
+                                                    .foregroundStyle(Color.fariinAction)
+                                            }
                                         } else {
                                             ContentUnavailableView("No unread chats", systemImage: "checkmark.circle",
                                                                    description: Text("You're all caught up."))
@@ -2919,8 +2933,9 @@ struct ChatsView: View {
                                     }
                                         .padding(.top, 24)
                                         // No archive row under a filter (see showsArchivedRow), so
-                                        // this branch needs no clearance for it.
-                                        .allowsHitTesting(false)
+                                        // this branch needs no clearance for it. Touchable only where
+                                        // it has a button (Groups, Channels).
+                                        .allowsHitTesting(chatFilter == 2 || chatFilter == 3)
                                 }
                             }
                         }
@@ -3370,6 +3385,13 @@ struct ChatsView: View {
                     ThreadView(cid: t.id, title: t.name, photoUrl: t.photo)
                         .id(t.id)
                 }
+            }
+            .sheet(isPresented: $showFindChannelsFromEmpty) {
+                // A channel opens behind the sheet, as from New chat.
+                DiscoverChannelsView(onOpen: { cid, handle in
+                    showFindChannelsFromEmpty = false
+                    path.append(PublicGroupTarget(cid: cid, name: handle))
+                }, opensInPlace: true)
             }
             .sheet(isPresented: $showNew) {
                 NewChatView(onOpenPublic: { t in
