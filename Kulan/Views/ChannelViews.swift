@@ -218,6 +218,8 @@ struct DiscoverChannelsView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            // The list close under the title (owner 2026-10-31: "the header has more empty space").
+            .contentMargins(.top, 8, for: .scrollContent)
             .navigationTitle("Find Channels")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1331,9 +1333,9 @@ enum ChannelInviteLink {
 
 /// ⛔ A CHANNEL'S ADD ADMIN PICKS FROM ITS FOLLOWERS (owner 2026-10-31: it opened the add-people
 /// sheet, every contact, "use the groups' design; nobody who is not a member"). The group's Choose
-/// Member page in look: the followers, a search at the foot, an X. A tap asks, then sends the
-/// admin invite; they become an admin when they accept. The server refuses anyone else too
-/// (`inviteChannelAdmins`).
+/// Member page in look: the followers, a search at the foot, an X. A tap asks, then makes them an
+/// admin at once (owner 2026-10-31: they follow already, no invite to accept). The server refuses
+/// anyone who is not a follower (`makeChannelAdmin`).
 struct ChannelAdminPicker: View {
     let cid: String
     let title: String
@@ -1396,12 +1398,12 @@ struct ChannelAdminPicker: View {
                 DefaultToolbarItem(kind: .search, placement: .bottomBar)
             }
             .task { await load() }
-            .alert("Invite \(asking?.name ?? "") as admin?",
+            .alert("Make \(asking?.name ?? "") an admin?",
                    isPresented: Binding(get: { asking != nil }, set: { if !$0 { asking = nil } })) {
                 Button("Cancel", role: .cancel) {}
-                Button("Invite") { if let f = asking { send(f) } }
+                Button("Make Admin") { if let f = asking { send(f) } }
             } message: {
-                Text("They become an admin when they accept the invite.")
+                Text("They can post in the channel. You can change what else they can do from Administrators.")
             }
         }
     }
@@ -1423,12 +1425,10 @@ struct ChannelAdminPicker: View {
     }
 
     private func send(_ f: ChannelFollowersView.Follower) {
-        let person = CallMember(uid: f.uid, name: f.name, photoUrl: f.photoUrl)
         Task {
             do {
-                let refused = try await ChannelAdminInvites.invite(cid: cid, title: title, people: [person])
-                ToastNotice.show(refused.isEmpty ? "Sent. \(f.name) becomes an admin when they accept."
-                                 : "Couldn't invite \(f.name). You can invite only followers you already chat with.")
+                try await ChannelAdminInvites.makeAdmin(cid: cid, uid: f.uid)
+                ToastNotice.show("\(f.name) is now an admin.")
                 onSent()
                 dismiss()
             } catch {

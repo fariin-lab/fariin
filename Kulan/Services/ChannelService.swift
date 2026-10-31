@@ -822,7 +822,13 @@ enum ChannelAdminInvites {
 
     static func link(_ code: String) -> String { "https://fariin.com/a/" + code }
 
+    /// A follower made an admin at once (owner 2026-10-31), no invite to accept. `makeChannelAdmin`.
+    static func makeAdmin(cid: String, uid: String) async throws {
+        _ = try await fn.httpsCallable("makeChannelAdmin").call(["cid": cid, "uid": uid])
+    }
+
     /// Creates the invites, then sends each person the link in our 1:1 chat. Returns who was refused.
+
     static func invite(cid: String, title: String, people: [CallMember]) async throws -> [String] {
         let r = try await fn.httpsCallable("inviteChannelAdmins").call(["cid": cid, "uids": people.map(\.uid)])
         let d = r.data as? [String: Any] ?? [:]
