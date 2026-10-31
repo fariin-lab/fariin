@@ -2998,8 +2998,8 @@ struct StoryEditorView: View {
 
             Button { closeTrim(keep: true) } label: {
                 Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white).frame(width: 44, height: 44)
-                    .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
+                    .foregroundStyle(.black).frame(width: 44, height: 44)
+                    .liquidGlass(Circle(), interactive: true, tint: .white)
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
@@ -3514,9 +3514,9 @@ struct StoryEditorView: View {
                 // action, matching the crop screen's ✓.
                 Button { closePen(discarding: false) } label: {
                     Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.black)
                         .frame(width: 44, height: 44)
-                        .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
+                        .liquidGlass(Circle(), interactive: true, tint: .white)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -3605,12 +3605,12 @@ struct StoryEditorView: View {
             }
         } label: {
             Group {
-                if posting { ProgressView().tint(.white) }
+                if posting { ProgressView().tint(.black) }
                 else { Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold)) }
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(.black)
             .frame(width: 40, height: 40)
-            .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
+            .liquidGlass(Circle(), interactive: true, tint: .white)
         }
         .buttonStyle(StoryPressStyle()).disabled(posting)
     }
@@ -3636,10 +3636,11 @@ struct StoryEditorView: View {
                     Image(systemName: "chevron.right").font(.system(size: 13, weight: .bold))
                 }
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(.black)
             .padding(.horizontal, nextPadding).frame(height: 46)   // user spec: 46px
-            // Blue-tinted real Liquid Glass (prominent action), not a flat blue fill.
-            .liquidGlass(Capsule(), interactive: true, tint: Color(.systemBlue))
+            // White Liquid Glass with black words (owner 2026-10-31: no blue; this page is always
+            // black, so the action colour is white here in both modes).
+            .liquidGlass(Capsule(), interactive: true, tint: .white)
             // WHOLE PILL tappable (user: only the "NEXT" text responded). Without an explicit
             // contentShape, SwiftUI hit-tests only the opaque text/chevron, not the padded capsule.
             .contentShape(Capsule())

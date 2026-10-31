@@ -761,9 +761,9 @@ struct ChatCropView: View {
                 // a prominent round action (see the composer's send).
                 Button { apply() } label: {
                     Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Color.onFariinAction)
+                        .foregroundStyle(.black)
                         .frame(width: 44, height: 44)
-                        .liquidGlass(Circle(), interactive: true, tint: Color.fariinAction)
+                        .liquidGlass(Circle(), interactive: true, tint: .white)   // a black page: the action is white here (owner 2026-10-31)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)

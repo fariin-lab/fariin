@@ -1809,9 +1809,11 @@ struct StoryCameraView: View {
                     // `Color(.systemBackground)` is that accent's inverse and needs no plumbing.
                     Image(systemName: "arrow.right")
                         .font(.system(size: 17, weight: .bold))
-                        .foregroundStyle(hasText ? Color(.systemBackground) : .white)
+                        // Over the camera the action is white with a black arrow, in both modes
+                        // (owner 2026-10-31: one colour, and never blue).
+                        .foregroundStyle(hasText ? Color.black : .white)
                         .frame(width: 40, height: 40)
-                        .background(hasText ? AnyShapeStyle(Color.fariinAction) : AnyShapeStyle(Color.white.opacity(0.18)),
+                        .background(hasText ? AnyShapeStyle(Color.white) : AnyShapeStyle(Color.white.opacity(0.18)),
                                     in: Circle())
                         .contentShape(Circle())
                 }
