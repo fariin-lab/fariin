@@ -2702,15 +2702,15 @@ struct StoryEditorView: View {
         } label: {
             ZStack {
                 Circle()
-                    .strokeBorder(style: StrokeStyle(lineWidth: 1.6, dash: [2.6, 2.2]))
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1.4, dash: [2.2, 1.9]))
                 Text("\(Int(storyHours))")
-                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .font(.system(size: 9.5, weight: .bold, design: .rounded))
                     .monospacedDigit()
             }
             .foregroundStyle(.white)
-            .frame(width: 28, height: 28)
+            .frame(width: 22, height: 22)
             .shadow(color: .black.opacity(0.35), radius: 1.5)
-            .frame(width: 34, height: 40)
+            .frame(width: 32, height: 40)
             .contentShape(Rectangle())
         }
         .accessibilityLabel("Story visible for \(Int(storyHours)) hours")
