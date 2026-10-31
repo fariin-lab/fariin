@@ -999,6 +999,46 @@ struct ChannelAdminCard: View {
     }
 }
 
+/// The top of a channel for everyone who is not an admin (owner 2026-10-31: a new follower opened
+/// Fariin News to a white page and one line). Who the channel is, in one glance: photo, name with
+/// its badge, @name, what it is about, and when it began. Nothing to tap; the bar below does that.
+struct ChannelFollowerCard: View {
+    let conv: Conversation
+
+    private var createdLine: String? {
+        guard let d = conv.createdAt else { return nil }
+        return "Created " + d.formatted(.dateTime.month(.abbreviated).day().year())
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            AvatarView(name: conv.title, photoUrl: conv.avatarUrl, size: 92).avatarSquircle(true)
+            VStack(spacing: 4) {
+                HStack(spacing: 5) {
+                    Text(conv.title).font(.title3.weight(.semibold)).lineLimit(2)
+                        .multilineTextAlignment(.center)
+                    GroupVerifiedMark(on: conv.showsGroupBadge, size: 18, kind: conv.groupVerifiedType)
+                }
+                if conv.isPublic, !conv.publicName.isEmpty {
+                    Text("@" + conv.publicName).font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+            if !conv.groupDescription.isEmpty {
+                Text(conv.groupDescription)
+                    .font(.subheadline).multilineTextAlignment(.center).lineLimit(4)
+                    .padding(.top, 2)
+            }
+            if let createdLine {
+                Text(createdLine).font(.footnote).foregroundStyle(.secondary).padding(.top, 2)
+            }
+        }
+        .padding(.horizontal, 18).padding(.vertical, 24)
+        .frame(maxWidth: 340)
+        .liquidGlass(RoundedRectangle(cornerRadius: 36, style: .continuous))
+        .padding(.horizontal, 20)
+    }
+}
+
 /// A channel post's reactions (2026-10-29), opened from the row under the post: every emoji with its
 /// count, mine ringed. A follower taps one to react (the same one again takes it back); an admin sees
 /// the counts. Never who reacted: nobody, not even the admins, is shown that.

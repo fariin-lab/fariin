@@ -1173,7 +1173,10 @@ struct ThreadView: View {
                            conv.publicName, "\(conv.isPublic)", "\(dark)"].joined(separator: "|")
                 return (AnyView(ChannelAdminCard(conv: conv, me: me).padding(.vertical, 14)), key)
             }
-            return nil
+            // Everyone else gets the channel's own card (owner 2026-10-31).
+            let key = ["chfol", conv.title, conv.avatarUrl ?? "", conv.groupDescription, conv.publicName,
+                       "\(conv.isPublic)", "\(conv.showsGroupBadge)", "\(dark)"].joined(separator: "|")
+            return (AnyView(ChannelFollowerCard(conv: conv).padding(.vertical, 14)), key)
         }
         // `cacheLooksWhole` (owner 2026-10-28): from the saved copy, before the server has answered.
         guard repo.didInitialLoad, isGroup, !notAMember, !preview, !repo.canLoadOlder || repo.cacheLooksWhole,
