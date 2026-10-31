@@ -187,6 +187,8 @@ struct ShareStorySheet: View {
     /// The Link and Location stickers on the FIRST item. Each extra carries its own — see
     /// `StoryTapTarget` and the note on `StoryExtra.stickers`.
     var stickers: [StoryTapTarget] = []
+    /// How long the story stays up, picked in the editor's caption bar (owner 2026-10-31).
+    var expiryHours: Double = 24
     /// ⚠️ THE STORY WHOSE AUDIENCE IS BEING CHANGED — set only by the "Edit viewers" door on a
     /// story that is already up, and nil for every post.
     ///
@@ -793,12 +795,12 @@ struct ShareStorySheet: View {
                 videoURL: video.url, thumbnail: video.thumbnail, muted: video.muted,
                 burn: video.burn, trim: video.trim, caption: caption, stickers: stickers,
                 excluded: [], included: [], everyone: false,
-                allowsReplies: groupAllowsReplies, tag: tag, captureProtected: captureProtected)
+                allowsReplies: groupAllowsReplies, tag: tag, captureProtected: captureProtected, expiryHours: expiryHours)
         } else {
             StoriesService.shared.postStoryBackground(
                 image: image, caption: caption, stickers: stickers,
                 excluded: [], included: [], everyone: false,
-                allowsReplies: groupAllowsReplies, tag: tag, captureProtected: captureProtected)
+                allowsReplies: groupAllowsReplies, tag: tag, captureProtected: captureProtected, expiryHours: expiryHours)
         }
         for extra in extras {
             if let v = extra.video {
@@ -806,12 +808,12 @@ struct ShareStorySheet: View {
                     videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim,
                     caption: extra.caption, stickers: extra.stickers,
                     excluded: [], included: [], everyone: false,
-                    allowsReplies: groupAllowsReplies, tag: tag, captureProtected: captureProtected)
+                    allowsReplies: groupAllowsReplies, tag: tag, captureProtected: captureProtected, expiryHours: expiryHours)
             } else if let p = extra.photo {
                 StoriesService.shared.postStoryBackground(
                     image: p, caption: extra.caption, stickers: extra.stickers,
                     excluded: [], included: [], everyone: false,
-                    allowsReplies: groupAllowsReplies, tag: tag, captureProtected: captureProtected)
+                    allowsReplies: groupAllowsReplies, tag: tag, captureProtected: captureProtected, expiryHours: expiryHours)
             }
         }
         onPosted()
@@ -943,7 +945,7 @@ struct ShareStorySheet: View {
                 burn: video.burn, trim: video.trim, caption: caption, stickers: stickers,
                 excluded: excluded, included: included, everyone: everyone, allowsReplies: replies,
                 tag: tag, captureProtected: captureProtected,
-                repostOf: repostOf)   // a video repost credits its author too
+                repostOf: repostOf, expiryHours: expiryHours)   // a video repost credits its author too
         } else {
             StoriesService.shared.postStoryBackground(
                 image: image, caption: caption, stickers: stickers,
@@ -952,7 +954,7 @@ struct ShareStorySheet: View {
                 // ⚠️ THE FIRST ITEM ONLY, AND THAT IS CORRECT RATHER THAN AN OVERSIGHT. A repost
                 // comes from one story and produces one story; the `extras` loop below exists for a
                 // multi-pick from the photo library, which the repost path cannot reach.
-                repostOf: repostOf)
+                repostOf: repostOf, expiryHours: expiryHours)
         }
         // The rest, in order, behind the first. The background posters already CHAIN rather than
         // cancel each other, so this queues instead of racing — which is what keeps a multi-item
@@ -970,12 +972,12 @@ struct ShareStorySheet: View {
                     videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim,
                     caption: extra.caption, stickers: extra.stickers,
                     excluded: excluded, included: included, everyone: everyone,
-                    allowsReplies: replies, tag: tag, captureProtected: captureProtected)
+                    allowsReplies: replies, tag: tag, captureProtected: captureProtected, expiryHours: expiryHours)
             } else if let p = extra.photo {
                 StoriesService.shared.postStoryBackground(
                     image: p, caption: extra.caption, stickers: extra.stickers,
                     excluded: excluded, included: included, everyone: everyone,
-                    allowsReplies: replies, tag: tag, captureProtected: captureProtected)
+                    allowsReplies: replies, tag: tag, captureProtected: captureProtected, expiryHours: expiryHours)
             }
         }
         onPosted()   // dismisses the editor -> back to chat; upload runs in the background
@@ -1147,13 +1149,13 @@ struct ShareStorySheet: View {
                 excluded: excluded, included: included, everyone: false, allowsReplies: replies,
                 tag: tag, captureProtected: captureProtected,
                 // A repost sent to a custom list keeps its credit (it was dropped on this path).
-                repostOf: repostOf)
+                repostOf: repostOf, expiryHours: expiryHours)
         } else {
             StoriesService.shared.postStoryBackground(
                 image: image, caption: caption, stickers: stickers,
                 excluded: excluded, included: included, everyone: false, allowsReplies: replies,
                 tag: tag, captureProtected: captureProtected,
-                repostOf: repostOf)
+                repostOf: repostOf, expiryHours: expiryHours)
         }
         // ⚠️ `stickers:` HAS TO BE PASSED ON EVERY CALL IN EVERY ONE OF THE THREE POST PATHS — the
         // first item's as well as the extras'. It defaults to empty, so an omission is silent: the
@@ -1167,12 +1169,12 @@ struct ShareStorySheet: View {
                     videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim,
                     caption: extra.caption, stickers: extra.stickers,
                     excluded: excluded, included: included, everyone: false,
-                    allowsReplies: replies, tag: tag, captureProtected: captureProtected)
+                    allowsReplies: replies, tag: tag, captureProtected: captureProtected, expiryHours: expiryHours)
             } else if let p = extra.photo {
                 StoriesService.shared.postStoryBackground(
                     image: p, caption: extra.caption, stickers: extra.stickers,
                     excluded: excluded, included: included, everyone: false,
-                    allowsReplies: replies, tag: tag, captureProtected: captureProtected)
+                    allowsReplies: replies, tag: tag, captureProtected: captureProtected, expiryHours: expiryHours)
             }
         }
         onPosted()
@@ -1210,13 +1212,13 @@ struct ShareStorySheet: View {
                 burn: video.burn, trim: video.trim, caption: caption, stickers: stickers,
                 excluded: [], included: people, everyone: false,
                 allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected,
-                repostOf: repostOf)   // a repost sent one-time keeps its credit too
+                repostOf: repostOf, expiryHours: expiryHours)   // a repost sent one-time keeps its credit too
         } else {
             StoriesService.shared.postStoryBackground(
                 image: image, caption: caption, stickers: stickers,
                 excluded: [], included: people, everyone: false,
                 allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected,
-                repostOf: repostOf)
+                repostOf: repostOf, expiryHours: expiryHours)
         }
         for extra in extras {
             if let v = extra.video {
@@ -1224,12 +1226,12 @@ struct ShareStorySheet: View {
                     videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim,
                     caption: extra.caption, stickers: extra.stickers,
                     excluded: [], included: people, everyone: false,
-                    allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected)
+                    allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected, expiryHours: expiryHours)
             } else if let p = extra.photo {
                 StoriesService.shared.postStoryBackground(
                     image: p, caption: extra.caption, stickers: extra.stickers,
                     excluded: [], included: people,
-                    everyone: false, allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected)
+                    everyone: false, allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected, expiryHours: expiryHours)
             }
         }
         onPosted()

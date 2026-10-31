@@ -1192,7 +1192,7 @@ final class StoriesService {
     }
 
     // Fire-and-forget post: pop back to chat immediately, upload in the background, show progress.
-    @MainActor func postStoryBackground(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends, captureProtected: Bool = false, repostOf: StoryRepost? = nil, storyDocId: String? = nil, resumed: Bool = false) {
+    @MainActor func postStoryBackground(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends, captureProtected: Bool = false, repostOf: StoryRepost? = nil, storyDocId: String? = nil, resumed: Bool = false, expiryHours: Double = 24) {
         // One id for this post from the start, kept in the ticket, so a resume writes the same story.
         let docId = storyDocId ?? Self.newStoryId()
         // Don't cancel an in-flight post (that silently DESTROYED the 1st story when a 2nd was
@@ -1293,7 +1293,7 @@ final class StoriesService {
             var failure: String?
             var cancelled = false
             do {
-                try await postStory(image: image, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected, repostOf: repostOf, storyId: docId, replaceExisting: resumed)
+                try await postStory(image: image, caption: caption, stickers: stickers, expiryHours: expiryHours, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected, repostOf: repostOf, storyId: docId, replaceExisting: resumed)
                 if await self.finishRunning(pendingId) { return }   // left behind on a swap: the retry owns it
                 StoryOutbox.forget(ticket)   // it landed; there is nothing to resume
             }
@@ -2135,7 +2135,7 @@ final class StoriesService {
                                              captureProtected: Bool = false,
                                              repostOf: StoryRepost? = nil,
                                              resumeTicket: String? = nil, storyIds resumeIds: [String]? = nil,
-                                             done: Set<String> = []) {
+                                             done: Set<String> = [], expiryHours: Double = 24) {
         // ⛔ A VIDEO POST SURVIVES THE APP BEING KILLED (owner, 2026-10-12). The clip, its burn-in and
         // every setting go to `VideoStoryOutbox` before the first byte moves, with one fixed story id
         // per part; a resume comes back here with those ids and the parts already landed.
@@ -2199,12 +2199,13 @@ final class StoriesService {
                                                excluded: excluded, included: included, everyone: everyone,
                                                allowsReplies: allowsReplies, tag: tag,
                                                captureProtected: captureProtected, repostOf: repostOf,
-                                               resumeTicket: ticketId, storyIds: partIds, done: done)
+                                               resumeTicket: ticketId, storyIds: partIds, done: done,
+                                               expiryHours: expiryHours)
             }
             var failure: String?
             var cancelled = false
             do {
-                try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected, repostOf: repostOf,
+                try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, stickers: stickers, expiryHours: expiryHours, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected, repostOf: repostOf,
                                          storyIds: partIds, done: done, replaceExisting: replaceExisting,
                                          onPartDone: { VideoStoryOutbox.markDone(ticketId, storyId: $0) })
                 if await self.finishRunning(pending.id) { return }   // left behind on a swap: the restart owns it

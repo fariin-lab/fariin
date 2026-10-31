@@ -3557,12 +3557,12 @@ service cloud.firestore {
         && !isBanned()
         // Fan-out cap 1000; a group story is capped by its group's size instead (groupPoster).
         && (request.resource.data.recipientUids.size() <= 1000 || request.resource.data.get('groupId', '') != '')
-        // Kill "immortal stories": expiry must be within ~30h of now (client sets +24h; the
-        // margin tolerates device-clock skew). Blocks a hostile client from setting expiresAt
-        // years out so cleanupStories never collects it.
+        // Kill "immortal stories": expiry must be within ~54h of now (the app offers 6, 12, 24 and
+        // 48 hours, owner 2026-10-31; the margin tolerates device-clock skew). Blocks a hostile
+        // client from setting expiresAt years out so cleanupStories never collects it.
         && request.resource.data.expiresAt is timestamp
         && request.resource.data.expiresAt > request.time
-        && request.resource.data.expiresAt < request.time + duration.value(30, 'h')
+        && request.resource.data.expiresAt < request.time + duration.value(54, 'h')
         // createdAt = the server's clock within 5 min (2026-09-11): it orders every tray and is frozen for life.
         && request.resource.data.createdAt is timestamp
         && request.resource.data.createdAt > request.time - duration.value(5, 'm')

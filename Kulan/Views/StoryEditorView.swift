@@ -273,6 +273,8 @@ struct StoryEditorView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var caption = ""
+    /// The story's lifetime in hours (owner 2026-10-31), 24 unless picked in the caption bar.
+    @State private var storyHours: Double = 24
     @State private var drawing = PKDrawing()
     /// ⛔ WHICH LAYER IS ON TOP, AND IT IS WHICHEVER WAS TOUCHED LAST (owner, 2026-08-21: "when i use
     /// pen then i try to use Aa the text are entering UNDER pen … always the one is the last one
@@ -1758,6 +1760,7 @@ struct StoryEditorView: View {
             // flows get the same compact fitted sheet.
             ShareStorySheet(image: s.data, caption: s.caption, video: s.video, extras: pendingExtras,
                             stickers: s.stickers,
+                            expiryHours: storyHours,
                             // The shape he left it in decides the credit: a card carries the
                             // author on the picture, full screen carries it in the header.
                             repostOf: repostOf.map { r in
@@ -2685,6 +2688,34 @@ struct StoryEditorView: View {
         .opacity(!captionFocused && draggingID == nil && !textToolBarsDown ? 1 : 0)
     }
 
+    /// ⛔ HOW LONG THE STORY STAYS UP (owner 2026-10-31, the reference app's picture): a small
+    /// dashed ring with the hours inside at the caption bar's end; a tap lists 6, 12, 24 and 48 hours,
+    /// 24 unless chosen. The pick rides to the share sheet and into the post's `expiresAt`.
+    private var storyLifetimeMenu: some View {
+        Menu {
+            Picker(selection: $storyHours) {
+                ForEach([6.0, 12, 24, 48], id: \.self) { h in Text("\(Int(h)) Hours").tag(h) }
+            } label: {
+                Text("Choose how long the story will be visible.")
+            }
+            .pickerStyle(.inline)
+        } label: {
+            ZStack {
+                Circle()
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1.6, dash: [2.6, 2.2]))
+                Text("\(Int(storyHours))")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(.white)
+            .frame(width: 26, height: 26)
+            .shadow(color: .black.opacity(0.35), radius: 1.5)
+            .frame(width: 36, height: 40)
+            .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Story visible for \(Int(storyHours)) hours")
+    }
+
     /// The caption field in its glass pill, exactly as it was inside the old bottom bar.
     private var captionBar: some View {
         HStack(spacing: 6) {
@@ -2702,6 +2733,8 @@ struct StoryEditorView: View {
                 .onChange(of: caption) { _, v in if v.count > StoryText.charLimit { caption = String(v.prefix(StoryText.charLimit)) } }
                 // ⚠️ ONE CONSTANT, and it used to be a hand-copied 700 beside a comment
                 // saying "cap like the text composer" — which caps at 720. See `StoryText`.
+            // How long the story stays up (owner 2026-10-31). App admins only for now.
+            if AdminStore.shared.isAdmin { storyLifetimeMenu }
         }
         // EXACTLY 40 AT REST (owner spec). It was 50: the + is a 32pt square and the bar
         // added 9pt of its own padding above and below it, so `minHeight: 40` never bit —
