@@ -2272,7 +2272,7 @@ struct StoryViewer: View {
                 Task {
                     let gone = await StoriesService.shared.deleteStory(id)
                     await StoriesRepository.shared.load(force: true)
-                    if !gone { await MainActor.run { flashSentToast("Couldn't delete — check your connection") } }
+                    if !gone { await MainActor.run { flashSentToast("Couldn't delete. Check your connection and try again.") } }
                 }
                 return
             }
@@ -2322,7 +2322,7 @@ struct StoryViewer: View {
                     // the only thing that tells him the delete did not happen. Silently leaving it
                     // deleted-looking is how an offline delete came back by itself hours later.
                     await StoriesRepository.shared.load(force: true)
-                    await MainActor.run { flashSentToast("Couldn't delete — check your connection") }
+                    await MainActor.run { flashSentToast("Couldn't delete. Check your connection and try again.") }
                     return
                 }
                 await StoriesRepository.shared.load(force: true)
@@ -2398,7 +2398,7 @@ struct StoryViewer: View {
         .onReceive(NotificationCenter.default.publisher(for: .init("storyAudienceUpdateFailed"))) { note in
             guard let info = note.userInfo, let id = info["id"] as? String else { return }
             audienceOverride.removeValue(forKey: id)
-            flashSentToast((info["message"] as? String) ?? "Couldn't update who can see this")
+            flashSentToast((info["message"] as? String) ?? "Couldn't update who can see this. Check your connection and try again.")
         }
         // ⛔ "…" → SHARE STORY / COPY STORY LINK — his spec, 2026-09-11. The same rights the
         // footer's repost mark belongs to, and they are re-checked here on LIVE state rather than

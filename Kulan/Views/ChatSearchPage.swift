@@ -49,6 +49,8 @@ struct ChatSearchOverlay: View {
     var onOpenPublicGroup: (PublicGroupTarget) -> Void
     /// Whether the search is up, told to the Chats tab so a door from outside can close it first.
     var onSearchingChange: (Bool) -> Void = { _ in }
+    /// "Did you mean â€¦?" tapped: the Chats tab writes it into the search field.
+    var onSuggest: (String) -> Void = { _ in }
 
     @Environment(\.isSearching) private var isSearching
     @Environment(\.dismissSearch) private var dismissSearch
@@ -69,8 +71,10 @@ struct ChatSearchOverlay: View {
          onOpenChat: @escaping (Conversation) -> Void,
          onOpenPerson: @escaping (UserProfile) -> Void,
          onOpenPublicGroup: @escaping (PublicGroupTarget) -> Void,
-         onSearchingChange: @escaping (Bool) -> Void = { _ in }) {
+         onSearchingChange: @escaping (Bool) -> Void = { _ in },
+         onSuggest: @escaping (String) -> Void = { _ in }) {
         self.onSearchingChange = onSearchingChange
+        self.onSuggest = onSuggest
         self.query = query
         self.me = me
         self.dark = dark
@@ -101,7 +105,7 @@ struct ChatSearchOverlay: View {
             ChatSearchPage(query: query, me: me, dark: dark, searching: searching,
                            chats: chats, people: people, personRow: personRow,
                            onOpenChat: onOpenChat, onOpenPerson: onOpenPerson,
-                           onOpenPublicGroup: onOpenPublicGroup)
+                           onOpenPublicGroup: onOpenPublicGroup, onSuggest: onSuggest)
                 // ⛔ AFTER THE BAR HAS GONE UP (owner 2026-10-18, build 973: "the Recent heading goes
                 // under the search bar"). The page is laid out at once for the bar's FINAL place, so
                 // while the field was still rising it passed over Recent and the first rows. The
@@ -320,6 +324,7 @@ struct ChatSearchPage: View {
     var onOpenChat: (Conversation) -> Void
     var onOpenPerson: (UserProfile) -> Void
     var onOpenPublicGroup: (PublicGroupTarget) -> Void
+    var onSuggest: (String) -> Void = { _ in }
 
     @Environment(\.dismissSearch) private var dismissSearch
     private var repo = ConversationsRepository.shared
@@ -344,7 +349,8 @@ struct ChatSearchPage: View {
          personRow: @escaping (UserProfile) -> AnyView,
          onOpenChat: @escaping (Conversation) -> Void,
          onOpenPerson: @escaping (UserProfile) -> Void,
-         onOpenPublicGroup: @escaping (PublicGroupTarget) -> Void) {
+         onOpenPublicGroup: @escaping (PublicGroupTarget) -> Void,
+         onSuggest: @escaping (String) -> Void = { _ in }) {
         self.query = query
         self.me = me
         self.dark = dark
@@ -355,6 +361,16 @@ struct ChatSearchPage: View {
         self.onOpenChat = onOpenChat
         self.onOpenPerson = onOpenPerson
         self.onOpenPublicGroup = onOpenPublicGroup
+        self.onSuggest = onSuggest
+    }
+
+    /// Every chat's name and @name on this phone: what a typo is most likely aiming at.
+    private var knownNames: [String] {
+        repo.conversations.flatMap { c -> [String] in
+            var out = [c.displayName(me)]
+            if c.isGroup, !c.publicName.isEmpty { out.append(c.publicName) }
+            return out
+        }
     }
 
     var body: some View {
@@ -763,7 +779,8 @@ struct ChatSearchPage: View {
                 .frame(maxHeight: .infinity, alignment: .top)
                 .allowsHitTesting(false)
         } else {
-            NoSearchResults(query: query)
+            NoSearchResults(query: query, suggestion: SearchSuggest.closest(to: query, in: knownNames),
+                            onSuggest: onSuggest, onFindChannels: { showFindChannels = true })
         }
     }
 }
@@ -773,6 +790,12 @@ struct ChatSearchPage: View {
 /// cannot say it two ways.
 struct NoSearchResults: View {
     let query: String
+    /// A close spelling of a name this phone already knows (owner 2026-10-31: "fix the typo for
+    /// them"), tapped to search it instead.
+    var suggestion: String? = nil
+    var onSuggest: ((String) -> Void)? = nil
+    /// The next search to try when nothing here matched: public channels.
+    var onFindChannels: (() -> Void)? = nil
     /// ⛔ THE MESSAGE REQUESTS EMPTY PAGE'S TYPE — owner 2026-10-16: "exactly the size, type and
     /// font of the message requests page". Title 17 semibold, line 15 secondary
     /// (MessageRequestsView `emptyLine`). Same words, still no icon.
@@ -785,6 +808,27 @@ struct NoSearchResults: View {
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+            if let suggestion, let onSuggest {
+                Button { onSuggest(suggestion) } label: {
+                    (Text("Did you mean ").foregroundStyle(.secondary)
+                     + Text(suggestion).foregroundStyle(Color.fariinAction).fontWeight(.semibold)
+                     + Text("?").foregroundStyle(.secondary))
+                        .font(.system(size: 15))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 4)
+            }
+            if let onFindChannels {
+                Button(action: onFindChannels) {
+                    Label("Find Channels", systemImage: "megaphone")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.fariinAction)
+                        .padding(.horizontal, 18).frame(height: 40)
+                        .overlay(Capsule().strokeBorder(Color.fariinAction.opacity(0.35), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 6)
+            }
         }
         .padding(.horizontal, 40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1299,4 +1343,45 @@ final class SearchSectionHeader: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     @objc private func clearTapped() { onClear?() }
+}
+
+
+/// "Did you mean â€¦?" (owner 2026-10-31): the known name a mistyped search was most likely aiming at.
+/// Edit distance on the folded text, against the whole name and each of its words, one slip allowed
+/// for a short word and two for a longer one. Nothing when the search already appears in a name.
+enum SearchSuggest {
+    static func closest(to query: String, in names: [String]) -> String? {
+        let q = fold(query)
+        guard q.count >= 3 else { return nil }
+        let limit = q.count <= 4 ? 1 : 2
+        var best: (name: String, d: Int)?
+        for name in Set(names) where !name.isEmpty {
+            let n = fold(name)
+            if n.contains(q) { return nil }
+            let parts = [n] + n.split(separator: " ").map(String.init)
+            let d = parts.map { distance(q, String($0.prefix(q.count + limit))) }.min() ?? 99
+            if d <= limit, d < (best?.d ?? 99) { best = (name, d) }
+        }
+        return best?.name
+    }
+
+    private static func fold(_ s: String) -> String {
+        s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func distance(_ a: String, _ b: String) -> Int {
+        let a = Array(a), b = Array(b)
+        if a.isEmpty { return b.count }
+        if b.isEmpty { return a.count }
+        var prev = Array(0...b.count)
+        for i in 1...a.count {
+            var cur = [i] + Array(repeating: 0, count: b.count)
+            for j in 1...b.count {
+                cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1))
+            }
+            prev = cur
+        }
+        return prev[b.count]
+    }
 }

@@ -121,7 +121,7 @@ struct EditHistorySheet: View {
                             dim: !readable)
                     }
                 } else if failed {
-                    Text("Couldn't load the edit history").font(.subheadline).foregroundStyle(.secondary)
+                    Text("Couldn't load the edit history. Check your connection and try again.").font(.subheadline).foregroundStyle(.secondary)
                 } else {
                     HStack { Spacer(); ProgressView(); Spacer() }
                 }

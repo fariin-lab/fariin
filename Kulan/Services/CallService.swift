@@ -2224,7 +2224,7 @@ final class CallService: NSObject {
         if shareUsesTrack {
             guard let pc, let sender = screenTransceiver(in: pc)?.sender, let track = screenTrack else {
                 print("[ScreenShare] dual mode lost its screen sender before the start")
-                stopScreenShare(notice: "Couldn't start screen sharing")
+                stopScreenShare(notice: "Couldn't start screen sharing. Try again.")
                 return
             }
             screenSender = sender
@@ -2330,7 +2330,7 @@ final class CallService: NSObject {
         if screenSharePhase == .picking {
             notice = nil
         } else if reason == .noFirstFrame || screenSharePhase == .starting {
-            notice = "Couldn't start screen sharing"
+            notice = "Couldn't start screen sharing. Try again."
         } else {
             notice = "Screen sharing stopped"
         }

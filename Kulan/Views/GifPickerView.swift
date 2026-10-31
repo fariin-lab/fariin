@@ -99,7 +99,7 @@ enum GifFavorites {
 
     /// Adds or removes, and returns the confirmation to show.
     static func toggle(_ m: Message) -> String {
-        guard m.isGif, let url = m.imageUrl else { return "Couldn't save this GIF" }
+        guard m.isGif, let url = m.imageUrl else { return "Couldn't save this GIF. Try again." }
         if contains(url) { remove(url); return "Removed from Favorites" }
         add(GiphyService.Gif(id: "fav-\(url)", url: url, width: m.width ?? 200, height: m.height ?? 200))
         return "Added to Favorites"

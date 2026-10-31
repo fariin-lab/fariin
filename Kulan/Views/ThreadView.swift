@@ -2083,7 +2083,7 @@ struct ThreadView: View {
         .sheet(item: $forwardTarget) { m in
             ForwardPicker(message: m, sourceCid: cid,
                           onQueued: { showJumpToast($0) },
-                          onFailed: { showJumpToast("Couldn't forward some messages") })
+                          onFailed: { showJumpToast("Couldn't forward some messages. Check your connection and try again.") })
         }
         .sheet(isPresented: $showGroupAdd) {
             AddMembersSheet(cid: cid, existing: Set(groupMembers))
@@ -6633,7 +6633,7 @@ struct ThreadView: View {
             }
             guard let (cipher, _) = try? await MediaSession.shared.data(from: url),
                   let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
-                await MainActor.run { sendError = "Couldn't open the file." }; return
+                await MainActor.run { sendError = "Couldn't open the file. It may be damaged, or in a format this phone can't open." }; return
             }
             // ⛔ THE NAME COMES FROM THE SENDER, SO IT IS NOT A PATH. `appendingPathComponent` does
             // not reject "/" or "..", and nothing sanitises `fileName` on the way in or out — so a
@@ -6654,7 +6654,7 @@ struct ThreadView: View {
             try? FileManager.default.createDirectory(at: box, withIntermediateDirectories: true)
             let tmp = box.appendingPathComponent(safe)
             guard (try? data.write(to: tmp)) != nil else {
-                await MainActor.run { sendError = "Couldn't open the file." }; return
+                await MainActor.run { sendError = "Couldn't open the file. It may be damaged, or in a format this phone can't open." }; return
             }
             // PDFs open in the custom PDFKit reader (Liquid Glass); everything else uses QuickLook.
             let isPDF = safe.lowercased().hasSuffix(".pdf") || data.prefix(4).elementsEqual([0x25, 0x50, 0x44, 0x46])   // "%PDF"
@@ -7066,7 +7066,7 @@ struct ThreadView: View {
             if await !ChatService.deleteMessage(cid: cid, messageId: m.id) {
                 await MainActor.run {
                     if undoable { repo.restoreAfterFailedDelete(m.id) }
-                    showJumpToast("Couldn't delete for everyone")
+                    showJumpToast("Couldn't delete for everyone. Check your connection and try again.")
                 }
             }
         }
@@ -7475,7 +7475,7 @@ struct ThreadView: View {
             switch item {
             case .image(let ui):
                 guard let d = ui.jpegData(compressionQuality: hd ? 0.95 : 0.85) else {
-                    await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't prepare one of the photos." }
+                    await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't prepare one of the photos. Remove it and try again." }
                     return
                 }
                 sendItems.append(.image(d))
@@ -7489,7 +7489,7 @@ struct ThreadView: View {
                 }
                 guard let prepared = exported else {
                     try? FileManager.default.removeItem(at: url)   // audit: else left this temp file behind
-                    await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't process one of the videos." }
+                    await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't process one of the videos. Remove it, or try a shorter clip." }
                     return
                 }
                 try? FileManager.default.removeItem(at: url)
@@ -8362,7 +8362,7 @@ struct ThreadView: View {
                 DiagLog.add("REACT# write refused cid=\(cid) remove=\(emoji == nil)")
                 await MainActor.run {
                     repo.revertMyReaction(messageId, uid: me, to: previous)
-                    showJumpToast("Couldn't update the reaction")
+                    showJumpToast("Couldn't update the reaction. Check your connection and try again.")
                 }
             }
         }
@@ -8519,7 +8519,7 @@ struct ThreadView: View {
         // path in this file does and the video path never did.
         guard let poster = await VideoTranscoder.poster(url) else {
             try? FileManager.default.removeItem(at: url)
-            await MainActor.run { sendError = "Couldn't process this video." }
+            await MainActor.run { sendError = "Couldn't process this video. Try a shorter clip or a different video." }
             return
         }
         let clientId = UUID().uuidString
@@ -8596,7 +8596,7 @@ struct ThreadView: View {
             let cancelled = await MediaSend.shared.wasCancelled(clientId)
             await MainActor.run {
                 repo.markFailed(clientId: clientId)
-                if !cancelled { sendError = "Couldn't process this video." }
+                if !cancelled { sendError = "Couldn't process this video. Try a shorter clip or a different video." }
             }
             return
         }

@@ -297,7 +297,7 @@ enum StickerSend {
     /// one somebody else made is kept as its own PNG copy (`addMine`), so it lands in Favorites
     /// whatever happens to the message.
     @MainActor static func toggleFavorite(_ m: Message, cid: String) async -> String {
-        guard let s = m.sticker else { return "Couldn't save this sticker" }
+        guard let s = m.sticker else { return "Couldn't save this sticker. Your phone may be low on storage; free some space and try again." }
         let store = StickerStore.shared
         if store.isFavorite(s) {
             store.removeFavorites([s.id])
@@ -309,14 +309,14 @@ enum StickerSend {
             return "Saved to Favorites"
         case .mine:
             guard let png = await minePNG(m, cid: cid), UIImage(data: png) != nil else {
-                return "Couldn't save this sticker"
+                return "Couldn't save this sticker. Your phone may be low on storage; free some space and try again."
             }
             do {
                 // Under the message's own id, so this menu then reads "Remove" (owner 2026-10-19).
                 _ = try store.addMine(png: png, emoji: s.emoji.isEmpty ? "🙂" : s.emoji, keepingId: s.stickerId)
                 return "Saved to Favorites"
             } catch {
-                return "Couldn't save this sticker"
+                return "Couldn't save this sticker. Your phone may be low on storage; free some space and try again."
             }
         }
     }

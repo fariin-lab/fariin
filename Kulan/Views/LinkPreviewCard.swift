@@ -237,7 +237,7 @@ struct LinkPreviewCard: View {
             await MainActor.run {
                 opening = false
                 if !opened {
-                    showOpenFailure(NetworkState.shared.isOnline ? "Couldn't connect"
+                    showOpenFailure(NetworkState.shared.isOnline ? "Couldn't connect. Check your connection and try again."
                                                                  : "No internet connection. Try again.")
                 }
             }

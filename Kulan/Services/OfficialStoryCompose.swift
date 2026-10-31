@@ -78,7 +78,7 @@ enum OfficialStoryCompose {
                                                     backdrop: b?.backdrop, storyBackdrop: true,
                                                     brightness: b?.brightness ?? 0,
                                                     holeCorner: b?.holeCorner ?? 0) else {
-            throw Failure.message("Couldn't process this video.")
+            throw Failure.message("Couldn't process this video. Try a shorter clip or a different video.")
         }
         let id = FirestoreHub.db.collection("officialStories").document().documentID
         try await upload(p.data, to: "officialStories/\(id)/media.mp4", type: "video/mp4")

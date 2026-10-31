@@ -1094,7 +1094,7 @@ struct ShareStorySheet: View {
                         name: .init("storyAudienceUpdateFailed"), object: nil,
                         userInfo: ["id": story.id,
                                    "message": (error as? LocalizedError)?.errorDescription
-                                       ?? "Couldn't update who can see this — check your connection"])
+                                       ?? "Couldn't update who can see this. Check your connection and try again."])
                 }
             }
         }

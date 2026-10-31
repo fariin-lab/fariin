@@ -305,6 +305,9 @@ struct ScanQRView: View {
     /// answers a question they did not ask.
     @State private var noCodeInPhoto = false
     @State private var torchOn = false
+    /// The camera is off for Fariin in iOS Settings (owner 2026-10-31: the scanner was a black screen
+    /// with no word about why). Then the page says so, offers Settings, and the photo button still works.
+    @State private var cameraDenied = false
 
     var body: some View {
         ZStack {
@@ -314,6 +317,7 @@ struct ScanQRView: View {
             // leaves you guessing how close to hold the phone and how much of the frame the code is
             // supposed to fill. The dimmed surround and the four corners answer both without a word.
             ScanTarget(locked: handling).ignoresSafeArea()
+            if cameraDenied { cameraOffCard }
 
             VStack {
                 HStack {
@@ -372,6 +376,11 @@ struct ScanQRView: View {
             }
         }
         .onChange(of: photoItem) { _, item in readPickedPhoto(item) }
+        .onAppear { checkCamera() }
+        // Back from Settings with the camera allowed: the page clears itself.
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            checkCamera()
+        }
         // A torch left burning after the screen closes is a flashlight nobody asked for, and on some
         // phones it stays on until the camera is opened again.
         .onDisappear { setTorch(false) }
@@ -382,7 +391,42 @@ struct ScanQRView: View {
         }
     }
 
+    private func checkCamera() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .denied, .restricted: cameraDenied = true
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { ok in
+                DispatchQueue.main.async { cameraDenied = !ok; if ok { scanReset += 1 } }
+            }
+        default:
+            if cameraDenied { scanReset += 1 }
+            cameraDenied = false
+        }
+    }
+
+    private var cameraOffCard: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "camera.fill").font(.system(size: 34, weight: .semibold)).foregroundStyle(.white)
+            Text("Camera access is off").font(.title3.weight(.semibold)).foregroundStyle(.white)
+            Text("Fariin needs the camera to scan a QR code. Turn it on in Settings, or pick a photo of a code with the button below.")
+                .font(.subheadline).foregroundStyle(.white.opacity(0.75)).multilineTextAlignment(.center)
+            Button {
+                if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+            } label: {
+                Text("Open Settings").font(.body.weight(.semibold)).foregroundStyle(.black)
+                    .padding(.horizontal, 28).frame(height: 48)
+                    .background(Capsule().fill(.white))
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 4)
+        }
+        .padding(.horizontal, 40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.ignoresSafeArea())
+    }
+
     private var hint: String {
+        if cameraDenied { return "Or pick a photo of a code" }
         if noCodeInPhoto { return "No QR code in that picture" }
         if notFound { return "No Fariin user found" }
         return "Point at a Fariin QR code"

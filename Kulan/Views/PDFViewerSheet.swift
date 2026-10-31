@@ -27,7 +27,7 @@ struct PDFViewerSheet: View {
                        locked: $locked, password: submittedPassword, wrongPassword: $wrongPassword)
                 .ignoresSafeArea()
             if failed {
-                Text("Couldn't open the file.")
+                Text("Couldn't open the file. It may be damaged, or in a format this phone can't open.")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
         }

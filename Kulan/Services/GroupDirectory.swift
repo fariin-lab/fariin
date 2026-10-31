@@ -369,7 +369,7 @@ enum GroupNameCheck: Equatable {
                 || ns.code == FunctionsErrorCode.permissionDenied.rawValue {
                 return .refused(ns.localizedDescription)
             }
-            return .failed(NetworkState.shared.isOnline ? "Couldn't connect" : "No internet connection. Try again.")
+            return .failed(NetworkState.shared.isOnline ? "Couldn't connect. Check your connection and try again." : "No internet connection. Try again.")
         }
     }
 

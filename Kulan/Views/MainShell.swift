@@ -1960,7 +1960,9 @@ struct ChatsView: View {
                     chatSearch = ""
                 },
                 // The search reports whether it is up (`clearCovers` closes it before a door moves).
-                onSearchingChange: { searchPresented = $0 })
+                onSearchingChange: { searchPresented = $0 },
+                // "Did you mean …?" (owner 2026-10-31): the suggestion goes into the field.
+                onSuggest: { chatSearch = $0 })
         )
     }
 
@@ -2859,7 +2861,7 @@ struct ChatsView: View {
                                     // the first-run welcome below. Wording reused from the app's
                                     // other load-failure states.
                                     ContentUnavailableView {
-                                        Label("Couldn't load your chats", systemImage: "wifi.exclamationmark")
+                                        Label("Couldn't load your chats. Check your connection and try again.", systemImage: "wifi.exclamationmark")
                                     } description: {
                                         Text("Check your connection and try again.")
                                     } actions: {

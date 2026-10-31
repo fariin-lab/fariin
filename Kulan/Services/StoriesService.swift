@@ -2379,7 +2379,7 @@ final class StoriesService {
                                                            holeCorner: burn?.holeCorner ?? 0,
                                                            bytesPerSecond: repostRate) else {
             throw NSError(domain: "Fariin", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Couldn't process this video"])
+                          userInfo: [NSLocalizedDescriptionKey: "Couldn't process this video. Try a shorter clip or a different video."])
         }
         // THE PHONE'S HALF IS OVER — and on video it is the long half. Past here it is upload only,
         // and the clip is already playable from the local file, so the ring must stop. See

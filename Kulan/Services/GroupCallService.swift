@@ -1253,7 +1253,7 @@ final class GroupCallService: ObservableObject {
                     GCLog.failure("mic_fail", room: self.logRoom, ["want": want ? "on" : "off", "code": Telemetry.code(error)])
                     if self.micOn != live {
                         self.micOn = live
-                        self.showToast(want ? "Couldn't turn the microphone on" : "Couldn't turn the microphone off")
+                        self.showToast(want ? "Couldn't turn the microphone on. Try again." : "Couldn't turn the microphone off. Try again.")
                     }
                     break
                 }
@@ -1310,7 +1310,7 @@ final class GroupCallService: ObservableObject {
                     GCLog.failure("camera_fail", room: self.logRoom, ["want": want ? "on" : "off", "code": Telemetry.code(error)])
                     if want == self.cameraWanted {
                         self.cameraOn = self.room.localParticipant.isCameraEnabled()
-                        self.showToast(want ? "Couldn't turn the camera on" : "Couldn't turn the camera off")
+                        self.showToast(want ? "Couldn't turn the camera on. Try again." : "Couldn't turn the camera off. Try again.")
                     }
                     break
                 }
@@ -1508,7 +1508,7 @@ final class GroupCallService: ObservableObject {
                 usingFrontCamera = capturer.position != .back
             } catch {
                 GCLog.failure("flip_fail", room: logRoom, ["code": Telemetry.code(error)])
-                showToast("Couldn't switch the camera")
+                showToast("Couldn't switch the camera. Try again.")
             }
             // Controls 2-B3, 2026-10-23: the flip is a stop and a start of the capture, and a
             // camera-off landing in between had its stop undone by that start: nothing went out
@@ -1583,7 +1583,7 @@ final class GroupCallService: ObservableObject {
                 if shareSession == nil { sharePending = false }
                 if gen == joinGeneration, isActive, shareSession == nil {
                     GCLog.failure("share_fail", room: logRoom, ["step": "open"])
-                    showToast("Couldn't share your screen")
+                    showToast("Couldn't share your screen. Try again.")
                 }
                 return
             }
@@ -1591,7 +1591,7 @@ final class GroupCallService: ObservableObject {
             guard ScreenSharePicker.show() else {
                 endScreenShare()
                 GCLog.failure("share_fail", room: logRoom, ["step": "picker"])
-                showToast("Couldn't share your screen")
+                showToast("Couldn't share your screen. Try again.")
                 return
             }
             // ⛔ THE SHEET CLOSED WITHOUT START (owner 2026-10-28: the "..." stayed white and the menu
@@ -1697,7 +1697,7 @@ final class GroupCallService: ObservableObject {
                 // A share already ended (or a call already left) is not a failure to show.
                 guard gen == joinGeneration, shareTrack === track else { return }
                 GCLog.failure("share_fail", room: logRoom, ["step": "publish", "code": Telemetry.code(error)])
-                showToast("Couldn't share your screen")
+                showToast("Couldn't share your screen. Try again.")
                 endScreenShare()
             }
         }
@@ -2752,7 +2752,7 @@ final class GroupCallService: ObservableObject {
             if adhocDoc?.roomId == roomId { for m in fresh { adhocDoc?.added[m.uid] = nil } }
             // audit M-159, 2026-10-07: a line over the stage, not the alert. `notice` is the
             // failed-start alert, and its OK closes the call screen of a call that is still running.
-            showToast("Couldn't add people")
+            showToast("Couldn't add people. Check your connection and try again.")
         }
     }
 

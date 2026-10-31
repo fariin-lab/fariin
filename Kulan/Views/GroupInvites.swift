@@ -537,7 +537,7 @@ struct JoinGroupSheet: View {
                         dismiss()
                     }
                 default:
-                    joinError = "Couldn't join. The link may be invalid."
+                    joinError = "Couldn't join. The link may have expired; ask for a new one."
                 }
             } catch {
                 // Banned sticks: Join goes grey with the server's words (audit 2026-10-26 item 19).
