@@ -422,7 +422,7 @@ struct AttachRecentsStrip: View {
                     } label: {
                         Image(systemName: viewOnce ? "1.circle.fill" : "1.circle")
                             .font(.system(size: 20, weight: .regular))
-                            .foregroundStyle(viewOnce ? Color(hex: 0x0A84FF) : Color(.systemGray))
+                            .foregroundStyle(viewOnce ? Color.fariinAction : Color(.systemGray))
                             .contentTransition(.symbolEffect(.replace))
                             .frame(width: 40, height: 40)   // matches the 40px bar; bottom-aligned
                             .contentShape(Rectangle())
@@ -508,9 +508,9 @@ struct AttachRecentsStrip: View {
             } label: {
                 Text("MANAGE")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.onFariinAction)
                     .padding(.horizontal, 14).frame(height: 30)
-                    .background(Color(hex: 0x0A84FF), in: Capsule())
+                    .background(Color.fariinAction, in: Capsule())
             }
         }
         .padding(.leading, 16).padding(.trailing, 12)

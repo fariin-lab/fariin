@@ -1202,7 +1202,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     private func setPen() {
         var c = UIButton.Configuration.plain()
         c.title = editing ? "Done" : "Edit"
-        c.baseForegroundColor = editing ? .systemBlue : .label
+        c.baseForegroundColor = .label
         c.contentInsets = .zero
         c.titleLineBreakMode = .byClipping
         // 13 at the foot beside the pack bar (owner 2026-10-19 "make small"), 15 in the old top row.
@@ -1490,7 +1490,7 @@ private final class StickerCell: UICollectionViewCell {
     func setChecking(_ on: Bool, on picked: Bool) {
         check.isHidden = !on
         check.image = UIImage(systemName: picked ? "checkmark.circle.fill" : "circle")
-        check.tintColor = picked ? .systemBlue : .white
+        check.tintColor = picked ? .fariinAction : .white
         check.backgroundColor = picked ? .white : UIColor.black.withAlphaComponent(0.25)
         check.layer.cornerRadius = 10
         check.clipsToBounds = true

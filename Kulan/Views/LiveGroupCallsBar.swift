@@ -121,9 +121,9 @@ struct LiveGroupCallRow: View {
             Button(action: onJoin) {
                 Text(isMine ? "RETURN" : "JOIN")
                     .font(.subheadline.weight(.bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.onFariinAction)
                     .padding(.horizontal, 16).frame(height: 32)
-                    .glassEffect(.regular.tint(Color.fariinBlue).interactive(), in: Capsule())
+                    .glassEffect(.regular.tint(Color.fariinAction).interactive(), in: Capsule())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(isMine ? "Return to the call in \(title)" : "Join the call in \(title)")

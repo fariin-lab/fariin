@@ -839,7 +839,7 @@ private struct RecentRow: View {
                 }
                 if let text = line ?? seen?.text {
                     Text(text).font(.subheadline)
-                        .foregroundStyle(seen?.online == true && line == nil ? Color.fariinBlue : .secondary)
+                        .foregroundStyle(seen?.online == true && line == nil ? Color.fariinAction : .secondary)
                         .lineLimit(1)
                 }
             }

@@ -170,7 +170,7 @@ struct ChatStorageView: View {
                 if selecting {
                     ZStack {
                         // Blue when picked (owner 2026-10-21: the app tint is white in dark mode).
-                        Circle().fill(isOn ? Color(hex: 0x0A84FF) : .black.opacity(0.25))
+                        Circle().fill(isOn ? Color.fariinAction : .black.opacity(0.25))
                         Circle().stroke(.white, lineWidth: 1.5)
                         if isOn {
                             Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)

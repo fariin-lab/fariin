@@ -978,7 +978,8 @@ struct AddAdminPage: View {
                     Button("Add") { add() }
                         .fontWeight(.semibold)
                         .buttonStyle(.glassProminent)
-                        .tint(Color(hex: 0x2392FE))
+                        .tint(Color.fariinAction)
+                        .foregroundStyle(Color.onFariinAction)
                 }
             }
         }
@@ -1429,10 +1430,10 @@ struct GroupRequestsView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("Decline \(r.name)")
                         Button { answer(r.uid) { try await GroupInviteService.approveJoin(cid: cid, uid: r.uid) } } label: {
-                            Text("Approve").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                            Text("Approve").font(.subheadline.weight(.semibold)).foregroundStyle(Color.onFariinAction)
                                 .padding(.horizontal, 12).padding(.vertical, 7)
                                 // Blue, not the accent (owner 2026-10-21: white on white in dark mode).
-                                .background(Capsule().fill(Color(hex: 0x0A84FF)))
+                                .background(Capsule().fill(Color.fariinAction))
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Approve \(r.name)")
@@ -1672,7 +1673,8 @@ struct EditGroupView: View {
                         if saving { ProgressView().tint(.white) } else { Text("Save").fontWeight(.semibold) }
                     }
                     .disabled(trimmed.isEmpty || !changed || saving)
-                    .buttonStyle(.borderedProminent).tint(.blue)
+                    .buttonStyle(.borderedProminent).tint(Color.fariinAction)
+                    .foregroundStyle(Color.onFariinAction)
                 }
             }
             .onAppear {

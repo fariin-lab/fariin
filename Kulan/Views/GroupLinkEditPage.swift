@@ -160,7 +160,8 @@ struct GroupLinkEditPage: View {
         ToolbarItem(placement: .topBarTrailing) {
             if saving { ProgressView() } else {
                 Button(link == nil ? "Create" : "Save") { save() }.fontWeight(.semibold)
-                    .buttonStyle(.glassProminent).tint(Color(hex: 0x2392FE))
+                    .buttonStyle(.glassProminent).tint(Color.fariinAction)
+                    .foregroundStyle(Color.onFariinAction)
             }
         }
     }

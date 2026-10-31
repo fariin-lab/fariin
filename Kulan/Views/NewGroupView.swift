@@ -338,7 +338,7 @@ struct NewGroupView: View {
                         .overlay { if creating { CreatingRing() } }
                 }
                 .disabled(!canCreate && !creating)
-                    .buttonStyle(.borderedProminent).tint(.blue)   // blue (owner 2026-10-18)
+                    .buttonStyle(.borderedProminent).tint(Color.fariinAction)   // blue (owner 2026-10-18)
             }
         }
         // Straight to the name, as the page is for naming the group.

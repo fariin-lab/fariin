@@ -114,11 +114,11 @@ struct NewChannelView: View {
                 Text("By creating a channel you agree to the [Channel Guidelines](https://help.fariin.com/channels/channel-guidelines).")
                     .font(.footnote).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .tint(Color(hex: 0x2392FE))
+                    .tint(Color.fariinAction)
                 Button { if embedded { embeddedDetails = true } else { path.append(.details) } } label: {
-                    Text("Create Channel").fontWeight(.semibold).foregroundStyle(.white)
+                    Text("Create Channel").fontWeight(.semibold).foregroundStyle(Color.onFariinAction)
                         .frame(maxWidth: .infinity).frame(height: 52)
-                        .liquidGlass(Capsule(), interactive: true, tint: Color(hex: 0x2392FE))
+                        .liquidGlass(Capsule(), interactive: true, tint: Color.fariinAction)
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -188,7 +188,8 @@ struct NewChannelView: View {
                         .overlay { if creating { CreatingRing(label: "Creating channel") } }
                 }
                 .disabled(trimmedName.isEmpty && !creating)
-                .buttonStyle(.borderedProminent).tint(.blue)
+                .buttonStyle(.borderedProminent).tint(Color.fariinAction)
+                .foregroundStyle(Color.onFariinAction)
             }
         }
         .task {
@@ -360,7 +361,7 @@ struct NewChannelView: View {
 /// a drawn sunset coast, its caption, reactions and views; two earlier posts fanned behind it (a
 /// night city, a mountain lake). Landscapes only, no people. Decorative: VoiceOver skips it.
 struct ChannelIntroPreview: View {
-    private let blue = Color(hex: 0x2392FE)
+    private let blue = Color.fariinAction
 
     var body: some View {
         ZStack {

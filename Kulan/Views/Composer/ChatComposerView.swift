@@ -254,8 +254,8 @@ final class ChatComposerView: UIView {
         var cfg = UIButton.Configuration.filled()
         cfg.cornerStyle = .capsule
         cfg.contentInsets = .zero
-        cfg.baseBackgroundColor = UIColor.systemBlue.withAlphaComponent(0.14)
-        cfg.baseForegroundColor = .systemBlue
+        cfg.baseBackgroundColor = UIColor.fariinAction.withAlphaComponent(0.1)
+        cfg.baseForegroundColor = .fariinAction
         let b = OutsetHitButton(configuration: cfg)
         b.hitOutset = UIEdgeInsets(top: 4, left: 4, bottom: 4, right: 4)
         return b

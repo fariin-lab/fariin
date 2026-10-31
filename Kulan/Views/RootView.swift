@@ -1092,9 +1092,9 @@ struct OnboardingView: View {
                         .overlay(alignment: .bottomTrailing) {
                             Image(systemName: pickedAvatar == nil ? "camera.fill" : "pencil")
                                 .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(Color.onFariinAction)
                                 .frame(width: 30, height: 30)
-                                .background(Color.fariinBlue, in: Circle())   // one action colour
+                                .background(Color.fariinAction, in: Circle())   // one action colour
                                 .overlay(Circle().strokeBorder(AuthPalette.page, lineWidth: 2.5))
                                 .offset(x: 2, y: 2)
                         }

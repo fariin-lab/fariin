@@ -533,9 +533,9 @@ struct ChatPinPage: View {
                             Spacer()
                             Text("Fariin Plus")
                                 .font(.caption.weight(.semibold))
-                                .foregroundStyle(Color.fariinBlue)
+                                .foregroundStyle(Color.fariinAction)
                                 .padding(.horizontal, 8).padding(.vertical, 3)
-                                .background(Capsule().fill(Color.fariinBlue.opacity(0.14)))
+                                .background(Capsule().fill(Color.fariinAction.opacity(0.14)))
                         }
                     }
                 } footer: {

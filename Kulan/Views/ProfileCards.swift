@@ -57,7 +57,7 @@ struct ProfileAboutContent: View {
             Label("About", systemImage: "text.alignleft").font(.body)
             if linked && !placeholder {
                 Text(Self.linkedText(text))
-                    .tint(Color(hex: 0x0A84FF))
+                    .tint(Color.fariinAction)
                     // A web link opens in the in-app browser, an @username on that person's profile
                     // (our own kulan://u/ link, which the app's deep link routing opens).
                     .environment(\.openURL, OpenURLAction { url in

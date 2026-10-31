@@ -492,9 +492,9 @@ struct ChatImageEditor: View {
                 // hands the photo straight back, with no editor page in between.
                 Button { finishPen() } label: {
                     Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.onFariinAction)
                         .frame(width: 44, height: 44)
-                        .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
+                        .liquidGlass(Circle(), interactive: true, tint: Color.fariinAction)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)

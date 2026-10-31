@@ -261,7 +261,7 @@ struct OfficialChatView: View {
                 .padding(.horizontal, 16)
                 .modifier(SelectableRow(selecting: selecting, wasSelecting: wasSelecting,
                                         selected: selectedIds.contains(a.id),
-                                        tint: Color(hex: 0x0A84FF),
+                                        tint: Color.fariinAction,
                                         onWallpaper: WallpaperStore.shared.hasWallpaper(for: OfficialChannel.cid),
                                         onToggle: { toggle(a.id) })))
             },
@@ -1120,7 +1120,7 @@ struct AnnouncementRow: View {
                         return .handled
                     })
                     .font(.system(size: 17))
-                    .tint(Color(hex: 0x0A84FF))
+                    .tint(Color.fariinAction)
                     .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -1211,7 +1211,7 @@ struct AnnouncementRow: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(Color(hex: 0x0A84FF))
+                .foregroundStyle(Color.fariinAction)
             }
         }
     }

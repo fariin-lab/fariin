@@ -206,7 +206,7 @@ struct GroupRecentActionsView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showFilter = true } label: {
                     Image(systemName: "line.3.horizontal.decrease")
-                        .foregroundStyle(filtering ? Color.fariinBlue : Color.primary)
+                        .foregroundStyle(filtering ? Color.fariinAction : Color.primary)
                 }
                 .accessibilityLabel(filtering ? "Filter, on" : "Filter")
                 .disabled(events.isEmpty)
@@ -295,7 +295,7 @@ struct GroupRecentActionsView: View {
                 }
                 .padding(.leading, 10)
                 .overlay(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 1.5).fill(Color.fariinBlue).frame(width: 3)
+                    RoundedRectangle(cornerRadius: 1.5).fill(Color.fariinAction).frame(width: 3)
                 }
             }
             if let url = d.photoUrl {
@@ -320,7 +320,7 @@ struct GroupRecentActionsView: View {
     }
 
     private var moreLoader: some View {
-        BusyArc.small(Color.fariinBlue)
+        BusyArc.small(Color.fariinAction)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)
             // A new identity per page, so it asks again if it is still on screen after a page whose
@@ -340,7 +340,8 @@ struct GroupRecentActionsView: View {
             Text(text).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
             if let button, let act {
                 Button(button, action: act)
-                    .buttonStyle(.glassProminent).tint(Color.fariinBlue)
+                    .buttonStyle(.glassProminent).tint(Color.fariinAction)
+                    .foregroundStyle(Color.onFariinAction)
                     .padding(.top, 4)
             }
         }
@@ -717,7 +718,7 @@ private struct RecentActionsFilterSheet: View {
                         apply(everyKind ? nil : kinds, everyone ? nil : actors)
                         dismiss()
                     }
-                    .tint(Color.fariinBlue)
+                    .tint(Color.fariinAction)
                     .disabled(kinds.isEmpty || (!people.isEmpty && actors.isEmpty))
                 }
             }
@@ -733,7 +734,7 @@ private struct RecentActionsFilterSheet: View {
                 Spacer(minLength: 8)
                 Image(systemName: "checkmark")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.fariinBlue)
+                    .foregroundStyle(Color.fariinAction)
                     .opacity(on ? 1 : 0)
             }
             .contentShape(Rectangle())

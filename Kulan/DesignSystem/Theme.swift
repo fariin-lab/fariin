@@ -13,12 +13,22 @@ extension Color {
         )
     }
 
-    /// ⛔ THE ONE ACTION COLOUR (owner 2026-10-26, "black somewhere, blue somewhere is confusing").
-    /// Fariin blue for anything tapped to ACT: main buttons (Save, Continue, Join, Send), links, the
-    /// compose pen. Black/white (`.primary`) is for text and plain icons only; red for danger;
-    /// green for the system switches. Apple's and Google's sign-in buttons keep their own black/white
-    /// (their brand rules). The same blue as the logo and the Join buttons.
-    static let fariinBlue = Color(hex: 0x2392FE)
+    /// ⛔ THE ONE ACTION COLOUR: BLACK ON LIGHT, WHITE ON DARK — owner 2026-10-31 (reverses 10-26's
+    /// blue: "you cannot use two colours, we stay black"). Anything tapped to ACT and anything that
+    /// shows loading: main buttons (Save, Continue, Join, Send), links, the compose pen, picked
+    /// checkmarks, spinners. Red stays for danger. NOT for chat bubbles, the verified badge, read
+    /// ticks, story rings, charts or colour pickers: those keep their own colours.
+    static let fariinAction = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .white : .black })
+    /// Text and icons ON a filled `fariinAction` button: white on light, black on dark.
+    static let onFariinAction = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .black : .white })
+    /// The old Fariin blue, for data only (group statistics charts), never for a control.
+    static let chartBlue = Color(hex: 0x2392FE)
+}
+
+extension UIColor {
+    /// `Color.fariinAction` for UIKit.
+    static let fariinAction = UIColor { $0.userInterfaceStyle == .dark ? .white : .black }
+    static let onFariinAction = UIColor { $0.userInterfaceStyle == .dark ? .black : .white }
 }
 
 // App-wide appearance override (persisted in UserDefaults via @AppStorage).

@@ -97,9 +97,9 @@ struct NewContactView: View {
             Spacer()
             Button { Task { await add() } } label: {
                 Image(systemName: working ? "ellipsis" : "checkmark")
-                    .font(.system(size: 16, weight: .bold)).foregroundStyle(.white)
+                    .font(.system(size: 16, weight: .bold)).foregroundStyle(Color.onFariinAction)
                     .frame(width: 40, height: 40)
-                    .background(canSave ? AnyShapeStyle(Color.blue) : AnyShapeStyle(Color.gray.opacity(0.4)), in: Circle())
+                    .background(canSave ? AnyShapeStyle(Color.fariinAction) : AnyShapeStyle(Color.gray.opacity(0.4)), in: Circle())
             }
             .disabled(!canSave)
         }

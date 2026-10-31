@@ -40,7 +40,7 @@ struct GroupPublicLinkCard: View {
                 .foregroundStyle(.primary)
             VStack(alignment: .leading, spacing: 2) {
                 // Fariin blue, the one action colour (owner 2026-10-26: "make it blue link").
-                Text(shownLink).foregroundStyle(Color.fariinBlue).lineLimit(1)
+                Text(shownLink).foregroundStyle(Color.fariinAction).lineLimit(1)
                 Text(copied ? "Copied" : "Link").font(.system(size: 13)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
@@ -134,7 +134,7 @@ struct GroupAboutCard: View {
             .mask { if folds { foldMask } else { Rectangle() } }
             .overlay(alignment: .bottomTrailing) {
                 if folds {
-                    Text("more").font(.body).foregroundStyle(Color(hex: 0x0A84FF))
+                    Text("more").font(.body).foregroundStyle(Color.fariinAction)
                 }
             }
             .contentShape(Rectangle())
@@ -152,7 +152,7 @@ struct GroupAboutCard: View {
 
     private var plainDesc: some View {
         Text(GroupInfoView.blueLinks(desc)).font(.body).foregroundStyle(.primary)
-            .tint(Color(hex: 0x0A84FF))
+            .tint(Color.fariinAction)
             .multilineTextAlignment(.leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)

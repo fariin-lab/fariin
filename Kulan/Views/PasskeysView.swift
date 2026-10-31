@@ -252,7 +252,7 @@ struct PasskeysView: View {
     /// A challenge fetched as the page opens, so Add goes straight to the sheet (see Passkeys.Prepared).
     @State private var prepared: Passkeys.Prepared?
 
-    private let brand = Color(hex: 0x0A84FF)
+    private let brand = Color.fariinAction
 
     var body: some View {
         Group {

@@ -204,7 +204,7 @@ struct StoryTick: View {
             // `.blue` LITERALLY, not accentColor: the app's accent resolves near-grey here, and a
             // grey tick does not read as chosen (his 2026-08-09 screenshot with the ticks circled).
             // Same blue as the Post Story capsule, so the sheet's two affirmatives agree.
-            .foregroundStyle(on ? Color.blue : Color.secondary.opacity(0.55))
+            .foregroundStyle(on ? Color.fariinAction : Color.secondary.opacity(0.55))
             .symbolRenderingMode(on ? .monochrome : .hierarchical)
     }
 }
@@ -327,7 +327,8 @@ struct StoryPeoplePicker: View {
                     .fontWeight(.semibold)
                     // Owner 2026-10-11: the reference's blue capsule; dims when it cannot act.
                     .buttonStyle(.glassProminent)
-                    .tint(.blue)
+                    .tint(Color.fariinAction)
+                    .foregroundStyle(Color.onFariinAction)
                     .disabled(requireAtLeastOne && selected.isEmpty)
             }
         }
@@ -478,7 +479,8 @@ struct SelectViewersView: View {
                     .fontWeight(.semibold)
                     // Owner 2026-10-11: the reference's blue capsule; dims when it cannot act.
                     .buttonStyle(.glassProminent)
-                    .tint(.blue)
+                    .tint(Color.fariinAction)
+                    .foregroundStyle(Color.onFariinAction)
                     .disabled(requiresSelection && selected.isEmpty)
             }
         }
@@ -527,7 +529,7 @@ struct CustomStoryEmojiHeader: View {
             if let onChange {
                 Button("Change Emoji", action: onChange)
                     .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(Color.fariinAction)
                     .buttonStyle(.borderless)
             }
         }
@@ -635,7 +637,8 @@ struct NameStoryView: View {
                     // Owner 2026-10-11: blue when it can be pressed; the disabled state stays grey.
                     // The same blue capsule as Next on the page before it.
                     .buttonStyle(.glassProminent)
-                    .tint(.blue)
+                    .tint(Color.fariinAction)
+                    .foregroundStyle(Color.onFariinAction)
                     // Required means required. A nameless list is unfindable in the picker, which is
                     // the one place its name is ever read.
                     .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -1346,7 +1349,8 @@ struct CustomStoryEditView: View {
                 }
                 .fontWeight(.semibold)
                 .buttonStyle(.glassProminent)
-                .tint(.blue)
+                .tint(Color.fariinAction)
+                .foregroundStyle(Color.onFariinAction)
                 .disabled(trimmed.isEmpty || !changed)
             }
         }

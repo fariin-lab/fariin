@@ -359,7 +359,7 @@ struct SecurityCheckupSheet: View {
                     Button { if let u = URL(string: "https://fariin.com/safety") { WebLink.open(u) } } label: {
                         Text("How Fariin keeps you safe")
                             .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Color.blue)
+                            .foregroundStyle(Color.fariinAction)
                     }
                     .buttonStyle(.plain)
                 }
@@ -381,9 +381,9 @@ struct SecurityCheckupSheet: View {
                 Button { close() } label: {
                     Text("Continue")
                         .font(.body.weight(.semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.onFariinAction)
                         .frame(maxWidth: .infinity, minHeight: 52)
-                        .background(Color.blue, in: Capsule())
+                        .background(Color.fariinAction, in: Capsule())
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 20)
@@ -573,9 +573,9 @@ private struct DeviceReviewPage: View {
                 Button(action: onYes) {
                     Text(devices.count == 1 ? "Yes, it's me" : "Yes, these are mine")
                         .font(.body.weight(.semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.onFariinAction)
                         .frame(maxWidth: .infinity, minHeight: 52)
-                        .background(Color.blue, in: Capsule())
+                        .background(Color.fariinAction, in: Capsule())
                 }
                 .buttonStyle(.plain)
                 Button(action: onNo) {

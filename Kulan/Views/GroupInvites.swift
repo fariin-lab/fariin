@@ -296,7 +296,7 @@ struct JoinGroupSheet: View {
     @State private var joinError: String?
     @State private var contentHeight: CGFloat = 380
 
-    private static let blue = Color(hex: 0x2392FE)
+    private static let blue = Color.fariinAction
 
     var body: some View {
         VStack(spacing: 0) {

@@ -74,7 +74,7 @@ struct RoleEditorView: View {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") { save() }
                     .fontWeight(.semibold)
-                    .tint(.blue)
+                    .tint(Color.fariinAction)
                     .disabled(!canSave)
             }
         }

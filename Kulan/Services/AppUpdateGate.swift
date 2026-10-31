@@ -197,7 +197,7 @@ private struct UpdatePromptView: View {
                     content.padding(.top, 28)
                     updateButton.padding(.horizontal, 20).padding(.top, 24)
                     Button(action: onNotNow) {
-                        Text("Not Now").font(.body.weight(.semibold)).foregroundStyle(Color.blue)
+                        Text("Not Now").font(.body.weight(.semibold)).foregroundStyle(Color.fariinAction)
                             .frame(maxWidth: .infinity, minHeight: 44)
                     }
                     .buttonStyle(.plain)
@@ -213,9 +213,9 @@ private struct UpdatePromptView: View {
         VStack(spacing: 0) {
             Image(systemName: "arrow.down.app.fill")
                 .font(.system(size: 30, weight: .semibold))
-                .foregroundStyle(Color.blue)
+                .foregroundStyle(Color.fariinAction)
                 .frame(width: 72, height: 72)
-                .background(Color.blue.opacity(0.14), in: Circle())
+                .background(Color.fariinAction.opacity(0.14), in: Circle())
             Text(decision.title)
                 .font(.title2.weight(.bold))
                 .multilineTextAlignment(.center)
@@ -232,9 +232,9 @@ private struct UpdatePromptView: View {
     private var updateButton: some View {
         Button(action: onUpdate) {
             Text("Update Now")
-                .font(.body.weight(.semibold)).foregroundStyle(.white)
+                .font(.body.weight(.semibold)).foregroundStyle(Color.onFariinAction)
                 .frame(maxWidth: .infinity, minHeight: 52)
-                .background(Color.blue, in: Capsule())
+                .background(Color.fariinAction, in: Capsule())
         }
         .buttonStyle(.plain)
     }

@@ -252,9 +252,9 @@ struct MessageRequestsView: View {
                 .renderingMode(.template)
                 .resizable().scaledToFit()
                 .frame(width: 34, height: 34)
-                .foregroundStyle(Color.blue)
+                .foregroundStyle(Color.fariinAction)
                 .frame(width: 72, height: 72)
-                .background(Color.blue.opacity(0.14), in: Circle())
+                .background(Color.fariinAction.opacity(0.14), in: Circle())
                 .padding(.top, 30)
             Text("Message requests")
                 .font(.title2.weight(.bold))
@@ -270,9 +270,9 @@ struct MessageRequestsView: View {
             Button { dismissIntro() } label: {
                 Text("Got it")
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.onFariinAction)
                     .frame(maxWidth: .infinity, minHeight: 52)
-                    .background(Color.blue, in: Capsule())
+                    .background(Color.fariinAction, in: Capsule())
             }
             .buttonStyle(.plain)
             .padding(.horizontal, 20)
@@ -281,7 +281,7 @@ struct MessageRequestsView: View {
             } label: {
                 Text("Learn more")
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(Color.blue)
+                    .foregroundStyle(Color.fariinAction)
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.plain)

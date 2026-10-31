@@ -415,7 +415,7 @@ struct MainShell: View {
         //
         // So the blue is applied here, where the bar reads it, and each tab's ROOT restores the
         // app's own tint for its content. The bar is outside those roots and keeps the blue.
-        .tint(.blue)
+        .tint(Color.fariinAction)
         .onChange(of: StoriesService.shared.uploading) { _, uploading in
             let wasUploading = sawStoryUpload
             sawStoryUpload = uploading
@@ -1899,7 +1899,7 @@ struct ChatsView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(u.name.isEmpty ? u.handle : u.name).font(.headline).foregroundStyle(.primary)
                 // Blue like a channel's @name in the same list (owner 2026-10-29).
-                Text("@\(u.handle)").font(.subheadline).foregroundStyle(Color(hex: 0x2392FE))
+                Text("@\(u.handle)").font(.subheadline).foregroundStyle(Color.fariinAction)
             }
             Spacer(minLength: 0)
         }
@@ -2247,9 +2247,9 @@ struct ChatsView: View {
         // The pencil's tip juts out top right, so the glyph's box sits the square low and left in
         // the circle; nudged so the square is what is centred (owner 2026-10-26). Up only: measured on
         // his screenshot, x 1.5 put the square 1.5 pt right of centre, so the sideways nudge is gone.
-        // Always white on the blue (owner 2026-10-26: in dark mode the prominent glass drew it black).
+        // The opposite of the fill: white on black, black on white (owner 2026-10-31, one colour).
         Button { showNew = true } label: {
-            Image(systemName: "square.and.pencil").foregroundStyle(.white).offset(y: -1.5)
+            Image(systemName: "square.and.pencil").foregroundStyle(Color.onFariinAction).offset(y: -1.5)
         }
             // Where the first-chat tip points (owner 2026-10-18).
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).midX } action: { composeMidX = $0 }
@@ -2310,7 +2310,8 @@ struct ChatsView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 // A filled Fariin-blue circle with a white pen, the screen's main action (owner
                 // 2026-10-26: the whole button blue, not just the pen; was a glass circle).
-                composeButton.buttonStyle(.glassProminent).tint(Color.fariinBlue)
+                composeButton.buttonStyle(.glassProminent).tint(Color.fariinAction)
+                    .foregroundStyle(Color.onFariinAction)
                     .modifier(SwipeFade(on: showHeaderIcons))
             }
         }

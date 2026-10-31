@@ -549,10 +549,10 @@ struct VerificationInfoSheet: View {
                 Button { dismiss() } label: {
                     Text("Got it")
                         .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.onFariinAction)
                         .frame(maxWidth: .infinity)
                         .frame(height: 50)
-                        .background(Capsule().fill(Color(hex: 0x2392FE)))
+                        .background(Capsule().fill(Color.fariinAction))
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)

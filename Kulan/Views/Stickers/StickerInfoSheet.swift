@@ -178,9 +178,9 @@ struct StickerInfoSheet: View {
             Button { StickerStore.shared.setAdded(pack.id, true); dismiss() } label: {
                 Text("Add to my stickers")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.onFariinAction)
                     .frame(maxWidth: .infinity).frame(height: 50)
-                    .background(Capsule().fill(Color.fariinBlue))
+                    .background(Capsule().fill(Color.fariinAction))
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)

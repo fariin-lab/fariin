@@ -708,7 +708,7 @@ enum SavePasswordOffer {
 private struct CreateProminent: ViewModifier {
     let on: Bool
     func body(content: Content) -> some View {
-        if on { content.buttonStyle(.borderedProminent).tint(.blue) } else { content }
+        if on { content.buttonStyle(.borderedProminent).tint(Color.fariinAction) } else { content }
     }
 }
 

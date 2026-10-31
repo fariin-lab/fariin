@@ -107,7 +107,7 @@ struct ChannelFollowerBar: View {
         .padding(.horizontal, 18)
         .frame(height: 50)
         .liquidGlass(RoundedRectangle(cornerRadius: 25, style: .continuous),
-                     interactive: true, tint: blue ? Color(hex: 0x2392FE) : nil)
+                     interactive: true, tint: blue ? Color.fariinAction : nil)
         .contentShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
     }
 
@@ -313,7 +313,7 @@ struct DiscoverChannelsView: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(mine ? Color.secondary : Color.white)
                 .padding(.horizontal, 14).frame(height: 32)
-                .liquidGlass(Capsule(), interactive: !mine, tint: mine ? nil : Color(hex: 0x2392FE))
+                .liquidGlass(Capsule(), interactive: !mine, tint: mine ? nil : Color.fariinAction)
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -589,7 +589,7 @@ struct InviteInsteadSheet: View {
                                 Spacer(minLength: 8)
                                 Image(systemName: picked.contains(p.uid) ? "checkmark.circle.fill" : "circle")
                                     .font(.title3)
-                                    .foregroundStyle(picked.contains(p.uid) ? Color(hex: 0x2392FE) : Color.secondary)
+                                    .foregroundStyle(picked.contains(p.uid) ? Color.fariinAction : Color.secondary)
                             }
                         }
                     }
@@ -610,10 +610,10 @@ struct InviteInsteadSheet: View {
                 Button { Task { await send() } } label: {
                     Text(sending ? "Sending…" : (picked.count > 1 ? "Send Link to \(picked.count)" : "Send Link"))
                         .font(.body.weight(.semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.onFariinAction)
                         .frame(maxWidth: .infinity)
                         .frame(height: 50)
-                        .background(Color(hex: 0x2392FE), in: Capsule())
+                        .background(Color.fariinAction, in: Capsule())
                 }
                 .buttonStyle(.plain)
                 .disabled(picked.isEmpty || sending)
@@ -693,7 +693,7 @@ struct ScheduledPostsView: View {
                 ForEach(posts) { p in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(p.at.formatted(date: .abbreviated, time: .shortened))
-                            .font(.subheadline.weight(.semibold)).foregroundStyle(Color(hex: 0x2392FE))
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(Color.fariinAction)
                         Text(p.text).lineLimit(3)
                     }
                     .swipeActions(edge: .trailing) {
@@ -742,7 +742,7 @@ struct AdminInviteSheet: View {
                 if info.state == "open" && info.forMe {
                     Text("Admins post in the channel and can change its name, photo and settings. Followers never see who the admins are.")
                         .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 24)
-                    wideButton("Accept", tint: Color(hex: 0x2392FE)) { answer(true) }
+                    wideButton("Accept", tint: Color.fariinAction) { answer(true) }
                     Button("Decline") { answer(false) }.foregroundStyle(.red).disabled(busy)
                 } else if info.canRevoke {
                     wideButton("Revoke", tint: .red) { revoke() }
@@ -1083,11 +1083,11 @@ struct ChannelReactSheet: View {
                             VStack(spacing: 6) {
                                 Text(e).font(.system(size: 30))
                                     .frame(width: 54, height: 54)
-                                    .background(Circle().fill(isMine(e) ? Color(hex: 0x2392FE).opacity(0.18)
+                                    .background(Circle().fill(isMine(e) ? Color.fariinAction.opacity(0.18)
                                                                          : Color(.secondarySystemBackground)))
-                                    .overlay(Circle().stroke(isMine(e) ? Color(hex: 0x2392FE) : .clear, lineWidth: 2))
+                                    .overlay(Circle().stroke(isMine(e) ? Color.fariinAction : .clear, lineWidth: 2))
                                 Text("\(count(of: e))").font(.footnote.monospacedDigit())
-                                    .foregroundStyle(isMine(e) ? Color(hex: 0x2392FE) : .secondary)
+                                    .foregroundStyle(isMine(e) ? Color.fariinAction : .secondary)
                             }
                         }
                         .buttonStyle(.plain)
@@ -1139,7 +1139,7 @@ struct ChannelReactionsSettingsView: View {
     static let palette = ["👍", "❤️", "🔥", "😂", "😮", "😢", "🙏", "👏", "🎉", "💯", "🤔", "😍",
                           "👎", "😡", "🤝", "💪", "✅", "⭐️", "🌙", "☀️", "⚽️", "📌", "💡", "🙌"]
     static let maxPicked = 6
-    private let blue = Color(hex: 0x2392FE)
+    private let blue = Color.fariinAction
 
     // Three plain choices and, for Selected, one palette grid with "+" for any emoji (owner
     // 2026-10-29, made minimal later the same day). Saves run in the background; the page is never

@@ -30,7 +30,7 @@ struct GroupStatsLanguage: Identifiable {
     let count: Int
     var id: String { code + "-\(index)" }
 
-    static let palette: [Color] = [.fariinBlue, .teal, .orange, .purple, .pink,
+    static let palette: [Color] = [.chartBlue, .teal, .orange, .purple, .pink,
                                    .green, .yellow, .indigo, .mint, .brown, .gray]
     var color: Color { Self.palette[index % Self.palette.count] }
 
@@ -516,15 +516,15 @@ struct GroupStatsView: View {
     @ViewBuilder private func channelFollowerCharts(_ s: GroupStatsChannelData) -> some View {
         if !s.growth.isEmpty {
             GroupStatsDayChart(title: "Growth", kind: .line,
-                               names: ["Followers"], colors: [Color.fariinBlue], points: s.growth)
+                               names: ["Followers"], colors: [Color.chartBlue], points: s.growth)
         }
         if !s.followers.isEmpty {
             GroupStatsDayChart(title: "Followers", kind: .bars,
-                               names: ["Joined", "Left"], colors: [Color.fariinBlue, Color.orange], points: s.followers)
+                               names: ["Joined", "Left"], colors: [Color.chartBlue, Color.orange], points: s.followers)
         }
         if !s.notifications.isEmpty {
             GroupStatsDayChart(title: "Notifications", kind: .bars,
-                               names: ["Muted", "Unmuted"], colors: [Color.fariinBlue, Color.orange], points: s.notifications)
+                               names: ["Muted", "Unmuted"], colors: [Color.chartBlue, Color.orange], points: s.notifications)
         }
     }
 
@@ -536,7 +536,7 @@ struct GroupStatsView: View {
         }
         if !s.interactions.isEmpty {
             GroupStatsDayChart(title: "Views and Reactions", kind: .line,
-                               names: ["Views", "Reactions"], colors: [Color.fariinBlue, Color.orange],
+                               names: ["Views", "Reactions"], colors: [Color.chartBlue, Color.orange],
                                points: s.interactions, showsNow: false)
         }
         if !s.emoji.isEmpty {
@@ -563,7 +563,7 @@ struct GroupStatsView: View {
     }
 
     private static func storyColors(_ n: Int) -> [Color] {
-        let p: [Color] = [Color.fariinBlue, Color.orange, Color.teal]
+        let p: [Color] = [Color.chartBlue, Color.orange, Color.teal]
         return Array(p.prefix(n))
     }
 
@@ -571,21 +571,21 @@ struct GroupStatsView: View {
 
     @ViewBuilder private func chartsSection(_ s: GroupStatsData) -> some View {
         GroupStatsDayChart(title: "Growth", kind: .line,
-                           names: ["Members"], colors: [Color.fariinBlue],
+                           names: ["Members"], colors: [Color.chartBlue],
                            points: s.points([(name: "Members", values: s.growth)]))
         GroupStatsDayChart(title: "Members", kind: .bars,
-                           names: ["Joined", "Left"], colors: [Color.fariinBlue, Color.orange],
+                           names: ["Joined", "Left"], colors: [Color.chartBlue, Color.orange],
                            points: s.points([(name: "Joined", values: s.joined), (name: "Left", values: s.left)]))
         GroupStatsDayChart(title: "New Members by Source", kind: .bars,
                            names: ["Link", "Public", "Added", "Request"],
-                           colors: [Color.fariinBlue, Color.teal, Color.orange, Color.purple],
+                           colors: [Color.chartBlue, Color.teal, Color.orange, Color.purple],
                            points: s.points([(name: "Link", values: s.srcLink), (name: "Public", values: s.srcPublic),
                                              (name: "Added", values: s.srcAdded), (name: "Request", values: s.srcRequest)]))
         GroupStatsDayChart(title: "Messages", kind: .bars,
-                           names: ["Messages"], colors: [Color.fariinBlue],
+                           names: ["Messages"], colors: [Color.chartBlue],
                            points: s.points([(name: "Messages", values: s.messages)]))
         GroupStatsDayChart(title: "Actions", kind: .bars,
-                           names: ["Deleted", "Removed"], colors: [Color.fariinBlue, Color.orange],
+                           names: ["Deleted", "Removed"], colors: [Color.chartBlue, Color.orange],
                            points: s.points([(name: "Deleted", values: s.deleted), (name: "Removed", values: s.banned)]))
     }
 
@@ -628,7 +628,8 @@ struct GroupStatsView: View {
                 Task { await load() }
             }
             .buttonStyle(.borderedProminent)
-            .tint(Color.fariinBlue)
+            .tint(Color.fariinAction)
+            .foregroundStyle(Color.onFariinAction)
         }
         .padding(32)
     }
@@ -967,7 +968,7 @@ struct GroupStatsBinsCard: View {
     private var chart: some View {
         Chart(bins) { b in
             BarMark(x: .value("Time", b.label), y: .value(valueName, b.value))
-                .foregroundStyle(Color.fariinBlue.gradient)
+                .foregroundStyle(Color.chartBlue.gradient)
                 .cornerRadius(2)
         }
         .chartXAxis {

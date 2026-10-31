@@ -46,7 +46,7 @@ struct PublicGroupSheet: View {
     /// Set when the rules let me read the group's messages: the real chat is shown instead.
     @State private var guest: PublicGroupGuest?
 
-    fileprivate static let blue = Color(hex: 0x2392FE)
+    fileprivate static let blue = Color.fariinAction
 
     /// When the page appeared: a guest chat that arrives later waits for the push to finish.
     @State private var appearedAt = Date()
@@ -607,7 +607,7 @@ struct PublicGroupHitRow: View {
                     GroupVerifiedMark(on: hit.verified || badgeFromChats, size: 14)
                 }
                 // The @name in our blue, it is the link; the count stays grey (owner 2026-10-29).
-                (Text("@" + hit.handle).foregroundStyle(Color(hex: 0x2392FE))
+                (Text("@" + hit.handle).foregroundStyle(Color.fariinAction)
                  + Text(String(hit.subtitle.dropFirst(hit.handle.count + 1))).foregroundStyle(.secondary))
                     .font(.subheadline).lineLimit(1)
             }
@@ -700,7 +700,7 @@ struct PublicGroupInfoView: View {
                 Button { undoFollow() } label: {
                     HStack(spacing: 14) {
                         Text("Following “" + p.title + "”").foregroundStyle(.primary).lineLimit(1)
-                        Text("Undo").fontWeight(.semibold).foregroundStyle(Color(hex: 0x2392FE))
+                        Text("Undo").fontWeight(.semibold).foregroundStyle(Color.fariinAction)
                     }
                     .font(.subheadline)
                     .padding(.horizontal, 18).padding(.vertical, 12)
@@ -1045,7 +1045,7 @@ struct PublicGroupInfoView: View {
                 if !allMembers, p.members.count > 6 {
                     Divider().padding(.leading, 16)
                     Button { allMembers = true } label: {
-                        Text("Show All").foregroundStyle(Color(hex: 0x0A84FF))
+                        Text("Show All").foregroundStyle(Color.fariinAction)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 16).frame(minHeight: 48)
                             .contentShape(Rectangle())

@@ -520,10 +520,10 @@ private struct LinkCapsuleLabel: View {
     var body: some View {
         Label(title, systemImage: icon)
             .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(Color.onFariinAction)
             .frame(maxWidth: .infinity)
             .frame(height: 52)
-            .background(Capsule().fill(Color(hex: 0x2392FE)))
+            .background(Capsule().fill(Color.fariinAction))
             .contentShape(Capsule())
     }
 }

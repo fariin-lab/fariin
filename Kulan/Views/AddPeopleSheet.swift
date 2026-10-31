@@ -330,10 +330,10 @@ struct AddPeopleSheet: View {
             } else {
                 Text(actionTitle)
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.onFariinAction)
                     .frame(maxWidth: .infinity)
                     .frame(height: 52)
-                    .background(Capsule().fill(Color.fariinBlue.opacity(ready ? 1 : 0.35)))   // one action colour
+                    .background(Capsule().fill(Color.fariinAction.opacity(ready ? 1 : 0.35)))   // one action colour
             }
         }
         .buttonStyle(.plain)

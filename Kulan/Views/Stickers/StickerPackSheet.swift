@@ -64,9 +64,9 @@ struct StickerPackSheet: View {
             Button { onAdd() } label: {
                 Text("Add to my stickers")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.onFariinAction)
                     .frame(maxWidth: .infinity).frame(height: 50)
-                    .background(Capsule().fill(Color(hex: 0x2392FE)))
+                    .background(Capsule().fill(Color.fariinAction))
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)

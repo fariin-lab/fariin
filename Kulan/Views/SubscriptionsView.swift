@@ -122,9 +122,9 @@ struct SubscriptionsView: View {
             Button {} label: {
                 Text("Coming Soon")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.onFariinAction)
                     .frame(maxWidth: .infinity).frame(height: 50)
-                    .background(Capsule().fill(Color.fariinBlue.opacity(0.5)))
+                    .background(Capsule().fill(Color.fariinAction.opacity(0.5)))
             }
             .buttonStyle(.plain)
             .disabled(true)

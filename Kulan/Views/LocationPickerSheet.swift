@@ -566,10 +566,10 @@ struct LocationPickerSheet: View {
                         Text("Send Location").font(.system(size: 17, weight: .semibold))
                         Text(sendButtonSubtitle).font(.system(size: 13)).opacity(0.85).lineLimit(1)
                     }
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.onFariinAction)
                     .padding(.horizontal, 20)
                     .frame(maxWidth: .infinity).frame(height: 58)
-                    .background(Color.blue, in: Capsule())
+                    .background(Color.fariinAction, in: Capsule())
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)

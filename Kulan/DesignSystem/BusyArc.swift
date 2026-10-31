@@ -8,7 +8,7 @@ import SwiftUI
 struct BusyArc: View {
     var size: CGFloat = 88
     var lineWidth: CGFloat = 9
-    var color: Color = Color(hex: 0x2C6BED)
+    var color: Color = .fariinAction   // the one action colour (owner 2026-10-31), was blue
 
     /// The size that fits inside a button or a row, at the label's height.
     static func small(_ color: Color) -> BusyArc { BusyArc(size: 22, lineWidth: 2.5, color: color) }

@@ -163,12 +163,12 @@ enum AuthPalette {
 // and must wear the same two buttons.
 extension View {
     /// The main action: a Fariin-blue pill, white text (owner 2026-10-26: one action colour, see
-    /// `Color.fariinBlue`; it was black, which turned white in dark mode).
+    /// `Color.fariinAction`; it was black, which turned white in dark mode).
     func authPrimaryPill() -> some View {
         self.font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(Color.onFariinAction)
             .frame(maxWidth: .infinity).frame(height: 50)
-            .background(Color.fariinBlue, in: Capsule())
+            .background(Color.fariinAction, in: Capsule())
     }
 
     /// One of the sign-in doors. Always the opposite of the page: white with dark text on
@@ -243,9 +243,9 @@ extension View {
     func authActionPill(enabled: Bool) -> some View {
         // Fariin blue, softened until it can go (owner 2026-10-26: one action colour).
         self.font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(.white.opacity(enabled ? 1 : 0.85))
+            .foregroundStyle(Color.onFariinAction.opacity(enabled ? 1 : 0.85))
             .frame(maxWidth: .infinity).frame(height: 54)
-            .background(Color.fariinBlue.opacity(enabled ? 1 : 0.35), in: Capsule())
+            .background(Color.fariinAction.opacity(enabled ? 1 : 0.35), in: Capsule())
     }
 
     /// A field box on the email pages: its glyph inside, no label above, a hairline at rest, dark
@@ -676,7 +676,7 @@ struct AuthMethodView: View {
                     // something, as the large apps' do), the others keep their @name.
                     if saved.count > 1 && saved.first?.uid == info.uid {
                         HStack(spacing: 6) {
-                            Circle().fill(Color(hex: 0x2C6BED)).frame(width: 7, height: 7)
+                            Circle().fill(Color.fariinAction).frame(width: 7, height: 7)
                             Text("Last used").font(.subheadline).foregroundStyle(.secondary)
                         }
                     } else {
@@ -968,11 +968,12 @@ struct EmailAuthView: View {
             ScrollView {
                 VStack(spacing: 14) {
                     VStack(spacing: 6) {
-                        // The app's own mark first, so the page says whose door it is. Same
-                        // artwork as the Home Screen icon (`ShiningLogo`, welcome-mark).
-                        ShiningLogo()
+                        // The app's own mark first, so the page says whose door it is: the same
+                        // black mark as the doors page before it (owner 2026-10-31: the blue icon
+                        // here was the one blue thing left on the sign-in pages).
+                        Image("LaunchLogo")
+                            .resizable().scaledToFit()
                             .frame(width: 64, height: 64)
-                            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                             .padding(.bottom, 14)
                             .accessibilityHidden(true)
                         Text(title)

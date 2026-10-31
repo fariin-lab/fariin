@@ -818,7 +818,7 @@ struct GroupInfoView: View {
             out.replaceSubrange(range, with: piece)
         }
         for run in out.runs where run.link != nil {
-            out[run.range].foregroundColor = Color(hex: 0x0A84FF)
+            out[run.range].foregroundColor = Color.fariinAction
         }
         return out
     }
@@ -2309,7 +2309,8 @@ struct AddMembersSheet: View {
                         if adding { ProgressView().tint(.white) } else { Text("Add").fontWeight(.semibold) }
                     }
                     .disabled(selected.isEmpty || adding)
-                    .buttonStyle(.borderedProminent).tint(.blue)
+                    .buttonStyle(.borderedProminent).tint(Color.fariinAction)
+                    .foregroundStyle(Color.onFariinAction)
                 }
             }
         }
@@ -2876,7 +2877,8 @@ struct GroupMemberSheet: View {
             Button("Done") { saveChanges() }
                 .fontWeight(.semibold)
                 .buttonStyle(.glassProminent)
-                .tint(Color(hex: 0x2392FE))
+                .tint(Color.fariinAction)
+                .foregroundStyle(Color.onFariinAction)
                 .disabled(!hasChanges)
         }
     }

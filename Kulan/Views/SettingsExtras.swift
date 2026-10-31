@@ -994,7 +994,7 @@ private struct DevicesHeader: View {
             SecurityShieldIcon()
                 .frame(width: 112, height: 112)
                 .accessibilityHidden(true)
-            (Text("Review your ") + Text("account security").foregroundColor(.blue)
+            (Text("Review your ") + Text("account security").foregroundColor(Color.fariinAction)
                 + Text(" and check active devices"))
                 .font(.body)
                 .multilineTextAlignment(.center)
@@ -1003,9 +1003,9 @@ private struct DevicesHeader: View {
             Button(action: onCheckup) {
                 Text("Security Checkup")
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.onFariinAction)
                     .frame(maxWidth: .infinity, minHeight: 52)
-                    .background(Color.blue, in: Capsule())
+                    .background(Color.fariinAction, in: Capsule())
             }
             .buttonStyle(.plain)
         }

@@ -132,9 +132,9 @@ struct LowStorageSheet: View {
             Button(action: onDone) {
                 Text("OK")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.onFariinAction)
                     .frame(maxWidth: .infinity).frame(height: 52)
-                    .background(Capsule().fill(Color.fariinBlue))
+                    .background(Capsule().fill(Color.fariinAction))
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)

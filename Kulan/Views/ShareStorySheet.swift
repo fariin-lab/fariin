@@ -831,7 +831,7 @@ struct ShareStorySheet: View {
             // that should be loud. His newer word, and the older note is kept above this one as
             // history rather than deleted.
             //
-            // ⚠️ `Color.blue` LITERALLY, WHICH IS NOT A FRESH CHOICE. The audience tick a few rows
+            // ⚠️ `Color.fariinAction` LITERALLY, WHICH IS NOT A FRESH CHOICE. The audience tick a few rows
             // above this button is `.blue` for a reason already written down in
             // `StoryAudienceViews`: the app's accent resolves near-grey there. Two blues in one
             // sheet that did not match would be worse than the grey was.
@@ -841,9 +841,9 @@ struct ShareStorySheet: View {
             // white by day, black by night — so the label had to flip with it. Blue does not flip,
             // so a flipping label would put BLACK text on blue at night. White on blue is right in
             // both themes and is what every system-blue capsule in iOS does.
-            .foregroundStyle(.white)
+            .foregroundStyle(Color.onFariinAction)
                 .frame(maxWidth: .infinity).frame(height: 52)
-                .background(Color.blue, in: Capsule())
+                .background(Color.fariinAction, in: Capsule())
         }
         .buttonStyle(StoryPressStyle())
         .disabled(posting || isPreparing)
@@ -1304,9 +1304,9 @@ private struct OfficialStoryForm: View {
                         if posting || preparing { ProgressView().tint(.white) }
                         else { Text("Post Story").font(.headline) }
                     }
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.onFariinAction)
                     .frame(maxWidth: .infinity).frame(height: 52)
-                    .background(Color.blue, in: Capsule())
+                    .background(Color.fariinAction, in: Capsule())
                 }
                 .buttonStyle(.plain)
                 .disabled(posting || preparing)
@@ -1378,7 +1378,7 @@ private struct OfficialCountryPicker: View {
                     Text(c.name).foregroundStyle(.primary)
                     Text(c.code).foregroundStyle(.secondary)
                     Spacer()
-                    if selected.contains(c.code) { Image(systemName: "checkmark").foregroundStyle(.blue) }
+                    if selected.contains(c.code) { Image(systemName: "checkmark").foregroundStyle(Color.fariinAction) }
                 }
             }
         }

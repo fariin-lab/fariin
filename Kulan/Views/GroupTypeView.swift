@@ -75,11 +75,13 @@ struct GroupTypeView: View {
                         if showPublic, nameChanged { save(name) } else { next() }
                     }
                     .disabled(showPublic && (name.isEmpty || (nameChanged && check != .available)))
-                    .buttonStyle(.glassProminent).tint(Color(hex: 0x2392FE))
+                    .buttonStyle(.glassProminent).tint(Color.fariinAction)
+                    .foregroundStyle(Color.onFariinAction)
                 } else {
                     // Blue, as the tag page's Done (owner 2026-10-20).
                     Button("Save") { save(name) }.disabled(!canSave)
-                        .buttonStyle(.glassProminent).tint(Color(hex: 0x2392FE))
+                        .buttonStyle(.glassProminent).tint(Color.fariinAction)
+                        .foregroundStyle(Color.onFariinAction)
                 }
             }
         }
@@ -172,10 +174,10 @@ struct GroupTypeView: View {
                 .buttonStyle(.plain)
                 // The app's own Share With sheet, as the links page sends (owner 2026-10-20).
                 Button { showSend = true } label: {
-                    Text("Share Link").fontWeight(.semibold).foregroundStyle(.white)
+                    Text("Share Link").fontWeight(.semibold).foregroundStyle(Color.onFariinAction)
                         .frame(maxWidth: .infinity).frame(height: 48)
                         // Blue-tinted liquid glass (owner 2026-10-21); was a flat blue fill.
-                        .liquidGlass(Capsule(), interactive: true, tint: Color(hex: 0x2392FE))
+                        .liquidGlass(Capsule(), interactive: true, tint: Color.fariinAction)
                         // The whole capsule takes the tap (owner 2026-10-21: only the words did).
                         .contentShape(Capsule())
                 }
