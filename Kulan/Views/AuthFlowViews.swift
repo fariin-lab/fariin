@@ -386,6 +386,10 @@ struct AuthMethodView: View {
             VStack(spacing: 0) {
                 // On the doors the top gap is held short, so the mark sits high (see the split below).
                 Spacer().frame(maxHeight: accountsFace ? .infinity : 96)
+                // ⛔ THE SWITCH IS SEEN (owner 2026-10-31: "tap Log in and it changes, but nobody
+                // would notice"). Only the title's words changed. The whole middle now slides across,
+                // forward to Log in, back to Create, like turning a page.
+                Group {
                 if accountsFace {
                     // ⛔ THE MARK, NOT THE WORD (owner 2026-10-31, comparing a large app's account
                     // page: its icon says which app this is before anything is read). His black logo,
@@ -446,6 +450,11 @@ struct AuthMethodView: View {
                     .disabled(busy)
                 }
                 }
+                }
+                .id(accountsFace ? "accounts" : (mode == .create ? "create" : "login"))
+                .transition(.asymmetric(
+                    insertion: .move(edge: mode == .create ? .leading : .trailing).combined(with: .opacity),
+                    removal: .move(edge: mode == .create ? .trailing : .leading).combined(with: .opacity)))
 
                 // Space always kept, spinner faded in (owner, 2026-09-25): inserting it on Google's
                 // tap grew this centred block and slid every card up, then back down when it went.
@@ -490,7 +499,7 @@ struct AuthMethodView: View {
                     let toCreate = accountsFace || mode == .login
                     Button {
                         error = nil
-                        withAnimation(.easeInOut(duration: 0.2)) { mode = toCreate ? .create : .login }
+                        withAnimation(.smooth(duration: 0.35)) { mode = toCreate ? .create : .login }
                     } label: {
                         Text(toCreate ? "Create account" : "Log in")
                             .font(.body.weight(.semibold))
