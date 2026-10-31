@@ -74,7 +74,16 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: ONE COLOUR, GIFS BACK, SMOOTHER PAGES.
+            THIS BUILD: KINDER EMPTY, ERROR AND SLOW PAGES; UNDO DELETE.
+            Delete Group / Delete Channel: gone at the tap, with "Group deleted. Undo" for 5 seconds before it is really deleted.
+            Scan QR with the camera off: the page says so, with Open Settings and the photo button, instead of a black screen.
+            Errors: about forty short "Couldn't ..." messages now say what to do next.
+            Search with no results: "Did you mean ...?" for a close spelling of a chat you have, and a Find Channels button.
+            Empty Groups / Channels filters: a New Group / Find Channels button.
+            A page still loading after 4 seconds says the connection is slow, or that you are offline.
+            PLEASE TEST: delete a test group and tap Undo, then delete another and let it go; Scan QR after turning the camera off for Fariin in Settings; search a name with one letter wrong.
+
+            EARLIER: ONE COLOUR, GIFS BACK, SMOOTHER PAGES.
             One colour: buttons, links, checkmarks, the selected tab, the compose button and every spinner are black (white in dark mode) instead of blue. Chat bubbles, the verified badge and read ticks keep their colours.
             Stickers and GIFs: the panel has GIFs | Stickers on top again, search on the left. GIFs browse in the panel with Recent, Favorites, Trending and five moods at the bottom; Search opens the tall GIF sheet, and swiping it down leaves the keyboard closed. The panel opens on the tab you used last.
             New chat: New Group, New Channel and New Contact slide in from the right inside the same card, with swipe back. Find Channels lives in Search only.
