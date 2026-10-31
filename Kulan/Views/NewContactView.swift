@@ -16,12 +16,33 @@ struct NewContactView: View {
     private var me: String { AuthService.shared.uid ?? "" }
     private var canSave: Bool { !ChatService.sanitizeHandle(handle).isEmpty && !working }
 
+    /// Pushed inside New Message (owner 2026-10-31): the system's title bar and Back, not a sheet.
+    var embedded = false
+
     var body: some View {
-        NavigationStack {
+        if embedded {
+            content
+                .navigationTitle("New Contact")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { Task { await add() } } label: {
+                            Image(systemName: working ? "ellipsis" : "checkmark").fontWeight(.semibold)
+                        }
+                        .disabled(!canSave)
+                        .accessibilityLabel("Add contact")
+                    }
+                }
+        } else {
+            NavigationStack { content }
+        }
+    }
+
+    private var content: some View {
             ZStack {
                 Color(.systemGroupedBackground).ignoresSafeArea()
                 VStack(spacing: 0) {
-                    header
+                    if !embedded { header }
                     ScrollView {
                         VStack(spacing: 22) {
                             // Name card (First + Last) — modern style.
@@ -63,7 +84,6 @@ struct NewContactView: View {
                 Button("OK", role: .cancel) {}
             }
             .onAppear { focus = .first }
-        }
     }
 
     private var header: some View {

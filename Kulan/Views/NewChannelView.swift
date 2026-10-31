@@ -9,6 +9,13 @@ import FirebaseFunctions
 /// by the server (`makeChannel`). From there on there is no going back, only forward.
 struct NewChannelView: View {
     let onOpen: (ChatTarget) -> Void
+    /// ⛔ PUSHED INSIDE NEW MESSAGE, NOT A SHEET ON A SHEET (owner 2026-10-31: "New channel opens from
+    /// the bottom over New chat, two cards stacked; the large apps slide it in from the right"). When
+    /// true there is no stack of its own: the page and its steps ride New Message's stack, the X is
+    /// the system's Back, and Channel Type has no Back (a second Next could make a second channel).
+    var embedded = false
+    @State private var embeddedDetails = false
+    @State private var embeddedTypeCid: String?
 
     private enum Step: Hashable { case details, type(String) }
 
@@ -42,23 +49,35 @@ struct NewChannelView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        if embedded {
             intro
-                .navigationDestination(for: Step.self) { step in
-                    switch step {
-                    case .details: details
-                    case .type(let cid):
-                        // Next opens the channel (owner 2026-10-29: a Share sheet that came up by itself
-                        // and finished the same whether used or swiped away was confusing). Sharing is
-                        // the Share button on the owner's card at the top of the channel.
-                        GroupTypeView(cid: cid, setupNext: { finish() },
-                                      localPhoto: avatarData.flatMap(UIImage.init(data:)))
-                    }
+                .navigationDestination(isPresented: $embeddedDetails) {
+                    details
+                        .navigationDestination(item: $embeddedTypeCid) { cid in
+                            typePage(cid).navigationBarBackButtonHidden(true)
+                        }
                 }
+                .interactiveDismissDisabled(creating || createdCid != nil)
+        } else {
+            NavigationStack(path: $path) {
+                intro
+                    .navigationDestination(for: Step.self) { step in
+                        switch step {
+                        case .details: details
+                        case .type(let cid): typePage(cid)
+                        }
+                    }
+            }
+            // No swipe-away once the channel is being made or made (owner 2026-10-30 audit): a swipe on
+            // Channel Type skipped `finish()`, and one mid-creation landed on a page that then jumped.
+            .interactiveDismissDisabled(creating || createdCid != nil)
         }
-        // No swipe-away once the channel is being made or made (owner 2026-10-30 audit): a swipe on
-        // Channel Type skipped `finish()`, and one mid-creation landed on a page that then jumped.
-        .interactiveDismissDisabled(creating || createdCid != nil)
+    }
+
+    /// Next opens the channel (owner 2026-10-29: a Share sheet that came up by itself and finished the
+    /// same whether used or swiped away was confusing). Sharing is the Share button on the owner's card.
+    private func typePage(_ cid: String) -> some View {
+        GroupTypeView(cid: cid, setupNext: { finish() }, localPhoto: avatarData.flatMap(UIImage.init(data:)))
     }
 
     // MARK: 1. What a channel is
@@ -96,7 +115,7 @@ struct NewChannelView: View {
                     .font(.footnote).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .tint(Color(hex: 0x2392FE))
-                Button { path.append(.details) } label: {
+                Button { if embedded { embeddedDetails = true } else { path.append(.details) } } label: {
                     Text("Create Channel").fontWeight(.semibold).foregroundStyle(.white)
                         .frame(maxWidth: .infinity).frame(height: 52)
                         .liquidGlass(Capsule(), interactive: true, tint: Color(hex: 0x2392FE))
@@ -108,9 +127,12 @@ struct NewChannelView: View {
             .padding(.bottom, 12)
         }
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "xmark") }
-                    .accessibilityLabel("Close")
+            // Pushed: the system's Back is the way out, so no X of its own.
+            if !embedded {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("Close")
+                }
             }
         }
     }
@@ -304,7 +326,7 @@ struct NewChannelView: View {
                 _ = await (described, linked)
                 creating = false
                 // Step 3 REPLACES this page: Back can never make a second channel.
-                path = [.type(cid)]
+                if embedded { embeddedTypeCid = cid } else { path = [.type(cid)] }
             } catch {
                 self.error = "Could not create the channel. Try again."
                 creating = false
@@ -327,7 +349,8 @@ struct NewChannelView: View {
     private func finish() {
         guard let cid = createdCid else { return }
         let target = ChatTarget(id: cid, name: trimmedName, photo: nil)
-        dismiss()
+        // Pushed: New Message's own close (in `onOpen`) takes this page down with it.
+        if !embedded { dismiss() }
         onOpen(target)
     }
 }

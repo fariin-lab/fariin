@@ -185,13 +185,15 @@ struct NewChatView: View {
                 }
                 // Scan button removed (owner 2026-10-19); scanning stays on the QR code page.
             }
-            .sheet(isPresented: $showNewGroup) {
-                // Both sheets go in ONE motion, straight into the group (owner 2026-10-18: the New
-                // Message page showed for a moment first). Dismissing this page takes the New Group
-                // sheet on top of it down with it.
-                NewGroupView { t in dismiss(); onOpen(t) }
+            .navigationDestination(isPresented: $showNewGroup) {
+                // Straight into the group in one motion (owner 2026-10-18): closing New Message takes
+                // this pushed page down with it.
+                NewGroupView(embedded: true) { t in dismiss(); onOpen(t) }
             }
-            .sheet(isPresented: $showDiscover) {
+            // ⛔ PUSHED, NOT A SHEET ON A SHEET (owner 2026-10-31: "it opens from the bottom over New
+            // chat, two cards stacked; the large apps slide it in from the right and you swipe back").
+            // New Group, Find Channels, New Channel and New Contact all ride this page's own stack.
+            .navigationDestination(isPresented: $showDiscover) {
                 // ⛔ THE CHANNEL GOES ON THE PATH FIRST, THEN BOTH SHEETS GO DOWN ONTO IT (owner
                 // 2026-10-31: the sheets closed, the bare chat list showed, and only then did the
                 // channel open, with nothing saying it was coming). The shell pushes behind this
@@ -208,13 +210,13 @@ struct NewChatView: View {
                         dismiss()
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { GroupDirectory.open(cid: cid, name: handle) }
                     }
-                }, opensInPlace: true)
+                }, opensInPlace: true, embedded: true)
             }
-            .sheet(isPresented: $showNewChannel) {
-                NewChannelView { t in dismiss(); onOpen(t) }
+            .navigationDestination(isPresented: $showNewChannel) {
+                NewChannelView(onOpen: { t in dismiss(); onOpen(t) }, embedded: true)
             }
-            .sheet(isPresented: $showNewContact) {
-                NewContactView { t in showNewContact = false; dismiss(); onOpen(t) }
+            .navigationDestination(isPresented: $showNewContact) {
+                NewContactView(onOpen: { t in showNewContact = false; dismiss(); onOpen(t) }, embedded: true)
             }
             .task { await loadHandles() }
         }

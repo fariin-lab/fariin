@@ -13,8 +13,16 @@ struct NewGroupView: View {
     // `preselect` pre-includes a contact (e.g. "Add to a Group" from a friend's profile).
     // `initial` ticks several at once (owner 2026-10-18: "Create a similar group" on a group's info
     // page hands over its members, me left out by the caller).
-    init(preselect: Person? = nil, initial: [Person] = [], onOpen: @escaping (ChatTarget) -> Void = { _ in }) {
+    /// Pushed inside New Message (owner 2026-10-31: not a sheet on a sheet). No stack or X of its own;
+    /// Group Details and Permissions ride New Message's stack, Back goes a step back as before.
+    let embedded: Bool
+    @State private var embeddedDetails = false
+    @State private var embeddedPermissions = false
+
+    init(preselect: Person? = nil, initial: [Person] = [], embedded: Bool = false,
+         onOpen: @escaping (ChatTarget) -> Void = { _ in }) {
         self.onOpen = onOpen
+        self.embedded = embedded
         var people = initial
         if let p = preselect, !people.contains(where: { $0.id == p.id }) { people.insert(p, at: 0) }
         if !people.isEmpty {
@@ -91,11 +99,27 @@ struct NewGroupView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        if embedded {
             membersPage
-                .navigationDestination(for: Step.self) { step in
-                    if step == .permissions { permissionsPage } else { detailsPage }
+                .navigationDestination(isPresented: $embeddedDetails) {
+                    detailsPage
+                        .navigationDestination(isPresented: $embeddedPermissions) { permissionsPage }
                 }
+        } else {
+            NavigationStack(path: $path) {
+                membersPage
+                    .navigationDestination(for: Step.self) { step in
+                        if step == .permissions { permissionsPage } else { detailsPage }
+                    }
+            }
+        }
+    }
+
+    private func go(_ step: Step) {
+        if embedded {
+            if step == .details { embeddedDetails = true } else { embeddedPermissions = true }
+        } else {
+            path.append(step)
         }
     }
 
@@ -164,13 +188,15 @@ struct NewGroupView: View {
         .navigationTitle("Select Members")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "xmark") }
+            if !embedded {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }
+                }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 // Skip with nobody ticked (owner 2026-10-18: a group may start with only you),
                 // Next once someone is.
-                Button(selected.isEmpty ? "Skip" : "Next") { path.append(.details) }
+                Button(selected.isEmpty ? "Skip" : "Next") { go(.details) }
                     .fontWeight(.semibold)
             }
         }
@@ -270,7 +296,7 @@ struct NewGroupView: View {
             }
 
             Section {
-                Button { nameFocused = false; path.append(.permissions) } label: {
+                Button { nameFocused = false; go(.permissions) } label: {
                     HStack {
                         Text("Permissions").foregroundStyle(.primary)
                         Spacer()

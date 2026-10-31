@@ -181,8 +181,14 @@ struct DiscoverChannelsView: View {
         Set(justFollowed.filter { follows.follows($0) })
     }
 
+    /// Pushed inside New Message (owner 2026-10-31): no stack or X of its own, the system's Back.
+    var embedded = false
+
     var body: some View {
-        NavigationStack {
+        if embedded { content } else { NavigationStack { content } }
+    }
+
+    private var content: some View {
             List {
                 if loading && rows.isEmpty {
                     HStack { Spacer(); ProgressView(); Spacer() }.listRowBackground(Color.clear)
@@ -204,8 +210,10 @@ struct DiscoverChannelsView: View {
             .navigationTitle("Find Channels")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
+                if !embedded {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
+                    }
                 }
             }
             .refreshable { await load() }
@@ -222,7 +230,6 @@ struct DiscoverChannelsView: View {
             .navigationDestination(item: $openVisitor) { t in
                 PublicGroupSheet(target: t, pushed: true)
             }
-        }
     }
 
     private func row(_ c: ChannelService.Discovered) -> some View {
