@@ -3990,56 +3990,45 @@ struct ThreadView: View {
         // SET, the chat colour and the search term — plus `firstUnreadId`, which draws the divider,
         // and the group roster's version, which draws sender names and avatars.
         let storiesRepo = StoriesRepository.shared
-        let key = [
-            "\(repo.itemsVersion)", "\(repo.otherLastReadMillis)", "\(repo.otherDeliveredMillis)", highlightId ?? "-",
-            "\(repo.iBlocked)", "\(readReceiptsOn)", "\(dark)",
-            "\(chatHasWallpaper):\(wallpaperBlur?.id ?? 0)",
-            // Hashed, not joined: Set's hashValue is order-independent and does not allocate, and
-            // this runs on the body path — the same reason `rowSignatures` hashes it.
-            "\(selecting)", "\(wasSelecting)", "\(selectedIds.count):\(selectedIds.hashValue)",
-            chatColorSpec?.stored ?? "-", firstUnreadId ?? "-",
-            searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
-            "\(isGroup)", "\(groupMembers.count)",
-            // ⚠️ THE FINAL PHASE'S OWN READS, added by the verification pass that went looking for
-            // them. The rule this file states four times: if a value is READ while building a row,
-            // it has to be in the key that decides whether that row is rebuilt.
-            //   storiesVersion / didLoad — `storyIsLive` decides whether a story reply draws its
-            //     card or says the story is gone, and that is a HEIGHT difference.
-            //   hiddenTick — `albumBody` drops tiles hidden "for me", which re-solves the mosaic.
-            "\(storiesRepo.storiesVersion)", "\(storiesRepo.didLoad)", "\(hiddenTick)",
-            //   viewedOnceTick — `viewOncePill` reads `ViewedOnce` to decide Viewed/Played and
-            //     whether the pill still opens. It was missing (owner, 2026-09-30: "it does not
-            //     become Viewed at once, I can open it again"): the mark was saved at the tap but
-            //     the pill was only rebuilt when something ELSE moved this key.
-            "\(viewedOnceTick)",
-            // The disappearing-message countdown is READ while building a row, so by this file's own
-            // rule — stated four times above — it has to be in the key that decides whether the row
-            // is rebuilt. It only moves in a chat that actually has messages on a timer.
-            "\(repo.expiryTick)",
-            // 2026-09-24 feature-audit: an edit waiting for the server draws the sending clock.
-            "\(editPendingIds.count):\(editPendingIds.hashValue)",
-            // The chat's timer draws the icon on messages the server has not stamped yet.
-            "\(conversation?.disappearSeconds ?? 0)",
-            // owner audit 2026-10-06 chat #73: the day ("Today" becomes "Yesterday" at midnight, time
-            // zone, 12/24-hour) and the group's sender names are read while building a row as well.
-            "\(dayTick)", "\(conversation?.names.hashValue ?? 0)",
-            // owner 2026-10-18: the Role chip beside a sender's name is read while building a row too.
-            "\(conversation?.roles.hashValue ?? 0)",
-            // The Restricted chat request I can answer: its notice carries Reject / Accept.
-            liveRestrictRequestId ?? "-",
-            // A channel draws every post as received (2026-10-28); known only once the doc is in.
-            conversation?.isChannel == true ? "ch" : "-",
-            // ⛔ A CHANNEL'S REACTIONS, THE SIXTH TIME THIS FILE'S RULE WAS BROKEN (owner 2026-10-29:
-            // "when I tap my reaction it doesn't show until I leave the channel and come back", and
-            // "double tap doesn't work" after following, which was the same thing: the pick was made
-            // and never drawn). `channelMine`, `channelCounts`, `channelReactionsOn` and
-            // `channelCanReact` are all READ while building a row, so they key it, as `rowSignatures`
-            // already does for the hosted rows. Text posts are UIKit rows and only rebuild from here.
-            conversation?.isChannel == true
-                ? "\(ChannelFollows.shared.myReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.pendingReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.countOverrides[cid]?.hashValue ?? 0):\(channelReactOn)\(channelCanReact)"
-                : "-",
-        ].joined(separator: "|")
-        return key
+        // ⛔ BUILT ONE PIECE AT A TIME (crash report, build 1073: "Thread stack size exceeded" in
+        // this function). One array literal of ~40 interpolated strings made a stack frame big
+        // enough to overflow inside SwiftUI's deep update; appending keeps the frame small. Every
+        // value the rows read is still here, the same list, the same order.
+        var k = ""
+        k.reserveCapacity(512)
+        func add(_ v: String) { k += v; k += "|" }
+        add("\(repo.itemsVersion)"); add("\(repo.otherLastReadMillis)"); add("\(repo.otherDeliveredMillis)")
+        add(highlightId ?? "-")
+        add("\(repo.iBlocked)"); add("\(readReceiptsOn)"); add("\(dark)")
+        add("\(chatHasWallpaper):\(wallpaperBlur?.id ?? 0)")
+        // Hashed, not joined: Set's hashValue is order-independent and does not allocate.
+        add("\(selecting)"); add("\(wasSelecting)"); add("\(selectedIds.count):\(selectedIds.hashValue)")
+        add(chatColorSpec?.stored ?? "-"); add(firstUnreadId ?? "-")
+        add(searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "")
+        add("\(isGroup)"); add("\(groupMembers.count)")
+        // storiesVersion / didLoad (a story reply's card), hiddenTick (album tiles hidden for me),
+        // viewedOnceTick (the view-once pill), expiryTick (the countdown).
+        add("\(storiesRepo.storiesVersion)"); add("\(storiesRepo.didLoad)"); add("\(hiddenTick)")
+        add("\(viewedOnceTick)")
+        add("\(repo.expiryTick)")
+        // An edit waiting for the server draws the sending clock; the chat's timer draws its icon.
+        add("\(editPendingIds.count):\(editPendingIds.hashValue)")
+        add("\(conversation?.disappearSeconds ?? 0)")
+        // The day, the sender names and the Role chips.
+        add("\(dayTick)"); add("\(conversation?.names.hashValue ?? 0)")
+        add("\(conversation?.roles.hashValue ?? 0)")
+        // The Restricted chat request I can answer.
+        add(liveRestrictRequestId ?? "-")
+        // A channel draws every post as received, and its reactions are read while building a row.
+        let channel = conversation?.isChannel == true
+        add(channel ? "ch" : "-")
+        if channel {
+            let f = ChannelFollows.shared
+            add("\(f.myReactions[cid]?.hashValue ?? 0):\(f.pendingReactions[cid]?.hashValue ?? 0):\(f.countOverrides[cid]?.hashValue ?? 0):\(channelReactOn)\(channelCanReact)")
+        } else {
+            add("-")
+        }
+        return k
     }
 
     @inline(never) private func rebuildUikitModels(key: String) -> [String: MessageRowModel] {
