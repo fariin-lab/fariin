@@ -1013,22 +1013,10 @@ struct GroupInfoView: View {
     private func deleteChannel() {
         guard !deletingChannel else { return }
         deletingChannel = true
-        let id = cid
-        LeaveGroupUndo.shared.closeChat(id)
-        ToastNotice.show("Channel deleted")
+        // Gone at the tap, "Channel deleted. Undo" for 5 s, then deleted for real (owner 2026-10-31).
+        LeaveGroupUndo.shared.start(cid: cid, title: conv?.displayName(me) ?? "the channel", kind: .deleteChannel)
         // One step to the chat list, as on unfollow (`unfollowNow`).
         if fromStory { dismiss() }
-        Task {
-            do {
-                try await GroupInviteService.deleteGroup(cid: id)
-            } catch {
-                await MainActor.run {
-                    LeaveGroupUndo.shared.reopen(id)
-                    ToastNotice.show("The channel was not deleted. Try again.")
-                    deletingChannel = false
-                }
-            }
-        }
     }
 
     private func setMuted(_ until: Double) {
@@ -2165,13 +2153,11 @@ private struct GroupInfoExits: ViewModifier {
             .alert(conv?.isChannel == true ? "Delete Channel?" : "Delete Group?", isPresented: $confirmDelete) {
                 Button("Cancel", role: .cancel) {}
                 Button("Delete for Everyone", role: .destructive) {
-                    let cid = cid
-                    run {
-                        try await GroupInviteService.deleteGroup(cid: cid)
-                        // Its chat closes too, not only this page (owner 2026-10-29: after Delete
-                        // Channel he was left on the channel's page).
-                        await MainActor.run { LeaveGroupUndo.shared.closeChat(cid) }
-                    }
+                    // Gone at the tap with 5 s to take it back (owner 2026-10-31); its chat closes
+                    // too, not only this page (owner 2026-10-29).
+                    LeaveGroupUndo.shared.start(cid: cid, title: conv?.displayName(me) ?? "the group",
+                                                kind: conv?.isChannel == true ? .deleteChannel : .deleteGroup)
+                    onGone()
                 }
             } message: {
                 Text(conv?.isChannel == true

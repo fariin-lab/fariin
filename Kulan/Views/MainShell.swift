@@ -3001,7 +3001,9 @@ struct ChatsView: View {
             if leave.barTitle != nil {
                 Button { withAnimation(.smooth(duration: 0.3)) { leave.undo() } } label: {
                     HStack(spacing: 14) {
-                        Text("You left the group.").foregroundStyle(.primary)
+                        Text(leave.barKind == .deleteGroup ? "Group deleted."
+                             : leave.barKind == .deleteChannel ? "Channel deleted." : "You left the group.")
+                            .foregroundStyle(.primary)
                         Text("Undo").fontWeight(.semibold).foregroundStyle(Color.accentColor)
                     }
                     .font(.subheadline)
