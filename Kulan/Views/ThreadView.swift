@@ -509,6 +509,8 @@ struct ThreadView: View {
     @State private var editHistoryTarget: MessageRef?   // id only
     @State private var editPendingIds: Set<String> = []
     @State private var forwardTarget: Message?    // forward-to-chat picker
+    /// A channel post's share arrow: the Share with sheet (owner 2026-10-31).
+    @State private var sharePost: Message?
     /// A plain flag now that the field is a `UITextView`: in, it asks the field to take or give up
     /// first responder; out, the field's delegate writes what actually happened (see
     /// `ChatComposerView.syncText`). `@FocusState` only ever spoke for a SwiftUI `TextField`.
@@ -2104,6 +2106,10 @@ struct ThreadView: View {
                 SendContactSheet(contactText: "", forwardMessages: msgs, sourceCid: cid,
                                  onSent: { exitSelection(); showJumpToast($0) })
             }
+        }
+        .sheet(item: $sharePost) { m in
+            SendContactSheet(contactText: channelShareLink, forwardMessages: [m], sourceCid: cid,
+                             onSent: { showJumpToast($0) })
         }
         .sheet(isPresented: $showPinnedSheet) {
             PinnedMessagesSheet(
@@ -4904,8 +4910,10 @@ struct ThreadView: View {
                 return true
             },
             // A channel post's share button (owner 2026-10-29): the long-press menu's Forward.
+            // The app's Share with sheet (owner 2026-10-31, his two screenshots): the grid of chats,
+            // Copy Link (the channel's) and the system share, the post forwarded to who is picked.
             onTapShare: { id in
-                if let m = repo.items.first(where: { $0.rowId == id }) { forwardTarget = m }
+                if let m = repo.items.first(where: { $0.rowId == id }) { sharePost = m }
             },
             onTapRetry: { id in
                 // 2026-09-24 decision D14: the tap asks Resend / Delete; the automatic retries still
@@ -5657,6 +5665,15 @@ struct ThreadView: View {
         // offered Delete; the server refused, but the button should never have been there). A group
         // deletes only for everyone, so each pick passes the long-press menu's own test.
         return picked.allSatisfy { $0.isSystem ? canDeleteNotice($0) : canDeleteHere($0) }
+    }
+
+    /// What Copy Link copies from a channel post's Share with sheet: the public link, else the
+    /// channel's invite link when this phone knows it.
+    private var channelShareLink: String {
+        guard let c = conversation else { return "" }
+        if c.isPublic, !c.publicName.isEmpty { return "https://fariin.com/" + c.publicName }
+        if !c.inviteCode.isEmpty { return KulanApp.groupLink(code: c.inviteCode) }
+        return ""
     }
 
     /// A channel's follower (not one of its admins): Select is for Forward, there is nothing to delete.
