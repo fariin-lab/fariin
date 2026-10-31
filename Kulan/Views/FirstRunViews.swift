@@ -44,18 +44,16 @@ struct AgreementView: View {
                     .padding(.top, 40)
                 Spacer()
                 Spacer()
-                Text("Read our [Privacy Policy](https://fariin.com/privacy). Tap \"Agree and continue\" to accept our [Terms](https://fariin.com/terms).")
+                // ⛔ ONE PLAIN LINE, OUR OWN WORDS (owner 2026-10-31: "looks noisy; no app talks about
+                // age on screen"). The old sentence was near another messenger's, and the age line
+                // sat under it. The age (16+) stays where it belongs: the Terms (fariin.com/terms,
+                // "You may use Fariin if you are 16 or older") and the App Store rating.
+                Text("By continuing, you agree to our [Terms](https://fariin.com/terms) and [Privacy Policy](https://fariin.com/privacy).")
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
                     .tint(.primary)
                     .environment(\.openURL, OpenURLAction { url in WebLink.open(url); return .handled })
                     .multilineTextAlignment(.center)
-                // 16, matching the App Store age rating (16+, set 2026-10-17) and the Terms.
-                Text("You must be 16 or older to use Fariin.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.top, 6)
                     .padding(.bottom, 16)
                 Button(action: onAgree) {
                     Text("Agree and continue").authPrimaryPill()
