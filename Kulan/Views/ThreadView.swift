@@ -667,7 +667,10 @@ struct ThreadView: View {
     /// too, and that is by far the commonest cause — so the line states the fact, offers the number,
     /// and blocks nothing. Tapping through to the verify screen counts as having seen it.
     @ViewBuilder private var keyChangeNotice: some View {
-        if keyChanged {
+        // ⛔ ONE-TO-ONE CHATS ONLY (owner 2026-10-31: "remove that thing" over a channel's bar). Groups
+        // and channels are not end-to-end encrypted, so a member's safety number says nothing about
+        // them, and the bar sat over the pinned message.
+        if keyChanged && !isGroup {
             Button {
                 // A group dismisses every member's notice at once: the bar named them all, so
                 // seeing it IS having seen all of them.
@@ -3139,7 +3142,22 @@ struct ThreadView: View {
     }
 
     // Liquid-Glass pinned-message bar below the nav (tap to scroll to it; pin.slash to unpin).
+    /// ⛔ THE BAR SLIDES, IT DOES NOT POP (owner 2026-10-31: "no animation when it appears or
+    /// disappears; use the reference app's"). Theirs moves the pinned panel in from behind the header
+    /// (its height above, sliding down) on a 0.4 s spring and back up the same way on the last unpin,
+    /// the messages riding with it. Clipped to its own band so it never draws over the header.
     @ViewBuilder private var pinnedBar: some View {
+        VStack(spacing: 0) {
+            if !visiblePinIds.isEmpty {
+                pinnedBarContent
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .clipped()
+        .animation(.spring(duration: 0.4, bounce: 0), value: visiblePinIds.isEmpty)
+    }
+
+    @ViewBuilder private var pinnedBarContent: some View {
         if !visiblePinIds.isEmpty {
             let ids = visiblePinIds
             let idx = min(pinIndex, ids.count - 1)

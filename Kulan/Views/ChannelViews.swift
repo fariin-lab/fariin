@@ -1220,7 +1220,9 @@ struct ChannelReactionsSettingsView: View {
                             if on {
                                 Image(systemName: "checkmark.circle.fill")
                                     .symbolRenderingMode(.palette)
-                                    .foregroundStyle(.white, blue)
+                                    // The tick in the circle's opposite (owner 2026-10-31: at night it
+                                    // was white on white, a plain dot).
+                                    .foregroundStyle(Color.onFariinAction, blue)
                                     .font(.system(size: 17))
                                     .background(Circle().fill(Color(.secondarySystemGroupedBackground)).padding(-1.5))
                                     .offset(x: 3, y: 3)

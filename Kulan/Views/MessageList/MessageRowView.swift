@@ -2053,28 +2053,8 @@ final class MessageRowView: UIView {
         guard let win = window, let chip = v as? ReactionChipView else { return }
         let center = chip.convert(chip.emojiPoint, to: win)
         let begin = CACurrentMediaTime() + delay
-        let bigSize: CGFloat = 64
-        let small = max(0.2, chip.emojiFontSize / bigSize)
-
-        let big = fxLabel(emoji, size: bigSize, at: center, in: win)
-        let keys: [NSNumber] = [0, 0.2, 0.32, 0.4, 0.72, 1]
-        let scale = CAKeyframeAnimation(keyPath: "transform.scale")
-        scale.values = [small, 1.12, 0.95, 1.0, 1.0, small]
-        scale.keyTimes = keys
-        let rise = CAKeyframeAnimation(keyPath: "position.y")
-        let up = center.y - 36
-        rise.values = [center.y, up - 4, up + 2, up, up, center.y]
-        rise.keyTimes = keys
-        let show = CAKeyframeAnimation(keyPath: "opacity")
-        show.values = [0, 1, 1, 0]
-        show.keyTimes = [0, 0.08, 0.9, 1]
-        let g = CAAnimationGroup()
-        g.animations = [scale, rise, show]
-        g.duration = 0.95
-        g.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        g.beginTime = begin
-        g.fillMode = .backwards
-        playFX(big, g, life: delay + g.duration)
+        // ⛔ NO BIG COPY (owner 2026-10-31: "every time a big emoji appears, fix"). The swelling copy
+        // above the pill is gone; the pill's own pop and the small spray are the whole effect.
 
         // Seven small copies, all the way round, a little more upward than down.
         for i in 0..<7 {
