@@ -2702,13 +2702,14 @@ struct StoryEditorView: View {
         } label: {
             ZStack {
                 Circle()
-                    .strokeBorder(style: StrokeStyle(lineWidth: 1.4, dash: [2.2, 1.9]))
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1.3, dash: [2, 1.7]))
                 Text("\(Int(storyHours))")
-                    .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                    .font(.system(size: 8.5, weight: .bold, design: .rounded))
                     .monospacedDigit()
             }
             .foregroundStyle(.white)
-            .frame(width: 22, height: 22)
+            // The reference app's size, measured off its screen: a 20 pt ring, an 8.5 pt figure.
+            .frame(width: 20, height: 20)
             .shadow(color: .black.opacity(0.35), radius: 1.5)
             .frame(width: 32, height: 40)
             .contentShape(Rectangle())
