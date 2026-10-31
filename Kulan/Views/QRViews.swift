@@ -492,6 +492,10 @@ struct ScanQRView: View {
 /// on screen but refuses to scan reads as a broken camera.
 private struct ScanTarget: View {
     var locked: Bool
+    /// The corners breathe while the camera looks (owner 2026-10-31: "blinks slowly, so the user feels
+    /// it is scanning"): a slow fade and a slight pull inward, held still once a code is in hand.
+    @State private var breathing = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geo in
@@ -511,8 +515,15 @@ private struct ScanTarget: View {
                     .stroke(locked ? Color.green : .white,
                             style: StrokeStyle(lineWidth: 4, lineCap: .round))
                     .frame(width: side, height: side)
+                    .opacity(breathing && !locked ? 0.45 : 1)
+                    .scaleEffect(breathing && !locked && !reduceMotion ? 0.96 : 1)
+                    .animation(locked ? .easeOut(duration: 0.2)
+                                      : .easeInOut(duration: 1.1).repeatForever(autoreverses: true),
+                               value: breathing)
                     .animation(.easeOut(duration: 0.2), value: locked)
             }
+            .onAppear { breathing = true }
+            .onChange(of: locked) { _, now in breathing = !now }
             .frame(width: geo.size.width, height: geo.size.height)
         }
         .allowsHitTesting(false)   // the buttons underneath must still take taps
