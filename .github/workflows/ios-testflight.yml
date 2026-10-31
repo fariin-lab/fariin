@@ -74,7 +74,16 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: FACES ON NOTIFICATIONS, CHANNEL FIXES.
+            THIS BUILD: STORY TIMER, CHANNEL TOOLS, SMOOTHER SELECT.
+            Stories (app admins): a small ring in the caption bar sets how long the story stays up, 6, 12, 24 or 48 hours (24 unless picked).
+            Channels: the share arrow on a post opens Share with (chats, Copy Link, iPhone share). Add Admin picks one of the channel's followers and makes them admin at once. Reactions: your picks in one bar, tap one to replace it from the emoji sheet. Mute / Unmute rolls, no vibration. The story sheet has no empty band.
+            Chats: the pin bar slides in and out. Selecting messages slides smoothly in and out, no jump. The safety-number bar shows in one-to-one chats only. Reactions no longer pop a big emoji. Chats shows the filter under its title.
+            Share and Forward list only chats you can post in. The last blue buttons are black (white on dark and on photo pages).
+            Sticker panel: bars on top, GIFs | Stickers at the foot, search beside it; no glass behind the top bar.
+            Search: Find Channels is a round button above the keyboard.
+            PLEASE TEST: make a story with 6 hours; share a channel post; add a follower as admin; select messages and press X; pin and unpin.
+
+            EARLIER: FACES ON NOTIFICATIONS, CHANNEL FIXES.
             Notifications: the sender's photo with the small Fariin badge, now also for reactions; someone with no photo gets a grey person circle (a group, a people circle).
             Channels: a follower gets no Select / Delete on posts. Your own channel opens inside Find Channels instead of dropping you on the chat list. Storage Used shows the real number before and after Follow, no jump. A private channel's page says to ask an admin for an invite link.
             PLEASE TEST: get a message and a reaction from someone with a photo and from someone without; long-press a post in a channel you follow; open your own channel from Find Channels.
