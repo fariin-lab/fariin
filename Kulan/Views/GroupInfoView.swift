@@ -120,7 +120,14 @@ struct GroupInfoView: View {
     /// refresh), the chat list's copy until it answers.
     @State private var live = LiveGroupDoc()
     // A group I left this session last (owner 2026-10-25): its info page draws me out of it.
-    private var conv: Conversation? { live.conv ?? repo.conversations.first { $0.id == cid } ?? FormerGroups.removed[cid] }
+    // ⛔ AND THE FOLLOW LIST'S COPY (owner 2026-10-31, his slowed-down recording: Follow, then a
+    // blank page with a spinner, then this page). The visitor page hands over as soon as the follow
+    // list holds the channel (`PublicGroupSheet.body`), but this page did not read that list, so it
+    // had nothing until its own document answered.
+    private var conv: Conversation? {
+        live.conv ?? repo.conversations.first { $0.id == cid }
+            ?? ChannelFollows.shared.conversations.first { $0.id == cid } ?? FormerGroups.removed[cid]
+    }
     private var iAmAdmin: Bool { conv?.isAdmin(me) ?? false }
     private var iAmOwner: Bool { conv?.createdBy == me && !(conv?.createdBy.isEmpty ?? true) }
     /// Not known yet counts as a member, so the page never flashes the left-group rows.
@@ -574,7 +581,10 @@ struct GroupInfoView: View {
     /// Search, Share.
     private var followerCircles: some View {
         HStack(spacing: 0) {
-            if followingNow {
+            // ⛔ LEAVE AND MUTE AT THE TAP (owner 2026-10-31, "never make something jump"): Follow
+            // went plus → ring → and only then Leave and Mute pushed in, three buttons becoming four.
+            // A follow on its way (`following`) already draws the follower's row, in one smooth change.
+            if followingNow || following {
                 // His leave icon and word (owner 2026-10-29), was a checkmark + "Following". In the
                 // row's own colour like its neighbours, not red (owner 2026-10-30).
                 Button { confirmUnfollow = true } label: {
@@ -635,26 +645,26 @@ struct GroupInfoView: View {
     /// its link is refused by the server, and that is said.
     private func followFromPage() {
         guard !following else { return }
-        following = true
+        withAnimation(.smooth(duration: 0.25)) { following = true }
+        Haptics.notify(.success)
         Task {
             do {
                 // A channel that approves each follower files a request (owner 2026-10-30: the ring
                 // waited 5 s for a follow that never comes, then the plus came back without a word).
                 // Say so and stop at once, as `rejoin()` does.
                 if try await ChannelService.follow(cid: cid) == "requested" {
-                    following = false
+                    withAnimation(.smooth(duration: 0.25)) { following = false }
                     ToastNotice.show("Request sent. An admin will review it.")
                     return
                 }
-                // The follow list arrives by listener: keep the ring until it does (up to 5 s), so
-                // the plus never flashes back between the server's yes and the Following circle.
+                // The follow list arrives by listener: hold the follower's row until it does (up to
+                // 5 s), so Follow never flashes back between the server's yes and the list.
                 for _ in 0..<25 where !ChannelFollows.shared.follows(cid) {
                     try? await Task.sleep(nanoseconds: 200_000_000)
                 }
-                Haptics.notify(.success)
             }
             catch { actionError = error.localizedDescription }
-            following = false
+            withAnimation(.smooth(duration: 0.25)) { following = false }
         }
     }
 

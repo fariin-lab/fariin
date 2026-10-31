@@ -846,12 +846,28 @@ struct PublicGroupInfoView: View {
 
     /// Follow, Share, Search, More, in the same round circles a follower and the owner see (owner
     /// 2026-10-29: one design for everyone, never square cards on one page and circles on the next).
-    private var channelActionsRow: some View {
+    @ViewBuilder private var channelActionsRow: some View {
+        if following { followerActionsRow } else { visitorActionsRow }
+    }
+
+    /// ⛔ AT THE TAP, THE FOLLOWER'S ROW (owner 2026-10-31: "no mark; follow, then Leave"). Follow
+    /// used to turn into "✓ Following", then the page swapped to the channel's own page with Leave:
+    /// two changes. Now the tap draws the row the channel's page has for a follower (Leave, Mute,
+    /// Search, Share, `GroupInfoView`), so the hand-over a moment later changes nothing on screen.
+    /// Leave takes the follow back; the others wait the second until that page is here.
+    private var followerActionsRow: some View {
         HStack(spacing: 0) {
-            Button { follow() } label: {
-                circle(following ? "checkmark" : "plus", following ? "Following" : "Follow")
-            }
-            .disabled(following)
+            Button { undoFollow() } label: { circle("ic_channel_leave", "Leave") }
+            circle("ic_bell_off", "Mute")
+            circle("magnifyingglass", "Search").opacity(0.45)   // as the channel page draws it before posts load
+            circle("square.and.arrow.up", "Share")
+        }
+        .tint(.primary)
+    }
+
+    private var visitorActionsRow: some View {
+        HStack(spacing: 0) {
+            Button { follow() } label: { circle("plus", "Follow") }
             // Our own "Share with" sheet first (chats); its corner button opens other apps.
             if let link {
                 Button { shareText = "Follow " + p.title + " on Fariin: " + link.absoluteString } label: {

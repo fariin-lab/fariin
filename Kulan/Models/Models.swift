@@ -1173,6 +1173,11 @@ enum ChannelCountBias {
                 return max(0, count + b.delta)
             }
             if base == count { return max(0, count + b.delta) }
+            // ⛔ A COPY THAT ALREADY COUNTS MY CHANGE IS NOT "THE BATCH LANDED" (owner 2026-10-31,
+            // his recording: left, came back as a visitor and it said 4 where 3 was right, then 5 at
+            // Follow). The previews carry stored + pending, so reading one dropped the -1 and the
+            // stored copy still saying 3 then drew 3 + its admin. Keep it for the stored copies.
+            if count == base + b.delta { return max(0, count) }
             bias[cid] = nil   // the batch landed: the server's number has it
             return count
         }
