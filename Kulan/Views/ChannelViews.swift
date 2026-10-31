@@ -33,6 +33,11 @@ struct ChannelFollowerBar: View {
                 Text(problem).font(.system(size: 14)).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
+            // Similar channels, right after following (owner 2026-10-31), above the bar, until closed.
+            if joined && SimilarChannels.showsAfterFollow(conv.id) {
+                SimilarChannelsStrip(cid: conv.id)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             if !joined, let blocked = followBlocked {
                 Self.noticeCard(blocked)
             } else {
@@ -1432,5 +1437,150 @@ struct ChannelAdminPicker: View {
                 ToastNotice.show(error.localizedDescription)
             }
         }
+    }
+}
+
+
+// MARK: - Similar channels (owner 2026-10-31)
+
+/// Which channel's "Similar Channels" card shows after following: followed in this run of the app,
+/// and not closed with its X (kept per channel). A channel under 1,000 followers gets an empty list
+/// from the server, except for app staff, so the card simply never appears there.
+@MainActor @Observable
+final class SimilarChannels {
+    static let shared = SimilarChannels()
+    /// Followed in this run (`ChannelService.follow`).
+    static var justFollowed: Set<String> {
+        get { shared.followed }
+        set { shared.followed = newValue }
+    }
+    private var followed: Set<String> = []
+    private var closed: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "similarChannels.closed") ?? [])
+    /// One fetch per channel per run.
+    @ObservationIgnored private var cache: [String: [ChannelService.Discovered]] = [:]
+
+    static func showsAfterFollow(_ cid: String) -> Bool {
+        shared.followed.contains(cid) && !shared.closed.contains(cid)
+    }
+
+    static func close(_ cid: String) {
+        shared.closed.insert(cid)
+        UserDefaults.standard.set(Array(shared.closed.suffix(500)), forKey: "similarChannels.closed")
+    }
+
+    static func load(_ cid: String) async -> [ChannelService.Discovered] {
+        if let c = shared.cache[cid] { return c }
+        let list = await ChannelService.similar(cid: cid)
+        shared.cache[cid] = list
+        return list
+    }
+
+    /// Opens a channel from a list: the visitor page for a stranger's, the chat for my own.
+    static func open(_ c: ChannelService.Discovered) {
+        GroupDirectory.open(cid: c.cid, name: c.handle.isEmpty ? nil : c.handle)
+    }
+}
+
+/// The card after following: "Similar Channels", an X, and up to 10 small channel cards in a row.
+/// Our own look: the app's glass panel and squircle photos, the follower count under each name.
+struct SimilarChannelsStrip: View {
+    let cid: String
+    @State private var list: [ChannelService.Discovered] = []
+    @State private var loaded = false
+
+    var body: some View {
+        Group {
+            if !list.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Similar Channels").font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Button {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) { SimilarChannels.close(cid) }
+                        } label: {
+                            Image(systemName: "xmark").font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 28, height: 28)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Close Similar Channels")
+                    }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(alignment: .top, spacing: 12) {
+                            ForEach(list) { c in
+                                Button { SimilarChannels.open(c) } label: { card(c) }
+                                    .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 14).padding(.top, 8).padding(.bottom, 12)
+                .liquidGlass(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+            }
+        }
+        .animation(.spring(response: 0.4, dampingFraction: 0.86), value: list.isEmpty)
+        .task(id: cid) {
+            guard !loaded else { return }
+            loaded = true
+            list = await SimilarChannels.load(cid)
+        }
+    }
+
+    private func card(_ c: ChannelService.Discovered) -> some View {
+        VStack(spacing: 4) {
+            AvatarView(name: c.title, photoUrl: c.photoUrl, size: 54).avatarSquircle(true)
+            HStack(spacing: 2) {
+                Text(c.title).font(.system(size: 11, weight: .medium)).lineLimit(1)
+                GroupVerifiedMark(on: c.verified, size: 10, label: c.label)
+            }
+            Text(GroupDirectory.followersLine(c.followerCount))
+                .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .frame(width: 70)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// The channel page's "Similar Channels": the same list as rows, hidden while there are none.
+struct SimilarChannelsSection: View {
+    let cid: String
+    let cardColor: Color
+    @State private var list: [ChannelService.Discovered] = []
+
+    var body: some View {
+        Group {
+            if !list.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Similar Channels").font(.headline).foregroundStyle(.secondary)
+                        .padding(.leading, 16)
+                    VStack(spacing: 0) {
+                        ForEach(Array(list.enumerated()), id: \.element.id) { i, c in
+                            Button { SimilarChannels.open(c) } label: {
+                                HStack(spacing: 12) {
+                                    AvatarView(name: c.title, photoUrl: c.photoUrl, size: 40).avatarSquircle(true)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        HStack(spacing: 4) {
+                                            Text(c.title).font(.body).foregroundStyle(.primary).lineLimit(1)
+                                            GroupVerifiedMark(on: c.verified, size: 13, label: c.label)
+                                        }
+                                        Text(GroupDirectory.followersLine(c.followerCount))
+                                            .font(.subheadline).foregroundStyle(.secondary)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, 16).padding(.vertical, 8)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            if i < list.count - 1 { Divider().padding(.leading, 68) }
+                        }
+                    }
+                    .profileSurface(plain: cardColor)
+                }
+            }
+        }
+        .task(id: cid) { list = await SimilarChannels.load(cid) }
     }
 }

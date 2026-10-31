@@ -574,6 +574,8 @@ struct GroupInfoView: View {
                                  onOpen: { m in if m.isVideo { viewerVideo = m } else { viewerImage = m } },
                                  onSeeAll: { showAllMedia = true })
             }
+            // Similar Channels (owner 2026-10-31): hidden until there are some.
+            SimilarChannelsSection(cid: cid, cardColor: cardColor)
             exitCard
         } else {
             memberCards

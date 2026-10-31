@@ -82,19 +82,29 @@ enum ChannelService {
         if let region = Locale.current.region?.identifier, region.count == 2 { data["country"] = region }
         let r = try await fn.httpsCallable("discoverChannels").call(data)
         let rows = (r.data as? [String: Any])?["channels"] as? [[String: Any]] ?? []
-        return rows.compactMap { d in
-            guard let cid = d["cid"] as? String, GroupDirectory.safeId(cid) else { return nil }
-            let photo = d["photoUrl"] as? String ?? ""
-            return Discovered(cid: cid, handle: d["handle"] as? String ?? "",
-                              title: d["title"] as? String ?? "Channel",
-                              photoUrl: photo.isEmpty ? nil : photo,
-                              description: d["description"] as? String ?? "",
-                              followerCount: (d["followerCount"] as? NSNumber)?.intValue ?? 0,
-                              admins: (d["admins"] as? NSNumber)?.intValue ?? 0,
-                              verified: d["verified"] as? Bool ?? false,
-                              label: d["label"] as? String ?? "",
-                              official: d["official"] as? Bool ?? false)
-        }
+        return rows.compactMap(discovered)
+    }
+
+    /// owner 2026-10-31: channels similar to this one, for me (server `getSimilarChannels`): up to 10,
+    /// none I follow or run. Empty under 1,000 followers, except for app staff.
+    static func similar(cid: String) async -> [Discovered] {
+        guard let r = try? await fn.httpsCallable("getSimilarChannels").call(["cid": cid]) else { return [] }
+        let rows = (r.data as? [String: Any])?["channels"] as? [[String: Any]] ?? []
+        return rows.compactMap(discovered)
+    }
+
+    private static func discovered(_ d: [String: Any]) -> Discovered? {
+        guard let cid = d["cid"] as? String, GroupDirectory.safeId(cid) else { return nil }
+        let photo = d["photoUrl"] as? String ?? ""
+        return Discovered(cid: cid, handle: d["handle"] as? String ?? "",
+                          title: d["title"] as? String ?? "Channel",
+                          photoUrl: photo.isEmpty ? nil : photo,
+                          description: d["description"] as? String ?? "",
+                          followerCount: (d["followerCount"] as? NSNumber)?.intValue ?? 0,
+                          admins: (d["admins"] as? NSNumber)?.intValue ?? 0,
+                          verified: d["verified"] as? Bool ?? false,
+                          label: d["label"] as? String ?? "",
+                          official: d["official"] as? Bool ?? false)
     }
 
     /// Follow a public channel, or a private one with its invite `code`. "following" or "already".
@@ -122,6 +132,7 @@ enum ChannelService {
         else { await adoptServerCount(cid, r: rData) }
         await MainActor.run {
             LeaveGroupUndo.shared.reopen(cid)   // unfollowed before: back in the list
+            if status != "requested" { SimilarChannels.justFollowed.insert(cid) }
         }
         return status
     }
