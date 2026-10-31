@@ -3065,8 +3065,8 @@ struct ChatsView: View {
                         Text(leave.barKind == .deleteGroup ? "Group deleted."
                              : leave.barKind == .deleteChannel ? "Channel deleted." : "You left the group.")
                             .font(.subheadline).lineLimit(1)
-                        Spacer(minLength: 8)
-                        Text("Undo").font(.subheadline.weight(.semibold))
+                        // Hugs its words, not the screen's width (owner 2026-10-31: full width was too long).
+                        Text("Undo").font(.subheadline.weight(.semibold)).padding(.leading, 6)
                     }
                     .foregroundStyle(Color.white)
                     .padding(.leading, 8).padding(.trailing, 18)
