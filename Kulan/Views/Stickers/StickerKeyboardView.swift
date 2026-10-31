@@ -375,54 +375,51 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             // ⛔ EDIT IS SMALL AND ON THE BAR'S RIGHT — owner 2026-10-19 (build at 486b4111 showed it at
             // the top right). The bar stays centred whether Edit shows or not, with Edit's slot kept
             // free on both sides, so a late show/hide of Edit can never leave the two out of step.
+            // ⛔ BARS ON TOP, THE SWITCH AT THE FOOT (owner 2026-10-31, his screenshots: "make it
+            // exactly like this"). Stickers: the pack bar centred at the top, Edit at its right.
+            // GIFs: their shelves bar at the top (drawn by the GIF grid). Both: GIFs | Stickers
+            // floating at the foot, and on GIFs a round 44 pt search at the foot's right.
             for v in [stripGlass, strip, editButton] as [UIView] { v.transform = .identity }
             let pad: CGFloat = 6
             let smallEditW: CGFloat = 48, smallEditH: CGFloat = 28
-            let room = w - 2 * M.side   // Edit lives at the top now (2026-10-21)
+            let gifsOn = tabs.selectedSegmentIndex == 0
+            let editRoom: CGFloat = (editButton.isHidden || gifsOn) ? 0 : smallEditW + 8
+            let room = w - 2 * M.side - 2 * editRoom
             let barW = min(room, strip.contentSize.width + 2 * pad)
-            let barY = h - footGap - M.stripH
+            let barY = M.top
             let bar = CGRect(x: (w - barW) / 2, y: barY, width: barW, height: M.stripH)
             stripGlass.frame = bar
             stripGlass.layer.cornerRadius = M.stripH / 2
             strip.frame = bar.insetBy(dx: pad, dy: 0)
-            // ⛔ EDIT AT THE TOP RIGHT — owner 2026-10-21 (reverses 10-19's "on the bar's right"): level
-            // with the first section heading, and it stays there while the grid scrolls or edits.
-            let editY = M.top + 4
-            editButton.frame = CGRect(x: w - M.side - smallEditW, y: editY, width: smallEditW, height: smallEditH)
+            editButton.frame = CGRect(x: w - M.side - smallEditW, y: barY + (M.stripH - smallEditH) / 2,
+                                      width: smallEditW, height: smallEditH)
             editGlass.frame = editButton.bounds
             editGlass.layer.cornerRadius = smallEditH / 2
-            let down = hideBars ? h - barY : 0
-            for v in [stripGlass, strip] as [UIView] { v.transform = CGAffineTransform(translationX: 0, y: down) }
-            let gifsOn = tabs.selectedSegmentIndex == 0
-            for v in [stripGlass, strip] as [UIView] { v.alpha = hideBars || editing || gifsOn ? 0 : 1 }
+            for v in [stripGlass, strip] as [UIView] { v.alpha = editing || gifsOn ? 0 : 1 }
             editButton.alpha = 1
-            // THE TOP ROW (owner 2026-10-31): search on the left (GIFs), the switch in the middle,
-            // Edit on the right (Stickers). It stays put while the grid scrolls; nothing floats on
-            // the grid but the foot bar.
-            let rowH = M.tabsH
-            var gridTop = M.top
             if AppFeatures.stickerPanelGifs {
-                tabs.frame = CGRect(x: (w - 160) / 2, y: M.top, width: 160, height: rowH)
+                let switchW: CGFloat = 200
+                tabs.frame = CGRect(x: (w - switchW) / 2, y: h - footGap - M.tabsH, width: switchW, height: M.tabsH)
                 tabGlass.frame = tabs.frame.insetBy(dx: -3, dy: -3)
                 tabGlass.layer.cornerRadius = tabGlass.bounds.height / 2
                 layoutTabThumb()
                 for v in [tabs, tabGlass, tabThumb] as [UIView] { v.transform = .identity; v.alpha = editing ? 0 : 1 }
-                let sSize = rowH + 6
-                searchButton.frame = CGRect(x: M.side, y: M.top - 3, width: sSize, height: sSize)
+                let sSize: CGFloat = 44
+                searchButton.frame = CGRect(x: w - M.side - sSize, y: tabs.frame.midY - sSize / 2,
+                                            width: sSize, height: sSize)
                 searchButton.alpha = gifsOn && !editing ? 1 : 0
                 searchButton.isUserInteractionEnabled = gifsOn && !editing
-                editButton.frame.origin.y = M.top + (rowH - smallEditH) / 2
-                gridTop = M.top + rowH + 8
             } else {
                 searchButton.alpha = 0
                 searchButton.isUserInteractionEnabled = false
             }
+            let gridTop = barY + M.stripH + 6
             grid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, h - gridTop))
-            gifGrid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, h - gridTop))
+            gifGrid.frame = CGRect(x: 0, y: M.top, width: w, height: max(0, h - M.top))
             gifGrid.footGap = footGap
-            gifGrid.bottomRoom = 0
-            // Room under the last row for the floating bar (and the Delete bar while editing).
-            grid.contentInset.bottom = bottomInset + M.stripH + 16 + (editing ? 44 : 0)
+            gifGrid.bottomRoom = M.tabsH + 16
+            // Room under the last row for the floating switch (and the Delete bar while editing).
+            grid.contentInset.bottom = bottomInset + M.tabsH + 16 + (editing ? 44 : 0)
             let barH = 44 + sb
             deleteBar.frame = CGRect(x: 0, y: h - barH, width: w, height: barH)
             deleteButton.frame = CGRect(x: 0, y: 0, width: w, height: 44)
@@ -658,7 +655,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         let grown = currentLift() > 0.5
         let p = pan.location(in: cardView)
         // The tab band at the foot is its own row (see `hitTest`), even where the grid runs under it.
-        let inBand = !tabs.isHidden && tabs.alpha > 0.01 && p.y <= tabGlass.frame.maxY + 8
+        let inBand = !tabs.isHidden && tabs.alpha > 0.01 && tabGlass.frame.insetBy(dx: -10, dy: -10).contains(p)
         var hit = inBand ? nil : cardView.hitTest(p, with: nil)
         while let h = hit, h !== cardView {
             if let s = h as? UIScrollView, s === grid || s === gifGrid.scrollView {

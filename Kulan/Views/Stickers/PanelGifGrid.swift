@@ -210,12 +210,13 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
             let room = w - 2 * M.side - 2 * pad
             stripCellSize = min(M.stripCell, floor((room - (n - 1) * M.stripSpacing) / max(n, 1)))
             let barW = n * stripCellSize + (n - 1) * M.stripSpacing + 2 * pad
-            let bar = CGRect(x: (w - barW) / 2, y: bounds.height - footGap - M.stripH, width: barW, height: M.stripH)
+            // At the top (owner 2026-10-31); the panel's GIFs | Stickers switch floats at the foot.
+            let bar = CGRect(x: (w - barW) / 2, y: M.barY, width: barW, height: M.stripH)
             stripGlass.frame = bar
             stripGlass.layer.cornerRadius = M.stripH / 2
             strip.frame = bar.insetBy(dx: pad, dy: 0)
             strip.alpha = 1
-            gridTop = 0
+            gridTop = M.barY + M.stripH + 6
             // Over the grid, which was added after them.
             bringSubviewToFront(stripGlass)
             bringSubviewToFront(strip)
@@ -245,7 +246,7 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
         searchField.frame = CGRect(x: 40, y: 0, width: max(0, searchPill.bounds.width - 48), height: ph)
         grid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, bounds.height - gridTop))
         grid.contentInset.bottom = barAtFoot && !searching
-            ? footGap + M.stripH + 12
+            ? footGap + bottomRoom
             : max(safeAreaInsets.bottom, 8) + bottomRoom
         emptyLabel.frame = CGRect(x: 32, y: gridTop + 28, width: max(0, w - 64), height: 60)
         if lastGridWidth != w {
