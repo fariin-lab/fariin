@@ -37,6 +37,8 @@ struct GroupInfoView: View {
         // below jumped up, then it came back and pushed them down). The visitor page fetches this
         // channel's media (`PublicGroupSheet.prefetchMedia`); this page used to start empty and wait.
         _media = State(initialValue: ChatService.cachedSharedMedia(cid) ?? [])
+        // The storage figure too, if this chat was measured before (owner 2026-10-31): no blank row.
+        _storage = State(initialValue: ChatMediaStorage.known[cid])
     }
     @Environment(\.dismiss) private var dismiss
     private var repo = ConversationsRepository.shared
@@ -1552,7 +1554,9 @@ struct GroupInfoView: View {
         for m in (all ?? []) + (ThreadMessageCache.shared.messages(for: cid) ?? []) { byId[m.id] = m }
         let msgs = Array(byId.values)
         storageMessages = msgs
-        storage = await Task.detached(priority: .utility) { ChatMediaStorage.measure(msgs) }.value
+        let measured = await Task.detached(priority: .utility) { ChatMediaStorage.measure(msgs) }.value
+        storage = measured
+        ChatMediaStorage.known[cid] = measured
     }
 
     private func clearStorage() {
@@ -1561,7 +1565,9 @@ struct GroupInfoView: View {
         // The cache deletes are queued on its own disk queue; measure after they have run.
         Task {
             try? await Task.sleep(for: .milliseconds(400))
-            storage = await Task.detached(priority: .utility) { ChatMediaStorage.measure(msgs) }.value
+            let measured = await Task.detached(priority: .utility) { ChatMediaStorage.measure(msgs) }.value
+            storage = measured
+            ChatMediaStorage.known[cid] = measured
         }
     }
 

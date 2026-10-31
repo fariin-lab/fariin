@@ -827,9 +827,7 @@ struct PublicGroupInfoView: View {
                     ToastNotice.show("Follow this channel to change its notifications.")
                 }
                 Divider().padding(.leading, 56)
-                ProfileInfoRow(title: "Storage Used", icon: "internaldrive", value: "None") {
-                    ToastNotice.show("Follow this channel to see what it keeps on this phone.")
-                }
+                VisitorStorageRow(cid: p.cid)
             }
             .profileSurface(plain: Color(.secondarySystemGroupedBackground))
         }
@@ -1056,6 +1054,33 @@ struct PublicGroupInfoView: View {
             }
             .background(Color(.secondarySystemGroupedBackground),
                         in: RoundedRectangle(cornerRadius: 24, style: .continuous))   // profileSurface's 24
+        }
+    }
+}
+
+
+/// A visitor's Storage Used (owner 2026-10-31): the real figure for what this phone already keeps of
+/// the channel (posts read while visiting), measured the same way as the follower page, and handed to
+/// it through `ChatMediaStorage.known` so Follow changes nothing in this row.
+private struct VisitorStorageRow: View {
+    let cid: String
+    @State private var usage: ChatMediaStorage.Usage?
+
+    init(cid: String) {
+        self.cid = cid
+        _usage = State(initialValue: ChatMediaStorage.known[cid])
+    }
+
+    var body: some View {
+        ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
+                       value: usage.map { GroupInfoView.bytes($0.total) } ?? "") {
+            ToastNotice.show("Follow this channel to manage what it keeps on this phone.")
+        }
+        .task(id: cid) {
+            let msgs = ChatMediaStorage.messagesOnPhone(cid)
+            let measured = await Task.detached(priority: .utility) { ChatMediaStorage.measure(msgs) }.value
+            usage = measured
+            ChatMediaStorage.known[cid] = measured
         }
     }
 }

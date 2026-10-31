@@ -139,6 +139,19 @@ struct GroupSectionAnchor: View {
 enum ChatMediaStorage {
     struct Usage: Equatable { var total = 0; var clearable = 0 }
 
+    /// The last figure measured for each chat, for this run of the app (owner 2026-10-31, frame by
+    /// frame: on Follow the row went None, then blank, then 194 KB). A page opening on a chat it has
+    /// measured before starts on that number and corrects it quietly when the new measure lands.
+    @MainActor static var known: [String: Usage] = [:]
+
+    /// Everything of this chat's this phone holds: the gallery's list and the chat's cached messages.
+    @MainActor static func messagesOnPhone(_ cid: String) -> [Message] {
+        var byId: [String: Message] = [:]
+        for m in (GalleryCache.store[cid] ?? []) + (ChatService.cachedSharedMedia(cid) ?? [])
+            + (ThreadMessageCache.shared.messages(for: cid) ?? []) { byId[m.id] = m }
+        return Array(byId.values)
+    }
+
     /// Every image url this chat's messages point at (photos, album photos, video posters, GIFs).
     private static func imageURLs(_ messages: [Message]) -> Set<String> {
         var out = Set<String>()
