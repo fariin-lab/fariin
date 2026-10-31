@@ -306,18 +306,22 @@ struct GroupTypeView: View {
         if !nameChanged && !name.isEmpty {
             Text("People can open this \(noun) with fariin.com/\(name).")
         } else if check != .idle {
-            HStack(spacing: 5) {
+            // ⛔ THE SIGN-UP USERNAME'S RING (owner 2026-10-31: "make checking look cool, and the
+            // answer"). One ring the whole time: an arc runs round it while the server is asked, then
+            // it closes green with a tick drawing in, or red with a cross. The words fade over.
+            HStack(spacing: 7) {
                 switch check {
-                case .checking: ProgressView().controlSize(.mini)
-                case .available: Image(systemName: "checkmark.circle.fill")
-                case .taken, .tooShort, .invalid: Image(systemName: "xmark.circle.fill")
+                case .checking: HandleCheckRing(state: .checking)
+                case .available: HandleCheckRing(state: .free)
+                case .taken, .tooShort, .invalid: HandleCheckRing(state: .taken)
                 default: EmptyView()
                 }
                 Text(check.text)
+                    .contentTransition(.opacity)
+                    .animation(.easeOut(duration: 0.2), value: check.text)
             }
             .foregroundStyle(checkColor)
             .transition(.opacity)
-            .id(check.text)
         } else {
             Text("Pick a link of \(GroupDirectory.nameMin) to \(GroupDirectory.nameMax) characters: letters, numbers and _.")
         }

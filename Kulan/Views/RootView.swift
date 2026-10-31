@@ -745,7 +745,8 @@ private struct OnboardingCropItem: Identifiable { let id = UUID(); let image: UI
 /// round it while the server is asked, then the arc closes into a full green circle with a tick
 /// drawing itself in, or a red one with a cross. The same ring the whole time, so the answer reads
 /// as the end of the wait rather than a different icon popping in.
-private struct HandleCheckRing: View {
+/// Shared with the group and channel link page (GroupTypeView, 2026-10-31).
+struct HandleCheckRing: View {
     enum Phase { case checking, free, taken }
     let state: Phase
 
@@ -808,7 +809,7 @@ private struct HandleCheckRing: View {
 
 /// A round-capped arc turning forever, driven by a CABasicAnimation on the layer (see the note in
 /// `HandleCheckRing`): the render server runs it, so SwiftUI's async renderer never does.
-private struct SpinningArc: UIViewRepresentable {
+struct SpinningArc: UIViewRepresentable {
     let color: UIColor
     let lineWidth: CGFloat
     let fraction: CGFloat
@@ -860,7 +861,7 @@ private struct SpinningArc: UIViewRepresentable {
     }
 }
 
-private struct TickShape: Shape {
+struct TickShape: Shape {
     func path(in r: CGRect) -> Path {
         var p = Path()
         p.move(to: CGPoint(x: r.minX, y: r.midY))
