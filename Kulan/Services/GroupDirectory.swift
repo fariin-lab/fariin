@@ -355,11 +355,11 @@ enum GroupNameCheck: Equatable {
         var args: [String: Any] = [:]
         if let name, !name.isEmpty { args["username"] = name }
         if let cid, KulanApp.safeSegment(cid) { args["cid"] = cid }
-        guard !args.isEmpty else { return .refused("This group is not public.") }
+        guard !args.isEmpty else { return .refused("This is private now. Ask one of its admins for an invite link.") }
         do {
             let res = try await fns.httpsCallable("publicGroupPreview").call(args)
             guard let p = PublicGroupPreview(res.data as? [String: Any] ?? [:]) else {
-                return .refused("This group is not public.")
+                return .refused("This is private now. Ask one of its admins for an invite link.")
             }
             await MainActor.run { remember(p) }
             return .found(p)
