@@ -1378,11 +1378,10 @@ struct ThreadView: View {
                 searchNavBar.transition(.opacity)
             } else if let conv = conversation, conv.isChannel, !conv.users.contains(me), !groupModHidesChat,
                       ChannelFollows.shared.follows(conv.id) {
-                // ⛔ A FOLLOWER'S BOTTOM IS EMPTY (owner 2026-10-29, evening: "no need, if the Follow
-                // button is not shown that means they already followed"). Reverses the morning's
-                // "You're following this channel" card; mute is the bell at the top. Zero height at
-                // the safe-area line, so the down arrow sits just above it.
-                Color.clear.frame(maxWidth: .infinity).frame(height: 0)
+                // ⛔ A FOLLOWER GETS MUTE HERE (owner 2026-10-31, from the reference app: Join turns
+                // into Mute / Unmute). Replaces the empty bottom of 2026-10-29; the same bar as Follow,
+                // so the tap morphs one into the other.
+                ChannelFollowerBar(conv: conv).transition(.opacity)
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top in
                         if let lift = Self.barLift(top: top) { composerLift = lift }
                     }

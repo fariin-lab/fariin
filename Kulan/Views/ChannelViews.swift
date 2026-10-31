@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// Where the composer goes for someone who is not an admin of a channel (2026-10-28). Following:
-/// the official chat's card, "You're following this channel" (owner 2026-10-29; mute is the bell).
-/// Not following (I unfollowed, or opened it from a link I have not used): Follow.
+/// Where the composer goes for someone who is not an admin of a channel (2026-10-28). Not following:
+/// Follow. Following: Mute / Unmute in the same place (owner 2026-10-31, the reference app's way).
 struct ChannelFollowerBar: View {
     let conv: Conversation
     @State private var follows = ChannelFollows.shared
@@ -53,29 +52,63 @@ struct ChannelFollowerBar: View {
         .onChange(of: following) { _, now in if now { optimistic = false } }
     }
 
-    /// Follow (the full-width blue bar) and "You're following this channel" (the official chat's
-    /// card) as ONE glass shape, so the spring carries one into the other instead of swapping views.
+    /// ⛔ FOLLOW BECOMES MUTE (owner 2026-10-31, from the reference app: its channel's Join turns
+    /// into Mute / Unmute in the same place). One capsule: blue Follow while I do not follow; at the
+    /// tap it settles into a light glass Mute. A tap mutes or unmutes; press and hold for the timed
+    /// choices, the same ones the channel's page offers (`GroupInfoView.muteMenuItems`).
     private var followMorph: some View {
-        // ⛔ NO "YOU'RE FOLLOWING" CARD (owner 2026-10-29, evening: the Follow button being gone
-        // already says you follow). At the tap the bar fades and shrinks away; once the follow lands
-        // ThreadView drops the bar and a follower's bottom is empty. A refusal brings Follow back.
-        Button { follow() } label: {
-            Text("Follow")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 18)
-                .frame(height: 50)
-                .liquidGlass(RoundedRectangle(cornerRadius: 25, style: .continuous),
-                             interactive: true, tint: Color(hex: 0x2392FE))
-                .contentShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
+        Group {
+            if joined {
+                Menu {
+                    if muted {
+                        Button("Unmute") { setMute(0) }
+                    } else {
+                        Section("Mute for…") {
+                            Button("1 hour") { setMute(ChatService.muteUntil(1)) }
+                            Button("8 hours") { setMute(ChatService.muteUntil(8)) }
+                            Button("1 day") { setMute(ChatService.muteUntil(24)) }
+                            Button("1 week") { setMute(ChatService.muteUntil(168)) }
+                        }
+                        Button(role: .destructive) { setMute(ChatService.muteUntil(nil)) } label: {
+                            Label("Mute Forever", systemImage: "bell.slash")
+                        }
+                    }
+                } label: {
+                    barLabel(icon: muted ? "bell" : "bell.slash", text: muted ? "Unmute" : "Mute", blue: false)
+                } primaryAction: {
+                    setMute(muted ? 0 : ChatService.muteUntil(nil))
+                }
+                .accessibilityLabel(muted ? "Unmute channel" : "Mute channel")
+            } else {
+                Button { follow() } label: { barLabel(icon: nil, text: "Follow", blue: true) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Follow")
+            }
         }
-        .buttonStyle(.plain)
         .padding(.horizontal, 16)
-        .opacity(joined ? 0 : 1)
-        .scaleEffect(joined ? 0.94 : 1)
-        .allowsHitTesting(!joined)
-        .accessibilityLabel("Follow")
+    }
+
+    private var muted: Bool { follows.entry(conv.id)?.isMuted ?? false }
+
+    private func setMute(_ until: Double) {
+        Haptics.impact(.light)
+        Task { _ = await ChatService.setMute(conv.id, until: until) }
+    }
+
+    /// The one capsule both states draw, so the spring on `joined` carries one into the other.
+    private func barLabel(icon: String?, text: String, blue: Bool) -> some View {
+        HStack(spacing: 8) {
+            if let icon { Image(systemName: icon).font(.system(size: 16, weight: .semibold)) }
+            Text(text).font(.system(size: 17, weight: .semibold))
+        }
+        .foregroundStyle(blue ? Color.white : Color.primary)
+        .contentTransition(.opacity)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 18)
+        .frame(height: 50)
+        .liquidGlass(RoundedRectangle(cornerRadius: 25, style: .continuous),
+                     interactive: true, tint: blue ? Color(hex: 0x2392FE) : nil)
+        .contentShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
     }
 
     /// The official chat's bottom card, word for word in style (`OfficialChatView.cannotReplyBar`).
