@@ -299,8 +299,67 @@ extension View {
     /// close the keyboard altogether". A tap meant for a field kept landing on this and closing the
     /// keys it had just opened. Kept as a no-op so the call sites stay put; swiping the page down
     /// (`scrollDismissesKeyboard`) and Return close the keyboard.
+    /// ⛔ BACK ON, WITHOUT THE FIGHT — owner 2026-10-31 ("it only closes when I tap Next"): a tap
+    /// anywhere closes the keys, the way big apps do, EXCEPT a tap on a text field, which is left
+    /// alone so it never closes the keys it just opened. Watched at the window and passed through
+    /// (`cancelsTouchesInView = false`), so a button still gets its tap.
     func dismissesKeyboardOnTap() -> some View {
-        self
+        background(KeyboardTapDismisser().allowsHitTesting(false))
+    }
+}
+
+/// Puts one tap watcher on the window while the page is on screen (see `dismissesKeyboardOnTap`).
+private struct KeyboardTapDismisser: UIViewRepresentable {
+    func makeUIView(context: Context) -> Host { Host() }
+    func updateUIView(_ uiView: Host, context: Context) {}
+
+    final class Host: UIView, UIGestureRecognizerDelegate {
+        private lazy var tap: UITapGestureRecognizer = {
+            let t = UITapGestureRecognizer(target: self, action: #selector(tapped))
+            t.cancelsTouchesInView = false
+            t.delegate = self
+            return t
+        }()
+        private weak var watched: UIWindow?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if watched !== window {
+                watched?.removeGestureRecognizer(tap)
+                window?.addGestureRecognizer(tap)
+                watched = window
+            }
+        }
+
+        @objc private func tapped() { watched?.endEditing(true) }
+
+        /// What made the 10-18 version fight: a field's box (icon, padding, the eye) is bigger than the
+        /// text field inside it, and a tap on the box's edge both focused the field and closed the
+        /// keys. So the whole row of every field, the full width and 24 pt above and below the text,
+        /// counts as the field.
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard let win = watched else { return false }
+            var v = touch.view
+            while let cur = v {
+                if cur is UITextField || cur is UITextView { return false }
+                v = cur.superview
+            }
+            let p = touch.location(in: win)
+            for f in Self.fields(in: win) {
+                let r = f.convert(f.bounds, to: win)
+                if CGRect(x: 0, y: r.minY - 24, width: win.bounds.width, height: r.height + 48).contains(p) { return false }
+            }
+            return true
+        }
+
+        private static func fields(in v: UIView) -> [UIView] {
+            if v.isHidden || v.alpha < 0.01 { return [] }
+            if v is UITextField || v is UITextView { return [v] }
+            return v.subviews.flatMap { fields(in: $0) }
+        }
+
+        func gestureRecognizer(_ g: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
     }
 }
 

@@ -147,7 +147,13 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     /// ⛔ THE PACK STRIP IS THE BOTTOM BAR — owner 2026-10-19 (his drawing): with the GIF switch gone,
     /// the strip leaves the top and floats at the foot on a glass capsule, where the switch was.
     private let stripGlass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
-    private var stripAtFoot: Bool { !AppFeatures.stickerPanelGifs }
+    /// Always now (owner 2026-10-31): the packs and the GIF shelves both ride a glass bar at the foot,
+    /// and the top row holds search, the GIFs | Stickers switch and Edit.
+    private var stripAtFoot: Bool { true }
+    /// The GIFs tab's search, top left of the panel. It opens the GIF sheet (see `onOpenGifSearch`).
+    private let searchButton = UIButton(type: .system)
+    /// The tab last used, for every chat and across launches (owner 2026-10-31). Stickers the first time.
+    private static let tabKey = "stickerPanel.lastTab"
     private var stripButtons: [UIButton] = []
     private let grid: UICollectionView
     private let deleteBar = UIView()
@@ -184,7 +190,8 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         backdrop.isHidden = true
         cardView.addSubview(backdrop)
 
-        tabs.selectedSegmentIndex = 1
+        tabs.selectedSegmentIndex = AppFeatures.stickerPanelGifs
+            ? ((UserDefaults.standard.object(forKey: Self.tabKey) as? Int) == 0 ? 0 : 1) : 1
         let normal = UIFont.systemFont(ofSize: 14, weight: .regular)
         let bold = UIFont.systemFont(ofSize: 14, weight: .semibold)
         tabs.setTitleTextAttributes([.font: normal, .foregroundColor: UIColor.secondaryLabel], for: .normal)
@@ -241,8 +248,22 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             guard let self, self.searchingGifs else { return }
             self.collapseGifSearch()
         }
+        gifGrid.barAtFoot = true
         cardView.addSubview(gifGrid)
-        // The switch floats over both grids (it sits at their foot now).
+
+        var sc = UIButton.Configuration.glass()
+        sc.cornerStyle = .capsule
+        sc.contentInsets = .zero
+        sc.image = UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold))
+        sc.baseForegroundColor = .label
+        searchButton.configuration = sc
+        searchButton.accessibilityLabel = "Search GIFs"
+        searchButton.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            if let open = self.onOpenGifSearch { open() } else { self.expandForGifSearch() }
+        }, for: .touchUpInside)
+        cardView.addSubview(searchButton)
+        // The switch floats over both grids.
         cardView.bringSubviewToFront(tabGlass)
         cardView.bringSubviewToFront(tabThumb)
         cardView.bringSubviewToFront(tabs)
@@ -273,6 +294,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         cardView.addGestureRecognizer(expandPan)
 
         reload()
+        applyTab()
         // Packs from the admin panel (2026-10-18): a changed catalog redraws the shelves; a server
         // sticker's file landing fills its tile in place (no full reload, so nothing flashes).
         NotificationCenter.default.addObserver(self, selector: #selector(catalogChanged),
@@ -371,10 +393,34 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             editGlass.layer.cornerRadius = smallEditH / 2
             let down = hideBars ? h - barY : 0
             for v in [stripGlass, strip] as [UIView] { v.transform = CGAffineTransform(translationX: 0, y: down) }
-            for v in [stripGlass, strip] as [UIView] { v.alpha = hideBars || editing ? 0 : 1 }
+            let gifsOn = tabs.selectedSegmentIndex == 0
+            for v in [stripGlass, strip] as [UIView] { v.alpha = hideBars || editing || gifsOn ? 0 : 1 }
             editButton.alpha = 1
-            grid.frame = CGRect(x: 0, y: M.top, width: w, height: max(0, h - M.top))
-            gifGrid.frame = CGRect(x: 0, y: M.top, width: w, height: max(0, h - M.top))
+            // THE TOP ROW (owner 2026-10-31): search on the left (GIFs), the switch in the middle,
+            // Edit on the right (Stickers). It stays put while the grid scrolls; nothing floats on
+            // the grid but the foot bar.
+            let rowH = M.tabsH
+            var gridTop = M.top
+            if AppFeatures.stickerPanelGifs {
+                tabs.frame = CGRect(x: (w - 160) / 2, y: M.top, width: 160, height: rowH)
+                tabGlass.frame = tabs.frame.insetBy(dx: -3, dy: -3)
+                tabGlass.layer.cornerRadius = tabGlass.bounds.height / 2
+                layoutTabThumb()
+                for v in [tabs, tabGlass, tabThumb] as [UIView] { v.transform = .identity; v.alpha = editing ? 0 : 1 }
+                let sSize = rowH + 6
+                searchButton.frame = CGRect(x: M.side, y: M.top - 3, width: sSize, height: sSize)
+                searchButton.alpha = gifsOn && !editing ? 1 : 0
+                searchButton.isUserInteractionEnabled = gifsOn && !editing
+                editButton.frame.origin.y = M.top + (rowH - smallEditH) / 2
+                gridTop = M.top + rowH + 8
+            } else {
+                searchButton.alpha = 0
+                searchButton.isUserInteractionEnabled = false
+            }
+            grid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, h - gridTop))
+            gifGrid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, h - gridTop))
+            gifGrid.footGap = footGap
+            gifGrid.bottomRoom = 0
             // Room under the last row for the floating bar (and the Delete bar while editing).
             grid.contentInset.bottom = bottomInset + M.stripH + 16 + (editing ? 44 : 0)
             let barH = 44 + sb
@@ -612,7 +658,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         let grown = currentLift() > 0.5
         let p = pan.location(in: cardView)
         // The tab band at the foot is its own row (see `hitTest`), even where the grid runs under it.
-        let inBand = !headerHidden && !tabs.isHidden && tabs.alpha > 0.01 && p.y >= tabGlass.frame.minY - 10
+        let inBand = !tabs.isHidden && tabs.alpha > 0.01 && p.y <= tabGlass.frame.maxY + 8
         var hit = inBand ? nil : cardView.hitTest(p, with: nil)
         while let h = hit, h !== cardView {
             if let s = h as? UIScrollView, s === grid || s === gifGrid.scrollView {
@@ -1102,16 +1148,12 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     /// Only while the card is home: its frames are then the panel's own coordinates. While it is out
     /// for GIF search the panel is empty and the card's window takes the touches.
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        if cardView.superview === self, !searchingGifs,
-           !headerHidden, !editing, !tabs.isHidden, tabs.alpha > 0.01, point.y >= tabGlass.frame.minY - 10 {
-            if tabs.frame.insetBy(dx: -12, dy: -10).contains(point) {
-                // Land on the control at the nearest point, so a touch just beside it still switches.
-                let p = CGPoint(x: min(max(point.x, tabs.frame.minX + 1), tabs.frame.maxX - 1), y: tabs.frame.midY)
-                return tabs.hitTest(convert(p, to: tabs), with: event) ?? tabs
-            }
-            // The card, not the panel: still no sticker, but the drag-to-grow pan (on the card) sees
-            // a drag that starts in the band, as theirs does across its whole panel (2026-10-18).
-            return cardView
+        // The switch sits on the top row now (owner 2026-10-31): a touch near it switches; anything
+        // else on that row (search, Edit) or below it goes on as usual.
+        if cardView.superview === self, !searchingGifs, !editing, !tabs.isHidden, tabs.alpha > 0.01,
+           tabs.frame.insetBy(dx: -12, dy: -8).contains(point) {
+            let p = CGPoint(x: min(max(point.x, tabs.frame.minX + 1), tabs.frame.maxX - 1), y: tabs.frame.midY)
+            return tabs.hitTest(convert(p, to: tabs), with: event) ?? tabs
         }
         return super.hitTest(point, with: event)
     }
@@ -1127,17 +1169,26 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
 
     @objc private func tabChanged() {
         UISelectionFeedbackGenerator().selectionChanged()
+        UserDefaults.standard.set(tabs.selectedSegmentIndex, forKey: Self.tabKey)
         UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0,
                        options: [.allowUserInteraction, .beginFromCurrentState]) { self.layoutTabThumb() }
-        let gifsOn = tabs.selectedSegmentIndex == 0
-        if gifsOn { if editing { endEditing() }; gifGrid.loadIfNeeded() }
+        if tabs.selectedSegmentIndex == 0, editing { endEditing() }
         UIView.transition(with: cardView, duration: 0.18, options: [.transitionCrossDissolve, .allowUserInteraction]) {
-            self.gifGrid.isHidden = !gifsOn
-            self.grid.isHidden = gifsOn
-            self.strip.isHidden = gifsOn
-            self.editButton.isHidden = gifsOn || (StickerStore.shared.recentsShown.isEmpty && StickerStore.shared.favoritesShown.isEmpty)
-                || !AppFeatures.stickerEdit
+            self.applyTab()
+            self.layoutCardSubviews()
         }
+    }
+
+    /// Shows the chosen tab's grid and bars, without animating (the panel opening on the last tab).
+    private func applyTab() {
+        let gifsOn = tabs.selectedSegmentIndex == 0
+        if gifsOn { gifGrid.loadIfNeeded() }
+        gifGrid.isHidden = !gifsOn
+        grid.isHidden = gifsOn
+        strip.isHidden = gifsOn
+        stripGlass.isHidden = gifsOn
+        editButton.isHidden = gifsOn || (StickerStore.shared.recentsShown.isEmpty && StickerStore.shared.favoritesShown.isEmpty)
+            || !AppFeatures.stickerEdit
         setNeedsLayout()
     }
 

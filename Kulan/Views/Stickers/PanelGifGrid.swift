@@ -20,8 +20,36 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
     /// Room under the last row for the panel's floating GIFs | Stickers switch (or the keyboard while searching).
     var bottomRoom: CGFloat = 0 { didSet { if oldValue != bottomRoom { setNeedsLayout() } } }
 
-    private enum Shelf: Int { case recent, favorites, trending }
+    private enum Shelf: Int {
+        case recent, favorites, trending, happy, love, sad, party, thumbsUp
+        /// What a mood shelf asks GIPHY for ("" for the three that are not a search).
+        var term: String {
+            switch self {
+            case .recent, .favorites, .trending: return ""
+            case .happy: return "happy"
+            case .love: return "love"
+            case .sad: return "sad"
+            case .party: return "party"
+            case .thumbsUp: return "thumbs up"
+            }
+        }
+    }
     private var shelf: Shelf = .trending
+    /// Each mood's GIFs once fetched, for this panel's life.
+    private var moodGifs: [Shelf: [GiphyService.Gif]] = [:]
+    private var moodTask: Task<Void, Never>?
+
+    /// THE SHELVES ARE A GLASS BAR AT THE FOOT (owner 2026-10-31): the panel's search and the
+    /// GIFs | Stickers switch sit on its top row, so this grid keeps no row of its own at rest; its
+    /// Recent / Favorites / Trending / moods ride a glass capsule at the foot, the way the sticker
+    /// packs do on the other tab.
+    var barAtFoot = false {
+        didSet { if oldValue != barAtFoot { buildStrip(); setNeedsLayout() } }
+    }
+    /// Where the foot bar's bottom sits above the panel's edge (the panel's own foot gap).
+    var footGap: CGFloat = 8 { didSet { if oldValue != footGap { setNeedsLayout() } } }
+    private let stripGlass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+    private var stripCellSize: CGFloat = 40
 
     private var gifs: [GiphyService.Gif] = []
     private var trendingGifs: [GiphyService.Gif] = []
@@ -118,6 +146,10 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
         }, for: .touchUpInside)
         addSubview(cancelButton)
 
+        stripGlass.clipsToBounds = true
+        stripGlass.isUserInteractionEnabled = false
+        stripGlass.alpha = 0
+        addSubview(stripGlass)
         buildStrip()
         addSubview(strip)
 
@@ -166,6 +198,27 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
             strip.frame = CGRect(x: 10 + restPillW, y: rowY + (rowH - M.stripH) / 2, width: max(0, w - restPillW - 10), height: M.stripH)
             strip.alpha = 0
             gridTop = barY + M.searchH + 8
+        } else if barAtFoot {
+            // No top row: the panel's own row above holds search. The shelves float at the foot.
+            search.frame = CGRect(x: 10, y: rowY, width: restPillW, height: M.barH)
+            search.alpha = 0
+            searchPill.frame = search.frame
+            searchPill.alpha = 0
+            cancelButton.alpha = 0
+            let pad: CGFloat = 6
+            let n = CGFloat(stripButtons.count)
+            let room = w - 2 * M.side - 2 * pad
+            stripCellSize = min(M.stripCell, floor((room - (n - 1) * M.stripSpacing) / max(n, 1)))
+            let barW = n * stripCellSize + (n - 1) * M.stripSpacing + 2 * pad
+            let bar = CGRect(x: (w - barW) / 2, y: bounds.height - footGap - M.stripH, width: barW, height: M.stripH)
+            stripGlass.frame = bar
+            stripGlass.layer.cornerRadius = M.stripH / 2
+            strip.frame = bar.insetBy(dx: pad, dy: 0)
+            strip.alpha = 1
+            gridTop = 0
+            // Over the grid, which was added after them.
+            bringSubviewToFront(stripGlass)
+            bringSubviewToFront(strip)
         } else {
             search.frame = CGRect(x: 10, y: rowY + (rowH - M.barH) / 2, width: restPillW, height: M.barH)
             search.alpha = 1
@@ -180,7 +233,10 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
             strip.alpha = 1
             gridTop = rowY + rowH + 4
         }
+        if !barAtFoot || searching { stripCellSize = M.stripCell }
+        stripGlass.alpha = barAtFoot && !searching ? 1 : 0
         strip.isUserInteractionEnabled = !searching
+        search.isUserInteractionEnabled = !searching && !barAtFoot
         layoutStrip()
         let ph = searchPill.bounds.height
         // The glass is sized here, not by autoresizing from a zero-size start (the sticker X lesson).
@@ -188,7 +244,9 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
         searchIcon.frame = CGRect(x: 14, y: (ph - 18) / 2, width: 18, height: 18)
         searchField.frame = CGRect(x: 40, y: 0, width: max(0, searchPill.bounds.width - 48), height: ph)
         grid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, bounds.height - gridTop))
-        grid.contentInset.bottom = max(safeAreaInsets.bottom, 8) + bottomRoom
+        grid.contentInset.bottom = barAtFoot && !searching
+            ? footGap + M.stripH + 12
+            : max(safeAreaInsets.bottom, 8) + bottomRoom
         emptyLabel.frame = CGRect(x: 32, y: gridTop + 28, width: max(0, w - 64), height: 60)
         if lastGridWidth != w {
             lastGridWidth = w
@@ -199,6 +257,8 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
     // MARK: Recent / Favorites / Trending strip
 
     private func buildStrip() {
+        for b in stripButtons { b.removeFromSuperview() }
+        stripButtons = []
         stripHighlight.backgroundColor = UIColor.label.withAlphaComponent(0.1)
         stripHighlight.layer.cornerRadius = 9
         stripHighlight.layer.cornerCurve = .continuous
@@ -211,7 +271,15 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
             // No asset of his for this one; the flame is what the GIF picker's Trending row already uses.
             (.trending, UIImage(systemName: "flame", withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)), "Trending GIFs"),
         ]
-        for (s, img, label) in items {
+        // The moods the GIF sheet's bar already offers (owner 2026-10-31), only on the foot bar.
+        let moods: [(Shelf, String, String)] = barAtFoot ? [
+            (.happy, "face.smiling", "Happy GIFs"), (.love, "heart", "Love GIFs"), (.sad, "cloud.rain", "Sad GIFs"),
+            (.party, "party.popper", "Party GIFs"), (.thumbsUp, "hand.thumbsup", "Thumbs Up GIFs"),
+        ] : []
+        let moodItems: [(Shelf, UIImage?, String)] = moods.map { m in
+            (m.0, UIImage(systemName: m.1, withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)), m.2)
+        }
+        for (s, img, label) in items + moodItems {
             let b = UIButton(type: .system)
             b.tag = s.rawValue
             b.tintColor = .secondaryLabel
@@ -226,13 +294,14 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
 
     private func layoutStrip() {
         var x: CGFloat = 0
-        let y = (M.stripH - M.stripCell) / 2
+        let cell = stripCellSize
+        let y = (M.stripH - cell) / 2
         for b in stripButtons {
-            b.frame = CGRect(x: x, y: y, width: M.stripCell, height: M.stripCell)
-            x += M.stripCell + M.stripSpacing
+            b.frame = CGRect(x: x, y: y, width: cell, height: cell)
+            x += cell + M.stripSpacing
         }
-        if stripButtons.indices.contains(shelf.rawValue) {
-            stripHighlight.frame = stripButtons[shelf.rawValue].frame.insetBy(dx: 4, dy: 4)
+        if let b = stripButtons.first(where: { $0.tag == shelf.rawValue }) {
+            stripHighlight.frame = b.frame.insetBy(dx: 4, dy: 4)
         }
         for b in stripButtons { b.tintColor = b.tag == shelf.rawValue ? .label : .secondaryLabel }
     }
@@ -255,6 +324,23 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
         case .recent: gifs = GifRecents.all()
         case .favorites: gifs = GifFavorites.all()
         case .trending: gifs = trendingGifs
+        default:
+            moodTask?.cancel()
+            if let cached = moodGifs[shelf] {
+                gifs = cached
+            } else {
+                gifs = []
+                let s = shelf
+                moodTask = Task { @MainActor [weak self] in
+                    let list = await GiphyService.shared.search(s.term)
+                    guard !Task.isCancelled, let self else { return }
+                    self.moodGifs[s] = list
+                    guard self.shelf == s, !self.hasQuery, !self.searching else { return }
+                    self.gifs = list
+                    self.grid.reloadData()
+                    self.updateEmpty()
+                }
+            }
         }
         grid.reloadData()
         updateEmpty()
@@ -262,7 +348,7 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
 
     /// The panel came back on screen: a GIF sent or favorited elsewhere since shows now.
     func refreshLocalShelf() {
-        guard shelf != .trending, !searching else { return }
+        guard shelf == .recent || shelf == .favorites, !searching else { return }
         showShelf()
     }
 
@@ -279,7 +365,7 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
             switch shelf {
             case .recent: text = "GIFs you send will show up here."
             case .favorites: text = "Hold a GIF and tap Add to Favorites to keep it here."
-            case .trending: text = nil
+            default: text = nil
             }
         }
         emptyLabel.text = text
@@ -449,7 +535,7 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
 
     /// Redraw only when the list just edited is the one on screen; Trending and results stay put.
     private func refreshAfterEdit() {
-        guard !hasQuery, !searching, shelf != .trending else { return }
+        guard !hasQuery, !searching, shelf == .recent || shelf == .favorites else { return }
         showShelf()
     }
 }
