@@ -79,7 +79,7 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
         static let searchH: CGFloat = 44
         /// The resting Search pill's share of the row; the shelf icons sit after it (owner 2026-10-18).
         static let restPillShare: CGFloat = 0.36, restPillMin: CGFloat = 120
-        static let stripH: CGFloat = 44, stripCell: CGFloat = 40, stripSpacing: CGFloat = 4, side: CGFloat = 10
+        static let stripH: CGFloat = 40, stripCell: CGFloat = 40, stripSpacing: CGFloat = 4, side: CGFloat = 10
     }
 
     override init(frame: CGRect) {
@@ -235,7 +235,8 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
             gridTop = rowY + rowH + 4
         }
         if !barAtFoot || searching { stripCellSize = M.stripCell }
-        stripGlass.alpha = barAtFoot && !searching ? 1 : 0
+        // No glass behind the top bar (owner 2026-10-31).
+        stripGlass.alpha = 0
         strip.isUserInteractionEnabled = !searching
         search.isUserInteractionEnabled = !searching && !barAtFoot
         layoutStrip()

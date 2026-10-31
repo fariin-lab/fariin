@@ -164,7 +164,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         static let item: CGFloat = 70, spacing: CGFloat = 12, side: CGFloat = 10, row: CGFloat = 2
         static let header: CGFloat = 24, packGap: CGFloat = 18
         static let stripCell: CGFloat = 40, stripInset: CGFloat = 6, stripSpacing: CGFloat = 4
-        static let top: CGFloat = 8, tabsH: CGFloat = 32, stripH: CGFloat = 44
+        static let top: CGFloat = 8, tabsH: CGFloat = 32, stripH: CGFloat = 40   // 40 (owner 2026-10-31)
     }
 
     init(height: CGFloat) {
@@ -396,6 +396,8 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             editGlass.frame = editButton.bounds
             editGlass.layer.cornerRadius = smallEditH / 2
             for v in [stripGlass, strip] as [UIView] { v.alpha = editing || gifsOn ? 0 : 1 }
+            // No glass behind the top bar (owner 2026-10-31): the icons sit on the panel itself.
+            stripGlass.isHidden = true
             editButton.alpha = 1
             if AppFeatures.stickerPanelGifs {
                 let switchW: CGFloat = 200
