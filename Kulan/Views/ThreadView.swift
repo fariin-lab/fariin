@@ -4145,9 +4145,11 @@ struct ThreadView: View {
                 showJumpToast(GifFavorites.toggle(m))
             })
         }
-        items.append(UIAction(title: "Select", image: UIImage(systemName: "checkmark.circle")) { _ in
-            setUIMode(.selection); selectedIds = [m.id]   // their order: mode first, then add the item
-        })
+        if selectionShowsDelete {   // no Select for a channel's follower (owner 2026-10-31)
+            items.append(UIAction(title: "Select", image: UIImage(systemName: "checkmark.circle")) { _ in
+                setUIMode(.selection); selectedIds = [m.id]   // their order: mode first, then add the item
+            })
+        }
         // NO "Report" on a message. The whole point of end-to-end encryption is that we cannot read what
         // was sent, so a message report would either carry nothing useful or force us to ship the plaintext
         // off the device - which would quietly break the guarantee the app makes. Reporting a PERSON or a
@@ -4969,7 +4971,11 @@ struct ThreadView: View {
             onUikitDoubleTap: { id in uikitQuickReact(id) },
             // CUSTOM LONG-PRESS MENU (experiment): every row's actions, the bar's config, and the
             // keyboard policy — close on open, restore on close, the reference app's keyboardWasActive model.
-            customMenuActions: { id in customMenuActions(for: id) },
+            // A channel's follower has no Select (owner 2026-10-31): nothing of theirs to pick for.
+            customMenuActions: { id in
+                let all = customMenuActions(for: id)
+                return selectionShowsDelete ? all : all.filter { $0.title != "Select" }
+            },
             customReactConfig: { id in customReactInfo(for: id) },
             onCustomReact: { id, selection in handleCustomReact(id, selection) },
             onMenuCloseKeyboard: {
@@ -5629,7 +5635,16 @@ struct ThreadView: View {
         // one call in a selection of 76 disabled the trash for all of them, and the bar kept it red,
         // so it looked live. A single call already has Delete, and `bulkDelete` already sends calls
         // to delete-for-me (`canDeleteForEveryone` excludes them).
-        return picked.allSatisfy { !$0.isSystem || canDeleteNotice($0) }
+        // ⛔ AND ONLY WHAT I MAY DELETE (owner 2026-10-31: a channel follower selected a post and was
+        // offered Delete; the server refused, but the button should never have been there). A group
+        // deletes only for everyone, so each pick passes the long-press menu's own test.
+        return picked.allSatisfy { $0.isSystem ? canDeleteNotice($0) : canDeleteHere($0) }
+    }
+
+    /// A channel's follower (not one of its admins): Select is for Forward, there is nothing to delete.
+    private var selectionShowsDelete: Bool {   // also: whether Select is offered at all
+        guard let c = conversation, c.isChannel else { return true }
+        return c.users.contains(me)
     }
 
     /// The chat's own colour for a filled tick, matching what the row builder hands the UIKit rows.
@@ -8824,6 +8839,7 @@ struct ThreadView: View {
         SelectionToolbar(count: liveSelection.count,
                          deleteEnabled: selectionCanBeDeleted,
                          forwardEnabled: selectionIsForwardable,
+                         showsDelete: selectionShowsDelete,
                          // owner 2026-10-18: other members' messages, as a group admin → the sheet.
                          onDelete: {
                              if let r = adminDeleteRequestFor(liveSelection) { adminDeleteRequest = r }
@@ -10632,6 +10648,7 @@ struct SelectionToolbar: UIViewRepresentable {
     var count: Int
     var deleteEnabled: Bool
     var forwardEnabled: Bool
+    var showsDelete = true
     var onDelete: () -> Void
     var onForward: () -> Void
 
@@ -10691,6 +10708,7 @@ struct SelectionToolbar: UIViewRepresentable {
         let fit = context.coordinator.label.bounds.size
         context.coordinator.label.frame.size = CGSize(width: ceil(fit.width) + 32, height: max(44, ceil(fit.height)))
         bar.items?.first?.isEnabled = deleteEnabled
+        bar.items?.first?.isHidden = !showsDelete
         // A forced red kept a disabled trash looking live (2026-09-27); let the bar dim it when off.
         bar.items?.first?.tintColor = deleteEnabled ? .systemRed : nil
         bar.items?.last?.isEnabled = forwardEnabled
