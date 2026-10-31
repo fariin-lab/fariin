@@ -50,6 +50,8 @@ enum EmojiCatalog {
 struct EmojiMorePicker: View {
     /// owner 2026-10-18: the Role editor picks its emoji here too, under its own title.
     var title: String = "React"
+    /// How tall the sheet opens (owner 2026-10-31: the channel's reaction bar must stay in sight).
+    var detents: Set<PresentationDetent> = [.medium, .large]
     var onPick: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
@@ -82,7 +84,7 @@ struct EmojiMorePicker: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { dismiss() } label: { Image(systemName: "xmark") }.tint(.primary) } }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents(detents)
     }
 
     private func grid(_ items: [EmojiCatalog.Item]) -> some View {

@@ -1199,7 +1199,8 @@ struct ChannelReactionsSettingsView: View {
         .animation(.snappy(duration: 0.25), value: mode)
         .animation(.snappy(duration: 0.25), value: list)
         .sheet(isPresented: $pickAny, onDismiss: { replacing = nil }) {
-            EmojiMorePicker(title: "Choose Emoji") { e in
+            // Low enough that the bar, and the emoji being replaced, stay in sight above it.
+            EmojiMorePicker(title: "Choose Emoji", detents: [.fraction(0.42), .large]) { e in
                 pickAny = false
                 place(e)
             }
@@ -1227,6 +1228,10 @@ struct ChannelReactionsSettingsView: View {
             ForEach(Array(list.enumerated()), id: \.offset) { i, e in
                 Button { replacing = i; pickAny = true } label: {
                     Text(e).font(.system(size: 30)).frame(width: 44, height: 44)
+                        // The one being replaced is ringed while the sheet is up (owner 2026-10-31).
+                        .background(Circle().fill(Color.primary.opacity(replacing == i && pickAny ? 0.12 : 0)))
+                        .overlay(Circle().strokeBorder(Color.fariinAction,
+                                                       lineWidth: replacing == i && pickAny ? 2 : 0))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Replace \(e)")
