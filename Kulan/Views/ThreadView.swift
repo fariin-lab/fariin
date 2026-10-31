@@ -10758,38 +10758,45 @@ struct SelectableRow: ViewModifier {
         (scheme != .dark && onWallpaper) ? Color(white: 0x80 / 255).opacity(0.5) : Color(.tertiaryLabel)
     }
 
+    /// ⛔ ONE SHAPE IN BOTH MODES (owner 2026-10-31: "when the circle appears the chat pops; on X it
+    /// jumps"). This used to be `if selecting { HStack(circle, content) } else { content }`: two
+    /// different views, so entering selection rebuilt the row (a photo reloaded) and leaving snapped
+    /// it back one pass late. Now the row is always the same HStack: the circle's lane opens and
+    /// closes with `selecting`, on the same 0.2 s ease as the UIKit rows, and the content slides with it.
     func body(content: Content) -> some View {
-        if selecting || wasSelecting {
-            HStack(spacing: 8) {
-                ZStack {
-                    // Unselected is an EMPTY RING. No disc behind it and no shadow — theirs hides the
-                    // ring behind the fill rather than drawing one on top of the other.
-                    Circle()
-                        .strokeBorder(ringColor, lineWidth: 2)
-                        .frame(width: 22, height: 22)
-                        .opacity(selected ? 0 : 1)
-                    Circle()
-                        .fill(tint)
-                        .frame(width: 22, height: 22)
-                        .overlay(
-                            // ⚠️ The tick does NOT scale in. Theirs sets the state with
-                            // `animated: false`, so the fill and the glyph arrive together on the
-                            // frame the finger lands.
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 13, weight: .bold))
-                                .foregroundStyle(.white)
-                        )
-                        .opacity(selected ? 1 : 0)
-                }
-                .frame(width: 24, height: 24)
-                .transition(.move(edge: .leading).combined(with: .opacity))
-                content.allowsHitTesting(false)
+        let open = selecting
+        HStack(spacing: 0) {
+            ZStack {
+                // Unselected is an EMPTY RING. No disc behind it and no shadow — theirs hides the
+                // ring behind the fill rather than drawing one on top of the other.
+                Circle()
+                    .strokeBorder(ringColor, lineWidth: 2)
+                    .frame(width: 22, height: 22)
+                    .opacity(selected ? 0 : 1)
+                Circle()
+                    .fill(tint)
+                    .frame(width: 22, height: 22)
+                    .overlay(
+                        // ⚠️ The tick does NOT scale in. Theirs sets the state with
+                        // `animated: false`, so the fill and the glyph arrive together on the
+                        // frame the finger lands.
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(.white)
+                    )
+                    .opacity(selected ? 1 : 0)
             }
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onToggle)
-        } else {
-            content
+            .frame(width: 24, height: 24)
+            .offset(x: open ? 0 : -40)
+            .opacity(open ? 1 : 0)
+            .frame(width: open ? 32 : 0, alignment: .leading)   // 24 + the 8 pt gap
+            content.allowsHitTesting(!open)
         }
+        .animation(.easeInOut(duration: MessageRowLayout.selectionAnimationDuration), value: open)
+        .contentShape(Rectangle())
+        .onTapGesture { if open { onToggle() } }
+        // `wasSelecting` no longer changes the shape; it stays in the API for the UIKit twin's two passes.
+        .id(0)
     }
 }
 
