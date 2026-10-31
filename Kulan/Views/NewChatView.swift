@@ -11,7 +11,12 @@ struct ChatTarget: Identifiable, Hashable {
 // lookup / note-to-self: those aren't real features in Fariin, so they're omitted.)
 struct NewChatView: View {
     let onOpen: (ChatTarget) -> Void
-    init(onOpen: @escaping (ChatTarget) -> Void = { _ in }) { self.onOpen = onOpen }
+    /// A public channel I do not follow: its page pushed behind this sheet, as `onOpen` does a chat.
+    let onOpenPublic: ((PublicGroupTarget) -> Void)?
+    init(onOpenPublic: ((PublicGroupTarget) -> Void)? = nil, onOpen: @escaping (ChatTarget) -> Void = { _ in }) {
+        self.onOpen = onOpen
+        self.onOpenPublic = onOpenPublic
+    }
 
     @Environment(\.dismiss) private var dismiss
     private var convRepo = ConversationsRepository.shared
@@ -187,11 +192,22 @@ struct NewChatView: View {
                 NewGroupView { t in dismiss(); onOpen(t) }
             }
             .sheet(isPresented: $showDiscover) {
-                // Both sheets go down, then the channel opens in the Chats tab (as New Group does).
+                // ⛔ THE CHANNEL GOES ON THE PATH FIRST, THEN BOTH SHEETS GO DOWN ONTO IT (owner
+                // 2026-10-31: the sheets closed, the bare chat list showed, and only then did the
+                // channel open, with nothing saying it was coming). The shell pushes behind this
+                // sheet and closes it, the order New Group already uses.
                 DiscoverChannelsView { cid, handle in
-                    showDiscover = false
-                    dismiss()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { GroupDirectory.open(cid: cid, name: handle) }
+                    let me = AuthService.shared.uid ?? ""
+                    if let c = convRepo.conversations.first(where: { $0.id == cid }),
+                       c.users.contains(me) || c.isFollower(me) {
+                        onOpen(ChatTarget(id: cid, name: c.title, photo: c.avatarUrl))
+                    } else if let onOpenPublic {
+                        onOpenPublic(PublicGroupTarget(cid: cid, name: handle))
+                    } else {
+                        showDiscover = false
+                        dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { GroupDirectory.open(cid: cid, name: handle) }
+                    }
                 }
             }
             .sheet(isPresented: $showNewChannel) {

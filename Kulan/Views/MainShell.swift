@@ -3367,7 +3367,11 @@ struct ChatsView: View {
                 }
             }
             .sheet(isPresented: $showNew) {
-                NewChatView { t in
+                NewChatView(onOpenPublic: { t in
+                    // A channel from Find Channels: the same, its page behind the sheet.
+                    path.append(t)
+                    showNew = false
+                }) { t in
                     // Push behind the sheet, then dismiss — no flash back to the list.
                     path.append(t)
                     showNew = false
