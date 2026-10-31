@@ -621,7 +621,6 @@ struct OfficialChatInfoView: View {
     private let onSearch: () -> Void
     private var store = OfficialChannelStore.shared
     @Environment(\.dismiss) private var dismiss
-    @State private var confirmBlock = false
     @State private var confirmClear = false
     @State private var showAllMedia = false
     @State private var zoomed: String?
@@ -681,12 +680,6 @@ struct OfficialChatInfoView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Removes these messages from this phone. New updates will still arrive.")
-        }
-        .alert("Block this chat?", isPresented: $confirmBlock) {
-            Button("Block", role: .destructive) { store.setBlocked(true); dismiss() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("You will stop getting updates from Fariin. Security alerts about your own account still come through. Nothing is lost and you can unblock it later.")
         }
     }
 
@@ -872,18 +865,15 @@ struct OfficialChatInfoView: View {
             card {
                 VStack(spacing: 0) {
                     dangerRow("Clear Chat", color: .red) { confirmClear = true }
-                    Divider().padding(.horizontal, 18)
-                    // Unblock when already blocked (audit 2026-09-24): nothing else calls setBlocked(false).
+                    // ⛔ NO BLOCK (owner 2026-10-31): this chat carries Fariin's news and the person's own
+                    // account alerts, never spam, so it cannot be blocked, as in the reference app. Mute
+                    // is the way to quiet it. Somebody who blocked it before keeps Unblock to get it back.
                     if store.state.blocked {
+                        Divider().padding(.horizontal, 18)
                         dangerRow("Unblock", color: .accentColor) { store.setBlocked(false) }
-                    } else {
-                        dangerRow("Block", color: .red) { confirmBlock = true }
                     }
                 }
             }
-            Text("Blocking stops the updates. It does not stop us telling you if something happens to your account.")
-                .font(.footnote).foregroundStyle(.secondary)
-                .padding(.horizontal, 18)
         }
     }
 }

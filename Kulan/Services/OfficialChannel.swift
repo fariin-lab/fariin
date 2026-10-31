@@ -1040,7 +1040,7 @@ final class OfficialChannelStore {
         stateRef?.setData(["archived": archived, "archivedAt": Self.chosenAt], merge: true)
     }
 
-    /// The way out the welcome message promises. Blocking hides the chat completely and stops the
+    /// Only Unblock calls this now (the chat cannot be blocked since 2026-10-31). Blocking hid the chat and stopped the
     /// read counters; it does not delete anything, so unblocking brings the history back.
     func setBlocked(_ blocked: Bool) {
         state.blocked = blocked
