@@ -74,7 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: STORY TIMER, CHANNEL TOOLS, SMOOTHER SELECT.
+            THIS BUILD: SIMILAR CHANNELS, CRASH FIX.
+            Similar Channels: after you follow a channel, a card over the bar shows up to 10 similar channels (people who follow this one also follow these), with an X to close it; the channel page lists them too. Shown on channels with 1,000+ followers; app admins see it on any channel for testing.
+            Fixed a crash when opening a busy chat.
+            Story timer menu: the caption bar stays put, the heading shows, 6 to 48 in order.
+            PLEASE TEST: follow a channel and look for Similar Channels; open several busy chats.
+
+            EARLIER: STORY TIMER, CHANNEL TOOLS, SMOOTHER SELECT.
             Stories (app admins): a small ring in the caption bar sets how long the story stays up, 6, 12, 24 or 48 hours (24 unless picked).
             Channels: the share arrow on a post opens Share with (chats, Copy Link, iPhone share). Add Admin picks one of the channel's followers and makes them admin at once. Reactions: your picks in one bar, tap one to replace it from the emoji sheet. Mute / Unmute rolls, no vibration. The story sheet has no empty band.
             Chats: the pin bar slides in and out. Selecting messages slides smoothly in and out, no jump. The safety-number bar shows in one-to-one chats only. Reactions no longer pop a big emoji. Chats shows the filter under its title.
