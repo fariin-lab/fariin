@@ -233,13 +233,6 @@ struct SettingsView: View {
                             Text("Give, change or withdraw a verified badge. Every decision is recorded permanently.")
                         }
                     }
-
-                    // Monitoring self-test (owner 2026-10-21): admins only, like the rest of this block.
-                    Section {
-                        MonitoringTestRows()
-                    } header: {
-                        Text("Monitoring")
-                    }
                 }
 
                 Section {
@@ -471,37 +464,6 @@ private struct ProfileCapsuleButtonStyle: ButtonStyle {
 
 // Your own profile, shown the way other people see it (hero avatar, name, @handle, bio),
 // with your own Stories section below. Edit lives in the top-right (opens EditProfileView).
-/// Owner 2026-10-21: proves the monitoring pipe end to end. Shown only inside Settings' admin block.
-/// "Send test error" goes through Telemetry (uploads within about 10s); "Test crash" ends the app on
-/// purpose after a confirm, so Crashlytics and MetricKit have a crash to report on the next launch.
-private struct MonitoringTestRows: View {
-    @State private var sent = false
-    @State private var confirmCrash = false
-
-    var body: some View {
-        Button {
-            Telemetry.event(.error, component: "selftest", code: "test_error")
-            sent = true
-        } label: {
-            SettingsRowLabel(sent ? "Test error sent" : "Send test error", system: "exclamationmark.bubble")
-        }
-        .tint(.primary)
-        Button(role: .destructive) { confirmCrash = true } label: {
-            SettingsRowLabel("Test crash", system: "bolt.trianglebadge.exclamationmark")
-        }
-        .alert("Crash the app now?", isPresented: $confirmCrash) {
-            Button("Cancel", role: .cancel) {}
-            Button("Crash", role: .destructive) {
-                DiagLog.add("TEL# admin test crash")
-                DiagLog.flush()
-                fatalError("Admin test crash (Settings > Monitoring)")
-            }
-        } message: {
-            Text("The app closes at once. Open it again so the crash report is sent.")
-        }
-    }
-}
-
 struct MyProfileView: View {
     private var profile = ProfileStore.shared
     @State private var stories = StoriesRepository.shared
@@ -1510,9 +1472,6 @@ struct AboutView: View {
     private var appVersion: String {
         (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"
     }
-    private var buildNumber: String {
-        (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "1"
-    }
     /// A row that LEAVES THE APP, and says so.
     ///
     /// Every one of these was a bare `Link`, which draws nothing at all: four rows that hand you to
@@ -1557,7 +1516,7 @@ struct AboutView: View {
             Section {
                 // Selectable so it can be copied into a support mail. It is the one value on this
                 // screen somebody else will ask them to read out.
-                LabeledContent("Version", value: "\(appVersion) (\(buildNumber))")
+                LabeledContent("Version", value: appVersion)
                     .textSelection(.enabled)
                 outLink("Privacy Policy", URL(string: "https://fariin.com/privacy")!)
                 outLink("Terms & Conditions", URL(string: "https://fariin.com/terms")!)
