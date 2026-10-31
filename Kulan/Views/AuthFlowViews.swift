@@ -475,6 +475,12 @@ struct AuthMethodView: View {
             }
             .padding(.horizontal, 24)
         }
+        // Back into a saved account: the same page-wide busy state as Signing Out (owner 2026-10-31:
+        // the whole page greyed out, as disabled controls do, with a small ring on one row).
+        .overlay {
+            if resumingUid != nil { BusyOverlay(text: "Signing In…") }
+        }
+        .animation(.easeInOut(duration: 0.25), value: resumingUid)
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(item: $emailPrefill) { address in
             EmailAuthView(mode: .login, prefill: address, onAuthed: onAuthed)

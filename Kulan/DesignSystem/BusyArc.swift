@@ -27,14 +27,16 @@ struct BusyArc: View {
     }
 }
 
-/// The page-wide busy state: the arc and what is happening, in words, over the page as it is (no
-/// wash, owner 2026-10-18: "the animation alone is cool"). Swallows touches, because whatever is
-/// running cannot be interrupted.
+/// The page-wide busy state: the arc and what is happening, in words. Swallows touches, because
+/// whatever is running cannot be interrupted.
+/// ⛔ ON THE PAGE'S OWN COLOUR (owner 2026-10-31: "make it all white, black in dark mode"). Drawn
+/// over the page as it was (2026-10-18), "Signing Out…" sat on top of the rows' words and read as
+/// broken. Now the screen fades to plain white / black and only the arc and the words show.
 struct BusyOverlay: View {
     let text: String
     var body: some View {
         ZStack {
-            Color.clear.contentShape(Rectangle()).ignoresSafeArea()
+            Color(.systemBackground).contentShape(Rectangle()).ignoresSafeArea()
             VStack(spacing: 16) {
                 // Half the first size (owner 2026-10-19: "too big, make it small").
                 BusyArc(size: 44, lineWidth: 5)
