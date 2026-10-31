@@ -781,16 +781,10 @@ struct GroupAdminsView: View {
                             photoUrl: conv?.photos[uid], source: .calls)
         }
         .sheet(isPresented: $showInvite) {
-            AddPeopleSheet(alreadyIn: Set(conv?.users ?? []), actionTitle: "Add", linkCap: 16) { people in
-                let title = conv?.title ?? "Channel"
-                Task {
-                    do {
-                        let refused = try await ChannelAdminInvites.invite(cid: cid, title: title, people: people)
-                        ToastNotice.show(refused.isEmpty ? "Sent. They become an admin when they accept."
-                                         : "Sent. Not sent to: " + refused.joined(separator: ", "))
-                        invitesTick += 1
-                    } catch { ToastNotice.show(error.localizedDescription) }
-                }
+            // A channel: one of its followers (owner 2026-10-31), the groups' Choose Member look.
+            ChannelAdminPicker(cid: cid, title: conv?.title ?? "Channel",
+                               exclude: Set(conv?.users ?? []).union(pendingAdmins.map(\.uid))) {
+                invitesTick += 1
             }
         }
         .sheet(isPresented: $showPick, onDismiss: { pickedAdmin = nil; pickQuery = "" }) {

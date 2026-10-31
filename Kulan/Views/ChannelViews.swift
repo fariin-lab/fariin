@@ -1328,3 +1328,112 @@ enum ChannelInviteLink {
         return try? await GroupInviteService.shareCode(cid: cid)
     }
 }
+
+/// ⛔ A CHANNEL'S ADD ADMIN PICKS FROM ITS FOLLOWERS (owner 2026-10-31: it opened the add-people
+/// sheet, every contact, "use the groups' design; nobody who is not a member"). The group's Choose
+/// Member page in look: the followers, a search at the foot, an X. A tap asks, then sends the
+/// admin invite; they become an admin when they accept. The server refuses anyone else too
+/// (`inviteChannelAdmins`).
+struct ChannelAdminPicker: View {
+    let cid: String
+    let title: String
+    let exclude: Set<String>
+    var onSent: () -> Void = {}
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var rows: [ChannelFollowersView.Follower] = []
+    @State private var more = true
+    @State private var loading = false
+    @State private var failed = false
+    @State private var query = ""
+    @State private var asking: ChannelFollowersView.Follower?
+
+    private var shown: [ChannelFollowersView.Follower] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        let list = rows.filter { !exclude.contains($0.uid) }
+        return q.isEmpty ? list : list.filter { $0.name.localizedCaseInsensitiveContains(q) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if rows.isEmpty && loading {
+                    ForEach(0..<6, id: \.self) { i in
+                        HStack(spacing: 12) {
+                            SkeletonCircle(size: 40)
+                            SkeletonBlock(width: [140, 110, 170, 95][i % 4], height: 13)
+                            Spacer(minLength: 0)
+                        }
+                        .accessibilityHidden(true)
+                    }
+                } else if shown.isEmpty && !loading {
+                    Text(failed ? "Couldn't load followers. Check your connection and try again."
+                         : query.isEmpty ? "No followers yet. Only a follower of the channel can become an admin."
+                         : "No follower by that name.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(shown) { f in
+                    Button { asking = f } label: {
+                        HStack(spacing: 12) {
+                            AvatarView(name: f.name, photoUrl: f.photoUrl, size: 40)
+                            Text(f.name).foregroundStyle(.primary).lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .onAppear { if f.uid == rows.last?.uid { Task { await load() } } }
+                }
+            }
+            .navigationTitle("Choose Follower")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $query, prompt: "Search")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("Close")
+                }
+                DefaultToolbarItem(kind: .search, placement: .bottomBar)
+            }
+            .task { await load() }
+            .alert("Invite \(asking?.name ?? "") as admin?",
+                   isPresented: Binding(get: { asking != nil }, set: { if !$0 { asking = nil } })) {
+                Button("Cancel", role: .cancel) {}
+                Button("Invite") { if let f = asking { send(f) } }
+            } message: {
+                Text("They become an admin when they accept the invite.")
+            }
+        }
+    }
+
+    private func load() async {
+        guard more, !loading else { return }
+        loading = true
+        defer { loading = false }
+        do {
+            let page = try await ChannelService.followers(cid: cid, after: rows.last?.uid)
+            let have = Set(rows.map(\.uid))
+            rows += page.rows.filter { !have.contains($0.uid) }
+            more = page.more
+            failed = false
+        } catch {
+            failed = true
+            more = false
+        }
+    }
+
+    private func send(_ f: ChannelFollowersView.Follower) {
+        let person = CallMember(uid: f.uid, name: f.name, photoUrl: f.photoUrl)
+        Task {
+            do {
+                let refused = try await ChannelAdminInvites.invite(cid: cid, title: title, people: [person])
+                ToastNotice.show(refused.isEmpty ? "Sent. \(f.name) becomes an admin when they accept."
+                                 : "Couldn't invite \(f.name). You can invite only followers you already chat with.")
+                onSent()
+                dismiss()
+            } catch {
+                ToastNotice.show(error.localizedDescription)
+            }
+        }
+    }
+}
