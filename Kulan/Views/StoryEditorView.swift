@@ -2693,12 +2693,14 @@ struct StoryEditorView: View {
     /// 24 unless chosen. The pick rides to the share sheet and into the post's `expiresAt`.
     private var storyLifetimeMenu: some View {
         Menu {
-            Picker(selection: $storyHours) {
-                ForEach([6.0, 12, 24, 48], id: \.self) { h in Text("\(Int(h)) Hours").tag(h) }
-            } label: {
-                Text("Choose how long the story will be visible.")
+            // The question as the menu's own heading, over the four lifetimes (owner 2026-10-31).
+            Section("Choose how long the story will be visible.") {
+                Picker("", selection: $storyHours) {
+                    ForEach([6.0, 12, 24, 48], id: \.self) { h in Text("\(Int(h)) Hours").tag(h) }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
             }
-            .pickerStyle(.inline)
         } label: {
             ZStack {
                 Circle()
