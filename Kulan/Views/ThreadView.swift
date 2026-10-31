@@ -1,4 +1,5 @@
 import SwiftUI
+import Observation
 import PhotosUI
 import Photos
 import CoreTransferable
@@ -121,7 +122,7 @@ struct ThreadView: View {
     /// a chat opened (EXC_BAD_ACCESS, stack guard). Keep every @State here small.
     @State private var pollResultsFor: MessageRef?
     struct MessageRef: Identifiable { let id: String }
-    @State private var replyingTo: Message?
+    @HeapState private var replyingTo: Message? = nil
     @State private var photoItem: PhotosPickerItem?
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var editImage: EditImageWrap?     // single picked/captured photo → chat editor
@@ -176,14 +177,14 @@ struct ThreadView: View {
     /// process-wide set with no observation of its own; without this the album kept its OLD height
     /// in the layout cache while the mosaic re-solved to a new one.
     @State private var hiddenTick = 0
-    @State private var pendingViewOnceConsume: Message?   // view-once photo open in the viewer → mark on close
+    @HeapState private var pendingViewOnceConsume: Message? = nil   // view-once photo open in the viewer → mark on close
     @State private var sendingPhoto = false
     @State private var typingSent = false
     @State private var typingIdleStop: DispatchWorkItem?   // 3s idle → auto-stop typing (idle pause timer)
-    @State private var viewerImage: Message?
+    @HeapState private var viewerImage: Message? = nil
     @State private var albumViewer: AlbumViewerWrap?   // tapped album photo → swipeable album gallery
-    @State private var albumScreen: Message?           // tapped a photo GROUP → the album list screen
-    @State private var viewerVideo: Message?   // tapped video bubble → full-screen player
+    @HeapState private var albumScreen: Message? = nil           // tapped a photo GROUP → the album list screen
+    @HeapState private var viewerVideo: Message? = nil   // tapped video bubble → full-screen player
     @State private var stickerSheet: StickerSheetItem?  // tapped sticker → its sheet (2026-10-17; custom ones too 2026-10-19)
     @State private var statusUnavailable = false     // tapped a status reply whose story expired
     @State private var sendError: String?
@@ -492,25 +493,25 @@ struct ThreadView: View {
     @State private var baseCoverDepth = 0
     // owner audit 2026-10-06 chat #13: arrivals at the bottom while covered still owe a receipt.
     @State private var coveredReadPending = false
-    @State private var morePickerTarget: Message? // any-emoji picker
-    @State private var channelReactTarget: Message?   // a channel post's reactions (2026-10-29)
+    @HeapState private var morePickerTarget: Message? = nil // any-emoji picker
+    @HeapState private var channelReactTarget: Message? = nil   // a channel post's reactions (2026-10-29)
     @State private var reactorsTarget: MessageRef?   // "who reacted" sheet (id only)
-    @State private var pendingDelete: Message?
+    @HeapState private var pendingDelete: Message? = nil
     /// owner 2026-10-18: an admin deleting other members' messages in a group (AdminDeleteSheet).
     @State private var adminDeleteRequest: AdminDeleteRequest?
     /// owner 2026-10-18: the words of the "You're restricted in this group" alert (voice, media).
     @State private var restrictedNoticeText = "An admin has turned off voice messages for you."
     @State private var restrictedNoticeTitle = "You're restricted in this group"
     // 2026-09-24 decision D14: a tapped failed message opens Resend / Delete instead of resending.
-    @State private var failedActionTarget: Message?
-    @State private var editingMessage: Message?   // INLINE edit — no modal/sheet
+    @HeapState private var failedActionTarget: Message? = nil
+    @HeapState private var editingMessage: Message? = nil   // INLINE edit — no modal/sheet
     // 2026-09-24 feature-audit: the message whose earlier versions are on screen, and the edits
     // still waiting for the server (their footer shows the sending clock until it answers).
     @State private var editHistoryTarget: MessageRef?   // id only
     @State private var editPendingIds: Set<String> = []
-    @State private var forwardTarget: Message?    // forward-to-chat picker
+    @HeapState private var forwardTarget: Message? = nil    // forward-to-chat picker
     /// A channel post's share arrow: the Share with sheet (owner 2026-10-31).
-    @State private var sharePost: Message?
+    @HeapState private var sharePost: Message? = nil
     /// A plain flag now that the field is a `UITextView`: in, it asks the field to take or give up
     /// first responder; out, the field's delegate writes what actually happened (see
     /// `ChatComposerView.syncText`). `@FocusState` only ever spoke for a SwiftUI `TextField`.
@@ -3410,7 +3411,7 @@ struct ThreadView: View {
     /// owner 2026-10-18: and the admin panel has not hidden the Chat Key (MsgPolicy). Every "Use Chat
     /// Key" door in this chat reads this one value, so hiding the key closes all of them at once.
     private var otherHasKey: Bool { otherKeyKnown && MsgPolicy.shared.chatKeyVisible }
-    @State private var cachedConv: Conversation?
+    @HeapState private var cachedConv: Conversation? = nil
     private var conversation: Conversation? { cachedConv }
     // A 1:1 id is two uids joined by "_"; anything else is a group or a channel, even when its
     // conversation is gone from the list (owner 2026-10-29: an unfollowed channel drew as a 1:1).
@@ -13445,4 +13446,31 @@ private struct AttachMediaOffNotice: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .accessibilityElement(children: .combine)
     }
+}
+
+
+/// ⛔ STATE THAT LIVES ON THE HEAP (crash reports builds 1073 and 1074, "Thread stack size exceeded"
+/// while a chat was pushed). SwiftUI copies the whole chat view, every @State inline, at each of the
+/// ~20 graph levels it walks when a chat opens; ThreadView was 20 KB, most of it a dozen optional
+/// whole messages (1.1 KB each), and the 1 MB main-thread stack ran out. This keeps the value in a
+/// small observable box, so the view carries a reference instead. Reads and writes behave like
+/// @State: a write redraws whatever read it.
+@propertyWrapper
+struct HeapState<Value>: DynamicProperty {
+    @State private var box: HeapStateBox<Value>
+    init(wrappedValue: Value) { _box = State(initialValue: HeapStateBox(wrappedValue)) }
+    var wrappedValue: Value {
+        get { box.value }
+        nonmutating set { box.value = newValue }
+    }
+    var projectedValue: Binding<Value> {
+        let b = box
+        return Binding(get: { b.value }, set: { b.value = $0 })
+    }
+}
+
+@Observable
+final class HeapStateBox<Value> {
+    var value: Value
+    init(_ value: Value) { self.value = value }
 }
