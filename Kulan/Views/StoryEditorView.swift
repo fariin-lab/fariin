@@ -2736,8 +2736,9 @@ struct StoryEditorView: View {
                 .onChange(of: caption) { _, v in if v.count > StoryText.charLimit { caption = String(v.prefix(StoryText.charLimit)) } }
                 // ⚠️ ONE CONSTANT, and it used to be a hand-copied 700 beside a comment
                 // saying "cap like the text composer" — which caps at 720. See `StoryText`.
-            // How long the story stays up (owner 2026-10-31). App admins only for now.
-            if AdminStore.shared.isAdmin { storyLifetimeMenu }
+            // Room for the lifetime ring, which rides on top of the bar (below) so its tap opens
+            // only its menu, never the caption's keyboard (owner 2026-10-31).
+            if AdminStore.shared.isAdmin { Color.clear.frame(width: 32, height: 1) }
         }
         // EXACTLY 40 AT REST (owner spec). It was 50: the + is a 32pt square and the bar
         // added 9pt of its own padding above and below it, so `minHeight: 40` never bit —
@@ -2759,6 +2760,11 @@ struct StoryEditorView: View {
         // makes theirs feel instant: there is no way to miss.
         .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
         .onTapGesture { captionFocused = true }
+        // How long the story stays up (owner 2026-10-31), app admins only for now. Over the bar,
+        // not inside its tap: tapping it shows the menu and leaves the caption bar where it is.
+        .overlay(alignment: .bottomTrailing) {
+            if AdminStore.shared.isAdmin { storyLifetimeMenu.padding(.trailing, 4) }
+        }
         // LIQUID GLASS, TINTED DARK (owner 2026-08-03: "in story caption bar make it liquid
         // glass"). Plain glass was here once and came back off: on a bright photo it went pale
         // and the white placeholder disappeared into it, which he photographed. `tint` is
