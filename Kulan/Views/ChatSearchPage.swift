@@ -397,6 +397,7 @@ struct ChatSearchPage: View {
                     .allowsHitTesting(false)
             }
         }
+        .overlay(alignment: .bottomTrailing) { if query.isEmpty { findChannelsButton } }
         .onAppear { recents.start() }
         .sheet(isPresented: $showFindChannels) {
             // A channel opens the way a public result does, behind the sheet, then the search closes.
@@ -413,6 +414,23 @@ struct ChatSearchPage: View {
         } message: {
             Text("Check your connection and try again.")
         }
+    }
+
+    /// ⛔ FIND CHANNELS IS ONE ROUND BUTTON (owner 2026-10-31: "remove that card, one 44 pt circle
+    /// above the keyboard with the find icon"). It rides the keyboard's top edge on the empty
+    /// search and goes once something is typed, where results take the page.
+    private var findChannelsButton: some View {
+        Button { showFindChannels = true } label: {
+            Image(systemName: "safari")
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(.primary)
+                .frame(width: 44, height: 44)
+                .liquidGlass(Circle(), interactive: true)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Find Channels")
+        .padding(.trailing, 16).padding(.bottom, 12)
     }
 
     // MARK: Sections
@@ -495,7 +513,8 @@ struct ChatSearchPage: View {
         }
         // ⛔ THE DOOR TO PUBLIC CHANNELS, FIRST ON THE EMPTY SEARCH (owner 2026-10-30: "where will
         // channels show up"). It was only under New Chat. Searching is where people go looking.
-        m.sections = [SearchPageSection(title: nil, rows: [SearchPageRow(kind: .findChannels, key: "find-channels")])]
+        // owner 2026-10-31: no longer a row here; a round button above the keyboard (`findChannelsButton`).
+        m.sections = []
         if !rows.isEmpty {
             m.sections.append(SearchPageSection(title: "Recent", showsClear: true, rows: rows))
         }

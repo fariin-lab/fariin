@@ -1602,6 +1602,14 @@ struct ChatsView: View {
     /// Find Channels from the empty Channels filter (owner 2026-10-31: an empty page gives one next step).
     @State private var showFindChannelsFromEmpty = false
     @State private var chatFilter = 0   // 0 = all, 1 = unread
+    private var chatFilterName: String? {
+        switch chatFilter {
+        case 1: return "Unread"
+        case 2: return "Groups"
+        case 3: return "Channels"
+        default: return nil
+        }
+    }
     /// The page's own search box (2026-08-30): Apple's field in the top bar, exactly as Stories and
     /// Calls have it — owner, 2026-09-26, "make it exactly like the Stories search". For one day
     /// (2026-09-25) it was the list's own placeholder, the reference app's design; he asked for the
@@ -2300,6 +2308,15 @@ struct ChatsView: View {
             // while `label` is non-nil, the normal header is untouched code.
             if let status = connection.state.label {
                 ToolbarItem(placement: .principal) { ConnectionTitleLabel(text: status) }
+            } else if let filterName = chatFilterName {
+                // The filter in use, under the title (owner 2026-10-31): "Chats / Unread".
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 0) {
+                        Text("Chats").font(.headline)
+                        Text(filterName).font(.caption).foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
             }
             // The "…" menu gets the system glass circle (no avatar any more, see `avatarMenu`).
             // `SwipeFade` stands in for the system's own bar-item pop transition: it drops the

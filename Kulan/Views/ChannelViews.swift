@@ -91,18 +91,26 @@ struct ChannelFollowerBar: View {
     private var muted: Bool { follows.entry(conv.id)?.isMuted ?? false }
 
     private func setMute(_ until: Double) {
-        Haptics.impact(.light)
+        // No buzz (owner 2026-10-31: "remove the vibrate" on Mute / Unmute).
         Task { _ = await ChatService.setMute(conv.id, until: until) }
     }
 
     /// The one capsule both states draw, so the spring on `joined` carries one into the other.
     private func barLabel(icon: String?, text: String, blue: Bool) -> some View {
-        HStack(spacing: 8) {
-            if let icon { Image(systemName: icon).font(.system(size: 16, weight: .semibold)) }
-            Text(text).font(.system(size: 17, weight: .semibold))
+        // ⛔ MUTE ⇄ UNMUTE ROLLS, IT DOES NOT BLINK (owner 2026-10-31): the old words slide up and
+        // fade while the new ones come up from below, the way the reference app swaps this title.
+        ZStack {
+            HStack(spacing: 8) {
+                if let icon { Image(systemName: icon).font(.system(size: 16, weight: .semibold)) }
+                Text(text).font(.system(size: 17, weight: .semibold))
+            }
+            .id(text)
+            .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 10)),
+                                    removal: .opacity.combined(with: .offset(y: -10))))
         }
-        .foregroundStyle(blue ? Color.white : Color.primary)
-        .contentTransition(.opacity)
+        .animation(.spring(duration: 0.3, bounce: 0), value: text)
+        .clipped()
+        .foregroundStyle(blue ? Color.onFariinAction : Color.primary)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 18)
         .frame(height: 50)
