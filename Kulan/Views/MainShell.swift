@@ -3029,10 +3029,10 @@ struct ChatsView: View {
 
     /// "You left the group. Undo" (owner 2026-10-25), for the 5 s before the leave really runs; and a
     /// failed leave says so, so it is never silent. One glass bar, above the tab bar. See `LeaveGroupUndo`.
-    /// Quiet grey, not the action black (owner 2026-10-31: "the black is too noisy"): a light grey
-    /// with dark words by day, a dark grey with light words at night.
+    /// Quiet grey, not the action black (owner 2026-10-31: "the black is too noisy"): a medium grey
+    /// by day (his pick, from the reference app's bar), a dark grey at night; white words on both.
     static let undoBarFill = Color(UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(white: 0.17, alpha: 1) : UIColor(white: 0.92, alpha: 1) })
+        ? UIColor(white: 0.17, alpha: 1) : UIColor(white: 0.35, alpha: 1) })
 
     @ViewBuilder private var leaveUndoBar: some View {
         let leave = LeaveGroupUndo.shared
@@ -3048,9 +3048,9 @@ struct ChatsView: View {
                         TimelineView(.periodic(from: .now, by: 0.1)) { ctx in
                             let left = max(0, leave.barEnds.timeIntervalSince(ctx.date))
                             ZStack {
-                                Circle().stroke(Color.primary.opacity(0.2), lineWidth: 2)
+                                Circle().stroke(Color.white.opacity(0.3), lineWidth: 2)
                                 Circle().trim(from: 0, to: left / LeaveGroupUndo.window)
-                                    .stroke(Color.primary, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                                    .stroke(Color.white, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                                     .rotationEffect(.degrees(-90))
                                     .animation(.linear(duration: 0.1), value: left)
                                 Text("\(Int(left.rounded(.up)))")
@@ -3068,7 +3068,7 @@ struct ChatsView: View {
                         Spacer(minLength: 8)
                         Text("Undo").font(.subheadline.weight(.semibold))
                     }
-                    .foregroundStyle(Color.primary)
+                    .foregroundStyle(Color.white)
                     .padding(.leading, 8).padding(.trailing, 18)
                     .frame(height: 40)
                     .background(Self.undoBarFill, in: Capsule())
