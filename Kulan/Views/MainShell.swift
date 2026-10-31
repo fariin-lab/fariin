@@ -3030,19 +3030,44 @@ struct ChatsView: View {
     @ViewBuilder private var leaveUndoBar: some View {
         let leave = LeaveGroupUndo.shared
         VStack(spacing: 8) {
-            if leave.barTitle != nil {
+            // ⛔ SOLID, WITH THE PHOTO (owner 2026-10-31: the glass bar was near invisible, he found
+            // Undo too late and lost his channel). The action colour filled, the group's photo and
+            // name so it says what went, and a ring counting down the seconds left.
+            if let title = leave.barTitle {
                 Button { withAnimation(.smooth(duration: 0.3)) { leave.undo() } } label: {
-                    HStack(spacing: 14) {
-                        Text(leave.barKind == .deleteGroup ? "Group deleted."
-                             : leave.barKind == .deleteChannel ? "Channel deleted." : "You left the group.")
-                            .foregroundStyle(.primary)
-                        Text("Undo").fontWeight(.semibold).foregroundStyle(Color.fariinAction)
+                    HStack(spacing: 12) {
+                        AvatarView(name: title, photoUrl: leave.barPhoto, size: 36)
+                            .avatarSquircle(leave.barKind == .deleteChannel)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(leave.barKind == .deleteGroup ? "Group deleted"
+                                 : leave.barKind == .deleteChannel ? "Channel deleted" : "You left the group")
+                                .font(.subheadline.weight(.semibold))
+                            Text(title).font(.footnote).opacity(0.7).lineLimit(1)
+                        }
+                        Spacer(minLength: 8)
+                        TimelineView(.periodic(from: .now, by: 0.1)) { ctx in
+                            let left = max(0, leave.barEnds.timeIntervalSince(ctx.date))
+                            ZStack {
+                                Circle().stroke(Color.onFariinAction.opacity(0.25), lineWidth: 2)
+                                Circle().trim(from: 0, to: left / LeaveGroupUndo.window)
+                                    .stroke(Color.onFariinAction, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                                    .rotationEffect(.degrees(-90))
+                                    .animation(.linear(duration: 0.1), value: left)
+                                Text("\(Int(left.rounded(.up)))").font(.system(size: 11, weight: .semibold).monospacedDigit())
+                            }
+                            .frame(width: 24, height: 24)
+                        }
+                        Text("Undo").font(.subheadline.weight(.bold))
                     }
-                    .font(.subheadline)
-                    .padding(.horizontal, 18).padding(.vertical, 12)
-                    .liquidGlass(Capsule())
+                    .foregroundStyle(Color.onFariinAction)
+                    .padding(.leading, 10).padding(.trailing, 18).padding(.vertical, 10)
+                    .background(Color.fariinAction, in: Capsule())
+                    .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .padding(.horizontal, 16)
+                .accessibilityLabel("\(title). Undo")
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
             if let failure = leave.failure {

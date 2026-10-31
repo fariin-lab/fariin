@@ -27,6 +27,13 @@ final class LeaveGroupUndo {
     private(set) var barTitle: String?
     /// What the bar is about: a leave or a delete.
     private(set) var barKind: Kind = .leave
+    /// The group's photo on the bar, so it says WHAT went (owner 2026-10-31); nil draws its initials.
+    private(set) var barPhoto: String?
+    /// When the bar's time runs out, for its countdown ring.
+    private(set) var barEnds = Date()
+
+    /// ⛔ 8 s, NOT 5 (owner 2026-10-31: he looked for Undo, found it late, and lost his channel).
+    static let window: TimeInterval = 8
     /// A leave that failed when it finally ran: shown so it is never silent.
     var failure: String?
 
@@ -91,10 +98,13 @@ final class LeaveGroupUndo {
         save(pending)
         hiddenIds.insert(cid)
         barKind = kind
+        let me = AuthService.shared.uid ?? ""
+        barPhoto = ConversationsRepository.shared.conversations.first { $0.id == cid }?.displayPhoto(me)
+        barEnds = Date().addingTimeInterval(Self.window)
         barTitle = title
         timer?.cancel()
         timer = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(Self.window * 1_000_000_000))
             guard !Task.isCancelled else { return }
             self?.commit()
         }
