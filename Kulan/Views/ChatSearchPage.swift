@@ -419,13 +419,14 @@ struct ChatSearchPage: View {
     /// ⛔ FIND CHANNELS IS ONE ROUND BUTTON (owner 2026-10-31: "remove that card, one 44 pt circle
     /// above the keyboard with the find icon"). It rides the keyboard's top edge on the empty
     /// search and goes once something is typed, where results take the page.
+    /// Filled like the compose pen (owner 2026-10-31): black with a white icon, white with a black one at night.
     private var findChannelsButton: some View {
         Button { showFindChannels = true } label: {
             Image(systemName: "safari")
                 .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(.primary)
+                .foregroundStyle(Color.onFariinAction)
                 .frame(width: 44, height: 44)
-                .liquidGlass(Circle(), interactive: true)
+                .glassEffect(.regular.tint(Color.fariinAction).interactive(), in: Circle())
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
