@@ -860,6 +860,9 @@ final class MessageRowView: UIView {
     /// The failed badge's menu items, asked for when it is tapped. Set by the cell.
     var failMenuItems: (() -> [UIMenuElement])?
     private var reactionViews: [ReactionChipView] = []
+    /// Where the date header and the unread divider live, so the selection slide leaves them still.
+    /// A sibling of this view, set by the cell.
+    weak var fixedHost: UIView?
     private var headerPill: RowNoticePillView?
     private var dividerLeft: UIView?
     private var dividerRight: UIView?
@@ -869,9 +872,6 @@ final class MessageRowView: UIView {
     private var callView: CallBubbleView?
     private var checkbox: SelectionCheckboxView?
     /// The disappearing-message icon, drawn over the footer. See `setExpiryTimer`.
-    /// Where the date header and the unread divider live, so the selection slide leaves them still.
-    /// A sibling of this view, set by the cell.
-    weak var fixedHost: UIView?
     private var expiryRing: UIImageView?
 
     private(set) var plan: RowPlan?
@@ -966,6 +966,7 @@ final class MessageRowView: UIView {
         applyHeader(p, dark: dark)
         applyDivider(p)
         applyCheckbox(m, p)
+        seatSelectionShift(p.selectionShift)
 
         switch p.body {
         case .bubble(let b):
@@ -975,7 +976,6 @@ final class MessageRowView: UIView {
             applyNoticeButtons(nil, dark: dark)
             applyBubble(b, model: m, dark: dark, cid: cid)
         case .notice(let n):
-        seatSelectionShift(p.selectionShift)
             bubbleBox.isHidden = true
             callView?.isHidden = true
             hideBubbleChrome()
@@ -1072,6 +1072,11 @@ final class MessageRowView: UIView {
             // it (a land held back by the gate, a row the signature diff skipped, an exit that
             // arrived in the same turn as a delete) kept a fully drawn circle until it was recycled.
             // There is nothing left to strand now.
+            //
+            // A circle still sliding out is left to finish: the pass after the slide runs on its own
+            // 0.2 s timer and could land first, which took the circle off a frame or two early.
+            // The slide's completion takes it out.
+            if checkbox?.layer.animation(forKey: "remove") != nil { return }
             checkbox?.layer.removeAllAnimations()
             checkbox?.removeFromSuperview()
             checkbox = nil
@@ -1081,11 +1086,6 @@ final class MessageRowView: UIView {
         let v = checkbox ?? {
             let v = SelectionCheckboxView(); addSubview(v); checkbox = v; return v
         }()
-            //
-            // A circle still sliding out is left to finish: the pass after the slide runs on its own
-            // 0.2 s timer and could land first, which took the circle off a frame or two early.
-            // The slide's completion takes it out.
-            if checkbox?.layer.animation(forKey: "remove") != nil { return }
         v.isHidden = false
         // Bounds and center, for the same reason the bubble box uses them: a translation may be
         // riding on this view from the slide, and a view's `frame` is undefined under a transform.
@@ -2617,6 +2617,9 @@ final class MessageRowView: UIView {
             box.removeFromSuperview()
             checkbox = nil
         }
+        // The slide goes with it: the next row is seated at its own by `apply`.
+        seatSelectionShift(0)
+        layer.removeAnimation(forKey: "selection.shift")
         quoteView?.isHidden = true
         hideBubbleChrome()
         mediaView?.prepareForReuse()
@@ -2639,9 +2642,6 @@ private extension BubbleText {
     /// The meta string for a bubble that is already planned — keeps the two call sites in
     /// `MessageRowView` from restating the colour and the isMe test.
     static func meta(b: BubblePlan, m: MessageRowModel) -> NSAttributedString {
-        // The slide goes with it: the next row is seated at its own by `apply`.
-        seatSelectionShift(0)
-        layer.removeAnimation(forKey: "selection.shift")
         guard case .bubble(let row) = m.content else { return NSAttributedString() }
         return meta(row.meta, isMe: row.isMe, color: b.metaColor,
                     solidTicks: b.mediaPlan?.metaCapsule != nil || b.albumPlan?.metaCapsule != nil)
