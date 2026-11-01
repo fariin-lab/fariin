@@ -1131,9 +1131,16 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         // Measured from where the scroll last turned, not frame by frame: a slow drag moves under
         // 6 pt a frame and used to hide nothing (owner 2026-11-01).
         let y = sv.contentOffset.y
+        // ⛔ THE END OF THE LIST MOVES NOTHING (owner 2026-11-01: at the last sticker it shook and left
+        // the finger). The bars change the grid's height, so a bar moved at the end changes where
+        // the end is: the rubber band's way back read as a scroll up, the bars came, the end moved,
+        // and it fought the finger in a loop. Past the end nothing is decided, and bars are not
+        // hidden so close to it that the taller grid would put the list beyond its end.
+        let end = sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height
+        if y >= end - 1, y > 0 { lastY = y; return }
         lastY = headerHidden ? max(lastY, y) : min(lastY, y)
         if y <= 0 { setHeaderHidden(false) }
-        else if !headerHidden, y - lastY > 6 { setHeaderHidden(true); lastY = y }
+        else if !headerHidden, y - lastY > 6, y + M.top + M.stripH + 6 < end { setHeaderHidden(true); lastY = y }
         else if headerHidden, lastY - y > 6 { setHeaderHidden(false); lastY = y }
     }
 
