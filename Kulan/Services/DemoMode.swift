@@ -468,13 +468,25 @@ enum DemoMode {
         // asking her son whether he got home, and a voice note back because typing is slower than
         // talking. The last two are hers and unanswered, which is what the 2 on the badge means.
         case "demo-hooyo":
-            return history(cid, me: me, other: "demo-hooyo", endingAt: t(-9000)) + [
-                Message(demoId: "\(cid)-0", from: "demo-hooyo", "Salaam walaal, sidee tahay?", t(-600)),
-                Message(demoId: "\(cid)-1", from: me, "Waan fiicanahay walaal, adiga?", t(-540)),
-                Message(demoAudio: "\(cid)-2", from: me, data: silence(seconds: 14),
-                        duration: 14, waveform: voicePattern, t(-500)),
-                Message(demoId: "\(cid)-3", from: "demo-hooyo", "Waan ku xiisay", t(-320)),
-                Message(demoId: "\(cid)-4", from: "demo-hooyo", "Ma soo gaadhay guriga?", t(-260)),
+            // App Store photo 2 (owner 2026-11-01): one screen that shows a photo with a heart,
+            // a voice note, a reply, read ticks and emoji. English, two friends planning a trip.
+            var beach = Message(demoImage: "\(cid)-2", from: "demo-hooyo",
+                                data: photoData("demo-photo-beach", .systemOrange, .systemPink, "Beach"),
+                                w: 1200, h: 900, t(-1500))
+            beach.reactions = [me: "❤️"]
+            let note = Message(demoAudio: "\(cid)-4", from: me, data: silence(seconds: 14),
+                               duration: 14, waveform: voicePattern, t(-1100))
+            var reply = Message(demoId: "\(cid)-5", from: "demo-hooyo", "Haha can't wait to see you 🫶", t(-900))
+            reply.replyTo = ReplyRef(id: note.id, authorId: me, text: "🎤 Voice message")
+            return [
+                Message(demoId: "\(cid)-0", from: "demo-hooyo", "Are you coming this weekend? 🌞", t(-1900)),
+                Message(demoId: "\(cid)-1", from: me, "Yes! Booked my flight ✈️", t(-1800)),
+                beach,
+                Message(demoId: "\(cid)-3", from: "demo-hooyo", "This is where we're going 😍", t(-1450)),
+                note,
+                reply,
+                Message(demoId: "\(cid)-6", from: me, "Me too. See you Friday! 🎉", t(-600)),
+                Message(demoId: "\(cid)-7", from: "demo-hooyo", "Did you get home safe?", t(-260)),
             ]
 
         // The one with a photograph in it. Drop demo-photo-wedding into the asset catalogue and

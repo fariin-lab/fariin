@@ -732,6 +732,9 @@ final class ThreadRepository {
             didInitialLoad = true
             canLoadOlder = false
             otherOnline = true
+            // Everything I sent is read: blue ticks on the demo chats (App Store pictures).
+            otherLastReadMillis = Date().timeIntervalSince1970 * 1000
+            otherDeliveredMillis = otherLastReadMillis
             refreshItems(reason: .initial)
             return
         }

@@ -8239,7 +8239,7 @@ struct ThreadView: View {
     // Anchor the unread divider above the first unread message and land there on open.
     // Runs once; the last `unreadOnOpen` messages are treated as the unread block.
     private func anchorUnread(_ proxy: ScrollViewProxy) {
-        guard !didAnchorUnread, unreadOnOpen > 0 else { return }
+        guard !didAnchorUnread, unreadOnOpen > 0, !DemoMode.storeShots else { return }
         guard let boundary = unreadBoundary() else { return }
         // Just mark WHERE the unread divider goes — do NOT scroll to it. The chat always opens at
         // the BOTTOM (newest), like a standard messenger; the divider is a marker you scroll up to.
