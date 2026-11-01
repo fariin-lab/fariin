@@ -6044,6 +6044,7 @@ final class CallService: NSObject {
         // 1:1 audit r2 C3, 2026-10-08: the reason the call really ended, held back for the tone.
         CallKitManager.shared.reportEnded(pendingKitEnd ?? .remote)
         pendingKitEnd = nil
+        if noAnswerHold { otherUid = "" }
         state = .idle
     }
 
@@ -7790,6 +7791,7 @@ final class CallService: NSObject {
         dialCreateStarted = false    // audit M-112
         dialStartedAt = nil          // audit M-155
         otherRawName = ""            // audit M-151
+        let peerForNoAnswer = otherUid     // the No answer page calls or records to them
         otherUid = ""
         peerIsEstablishedContact = false   // never inherited by the next call
         peerTrustPending = false           // 2026-09-24 fix-all #231
@@ -7862,6 +7864,7 @@ final class CallService: NSObject {
         if wasCaller, !micDenied, UIApplication.shared.applicationState == .active,
            reason == .missed || reason == .declined || (reason == .failed && connectedDate == nil) {
             if minimized { minimized = false }
+            otherUid = peerForNoAnswer   // cleared again by `closeEndedTail`
             noAnswerHold = true
             return
         }
