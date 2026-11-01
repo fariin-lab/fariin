@@ -644,18 +644,13 @@ enum MediaFetch {
                                       finish: photoFinisher(url: url, enc: enc, cid: cid))
     }
 
-    /// A chat video: decrypt into VideoCache, and only once the local copy is really there, remove
-    /// the server copy of a delivered 1:1 clip (the mailman model; the player used to do this, so a
-    /// clip that arrived through the prefetch sweep was never picked up server-side).
+    /// A chat video: decrypt into VideoCache. The encrypted server copy stays: a cleared cache or a
+    /// reinstall can fetch it again, and the rules never let a recipient delete it anyway.
     static func videoFinisher(url: String, enc: EncMeta?, cid: String, messageId: String,
                               authorId: String) -> MediaDownloads.Finisher {
         { file in
             guard let clear = await clearBytes(file, enc: enc, cid: cid),
                   VideoCache.store(clear, for: messageId) else { return false }
-            let me = await MainActor.run { AuthService.shared.uid }
-            if cid.contains("_"), authorId != me {
-                try? await Storage.storage().safeReference(forURL: url)?.delete()
-            }
             return true
         }
     }

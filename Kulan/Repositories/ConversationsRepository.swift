@@ -72,7 +72,15 @@ final class ConversationsRepository {
         didSet {
             GroupLinkDoor.noteConversations(conversations)
             // owner 2026-10-18 readable banners: names + photo URLs for the notification extension.
-            NotifShare.noteConversations(conversations)
+            // At most once a second: every typing flag lands here, and this walks the whole list.
+            if !notifSharePending {
+                notifSharePending = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                    guard let self else { return }
+                    self.notifSharePending = false
+                    NotifShare.noteConversations(self.conversations)
+                }
+            }
             // owner 2026-10-26: a group still showing an old "deleted" preview (written before groups
             // dropped that line) is re-pointed at its newest real message, once per group per launch.
             for c in conversations where c.isGroup && c.lastMessageCipher == "This message was deleted"
@@ -83,6 +91,7 @@ final class ConversationsRepository {
         }
     }
     @ObservationIgnored private var repairedPreviews = Set<String>()
+    @ObservationIgnored private var notifSharePending = false
     var hasLoaded = false   // false until the first real snapshot -> drives the skeleton
     /// owner 2026-10-27 (a brand-new account showed a blank list before "No chats yet"): set when
     /// this phone has just finished creating the profile. Such an account has no chats to wait for,
@@ -311,6 +320,24 @@ final class ConversationsRepository {
     /// is rebuilt, at most once in five minutes, so a slow line cannot make it churn.
     @ObservationIgnored private var behindCheck: Task<Void, Never>?
     @ObservationIgnored private var lastBehindRepair = Date.distantPast
+    /// With a time limit: on a stuck client this read never answers, and the loop that asks must
+    /// survive that, or the check is dead for the rest of the run.
+    private func newestOnServer(_ uid: String) async -> QueryDocumentSnapshot? {
+        let (answers, reply) = AsyncStream.makeStream(of: QueryDocumentSnapshot?.self)
+        let query = db.collection("conversations").whereField("users", arrayContains: uid)
+            .order(by: "updatedAt", descending: true).limit(to: 1)
+        Task {
+            reply.yield((try? await query.getDocuments(source: .server))?.documents.first)
+            reply.finish()
+        }
+        Task {
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            reply.yield(nil); reply.finish()
+        }
+        for await top in answers { return top }
+        return nil
+    }
+
     private func startBehindServerCheck() {
         guard behindCheck == nil else { return }
         behindCheck = Task { @MainActor [weak self] in
@@ -318,11 +345,7 @@ final class ConversationsRepository {
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
                 guard let self, UIApplication.shared.applicationState == .active,
                       self.listener != nil, let uid = Auth.auth().currentUser?.uid, uid == self.listenerUid,
-                      let snap = try? await self.db.collection("conversations")
-                        .whereField("users", arrayContains: uid)
-                        .order(by: "updatedAt", descending: true)
-                        .limit(to: 1).getDocuments(source: .server),
-                      let top = snap.documents.first else { continue }
+                      let top = await self.newestOnServer(uid) else { continue }
                 let server = Conversation(id: top.documentID, data: top.data(with: .estimate)).updatedAtMillis
                 let behind = server - self.newestMillis(self.lastRaw)
                 guard behind > 60_000, Date().timeIntervalSince(self.lastBehindRepair) > 300 else { continue }
@@ -408,7 +431,8 @@ final class ConversationsRepository {
                 // server's answer still comes through, and `startBehindServerCheck` catches a list
                 // that stays behind.
                 if snap.metadata.isFromCache, !snap.metadata.hasPendingWrites {   // my own delete or leave passes
-                    let shownNewest = self.newestMillis(self.lastRaw + self.conversations)
+                    // Chats only: a channel is not in this query, so a newer one refused a good copy.
+                    let shownNewest = self.newestMillis(self.lastRaw + self.conversations.filter { !$0.isChannel })
                     if self.newestMillis(convs) + 1_000 < shownNewest {
                         DiagLog.add("CHATLIST# refused an older saved copy, \((shownNewest - self.newestMillis(convs)) / 1000)s behind")
                         DiagLog.flagForUpload(after: 5)

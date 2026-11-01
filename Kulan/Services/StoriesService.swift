@@ -1192,6 +1192,7 @@ final class StoriesService {
     }
 
     // Fire-and-forget post: pop back to chat immediately, upload in the background, show progress.
+    @MainActor private static var autoRetries = 0
     @MainActor func postStoryBackground(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends, captureProtected: Bool = false, repostOf: StoryRepost? = nil, storyDocId: String? = nil, resumed: Bool = false, expiryHours: Double = 24) {
         // One id for this post from the start, kept in the ticket, so a resume writes the same story.
         let docId = storyDocId ?? Self.newStoryId()
@@ -1311,7 +1312,18 @@ final class StoriesService {
                 if Self.isPermanentPostFailure(error) { StoryOutbox.forget(ticket) }
                 // 2026-09-24 decision D18: a kept ticket is no longer a running post, so a retry
                 // (reconnect or "Try Again") may pick it up in this same session.
-                else { StoryOutbox.release(ticket) }
+                else {
+                    StoryOutbox.release(ticket)
+                    // The post fails only after signal is back, when the reconnect retry has already
+                    // passed it by. A few tries a launch, so a bad post cannot alert for ever.
+                    if Self.autoRetries < 3 {
+                        Self.autoRetries += 1
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 60_000_000_000)
+                            StoryOutbox.retry(for: me)
+                        }
+                    }
+                }
             }
             // ⚠️ A PLAIN FAILURE KEEPS ITS TICKET. That is the whole point: no connection now is the
             // case worth remembering, and the next sign-in puts it back through this same door.
@@ -1788,6 +1800,9 @@ final class StoriesService {
                 "captureProtected": captureProtected,
         ]
         if let repostOf { mirror["repostOf"] = repostOf.asData }
+        // Hide Story From also covers the profile ring. Tokens, so the list names nobody.
+        let hidden = await MainActor.run { StoryAudienceStore.shared.hiddenFrom }
+        if !hidden.isEmpty { mirror["hiddenTokens"] = Array(StoryAudienceToken.tokens(hidden).prefix(500)) }
         try? await db.collection("users").document(me)
             .collection("publicStories").document(storyId)
             .setData(mirror)
@@ -3341,7 +3356,9 @@ final class StoriesRepository {
             .whereField("expiresAt", isGreaterThan: Timestamp(date: now))
             .limit(to: 50)
             .getDocuments()
-        let stories = parse(snap?.documents)
+        let myToken = StoryAudienceToken.token(me)
+        let open = snap?.documents.filter { ($0.data()["hiddenTokens"] as? [String])?.contains(myToken) != true }
+        let stories = parse(open)
             .filter { $0.expiresAt > now }
             .sorted { $0.createdAt < $1.createdAt }
         guard !stories.isEmpty else { return nil }

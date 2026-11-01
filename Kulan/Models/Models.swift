@@ -1299,6 +1299,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var followerCount = 0
     /// Posts so far (server, onNewMessage). A follower's unread is this minus `followerRead`.
     var postCount = 0
+    /// The numbers of posts deleted lately (server). They stay in `postCount`, which followers' read
+    /// marks are counted against, so they are left out of the unread sum here.
+    var deletedPostSeqs: [Int] = []
     /// Mine as a follower, from users/{me}/channels/{cid} (ChannelFollows), nil when I am not one.
     var followerRead: Int?
     var followerMuted = false
@@ -1521,6 +1524,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         }
         self.followerCount = max(0, (data["followerCount"] as? NSNumber)?.intValue ?? 0)
         self.postCount = max(0, (data["postCount"] as? NSNumber)?.intValue ?? 0)
+        self.deletedPostSeqs = (data["deletedPostSeqs"] as? [NSNumber])?.map(\.intValue) ?? []
         self.memberSend = data["memberSend"] as? [String: Bool] ?? [:]
         self.slowModeSeconds = (data["slowMode"] as? NSNumber)?.intValue ?? 0
         func ms(_ v: Any?) -> Double {
@@ -1855,7 +1859,10 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// unread" flag (before 2026-09-24), which means a dot and no number — see `ChatService.markUnread`.
     /// A follower's: the channel's posts past the ones they have read.
     func unread(_ me: String) -> Int {
-        if isFollower(me) { return max(0, postCount - (followerRead ?? 0)) }
+        if isFollower(me) {
+            let read = followerRead ?? 0
+            return max(0, postCount - read - deletedPostSeqs.filter { $0 > read }.count)
+        }
         return max(0, unreadCount[me] ?? 0)
     }
     /// You marked this chat unread yourself. A reminder, not a claim that somebody sent you something,
