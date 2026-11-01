@@ -225,6 +225,10 @@ final class DemoGroupCallEngine: ObservableObject {
                                      handRaised: false, joinedAt: now.addingTimeInterval(-Double(300 - i * 20))))
         }
         beginConnecting()
+        // Me on voice only (owner 2026-11-01): my profile photo read as a still, not a camera, so
+        // my tile shows the call's camera-off look instead.
+        cameraOn = false
+        rebuild()
     }
 
     /// Preset: join a call that is already running with `total` people in it, me included.
