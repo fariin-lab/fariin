@@ -4370,7 +4370,7 @@ struct ThreadView: View {
         // anyone who does not run the channel. It reports the channel, as its page does. Channels
         // are not end-to-end encrypted, so the note against Report on a message is about 1:1 chats.
         if let conv = conversation, conv.isChannel, !conv.isOwner(me), !conv.admins.contains(me) {
-            out.append(CMAction(title: "Report Channel", icon: "exclamationmark.octagon", destructive: true) {
+            out.append(CMAction(title: "Report", icon: "exclamationmark.octagon") {
                 confirmChannelReport = true
             })
         }
