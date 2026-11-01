@@ -2522,7 +2522,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private func textSendSource(for id: String?) -> ChatComposerView.TextSendSource? {
         guard let id, case .bubble(let b)? = rowModels[id]?.content, b.isMe else { return nil }
         switch b.body {
-        case .text, .jumbomoji: break
+        case .text, .jumbomoji, .voice: break
         default: return nil
         }
         return (composerBar as? ChatComposerView)?.takeTextSendSource()

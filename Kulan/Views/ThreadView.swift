@@ -10388,6 +10388,7 @@ struct ThreadView: View {
         // ⚠️ CAPTURED BEFORE resetRecordingState, which clears the flag — the Task below races the
         // reset, and reading the @State inside it sent every one-time note as ordinary.
         let once = voiceViewOnce
+        sendTick &+= 1   // as a text send: the list holds still while the bar shrinks
         Task { await stopAndSendAudio(viewOnce: once, reviewedBars: reviewedBars) }
         impact(.light)
         resetRecordingState()

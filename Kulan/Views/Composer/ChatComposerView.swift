@@ -309,6 +309,12 @@ final class ChatComposerView: UIView {
         guard let s = lastTextSend, CACurrentMediaTime() - s.at < 1.0 else { return nil }
         return s.source
     }
+    /// A voice note leaves from the same field a text does (owner 2026-11-01: "the animation you use
+    /// for a sent message"). Its bytes take a moment to finish, so it gets one more second.
+    private func noteVoiceSend() {
+        let box = pill.convert(pill.bounds, to: nil)
+        lastTextSend = (TextSendSource(pill: box, textX: box.minX + BubbleMetrics.hPad), CACurrentMediaTime() + 1)
+    }
     private var displayLink: CADisplayLink?
 
     // MARK: - Init
@@ -439,7 +445,7 @@ final class ChatComposerView: UIView {
         trashButton.addAction(UIAction { [weak self] _ in self?.actions.cancelRecording() }, for: .touchUpInside)
         sendButton.addAction(UIAction { [weak self] _ in
             guard let self else { return }
-            if self.shown.recordLocked { self.actions.sendRecording() } else {
+            if self.shown.recordLocked { self.noteVoiceSend(); self.actions.sendRecording() } else {
                 // Where the text left from, for the list's send transition — measured before the
                 // send clears the field and shrinks the pill. Not for an edit, which moves no bubble.
                 if !self.shown.editing, !self.textView.text.isEmpty {
@@ -601,7 +607,7 @@ final class ChatComposerView: UIView {
         stripTimer.font = .monospacedDigitSystemFont(ofSize: 15, weight: .regular)
         stripTimer.textColor = .secondaryLabel
         stripX.addAction(UIAction { [weak self] _ in self?.actions.cancelRecording() }, for: .touchUpInside)
-        stripSend.addAction(UIAction { [weak self] _ in self?.actions.sendRecording() }, for: .touchUpInside)
+        stripSend.addAction(UIAction { [weak self] _ in self?.noteVoiceSend(); self?.actions.sendRecording() }, for: .touchUpInside)
 
         // The big mic + lock, drawn over everything and never hit-tested.
         addSubview(overlayGroup)
@@ -1313,6 +1319,7 @@ final class ChatComposerView: UIView {
         case .changed:
             actions.holdChanged(t)
         case .ended:
+            noteVoiceSend()
             actions.holdEnded(t, false)
             holdStart = nil
         case .cancelled, .failed:
