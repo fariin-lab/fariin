@@ -379,7 +379,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             // ⛔ BARS ON TOP, THE SWITCH AT THE FOOT (owner 2026-10-31, his screenshots: "make it
             // exactly like this"). Stickers: the pack bar centred at the top, Edit at its right.
             // GIFs: their shelves bar at the top (drawn by the GIF grid). Both: GIFs | Stickers
-            // floating at the foot, and on GIFs a round 44 pt search at the foot's right.
+            // floating at the foot, and on GIFs a round search as tall as the switch at the foot's right.
             for v in [stripGlass, strip, editButton] as [UIView] { v.transform = .identity }
             let pad: CGFloat = 6
             let smallEditW: CGFloat = 48, smallEditH: CGFloat = 28
@@ -420,7 +420,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
                     v.transform = CGAffineTransform(translationX: 0, y: drop)
                     v.alpha = editing || hide ? 0 : 1
                 }
-                let sSize: CGFloat = 44
+                let sSize = M.tabsH + 6   // the switch's glass height (owner 2026-11-01)
                 searchButton.transform = .identity
                 searchButton.frame = CGRect(x: w - M.side - sSize, y: tabs.frame.midY - sSize / 2,
                                             width: sSize, height: sSize)
