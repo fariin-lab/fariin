@@ -2205,8 +2205,14 @@ struct UsernameEditView: View {
     /// up lying to people.
     @State private var token = 0
     @State private var claiming = false
+    /// Free names offered under a taken one (owner 2026-10-31), already checked with the server.
+    @State private var suggestions: [String] = []
 
     private var clean: String { ChatService.sanitizeHandle(draft) }
+    /// The field wears a red edge while the name cannot be used.
+    private var fieldIsWrong: Bool {
+        switch status { case .taken, .problem: return true; default: return false }
+    }
     /// The admin account typing its one-letter name, @v (owner, 2026-10-07; the server decides).
     private var ownerShortName: Bool { clean.lowercased() == ChatService.ownerShortHandle && ChatService.iAmOwnerAccount }
     /// Exactly the same, case included: "realwarya" to "Realwarya" is a change you can save now
@@ -2271,6 +2277,15 @@ struct UsernameEditView: View {
                 // which would re-run the animation on every keystroke.
                 .animation(.smooth(duration: 0.18), value: remaining <= Self.counterAppearsAt)
                 .animation(.smooth(duration: 0.18), value: draft.isEmpty)
+                // A thin red edge on the field itself while the name cannot be used (owner
+                // 2026-10-31): the eye is on the field, not the line under it.
+                .listRowBackground(
+                    RoundedRectangle(cornerRadius: 26, style: .continuous)
+                        .fill(Color(.secondarySystemGroupedBackground))
+                        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous)
+                            .strokeBorder(Color.red.opacity(fieldIsWrong ? 0.85 : 0), lineWidth: 1.5))
+                        .animation(.smooth(duration: 0.2), value: fieldIsWrong)
+                )
             } footer: {
                 // The one line that changes. Fixed height so the form does not twitch as it swaps.
                 statusLine
@@ -2337,10 +2352,28 @@ struct UsernameEditView: View {
                 Text("\(name) is available.").foregroundStyle(.green)
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
             case .taken:
-                Text("Sorry, this username is already taken.").foregroundStyle(.red)
+                // Plain and short, no "Sorry" (owner 2026-10-31: read like the big apps).
+                Label("This username is taken.", systemImage: "exclamationmark.circle.fill")
+                    .foregroundStyle(.red)
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                if !suggestions.isEmpty {
+                    HStack(spacing: 6) {
+                        Text("Free:")
+                        ForEach(suggestions, id: \.self) { name in
+                            Button { draft = name } label: {
+                                Text("@\(name)").font(.footnote.weight(.medium))
+                                    .foregroundStyle(.primary)
+                                    .padding(.horizontal, 9).padding(.vertical, 4)
+                                    .background(Color(.tertiarySystemFill), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                    .transition(.opacity)
+                }
             case .problem(let why):
-                Text(why).foregroundStyle(.red)
+                Label(why, systemImage: "exclamationmark.circle.fill").foregroundStyle(.red)
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
             Text("Letters, numbers and _ only. \(Limits.usernameMinChars)–\(Limits.usernameMaxChars) characters.")
@@ -2384,6 +2417,7 @@ struct UsernameEditView: View {
     /// about twice, a newer keystroke cancels the wait, and a stale reply is dropped on arrival.
     private func schedule(_ value: String) {
         token += 1
+        if !suggestions.isEmpty { suggestions = [] }
         let mine = token
 
         guard !unchanged else { status = .quiet; return }
@@ -2411,6 +2445,7 @@ struct UsernameEditView: View {
                     else if r.reason == "taken" || r.reason == nil { status = .taken }
                     else { status = .problem(r.reason ?? "") }
                 }
+                if status == .taken { await suggest(for: value, mine) }
             } catch {
                 guard mine == token else { return }
                 // A failed CHECK is not a failed name: say nothing rather than accuse it of being
@@ -2419,6 +2454,26 @@ struct UsernameEditView: View {
                 lastAsked = ""
             }
         }
+    }
+
+    /// Up to three free names close to a taken one, each asked of the server first, so a tap on one
+    /// is never met by "taken" again. Few checks: the server allows 40 a minute.
+    private func suggest(for value: String, _ mine: Int) async {
+        let base = String(value.prefix(Limits.usernameMaxChars - 4))
+        var pool: [String] = []
+        for _ in 0..<12 where pool.count < 4 {
+            let pick = Bool.random() ? "\(base)_\(Int.random(in: 10...99))" : "\(base)\(Int.random(in: 100...999))"
+            if ChatService.handleShapeProblem(pick) == nil, !pool.contains(pick) { pool.append(pick) }
+        }
+        var free: [String] = []
+        await withTaskGroup(of: String?.self) { g in
+            for n in pool {
+                g.addTask { (try? await ChatService.checkHandleAvailable(n))?.available == true ? n : nil }
+            }
+            for await n in g { if let n { free.append(n) } }
+        }
+        guard mine == token else { return }
+        withAnimation(.smooth(duration: 0.2)) { suggestions = Array(free.prefix(3)) }
     }
 
     /// Done CLAIMS it on the server. The check above is a courtesy; this is the decision, and it is
