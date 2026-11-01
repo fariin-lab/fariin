@@ -2950,29 +2950,38 @@ enum ChatService {
         var errorDescription: String? { "This message was deleted." }
     }
 
-    /// The forward sheet holds the message as it was when it opened, and the author may have deleted
-    /// it since (bug search 2026-11-01). Three seconds at most: no answer means forward as before.
-    private static func sourceWasDeleted(_ id: String, in cid: String) async -> Bool {
-        let (answers, reply) = AsyncStream.makeStream(of: Bool.self)
+    /// The words to forward now, not when the sheet opened (bug search 2026-11-01): nil when the
+    /// author has deleted it, their edited text when edited. Three seconds at most: no answer
+    /// means forward the copy in hand, as before.
+    private static func liveForwardText(_ m: Message, in cid: String) async -> String? {
+        let (answers, reply) = AsyncStream.makeStream(of: String?.self)
         Task {
             let d = try? await db.collection("conversations").document(cid).collection("messages")
-                .document(id).getDocument(source: .server)
-            reply.yield(d.map { !$0.exists || $0.get("deleted") as? Bool == true } ?? false)
+                .document(m.id).getDocument(source: .server)
+            if let d {
+                if !d.exists || d.get("deleted") as? Bool == true { reply.yield(nil) }
+                else if d.get("edited") as? Bool == true, let data = d.data() {
+                    let text = Message(id: m.id, data: data, cid: cid, crypto: Crypto.shared).text
+                    reply.yield(text == "🔒" || text == "…" ? m.text : text)
+                } else { reply.yield(m.text) }
+            } else { reply.yield(m.text) }
             reply.finish()
         }
         Task {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
-            reply.yield(false); reply.finish()
+            reply.yield(m.text); reply.finish()
         }
-        for await gone in answers { return gone }
-        return false
+        for await text in answers { return text }
+        return m.text
     }
 
     /// `clientId` matches the optimistic bubble ForwardPicker parked in PendingOutbox, so the echo
     /// REPLACES that bubble rather than landing beside it as a duplicate.
     static func forwardMessage(_ m: Message, from sourceCid: String, to targetCid: String,
                                clientId: String? = nil) async throws {
-        guard await !sourceWasDeleted(m.id, in: sourceCid) else { throw ForwardGoneError() }
+        guard let liveText = await liveForwardText(m, in: sourceCid) else { throw ForwardGoneError() }
+        var m = m
+        m.text = liveText
         let forwarded = isForward(m, from: sourceCid, to: targetCid)
         if m.isSticker {   // 2026-10-17 chat stickers
             try await StickerSend.forward(m, from: sourceCid, to: targetCid, clientId: clientId, forwarded: forwarded)
