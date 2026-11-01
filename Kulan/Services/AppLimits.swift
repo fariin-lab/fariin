@@ -44,7 +44,7 @@ final class AppLimits {
         static let storiesPerHourDefault = 40
         static let storiesPerHourVerified = 40
         static let groupMembersMax = 30   // appLimit('group_members_max', 30) in firestore.rules
-        static let pinnedChatsMax = 3
+        static let pinnedChatsMax = 5
         static let groupsOwnedMax = 10   // groups_owned_max, functions-groups groupCreateCheck
         static let groupDescMax = 200    // group_desc_max (owner 2026-10-21, set from the panel; 150 owner 2026-10-22, 200 owner 2026-10-27)
     }
@@ -202,7 +202,7 @@ final class AppLimits {
         number("group_members_max", Fallback.groupMembersMax)
     }
 
-    /// How many chats one person may pin (owner 2026-10-19: 3), from the panel's `pinned_chats_max`.
+    /// How many chats one person may pin (owner 2026-11-01: 5), from the panel's `pinned_chats_max`.
     var pinnedChatsMax: Int {
         number("pinned_chats_max", Fallback.pinnedChatsMax)
     }
