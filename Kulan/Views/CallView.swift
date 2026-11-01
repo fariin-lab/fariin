@@ -387,7 +387,8 @@ struct CallView: View {
     // they turn the camera off, so gate on the signalled camera state, not just the track).
     // 1:1 audit #13 (owner, 2026-10-08): `remoteVideoLive` also drops a stream that stopped
     // delivering frames, so a lost camera-off signal shows their photo, not a frozen face.
-    private var hasRemote: Bool { call.remoteVideoLive && call.remoteVideoTrack != nil }
+    // And only from its first real frame (owner 2026-11-01): until then the voice screen stays.
+    private var hasRemote: Bool { call.remoteVideoLive && call.remoteVideoTrack != nil && call.remoteFrameArrived }
     // Show MY camera full-screen while RINGING (self-preview) or when I tapped to swap. Once the
     // call is CONNECTED and their camera is off, THEY own the big view (avatar) and I go to the PiP —
     // my video never fills the screen just because they turned their camera off (they'd "vanish").
@@ -477,7 +478,8 @@ struct CallView: View {
                     .frame(width: geo.size.width, height: geo.size.height)
                     .clipped()
                     .opacity(canShow ? 1 : 0)
-                    .animation(.easeInOut(duration: 0.2), value: canShow)
+                    // Their picture cuts in, as the reference does; only my own preview fades.
+                    .animation(showLocalFull ? .easeInOut(duration: 0.2) : nil, value: canShow)
             }
             // Screen share viewer, 2026-10-08: their screen whole, with pinch/pan/double-tap zoom, and
             // nothing over it but the chrome. A single tap sends the chrome away and back.

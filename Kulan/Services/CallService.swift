@@ -474,6 +474,7 @@ final class CallService: NSObject {
             // 1:1 audit r2 J4, 2026-10-08: the frozen-video watch runs only while their camera is
             // said on, not as a 1 Hz timer on every call (voice calls included).
             guard remoteCameraOn != oldValue else { return }
+            waitForRemoteFrame()
             if remoteCameraOn { startRemoteFreezeWatchIfNeeded() } else { stopRemoteFreezeWatch() }
         }
     }
@@ -765,7 +766,24 @@ final class CallService: NSObject {
     /// Kept for the life of the app, as the system keeps its window size.
     var cardScale: CGFloat = 1
     var localVideoTrack: RTCVideoTrack?
-    var remoteVideoTrack: RTCVideoTrack?
+    var remoteVideoTrack: RTCVideoTrack? {
+        didSet {
+            guard remoteVideoTrack !== oldValue else { return }
+            oldValue?.remove(remoteFrameProbe)
+            remoteVideoTrack?.add(remoteFrameProbe)
+            waitForRemoteFrame()
+        }
+    }
+    /// ⛔ THEIR VIDEO TAKES THE BIG VIEW ON ITS FIRST REAL FRAME — owner 2026-11-01, frame by frame
+    /// through the reference app's accept: my camera shrinks to the card at once, the dark voice
+    /// screen with their photo stays behind it, and their picture cuts in only when it exists. The
+    /// `cams` signal says the camera is on; it does not say a frame has reached this phone. Main only.
+    private(set) var remoteFrameArrived = false
+    private let remoteFrameProbe = RemoteFrameProbe()
+    private func waitForRemoteFrame() {
+        remoteFrameArrived = false
+        remoteFrameProbe.arm { [weak self] in self?.remoteFrameArrived = true }
+    }
 
     // MARK: Screen share v3 dual mode (screen on its own track, camera keeps running)
     //
@@ -8024,6 +8042,19 @@ extension CallService: RTCPeerConnectionDelegate {
                 if isScreen { self.remoteScreenTrack = track } else { self.remoteVideoTrack = track }
             }
         }
+    }
+}
+
+/// Says once, on main, that a frame has arrived. Stays on the track; each arm is one report.
+private final class RemoteFrameProbe: NSObject, RTCVideoRenderer {
+    private let lock = NSLock()
+    private var report: (() -> Void)?
+    func arm(_ report: @escaping () -> Void) { lock.lock(); self.report = report; lock.unlock() }
+    func setSize(_ size: CGSize) {}
+    func renderFrame(_ frame: RTCVideoFrame?) {
+        guard frame != nil else { return }
+        lock.lock(); let r = report; report = nil; lock.unlock()
+        if let r { DispatchQueue.main.async(execute: r) }
     }
 }
 
