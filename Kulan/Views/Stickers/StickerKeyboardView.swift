@@ -249,6 +249,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             self.collapseGifSearch()
         }
         gifGrid.barAtFoot = true
+        gifGrid.onScrolled = { [weak self] sv in self?.barsFollowDrag(sv) }
         cardView.addSubview(gifGrid)
 
         var sc = UIButton.Configuration.glass()
@@ -397,8 +398,8 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             editGlass.layer.cornerRadius = smallEditH / 2
             // ⛔ SCROLLING INTO THE STICKERS HIDES BOTH BARS (owner 2026-11-01, "exactly like before"):
             // the top row leaves upward, the switch leaves downward, the grid takes the room. Done
-            // stays while editing, and the GIF tab has no grid here to bring them back.
-            let hide = (headerHidden && !gifsOn && !editing) || searchingGifs
+            // stays while editing. The GIF tab does the same with its own shelves row.
+            let hide = (headerHidden && !editing) || searchingGifs
             for v in [stripGlass, strip] as [UIView] { v.alpha = editing || gifsOn || hide ? 0 : 1 }
             // No glass behind the top bar (owner 2026-10-31): the icons sit on the panel itself.
             stripGlass.isHidden = true
@@ -420,19 +421,25 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
                     v.alpha = editing || hide ? 0 : 1
                 }
                 let sSize: CGFloat = 44
+                searchButton.transform = .identity
                 searchButton.frame = CGRect(x: w - M.side - sSize, y: tabs.frame.midY - sSize / 2,
                                             width: sSize, height: sSize)
-                searchButton.alpha = gifsOn && !editing ? 1 : 0
-                searchButton.isUserInteractionEnabled = gifsOn && !editing
+                searchButton.transform = CGAffineTransform(translationX: 0, y: drop)
+                searchButton.alpha = gifsOn && !editing && !hide ? 1 : 0
+                searchButton.isUserInteractionEnabled = gifsOn && !editing && !hide
             } else {
                 searchButton.alpha = 0
                 searchButton.isUserInteractionEnabled = false
             }
             let gridTop = hide ? 0 : barY + M.stripH + 6
             grid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, h - gridTop))
-            gifGrid.frame = CGRect(x: 0, y: M.top, width: w, height: max(0, h - M.top))
+            let gifsUp = hide && !searchingGifs
+            gifGrid.barHidden = gifsUp
+            let gifTop = gifsUp ? 0 : M.top
+            gifGrid.frame = CGRect(x: 0, y: gifTop, width: w, height: max(0, h - gifTop))
             gifGrid.footGap = footGap
             gifGrid.bottomRoom = M.tabsH + 16
+            gifGrid.layoutIfNeeded()   // inside the hide animation, so its row and grid move with the rest
             // Room under the last row for the floating switch (and the Delete bar while editing).
             grid.contentInset.bottom = bottomInset + M.tabsH + 16 + (editing ? 44 : 0)
             let barH = 44 + sb
@@ -1115,6 +1122,12 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         guard sv.isTracking || sv.isDecelerating else { lastY = sv.contentOffset.y; return }
         // Animated (.tgs) tiles show stills while the grid moves (owner 2026-10-21, scroll lag).
         StickerPlayerView.setPanelScrolling(true)
+        barsFollowDrag(sv)
+    }
+
+    /// Down into the content hides the bars, back up or at the top brings them. Both grids.
+    private func barsFollowDrag(_ sv: UIScrollView) {
+        guard sv.isTracking || sv.isDecelerating else { lastY = sv.contentOffset.y; return }
         let y = sv.contentOffset.y, dy = y - lastY
         lastY = y
         if y <= 0 { setHeaderHidden(false) }
@@ -1185,6 +1198,8 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0,
                        options: [.allowUserInteraction, .beginFromCurrentState]) { self.layoutTabThumb() }
         if tabs.selectedSegmentIndex == 0, editing { endEditing() }
+        // The two grids scroll apart: the next drag measures from the one now showing.
+        lastY = (tabs.selectedSegmentIndex == 0 ? gifGrid.scrollView : grid).contentOffset.y
         UIView.transition(with: cardView, duration: 0.18, options: [.transitionCrossDissolve, .allowUserInteraction]) {
             self.applyTab()
             self.layoutCardSubviews()

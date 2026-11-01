@@ -17,6 +17,10 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
     var onSearch: () -> Void = {}
     var onCancelSearch: () -> Void = {}
     var onSearchFieldEnded: () -> Void = {}
+    /// A drag or fling moved the GIFs: the panel decides whether its bars hide, as for stickers.
+    var onScrolled: (UIScrollView) -> Void = { _ in }
+    /// Scrolled into the GIFs (owner 2026-11-01): the shelves are out of the way, the GIFs take the room.
+    var barHidden = false { didSet { if oldValue != barHidden { setNeedsLayout() } } }
     /// Room under the last row for the panel's floating GIFs | Stickers switch (or the keyboard while searching).
     var bottomRoom: CGFloat = 0 { didSet { if oldValue != bottomRoom { setNeedsLayout() } } }
 
@@ -172,6 +176,11 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
 
     private var lastGridWidth: CGFloat = 0
 
+    func scrollViewDidScroll(_ sv: UIScrollView) {
+        guard sv === grid else { return }
+        onScrolled(sv)
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         let w = bounds.width
@@ -211,12 +220,13 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
             stripCellSize = min(M.stripCell, floor((room - (n - 1) * M.stripSpacing) / max(n, 1)))
             let barW = n * stripCellSize + (n - 1) * M.stripSpacing + 2 * pad
             // At the top (owner 2026-10-31); the panel's GIFs | Stickers switch floats at the foot.
-            let bar = CGRect(x: (w - barW) / 2, y: M.barY, width: barW, height: M.stripH)
+            let barTop = barHidden ? -(M.barY + M.stripH) : M.barY
+            let bar = CGRect(x: (w - barW) / 2, y: barTop, width: barW, height: M.stripH)
             stripGlass.frame = bar
             stripGlass.layer.cornerRadius = M.stripH / 2
             strip.frame = bar.insetBy(dx: pad, dy: 0)
-            strip.alpha = 1
-            gridTop = M.barY + M.stripH + 6
+            strip.alpha = barHidden ? 0 : 1
+            gridTop = barHidden ? 0 : M.barY + M.stripH + 6
             // Over the grid, which was added after them.
             bringSubviewToFront(stripGlass)
             bringSubviewToFront(strip)
