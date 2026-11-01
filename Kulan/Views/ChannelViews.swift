@@ -346,6 +346,7 @@ struct DiscoverChannelsView: View {
 
     private func load() async {
         loading = true
+        if DemoMode.storeShots { rows = DemoMode.storeChannels(); failed = false; loading = false; return }
         do { rows = try await ChannelService.discover(); failed = false }
         catch { failed = true }
         loading = false

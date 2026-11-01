@@ -159,7 +159,18 @@ enum GroupNameCheck: Equatable {
     }
 
     nonisolated static func membersLine(_ n: Int) -> String { "\(n) \(n == 1 ? "member" : "members")" }
-    nonisolated static func followersLine(_ n: Int) -> String { "\(n) \(n == 1 ? "follower" : "followers")" }
+    /// Short from 10,000 up, as the big apps write it (owner 2026-11-01: "2400000 followers"):
+    /// 9,999 stays whole, then 12K, 128K, 2.4M.
+    nonisolated static func followersLine(_ n: Int) -> String { "\(shortCount(n)) \(n == 1 ? "follower" : "followers")" }
+    nonisolated static func shortCount(_ n: Int) -> String {
+        func cut(_ v: Double, _ unit: String) -> String {
+            let s = v < 10 ? String(format: "%.1f", (v * 10).rounded(.down) / 10) : String(Int(v))
+            return (s.hasSuffix(".0") ? String(s.dropLast(2)) : s) + unit
+        }
+        if n >= 1_000_000 { return cut(Double(n) / 1_000_000, "M") }
+        if n >= 10_000 { return cut(Double(n) / 1_000, "K") }
+        return "\(n)"
+    }
     /// A link card's line is a channel's when it is exactly `followersLine` ("1 follower",
     /// "1.2K followers"), owner 2026-10-29 review fix. The cards used `contains("follower")`, which
     /// also caught any group or person card whose text mentions followers. The stored preview

@@ -159,6 +159,42 @@ enum DemoMode {
         storeShots && ProcessInfo.processInfo.environment["FARIIN_STORE_SHOTS_CALL"] != nil
     }
 
+    /// Find Channels in screenshot mode (owner 2026-11-01): six made-up public channels with the
+    /// owner's AI-made pictures, the app's own channel first. Nothing is fetched or followed.
+    @MainActor static func storeChannels() -> [ChannelService.Discovered] {
+        func pic(_ n: String) -> String {
+            profilePhoto("demo-chan-\(n)", "chan-\(n)", .systemBlue, .systemTeal, String(n.prefix(1)).uppercased())
+        }
+        return [
+            .init(cid: "demo-news", handle: "fariinnews", title: "Fariin News",
+                  photoUrl: profilePhoto("official-mark", "fariin-news", .black, .darkGray, "F"),
+                  description: "Official news from Fariin. New features, tips and updates.",
+                  followerCount: 128_400, verified: true, label: "", official: true),
+            .init(cid: "demo-chan-news", handle: "worldnews", title: "World News",
+                  photoUrl: pic("news"), description: "The day's top stories, in two minutes.",
+                  followerCount: 2_400_000, verified: true, label: ""),
+            .init(cid: "demo-chan-football", handle: "footballdaily", title: "Football Daily",
+                  photoUrl: pic("football"), description: "Scores, goals and transfer news, live.",
+                  followerCount: 860_000, verified: false, label: ""),
+            .init(cid: "demo-chan-recipes", handle: "easyrecipes", title: "Easy Recipes",
+                  photoUrl: pic("recipes"), description: "Quick home cooking for every day of the week.",
+                  followerCount: 312_000, verified: false, label: ""),
+            .init(cid: "demo-chan-travel", handle: "traveldiaries", title: "Travel Diaries",
+                  photoUrl: pic("travel"), description: "Beaches, cities and hidden places to visit.",
+                  followerCount: 540_000, verified: false, label: ""),
+            .init(cid: "demo-chan-tech", handle: "techtoday", title: "Tech Today",
+                  photoUrl: pic("tech"), description: "Phones, apps and gadgets, made simple.",
+                  followerCount: 198_000, verified: false, label: ""),
+            .init(cid: "demo-chan-music", handle: "musicmix", title: "Music Mix",
+                  photoUrl: pic("music"), description: "New songs and live shows every week.",
+                  followerCount: 1_100_000, verified: false, label: ""),
+        ]
+    }
+    /// Launched with FARIIN_STORE_SHOTS_CHANNELS as well: Find Channels opens on its own.
+    static var storeShotsChannels: Bool {
+        storeShots && ProcessInfo.processInfo.environment["FARIIN_STORE_SHOTS_CHANNELS"] != nil
+    }
+
     /// APP STORE SCREENSHOT MODE (owner 2026-11-01: "our most important thing is the chat list").
     /// Debug builds only, and only when the simulator is launched with FARIIN_STORE_SHOTS set
     /// (`SIMCTL_CHILD_FARIIN_STORE_SHOTS=1 xcrun simctl launch ...`). The chat list then holds the demo

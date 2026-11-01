@@ -3456,6 +3456,11 @@ struct ChatsView: View {
                         .id(t.id)
                 }
             }
+            .task {
+                guard DemoMode.storeShotsChannels else { return }
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                showFindChannelsFromEmpty = true
+            }
             .sheet(isPresented: $showFindChannelsFromEmpty) {
                 // A channel opens behind the sheet, as from New chat.
                 DiscoverChannelsView(onOpen: { cid, handle in
