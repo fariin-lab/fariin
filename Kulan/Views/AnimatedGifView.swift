@@ -37,7 +37,13 @@ struct AnimatedGifView: UIViewRepresentable {
     var fill: Bool = true
     var placeholder: UIColor = .secondarySystemFill
 
-    private static let cache = NSCache<NSString, UIImage>()   // decoded animated GIFs, reused across instances
+    // Decoded animated GIFs, reused across instances. Held to a few dozen: each one is every frame as
+    // a bitmap, and with no limit a chat of GIFs held 520 MB (owner's phone, 2026-11-01).
+    private static let cache: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 40
+        return c
+    }()
 
     func makeUIView(context: Context) -> UIImageView {
         let v = UIImageView()
@@ -116,8 +122,18 @@ extension UIImage {
         guard count > 1 else { return UIImage(data: data) }
         var frames: [UIImage] = []
         var duration = 0.0
+        // ⛔ DECODED HERE, OFF THE MAIN THREAD, AT A SIZE THE SCREEN CAN USE (owner's cpu report,
+        // 2026-11-01: 91% for 99 s on the main thread, in ImageIO, 520 MB). `CreateImageAtIndex`
+        // gives a frame still compressed, so the image view decoded each one on main as it drew,
+        // for every GIF on screen, round and round. These come out as finished bitmaps.
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: 600,
+        ]
         for i in 0..<count {
-            guard let cg = CGImageSourceCreateImageAtIndex(src, i, nil) else { continue }
+            guard let cg = CGImageSourceCreateThumbnailAtIndex(src, i, options as CFDictionary) else { continue }
             frames.append(UIImage(cgImage: cg))
             let props = CGImageSourceCopyPropertiesAtIndex(src, i, nil) as? [CFString: Any]
             let gif = props?[kCGImagePropertyGIFDictionary] as? [CFString: Any]
