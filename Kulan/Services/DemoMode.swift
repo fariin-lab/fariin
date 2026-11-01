@@ -134,7 +134,21 @@ enum DemoMode {
     /// the demo rows a second after they appeared.
     static func withDemoChats(_ convs: [Conversation]) -> [Conversation] {
         guard chatsInjected, !demoChats.isEmpty else { return convs }
+        // App Store pictures: the demo rows alone, none of the signed-in account's own chats.
+        if storeShots { return demoChats }
         return demoChats + convs.filter { !isDemoConversation($0.id) }
+    }
+
+    /// APP STORE SCREENSHOT MODE (owner 2026-11-01: "our most important thing is the chat list").
+    /// Debug builds only, and only when the simulator is launched with FARIIN_STORE_SHOTS set
+    /// (`SIMCTL_CHILD_FARIIN_STORE_SHOTS=1 xcrun simctl launch ...`). The chat list then holds the demo
+    /// chats and nothing else. Nothing is written anywhere; a normal launch is the real list again.
+    static var storeShots: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["FARIIN_STORE_SHOTS"] != nil
+        #else
+        return false
+        #endif
     }
 
     // A plain flag the repos can read synchronously from anywhere; written once on the main actor.
@@ -339,7 +353,10 @@ enum DemoMode {
         let signedIn = AuthService.shared.uid ?? ""
         let me = signedIn.isEmpty ? meUid : signedIn
         meUid = me
-        let now = Date()
+        // Screenshot mode: the rows' times sit just before the status bar's 9:41.
+        let now = storeShots
+            ? (Calendar.current.date(bySettingHour: 9, minute: 41, second: 0, of: Date()) ?? Date())
+            : Date()
         let hooyoPhoto  = profilePhoto("demo-face-hooyo",  "hooyo",  .systemOrange, .systemYellow, "H")
         let ayaanPhoto  = profilePhoto("demo-face-ayaan",  "ayaan",  .systemBlue,   .systemCyan,   "A")
         let cabdiPhoto  = profilePhoto("demo-face-cabdi",  "cabdi",  .systemGreen,  .systemTeal,   "C")
@@ -350,22 +367,31 @@ enum DemoMode {
         // they actually live. A demo of six Somali names would show only half of that life.
         let linneaPhoto = profilePhoto("demo-face-linnea", "linnea", .systemGreen,  .systemMint,   "L")
         let ilhanPhoto  = profilePhoto("demo-face-ilhan",  "ilhan",  .systemPurple, .systemPink,   "I")
+        // App Store set (owner 2026-11-01): a family group and the app's own channel join the list,
+        // so the one picture shows people, a group and a channel together.
+        let familyPhoto = profilePhoto("demo-photo-dinner", "family", .systemOrange, .systemRed, "Q")
+        let newsPhoto   = profilePhoto("official-mark", "fariin-news", .black, .darkGray, "F")
         return [
+            group("demo-family", me, title: "Qoyska 🏡", photo: familyPhoto, at: now.addingTimeInterval(-90),
+                  sender: "demo-hooyo", senderName: "Hooyo", last: "Casho waa diyaar, kaalaya 🍲",
+                  members: ["demo-hooyo", "demo-cabdi", "demo-khadra"], unread: 3, pinned: true),
             chat("demo-hooyo",  me, "demo-hooyo",  "Sagal",         now.addingTimeInterval(-260),
-                 "Ma soo gaadhay guriga?", hooyoPhoto, unread: 2),
+                 "Ma soo gaadhay guriga?", hooyoPhoto, unread: 2, pinned: true),
             chat("demo-ayaan",  me, "demo-ayaan",  "Ayaan Warsame", now.addingTimeInterval(-2100),
-                 "I will call you after Maghrib", ayaanPhoto),
+                 "I will call you after Maghrib", ayaanPhoto, mine: true),
+            channel("demo-news", me, title: "Fariin News", photo: newsPhoto, at: now.addingTimeInterval(-4200),
+                    last: "Channels are here 📣"),
             // ⚠️ HE IS CALLED DADIR ON SCREEN AND `cabdi` IN THE CODE. The uid, the asset names and
             // the conversation id all still say cabdi, and that is deliberate: renaming five image
             // sets and their references to change a label nobody sees buys nothing and risks a typo
             // in a filename that only shows up as a grey square on a device. Display name here,
             // identifiers left alone.
             chat("demo-cabdi",  me, "demo-cabdi",  "Dadir",         now.addingTimeInterval(-8000),
-                 "🎤 Voice message · 0:14", cabdiPhoto),
+                 "🎤 Voice message · 0:14", cabdiPhoto, unread: 1),
             chat("demo-khadra", me, "demo-khadra", "Khadra",        now.addingTimeInterval(-12000),
                  "📷 Photo", khadraPhoto),
             chat("demo-linnea", me, "demo-linnea", "Linnea",        now.addingTimeInterval(-26000),
-                 "See you at the library at 4?", linneaPhoto),
+                 "See you at the library at 4?", linneaPhoto, mine: true),
             // Not a face, and that is not a compromise. A soft toy, a cup, a view: this is what a
             // great many real profile pictures actually are, and a list where all seven are portraits
             // would be the unrealistic one.
@@ -381,19 +407,51 @@ enum DemoMode {
     }
 
     private static func chat(_ id: String, _ me: String, _ other: String, _ name: String, _ at: Date,
-                             _ last: String, _ photo: String, unread: Int = 0) -> Conversation {
+                             _ last: String, _ photo: String, unread: Int = 0,
+                             pinned: Bool = false, mine: Bool = false) -> Conversation {
         var data: [String: Any] = [
             "users": [me, other],
             "names": [other: name, me: "You"],
             // Without this every demo person is a coloured letter, so the preview could never show
             // the poster header at all — it needs a real photo before it will draw.
             "photos": [other: photo],
-            "lastSender": other,
+            // Mine: sent by me and already read (their unread count is 0), so the row shows the ticks.
+            "lastSender": mine ? me : other,
             "lastMessage": last,
             "updatedAt": Timestamp(date: at),
         ]
+        if mine { data["delivered"] = [other: (at.timeIntervalSince1970 + 5) * 1000] }
         if unread > 0 { data["unreadCount"] = [me: unread] }
+        if pinned { data["pinnedBy"] = [me: true] }
         return Conversation(id: id, data: data)
+    }
+
+    /// A family group: its photo and title, the last line with who wrote it.
+    private static func group(_ id: String, _ me: String, title: String, photo: String, at: Date,
+                              sender: String, senderName: String, last: String, members: [String],
+                              unread: Int = 0, pinned: Bool = false) -> Conversation {
+        var names: [String: String] = [me: "You"]
+        for m in members { names[m] = m == sender ? senderName : String(m.dropFirst(5)).capitalized }
+        var data: [String: Any] = [
+            "type": "group", "title": title, "avatarUrl": photo,
+            "users": [me] + members, "names": names,
+            "lastSender": sender, "lastMessage": last,
+            "updatedAt": Timestamp(date: at), "createdBy": sender,
+        ]
+        if unread > 0 { data["unreadCount"] = [me: unread] }
+        if pinned { data["pinnedBy"] = [me: true] }
+        return Conversation(id: id, data: data)
+    }
+
+    /// A channel I follow: verified, its last post as the line.
+    private static func channel(_ id: String, _ me: String, title: String, photo: String, at: Date,
+                                last: String) -> Conversation {
+        Conversation(id: id, data: [
+            "type": "group", "channel": true, "title": title, "avatarUrl": photo, "verified": true,
+            "users": [me, "demo-fariin"], "names": [me: "You", "demo-fariin": title],
+            "lastSender": "demo-fariin", "lastMessage": last,
+            "updatedAt": Timestamp(date: at), "createdBy": "demo-fariin", "followerCount": 128_400,
+        ])
     }
 
     // MARK: - The conversations

@@ -482,6 +482,11 @@ struct RootView: View {
             Push.register(); Push.saveVoipToken()
             DeviceRegistry.shared.start()   // record this phone in Settings › Devices, and watch for a remote sign-out
             startOfficialChannel()
+            // App Store screenshot mode (debug only): demo chats alone, before the list is drawn.
+            if DemoMode.storeShots {
+                DemoMode.setChats(true)
+                ConversationsRepository.shared.refreshForDemo()
+            }
             // A local settings read, no network: the explainer only for a phone never asked.
             phase = await Push.needsExplainer() ? .notifications : .main
             Task {   // background refresh + key self-heal, off the boot path
@@ -547,8 +552,11 @@ struct RootView: View {
             // "Demo chats" survives a restart like any other setting. Rebuilt HERE rather than
             // inside the repository because building the rows needs the main actor and a uid, and
             // this is the first point in the launch where both are true.
-            if DemoMode.isAvailable, UserDefaults.standard.bool(forKey: "demoChats") {
-                await MainActor.run { DemoMode.setChats(true) }
+            if DemoMode.isAvailable, UserDefaults.standard.bool(forKey: "demoChats") || DemoMode.storeShots {
+                await MainActor.run {
+                    DemoMode.setChats(true)
+                    ConversationsRepository.shared.refreshForDemo()
+                }
             }
             Push.register(); Push.saveVoipToken()   // notifications + VoIP token now that we're signed in
             DeviceRegistry.shared.start()
