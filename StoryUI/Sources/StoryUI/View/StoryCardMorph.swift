@@ -450,13 +450,23 @@ public final class StoryCardMorph {
 
     /// The card strip inside the flight container, in WINDOW coordinates, at rest. Resolved from
     /// the same metrics `cardWindowRect` uses, against a view whose `bounds.origin` is structurally
-    /// zero — the double-counted-offset trap in `applyMask` cannot arise here. Read it before a
-    /// transform is applied, or `convert` folds that transform into the answer.
+    /// zero — the double-counted-offset trap in `applyMask` cannot arise here.
+    ///
+    /// ⛔ THE SAME WITH THE CARD MID-SHRINK (owner 2026-11-01: a pull ran down to the row thumbnail's
+    /// size). The drag reads this every frame to work out its size floor. Converting through the card
+    /// folded its transform in, so the "full" card measured smaller as it shrank, the floor moved
+    /// with it, and past a point it let go altogether. Built through the superview instead, as
+    /// `restContentWindowRect` is: `center` and `bounds` do not change under a transform.
     public var flightRestRect: CGRect? {
-        guard let flightCard, flightCard.window != nil, flightCard.bounds.width > 1, cardHeight > 1 else { return nil }
+        guard let flightCard, let superview = flightCard.superview, flightCard.window != nil,
+              flightCard.bounds.width > 1, cardHeight > 1 else { return nil }
         let r = contentRect(in: flightCard)
         guard r.width > 1, r.height > 1 else { return nil }
-        return flightCard.convert(r, to: nil)
+        let restCenter = CGPoint(x: flightCard.center.x + r.midX - flightCard.bounds.midX,
+                                 y: flightCard.center.y + r.midY - flightCard.bounds.midY)
+        let inWindow = superview.convert(restCenter, to: nil)
+        return CGRect(x: inWindow.x - r.width / 2, y: inWindow.y - r.height / 2,
+                      width: r.width, height: r.height)
     }
 
     /// `apply`, on the flight container. Same interpolation, same mask discipline, shared core —
