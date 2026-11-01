@@ -3968,9 +3968,30 @@ struct StoryViewer: View {
         // card strip, a view whose bounds origin is structurally zero. Still nil until
         // StoryDetailView has laid out and published a height — which is exactly what the open's
         // ladder waits for.
-        guard let card = StoryCardMorph.shared.flightRestRect,
-              let src = onScreenRect(for: heroKeyNow()) else { return nil }
+        guard let card = StoryCardMorph.shared.flightRestRect else { return nil }
+        let key = heroKeyNow()
+        guard let src = onScreenRect(for: key) ?? chatRowRect(for: key) else {
+            let scoped = MediaOpenRects.key(.storyRow, key)
+            DiagLog.add("STORYCLOSE# no anchor key=\(key) view=\(MediaOpenRects.liveView(scoped) != nil) "
+                + "live=\(String(describing: MediaOpenRects.liveViewRect(scoped))) "
+                + "written=\(String(describing: MediaOpenRects.recordedRect(scoped)))")
+            return nil
+        }
         return (CGPoint(x: card.midX, y: card.midY), src)
+    }
+
+    /// ⛔ A CHAT LIST RING'S LAST WRITTEN PLACE (owner 2026-11-01: a channel story opened from the
+    /// list sometimes closed to the middle of the screen, with its row right there). When the ring's
+    /// view cannot answer, its written rect is still good: a list row stays put while the story covers
+    /// it. Only the list's rings, because a written rect is stale for a door inside a chat
+    /// (`liveViewRect`). A row that scrolled away fails the same on-screen test.
+    private func chatRowRect(for key: String) -> CGRect? {
+        guard key.hasPrefix("row-"),
+              let r = MediaOpenRects.recordedRect(MediaOpenRects.key(.storyRow, key)),
+              r.width > 1, r.height > 1,
+              UIScreen.main.bounds.contains(CGPoint(x: r.midX, y: r.midY)) else { return nil }
+        DiagLog.add("STORYCLOSE# written rect key=\(key)")
+        return r
     }
 
     /// Run the single scalar from 0 to 1, interpolating every value in `hero` between the two ends
