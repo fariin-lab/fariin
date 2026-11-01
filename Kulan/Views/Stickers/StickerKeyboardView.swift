@@ -163,8 +163,8 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     private enum M {
         static let item: CGFloat = 70, spacing: CGFloat = 12, side: CGFloat = 10, row: CGFloat = 2
         static let header: CGFloat = 24, packGap: CGFloat = 18
-        static let stripCell: CGFloat = 32, stripInset: CGFloat = 4, stripSpacing: CGFloat = 4
-        static let top: CGFloat = 8, tabsH: CGFloat = 32, stripH: CGFloat = 34   // smaller again (owner 2026-11-01)
+        static let stripCell: CGFloat = 28, stripInset: CGFloat = 2, stripSpacing: CGFloat = 8
+        static let top: CGFloat = 8, tabsH: CGFloat = 32, stripH: CGFloat = 34   // cell 28, picture 24, gap 8: the reference panel's (2026-11-01)
     }
 
     init(height: CGFloat) {
@@ -1065,7 +1065,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             x += M.stripCell + M.stripSpacing
         }
         if stripButtons.indices.contains(markedStrip) {
-            stripHighlight.frame = stripButtons[markedStrip].frame.insetBy(dx: 1, dy: 1)
+            stripHighlight.frame = stripButtons[markedStrip].frame
         }
         strip.contentSize = CGSize(width: x - M.stripSpacing, height: M.stripH)
     }
@@ -1086,7 +1086,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         markedStrip = i
         if stripHighlight.superview !== strip { strip.insertSubview(stripHighlight, at: 0) }
         if stripButtons.indices.contains(i) {
-            let to = stripButtons[i].frame.insetBy(dx: 1, dy: 1)
+            let to = stripButtons[i].frame
             if first { stripHighlight.frame = to }
             else { UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState]) { self.stripHighlight.frame = to } }
         }
