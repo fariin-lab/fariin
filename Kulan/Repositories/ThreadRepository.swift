@@ -1220,6 +1220,8 @@ final class ThreadRepository {
             + "|" + uploading + "|" + media + "|" + stamp + "|" + link
             + "|" + views + "|" + counts + "|" + polls
             + "|" + String(data["pollClosed"] as? Bool ?? false)   // Stop Poll changes nothing else
+            // The sixth: the server stamps the timer in a second write after the message lands.
+            + "|" + String((data["expiresAt"] as? Timestamp)?.seconds ?? 0)
     }
 
     // Build a message, reusing the cached copy unless a mutable field (reactions / edit) changed.
@@ -1229,9 +1231,21 @@ final class ThreadRepository {
         let sig = Self.changeSig(data)
         if let cached = byId[id], rawReactions[id] == sig { return cached }
         let m = Message(id: id, data: data, cid: cid, crypto: Crypto.shared)
+        forgetLocalCopiesIfDeleted(old: byId[id], new: m)
         byId[id] = m
         rawReactions[id] = sig
         return m
+    }
+
+    /// Someone deleted this for everyone: the tombstone carries no urls, so the files this phone
+    /// decrypted are named from the copy it replaces, and any banner of it goes too.
+    private func forgetLocalCopiesIfDeleted(old: Message?, new: Message) {
+        guard new.deleted, let old, !old.deleted else { return }
+        let id = new.id, cid = cid
+        Task { @MainActor in
+            ChatService.forgetLocalCopies(of: old, cid: cid)
+            NotificationCleaner.remove(messageId: id)
+        }
     }
 
     // Re-attach the whole listener set after a listener error. Audit C14: this used to give up
@@ -1423,6 +1437,9 @@ final class ThreadRepository {
             // only thing `>` can miss, and a delete for everyone is a tombstone update anyway.
             for (id, m) in byId where m.createdAt > cutoff && !windowIds.contains(id) {
                 byId.removeValue(forKey: id); rawReactions.removeValue(forKey: id)
+                // Purged on the server before this phone's own timer got to it.
+                let cid = cid
+                if m.expiresAt != nil { Task { @MainActor in ChatService.forgetLocalCopies(of: m, cid: cid) } }
             }
         }
         // The optimistic delete overlay has done its job once the real thing is in hand: the doc now
@@ -1646,6 +1663,11 @@ final class ThreadRepository {
         // deleting is the server's and might have to wait for a network.
         rebuild()
         guard !due.isEmpty else { return }
+        // The files this phone decrypted go with it. The server cannot reach them.
+        let dueMessages = due.compactMap { byId[$0] }, chat = cid
+        Task { @MainActor in
+            for m in dueMessages { ChatService.forgetLocalCopies(of: m, cid: chat) }
+        }
         // Fire and forget. The other phone is very likely making the same call a second either side
         // of this one, and the second one to arrive finds nothing left and says so — deleting twice
         // is not an error, it is the end state already being true.

@@ -439,6 +439,44 @@ enum NotificationCleaner {
         }
     }
 
+    /// The banner of a message deleted for everyone (bug search 2026-11-01): it carried the decrypted
+    /// words, and only expiry had a cleanup. The push carries `mid` for this.
+    static func remove(messageId: String) {
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { notes in
+            let ids = notes.filter { ($0.request.content.userInfo["mid"] as? String) == messageId }
+                .map { $0.request.identifier }
+            if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+        }
+    }
+
+    private static var lastDeletedCheck: Date?
+
+    /// Banners left up for messages that have gone since, in chats that are not open. One read per
+    /// banner, twenty banners at most, once a minute. An answer from the local copy proves nothing.
+    static func pruneDeleted() {
+        if let last = lastDeletedCheck, Date().timeIntervalSince(last) < 60 { return }
+        lastDeletedCheck = Date()
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { notes in
+            let items = notes.prefix(20).compactMap { note -> (id: String, cid: String, mid: String)? in
+                let info = note.request.content.userInfo
+                guard let cid = info["cid"] as? String, let mid = info["mid"] as? String else { return nil }
+                return (note.request.identifier, cid, mid)
+            }
+            guard !items.isEmpty else { return }
+            Task {
+                var ids: [String] = []
+                for item in items {
+                    guard let d = try? await FirestoreHub.db.collection("conversations").document(item.cid)
+                        .collection("messages").document(item.mid).getDocument(source: .server) else { continue }
+                    if !d.exists || d.get("deleted") as? Bool == true { ids.append(item.id) }
+                }
+                if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+            }
+        }
+    }
+
     static func clear(cid: String) {
         let center = UNUserNotificationCenter.current()
         center.getDeliveredNotifications { notes in

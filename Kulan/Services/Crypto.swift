@@ -226,6 +226,15 @@ final class Crypto {
                           userInfo: [NSLocalizedDescriptionKey: "ensureReady() called before sign-in"])
         }
 
+        // ⛔ "COULD NOT READ" IS NOT "NOT THERE" (bug search 2026-11-01). Every miss below ends in a
+        // new keypair, and that one is permanent: all sealed to the old key becomes a lock glyph.
+        for key in [Self.skKeychainKey(uid), Self.pkKeychainKey(uid)] {
+            let found = Keychain.lookup(key)
+            if found.value == nil && !found.notFound {
+                throw NSError(domain: "Crypto", code: 13,
+                              userInfo: [NSLocalizedDescriptionKey: "keychain not readable right now"])
+            }
+        }
         // Load THIS ACCOUNT's keypair from the Keychain, or generate + persist a new one.
         let skBytes: Bytes, pkBytes: Bytes
         if let skB64 = Keychain.get(Self.skKeychainKey(uid)),
@@ -587,8 +596,36 @@ final class Crypto {
         } catch {
             print("[Recovery] crypto: key fetch failed:", error)
             await MainActor.run { SessionRecovery.noteRefusal(error, "key") }
+            // A refusal is an answer, not a bad line: asking again would hold a group's sends for ever.
+            if (error as NSError).domain == FirestoreErrorDomain,
+               (error as NSError).code == FirestoreErrorCode.permissionDenied.rawValue { return .noKey }
             return .failed
         }
+    }
+
+    /// `preloadKeys` for a group seal. A member with no published key is skipped, as before, but a
+    /// read that failed is not that (bug search 2026-11-01): the member would be left out of this
+    /// message for good. It throws instead, and the send queues, as a 1:1 does.
+    private func groupKeys(_ members: [String]) async throws -> [String: Bytes] {
+        var keys = await preloadKeys(members)
+        for uid in Set(members) where !uid.isEmpty && keys[uid] == nil {
+            // Ten seconds at most, as `preloadKey`: a hung read must not hold the send for ever.
+            let (answers, reply) = AsyncStream.makeStream(of: KeyFetch.self)
+            let read = Task { reply.yield(await self.fetchKeyResult(uid)); reply.finish() }
+            let clock = Task {
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                reply.yield(.failed); reply.finish()
+            }
+            var result = KeyFetch.failed
+            for await answer in answers { result = answer; break }
+            read.cancel(); clock.cancel()
+            switch result {
+            case .key(let b): keys[uid] = b
+            case .noKey: break
+            case .failed: throw MissingRecipientKeyError(uid: uid)
+            }
+        }
+        return keys
     }
 
     private func fetchKey(_ uid: String) async -> Bytes? {
@@ -801,7 +838,7 @@ final class Crypto {
             throw NSError(domain: "Crypto", code: 12, userInfo: [NSLocalizedDescriptionKey: "group file seal failed"])
         }
         var wraps: [String: String] = [:]
-        let keys = await preloadKeys(members)   // 2026-09-24 fix-all #118: fetched together, not one by one
+        let keys = try await groupKeys(members)   // 2026-09-24 fix-all #118: fetched together, not one by one
         for uid in Set(members) {
             guard let pub = keys[uid] else { continue }   // skip keyless members
             guard let w: (authenticatedCipherText: Bytes, nonce: Box.Nonce) =
@@ -896,7 +933,7 @@ final class Crypto {
         }
         let me = currentUid() ?? ""
         var wraps: [String: String] = [:]
-        let keys = await preloadKeys(members)   // 2026-09-24 fix-all #118: fetched together, not one by one
+        let keys = try await groupKeys(members)   // 2026-09-24 fix-all #118: fetched together, not one by one
         for uid in Set(members) {
             // Skip members who haven't published a key yet — they'll see "…" until they do.
             // One keyless member must NOT block the whole group (unlike a 1:1 chat).

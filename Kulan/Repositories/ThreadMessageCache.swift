@@ -57,6 +57,42 @@ final class ThreadMessageCache {
     private let cap = 200            // bound memory — the recent window is all the first screen needs
     private let backgroundCap = 60   // ~2 screens; enough for an instant reopen after backgrounding
 
+    private var lastExpirySweep: Date?
+
+    /// Words and files of messages whose timer ran out while their chat stayed closed (bug search
+    /// 2026-11-01): `store` only runs for an open chat, so they sat on disk until it was reopened,
+    /// for ever if it never was. Rewrites only the files that change. At most every ten minutes.
+    func sweepExpired() {
+        if let last = lastExpirySweep, Date().timeIntervalSince(last) < 600 { return }
+        lastExpirySweep = Date()
+        let gen = generation
+        io.async { [weak self] in
+            guard let self, self.generation == gen else { return }
+            let files = (try? FileManager.default.contentsOfDirectory(at: Self.directory,
+                                                                      includingPropertiesForKeys: nil)) ?? []
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .secondsSince1970
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .secondsSince1970
+            let now = Date()
+            var gone: [Message] = []
+            for url in files {
+                guard let data = try? Data(contentsOf: url),
+                      let all = try? decoder.decode([Message].self, from: data) else { continue }
+                let kept = all.filter { m in m.expiresAt.map { now < $0 } ?? true }
+                guard kept.count != all.count, let out = try? encoder.encode(kept) else { continue }
+                try? out.write(to: url, options: [.atomic])
+                try? FileManager.default.setAttributes([.protectionKey: Self.protection],
+                                                       ofItemAtPath: url.path)
+                gone += all.filter { m in m.expiresAt.map { now >= $0 } ?? false }
+            }
+            guard !gone.isEmpty else { return }
+            Task { @MainActor in
+                for m in gone { ChatService.forgetLocalCopies(of: m, cid: nil) }
+            }
+        }
+    }
+
     func store(_ cid: String, _ messages: [Message]) {
         byCid[cid] = messages.suffix(cap).map { $0 }
         persist(cid, byCid[cid] ?? [])

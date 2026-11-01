@@ -2644,11 +2644,12 @@ enum ChatService {
 
     /// A video announced but never delivered — the transcode failed, the clip was over the limit, the
     /// upload died. Without this the recipient keeps a bubble that spins for ever. Hard delete, which
-    /// the rules allow the author of a message to do; the conversation row is left alone because the
-    /// next message rewrites it anyway.
+    /// the rules allow the author of a message to do. The server takes it off the unread counts
+    /// (`uncountRemovedMessage`); the row is put back here, or the other person keeps a dead "Video".
     static func cancelAnnounced(cid: String, messageId: String) async {
         try? await db.collection("conversations").document(cid)
             .collection("messages").document(messageId).delete()
+        await clearSummaryIfNewest(cid: cid, deletedId: messageId)
     }
 
     static func sendVideo(cid: String, video: Data, thumbnail: Data, duration: Double,
@@ -2961,6 +2962,23 @@ enum ChatService {
     /// author has deleted it, their edited text when edited. Three seconds at most: no answer
     /// means forward the copy in hand, as before.
     private static func liveForwardText(_ m: Message, in cid: String) async -> String? {
+        // The official chat's posts are not messages of a conversation, so there is nothing to ask.
+        if OfficialChannel.isOfficial(cid) { return m.text }
+        // One read per message however many chats it goes to: the answer holds for the whole forward.
+        let key = cid + "/" + m.id
+        if let held = forwardCheckLock.withLock({ forwardChecks[key] }),
+           Date().timeIntervalSince(held.at) < 30 { return held.text }
+        let text = await readForwardText(m, in: cid)
+        forwardCheckLock.withLock {
+            if forwardChecks.count > 200 { forwardChecks.removeAll() }
+            forwardChecks[key] = (Date(), text)
+        }
+        return text
+    }
+    private static let forwardCheckLock = NSLock()
+    private nonisolated(unsafe) static var forwardChecks: [String: (at: Date, text: String?)] = [:]
+
+    private static func readForwardText(_ m: Message, in cid: String) async -> String? {
         let (answers, reply) = AsyncStream.makeStream(of: String?.self)
         Task {
             let d = try? await db.collection("conversations").document(cid).collection("messages")
@@ -3593,6 +3611,19 @@ enum ChatService {
         VideoCache.remove(messageId)
         for u in blobs { DiskImageCache.shared.remove(url: u) }
         MessageSearch.invalidateChat(cid)
+    }
+
+    /// The same, for a message that went without this phone deleting it: its timer ran out or the
+    /// sender deleted it for everyone (bug search 2026-11-01). The server cannot reach these files.
+    /// `cid` nil only from the closed-chat sweep, which has no search corpus to drop.
+    @MainActor
+    static func forgetLocalCopies(of m: Message, cid: String?) {
+        AudioCache.remove(m.id)
+        VideoCache.remove(m.id)
+        var urls = [m.imageUrl, m.thumbUrl].compactMap { $0 }
+        for item in m.album { urls.append(item.imageUrl) }
+        for u in urls where !u.isEmpty { DiskImageCache.shared.remove(url: u) }
+        if let cid { MessageSearch.invalidateChat(cid) }
     }
 
     private static func mediaStorageURLs(in data: [String: Any]?) -> [String] {

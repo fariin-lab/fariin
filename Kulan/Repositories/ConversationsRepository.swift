@@ -894,6 +894,8 @@ final class ConversationsRepository {
                 .call(["cid": c.id, "ids": [String]()]) { _, _ in }
         }
         NotificationCleaner.pruneExpired()
+        NotificationCleaner.pruneDeleted()
+        ThreadMessageCache.shared.sweepExpired()
     }
 
     /// The "Demo chats" switch was flipped. Redraw the list from what is already in memory rather
