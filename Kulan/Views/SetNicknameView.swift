@@ -140,6 +140,7 @@ struct SetNicknameView: View {
             .alert("Delete Nickname?", isPresented: $confirmDelete) {
                 Button("Delete", role: .destructive) {
                     ContactNames.shared.remove(for: uid)
+                    NotifShare.noteConversations(ConversationsRepository.shared.conversations)   // banners too
                     onSave()
                     dismiss()
                 }
@@ -168,6 +169,7 @@ struct SetNicknameView: View {
                         note: Limits.oneParagraph(note, max: Self.noteLimit)
                             .trimmingCharacters(in: .whitespaces)),
             for: uid)
+        NotifShare.noteConversations(ConversationsRepository.shared.conversations)   // banners too
         onSave()
         dismiss()
     }

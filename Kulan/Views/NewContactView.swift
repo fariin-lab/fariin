@@ -80,7 +80,8 @@ struct NewContactView: View {
                     .scrollDismissesKeyboard(.interactively)
                 }
             }
-            .alert("Sorry, this user doesn't seem to exist.", isPresented: $notFound) {
+            .alert(ChatService.handleLookupFailed ? "Couldn't check that username. Check your connection and try again."
+                                                  : "Sorry, this user doesn't seem to exist.", isPresented: $notFound) {
                 Button("OK", role: .cancel) {}
             }
             .onAppear { focus = .first }

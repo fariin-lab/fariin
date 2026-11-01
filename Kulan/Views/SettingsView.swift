@@ -790,23 +790,10 @@ struct AccountSettingsView: View {
                 // still reachable with a sign-out already in flight (owner report).
                 working = true
                 Task {
-                    await Push.unregister()   // AWAITED before signOut (needs auth): stop message + CallKit ring pushes to this phone
-                    // Same reason it is awaited: dropping our own row in Settings › Devices needs
-                    // auth, and leaving it behind would show this phone as still signed in.
-                    await DeviceRegistry.shared.removeThisDevice()
-                    // Offline presence also needs auth, so it goes before signOut. Without it a
-                    // signed-out account showed "online" to its contacts indefinitely (2026-09-24 audit).
-                    await PresenceService.set(online: false)
-                    // Deliberately NOT bounded by a timeout. Leaving early to feel faster would put
-                    // back the bug `Push.unregister`'s retry exists to fix: tokens left under the
-                    // signed-out account keep ringing this phone and showing its notifications.
-                    // Waiting visibly is better than leaking a signed-out account's messages.
+                    await SessionWipe.cleanUpBeforeSignOut()
                     // Captured before signOut clears it: whose received media stays on this phone
                     // for their return (it is the only copy — see `SessionWipe.claimKeptMedia`).
                     let leaving = Auth.auth().currentUser?.uid
-                    // audit M-015, 2026-10-07: any call ends HERE, while the end write and the chat
-                    // record are still allowed. After signOut the rules refused them.
-                    await SessionWipe.endCallsBeforeSignOut()
                     try? Auth.auth().signOut()
                     SessionWipe.wipeAccountData(keepingMediaFor: leaving)   // this account's on-device state must not leak into the next sign-up
                     dismiss(); onSignOut()
@@ -1708,7 +1695,9 @@ struct EditProfileView: View {
     private static let bioCounterAppearsAt = 20
     private var bioRemaining: Int { max(0, Limits.bioChars - about.count) }
     private var hasUnsavedText: Bool {
-        firstName != origFirst || lastName != origLast || handle != origHandle || about != origAbout
+        // The handle against the live profile: the Username page claims the name at once, so a claimed
+        // one is not an unsaved change and the discard prompt must not promise to undo it.
+        firstName != origFirst || lastName != origLast || handle != (profile.me?.handle ?? origHandle) || about != origAbout
     }
 
     /// A BIO IS ONE PARAGRAPH — the rule and the whole reason for it live in `Limits.oneParagraph`,
@@ -2029,16 +2018,10 @@ struct EditProfileView: View {
                 // ONCE. Audit 2026-09-24: `onAppear` fires again on the way back from the Links page
                 // (a push inside this sheet), and it re-read every field from the saved profile — so
                 // a name or bio typed before opening Links was silently put back.
-                guard !fieldsLoaded else { return }
-                fieldsLoaded = true
-                let parts = (profile.me?.name ?? "").split(separator: " ", maxSplits: 1).map(String.init)
-                firstName = parts.first ?? ""
-                lastName = parts.count > 1 ? parts[1] : ""
-                handle = profile.me?.handle ?? ""
-                about = profile.me?.about ?? ""
-                origFirst = firstName; origLast = lastName
-                origHandle = handle; origAbout = about
+                loadFieldsOnce()
             }
+            // Opened before the profile existed: fill in when it arrives, not with blanks for good.
+            .onChange(of: profile.me?.id) { _, _ in loadFieldsOnce() }
             // The discard prompt moved OUT to the screen with the X that raises it — left here it
             // did not exist on the Large tab, so X would set the flag and nothing would appear.
             .onChange(of: photoItem) { _, item in
@@ -2110,6 +2093,18 @@ struct EditProfileView: View {
     /// cache, so every avatar in the app has it on the next frame, and swaps to the real url when it
     /// lands. Nothing here can fail any more, so nothing here returns false: a failed upload puts the
     /// old picture back and reports itself through `profile.photoError`, which this screen watches.
+    private func loadFieldsOnce() {
+        guard !fieldsLoaded, let me = profile.me else { return }
+        fieldsLoaded = true
+        let parts = me.name.split(separator: " ", maxSplits: 1).map(String.init)
+        firstName = parts.first ?? ""
+        lastName = parts.count > 1 ? parts[1] : ""
+        handle = me.handle
+        about = me.about
+        origFirst = firstName; origLast = lastName
+        origHandle = handle; origAbout = about
+    }
+
     private func applyPendingPhoto() {
         if pendingRemove {
             profile.removePhotoLocallyThenSync()

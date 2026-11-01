@@ -40,6 +40,8 @@ final class ProfileStore {
     /// A photo change that is on screen but not yet on the server. Nothing blocks on it; it exists so
     /// a screen can say so if it wants to, and so two changes cannot overlap unnoticed.
     var photoUploading = false
+    private var photoJobs = 0
+    private var photoChain: Task<Void, Never>?
     /// Set when an optimistic photo change had to be put back. Cleared when the next one starts.
     var photoError: String?
 
@@ -421,7 +423,12 @@ final class ProfileStore {
         // `StoriesRepository.refreshMyDisplay`.
         StoriesRepository.shared.refreshMyDisplay()
         photoUploading = true
-        Task { [weak self] in
+        // One photo change at a time, in order (bug search 2026-11-01): a removal that overtook a slow
+        // upload was undone when the upload landed.
+        photoJobs += 1
+        let prior = photoChain
+        photoChain = Task { [weak self] in
+            await prior?.value
             guard let self else { return }
             // 2026-09-24 fix-all #136: kept on disk until the upload lands, so a kill mid-upload is
             // resumed by the next launch's `loadMine` instead of silently losing the change.
@@ -445,7 +452,7 @@ final class ProfileStore {
                     self.photoError = "Your photo could not be uploaded. \(error.localizedDescription)"
                 }
             }
-            await MainActor.run { self.photoUploading = false }
+            await MainActor.run { self.photoJobs -= 1; self.photoUploading = self.photoJobs > 0 }
         }
     }
 
@@ -464,7 +471,12 @@ final class ProfileStore {
         }
         StoriesRepository.shared.refreshMyDisplay()   // see the note in `setPhotoLocallyThenUpload`
         photoUploading = true
-        Task { [weak self] in
+        // One photo change at a time, in order (bug search 2026-11-01): a removal that overtook a slow
+        // upload was undone when the upload landed.
+        photoJobs += 1
+        let prior = photoChain
+        photoChain = Task { [weak self] in
+            await prior?.value
             guard let self else { return }
             do { try await self.removePhoto() }
             catch {
@@ -478,7 +490,7 @@ final class ProfileStore {
                     self.photoError = "Your photo could not be removed. \(error.localizedDescription)"
                 }
             }
-            await MainActor.run { self.photoUploading = false }
+            await MainActor.run { self.photoJobs -= 1; self.photoUploading = self.photoJobs > 0 }
         }
     }
 
@@ -505,13 +517,20 @@ final class ProfileStore {
         // write; the name is claimed, and a refusal throws so Save stops with the server's words.
         // Case counts as a change (2026-10-07): "Realwarya" for "realwarya" goes to the server,
         // which keeps the name and updates how it is written.
+        var claimed = false
         if h != (me?.handle ?? ""), !h.isEmpty {
             try await ChatService.claimHandle(h)
+            claimed = true
         }
-        try await db.collection("users").document(uid).setData([
-            "name": n,
-            "about": about.trimmingCharacters(in: .whitespacesAndNewlines),
-        ], merge: true)
+        var fields: [String: Any] = ["name": n]
+        // Without a loaded profile the bio field is only empty, not cleared by anyone.
+        if me != nil { fields["about"] = about.trimmingCharacters(in: .whitespacesAndNewlines) }
+        do {
+            try await db.collection("users").document(uid).setData(fields, merge: true)
+        } catch {
+            if claimed { me = await fetch(uid) ?? me }   // the name did change: show it
+            throw error
+        }
 
         // Fan the new name out to every conversation's names map (mirrors uploadPhoto's
         // photo fan-out) — chat lists read `names`, so contacts kept seeing the old name.

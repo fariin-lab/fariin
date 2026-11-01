@@ -10,6 +10,27 @@ import FirebaseFirestore
 /// of the old documents.
 @MainActor
 enum SessionWipe {
+    /// What every sign-out does while it still has auth: stop pushes and call rings, drop this phone's
+    /// row in Devices, go offline, end any call. ⛔ BOUNDED, 20 s (bug search 2026-11-01): Firestore
+    /// writes never finish offline, so Log Out sat on "Signing Out..." for ever and the only way out
+    /// was to kill the app, still signed in. A tighter limit would drop these on a weak signal; with
+    /// no signal they cannot run at all, and the account still leaves this phone.
+    @MainActor static func cleanUpBeforeSignOut() async {
+        let (finished, done) = AsyncStream.makeStream(of: Void.self)
+        Task { @MainActor in
+            await Push.unregister()
+            await DeviceRegistry.shared.removeThisDevice()
+            await PresenceService.set(online: false)
+            await endCallsBeforeSignOut()   // audit M-015: before signOut the rules still allow the end write
+            done.yield(); done.finish()
+        }
+        Task {
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            done.yield(); done.finish()
+        }
+        for await _ in finished { break }
+    }
+
     /// audit M-015, 2026-10-07: every sign-out path ran `Auth.signOut()` BEFORE the wipe ended the
     /// call, so the 1:1 "ended" write, the chat record and the live-row cleanup were all refused by
     /// the rules (no auth any more) and the other phone sat on a dead line. The callers now call this

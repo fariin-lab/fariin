@@ -4398,7 +4398,10 @@ enum ChatService {
     /// `allowSelf` is for the PROFILE LINK PREVIEW and nothing else. Sharing your own link has to
     /// draw your own card; every other caller is trying to start a chat, where finding yourself is
     /// the bug this guard exists to stop.
+    /// The last `findByHandle` could not ask, so its nil does not mean "nobody has this name".
+    nonisolated(unsafe) static var handleLookupFailed = false
     static func findByHandle(_ handle: String, allowSelf: Bool = false) async -> UserProfile? {
+        handleLookupFailed = false
         var h = handle.trimmingCharacters(in: .whitespaces).lowercased()
         if h.hasPrefix("@") { h.removeFirst() }   // users type "@ayaan"
         guard !h.isEmpty else { return nil }
@@ -4428,6 +4431,7 @@ enum ChatService {
             return ProfileStore.indexed(u, fresh: !d.metadata.isFromCache)   // warms photo / call-privacy / verification
         } catch {
             print("findByHandle failed:", error)
+            handleLookupFailed = true
             return nil
         }
     }

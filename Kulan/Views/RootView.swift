@@ -183,11 +183,9 @@ struct RootView: View {
                             ToolbarItem(placement: .topBarLeading) {
                                 Button("Log Out") {
                                     Task {
-                                        await Push.unregister()
-                                        await DeviceRegistry.shared.removeThisDevice()
+                                        await SessionWipe.cleanUpBeforeSignOut()
                                         // A sign-out, not the deletion: keep the media for their return.
                                         let leaving = AuthService.shared.uid
-                                        await SessionWipe.endCallsBeforeSignOut()   // audit M-015, 2026-10-07
                                         await AuthService.shared.abandonSession()   // the signOut
                                         SessionWipe.wipeAccountData(keepingMediaFor: leaving)
                                         await route()
@@ -207,7 +205,12 @@ struct RootView: View {
                             ToolbarItem(placement: .topBarLeading) {
                                 Button("Log Out") {
                                     Task {
+                                        // A full sign-out: this page can open with the app already
+                                        // running, so pushes and on-phone data must go as well.
+                                        await SessionWipe.cleanUpBeforeSignOut()
+                                        let leaving = AuthService.shared.uid
                                         await AuthService.shared.abandonSession()
+                                        SessionWipe.wipeAccountData(keepingMediaFor: leaving)
                                         await route()
                                     }
                                 }

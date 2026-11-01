@@ -453,9 +453,7 @@ struct DeleteAccountView: View {
         do {   // nothing here throws; kept as a block so the steps read in order
             if let uid = Auth.auth().currentUser?.uid { LastAccount.forget(uid) }   // not offered on Log In
             // Same order Settings uses: stop this phone's pushes while we still have auth, then sign out.
-            await Push.unregister()
-            await DeviceRegistry.shared.removeThisDevice()   // and drop our row in Settings › Devices
-            await SessionWipe.endCallsBeforeSignOut()   // audit M-015, 2026-10-07: while writes are allowed
+            await SessionWipe.cleanUpBeforeSignOut()
             try? Auth.auth().signOut()
             // WIPE THE DEVICE COPY TOO (audit). The comment above justified skipping this to protect
             // the encryption key — but SessionWipe never touches the Keychain key (wipeIdentity only

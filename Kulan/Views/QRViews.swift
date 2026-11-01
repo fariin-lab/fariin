@@ -428,7 +428,7 @@ struct ScanQRView: View {
     private var hint: String {
         if cameraDenied { return "Or pick a photo of a code" }
         if noCodeInPhoto { return "No QR code in that picture" }
-        if notFound { return "No Fariin user found" }
+        if notFound { return ChatService.handleLookupFailed ? "Check your connection" : "No Fariin user found" }
         return "Point at a Fariin QR code"
     }
 
