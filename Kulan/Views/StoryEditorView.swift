@@ -837,6 +837,7 @@ struct StoryEditorView: View {
     /// cropped, the editor recomputed from that old cropped bitmap and drew the OLD PHOTO on the new
     /// item. He picked a second image and the screen did not change.
     @MainActor private func appendPicked(image ui: UIImage, assetID: String? = nil) {
+        stopPreview()   // the clip being left must not keep playing behind the new item
         stashCurrent()
         items.append(DraftItem(image: ui, assetID: assetID))
         index = max(0, items.count - 1)
@@ -856,6 +857,7 @@ struct StoryEditorView: View {
     private func appendPicked(video url: URL, assetID: String? = nil) async {
         let dur = await Self.duration(of: url)
         await MainActor.run {
+            stopPreview()
             stashCurrent()
             items.append(DraftItem(image: Self.blackPoster, videoURL: url, duration: dur, assetID: assetID))
             index = max(0, items.count - 1)
@@ -1020,6 +1022,7 @@ struct StoryEditorView: View {
 
         // STEP 2 — the whole batch, in tap order, in one transaction.
         await MainActor.run {
+            stopPreview()
             stashCurrent()
             for pick in added {
                 switch pick.kind {

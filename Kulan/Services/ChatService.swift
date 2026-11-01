@@ -1864,6 +1864,20 @@ enum ChatService {
                                     convRef: DocumentReference? = nil) async throws {
         var payload = fields
         payload["uploading"] = FieldValue.delete()
+    /// ⛔ THE MESSAGE IS OUT, SO THE FILE MUST FOLLOW (bug search 2026-11-01). A voice note or file
+    /// is written before its upload ends. If that upload failed, Retry and the queue both saw a
+    /// message already on the server and stood down, so the other phone spun for ever. This keeps
+    /// trying over about four minutes before it gives up.
+    private static func retryUpload(_ bytes: Data, to path: String, after first: Error) async throws -> String {
+        var last = first
+        for wait in [3, 10, 30, 60, 120] as [UInt64] {
+            try? await Task.sleep(nanoseconds: wait * 1_000_000_000)
+            do { return try await uploadEncrypted(bytes, to: path) } catch { last = error }
+        }
+        DiagLog.add("UPLOAD# gave up after retries: \(path.suffix(24))")
+        throw last
+    }
+
         let batch = db.batch()
         batch.updateData(payload, forDocument: msgRef)
         if let conv, let convRef, !conv.isEmpty { batch.updateData(conv, forDocument: convRef) }
@@ -2477,7 +2491,9 @@ enum ChatService {
         try await batch.commit()
 
         // Now the audio itself; the bubble has been on their screen since before this line.
-        let url = try await uploadedURL
+        let url: String
+        do { url = try await uploadedURL }
+        catch { url = try await retryUpload(cipher, to: "chat/\(cid)/\(msgRef.documentID).m4a.enc", after: error) }
         try await attachMedia(["audioUrl": url], to: msgRef)
     }
 
@@ -2822,7 +2838,10 @@ enum ChatService {
         batch.updateData(convUpdate, forDocument: convRef)
         try await batch.commit()
 
-        try await attachMedia(["fileUrl": try await uploadedURL], to: msgRef)
+        let url: String
+        do { url = try await uploadedURL }
+        catch { url = try await retryUpload(cipher, to: "chat/\(cid)/\(msgRef.documentID).file.enc", after: error) }
+        try await attachMedia(["fileUrl": url], to: msgRef)
     }
 
     /// First-page render for a PDF, the pixels for an image file — nil for anything else
@@ -3087,7 +3106,9 @@ enum ChatService {
             // into their individual photos/videos.
             let out = snap.documents
                 .map { Message(id: $0.documentID, data: $0.data(), cid: cid, crypto: Crypto.shared) }
-                .filter { $0.isImage || $0.isVideo || $0.isAlbum }
+                // Never a view-once item (bug search 2026-11-01): the gallery has always left them out,
+                // this strip did not, and a tap here opened one without spending it.
+                .filter { ($0.isImage || $0.isVideo || $0.isAlbum) && !$0.viewOnce }
                 .flatMap { $0.expandedGalleryItems(cid: cid) }
             await MainActor.run {
                 sharedMediaCache[cid] = out

@@ -427,6 +427,27 @@ final class Crypto {
         return result
     }
 
+    /// ⛔ WHAT I SEAL TO IS CHECKED, NOT ASSUMED (bug search 2026-11-01). `preloadKey` answers from the
+    /// cache for ever, and only a message from them that fails to open refreshed it, so after they
+    /// moved to a new phone everything I sent went to a key nobody holds, and neither side was told.
+    /// At most every five minutes per person, the server is asked first, for 1.5 s at most: a slow
+    /// line sends with the key it has rather than holding the message.
+    private var lastSendKeyCheck: [String: Date] = [:]   // guarded by `lock`
+    private func keyForSending(_ uid: String) async -> Bytes? {
+        let cached = await preloadKey(uid)
+        let due: Bool = lock.withLock {
+            if let t = lastSendKeyCheck[uid], Date().timeIntervalSince(t) < 300 { return false }
+            lastSendKeyCheck[uid] = Date()
+            return true
+        }
+        guard due else { return cached }
+        let check = Task<Bytes?, Never> {
+            if case .key(let k) = await self.fetchKeyResult(uid, source: .server) { return k }
+            return nil
+        }
+        return await Self.raceTimeout(1.5, check) ?? cached
+    }
+
     /// First of "the fetch finished" and "`seconds` passed". A continuation, not a task group: a group
     /// would wait for the hung child on exit and defeat the point.
     private static func raceTimeout(_ seconds: Double, _ task: Task<Bytes?, Never>) async -> Bytes? {
@@ -610,7 +631,7 @@ final class Crypto {
             throw NSError(domain: "Crypto", code: 3, userInfo: [NSLocalizedDescriptionKey: "keys not ready"])
         }
         let other = otherUid(cid)
-        guard let otherPub = await preloadKey(other) else { throw MissingRecipientKeyError(uid: other) }
+        guard let otherPub = await keyForSending(other) else { throw MissingRecipientKeyError(uid: other) }
 
         // box.seal(...) -> (authenticatedCipherText = MAC‖ct, nonce) ; matches nacl.box output.
         guard let sealed: (authenticatedCipherText: Bytes, nonce: Box.Nonce) =
@@ -745,7 +766,7 @@ final class Crypto {
             throw NSError(domain: "Crypto", code: 5, userInfo: [NSLocalizedDescriptionKey: "keys not ready"])
         }
         let other = otherUid(cid)
-        guard let otherPub = await preloadKey(other) else { throw MissingRecipientKeyError(uid: other) }
+        guard let otherPub = await keyForSending(other) else { throw MissingRecipientKeyError(uid: other) }
 
         let fileKey = sodium.secretBox.key()                       // random 32-byte key
         guard let sealedFile: (authenticatedCipherText: Bytes, nonce: SecretBox.Nonce) =

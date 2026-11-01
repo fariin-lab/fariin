@@ -4157,11 +4157,13 @@ struct ThreadView: View {
             })
         }
         let isPinned = repo.pinnedMessageIds.contains(m.id)
-        items.append(UIAction(title: isPinned ? "Unpin" : "Pin",
-                              image: isPinned ? UIImage(systemName: "pin.slash")
-                                             : UIImage(named: "ic_pin_menu")?.withRenderingMode(.alwaysTemplate)) { _ in
-            togglePin(m)
-        })
+        if isPinned || !m.viewOnce {
+            items.append(UIAction(title: isPinned ? "Unpin" : "Pin",
+                                  image: isPinned ? UIImage(systemName: "pin.slash")
+                                                 : UIImage(named: "ic_pin_menu")?.withRenderingMode(.alwaysTemplate)) { _ in
+                togglePin(m)
+            })
+        }
         if savingAllowed {
             items.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
                 guard savingAllowed else { return }   // switched on while the menu was open
@@ -4370,7 +4372,7 @@ struct ThreadView: View {
         if isGroup && mine && m.sendState == nil {
             out.append(CMAction(title: "Info", icon: "info.circle") { infoTarget = MessageRef(id: m.id) })
         }
-        if canPin && delivered {   // see `delivered` above — a pin on a clientId can never resolve
+        if canPin && delivered && !m.viewOnce {   // no view-once: the pinned bar shows its thumbnail. See `delivered` above — a pin on a clientId can never resolve
             out.append(CMAction(title: isPinned ? "Unpin" : "Pin", icon: isPinned ? "pin.slash" : "ic_pin_menu") {
                 togglePin(m)
             })
@@ -5226,6 +5228,8 @@ struct ThreadView: View {
     // pipeline as a feature marker (a plaintext system message would leak content to the server).
     // Older builds render the unknown marker as the graceful "newer version" notice.
     private func togglePin(_ m: Message) {
+        // A view-once item is never pinned: the bar would show its thumbnail on both phones.
+        if m.viewOnce && !repo.pinnedMessageIds.contains(m.id) { return }
         if repo.pinnedMessageIds.contains(m.id) {
             Task { await ChatService.removePinnedMessage(cid, m.id) }   // the reference app posts no unpin notice
         } else if repo.pinnedMessageIds.count < Limits.pinnedMessagesPerChat {
