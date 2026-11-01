@@ -118,15 +118,9 @@ struct DemoGroupCallView: View {
             .background(alignment: .bottom) {
                 ZStack {
                     if front == nil {
+                        // The real screen since 2026-10-28 (GroupCallView `middle`): the stage starts
+                        // under the header, never under the clock and the battery.
                         DemoStageView(selfExpanded: $selfExpanded)
-                            .overlay(alignment: .top) {
-                                LinearGradient(colors: [.black.opacity(0.55), .black.opacity(0.25), .clear],
-                                               startPoint: .top, endPoint: .bottom)
-                                    .frame(height: stageLift + 40)
-                                    .allowsHitTesting(false)
-                            }
-                            .ignoresSafeArea(.container, edges: .top)
-                            .padding(.top, -stageLift)
                             .transition(.opacity)
                     }
                 }
