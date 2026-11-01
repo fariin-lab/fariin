@@ -302,9 +302,42 @@ final class ConversationsRepository {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
+    private func newestMillis(_ convs: [Conversation]) -> Double { convs.map(\.updatedAtMillis).max() ?? 0 }
+
+    /// ⛔ IS THE LIST BEHIND THE SERVER? (owner 2026-11-01). The stall watchdog has one clock, and
+    /// any answer from the server counts as healthy for everything, so a list stuck on old data
+    /// looked fine for as long as the heartbeat answered. Once a minute on screen this asks the server
+    /// for the same query's newest row, one document, and compares. Well behind: the list's listener
+    /// is rebuilt, at most once in five minutes, so a slow line cannot make it churn.
+    @ObservationIgnored private var behindCheck: Task<Void, Never>?
+    @ObservationIgnored private var lastBehindRepair = Date.distantPast
+    private func startBehindServerCheck() {
+        guard behindCheck == nil else { return }
+        behindCheck = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                guard let self, UIApplication.shared.applicationState == .active,
+                      self.listener != nil, let uid = Auth.auth().currentUser?.uid, uid == self.listenerUid,
+                      let snap = try? await self.db.collection("conversations")
+                        .whereField("users", arrayContains: uid)
+                        .order(by: "updatedAt", descending: true)
+                        .limit(to: 1).getDocuments(source: .server),
+                      let top = snap.documents.first else { continue }
+                let server = Conversation(id: top.documentID, data: top.data(with: .estimate)).updatedAtMillis
+                let behind = server - self.newestMillis(self.lastRaw)
+                guard behind > 60_000, Date().timeIntervalSince(self.lastBehindRepair) > 300 else { continue }
+                self.lastBehindRepair = Date()
+                DiagLog.add("CHATLIST# \(Int(behind / 1000))s behind the server: listening again")
+                DiagLog.flagForUpload(after: 5)
+                self.attach()
+            }
+        }
+    }
+
     private func attach() {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         stop()
+        startBehindServerCheck()
         listenerUid = uid
         ChannelFollows.shared.start(uid: uid)   // 2026-10-28: the channels I follow, beside the window
         beginCatchUp()   // 2026-10-27: a fresh listener's first answers are a catch-up, not live moves
@@ -366,6 +399,22 @@ final class ConversationsRepository {
                 // chat as delete-for-me and it vanishes from the list until the server acks.
                 let docs = snap.documents.map { (id: $0.documentID, data: $0.data(with: .estimate)) }
                 let convs = docs.map { Conversation(id: $0.id, data: $0.data) }
+                // ⛔ A SAVED COPY NEVER WALKS THE LIST BACKWARDS (owner 2026-11-01: the whole list went
+                // back to old pins, old photos, old names until the app was reopened). Only an empty
+                // cached snapshot was ever refused, so an older one replaced what was on screen and
+                // then overwrote the launch file too. The cache can be old: after a client swap the
+                // default client missed that session, and a fresh client reopens an earlier run's
+                // files under the same app name. Refused here, before anything is written; the
+                // server's answer still comes through, and `startBehindServerCheck` catches a list
+                // that stays behind.
+                if snap.metadata.isFromCache, !snap.metadata.hasPendingWrites {   // my own delete or leave passes
+                    let shownNewest = self.newestMillis(self.lastRaw + self.conversations)
+                    if self.newestMillis(convs) + 1_000 < shownNewest {
+                        DiagLog.add("CHATLIST# refused an older saved copy, \((shownNewest - self.newestMillis(convs)) / 1000)s behind")
+                        DiagLog.flagForUpload(after: 5)
+                        return
+                    }
+                }
                 // Keep the launch cache current. The RAW documents go in, so the cache is rebuilt by
                 // the same initializer the live path uses and cannot drift from it as fields are
                 // added. Written off the main thread; see ConversationsDiskCache.
