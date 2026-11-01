@@ -1548,7 +1548,7 @@ final class CallService: NSObject {
         let source = Self.factory.videoSource()
         let capturer = RTCCameraVideoCapturer(delegate: source)
         let track = Self.factory.videoTrack(with: source, trackId: "video0")
-        track.isEnabled = cameraOn
+        track.isEnabled = cameraOn && cameraMayGoOut
         videoSource = source
         videoCapturer = capturer
         localVideoTrack = track
@@ -1563,7 +1563,7 @@ final class CallService: NSObject {
         // 1:1 audit #13; r2 J4: the freeze watch now starts with their camera (remoteCameraOn).
         if remoteCameraOn { startRemoteFreezeWatchIfNeeded() }
         guard let track = localVideoTrack else { return }
-        track.isEnabled = cameraOn   // the toggle may have moved between warm-up and attach
+        track.isEnabled = cameraOn && cameraMayGoOut   // the toggle may have moved between warm-up and attach
         connection.add(track, streamIds: ["stream0"])
     }
 
@@ -2067,8 +2067,16 @@ final class CallService: NSObject {
     /// The `cams.<me>` value: what my video is ACTUALLY carrying. True for the length of a FALLBACK
     /// screen share (dual mode sends the screen on its own track), so the other side's existing video layout shows it; otherwise the real camera state.
     private var camsSignal: Bool {
-        shareOwnsCamera || (cameraOn && !cameraStarting && !cameraPausedByBackground && !videoPausedForNetwork && !isHeld)
+        guard cameraMayGoOut else { return false }
+        return shareOwnsCamera || (cameraOn && !cameraStarting && !cameraPausedByBackground && !videoPausedForNetwork && !isHeld)
     }
+
+    /// ⛔ NO PICTURE BEFORE THE ANSWER (owner's recording, 2026-11-01). The connection is built while
+    /// the phone rings and can already be up, and the camera warms during the ring. The microphone
+    /// was held back until the answer; the camera was not, so a phone ringing with the app open
+    /// could send its picture and say cams=true (the caller's preview went black for half a second
+    /// as it took that for their video). The person being called sends nothing until they accept.
+    private var cameraMayGoOut: Bool { isCaller || wasAccepted }
 
     /// 1:1 audit r2 E1, 2026-10-08: a camera turned on (tap, or weak-link resume) is not announced
     /// until startCapture's completion sees the session running, so the other side never shows a
@@ -2092,6 +2100,7 @@ final class CallService: NSObject {
     private func markCameraStartingForAnswer() {
         noteCamera("answer")
         defer { reviveCameraIfStuck() }
+        if cameraOn, !cameraPausedByBackground { localVideoTrack?.isEnabled = true }   // held until now
         guard cameraOn, !shareOwnsCamera, videoCapturer?.captureSession.isRunning != true else {
             if cameraOn { mark("camAlreadyRunningAtAnswer") }
             return
@@ -2629,7 +2638,7 @@ final class CallService: NSObject {
         guard cameraPausedByBackground || localVideoTrack?.isEnabled == false else { return }
         cameraPausedByBackground = false
         cameraStarting = false   // 1:1 audit r3 D2: the session runs, so a pending turn-on is done
-        localVideoTrack?.isEnabled = true
+        localVideoTrack?.isEnabled = cameraMayGoOut
         broadcastCameraState()   // they see my video come back
     }
 
