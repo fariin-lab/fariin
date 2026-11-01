@@ -48,6 +48,8 @@ final class CallService: NSObject {
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
                                                object: nil, queue: .main) { [weak self] _ in
             CallPiPController.shared.stopSystemPiP()
+            self?.cameraReviveTries = 0   // a new visit to the screen, a new try
+            self?.reviveCameraIfStuck()
             self?.startVoiceMonitor()   // 1:1 audit r2 J3, 2026-10-08: back on screen with the card up
             // 1:1 audit r2 check, 2026-10-08: the freeze watch paused in the background comes back.
             if let self, self.remoteCameraOn, self.state != .idle, self.state != .ended {
@@ -166,6 +168,7 @@ final class CallService: NSObject {
                 videoSpeakerDefaultApplied = false   // the next call gets its own default (#6)
                 speakerChosenByUser = false          // audit M-010: so does its own choice
                 cameraPausedByBackground = false; stopPausedCameraRetry()
+                cameraReviveTries = 0
                 stopLinkMonitor()
                 stopPathMonitor()
                 restartRequestsSent = 0; restartRequestsSeen = 0
@@ -2070,6 +2073,7 @@ final class CallService: NSObject {
     /// announces it (after the accept, so no camera write lands before it). Main only.
     private func markCameraStartingForAnswer() {
         noteCamera("answer")
+        defer { reviveCameraIfStuck() }
         guard cameraOn, !shareOwnsCamera, videoCapturer?.captureSession.isRunning != true else {
             if cameraOn { mark("camAlreadyRunningAtAnswer") }
             return
@@ -2611,6 +2615,28 @@ final class CallService: NSObject {
         broadcastCameraState()   // they see my video come back
     }
 
+    /// ⛔ THE ANSWERED CAMERA STARTS FRESH — owner 2026-11-01: "someone video calls me, I answer, they
+    /// hear me but cannot see my face". The connection is built during the ring, and that starts the
+    /// camera too. With the app in the background iOS stops it at once (call le2SqamM7SDh: stopped
+    /// 0.87 s in, "cams" false), and answering found a camera already made and left it, waiting
+    /// for iOS to resume it. The calls that worked started the camera at the answer. So: an answered
+    /// call, the app on screen, and the camera still held or paused gets a clean stop and start,
+    /// and its start announces it. At most three tries per visit: a camera truly taken by another
+    /// app must not be restarted every two seconds. Main only.
+    private var cameraReviveTries = 0
+    private func reviveCameraIfStuck() {
+        guard wasAccepted, cameraShouldRun, UIApplication.shared.applicationState == .active,
+              let capturer = videoCapturer else { return }
+        let session = capturer.captureSession
+        guard cameraPausedByBackground || session.isInterrupted else { return }
+        if session.isRunning, !session.isInterrupted { resumeCameraIfReallyBack(); return }
+        guard cameraReviveTries < 3 else { return }
+        cameraReviveTries += 1
+        noteCamera("revive try \(cameraReviveTries)")
+        cameraStarting = true
+        capturer.stopCapture { [weak self] in self?.startCaptureIfWanted(front: nil) }
+    }
+
     // Some interruptions never post an "ended". The documented example is thermal/system pressure, whose
     // recovery Apple expects the app to earn by lowering the frame rate (we do not, yet — see the audit),
     // and it fires in the FOREGROUND, where no app-lifecycle backstop can ever run. Camera-stolen-by-
@@ -2623,6 +2649,7 @@ final class CallService: NSObject {
             guard let self else { return }
             guard inLiveCall, cameraOn, cameraPausedByBackground else { stopPausedCameraRetry(); return }
             resumeCameraIfReallyBack()
+            reviveCameraIfStuck()
         }
     }
     private func stopPausedCameraRetry() {
