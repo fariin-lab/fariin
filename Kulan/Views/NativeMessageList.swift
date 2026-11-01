@@ -526,6 +526,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             } else {
                 let host = UIHostingController(rootView: content)
                 host.view.backgroundColor = .clear
+                // Hidden until it stands where it will stay (see `placeHistoryHeader`).
+                host.view.alpha = 0
                 addChild(host)
                 collectionView.addSubview(host.view)
                 host.didMove(toParent: self)
@@ -559,10 +561,31 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             self.headerRemeasureTries += 1
             self.historyHeaderWidth = 0
             self.layoutHistoryHeader()
-            // Always a second pass (a short first measure is not always zero), then only while short.
-            if self.headerRemeasureTries < 2
-                || (self.layout.headerHeight < 40 && self.headerRemeasureTries < 8) { self.scheduleHeaderRemeasure() }
+            self.placeHistoryHeader()
+            // Always a second pass (a short first measure is not always zero), then only while short
+            // or still not shown.
+            let waiting = self.layout.headerHeight < 40 || self.historyHeaderHost?.view.alpha == 0
+            if self.headerRemeasureTries < 2 || (waiting && self.headerRemeasureTries < 8) { self.scheduleHeaderRemeasure() }
         }
+    }
+
+    /// ⛔ THE CARD SHOWS ONCE IT IS IN PLACE (owner 2026-11-01, three screenshots: nothing, then the
+    /// card under the header, then at the bottom). It is made at the top of the list, and a short
+    /// chat only sits at the bottom once the top inset is written, so for a moment it was drawn under
+    /// the header. A reader at the newest is put there first, then the card comes in. The last
+    /// try shows it wherever it is: late is better than missing.
+    private func placeHistoryHeader() {
+        guard let host = historyHeaderHost, host.view.alpha == 0, layout.headerHeight >= 40,
+              view.window != nil else { return }
+        updateInsets()
+        if (lastKnownDistanceFromBottom ?? 0) <= Self.atNewestTolerance {
+            UIView.performWithoutAnimation {
+                collectionView.setContentOffset(CGPoint(x: 0, y: maxContentOffsetY), animated: false)
+            }
+        }
+        let top = view.convert(host.view.frame, from: collectionView).minY
+        guard top >= view.safeAreaInsets.top || headerRemeasureTries >= 7 else { return }
+        UIView.animate(withDuration: 0.15) { host.view.alpha = 1 }
     }
 
     /// Measures the card at the list's width and moves the rows by the difference, keeping every

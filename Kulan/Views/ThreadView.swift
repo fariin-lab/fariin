@@ -1182,12 +1182,12 @@ struct ThreadView: View {
         // article is a row on the channel's page). Its owner and admins get the channel's card:
         // share it, edit it. A follower sees the posts from "Channel created" on.
         // ⛔ FROM THE FIRST FRAME WHEN THE WHOLE CHANNEL IS KNOWN TO BE HERE (owner 2026-11-01: the
-        // card came late). A channel whose post count the rows on screen already cover has nothing
-        // older to wait for, so it does not wait for the server. Under a page of rows only: an old
-        // channel's count may be short of its real history, and the card must not sit between pages.
+        // card came late). A channel under a page of posts has nothing older to wait for, so it does
+        // not wait for the rows or the server. An old channel's count may be short of its real
+        // history; a full page then takes the card away again, so it never sits between pages.
         if let conv = conversation, conv.isChannel, !preview,
            (repo.didInitialLoad && (!repo.canLoadOlder || repo.cacheLooksWhole))
-            || (repo.items.count < 20 && repo.items.count >= conv.postCount) {
+            || (repo.items.count < 20 && conv.postCount < 20) {
             if conv.admins.contains(me) || conv.isOwner(me) {
                 let key = ["chadm", conv.title, conv.avatarUrl ?? "", conv.groupDescription, "\(conv.followerCount)",
                            conv.publicName, "\(conv.isPublic)", "\(dark)"].joined(separator: "|")
