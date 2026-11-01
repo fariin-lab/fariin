@@ -2294,6 +2294,9 @@ struct UsernameEditView: View {
         }
         .navigationTitle("Username")
         .navigationBarTitleDisplayMode(.inline)
+        // A tap off the field puts the keys away (owner 2026-11-01).
+        .scrollDismissesKeyboard(.interactively)
+        .dismissesKeyboardOnTap()
         .toolbar {
             // Owner, 2026-09-25: an ✕ to leave without saving. Always opened as a sheet (both
             // callers wrap it in their own NavigationStack), so there is no Back button to clash with.

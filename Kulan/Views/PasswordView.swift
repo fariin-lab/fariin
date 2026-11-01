@@ -177,6 +177,10 @@ struct PasswordView: View {
             }
         }
         .onAppear { focused = true }
+        // A tap off the fields, or a drag, puts the keys away (owner 2026-11-01: "it opens with the
+        // keyboard and I can't close it").
+        .scrollDismissesKeyboard(.interactively)
+        .dismissesKeyboardOnTap()
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 // 2026-10-18 (owner): a FIRST password (Apple / Google account) says "Create" on a
