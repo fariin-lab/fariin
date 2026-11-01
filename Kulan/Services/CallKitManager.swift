@@ -314,7 +314,9 @@ final class CallKitManager: NSObject {
                                                       kitError: (error as NSError?)?.code)
                 }
             } else {
-                RingVibration.start()   // owner 2026-10-24
+                // Only if the ring is still up: this completion can land after a quick cancel,
+                // and nothing would stop the buzz before its 60 s cap.
+                DispatchQueue.main.async { if self?.activeUUID == uuid { RingVibration.start() } }   // owner 2026-10-24
                 // Owner, 2026-10-10: the ring is up; the caller may now hear "Ringing...".
                 DispatchQueue.main.async { CallService.shared.ringShown(callId: callId) }
             }
@@ -447,7 +449,9 @@ final class CallKitManager: NSObject {
         update.supportsHolding = false
         Self.limitControls(update)
         provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
-            if error == nil { RingVibration.start() }   // owner 2026-10-24
+            if error == nil {   // owner 2026-10-24; only if the ring is still up, as above
+                DispatchQueue.main.async { if self?.groupUUID == uuid { RingVibration.start() } }
+            }
             // Refused by iOS (Focus, its block list): no ring and no system call. Let go of it.
             if error != nil {
                 DispatchQueue.main.async {
@@ -662,7 +666,10 @@ extension CallKitManager: CXProviderDelegate {
         action.fulfill()
     }
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
-        RingVibration.stop()   // declined or hung up (owner 2026-10-24)
+        // Declined or hung up (owner 2026-10-24). A late End for an older call, after a crossed
+        // call stood down, must not silence the ring that replaced it.
+        let current = [activeUUID, groupUUID].compactMap { $0 }
+        if current.isEmpty || current.contains(action.callUUID) { RingVibration.stop() }
         // owner, 2026-10-06: End on a group ring declines it; on an answered group call it hangs up.
         if let group = groupUUID, group == action.callUUID {
             groupUUID = nil

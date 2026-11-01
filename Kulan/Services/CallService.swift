@@ -90,9 +90,16 @@ final class CallService: NSObject {
     // Why a call ended — drives the end tone, the status label, and the call record.
     enum EndReason: String { case none, hangup, declined, missed, failed, busy }
 
+    /// A call really in progress. `.ended` is not one: its tail is cosmetic, and the No answer page
+    /// can hold it for as long as the page is looked at.
+    var isLive: Bool { [.outgoing, .incoming, .active, .reconnecting].contains(state) }
+
     var state: State = .idle {
         didSet {
             if state != .ended { noAnswerHold = false }   // the No answer page lives only in `.ended`
+            // The "Couldn't connect" and No answer pages have no timer: proximity and keep-awake
+            // must not wait for `.idle`, or the screen stays blanked or awake until a button is tapped.
+            if state == .ended { updateInCallScreenBehavior() }
             // 1:1 audit check, 2026-10-08: a new call never inherits the teardown flag.
             if state == .outgoing || state == .incoming { tearingDown = false }
             // 1:1 audit r2 C4/D5, 2026-10-08: the ring screen reads the live route, not the last call's.
@@ -4707,6 +4714,9 @@ final class CallService: NSObject {
         // call placed inside it takes over instead of being dropped; and a call placed while another
         // is live says so, with the same notice the group-call side already shows, instead of a
         // button that silently does nothing.
+        // The tail's own CallKit call may still be in iOS's list after this clears it: the check
+        // for a call in another app below must not take it for one.
+        let endedTailUUID = state == .ended ? CallKitManager.shared.activeUUID : nil
         closeEndedTail()
         // A SECOND TAP ON THE SAME CALL BUTTON (audit M-155, 2026-10-07): the first tap has just
         // started this very call, and answering the second with "You're already in a call" put a
@@ -4739,7 +4749,7 @@ final class CallService: NSObject {
         }
         if inGroupCall { return }
         // A call in another app still has the microphone (owner 2026-10-24): refused with a notice.
-        if CallKitManager.otherCallActive(excluding: CallKitManager.shared.activeUUID) {
+        if CallKitManager.otherCallActive(excluding: CallKitManager.shared.activeUUID ?? endedTailUUID) {
             MainActor.assumeIsolated { GroupCallService.presentOverTop(CallKitManager.otherCallNotice) }
             return
         }

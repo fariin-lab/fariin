@@ -84,6 +84,10 @@ struct CreateCallLinkSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
     @State private var approvalFailed = false
+    @State private var approvalSaved: Bool?
+    @State private var approvalSaving = false
+    @State private var videoSaved: Bool?
+    @State private var videoSaving = false
     /// Measured from the content; the first value is a close estimate so the sheet does not open
     /// at one height and move to another.
     @State private var contentHeight: CGFloat = 420
@@ -211,29 +215,47 @@ struct CreateCallLinkSheet: View {
 
     /// Saved to the server at once. The switch moves first; a refusal puts it back and says so.
     /// Same shape as `setApproval`: the row moves first, a refusal puts it back and says so.
+    /// One save at a time, the newest value sent when it ends, as the details page does (M-095). Two
+    /// quick flips used to race as two unordered calls and could leave the server opposite the switch.
     private func setVideo(_ on: Bool) {
-        let before = draft.video
+        if videoSaved == nil { videoSaved = draft.video }
         draft.video = on
-        let d = draft
+        guard !videoSaving else { return }
+        videoSaving = true
         Task { @MainActor in
-            do { try await CallLinkService.shared.setVideo(d, on: on) }
-            catch {
-                draft.video = before
-                approvalFailed = true
+            while draft.video != videoSaved {
+                let want = draft.video
+                do {
+                    try await CallLinkService.shared.setVideo(draft, on: want)
+                    videoSaved = want
+                } catch {
+                    draft.video = videoSaved ?? want
+                    approvalFailed = true
+                    break
+                }
             }
+            videoSaving = false
         }
     }
 
     private func setApproval(_ on: Bool) {
-        let before = draft.approval
+        if approvalSaved == nil { approvalSaved = draft.approval }
         draft.approval = on
-        let d = draft
+        guard !approvalSaving else { return }
+        approvalSaving = true
         Task { @MainActor in
-            do { try await CallLinkService.shared.setApproval(d, on: on) }
-            catch {
-                draft.approval = before
-                approvalFailed = true
+            while draft.approval != approvalSaved {
+                let want = draft.approval
+                do {
+                    try await CallLinkService.shared.setApproval(draft, on: want)
+                    approvalSaved = want
+                } catch {
+                    draft.approval = approvalSaved ?? want
+                    approvalFailed = true
+                    break
+                }
             }
+            approvalSaving = false
         }
     }
 }

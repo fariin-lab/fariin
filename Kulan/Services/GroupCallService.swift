@@ -197,7 +197,11 @@ final class GroupCallService: ObservableObject {
         dynacast: true
     ))
     @Published var activeCid: String? {     // nil = no group call in progress
-        didSet { syncJoinState() }
+        didSet {
+            syncJoinState()
+            // A group call taken from over the No answer page replaces it.
+            if activeCid != nil { CallService.shared.closeNoAnswer() }
+        }
     }
     /// See `GroupJoinState`. Derived from `activeCid`, `waitingForApproval` and `connecting`, which
     /// keep their old meanings for the code that reads them.
@@ -1724,6 +1728,17 @@ final class GroupCallService: ObservableObject {
         Task { @MainActor in
             for publication in live { try? await room.localParticipant.unpublish(publication: publication) }
             try? await track?.stop()
+            // A room that was reconnecting can drop that unpublish with no event back, and with the
+            // session gone the 30 s watcher above no longer runs: the button stayed on "Sharing".
+            guard had else { return }
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard isActive, screenSharing, shareSession == nil, !sharePending else { return }
+            let left = room.localParticipant.trackPublications.values
+                .compactMap { $0 as? LocalTrackPublication }
+                .filter { $0.source == .screenShareVideo }
+            for publication in left { try? await room.localParticipant.unpublish(publication: publication) }
+            screenSharing = false
+            GCLog.event("share_end_forced", room: logRoom)
         }
     }
 
@@ -3569,7 +3584,7 @@ final class GroupCallService: ObservableObject {
         let now = Date()
         let blocks = BlockList.snapshot
         guard !me.isEmpty, activeCid == nil, !connecting, !waitingForApproval,
-              CallService.shared.state == .idle else {
+              !CallService.shared.isLive else {
             // In another call: the invitation is not shown, and the people ringing me are told
             // "busy" instead of ringing into nothing (owner 2026-10-06; the reference app does the
             // same). Only a fresh ring for a call I am not in and have not answered.
@@ -3657,7 +3672,7 @@ final class GroupCallService: ObservableObject {
               // person asking to go in, and a member dropped from the call (or whose other phone
               // died) is on that list for good; this is their way back while the call is live.
               activeCid == nil, !connecting, !waitingForApproval,
-              CallService.shared.state == .idle,
+              !CallService.shared.isLive,
               let invite = makeInvite(id: roomId, data: d),
               !BlockList.snapshot.contains(invite.startedBy)   // audit M-076, 2026-10-07
         else { return }

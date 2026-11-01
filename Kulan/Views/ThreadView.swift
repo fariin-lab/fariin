@@ -18,7 +18,7 @@ import QuickLook
 enum CallLinkDoor {
     @MainActor static func open(key: String) {
         guard !GroupCallService.shared.isActive, !GroupCallService.shared.connecting,
-              CallService.shared.state == .idle else {
+              !CallService.shared.isLive else {
             GroupCallService.presentOverTop(GroupCallService.busyNotice)
             return
         }
