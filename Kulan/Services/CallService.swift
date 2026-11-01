@@ -2033,6 +2033,7 @@ final class CallService: NSObject {
         // from .reconnecting re-sends it too (see `state`).
         let value = camsSignal
         mark(value ? "camsOnSent" : "camsOffSent")   // 2026-10-10: camera evidence in callTiming
+        noteCamera("cams=\(value) sent")
         db.collection("calls").document(id).updateData(["cams.\(me)": value]) { [weak self] err in
             guard let self, err != nil, attempt < 3 else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
@@ -2053,10 +2054,22 @@ final class CallService: NSObject {
     /// black or stale frame as live video. Cleared there, on a turn-off, a denial and at .idle.
     private var cameraStarting = false
 
+    /// ⛔ MEASUREMENT (owner 2026-11-01, "I hear them but cannot see their face"). `callTiming` is
+    /// saved just after connecting, so it cannot say what the camera did later in the call. These
+    /// lines can: is the app on screen, is iOS holding the camera, and what `cams` was sent.
+    private func noteCamera(_ what: String) {
+        let session = videoCapturer?.captureSession
+        DiagLog.add("CALLCAM# \(what) app=\(UIApplication.shared.applicationState.rawValue) "
+                    + "running=\(session?.isRunning ?? false) interrupted=\(session?.isInterrupted ?? false) "
+                    + "cameraOn=\(cameraOn) paused=\(cameraPausedByBackground) starting=\(cameraStarting) "
+                    + "state=\(state) role=\(isCaller ? "caller" : "callee")")
+    }
+
     /// 1:1 audit r3 D2, 2026-10-08: answering a video call is a turn-on too. Unless the camera warmed
     /// during the ring is already running, the answer says cams=false and startCapture's completion
     /// announces it (after the accept, so no camera write lands before it). Main only.
     private func markCameraStartingForAnswer() {
+        noteCamera("answer")
         guard cameraOn, !shareOwnsCamera, videoCapturer?.captureSession.isRunning != true else {
             if cameraOn { mark("camAlreadyRunningAtAnswer") }
             return
@@ -2556,6 +2569,7 @@ final class CallService: NSObject {
               let raw = note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? Int,
               let reason = AVCaptureSession.InterruptionReason(rawValue: raw),
               isVideoInterruption(reason) else { return }
+        noteCamera("interrupted reason=\(raw)")
         // Not during a share: the camera is stopped then, and disabling the track would cut the screen.
         guard inLiveCall, cameraOn, !cameraPausedByBackground, !shareOwnsCamera else { return }
         cameraPausedByBackground = true
@@ -2571,6 +2585,7 @@ final class CallService: NSObject {
         // while our session was still interrupted, putting the other side on a frozen frame.
         guard let session = note.object as? AVCaptureSession,
               session === videoCapturer?.captureSession else { return }
+        noteCamera("interruption ended")
         resumeCameraIfReallyBack()
     }
 
@@ -2584,7 +2599,7 @@ final class CallService: NSObject {
         guard cameraShouldRun, let session = videoCapturer?.captureSession else { return }
         // Still interrupted: do NOT clear the flag and do NOT claim video. Announcing cams=true here
         // was the bug that put the other side on a frozen frame AND swallowed the real resume later.
-        guard !session.isInterrupted else { return }
+        guard !session.isInterrupted else { noteCamera("resume refused: still interrupted"); return }
         // Apple preserves the startRunning intent across an interruption as long as we never called
         // stopRunning, so the session resumes itself. Restart only if it genuinely did not.
         if !session.isRunning { startCameraCapture(); return }   // its own start will resume us
@@ -7648,6 +7663,7 @@ final class CallService: NSObject {
         // a ring-out is never read as a slow connect.
         mark("ended")
         writeTimeline(outcome: endReason == .none ? "ended" : endReason.rawValue)
+        if startedAsVideo { noteCamera("call over"); DiagLog.flagForUpload(after: 4) }
         listeners.forEach { $0.remove() }
         listeners = []
         ringingWatcher?.remove(); ringingWatcher = nil

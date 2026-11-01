@@ -10,7 +10,7 @@ import WebRTC
 //   • Bottom: dark frosted control capsule (icon-only circular buttons, red end)
 // NOTE: only the UI is new. All bindings go to CallService.shared exactly as before — no call
 // logic, WebRTC, signaling, or CallKit code was touched. Controls shown match what actually
-// works per mode (no dead buttons): voice = mic·speaker·end, video = mic·camera·flip·speaker·end.
+// works per mode (no dead buttons): voice = mic·speaker·end, video = mic·camera·speaker·end.
 struct CallView: View {
     private var call = CallService.shared
     /// ⛔ THE CALL WEARS THE PERSON'S OWN COLOUR (owner, 2026-08-20), reversing the flat black of
@@ -1322,10 +1322,7 @@ struct CallView: View {
                 // stopping brings the camera back exactly as it was.
                 .disabled(!cameraButtonEnabled)
                 .opacity(cameraButtonEnabled ? 1 : 0.4)
-            // Flip front/back only while my camera is on (and actually showing, not a shared screen).
-            if call.cameraOn && !myScreenOnCamera {
-                callCircle("arrow.triangle.2.circlepath", active: false, label: "Flip camera") { flipCamera() }
-            }
+            // No flip here (owner 2026-11-01): the button on my camera's card does it.
             speakerCircle
             // Labels: owner audit 2026-10-06 #19 — icon-only buttons read as "button" or the raw
             // symbol name under VoiceOver. Each says what a tap does now.
