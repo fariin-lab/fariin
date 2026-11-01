@@ -108,6 +108,7 @@ enum VideoStoryOutbox {
                        hasBurn: burn != nil, cropRect: burn?.cropRect, canvasAspect: burn?.canvasAspect,
                        contentScale: burn?.contentScale ?? 1, holeCorner: burn?.holeCorner ?? 0,
                        brightness: burn?.brightness ?? 0)
+        t.expiryHours = expiryHours
         write(t)
         return (id, ids)
     }
@@ -193,7 +194,6 @@ enum VideoStoryOutbox {
         return try? JSONDecoder().decode(Ticket.self, from: d)
     }
     private static func write(_ t: Ticket) {
-        t.expiryHours = expiryHours
         if let d = try? JSONEncoder().encode(t) { try? d.write(to: meta(t.id), options: .atomic) }
     }
 }
