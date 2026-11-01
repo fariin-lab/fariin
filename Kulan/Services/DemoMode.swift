@@ -220,7 +220,7 @@ enum DemoMode {
             ], lastViewedAt: nil, isMine: true)
 
         StoriesRepository.shared.others = [
-            StoryGroup(authorUid: "demo-cabdi", name: "Dadir", photoUrl: cabdiPhoto,
+            StoryGroup(authorUid: "demo-cabdi", name: "Daniel", photoUrl: cabdiPhoto,
                        stories: [
                         Story(id: "demo-c1", authorUid: "demo-cabdi",
                               createdAt: now.addingTimeInterval(-25200),
@@ -243,7 +243,7 @@ enum DemoMode {
                               expiresAt: now.addingTimeInterval(20 * 3600),
                               mediaUrl: cabdiStory5, allowsReplies: true, caption: "Waddada"),
                        ], lastViewedAt: nil, isMine: false),
-            StoryGroup(authorUid: "demo-khadra", name: "Khadra", photoUrl: khadraPhoto,
+            StoryGroup(authorUid: "demo-khadra", name: "Sofia", photoUrl: khadraPhoto,
                        stories: [
                         Story(id: "demo-k1", authorUid: "demo-khadra",
                               createdAt: now.addingTimeInterval(-28800),
@@ -301,7 +301,7 @@ enum DemoMode {
         let linneaPhoto = profilePhoto("demo-face-linnea", "linnea", .systemGreen,  .systemMint,   "L")
         let ilhanPhoto  = profilePhoto("demo-face-ilhan",  "ilhan",  .systemPurple, .systemPink,   "I")
         return [
-            StoryGroup(authorUid: "demo-sagal", name: "Sagal", photoUrl: sagalPhoto, stories: [
+            StoryGroup(authorUid: "demo-sagal", name: "Maya", photoUrl: sagalPhoto, stories: [
                 s(1, "demo-sagal", "demo-story-sagal",   23400, "Subax"),
                 s(2, "demo-sagal", "demo-story-sagal-2", 16200, nil),
                 s(3, "demo-sagal", "demo-story-sagal-3",  7200, "Guriga"),
@@ -316,19 +316,19 @@ enum DemoMode {
                 s(2, "demo-linnea", "demo-story-linnea-2", 13500, nil),
                 s(3, "demo-linnea", "demo-story-linnea-3",  6300, "Autumn"),
             ], lastViewedAt: nil, isMine: false),
-            StoryGroup(authorUid: "demo-ilhan", name: "Ilhan", photoUrl: ilhanPhoto, stories: [
+            StoryGroup(authorUid: "demo-ilhan", name: "Leo", photoUrl: ilhanPhoto, stories: [
                 s(1, "demo-ilhan", "demo-story-ilhan",   30600, nil),
                 s(2, "demo-ilhan", "demo-story-ilhan-2", 17100, "Xeebta"),
                 s(3, "demo-ilhan", "demo-story-ilhan-3",  8100, "Baraf"),
             ], lastViewedAt: nil, isMine: false),
-            StoryGroup(authorUid: "demo-cabdi", name: "Dadir", photoUrl: cabdiPhoto, stories: [
+            StoryGroup(authorUid: "demo-cabdi", name: "Daniel", photoUrl: cabdiPhoto, stories: [
                 s(1, "demo-cabdi", "demo-story-cabdi",   25200, "Night vibes"),
                 s(2, "demo-cabdi", "demo-story-cabdi-2", 18000, "Golden hour"),
                 s(3, "demo-cabdi", "demo-story-cabdi-3", 10800, "Home"),
                 s(4, "demo-cabdi", "demo-story-cabdi-4",  5400, nil),
                 s(5, "demo-cabdi", "demo-story-cabdi-5",  3600, "Long way back"),
             ], lastViewedAt: nil, isMine: false),
-            StoryGroup(authorUid: "demo-khadra", name: "Khadra", photoUrl: khadraPhoto, stories: [
+            StoryGroup(authorUid: "demo-khadra", name: "Sofia", photoUrl: khadraPhoto, stories: [
                 s(1, "demo-khadra", "demo-story-khadra",   28800, "Casarkii"),
                 s(2, "demo-khadra", "demo-story-khadra-2", 21600, "Suuqa"),
                 s(3, "demo-khadra", "demo-story-khadra-3", 14400, nil),
@@ -375,10 +375,10 @@ enum DemoMode {
             group("demo-family", me, title: "Family 🏡", photo: familyPhoto, at: now.addingTimeInterval(-90),
                   sender: "demo-hooyo", senderName: "Mom", last: "Dinner is ready, come home 🍲",
                   members: ["demo-hooyo", "demo-cabdi", "demo-khadra"], unread: 3, pinned: true),
-            chat("demo-hooyo",  me, "demo-hooyo",  "Sagal",         now.addingTimeInterval(-260),
+            chat("demo-hooyo",  me, "demo-hooyo",  "Maya",          now.addingTimeInterval(-260),
                  "Did you get home safe?", hooyoPhoto, unread: 2, pinned: true),
             chat("demo-ayaan",  me, "demo-ayaan",  "Ayaan Warsame", now.addingTimeInterval(-2100),
-                 "I will call you after Maghrib", ayaanPhoto, mine: true),
+                 "I will call you tonight", ayaanPhoto, mine: true),
             channel("demo-news", me, title: "Fariin News", photo: newsPhoto, at: now.addingTimeInterval(-4200),
                     last: "Channels are here 📣"),
             // ⚠️ HE IS CALLED DADIR ON SCREEN AND `cabdi` IN THE CODE. The uid, the asset names and
@@ -386,22 +386,22 @@ enum DemoMode {
             // sets and their references to change a label nobody sees buys nothing and risks a typo
             // in a filename that only shows up as a grey square on a device. Display name here,
             // identifiers left alone.
-            chat("demo-cabdi",  me, "demo-cabdi",  "Dadir",         now.addingTimeInterval(-8000),
+            chat("demo-cabdi",  me, "demo-cabdi",  "Daniel",        now.addingTimeInterval(-8000),
                  "🎤 Voice message · 0:14", cabdiPhoto, unread: 1),
-            chat("demo-khadra", me, "demo-khadra", "Khadra",        now.addingTimeInterval(-12000),
+            chat("demo-khadra", me, "demo-khadra", "Sofia",         now.addingTimeInterval(-12000),
                  "📷 Photo", khadraPhoto),
             chat("demo-linnea", me, "demo-linnea", "Linnea",        now.addingTimeInterval(-26000),
                  "See you at the library at 4?", linneaPhoto, mine: true),
             // Not a face, and that is not a compromise. A soft toy, a cup, a view: this is what a
             // great many real profile pictures actually are, and a list where all seven are portraits
             // would be the unrealistic one.
-            chat("demo-ilhan",  me, "demo-ilhan",  "Ilhan",         now.addingTimeInterval(-93000),
+            chat("demo-ilhan",  me, "demo-ilhan",  "Leo",           now.addingTimeInterval(-93000),
                  "Thank you so much ❤️", ilhanPhoto),
             // ⛔ THE LAST ONE STAYS WITHOUT A PHOTO ON PURPOSE — do not "finish" this by giving him
             // one. Somebody with no picture is the commonest row in any real chat list, and the
             // coloured letter circle is a piece of the design that has to be visible in a screenshot
             // too. Six with pictures and one without is the honest ratio.
-            chat("demo-faarax", me, "demo-faarax", "Faarax",        now.addingTimeInterval(-176400),
+            chat("demo-faarax", me, "demo-faarax", "Lucas",         now.addingTimeInterval(-176400),
                  "Are we still meeting tomorrow?", ""),
         ]
     }
@@ -489,7 +489,7 @@ enum DemoMode {
                         w: 1080, h: 1350, t(-8800)),
                 Message(demoId: "\(cid)-4", from: "demo-ayaan", "Mashallah, aad ayay u quruxsan tahay", t(-8600)),
                 Message(demoId: "\(cid)-5", from: me, "Mahadsanid", t(-8400)),
-                Message(demoId: "\(cid)-6", from: "demo-ayaan", "I will call you after Maghrib", t(-2100)),
+                Message(demoId: "\(cid)-6", from: "demo-ayaan", "I will call you tonight", t(-2100)),
             ]
 
         case "demo-cabdi":
