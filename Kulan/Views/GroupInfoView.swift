@@ -601,9 +601,6 @@ struct GroupInfoView: View {
                 }
                     .tint(.primary)
                     .accessibilityLabel("Leave channel")
-                Menu { muteMenuItems } label: { actionIcon(muted ? "ic_bell" : "ic_bell_off", muted ? "Unmute" : "Mute") }
-                    .tint(.primary)
-                    .accessibilityLabel(muted ? "Unmute" : "Mute")
             } else {
                 // While it runs the plus turns into the ring (owner 2026-10-29: "Following…" under a
                 // plus looked broken); when it lands the circle becomes Following ✓ and Mute slides in.
@@ -613,15 +610,31 @@ struct GroupInfoView: View {
                     .tint(.primary)
                     .disabled(following)
             }
-            Button { onSearch?() } label: { actionIcon("magnifyingglass", "Search") }
-                .tint(.primary)
-                .disabled(onSearch == nil)
-                .opacity(onSearch == nil ? 0.45 : 1)
+            // ⛔ ONE ORDER, BEFORE AND AFTER (owner 2026-11-01: "only Follow should change"): Follow
+            // or Leave, Share, Search, Mute, the visitor page's order (`PublicGroupSheet`).
             if let name = conv?.publicName, !name.isEmpty {
                 Button { shareGroupText = "Follow " + (conv?.title ?? "this channel") + " on Fariin: https://fariin.com/" + name } label: {
                     actionIcon("square.and.arrow.up", "Share")
                 }
                 .tint(.primary)
+            } else {
+                // No public link: still in its place, faded, as the visitor page draws it.
+                actionIcon("square.and.arrow.up", "Share").opacity(0.45)
+            }
+            Button { onSearch?() } label: { actionIcon("magnifyingglass", "Search") }
+                .tint(.primary)
+                .disabled(onSearch == nil)
+                .opacity(onSearch == nil ? 0.45 : 1)
+            if followingNow || following {
+                Menu { muteMenuItems } label: { actionIcon(muted ? "ic_bell" : "ic_bell_off", muted ? "Unmute" : "Mute") }
+                    .tint(.primary)
+                    .accessibilityLabel(muted ? "Unmute" : "Mute")
+            } else {
+                Button { ToastNotice.show("Follow this channel to change its notifications.") } label: {
+                    actionIcon("ic_bell_off", "Mute")
+                }
+                .tint(.primary)
+                .opacity(0.45)
             }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: followingNow)

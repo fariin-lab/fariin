@@ -865,11 +865,13 @@ struct PublicGroupInfoView: View {
     /// Search, Share, `GroupInfoView`), so the hand-over a moment later changes nothing on screen.
     /// Leave takes the follow back; the others wait the second until that page is here.
     private var followerActionsRow: some View {
+        // ⛔ ONE ORDER, BEFORE AND AFTER (owner 2026-11-01: "only Follow should change"): Follow or
+        // Leave, Share, Search, Mute. Mute wakes up once following.
         HStack(spacing: 0) {
             Button { undoFollow() } label: { circle("ic_channel_leave", "Leave") }
-            circle("ic_bell_off", "Mute")
-            circle("magnifyingglass", "Search").opacity(0.45)   // as the channel page draws it before posts load
             circle("square.and.arrow.up", "Share")
+            circle("magnifyingglass", "Search").opacity(0.45)   // as the channel page draws it before posts load
+            circle("ic_bell_off", "Mute")
         }
         .tint(.primary)
     }
@@ -889,12 +891,11 @@ struct PublicGroupInfoView: View {
             Button { joinNotice = "Follow the channel to search its posts." } label: {
                 circle("magnifyingglass", "Search").opacity(0.45)
             }
-            Menu {
-                if let link {
-                    Button { UIPasteboard.general.string = link.absoluteString } label: { Label("Copy Link", systemImage: "doc.on.doc") }
-                }
-                Button(role: .destructive) { confirmReport = true } label: { Label("Report Channel", systemImage: "exclamationmark.octagon") }
-            } label: { circle("ellipsis", "More") }
+            // Mute in More's place (owner 2026-11-01): More only held Copy Link and Report, both
+            // already on this page (the link row, the Report row at the foot).
+            Button { joinNotice = "Follow the channel to change its notifications." } label: {
+                circle("ic_bell_off", "Mute").opacity(0.45)
+            }
         }
         .tint(.primary)
         .alert("Report this channel?", isPresented: $confirmReport) {
