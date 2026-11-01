@@ -468,7 +468,8 @@ enum NotificationCleaner {
         let official = [OfficialChannelStore.shared.listEntry].compactMap { $0 }
         let total = (ConversationsRepository.shared.conversations + official)
             .filter { $0.id != cid && !$0.isCleared(me) && !$0.isArchived(me) && !$0.isBlockedByMe(me)
-                      && (Flags.groupsEnabled || !$0.isGroup) }
+                      && (Flags.groupsEnabled || !$0.isGroup)
+                      && MessageRequests.stance($0, myUid: me) != .incoming }   // as the Chats tab
             .reduce(0) { $0 + $1.unread(me) }
         return max(0, total)
     }
@@ -539,6 +540,17 @@ enum Push {
     /// themselves: that screen's Continue, and the Show Notifications switch in Settings. A phone
     /// that already answered is unaffected either way: iOS answers without showing anything.
     static func register(askIfUndecided: Bool = false) {
+        // Show Notifications off survives a log out or a new phone: the wipe clears the local switch,
+        // so a sign-in with none asks the account (`users.notifPush`).
+        if UserDefaults.standard.object(forKey: "notif.push") == nil, let me = Auth.auth().currentUser?.uid {
+            Task {
+                guard let d = try? await FirestoreHub.db.collection("users").document(me).getDocument().data(),
+                      d["notifPush"] as? Bool == false,
+                      UserDefaults.standard.object(forKey: "notif.push") == nil else { return }
+                UserDefaults.standard.set(false, forKey: "notif.push")
+                await unregister()
+            }
+        }
         guard UserDefaults.standard.object(forKey: "notif.push") as? Bool ?? true else { return }
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in

@@ -4184,12 +4184,12 @@ struct ThreadView: View {
                 forwardTarget = m
             })
         }
-        if let fav = StickerSend.favoriteTitle(m) {   // 2026-10-17 chat stickers
+        if savingAllowed, let fav = StickerSend.favoriteTitle(m) {   // 2026-10-17 chat stickers
             items.append(UIAction(title: fav, image: UIImage(systemName: fav.hasPrefix("Remove") ? "star.slash" : "star")) { _ in
                 Task { @MainActor in showJumpToast(await StickerSend.toggleFavorite(m, cid: cid)) }
             })
         }
-        if let fav = GifFavorites.menuTitle(m) {   // owner 2026-10-18: the panel's GIF Favorites
+        if savingAllowed, let fav = GifFavorites.menuTitle(m) {   // owner 2026-10-18: the panel's GIF Favorites
             items.append(UIAction(title: fav, image: UIImage(systemName: fav.hasPrefix("Remove") ? "star.slash" : "star")) { _ in
                 showJumpToast(GifFavorites.toggle(m))
             })
@@ -4361,12 +4361,12 @@ struct ThreadView: View {
             })
         }
         // 2026-10-17 chat stickers (owner): keep a sticker from the chat, mine or theirs.
-        if let fav = StickerSend.favoriteTitle(m) {
+        if savingAllowed, let fav = StickerSend.favoriteTitle(m) {
             out.append(CMAction(title: fav, icon: fav.hasPrefix("Remove") ? "star.slash" : "star") {
                 Task { @MainActor in showJumpToast(await StickerSend.toggleFavorite(m, cid: cid)) }
             })
         }
-        if let fav = GifFavorites.menuTitle(m) {   // owner 2026-10-18: the panel's GIF Favorites
+        if savingAllowed, let fav = GifFavorites.menuTitle(m) {   // owner 2026-10-18: the panel's GIF Favorites
             out.append(CMAction(title: fav, icon: fav.hasPrefix("Remove") ? "star.slash" : "star") {
                 showJumpToast(GifFavorites.toggle(m))
             })
@@ -5635,6 +5635,7 @@ struct ThreadView: View {
     ///   guard Reply, Edit, Pin and Info already share, for the reason written above the menu.
     private func canForward(_ m: Message) -> Bool {
         m.sendState == nil && !m.isCall && !m.isSystem && !m.deleted && !m.viewOnce
+            && m.text != "🔒" && m.text != "…"   // unopened: a forward would send the placeholder itself
             && !repo.noForwarding   // Disable Sharing (2026-10-03), from this chat's own listener
     }
 

@@ -6969,7 +6969,9 @@ final class CallService: NSObject {
                 ref.getDocument(source: .server) { [weak self] snap, _ in
                     guard let self, sameCall() else { return }
                     if let d = snap?.data(), (d["status"] as? String) != "ended" {
-                        ref.updateData(data) { [weak self] err in
+                        // Never the camera state read before it came up: that is what took the face away.
+                        let plain = data.filter { !$0.key.hasPrefix("cams.") }
+                        ref.updateData(plain) { [weak self] err in
                             if let err { Self.reportToRecovery(err, "call answer") }
                             guard let self, err != nil, sameCall() else { return }
                             self.endReason = .failed; self.hangUp()

@@ -68,6 +68,10 @@ struct NotificationsSettingsView: View {
                 Toggle("Show Notifications", isOn: $pushOn)
                     .tint(.green)
                     .onChange(of: pushOn) { _, on in
+                        // Kept on the account too, so a log out does not turn it back on.
+                        if let me = AuthService.shared.uid {
+                            FirestoreHub.db.collection("users").document(me).setData(["notifPush": on], merge: true)
+                        }
                         if on { Push.register(askIfUndecided: true) } else { Task { await Push.unregister() } }   // unregister is now async
                     }
             } footer: {
