@@ -478,7 +478,10 @@ enum DemoMode {
     /// The full (plaintext) conversation shown when a demo chat is opened.
     static func messages(for cid: String) -> [Message] {
         let me = meUid
-        let n = Date()
+        // Screenshot mode: every message before the status bar's 9:41.
+        let n = storeShots
+            ? (Calendar.current.date(bySettingHour: 9, minute: 41, second: 0, of: Date()) ?? Date())
+            : Date()
         func t(_ s: Double) -> Date { n.addingTimeInterval(s) }
 
         switch cid {
@@ -524,24 +527,19 @@ enum DemoMode {
             ]
 
         case "demo-trip":
-            var speaker = Message(demoId: "\(cid)-1", from: "demo-khadra", "Me! And the speaker 🎶", t(-2600))
-            speaker.reactions = [me: "😂", "demo-cabdi": "😂", "demo-hooyo": "😂", "demo-linnea": "👍"]
             let poll = Message(demoId: Self.tripPollId, from: "demo-linnea",
                                Message.pollMarkerText(id: Self.tripPollId, question: "What time do we leave? 🚗",
                                                       options: ["7 AM", "9 AM"], multiple: false), t(-2200))
             var car = Message(demoImage: "\(cid)-3", from: "demo-hooyo",
                               data: photoData("demo-photo-car", .systemTeal, .systemBlue, "Car"),
-                              w: 1600, h: 1300, t(-1500))
+                              w: 2200, h: 1000, t(-1500))
             car.reactions = [me: "❤️", "demo-cabdi": "❤️", "demo-khadra": "😍", "demo-linnea": "❤️"]
             var sticker = Message(demoId: "\(cid)-5", from: "demo-cabdi", "", t(-900))
             sticker.type = "sticker"; sticker.stickerPack = "topi"; sticker.stickerId = "topi_05"
             sticker.stickerEmoji = "🎉"; sticker.stickerAnimated = true
             return [
-                Message(demoId: "\(cid)-0", from: "demo-cabdi", "Who's bringing the snacks? 🍉", t(-2800)),
-                speaker,
                 poll,
                 car,
-                Message(demoId: "\(cid)-4", from: "demo-hooyo", "All packed! 🚗💨", t(-1450)),
                 sticker,
                 Message(demoId: "\(cid)-6", from: me, "Can't wait!! 🙌", t(-600)),
             ]
