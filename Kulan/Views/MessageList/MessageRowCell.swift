@@ -195,11 +195,11 @@ final class MessageRowCell: UICollectionViewCell {
         super.init(frame: frame)
         backgroundColor = .clear
         contentView.backgroundColor = .clear
-        contentView.addSubview(rowView)
         fixedHost.isUserInteractionEnabled = false
         contentView.addSubview(fixedHost)
-        tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        contentView.addSubview(rowView)
         rowView.fixedHost = fixedHost
+        tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         tap.cancelsTouchesInView = false   // the list's tap-to-dismiss-keyboard still gets its turn
         contentView.addGestureRecognizer(tap)
         rowView.failMenuItems = { [weak self] in
@@ -222,8 +222,8 @@ final class MessageRowCell: UICollectionViewCell {
         rowId = nil
         model = nil
         rowView.isHidden = true
-        accessibilityLabel = nil
         fixedHost.isHidden = true
+        accessibilityLabel = nil
         accessibilityValue = nil
     }
 
@@ -241,6 +241,7 @@ final class MessageRowCell: UICollectionViewCell {
         // animates correctly too, and a cell that missed the transition entirely cannot be left in
         // the wrong state: the pass after the slide carries neither flag, and the row is rebuilt
         // without a selection lane at all.
+        //
         applyAccessibility(m)
         let entering = m.selecting && !m.wasSelecting
         let leaving = !m.selecting && m.wasSelecting
@@ -256,9 +257,9 @@ final class MessageRowCell: UICollectionViewCell {
         guard entering || leaving else { return }
         rowView.animateSelectionShift(from: shownShift, to: plan.selectionShift)
         rowView.animateSelectionSlide(entering: entering)
-    }
         WallpaperBlurSliceView.reposition(in: self)
         BubbleFillView.repositionGradients(in: self)
+    }
 
     /// A geometry-neutral repaint — the tick upgraded, the time changed, the row was selected. Held
     /// to changes that cannot move anything, because a height-changing update has to go through the
@@ -504,8 +505,8 @@ final class MessageRowCell: UICollectionViewCell {
         let p = g.location(in: rowView)
 
         if m.selecting {
-            // In selection mode the whole row toggles — the checkbox is the affordance, not the
             if case .notice = m.content { return }   // no circle, nothing to select
+            // In selection mode the whole row toggles — the checkbox is the affordance, not the
             // only target. Theirs suppresses every other tap handler here for the same reason.
             //
             // THE TICK IS WRITTEN ONTO THE VIEW FIRST, then the model is told. That is their
