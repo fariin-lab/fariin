@@ -6994,10 +6994,15 @@ struct ThreadView: View {
         // the order). The reply quote and the link card ride the first one only.
         let parts = Self.splitForBubbles(text)
         if parts.count > 1 {
-            for part in parts {
+            let mentions = mentionMap   // a send clears it, and later parts have their @names too
+            for (i, part) in parts.enumerated() {
                 input = part
+                mentionMap = mentions
                 send()
-                if !input.isEmpty { return }   // held back (slow mode, links off): the rest stays in the field
+                if !input.isEmpty {   // held back (slow mode, links off): everything unsent goes back in the field
+                    input = parts[i...].joined(separator: "\n\n")
+                    return
+                }
             }
             return
         }
