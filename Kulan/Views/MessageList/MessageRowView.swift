@@ -2005,7 +2005,9 @@ final class MessageRowView: UIView {
             // The pill is held hidden for the flight now; where to fly is asked once layout is done.
             let from = ReactionFlight.take(chip.emoji)
             let settle: CFTimeInterval = 0.06
-            let delay = from == nil ? 0 : ReactionFlight.duration + settle
+            // The pill is solid as the emoji lands, not after it (owner 2026-11-01: the bubble had
+            // grown, an empty gap sat there, and the pill came late). Its fade takes 0.22 s.
+            let delay = from == nil ? 0 : max(0, ReactionFlight.duration + settle - 0.22)
             popPill(v, arriving: old.arriving.contains(chip.emoji), delay: delay)
             let emoji = chip.emoji
             DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self, weak v] in

@@ -1335,7 +1335,11 @@ struct MediaGalleryView: View {
         guard let src else { return nil }
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("share-voice", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let dest = dir.appendingPathComponent(index == 0 ? "Voice message.m4a" : "Voice message \(index + 1).m4a")
+        // A note's file is Opus in CAF since 2026-11-01, whatever the cache calls it; the shared
+        // file has to say what it is or other apps refuse it.
+        let head = (try? FileHandle(forReadingFrom: src))?.readData(ofLength: 4)
+        let ext = head == Data("caff".utf8) ? "caf" : "m4a"
+        let dest = dir.appendingPathComponent(index == 0 ? "Voice message.\(ext)" : "Voice message \(index + 1).\(ext)")
         try? FileManager.default.removeItem(at: dest)
         guard (try? FileManager.default.copyItem(at: src, to: dest)) != nil else { return nil }
         return dest

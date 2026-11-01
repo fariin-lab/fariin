@@ -87,14 +87,15 @@ final class AudioRecorder {
                                                 // customer is the mic halo (levels.last).
     private let maxWaveSamples = 900            // bounded streaming buffer (halved by RMS when exceeded)
 
-    // Voice-tuned AAC: 24 kHz mono comfortably covers speech (≤ ~8 kHz voiced energy, Nyquist 12 kHz)
-    // and ~40 kbps keeps the E2EE payload small (faster seal + upload) with no audible loss on speech.
+    // Plain 48 kHz mono while recording; every stretch stays a playable file for pause and drafts.
+    // The note that leaves the phone is Opus (`OpusVoiceEncoder`, owner 2026-11-01).
     private let settings: [String: Any] = [
-        AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-        AVSampleRateKey: 24_000,
+        AVFormatIDKey: Int(kAudioFormatLinearPCM),
+        AVSampleRateKey: OpusVoiceEncoder.sampleRate,
         AVNumberOfChannelsKey: 1,
-        AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
-        AVEncoderBitRateKey: 40_000,
+        AVLinearPCMBitDepthKey: 16,
+        AVLinearPCMIsFloatKey: false,
+        AVLinearPCMIsBigEndianKey: false,
     ]
 
     // Set when a call/Siri/alarm interrupted an in-flight recording: the partial note is PRESERVED
@@ -198,7 +199,7 @@ final class AudioRecorder {
             // the hold itself configures and activates the session (`requestAndStart`).
             DispatchQueue.global(qos: .userInitiated).async {
                 let url = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("voice-\(UUID().uuidString).m4a")
+                    .appendingPathComponent("voice-\(UUID().uuidString).caf")
                 guard let r = try? AVAudioRecorder(url: url, settings: self.settings) else { return }
                 r.isMeteringEnabled = true
                 r.prepareToRecord()
@@ -235,7 +236,7 @@ final class AudioRecorder {
             DiagLog.add("VOICEREC# warm recorder refused, rebuilding")
             if let u = fileURL { try? FileManager.default.removeItem(at: u) }
             let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("voice-\(UUID().uuidString).m4a")
+                .appendingPathComponent("voice-\(UUID().uuidString).caf")
             guard let fresh = try? AVAudioRecorder(url: url, settings: settings) else {
                 recorder = nil; fileURL = nil; return
             }
@@ -266,7 +267,7 @@ final class AudioRecorder {
                 try? session.setActive(true)
                 Self.allowHapticsWhileRecording(session)
                 let url = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("voice-\(UUID().uuidString).m4a")
+                    .appendingPathComponent("voice-\(UUID().uuidString).caf")
                 guard let r = try? AVAudioRecorder(url: url, settings: self.settings) else { return }
                 r.isMeteringEnabled = true
                 r.record()
@@ -383,12 +384,8 @@ final class AudioRecorder {
     // after `stop()`. The reference's pause offers BOTH listening and continuing, and one file can
     // never do both. So: every pause STOPS the current file (a finished, playable stretch), listening
     // plays the stretches stitched together, resuming records the next stretch to a fresh file, and
-    // send stitches all of them into the one m4a that leaves the phone. A single-stretch note (the
-    // common hold-release case) skips the stitch entirely — its file IS the note, same speed as ever.
-    //
-    // The stitch is `AVMutableComposition` + passthrough export: every stretch is recorded with the
-    // identical AAC settings, so the bytes are copied, not re-encoded. A re-encode preset is the
-    // fallback if the muxer ever refuses, because a slower send beats a lost note.
+    // send joins all of them into the one Opus file that leaves the phone (`OpusVoiceEncoder`).
+    // AAC is the fallback if that ever refuses, because a slower send beats a lost note.
 
     /// The finished stretches so far, in order. The live recorder (if any) is the stretch in progress.
     private var segments: [(url: URL, duration: Double)] = []
@@ -471,7 +468,7 @@ final class AudioRecorder {
             r.record()
         } else {
             let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("voice-\(UUID().uuidString).m4a")
+                .appendingPathComponent("voice-\(UUID().uuidString).caf")
             guard let r = try? AVAudioRecorder(url: url, settings: settings) else { return }
             r.isMeteringEnabled = true
             r.record()
@@ -486,7 +483,13 @@ final class AudioRecorder {
 
     /// One playable file for the whole note so far. A single stretch needs no work at all.
     private func stitched() async -> URL? {
-        if segments.count == 1 { return segments[0].url }
+        let urls = segments.map(\.url)
+        let opus = FileManager.default.temporaryDirectory.appendingPathComponent("voice-note-\(UUID().uuidString).caf")
+        if await Task.detached(priority: .userInitiated, operation: { OpusVoiceEncoder.encode(urls, to: opus) }).value {
+            return opus
+        }
+        // Not Opus (a draft from an older build is 24 kHz AAC): AAC, because a note must never be lost.
+        DiagLog.add("VOICEREC# not encoded as Opus: AAC instead")
         let comp = AVMutableComposition()
         guard let track = comp.addMutableTrack(withMediaType: .audio,
                                                preferredTrackID: kCMPersistentTrackID_Invalid) else { return nil }
@@ -501,7 +504,7 @@ final class AudioRecorder {
         }
         let out = FileManager.default.temporaryDirectory
             .appendingPathComponent("voice-stitched-\(UUID().uuidString).m4a")
-        for preset in [AVAssetExportPresetPassthrough, AVAssetExportPresetAppleM4A] {
+        for preset in [AVAssetExportPresetAppleM4A] {
             guard let ex = AVAssetExportSession(asset: comp, presetName: preset) else { continue }
             ex.outputURL = out
             ex.outputFileType = .m4a
@@ -645,7 +648,7 @@ final class AudioRecorder {
         try? fm.createDirectory(at: staging, withIntermediateDirectories: true)
         var files: [String] = [], durations: [Double] = []
         for (i, seg) in segments.enumerated() {
-            let name = "seg\(i).m4a"
+            let name = "seg\(i).\(seg.url.pathExtension)"
             try? fm.moveItem(at: seg.url, to: staging.appendingPathComponent(name))
             files.append(name); durations.append(seg.duration)
         }
