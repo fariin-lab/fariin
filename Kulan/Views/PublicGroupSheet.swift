@@ -671,13 +671,21 @@ struct PublicGroupInfoView: View {
         // blank "Group · 0 Members" page). At the tap the follow list does not hold the channel yet,
         // and the member page with nothing to read draws as an empty group. The visitor page stays
         // until the channel has arrived, then hands over.
-        if p.isChannel && (following || ChannelFollows.shared.follows(p.cid))
-            && (ChannelFollows.shared.conversations.contains { $0.id == p.cid }
-                || ConversationsRepository.shared.conversations.contains { $0.id == p.cid }) {
-            GroupInfoView(cid: p.cid)
-                .onDisappear { guest.joined = true }
-        } else {
-            visitorPage
+        // ⛔ ONE onDisappear, ON THE PAGE AS A WHOLE (owner 2026-11-01: Follow still flashed a blank
+        // page). Each branch had its own, so the hand-over itself (visitor page out, channel page in)
+        // fired the visitor page's and turned the chat behind into the follower's while this page
+        // was still open. A ZStack is one view: it only disappears when the page really closes.
+        ZStack {
+            if p.isChannel && (following || ChannelFollows.shared.follows(p.cid))
+                && (ChannelFollows.shared.conversations.contains { $0.id == p.cid }
+                    || ConversationsRepository.shared.conversations.contains { $0.id == p.cid }) {
+                GroupInfoView(cid: p.cid)
+            } else {
+                visitorPage
+            }
+        }
+        .onDisappear {
+            if following || ChannelFollows.shared.follows(p.cid) { guest.joined = true }
         }
     }
 
@@ -715,8 +723,7 @@ struct PublicGroupInfoView: View {
         .sheet(item: Binding(get: { shareText.map { ShareText(id: $0) } }, set: { shareText = $0?.id })) { t in
             SendContactSheet(contactText: t.id)
         }
-        // Followed from here: the chat behind becomes the follower's once this page closes.
-        .onDisappear { if following { guest.joined = true } }
+        // Followed from here: the chat behind becomes the follower's once this page closes (`body`).
         // No Join here: the reference app's info page has none (its only Join is the chat's foot).
         .task {
             guard guest.readable else { return }
