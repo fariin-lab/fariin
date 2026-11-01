@@ -372,11 +372,11 @@ enum DemoMode {
         let familyPhoto = profilePhoto("demo-photo-dinner", "family", .systemOrange, .systemRed, "Q")
         let newsPhoto   = profilePhoto("official-mark", "fariin-news", .black, .darkGray, "F")
         return [
-            group("demo-family", me, title: "Qoyska 🏡", photo: familyPhoto, at: now.addingTimeInterval(-90),
-                  sender: "demo-hooyo", senderName: "Hooyo", last: "Casho waa diyaar, kaalaya 🍲",
+            group("demo-family", me, title: "Family 🏡", photo: familyPhoto, at: now.addingTimeInterval(-90),
+                  sender: "demo-hooyo", senderName: "Mom", last: "Dinner is ready, come home 🍲",
                   members: ["demo-hooyo", "demo-cabdi", "demo-khadra"], unread: 3, pinned: true),
             chat("demo-hooyo",  me, "demo-hooyo",  "Sagal",         now.addingTimeInterval(-260),
-                 "Ma soo gaadhay guriga?", hooyoPhoto, unread: 2, pinned: true),
+                 "Did you get home safe?", hooyoPhoto, unread: 2, pinned: true),
             chat("demo-ayaan",  me, "demo-ayaan",  "Ayaan Warsame", now.addingTimeInterval(-2100),
                  "I will call you after Maghrib", ayaanPhoto, mine: true),
             channel("demo-news", me, title: "Fariin News", photo: newsPhoto, at: now.addingTimeInterval(-4200),
@@ -396,13 +396,13 @@ enum DemoMode {
             // great many real profile pictures actually are, and a list where all seven are portraits
             // would be the unrealistic one.
             chat("demo-ilhan",  me, "demo-ilhan",  "Ilhan",         now.addingTimeInterval(-93000),
-                 "Mahadsanid walaal", ilhanPhoto),
+                 "Thank you so much ❤️", ilhanPhoto),
             // ⛔ THE LAST ONE STAYS WITHOUT A PHOTO ON PURPOSE — do not "finish" this by giving him
             // one. Somebody with no picture is the commonest row in any real chat list, and the
             // coloured letter circle is a piece of the design that has to be visible in a screenshot
             // too. Six with pictures and one without is the honest ratio.
             chat("demo-faarax", me, "demo-faarax", "Faarax",        now.addingTimeInterval(-176400),
-                 "Berri ma is aragnaa?", ""),
+                 "Are we still meeting tomorrow?", ""),
         ]
     }
 
