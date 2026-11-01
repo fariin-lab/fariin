@@ -245,10 +245,10 @@ enum DemoMode {
         let cabdiStory3 = story("demo-story-cabdi-3", .systemBrown, .systemOrange, "Geeljire")
         let cabdiStory4 = story("demo-story-cabdi-4", .systemTeal, .systemBlue,  "Masaajidka")
         let cabdiStory5 = story("demo-story-cabdi-5", .systemBrown, .systemOrange, "Waddada")
-        let khadraStory = story("demo-story-khadra", .systemPink, .systemOrange, "Casarkii")
-        let khadraStory2 = story("demo-story-khadra-2", .systemGreen, .systemYellow, "Suuqa")
+        let khadraStory = story("demo-story-khadra", .systemPink, .systemOrange, "Afternoon")
+        let khadraStory2 = story("demo-story-khadra-2", .systemGreen, .systemYellow, "Market day")
         let khadraStory3 = story("demo-story-khadra-3", .systemYellow, .systemOrange, "Bacaadka")
-        let khadraStory4 = story("demo-story-khadra-4", .systemTeal, .systemGreen, "Xeebta")
+        let khadraStory4 = story("demo-story-khadra-4", .systemTeal, .systemGreen, "The beach")
 
         // Profile portraits. Built here so the chat list and the story rings hand the same url to
         // the poster header, and so the whole set exists before any row asks for it.
@@ -304,11 +304,11 @@ enum DemoMode {
                         Story(id: "demo-k1", authorUid: "demo-khadra",
                               createdAt: now.addingTimeInterval(-28800),
                               expiresAt: now.addingTimeInterval(8 * 3600),
-                              mediaUrl: khadraStory, allowsReplies: true, caption: "Casarkii"),
+                              mediaUrl: khadraStory, allowsReplies: true, caption: "Afternoon"),
                         Story(id: "demo-k2", authorUid: "demo-khadra",
                               createdAt: now.addingTimeInterval(-21600),
                               expiresAt: now.addingTimeInterval(10 * 3600),
-                              mediaUrl: khadraStory2, allowsReplies: true, caption: "Suuqa"),
+                              mediaUrl: khadraStory2, allowsReplies: true, caption: "Market day"),
                         Story(id: "demo-k3", authorUid: "demo-khadra",
                               createdAt: now.addingTimeInterval(-14400),
                               expiresAt: now.addingTimeInterval(12 * 3600),
@@ -316,7 +316,7 @@ enum DemoMode {
                         Story(id: "demo-k4", authorUid: "demo-khadra",
                               createdAt: now.addingTimeInterval(-9000),
                               expiresAt: now.addingTimeInterval(14 * 3600),
-                              mediaUrl: khadraStory4, allowsReplies: true, caption: "Xeebta"),
+                              mediaUrl: khadraStory4, allowsReplies: true, caption: "The beach"),
                        ], lastViewedAt: nil, isMine: false),
         ]
 
@@ -358,13 +358,13 @@ enum DemoMode {
         let ilhanPhoto  = profilePhoto("demo-face-ilhan",  "ilhan",  .systemPurple, .systemPink,   "I")
         return [
             StoryGroup(authorUid: "demo-sagal", name: "Maya", photoUrl: sagalPhoto, stories: [
-                s(1, "demo-sagal", "demo-story-sagal",   23400, "Subax"),
-                s(2, "demo-sagal", "demo-story-sagal-2", 16200, nil),
-                s(3, "demo-sagal", "demo-story-sagal-3",  7200, "Guriga"),
+                // App Store photo 6 (owner 2026-11-01): the beach trip's night, first when tapped.
+                s(1, "demo-sagal", "demo-story-maya",     3600, "Best night ever 🌅"),
+                s(2, "demo-sagal", "demo-story-campfire", 2700, nil),
             ], lastViewedAt: nil, isMine: false),
             StoryGroup(authorUid: "demo-ayaan", name: "Ayaan", photoUrl: ayaanPhoto, stories: [
-                s(1, "demo-ayaan", "demo-story-ayaan",   26100, "Suuqa"),
-                s(2, "demo-ayaan", "demo-story-ayaan-2", 12600, "Shaah"),
+                s(1, "demo-ayaan", "demo-story-ayaan",   26100, "Market day"),
+                s(2, "demo-ayaan", "demo-story-ayaan-2", 12600, "Tea time"),
                 s(3, "demo-ayaan", "demo-story-ayaan-3",  4500, nil),
             ], lastViewedAt: nil, isMine: false),
             StoryGroup(authorUid: "demo-linnea", name: "Linnea", photoUrl: linneaPhoto, stories: [
@@ -374,8 +374,8 @@ enum DemoMode {
             ], lastViewedAt: nil, isMine: false),
             StoryGroup(authorUid: "demo-ilhan", name: "Leo", photoUrl: ilhanPhoto, stories: [
                 s(1, "demo-ilhan", "demo-story-ilhan",   30600, nil),
-                s(2, "demo-ilhan", "demo-story-ilhan-2", 17100, "Xeebta"),
-                s(3, "demo-ilhan", "demo-story-ilhan-3",  8100, "Baraf"),
+                s(2, "demo-ilhan", "demo-story-ilhan-2", 17100, "The beach"),
+                s(3, "demo-ilhan", "demo-story-ilhan-3",  8100, "Snow"),
             ], lastViewedAt: nil, isMine: false),
             StoryGroup(authorUid: "demo-cabdi", name: "Daniel", photoUrl: cabdiPhoto, stories: [
                 s(1, "demo-cabdi", "demo-story-cabdi",   25200, "Night vibes"),
@@ -385,10 +385,10 @@ enum DemoMode {
                 s(5, "demo-cabdi", "demo-story-cabdi-5",  3600, "Long way back"),
             ], lastViewedAt: nil, isMine: false),
             StoryGroup(authorUid: "demo-khadra", name: "Sofia", photoUrl: khadraPhoto, stories: [
-                s(1, "demo-khadra", "demo-story-khadra",   28800, "Casarkii"),
-                s(2, "demo-khadra", "demo-story-khadra-2", 21600, "Suuqa"),
+                s(1, "demo-khadra", "demo-story-khadra",   28800, "Afternoon"),
+                s(2, "demo-khadra", "demo-story-khadra-2", 21600, "Market day"),
                 s(3, "demo-khadra", "demo-story-khadra-3", 14400, nil),
-                s(4, "demo-khadra", "demo-story-khadra-4",  9000, "Xeebta"),
+                s(4, "demo-khadra", "demo-story-khadra-4",  9000, "The beach"),
             ], lastViewedAt: nil, isMine: false),
         ]
     }
