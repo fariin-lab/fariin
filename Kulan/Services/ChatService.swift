@@ -3107,10 +3107,18 @@ enum ChatService {
     /// messages are fetched and filtered client-side — a `type ==` + `createdAt` query would need
     /// a composite index and fail silently without one. Idempotent: cached ids are skipped, and
     /// one-time notes are never cached anywhere, this path included.
-    static func prefetchNewestVoice(cid: String) async {
+    static func prefetchNewestVoice(cid: String, tries: Int = 4) async {
         guard let snap = try? await db.collection("conversations").document(cid).collection("messages")
             .order(by: "createdAt", descending: true)
-            .limit(to: 8).getDocuments() else { return }
+            .limit(to: 8).getDocuments(source: .server) else { return }
+        // The bubble comes before its file (`sendAudio`). A note still uploading has nothing to fetch
+        // yet, so look again shortly (owner 2026-11-01): a note that arrived while I was on the
+        // chat list must be on the phone by the time I open the chat.
+        if tries > 1, snap.documents.contains(where: { $0.get("uploading") as? Bool == true && $0.get("type") as? String == "audio" }) {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await prefetchNewestVoice(cid: cid, tries: tries - 1)
+            return
+        }
         // 2026-10-23: through `MediaFetch.requestVoice`, so the same rules as inside a chat apply
         // here (the Audio row and the network, Low Data Mode, the size ceiling, one-time notes and
         // files sealed before I joined left alone), and the download is the shared job a tap would

@@ -708,6 +708,11 @@ struct ThreadView: View {
     /// been replaced since we last looked — ⚠️ a GROUP WAS PREVIOUSLY EXCLUDED ENTIRELY (`!isGroup`),
     /// so a member changing phone was silent, which is the one place it matters most: a group has
     /// more people in it and you know each of them less well.
+    /// Recent voice notes whose file link has landed (see the `.task(id:)` that reads this).
+    private var voiceFilesLanded: Int {
+        repo.items.suffix(30).reduce(0) { $0 + ($1.isAudio && $1.audioUrl?.isEmpty == false ? 1 : 0) }
+    }
+
     private var keyChangedUids: [String] {
         isGroup ? SafetyKeyLog.pendingAmong(groupMembers.filter { $0 != me })
                 : (SafetyKeyLog.changedAt(otherUid) != nil ? [otherUid] : [])
@@ -2218,7 +2223,11 @@ struct ThreadView: View {
         // The attach grid's recents, warmed before the sheet is ever opened (a no-op once warm;
         // see RecentsCache.prewarm and the same call on the chat list).
         .onAppear { RecentsCache.prewarm() }
-        .task(id: "\(cid)-\(repo.items.count)") {
+        // ⛔ AND ON A VOICE NOTE'S FILE LINK (owner 2026-11-01: a received note always showed loading on
+        // play). A note's bubble arrives before its upload ends, so the first look finds no url, and
+        // the url lands on the same row: the count never moved, so nothing looked again and the
+        // file waited for the tap.
+        .task(id: "\(cid)-\(repo.items.count)-\(voiceFilesLanded)") {
             // ⛔ VOICE NOTES DO NOT WAIT FOR THE DEBOUNCE — his report, 2026-08-27, and the reference
             // app's own trigger: their file node calls `fetch(false)` as the bubble lays out, with no
             // delay and no viewport test. A note arriving while he watched used to sit here for 1.2
