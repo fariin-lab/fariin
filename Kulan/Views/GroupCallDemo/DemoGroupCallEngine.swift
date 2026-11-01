@@ -214,6 +214,19 @@ final class DemoGroupCallEngine: ObservableObject {
 
     // MARK: - Starting
 
+    /// App Store screenshot (owner 2026-11-01): the Beach Trip call, five friends on camera.
+    func startStoreShots() {
+        resetState(keepLog: true)
+        let cast: [(String, Bool)] = [("Emma", true), ("George", false), ("Noah", true),
+                                      ("Grace", true), ("Omar", true)]
+        for (i, (name, mic)) in cast.enumerated() {
+            people.append(DemoPerson(id: "PA_store_\(i)", uid: Self.uid(for: name), name: name, photoUrl: nil,
+                                     role: .participant, micOn: mic, cameraOn: true, link: .connecting,
+                                     handRaised: false, joinedAt: now.addingTimeInterval(-Double(300 - i * 20))))
+        }
+        beginConnecting()
+    }
+
     /// Preset: join a call that is already running with `total` people in it, me included.
     func startPreset(total: Int) {
         resetState(keepLog: true)

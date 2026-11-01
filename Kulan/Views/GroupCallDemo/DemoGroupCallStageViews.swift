@@ -168,6 +168,18 @@ struct DemoFakeCamera: View {
     }
 
     var body: some View {
+        // App Store screenshot mode: the person's own front-camera photo, edge to edge, no mark.
+        if let face = DemoMode.callFace(name: name) {
+            GeometryReader { g in
+                Image(uiImage: face).resizable().scaledToFill()
+                    .frame(width: g.size.width, height: g.size.height).clipped()
+            }
+        } else {
+            stand_in
+        }
+    }
+
+    private var stand_in: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             let drift = sin(t / 3) * 0.06

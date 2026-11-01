@@ -146,6 +146,19 @@ enum DemoMode {
         return [meUid: [1], "demo-cabdi": [1], "demo-khadra": [1], "demo-hooyo": [0]]
     }
 
+    /// The demo call's front-camera photos (screenshot mode only); my own tile shows the demo me.
+    static func callFace(name: String) -> UIImage? {
+        guard storeShots else { return nil }
+        let key = name.lowercased()
+        if let img = UIImage(named: "demo-call-\(key)") { return img }
+        if name == "You" || name == (ProfileStore.shared.me?.name ?? "-") { return UIImage(named: "demo-face-me") }
+        return nil
+    }
+    /// Launched with FARIIN_STORE_SHOTS_CALL as well: the app opens straight on the demo call.
+    static var storeShotsCall: Bool {
+        storeShots && ProcessInfo.processInfo.environment["FARIIN_STORE_SHOTS_CALL"] != nil
+    }
+
     /// APP STORE SCREENSHOT MODE (owner 2026-11-01: "our most important thing is the chat list").
     /// Debug builds only, and only when the simulator is launched with FARIIN_STORE_SHOTS set
     /// (`SIMCTL_CHILD_FARIIN_STORE_SHOTS=1 xcrun simctl launch ...`). The chat list then holds the demo

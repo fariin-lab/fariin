@@ -589,6 +589,7 @@ struct CallsView: View {
     @Environment(\.colorScheme) private var scheme
     private var dark: Bool { scheme == .dark }
     @State private var repo = CallsRepository.shared
+    @State private var showStoreCall = false
     @State private var filter = 0            // 0 = All, 1 = Missed
     @State private var profileTarget: CallEntry?
     @State private var showNew = false
@@ -1218,6 +1219,9 @@ struct CallsView: View {
             // sheet down to close it showed a refresh spinner). A cover attached inside the refresh
             // hands that pull-to-refresh to everything it presents, down to the sheet's list.
             .fullScreenCover(isPresented: $showLiveCall) { GroupCallView() }
+            // App Store screenshot of a group call (debug only, see DemoMode.storeShotsCall).
+            .fullScreenCover(isPresented: $showStoreCall) { DemoGroupCallView() }
+            .task { if DemoMode.storeShotsCall { try? await Task.sleep(nanoseconds: 1_500_000_000); showStoreCall = true } }
             .confirmationDialog(deleteSelectionTitle,
                                 isPresented: $showDeleteCalls, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) { deleteSelectedCalls() }

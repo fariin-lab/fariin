@@ -52,7 +52,10 @@ struct DemoGroupCallView: View {
         .animation(GroupCallMotion.fade, value: engine.ringing.isEmpty)
         .environmentObject(engine)
         .preferredColorScheme(.dark)
-        .task { await engine.loadOwnerProfile() }
+        .task {
+            await engine.loadOwnerProfile()
+            if DemoMode.storeShots { engine.startStoreShots() }
+        }
         .onDisappear { engine.shutdown() }
         .sheet(isPresented: $showPeople) {
             DemoPeopleSheet().environmentObject(engine)
@@ -150,12 +153,14 @@ struct DemoGroupCallView: View {
                 subtitle.font(.caption).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
             }
             Spacer()
-            Button { showScenarios = true } label: {
-                Image(systemName: "slider.horizontal.3").font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.orange)
-                    .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)
+            if !DemoMode.storeShots {
+                Button { showScenarios = true } label: {
+                    Image(systemName: "slider.horizontal.3").font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.orange)
+                        .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)
+                }
+                .accessibilityLabel("Scenarios")
             }
-            .accessibilityLabel("Scenarios")
             Button { showPeople = true } label: {
                 Image(systemName: "person.2.fill").font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
@@ -166,6 +171,7 @@ struct DemoGroupCallView: View {
     }
 
     private var title: String {
+        if DemoMode.storeShots { return "Beach Trip 🌴" }
         let others = engine.tiles.filter { !$0.isLocal }
         if others.count == 1, let one = others.first { return one.name }
         let names = (others.isEmpty ? engine.ringing.map(\.name) : others.map(\.name))
