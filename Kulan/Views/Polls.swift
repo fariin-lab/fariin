@@ -39,6 +39,11 @@ enum PollService {
     static func listen(cid: String, messageId: String, channel: Bool? = nil,
                        _ cb: @escaping ([String: [Int]]) -> Void) -> ListenerRegistration {
         if channel ?? Conversation.Right.isChannel(cid) { return listenChannel(cid: cid, messageId: messageId, cb) }
+        // A demo chat's poll: its votes are local (DemoMode), nothing to listen to.
+        if DemoMode.isDemoConversation(cid) {
+            cb(DemoMode.pollVotes(messageId))
+            return PollCompositeRegistration([])
+        }
         return PollVotesHub.shared.subscribe(key: "\(cid)|\(messageId)", cb) {
             votesRef(cid, messageId).addSnapshotListener { snap, _ in
                 var out: [String: [Int]] = [:]

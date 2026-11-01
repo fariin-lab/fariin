@@ -139,6 +139,13 @@ enum DemoMode {
         return demoChats + convs.filter { !isDemoConversation($0.id) }
     }
 
+    /// The Beach Trip poll and its votes (three for 9 AM, one for 7 AM, mine among them).
+    static let tripPollId = "demo-trip-2"
+    static func pollVotes(_ messageId: String) -> [String: [Int]] {
+        guard messageId == tripPollId else { return [:] }
+        return [meUid: [1], "demo-cabdi": [1], "demo-khadra": [1], "demo-hooyo": [0]]
+    }
+
     /// APP STORE SCREENSHOT MODE (owner 2026-11-01: "our most important thing is the chat list").
     /// Debug builds only, and only when the simulator is launched with FARIIN_STORE_SHOTS set
     /// (`SIMCTL_CHILD_FARIIN_STORE_SHOTS=1 xcrun simctl launch ...`). The chat list then holds the demo
@@ -403,6 +410,18 @@ enum DemoMode {
             // too. Six with pictures and one without is the honest ratio.
             chat("demo-faarax", me, "demo-faarax", "Lucas",         now.addingTimeInterval(-176400),
                  "Are we still meeting tomorrow?", ""),
+            // App Store photo 3 (owner 2026-11-01): friends planning the beach trip from photo 2.
+            Conversation(id: "demo-trip", data: [
+                "type": "group", "title": "Beach Trip 🌴",
+                "avatarUrl": profilePhoto("demo-photo-trip", "trip", .systemTeal, .systemBlue, "B"),
+                "users": [me, "demo-hooyo", "demo-cabdi", "demo-khadra", "demo-linnea"],
+                "names": [me: "You", "demo-hooyo": "Maya", "demo-cabdi": "Daniel",
+                          "demo-khadra": "Sofia", "demo-linnea": "Linnea"],
+                "photos": ["demo-hooyo": hooyoPhoto, "demo-cabdi": cabdiPhoto,
+                           "demo-khadra": khadraPhoto, "demo-linnea": linneaPhoto],
+                "lastSender": me, "lastMessage": "Can't wait!! 🙌",
+                "updatedAt": Timestamp(date: now.addingTimeInterval(-180000)), "createdBy": "demo-hooyo",
+            ]),
         ]
     }
 
@@ -502,6 +521,29 @@ enum DemoMode {
                 Message(demoId: "\(cid)-4", from: "demo-ayaan", "Mashallah, aad ayay u quruxsan tahay", t(-8600)),
                 Message(demoId: "\(cid)-5", from: me, "Mahadsanid", t(-8400)),
                 Message(demoId: "\(cid)-6", from: "demo-ayaan", "I will call you tonight", t(-2100)),
+            ]
+
+        case "demo-trip":
+            var speaker = Message(demoId: "\(cid)-1", from: "demo-khadra", "Me! And the speaker 🎶", t(-2600))
+            speaker.reactions = [me: "😂", "demo-cabdi": "😂", "demo-hooyo": "😂", "demo-linnea": "👍"]
+            let poll = Message(demoId: Self.tripPollId, from: "demo-linnea",
+                               Message.pollMarkerText(id: Self.tripPollId, question: "What time do we leave? 🚗",
+                                                      options: ["7 AM", "9 AM"], multiple: false), t(-2200))
+            var car = Message(demoImage: "\(cid)-3", from: "demo-hooyo",
+                              data: photoData("demo-photo-car", .systemTeal, .systemBlue, "Car"),
+                              w: 1600, h: 1300, t(-1500))
+            car.reactions = [me: "❤️", "demo-cabdi": "❤️", "demo-khadra": "😍", "demo-linnea": "❤️"]
+            var sticker = Message(demoId: "\(cid)-5", from: "demo-cabdi", "", t(-900))
+            sticker.type = "sticker"; sticker.stickerPack = "topi"; sticker.stickerId = "topi_05"
+            sticker.stickerEmoji = "🎉"; sticker.stickerAnimated = true
+            return [
+                Message(demoId: "\(cid)-0", from: "demo-cabdi", "Who's bringing the snacks? 🍉", t(-2800)),
+                speaker,
+                poll,
+                car,
+                Message(demoId: "\(cid)-4", from: "demo-hooyo", "All packed! 🚗💨", t(-1450)),
+                sticker,
+                Message(demoId: "\(cid)-6", from: me, "Can't wait!! 🙌", t(-600)),
             ]
 
         case "demo-cabdi":
