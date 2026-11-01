@@ -6883,6 +6883,12 @@ final class CallService: NSObject {
     /// caller's accepted-connect timeout, which fails the call from the other side.
     private func writeAnswerWithRetry(ref: DocumentReference, data: [String: Any], attempt: Int) {
         let peer = otherUid, video = startedAsVideo || everVideo   // for acceptLostToCancel, read while live
+        // ⛔ THE ANSWER CARRIES NO CAMERA STATE — owner 2026-11-01: "they see my face for the first
+        // seconds, then only my photo". The value in `data` was read before the camera came up, and
+        // this transaction lands AFTER `broadcastCameraState` has said true, so it put false back
+        // (5 of 6 calls: phone logged cams=true, the call document ended false). The caller then
+        // dropped the live video for my photo. `cams` has one writer now; it speaks once this lands.
+        let staleCams = "cams.\(me)"
         ref.firestore.runTransaction({ txn, errPtr -> Any? in
             // ⚠️ A FAILED READ IS NOT "THE CALLER CANCELLED". The old `try?` collapsed the two, so
             // one transient read hiccup returned success-with-no-writes, the retry path (which
@@ -6903,6 +6909,7 @@ final class CallService: NSObject {
                 return nil
             }
             var write = data
+            write.removeValue(forKey: staleCams)
             if data["status"] != nil { write["answeredDevice"] = Self.deviceClaim }
             txn.updateData(write, forDocument: ref)
             return nil
@@ -6914,7 +6921,10 @@ final class CallService: NSObject {
                 return
             }
             if (result as? String) == "taken" { self.standDownAnsweredElsewhere(ref.documentID); return }
-            guard let error else { return }                // landed
+            guard let error else {   // landed
+                if self.callId == ref.documentID, self.inLiveCall { self.broadcastCameraState() }
+                return
+            }
             Self.reportToRecovery(error, "call answer")    // owner, 2026-10-08
             // Call already over, or a newer call is up (audit M-038, 2026-10-07): nothing to save,
             // and a failure here must never end a call it does not belong to.
