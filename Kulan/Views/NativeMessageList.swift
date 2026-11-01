@@ -3592,6 +3592,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             }
         }
 
+        // The last row(s) deleted while the reader sat at the newest (see `settleAfterNewestRemoved`).
+        let newestWentAway = wasAtNewest && ids.count < oldSet.count && oldNewestId.map { !ids.contains($0) } == true
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self else { return }
             self.layout.pendingContentOffsetAdjustment = 0   // never let the fallback channel go stale
@@ -3605,6 +3607,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 if self.canLandLoad { self.performScrollTarget(target) } else { self.parkScrollTarget(target) }
             } else if glide {
                 startGlide()
+            } else if newestWentAway {
+                self.settleAfterNewestRemoved()
             } else if adjustment != 0 {
                 // A new message landed while the reader is in history. The layout has already held them
                 // still; this is the one net that checks it actually happened.
@@ -4280,6 +4284,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// reconfigures, and a bare write inside any of those animates the offset on a curve that has
     /// nothing to do with the reader — which is what the always-bare one got wrong. `keyboardBlockUntil`
     /// is precisely the window in which the keys are moving, so it decides.
+    /// ⛔ THE LIST COMES DOWN WHEN ITS LAST ROWS GO (owner 2026-11-01, two screenshots: an empty gap
+    /// over the bar after deleting). A short chat sits at the bottom on a top inset that only
+    /// `updateInsets` writes, and a delete moves nothing that calls it, so the gap stayed; a long chat
+    /// snapped. One glide closes it either way.
+    private func settleAfterNewestRemoved() {
+        collectionView.layoutIfNeeded()
+        UIView.animate(withDuration: 0.25, delay: 0,
+                       options: [.curveEaseInOut, .beginFromCurrentState, .allowUserInteraction]) {
+            self.updateInsets()
+            let bound = self.maxContentOffsetY
+            self.collectionView.contentOffset = CGPoint(x: 0, y: bound)
+            self.lastStableOffset = bound
+        }
+    }
+
     private func restoreReaderPosition() {
         // ⛔ NOT DURING THE SEND HOLD. The hold exists so the composer's own shrink (the reply banner
         // leaving, the text clearing) cannot walk the content down before the row lands and the glide
