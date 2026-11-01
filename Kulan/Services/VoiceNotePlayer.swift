@@ -437,9 +437,16 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         // the same file beside it. Now the tap joins that job (or starts one ahead of the automatic
         // queue), and gets its retries and resume with it. The finisher decrypts into AudioCache,
         // so the note never downloads twice.
+        // Measurement (owner 2026-11-01: a received voice note shows loading on play): a note that
+        // reaches this line was not on the phone at the tap. How long, what size, and did it work.
+        let waitedFrom = Date()
         let ok = await MediaDownloads.shared.download(
             urlStr, priority: .user,
             finish: MediaFetch.voiceFinisher(enc: meta, cid: cid, messageId: message.id))
+        DiagLog.add("VOICETAP# not local at tap ok=\(ok) waited=\(Int(Date().timeIntervalSince(waitedFrom) * 1000))ms "
+                    + "len=\(Int(message.duration ?? 0))s "
+                    + "wifi=\(NetworkState.shared.isWifi)")
+        DiagLog.flagForUpload(after: 5)
         guard ok, let local = AudioCache.url(for: message.id) else {
             failedId = message.id
             clearNowPlaying(); return
