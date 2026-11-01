@@ -1128,11 +1128,13 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     /// Down into the content hides the bars, back up or at the top brings them. Both grids.
     private func barsFollowDrag(_ sv: UIScrollView) {
         guard sv.isTracking || sv.isDecelerating else { lastY = sv.contentOffset.y; return }
-        let y = sv.contentOffset.y, dy = y - lastY
-        lastY = y
+        // Measured from where the scroll last turned, not frame by frame: a slow drag moves under
+        // 6 pt a frame and used to hide nothing (owner 2026-11-01).
+        let y = sv.contentOffset.y
+        lastY = headerHidden ? max(lastY, y) : min(lastY, y)
         if y <= 0 { setHeaderHidden(false) }
-        else if dy > 6 { setHeaderHidden(true) }
-        else if dy < -6 { setHeaderHidden(false) }
+        else if !headerHidden, y - lastY > 6 { setHeaderHidden(true); lastY = y }
+        else if headerHidden, lastY - y > 6 { setHeaderHidden(false); lastY = y }
     }
 
     // The grid has stopped: the stickers on screen start moving.
