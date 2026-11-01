@@ -163,8 +163,8 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
     private enum M {
         static let item: CGFloat = 70, spacing: CGFloat = 12, side: CGFloat = 10, row: CGFloat = 2
         static let header: CGFloat = 24, packGap: CGFloat = 18
-        static let stripCell: CGFloat = 40, stripInset: CGFloat = 6, stripSpacing: CGFloat = 4
-        static let top: CGFloat = 8, tabsH: CGFloat = 32, stripH: CGFloat = 40   // 40 (owner 2026-10-31)
+        static let stripCell: CGFloat = 32, stripInset: CGFloat = 4, stripSpacing: CGFloat = 4
+        static let top: CGFloat = 8, tabsH: CGFloat = 32, stripH: CGFloat = 34   // smaller again (owner 2026-11-01)
     }
 
     init(height: CGFloat) {
@@ -1009,11 +1009,11 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             b.tintColor = .secondaryLabel
             switch sec.shelf {
             case .recents:
-                b.setImage(UIImage(named: "ic_clock_outline")?.withRenderingMode(.alwaysTemplate), for: .normal)   // his icon (owner 2026-10-18)
+                b.setImage(UIImage(named: "ic_clock_outline")?.stripIcon(), for: .normal)   // his icon (owner 2026-10-18)
                 b.accessibilityLabel = "Recently Used"
             case .favorites:
                 // His icon (owner 2026-10-18), not the system star.
-                b.setImage(UIImage(named: "ic_star_outline")?.withRenderingMode(.alwaysTemplate), for: .normal)
+                b.setImage(UIImage(named: "ic_star_outline")?.stripIcon(), for: .normal)
                 b.accessibilityLabel = "Favorites"
             case .pack(let p):
                 let player = StickerPlayerView()
@@ -1041,7 +1041,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
 
     /// The 16 pt grey circle with a white ring and a white plus, at a strip icon's bottom right.
     private static func addBadge(in cell: CGFloat) -> UIView {
-        let d: CGFloat = 16
+        let d: CGFloat = 13
         let v = UIView(frame: CGRect(x: cell - d - 1, y: cell - d - 1, width: d, height: d))
         v.backgroundColor = .systemGray
         v.layer.cornerRadius = d / 2
@@ -1049,7 +1049,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         v.layer.borderColor = UIColor.white.cgColor
         v.isUserInteractionEnabled = false
         let plus = UIImageView(image: UIImage(systemName: "plus",
-                                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 8, weight: .heavy)))
+                                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 7, weight: .heavy)))
         plus.tintColor = .white
         plus.contentMode = .center
         plus.frame = v.bounds
@@ -1065,7 +1065,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
             x += M.stripCell + M.stripSpacing
         }
         if stripButtons.indices.contains(markedStrip) {
-            stripHighlight.frame = stripButtons[markedStrip].frame.insetBy(dx: 4, dy: 4)
+            stripHighlight.frame = stripButtons[markedStrip].frame.insetBy(dx: 1, dy: 1)
         }
         strip.contentSize = CGSize(width: x - M.stripSpacing, height: M.stripH)
     }
@@ -1086,7 +1086,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         markedStrip = i
         if stripHighlight.superview !== strip { strip.insertSubview(stripHighlight, at: 0) }
         if stripButtons.indices.contains(i) {
-            let to = stripButtons[i].frame.insetBy(dx: 4, dy: 4)
+            let to = stripButtons[i].frame.insetBy(dx: 1, dy: 1)
             if first { stripHighlight.frame = to }
             else { UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState]) { self.stripHighlight.frame = to } }
         }

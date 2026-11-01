@@ -53,7 +53,7 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
     /// Where the foot bar's bottom sits above the panel's edge (the panel's own foot gap).
     var footGap: CGFloat = 8 { didSet { if oldValue != footGap { setNeedsLayout() } } }
     private let stripGlass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
-    private var stripCellSize: CGFloat = 40
+    private var stripCellSize: CGFloat = 32
 
     private var gifs: [GiphyService.Gif] = []
     private var trendingGifs: [GiphyService.Gif] = []
@@ -83,7 +83,7 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
         static let searchH: CGFloat = 44
         /// The resting Search pill's share of the row; the shelf icons sit after it (owner 2026-10-18).
         static let restPillShare: CGFloat = 0.36, restPillMin: CGFloat = 120
-        static let stripH: CGFloat = 40, stripCell: CGFloat = 40, stripSpacing: CGFloat = 4, side: CGFloat = 10
+        static let stripH: CGFloat = 34, stripCell: CGFloat = 32, stripSpacing: CGFloat = 4, side: CGFloat = 10
     }
 
     override init(frame: CGRect) {
@@ -278,10 +278,10 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
         strip.addSubview(stripHighlight)
         let items: [(Shelf, UIImage?, String)] = [
             // His icons (owner 2026-10-18), the same two the sticker strip uses.
-            (.recent, UIImage(named: "ic_clock_outline")?.withRenderingMode(.alwaysTemplate), "Recent GIFs"),
-            (.favorites, UIImage(named: "ic_star_outline")?.withRenderingMode(.alwaysTemplate), "Favorite GIFs"),
+            (.recent, UIImage(named: "ic_clock_outline")?.stripIcon(), "Recent GIFs"),
+            (.favorites, UIImage(named: "ic_star_outline")?.stripIcon(), "Favorite GIFs"),
             // No asset of his for this one; the flame is what the GIF picker's Trending row already uses.
-            (.trending, UIImage(systemName: "flame", withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)), "Trending GIFs"),
+            (.trending, UIImage(systemName: "flame", withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .regular)), "Trending GIFs"),
         ]
         // The moods the GIF sheet's bar already offers (owner 2026-10-31), only on the foot bar.
         let moods: [(Shelf, String, String)] = barAtFoot ? [
@@ -289,7 +289,7 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
             (.party, "party.popper", "Party GIFs"), (.thumbsUp, "hand.thumbsup", "Thumbs Up GIFs"),
         ] : []
         let moodItems: [(Shelf, UIImage?, String)] = moods.map { m in
-            (m.0, UIImage(systemName: m.1, withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)), m.2)
+            (m.0, UIImage(systemName: m.1, withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .regular)), m.2)
         }
         for (s, img, label) in items + moodItems {
             let b = UIButton(type: .system)
@@ -313,7 +313,7 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
             x += cell + M.stripSpacing
         }
         if let b = stripButtons.first(where: { $0.tag == shelf.rawValue }) {
-            stripHighlight.frame = b.frame.insetBy(dx: 4, dy: 4)
+            stripHighlight.frame = b.frame.insetBy(dx: 1, dy: 1)
         }
         for b in stripButtons { b.tintColor = b.tag == shelf.rawValue ? .label : .secondaryLabel }
     }
@@ -549,6 +549,17 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
     private func refreshAfterEdit() {
         guard !hasQuery, !searching, shelf == .recent || shelf == .favorites else { return }
         showShelf()
+    }
+}
+
+extension UIImage {
+    /// A top-bar icon at the bars' size (owner 2026-11-01: smaller, they took too much room).
+    /// His icon files draw at their own size, so they are redrawn to fit.
+    func stripIcon(side: CGFloat = 19) -> UIImage {
+        let scale = side / max(size.width, size.height)
+        let box = CGSize(width: size.width * scale, height: size.height * scale)
+        return UIGraphicsImageRenderer(size: box).image { _ in draw(in: CGRect(origin: .zero, size: box)) }
+            .withRenderingMode(.alwaysTemplate)
     }
 }
 
