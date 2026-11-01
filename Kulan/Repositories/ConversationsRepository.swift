@@ -234,9 +234,11 @@ final class ConversationsRepository {
             foregroundObserver = NotificationCenter.default.addObserver(
                 forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
                     self?.listBurnTick()
+                    Self.clearWhatWentAway()
                     self?.beginCatchUp()   // 2026-10-27: what changed while away lands without animating
                 }
         }
+        Self.clearWhatWentAway()
         // Media a Sign Out kept on this phone: back to its own account, or wiped before anyone else's
         // session sees it. A no-op unless a keep is pending. (2026-09-26)
         if let signedIn = Auth.auth().currentUser?.uid { SessionWipe.claimKeptMedia(for: signedIn) }
@@ -894,6 +896,13 @@ final class ConversationsRepository {
                 .call(["cid": c.id, "ids": [String]()]) { _, _ in }
         }
         NotificationCleaner.pruneExpired()
+        Self.clearWhatWentAway()
+    }
+
+    /// Words and banners of messages that went while the app was away. On launch and on return too:
+    /// `burnList` runs only when a row's newest message is due, and the server's sweep may have got
+    /// there first. Each is throttled by itself.
+    private static func clearWhatWentAway() {
         NotificationCleaner.pruneDeleted()
         ThreadMessageCache.shared.sweepExpired()
     }

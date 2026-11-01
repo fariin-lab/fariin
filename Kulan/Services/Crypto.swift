@@ -32,6 +32,10 @@ struct MissingRecipientKeyError: Error {
     let uid: String
 }
 
+/// A group member's key could not be read just now, which says nothing about whether they have one.
+/// Not `MissingRecipientKeyError`: the send stays queued, and nobody is told a member has no key.
+struct GroupKeyReadError: Error {}
+
 /// Per-attachment envelope stored alongside an encrypted file. Mirrors EncMeta in crypto.ts.
 struct EncMeta: Codable, Equatable, Hashable {
     let v: Int       // always 1
@@ -228,7 +232,7 @@ final class Crypto {
 
         // ⛔ "COULD NOT READ" IS NOT "NOT THERE" (bug search 2026-11-01). Every miss below ends in a
         // new keypair, and that one is permanent: all sealed to the old key becomes a lock glyph.
-        for key in [Self.skKeychainKey(uid), Self.pkKeychainKey(uid)] {
+        for key in [Self.skKeychainKey(uid), Self.pkKeychainKey(uid), Self.legacySkKey, Self.legacyPkKey] {
             let found = Keychain.lookup(key)
             if found.value == nil && !found.notFound {
                 throw NSError(domain: "Crypto", code: 13,
@@ -606,9 +610,12 @@ final class Crypto {
     /// `preloadKeys` for a group seal. A member with no published key is skipped, as before, but a
     /// read that failed is not that (bug search 2026-11-01): the member would be left out of this
     /// message for good. It throws instead, and the send queues, as a 1:1 does.
+    private var noKeySeen: [String: Date] = [:]
     private func groupKeys(_ members: [String]) async throws -> [String: Bytes] {
         var keys = await preloadKeys(members)
-        for uid in Set(members) where !uid.isEmpty && keys[uid] == nil {
+        // A member with no key costs one extra read a minute, not one per message.
+        let recent = lock.withLock { noKeySeen.filter { Date().timeIntervalSince($0.value) < 60 } }
+        for uid in Set(members) where !uid.isEmpty && keys[uid] == nil && recent[uid] == nil {
             // Ten seconds at most, as `preloadKey`: a hung read must not hold the send for ever.
             let (answers, reply) = AsyncStream.makeStream(of: KeyFetch.self)
             let read = Task { reply.yield(await self.fetchKeyResult(uid)); reply.finish() }
@@ -621,8 +628,8 @@ final class Crypto {
             read.cancel(); clock.cancel()
             switch result {
             case .key(let b): keys[uid] = b
-            case .noKey: break
-            case .failed: throw MissingRecipientKeyError(uid: uid)
+            case .noKey: lock.withLock { noKeySeen[uid] = Date() }
+            case .failed: throw GroupKeyReadError()
             }
         }
         return keys

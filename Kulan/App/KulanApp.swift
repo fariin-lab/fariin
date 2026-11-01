@@ -177,7 +177,7 @@ struct KulanApp: App {
             }
             guard AuthService.shared.uid != nil else { return }
             guard !GroupCallService.shared.isActive, !GroupCallService.shared.connecting,
-                  CallService.shared.state == .idle else {
+                  !CallService.shared.isLive else {
                 GroupCallService.presentOverTop(GroupCallService.busyNotice)
                 return
             }

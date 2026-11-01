@@ -706,9 +706,13 @@ enum ChatService {
         let iAmGroupAdmin = known?.adminCan(uid, .inviteUsers) ?? false
         // Lifting a ban takes the remove right, not the add right (2026-11-01): otherwise one admin
         // undoes another's removal. The server closed the same door on join requests on 2026-10-25.
-        if known?.adminCan(uid, .banUsers) == true {
-            update["bannedUids"] = FieldValue.arrayRemove(newOnes)
-        } else if let known, !Set(known.bannedUids).isDisjoint(with: newOnes) {
+        // Only when someone here really is banned: an arrayRemove on a group with no list writes an
+        // empty one, and the members-can-add rule refuses any change to that field.
+        let lifted = newOnes.filter { known?.bannedUids.contains($0) == true }
+        if lifted.isEmpty {
+        } else if known?.adminCan(uid, .banUsers) == true {
+            update["bannedUids"] = FieldValue.arrayRemove(lifted)
+        } else {
             throw NSError(domain: "ChatService", code: 31, userInfo: [NSLocalizedDescriptionKey:
                 "An admin removed this person. Only an admin who can remove members can add them back."])
         }

@@ -2005,7 +2005,8 @@ service cloud.firestore {
           && n.get('restrictedFlags', {}).diff(o.get('restrictedFlags', {})).affectedKeys()
                .union(n.get('restrictedUntil', {}).diff(o.get('restrictedUntil', {})).affectedKeys())
                .intersection(o.get('admins', []).toSet().union([o.get('createdBy', '')].toSet())).size() == 0
-          && (adminHasRight('banUsers') || (!('bannedUids' in keys)
+          && (adminHasRight('banUsers') || (n.get('bannedUids', []).size() == o.get('bannedUids', []).size()
+              && o.get('bannedUids', []).hasAll(n.get('bannedUids', []))
               && added.intersection(o.get('bannedUids', []).toSet()).size() == 0))
           // 2026-10-19 group fix round S7: without Pin messages, only the clean-up unpin (memberUnpinOK).
           && (!('pinnedMessageIds' in keys) || adminHasRight('pinMessages') || memberUnpinOK())
