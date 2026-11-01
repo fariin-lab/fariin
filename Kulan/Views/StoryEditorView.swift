@@ -4242,6 +4242,10 @@ struct StoryEditorView: View {
 
     // MARK: - Send
     private func send() async {
+        // Two NEXT taps ran this twice and the walks through `index` crossed. Nothing ever set this.
+        guard !posting else { return }
+        posting = true
+        defer { posting = false }
         stashCurrent()
         let keep = index
         // ⛔ THE SCREEN STAYS PUT WHILE THE OTHERS RENDER (owner 2026-10-23: "4 pictures, I stay on the

@@ -478,6 +478,9 @@ enum NotificationCleaner {
     /// badge, so it overstated until the next push. The list now calls this on every published
     /// snapshot. Skipped while nothing changed, so a typing flag does not touch the badge at all.
     nonisolated(unsafe) private static var lastSetBadge: Int?
+    /// Sign-out set the icon to 0 behind this memo, so the next account's first count was skipped
+    /// whenever it happened to equal the old one.
+    static func forgetBadge() { lastSetBadge = nil }
     @MainActor static func syncBadgeFromList() {
         guard ConversationsRepository.shared.hasLoaded else { return }
         let total = badgeTotal(excluding: nil)

@@ -1247,7 +1247,7 @@ final class StoriesService {
                                               // 2026-09-24 audit: and whose story it reposts, so a
                                               // resumed repost keeps its credit.
                                               repostOf: repostOf,
-                                              storyDocId: docId)
+                                              storyDocId: docId, expiryHours: expiryHours)
             // The card's thumbnail is NOT made here any more — see `quick` below.
             return (nil, ticket)
         }
@@ -2151,7 +2151,7 @@ final class StoriesService {
                                               excluded: excluded, included: included, everyone: everyone,
                                               allowsReplies: allowsReplies, tag: tag,
                                               captureProtected: captureProtected, repostOf: repostOf,
-                                              ownerUid: uid)
+                                              ownerUid: uid, expiryHours: expiryHours)
             ticketId = r.ticket; partIds = r.storyIds; replaceExisting = false
         }
         // Same queueing as postStoryBackground: never cancel an in-flight post, chain behind it.
@@ -2653,6 +2653,9 @@ final class StoriesService {
         // the view goes to the official story's own count instead (owner 2026-10-18, see
         // `OfficialStoryViews`).
         if OfficialChannel.isOfficial(story.authorUid) { await OfficialStoryViews.record(story); return }
+        // First and not awaited (bug search 2026-11-01): the writes below wait for the server, so offline
+        // this used to be reached only after reconnecting, and the story could be reopened until then.
+        if story.oneTime { Task { await consumeOneTime(story) } }
         // Advance my per-author watermark to this story's POST time — never backwards, one write
         // per advance. (Was a wall-clock serverTimestamp, which made watching 1 of 5 stories mark
         // the whole ring seen; the watermark now means "the newest story of theirs I've watched".)
@@ -2678,7 +2681,6 @@ final class StoriesService {
                           "at": FieldValue.serverTimestamp(),
                           "expiresAt": Timestamp(date: story.expiresAt)])
         }
-        if story.oneTime { await consumeOneTime(story) }
     }
 
     /// BURN A ONE-TIME STORY, for me.
@@ -3624,6 +3626,21 @@ final class StoriesRepository {
         }
     }
 
+    /// A Firestore listener that errors is dead for good, so the tray stayed frozen until the next
+    /// launch. One error brings them all back after a minute; several at once make one restart.
+    private var relistenTask: Task<Void, Never>?
+    private func relistenAfterError() {
+        Task { @MainActor [weak self] in
+            guard let self, self.relistenTask == nil else { return }
+            self.relistenTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                guard let self else { return }
+                self.relistenTask = nil
+                if let me = self.listeningUid, !me.isEmpty { self.start(me) }
+            }
+        }
+    }
+
     // Attach the three live queries (chat-list listener pattern).
     @MainActor private func start(_ me: String) {
         stop()
@@ -3634,7 +3651,7 @@ final class StoriesRepository {
         othersReg = db.collection("stories")
             .whereField("recipientUids", arrayContains: StoryAudienceToken.token(me))
             .addSnapshotListener { [weak self] snap, error in
-                guard let self, let snap else { if let error { print("stories listen error:", error) }; return }
+                guard let self, let snap else { if let error { print("stories listen error:", error); self?.relistenAfterError() }; return }
                 if !snap.metadata.isFromCache { self.othersFromServer = true }
                 // One line, no extra read — see `ConnectionStatus`.
                 Task { @MainActor in ConnectionStatus.shared.noteSnapshot(fromCache: snap.metadata.isFromCache, pendingWrites: snap.metadata.hasPendingWrites) }
@@ -3646,7 +3663,7 @@ final class StoriesRepository {
         // The stories posted before the change, for the day they have left. See `othersLegacyReg`.
         othersLegacyReg = db.collection("stories").whereField("recipientUids", arrayContains: me)
             .addSnapshotListener { [weak self] snap, error in
-                guard let self, let snap else { if let error { print("legacy stories listen error:", error) }; return }
+                guard let self, let snap else { if let error { print("legacy stories listen error:", error); self?.relistenAfterError() }; return }
                 if !snap.metadata.isFromCache { self.othersLegacyFromServer = true }
                 if Self.ignoreColdEmpty(snap, serverHasSpoken: self.othersLegacyFromServer) { return }
                 self.othersByLegacyUid = self.parse(snap.documents)
@@ -3655,7 +3672,7 @@ final class StoriesRepository {
             }
         mineReg = db.collection("stories").whereField("authorUid", isEqualTo: me)
             .addSnapshotListener { [weak self] snap, error in
-                guard let self, let snap else { if let error { print("my stories listen error:", error) }; return }
+                guard let self, let snap else { if let error { print("my stories listen error:", error); self?.relistenAfterError() }; return }
                 if !snap.metadata.isFromCache { self.mineFromServer = true }
                 Task { @MainActor in ConnectionStatus.shared.noteSnapshot(fromCache: snap.metadata.isFromCache, pendingWrites: snap.metadata.hasPendingWrites) }
                 if Self.ignoreColdEmpty(snap, serverHasSpoken: self.mineFromServer) { return }
@@ -3664,8 +3681,8 @@ final class StoriesRepository {
             }
         // My per-author seen watermarks — live too, so watching on another device greys rings here.
         ctxReg = db.collection("users").document(me).collection("storyContexts")
-            .addSnapshotListener { [weak self] snap, _ in
-                guard let self, let snap else { return }
+            .addSnapshotListener { [weak self] snap, error in
+                guard let self, let snap else { if error != nil { self?.relistenAfterError() }; return }
                 for d in snap.documents {
                     // ⛔ PLUS ONE MILLISECOND — owner 2026-10-28: a watched ring came back unwatched
                     // after every log out and in. The watermark is written as the story's own post

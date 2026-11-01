@@ -526,6 +526,9 @@ extension MessageSearch {
             // a row that does not exist. The list and the search have to agree about what is in this
             // conversation, and the list is the one the user can see.
             if HiddenMessages.isHidden(doc.documentID) { return nil }
+            // The thread hides these, so its search must too (`BlockList.hides`).
+            if author != me, let t = data["createdAt"] as? Timestamp,
+               BlockList.snapshot.hides(author: author, atMillis: t.dateValue().timeIntervalSince1970 * 1000) { return nil }
             // A tombstone has no content left to find; matching one would be matching the words of
             // a message both sides were told was destroyed.
             if data["deleted"] as? Bool == true { return nil }

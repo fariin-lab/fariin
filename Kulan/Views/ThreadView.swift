@@ -1687,7 +1687,12 @@ struct ThreadView: View {
         } message: { Text("This status has expired.") }
         .fullScreenCover(item: $viewerImage, onDismiss: {
             // A view-once photo is consumed the moment the viewer closes: bubble flips to "Viewed".
-            if let m = pendingViewOnceConsume {
+            if let m = pendingViewOnceConsume, m.type == "image", !ViewedOnce.wasShown(m.id) {
+                // Closed before the picture ever appeared: nothing was seen, so nothing is spent.
+                ViewedOnce.unmark(m.id)
+                pendingViewOnceConsume = nil
+                viewedOnceTick += 1
+            } else if let m = pendingViewOnceConsume {
                 ViewedOnce.mark(m.id)
                 // 2026-09-24 decision D12: view-once photos are burned on the server like voice.
                 // Same fire-and-forget shape as OneTimeVoicePage's consumeOnceVoice call; the
@@ -10521,6 +10526,18 @@ enum ViewedOnce {
             let m = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
             mirror = m
             return m.contains(id)
+        }
+    }
+    /// The viewer really had the picture. Memory only: it answers for the viewer open right now.
+    private static var shown = Set<String>()
+    static func noteShown(_ id: String) { _ = lock.withLock { shown.insert(id) } }
+    static func wasShown(_ id: String) -> Bool { lock.withLock { shown.contains(id) } }
+    static func unmark(_ id: String) {
+        lock.withLock {
+            var ids = UserDefaults.standard.stringArray(forKey: key) ?? []
+            ids.removeAll { $0 == id }
+            UserDefaults.standard.set(ids, forKey: key)
+            mirror = Set(ids)
         }
     }
     static func mark(_ id: String) {

@@ -190,6 +190,7 @@ enum SessionWipe {
         let center = UNUserNotificationCenter.current()
         center.removeAllDeliveredNotifications()
         center.setBadgeCount(0)
+        NotificationCleaner.forgetBadge()
         wipeAccountPrefs()
         CallPrivacyIndex.clear()                // who-refuses-calls is per-account too
         VerificationIndex.clear()               // and who is verified — the next account starts blank

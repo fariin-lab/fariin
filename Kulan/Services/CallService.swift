@@ -701,10 +701,11 @@ final class CallService: NSObject {
             f.big = localLive ? localVideoTrack : nil
             f.mirrorBig = mirrorLocal
             f.bigName = myName; f.bigPhotoUrl = myPhotoUrl
-            f.tile = remoteVideoLive ? remoteVideoTrack : nil
+            f.tile = remoteVideoLive && remoteFrameArrived ? remoteVideoTrack : nil
             f.tileName = otherName; f.tilePhotoUrl = otherPhotoUrl
         } else {
-            f.big = remoteVideoLive ? remoteVideoTrack : nil
+            // No first frame yet means their photo, as on the full call screen (`hasRemote`).
+            f.big = remoteVideoLive && remoteFrameArrived ? remoteVideoTrack : nil
             // Their dual-mode share is on its own track and goes big, whatever their camera is doing.
             if remoteScreenSharing, remoteScreenMode == "track", let screen = remoteScreenTrack { f.big = screen }
             f.bigIsScreen = remoteScreenSharing && f.big != nil
@@ -7793,6 +7794,7 @@ final class CallService: NSObject {
         heldPreAnswer = nil                // 2026-09-24 fix-all #230
         callerTakesEarlyAnswer = false; onlyRingingDevice = nil; earlyAnswerSent = false
         iceDroppedDuringRing = false       // owner audit 2026-10-06 #15: belongs to this call's path
+        let wasCaller = isCaller           // read below for the No answer page: this line used to kill it
         isCaller = false
 
         // Feedback tone for the non-initiating side / system-ended calls. Keep the audio
@@ -7855,7 +7857,7 @@ final class CallService: NSObject {
         // vanished): a call shrunk into the card opens back up for it, and a call that never
         // connected ("Couldn't connect") gets it too, with Try again. Still only with the app in
         // front: in the background nobody is looking.
-        if isCaller, !micDenied, UIApplication.shared.applicationState == .active,
+        if wasCaller, !micDenied, UIApplication.shared.applicationState == .active,
            reason == .missed || reason == .declined || (reason == .failed && connectedDate == nil) {
             if minimized { minimized = false }
             noAnswerHold = true

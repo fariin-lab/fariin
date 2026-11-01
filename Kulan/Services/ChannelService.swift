@@ -668,6 +668,31 @@ final class ChannelFollows {
         if muted != nil || mutedUntil != nil { scheduleMuteExpiry() }
     }
 
+    private func attachDocListener(_ cid: String) {
+        docListeners[cid] = FirestoreHub.db.collection("conversations").document(cid)
+            .addSnapshotListener { [weak self] snap, error in
+                guard let self else { return }
+                // A passing error is not a deleted channel (bug search 2026-11-01): the row stays and
+                // the dead listener is replaced. Only a refusal or a missing document drops it.
+                if let error, (error as NSError).code != FirestoreErrorCode.permissionDenied.rawValue {
+                    self.docListeners[cid]?.remove()
+                    self.docListeners[cid] = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+                        guard let self, self.entries[cid] != nil, self.docListeners[cid] == nil else { return }
+                        self.attachDocListener(cid)
+                    }
+                    return
+                }
+                // A deleted (or no longer readable) channel just drops off the list.
+                guard let snap, snap.exists, let data = snap.data(with: .estimate) else {
+                    if self.docs.removeValue(forKey: cid) != nil { self.queueListRebuild() }
+                    return
+                }
+                self.docs[cid] = Conversation(id: cid, data: data)
+                self.queueListRebuild()
+            }
+    }
+
     private func apply(_ next: [String: Entry]) {
         // A channel followed again by any road (link, public page, Follow): back in the list.
         for cid in next.keys where entries[cid] == nil {
@@ -692,19 +717,7 @@ final class ChannelFollows {
             docListeners[cid] = nil
             docs[cid] = nil
         }
-        for cid in live where docListeners[cid] == nil {
-            docListeners[cid] = FirestoreHub.db.collection("conversations").document(cid)
-                .addSnapshotListener { [weak self] snap, _ in
-                    guard let self else { return }
-                    // A deleted (or no longer readable) channel just drops off the list.
-                    guard let snap, snap.exists, let data = snap.data(with: .estimate) else {
-                        if self.docs.removeValue(forKey: cid) != nil { self.queueListRebuild() }
-                        return
-                    }
-                    self.docs[cid] = Conversation(id: cid, data: data)
-                    self.queueListRebuild()
-                }
-        }
+        for cid in live where docListeners[cid] == nil { attachDocListener(cid) }
         // Keep what I marked locally if the server has not caught up yet (a Mark as Unread is
         // taken as the server says once it has).
         var merged = next

@@ -1219,6 +1219,7 @@ final class ThreadRepository {
             + "|" + reactions + "|" + albumSig + "|" + deleted + "|" + type + "|" + call
             + "|" + uploading + "|" + media + "|" + stamp + "|" + link
             + "|" + views + "|" + counts + "|" + polls
+            + "|" + String(data["pollClosed"] as? Bool ?? false)   // Stop Poll changes nothing else
     }
 
     // Build a message, reusing the cached copy unless a mutable field (reactions / edit) changed.

@@ -23,6 +23,8 @@ import CoreGraphics
 enum VideoStoryOutbox {
     struct Ticket: Codable {
         var id: String
+        /// The 6, 12 or 48 hours chosen. Optional so an older ticket still decodes (as 24).
+        var expiryHours: Double? = nil
         var ownerUid: String
         var startedAt: Double
         var muted: Bool
@@ -79,7 +81,7 @@ enum VideoStoryOutbox {
                          trim: ClosedRange<Double>?, caption: String, stickers: [StoryTapTarget],
                          excluded: Set<String>, included: Set<String>, everyone: Bool,
                          allowsReplies: Bool, tag: StoryAudienceTag, captureProtected: Bool,
-                         repostOf: StoryRepost?, ownerUid: String) -> (ticket: String, storyIds: [String]) {
+                         repostOf: StoryRepost?, ownerUid: String, expiryHours: Double = 24) -> (ticket: String, storyIds: [String]) {
         let id = UUID().uuidString
         let ids = (0..<maxParts).map { _ in StoriesService.newStoryId() }
         lock.lock(); liveIds.insert(id); lock.unlock()
@@ -95,7 +97,7 @@ enum VideoStoryOutbox {
         try? thumbnail.write(to: thumb(id), options: .atomic)
         if let o = burn?.overlay?.pngData() { try? o.write(to: overlayFile(id), options: .atomic) }
         if let b = burn?.backdrop?.pngData() { try? b.write(to: backdropFile(id), options: .atomic) }
-        let t = Ticket(id: id, ownerUid: ownerUid, startedAt: Date().timeIntervalSince1970,
+        var t = Ticket(id: id, ownerUid: ownerUid, startedAt: Date().timeIntervalSince1970,
                        muted: muted, trimLower: trim?.lowerBound, trimUpper: trim?.upperBound,
                        caption: caption, stickers: stickers,
                        excluded: Array(excluded), included: Array(included),
@@ -176,7 +178,8 @@ enum VideoStoryOutbox {
                 allowsReplies: t.allowsReplies,
                 tag: StoryAudienceTag(label: t.tagLabel, name: t.tagName, listIds: t.tagListIds),
                 captureProtected: t.captureProtected, repostOf: t.repostOf,
-                resumeTicket: id, storyIds: t.storyIds, done: Set(t.done))
+                resumeTicket: id, storyIds: t.storyIds, done: Set(t.done),
+                expiryHours: t.expiryHours ?? 24)
         }
     }
 
@@ -190,6 +193,7 @@ enum VideoStoryOutbox {
         return try? JSONDecoder().decode(Ticket.self, from: d)
     }
     private static func write(_ t: Ticket) {
+        t.expiryHours = expiryHours
         if let d = try? JSONEncoder().encode(t) { try? d.write(to: meta(t.id), options: .atomic) }
     }
 }

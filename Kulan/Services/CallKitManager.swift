@@ -20,7 +20,9 @@ enum RingVibration {
 
     static func start() {
         DispatchQueue.main.async {
-            stop()
+            // Not `stop()`: that queues its work, so it ran after this block and killed this timer.
+            timer?.invalidate(); timer = nil
+            cap?.cancel(); cap = nil
             buzz()
             let t = Timer(timeInterval: 1.6, repeats: true) { _ in buzz() }
             RunLoop.main.add(t, forMode: .common)

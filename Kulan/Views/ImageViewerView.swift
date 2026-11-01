@@ -777,6 +777,7 @@ struct ImageViewerView: View {
 
     // Load order: optimistic local bytes → cached decrypted → decrypt-on-demand (per page).
     private func load(_ m: Message) async {
+        defer { if m.viewOnce, loaded[m.id] != nil { ViewedOnce.noteShown(m.id) } }
         if let data = m.localImageData, let ui = UIImage(data: data) { loaded[m.id] = ui; return }
         guard let u = m.imageUrl else { return }
         if let mem = DiskImageCache.shared.memoryImage(u) { loaded[m.id] = mem; return }
@@ -788,7 +789,7 @@ struct ImageViewerView: View {
             loaded[m.id] = UIImage(data: dec)
             // A view-once photo from someone else is spent on the server now, with the picture
             // already in hand, not when this viewer closes.
-            if m.viewOnce, m.authorId != AuthService.shared.uid {
+            if m.viewOnce, m.authorId != AuthService.shared.uid, !Task.isCancelled {
                 ViewedOnce.burnImage(cid: cid, messageId: m.id)
             }
         }

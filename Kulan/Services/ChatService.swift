@@ -2429,7 +2429,9 @@ enum ChatService {
             try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
         }
 
-        let msgRef = convRef.collection("messages").document()
+        // One fixed address, as text (bug search 2026-11-01): an offline send and its auto-retry each
+        // made a new id, so the other phone got the note twice.
+        let msgRef = textMessageRef(convRef, clientId: clientId)
         // Persist the plaintext I just recorded so playing my OWN note NEVER downloads+decrypts (the
         // "loading" spin). Store under BOTH keys the bubble can be identified by: the FINAL message id
         // (== the server doc id the reconciled bubble carries) AND the clientId (the optimistic bubble,

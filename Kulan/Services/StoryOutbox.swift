@@ -33,6 +33,8 @@ enum StoryOutbox {
     /// What a photo post was, in the words `postStoryBackground` speaks.
     struct Ticket: Codable {
         var id: String
+        /// The 6, 12 or 48 hours chosen. Optional so an older ticket still decodes (as 24).
+        var expiryHours: Double? = nil
         var caption: String
         var stickers: [StoryTapTarget]
         var excluded: [String]
@@ -96,10 +98,11 @@ enum StoryOutbox {
     static func remember(image: Data, caption: String, stickers: [StoryTapTarget],
                          excluded: Set<String>, included: Set<String>, everyone: Bool,
                          allowsReplies: Bool, tag: StoryAudienceTag, captureProtected: Bool,
-                         ownerUid: String, repostOf: StoryRepost? = nil, storyDocId: String? = nil) -> String {
+                         ownerUid: String, repostOf: StoryRepost? = nil, storyDocId: String? = nil,
+                         expiryHours: Double = 24) -> String {
         let id = UUID().uuidString
         lock.lock(); liveIds.insert(id); lock.unlock()
-        let t = Ticket(id: id, caption: caption, stickers: stickers,
+        var t = Ticket(id: id, caption: caption, stickers: stickers,
                        excluded: Array(excluded), included: Array(included),
                        everyone: everyone, allowsReplies: allowsReplies,
                        tagLabel: tag.label, tagName: tag.name, tagListIds: tag.listIds,
@@ -109,6 +112,7 @@ enum StoryOutbox {
                        repostOf: repostOf,
                        storyDocId: storyDocId)
         try? image.write(to: bytes(id), options: .atomic)
+        t.expiryHours = expiryHours
         if let d = try? JSONEncoder().encode(t) { try? d.write(to: meta(id), options: .atomic) }
         return id
     }
@@ -227,7 +231,8 @@ enum StoryOutbox {
                 tag: StoryAudienceTag(label: t.tagLabel, name: t.tagName, listIds: t.tagListIds ?? []),
                 captureProtected: t.captureProtected,
                 repostOf: t.repostOf,   // 2026-09-24 audit: a repost resumes as a repost
-                storyDocId: t.storyDocId, resumed: true)
+                storyDocId: t.storyDocId, resumed: true,
+                expiryHours: t.expiryHours ?? 24)
         }
     }
 }

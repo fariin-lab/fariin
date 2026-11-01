@@ -60,8 +60,11 @@ final class OfficialStories {
 
     /// Ask again, unless the last answer is still fresh. Called when the Stories list appears and
     /// when the app comes back to the front; `force` after a story has expired on screen.
+    private var forceAfterFetch = false
     func refresh(force: Bool = false) {
-        guard let uid = Auth.auth().currentUser?.uid, !fetching else { return }
+        // A forced ask during a running one (an admin removal) must not be lost: it runs right after.
+        if fetching { if force { forceAfterFetch = true }; return }
+        guard let uid = Auth.auth().currentUser?.uid else { return }
         // ⛔ THE LAST ANSWER FIRST — owner 2026-10-16: the Fariin card arrived after the others.
         // Friends' cards come from saved data at once; this one waited for the callable. The last
         // answer is kept on the phone and shown the moment the app asks, expired ones dropped,
@@ -74,7 +77,10 @@ final class OfficialStories {
         guard force || Date().timeIntervalSince(lastFetch) > 5 * 60 else { return }
         fetching = true
         Task {
-            defer { fetching = false }
+            defer {
+                fetching = false
+                if forceAfterFetch { forceAfterFetch = false; refresh(force: true) }
+            }
             let stories = await fetch()
             guard let stories else { return }   // a failed call keeps what is on screen
             lastFetch = Date()
