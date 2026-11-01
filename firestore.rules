@@ -2005,8 +2005,8 @@ service cloud.firestore {
           && n.get('restrictedFlags', {}).diff(o.get('restrictedFlags', {})).affectedKeys()
                .union(n.get('restrictedUntil', {}).diff(o.get('restrictedUntil', {})).affectedKeys())
                .intersection(o.get('admins', []).toSet().union([o.get('createdBy', '')].toSet())).size() == 0
-          && (!('bannedUids' in keys) || adminHasRight('banUsers')
-              || (adminHasRight('inviteUsers') && o.get('bannedUids', []).hasAll(n.get('bannedUids', []))))
+          && (adminHasRight('banUsers') || (!('bannedUids' in keys)
+              && added.intersection(o.get('bannedUids', []).toSet()).size() == 0))
           // 2026-10-19 group fix round S7: without Pin messages, only the clean-up unpin (memberUnpinOK).
           && (!('pinnedMessageIds' in keys) || adminHasRight('pinMessages') || memberUnpinOK())
           // audit F3, 2026-10-23: the name/photo mirrors move only at my key or the people added or removed.

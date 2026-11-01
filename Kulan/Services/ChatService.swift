@@ -703,8 +703,15 @@ enum ChatService {
         // touching it would reject the whole add. Admins write through the any-field admin branch.
         // 2026-09-24 audit: the rules now hold an admin to their rights, and an admin without Add
         // members adds through the membersCanAdd branch, so the test is the right, not the badge.
-        let iAmGroupAdmin = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.adminCan(uid, .inviteUsers) ?? false
-        if iAmGroupAdmin { update["bannedUids"] = FieldValue.arrayRemove(newOnes) }
+        let iAmGroupAdmin = known?.adminCan(uid, .inviteUsers) ?? false
+        // Lifting a ban takes the remove right, not the add right (2026-11-01): otherwise one admin
+        // undoes another's removal. The server closed the same door on join requests on 2026-10-25.
+        if known?.adminCan(uid, .banUsers) == true {
+            update["bannedUids"] = FieldValue.arrayRemove(newOnes)
+        } else if let known, !Set(known.bannedUids).isDisjoint(with: newOnes) {
+            throw NSError(domain: "ChatService", code: 31, userInfo: [NSLocalizedDescriptionKey:
+                "An admin removed this person. Only an admin who can remove members can add them back."])
+        }
         var addedNames: [String] = []
         var keyless: [String] = []
         for u in newOnes {

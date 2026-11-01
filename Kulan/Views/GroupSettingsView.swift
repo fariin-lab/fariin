@@ -267,12 +267,13 @@ struct GroupSettingsView: View {
 
     // MARK: Joining
 
-    /// Type and links: change-info admins see Type; the invite link and requests need inviteUsers.
+    /// Type and links: the owner sees Type; the invite link and requests need inviteUsers.
     @ViewBuilder private var joiningSection: some View {
-        if canEdit || can(.inviteUsers) {
+        let ownsType = canEdit && conv?.isOwner(me) == true
+        if ownsType || can(.inviteUsers) {
             Section {
                 // Private / Public and the public link name live on the Group Type page.
-                if canEdit {
+                if ownsType {
                     NavigationLink { GroupTypeView(cid: cid) } label: {
                         valueRow("ic_gs_group_type", conv?.isChannel == true ? "Channel Type" : "Group Type", isPublicNow ? "Public" : "Private")
                     }
@@ -348,7 +349,7 @@ struct GroupSettingsView: View {
                 valueRow("ic_gs_admins", "Administrators", "\(conv?.admins.count ?? 0)")
             }
             // REMOVED USERS, the people taken out of the group (`bannedUids`).
-            if can(.banUsers) || can(.inviteUsers) {
+            if can(.banUsers) {
                 NavigationLink { GroupRemovedUsersView(cid: cid) } label: {
                     valueRow("ic_gs_banned", "Banned Users", "\(conv?.bannedUids.count ?? 0)")
                 }
