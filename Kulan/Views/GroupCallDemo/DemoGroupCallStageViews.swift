@@ -284,7 +284,8 @@ struct DemoStageView: View {
     @ViewBuilder
     private func selfPip(stageSize: CGSize) -> some View {
         let remoteCount = engine.remoteCount
-        if remoteCount >= 1, let local = engine.tiles.first(where: { $0.isLocal }) {
+        // Only beside one other person: with two or more, my tile is in the grid (see DemoGridView).
+        if remoteCount == 1, let local = engine.tiles.first(where: { $0.isLocal }) {
             let pip = GroupCallSelfView.size(remoteCount: remoteCount, expanded: selfExpanded, stageSize: stageSize)
             DemoTileView(tile: local, style: .pip, isActiveSpeaker: false, isPinned: false,
                          onTap: { selfExpanded.toggle() })
@@ -315,7 +316,11 @@ struct DemoGridView: View {
 
     @ViewBuilder
     private func grid(size: CGSize) -> some View {
-        let remotes = engine.tilesWithLiveSpeech.filter { !$0.isLocal }
+        // The real grid (GroupCallGridView, owner 2026-10-27): with two or more others I am the grid's
+        // first tile, not a corner card over somebody's face.
+        let others = engine.tilesWithLiveSpeech.filter { !$0.isLocal }
+        let me = others.count >= 2 ? engine.tilesWithLiveSpeech.first(where: { $0.isLocal }) : nil
+        let remotes = (me.map { [$0] } ?? []) + others
         let plan = plan(remotes: remotes, size: size)
         let byId = Dictionary(remotes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let layout = plan.layout
