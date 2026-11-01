@@ -404,6 +404,8 @@ struct BubbleRow: Equatable {
     /// A channel post (owner 2026-10-29, the reference app's channel feed): the bubble takes the
     /// column's whole width and a photo or video fills it edge to edge.
     var wide: Bool = false
+    /// The round share button beside a channel post; not where the channel restricts sharing.
+    var shareable: Bool = false
 }
 
 /// A centred capsule notice: the day separator, a system event, a pin notice.

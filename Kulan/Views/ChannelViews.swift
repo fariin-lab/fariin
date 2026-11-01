@@ -1192,7 +1192,8 @@ struct ChannelReactionsSettingsView: View {
                         .listRowBackground(Color.clear)
                         .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 4, trailing: 0))
                 } footer: {
-                    Text(list.isEmpty ? "Pick at least one, or reactions will be off." : "Tap to replace an emoji")
+                    Text(list.isEmpty ? "Pick at least one, or reactions will be off."
+                         : list.count > 1 ? "Tap to replace an emoji, or tap its x to remove it" : "Tap to replace an emoji")
                         .frame(maxWidth: .infinity)
                         .multilineTextAlignment(.center)
                 }
@@ -1240,6 +1241,23 @@ struct ChannelReactionsSettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Replace \(e)")
+                // ⛔ ANY NUMBER UP TO SIX (owner 2026-11-01: "I can't make it only 3"): each one has
+                // its own x. The last one stays; to have none, No Reactions is the choice above.
+                .overlay(alignment: .topTrailing) {
+                    if list.count > 1 {
+                        Button { remove(at: i) } label: {
+                            Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(Color(.systemBackground))
+                                .frame(width: 18, height: 18)
+                                .background(Circle().fill(Color.secondary))
+                                .frame(width: 30, height: 30, alignment: .topTrailing)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .offset(x: 6, y: -6)
+                        .accessibilityLabel("Remove \(e)")
+                    }
+                }
             }
             if list.count < Self.maxPicked {
                 Button { replacing = nil; pickAny = true } label: {
@@ -1255,6 +1273,14 @@ struct ChannelReactionsSettingsView: View {
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(Capsule().fill(Color(.secondarySystemGroupedBackground)))
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+    }
+
+    private func remove(at i: Int) {
+        guard list.count > 1, list.indices.contains(i) else { return }
+        list.remove(at: i)
+        replacing = nil
+        Haptics.impact(.light)
+        save()
     }
 
     /// The emoji sheet's pick: it takes the tapped place (an emoji already in the bar swaps places

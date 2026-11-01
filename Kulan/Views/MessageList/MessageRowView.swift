@@ -1223,7 +1223,7 @@ final class MessageRowView: UIView {
         // Not on a post still sending (Forward would open on something not out yet), and not while
         // selecting, where the button sat under the selection tap (owner 2026-10-29 review fix).
         // `canSwipeToReply` is the builder's "sent" flag (sendState nil, not deleted).
-        guard case .bubble(let row) = m.content, row.wide, !row.showsFailedBadge, row.canSwipeToReply,
+        guard case .bubble(let row) = m.content, row.wide, row.shareable, !row.showsFailedBadge, row.canSwipeToReply,
               !m.selecting, !m.wasSelecting, b.bubble.width > 0 else {
             shareButton?.isHidden = true; shareRect = nil; return
         }

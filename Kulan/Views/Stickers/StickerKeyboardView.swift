@@ -395,17 +395,30 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
                                       width: smallEditW, height: smallEditH)
             editGlass.frame = editButton.bounds
             editGlass.layer.cornerRadius = smallEditH / 2
-            for v in [stripGlass, strip] as [UIView] { v.alpha = editing || gifsOn ? 0 : 1 }
+            // ⛔ SCROLLING INTO THE STICKERS HIDES BOTH BARS (owner 2026-11-01, "exactly like before"):
+            // the top row leaves upward, the switch leaves downward, the grid takes the room. Done
+            // stays while editing, and the GIF tab has no grid here to bring them back.
+            let hide = (headerHidden && !gifsOn && !editing) || searchingGifs
+            for v in [stripGlass, strip] as [UIView] { v.alpha = editing || gifsOn || hide ? 0 : 1 }
             // No glass behind the top bar (owner 2026-10-31): the icons sit on the panel itself.
             stripGlass.isHidden = true
-            editButton.alpha = 1
+            editButton.alpha = hide ? 0 : 1
+            let lift = hide ? bar.maxY : 0
+            for v in [strip, editButton] as [UIView] { v.transform = CGAffineTransform(translationX: 0, y: -lift) }
             if AppFeatures.stickerPanelGifs {
                 let switchW: CGFloat = 200
+                // Back to identity first: a frame set on a shifted view lands shifted the other way,
+                // which is how the switch jumped up the panel on scroll.
+                for v in [tabs, tabGlass, tabThumb] as [UIView] { v.transform = .identity }
                 tabs.frame = CGRect(x: (w - switchW) / 2, y: h - footGap - M.tabsH, width: switchW, height: M.tabsH)
                 tabGlass.frame = tabs.frame.insetBy(dx: -3, dy: -3)
                 tabGlass.layer.cornerRadius = tabGlass.bounds.height / 2
                 layoutTabThumb()
-                for v in [tabs, tabGlass, tabThumb] as [UIView] { v.transform = .identity; v.alpha = editing ? 0 : 1 }
+                let drop = hide ? h - tabGlass.frame.minY : 0
+                for v in [tabs, tabGlass, tabThumb] as [UIView] {
+                    v.transform = CGAffineTransform(translationX: 0, y: drop)
+                    v.alpha = editing || hide ? 0 : 1
+                }
                 let sSize: CGFloat = 44
                 searchButton.frame = CGRect(x: w - M.side - sSize, y: tabs.frame.midY - sSize / 2,
                                             width: sSize, height: sSize)
@@ -415,7 +428,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
                 searchButton.alpha = 0
                 searchButton.isUserInteractionEnabled = false
             }
-            let gridTop = barY + M.stripH + 6
+            let gridTop = hide ? 0 : barY + M.stripH + 6
             grid.frame = CGRect(x: 0, y: gridTop, width: w, height: max(0, h - gridTop))
             gifGrid.frame = CGRect(x: 0, y: M.top, width: w, height: max(0, h - M.top))
             gifGrid.footGap = footGap

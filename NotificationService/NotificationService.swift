@@ -141,9 +141,13 @@ final class NotificationService: UNNotificationServiceExtension {
         copy.title = isGroup ? groupName : shownSender
 
         // 2. The photos, downloaded with a short limit or taken from the App Group cache.
+        // `sp`: the chat's own photo of the sender, from the push (owner 2026-11-01: a grey face when
+        // this phone's saved chat list had no photo yet). What the phone saved wins: it knows my
+        // saved name and hidden photos; the push covers a chat it has not saved.
+        let pushedPhoto = info["sp"] as? String
         let senderPhoto = isGroup
-            ? ((chat[NotifShared.Chat.members] as? [String: String])?[aid] ?? direct[NotifShared.Chat.photo] as? String)
-            : chat[NotifShared.Chat.photo] as? String
+            ? ((chat[NotifShared.Chat.members] as? [String: String])?[aid] ?? direct[NotifShared.Chat.photo] as? String ?? pushedPhoto)
+            : (chat[NotifShared.Chat.photo] as? String ?? pushedPhoto)
         let groupPhoto = isGroup ? chat[NotifShared.Chat.photo] as? String : nil
         let photos = Avatars.load([senderPhoto, groupPhoto], timeout: 4)
 

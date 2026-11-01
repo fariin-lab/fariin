@@ -26,6 +26,8 @@ struct MessageRowContext {
     /// and my pick per post, as shown and as the server holds it (the counts include the latter).
     var channelReactionsOn: Bool = false
     var channelCanReact: Bool = false
+    /// Disable Sharing is on in this chat (`ThreadRepository.noForwarding`).
+    var noForwarding: Bool = false
     var channelMine: (String) -> String? = { _ in nil }
     var channelConfirmed: (String) -> String? = { _ in nil }
     /// The counts to draw for a post (mid, the post's own): the server's answer to my pick while the
@@ -414,7 +416,8 @@ enum MessageRowModelBuilder {
             // why it keeps the double-tap shortcut and the others give it away.
             opensOnTap: msg.isImage || msg.isVideo || msg.isAlbum || msg.isFile,
             canDoubleTapReact: msg.sendState == nil && !msg.deleted && !msg.isStoryReaction,
-            wide: ctx.isChannel && !msg.deleted)
+            wide: ctx.isChannel && !msg.deleted,
+            shareable: ctx.isChannel && !msg.deleted && !ctx.noForwarding)
     }
 
     /// ⛔ THE TIMER ICON FROM THE FIRST FRAME — owner, 2026-09-29: messages sent right after the

@@ -497,10 +497,7 @@ final class ChannelFollows {
     /// wrong numbers): the follow list's listener could hand over a pick one step ahead of or behind
     /// the counts on screen, and mixing the two put the count off by one per step.
     func confirmedReaction(_ cid: String, _ mid: String) -> String? {
-        if let o = countOverrides[cid]?[mid], Date().timeIntervalSince(o.at) < 120,
-           lastPost[cid + "/" + mid].map({ $0 == o.base }) ?? true {
-            return o.pick
-        }
+        if let o = countOverrides[cid]?[mid], Date().timeIntervalSince(o.at) < Self.answerHolds { return o.pick }
         return myReactions[cid]?[mid]
     }
 
@@ -511,24 +508,33 @@ final class ChannelFollows {
     /// ⛔ THE SERVER'S COUNTS UNTIL THE POST CATCHES UP (2026-10-29 review fix). Others' reactions
     /// reach the post in a once-a-minute batch now, so right after my pick lands the post's own
     /// `reactionCounts` do not have it yet, and the chip vanished or showed the old count for up to a
-    /// minute. The server's answer (the post's counts with my change applied) is shown instead while
-    /// the post still holds the counts it had when I tapped, for two minutes at most.
-    struct CountOverride: Hashable { let counts: [String: Int]; let base: [String: Int]; let at: Date; var pick: String? = nil }
+    /// minute. The server's answer (the post's counts with my change applied) is shown instead.
+    /// ⛔ THE ANSWER HOLDS FOR ONE WHOLE BATCH, HOWEVER THE POST MOVES (owner 2026-11-01: fast double
+    /// taps sometimes left a fake count). The answer is the count as it WILL land: it already has
+    /// everything still waiting in the buffer. It used to give way the moment the post changed at
+    /// all, but a batch landing between two taps holds the first tap and not the second, so the
+    /// post was one step behind and that stale number stayed until the next batch. Now the answer
+    /// stands until a batch after my last tap has surely landed, then the post is the truth again.
+    struct CountOverride: Hashable { let counts: [String: Int]; let at: Date; var pick: String? = nil }
     private(set) var countOverrides: [String: [String: CountOverride]] = [:]
+    /// The batch runs each minute; a little longer than that, so its run time is covered.
+    private static let answerHolds: TimeInterval = 75
 
-    func noteServerCounts(_ cid: String, _ mid: String, counts: [String: Int], base: [String: Int], pick: String?) {
-        countOverrides[cid, default: [:]][mid] = CountOverride(counts: counts, base: base, at: Date(), pick: pick)
+    func noteServerCounts(_ cid: String, _ mid: String, counts: [String: Int], pick: String?) {
+        let o = CountOverride(counts: counts, at: Date(), pick: pick)
+        countOverrides[cid, default: [:]][mid] = o
+        // Dropped by the clock too: when the post has not changed, nothing else would redraw it.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64((Self.answerHolds + 1) * 1_000_000_000))
+            guard let self, self.countOverrides[cid]?[mid] == o else { return }
+            self.countOverrides[cid]?[mid] = nil
+        }
     }
-    /// The post's own counts as last drawn, so `confirmedReaction` knows whether the answer is
-    /// still the one on screen. Not observed: it is written while drawing.
-    @ObservationIgnored private var lastPost: [String: [String: Int]] = [:]
 
-    /// The counts to draw for a post: the server's answer while it is newer than the post.
+    /// The counts to draw for a post: my last answer from the server while it holds, else the post.
     func displayCounts(_ cid: String, _ mid: String, post: [String: Int]) -> [String: Int] {
-        lastPost[cid + "/" + mid] = post
-        guard let o = countOverrides[cid]?[mid] else { return post }
-        if o.base == post, Date().timeIntervalSince(o.at) < 120 { return o.counts }
-        return post   // the batch landed (or it is too old): the post is the truth again
+        guard let o = countOverrides[cid]?[mid], Date().timeIntervalSince(o.at) < Self.answerHolds else { return post }
+        return o.counts
     }
 
     func settleReaction(_ cid: String, _ mid: String, confirmed: String?) {
@@ -551,9 +557,8 @@ final class ChannelFollows {
     /// after must not undo it.
     @ObservationIgnored private var settledAt: [String: (emoji: String?, at: Date)] = [:]
 
-    /// `base`: the post's counts when the first tap was made (see `displayCounts`).
     @MainActor
-    func react(cid: String, mid: String, emoji: String?, base: [String: Int], failed: @escaping (String) -> Void) {
+    func react(cid: String, mid: String, emoji: String?, failed: @escaping (String) -> Void) {
         let held = confirmedReaction(cid, mid)
         setPendingReaction(cid, mid, emoji)
         let key = cid + "/" + mid
@@ -568,7 +573,7 @@ final class ChannelFollows {
                     onServer = e
                     // Every answer, even one the next tap has already overtaken: the counts on screen
                     // and the pick they include must always come from the same answer.
-                    if let counts { noteServerCounts(cid, mid, counts: counts, base: base, pick: e) }
+                    if let counts { noteServerCounts(cid, mid, counts: counts, pick: e) }
                     guard pendingReactions[cid]?[mid] == want else { continue }   // tapped again meanwhile
                     settleReaction(cid, mid, confirmed: e)
                 } catch {

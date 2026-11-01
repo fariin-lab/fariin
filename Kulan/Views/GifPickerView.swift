@@ -335,6 +335,8 @@ struct GifPickerView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                 }
+                // A scroll closes the keyboard (owner 2026-11-01); the search words stay in the field.
+                .scrollDismissesKeyboard(.immediately)
                 categoryRow
                     .padding(.top, 8)
             }

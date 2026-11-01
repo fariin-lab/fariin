@@ -495,6 +495,7 @@ struct ThreadView: View {
     @State private var coveredReadPending = false
     @HeapState private var morePickerTarget: Message? = nil // any-emoji picker
     @HeapState private var channelReactTarget: Message? = nil   // a channel post's reactions (2026-10-29)
+    @State private var confirmChannelReport = false   // Report Channel on a post's menu (2026-11-01)
     @State private var reactorsTarget: MessageRef?   // "who reacted" sheet (id only)
     @HeapState private var pendingDelete: Message? = nil
     /// owner 2026-10-18: an admin deleting other members' messages in a group (AdminDeleteSheet).
@@ -684,21 +685,22 @@ struct ThreadView: View {
                 // member's own profile.
                 if !isGroup { showEncryptionInfo = true }
             } label: {
+                // ⛔ A SMALL GLASS CAPSULE, NOT A FULL-WIDTH BAR (owner 2026-11-01, his picture): the
+                // icon and the line only. Tapping it is still the way to the verify screen.
                 HStack(spacing: 8) {
                     Image(systemName: "lock.rotation").font(.system(size: 13, weight: .semibold))
                     Text(keyChangeText)
                         .font(.system(size: 13, weight: .medium)).lineLimit(1)
-                    Spacer(minLength: 4)
-                    if !isGroup {
-                        Text("Verify").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.fariinAction)
-                    }
                 }
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 14).padding(.vertical, 9)
-                .background(.bar)
-                .contentShape(Rectangle())
+                .liquidGlass(Capsule())
+                .contentShape(Capsule())
             }
             .buttonStyle(.plain)
+            .accessibilityHint("Opens the safety number")
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 16).padding(.top, 6)
         }
     }
 
@@ -1174,8 +1176,13 @@ struct ThreadView: View {
         // A channel's start (owner 2026-10-29): no privacy pill (it read as the reference app's; the
         // article is a row on the channel's page). Its owner and admins get the channel's card:
         // share it, edit it. A follower sees the posts from "Channel created" on.
-        if let conv = conversation, conv.isChannel, repo.didInitialLoad, !preview,
-           !repo.canLoadOlder || repo.cacheLooksWhole {
+        // ⛔ FROM THE FIRST FRAME WHEN THE WHOLE CHANNEL IS KNOWN TO BE HERE (owner 2026-11-01: the
+        // card came late). A channel whose post count the rows on screen already cover has nothing
+        // older to wait for, so it does not wait for the server. Under a page of rows only: an old
+        // channel's count may be short of its real history, and the card must not sit between pages.
+        if let conv = conversation, conv.isChannel, !preview,
+           (repo.didInitialLoad && (!repo.canLoadOlder || repo.cacheLooksWhole))
+            || (repo.items.count < 20 && repo.items.count >= conv.postCount) {
             if conv.admins.contains(me) || conv.isOwner(me) {
                 let key = ["chadm", conv.title, conv.avatarUrl ?? "", conv.groupDescription, "\(conv.followerCount)",
                            conv.publicName, "\(conv.isPublic)", "\(dark)"].joined(separator: "|")
@@ -2048,6 +2055,13 @@ struct ThreadView: View {
         .sheet(item: $morePickerTarget, onDismiss: { CMOverlay.current?.dismiss(animated: true) }) { m in
             EmojiMorePicker { emoji in react(m, emoji) }
         }
+        .alert("Report this channel?", isPresented: $confirmChannelReport) {
+            Button("Report", role: .destructive) {
+                Task { await ChatService.report(reportedUid: "", cid: cid, reason: "channel") }
+                showJumpToast("Thanks. Fariin's moderators will review this channel.")
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("No one in the channel will know about this report.") }
         .sheet(item: $channelReactTarget, onDismiss: { CMOverlay.current?.dismiss(animated: true) }) { m in
             let live = repo.items.first(where: { $0.id == m.id }) ?? m
             ChannelReactSheet(offered: channelOffered, counts: channelCounts(live), mine: myReaction(live),
@@ -4025,7 +4039,7 @@ struct ThreadView: View {
         add(channel ? "ch" : "-")
         if channel {
             let f = ChannelFollows.shared
-            add("\(f.myReactions[cid]?.hashValue ?? 0):\(f.pendingReactions[cid]?.hashValue ?? 0):\(f.countOverrides[cid]?.hashValue ?? 0):\(channelReactOn)\(channelCanReact)")
+            add("\(f.myReactions[cid]?.hashValue ?? 0):\(f.pendingReactions[cid]?.hashValue ?? 0):\(f.countOverrides[cid]?.hashValue ?? 0):\(channelReactOn)\(channelCanReact)\(repo.noForwarding)")
         } else {
             add("-")
         }
@@ -4047,6 +4061,7 @@ struct ThreadView: View {
             signPosts: false,   // Sign Posts removed (owner 2026-10-29): posts come from the channel
             calleeRinging: CallService.shared.calleeRinging,
             channelReactionsOn: channelReactOn, channelCanReact: channelCanReact,
+            noForwarding: repo.noForwarding,
             channelMine: { [cid] in ChannelFollows.shared.myReaction(cid, $0) },
             channelConfirmed: { [cid] in ChannelFollows.shared.confirmedReaction(cid, $0) },
             channelCounts: { [cid] in ChannelFollows.shared.displayCounts(cid, $0, post: $1) },
@@ -4347,6 +4362,14 @@ struct ThreadView: View {
                 togglePin(m)
             })
         }
+        // ⛔ REPORT CHANNEL ON A POST (owner 2026-11-01): public, private and restricted alike, for
+        // anyone who does not run the channel. It reports the channel, as its page does. Channels
+        // are not end-to-end encrypted, so the note against Report on a message is about 1:1 chats.
+        if let conv = conversation, conv.isChannel, !conv.isOwner(me), !conv.admins.contains(me) {
+            out.append(CMAction(title: "Report Channel", icon: "exclamationmark.octagon", destructive: true) {
+                confirmChannelReport = true
+            })
+        }
         if canDeleteHere(m) { out.append(CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = m }) }
         return out
     }
@@ -4465,11 +4488,8 @@ struct ThreadView: View {
             return
         }
         if let e = emoji { ReactionRecents.add(e) }
-        // The post's counts as they stand now: the server's answer is drawn while the post still
-        // holds these (`ChannelFollows.displayCounts`, the once-a-minute batch).
-        let base = repo.items.first(where: { $0.id == mid })?.reactionCounts ?? [:]
         // One request per post at a time, the newest tap wins (`ChannelFollows.react`).
-        ChannelFollows.shared.react(cid: cid, mid: mid, emoji: emoji, base: base) { msg in
+        ChannelFollows.shared.react(cid: cid, mid: mid, emoji: emoji) { msg in
             showJumpToast(msg)
         }
     }
