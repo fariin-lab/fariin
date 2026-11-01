@@ -575,8 +575,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// the header. A reader at the newest is put there first, then the card comes in. The last
     /// try shows it wherever it is: late is better than missing.
     private func placeHistoryHeader() {
-        guard let host = historyHeaderHost, host.view.alpha == 0, layout.headerHeight >= 40,
-              view.window != nil else { return }
+        guard let host = historyHeaderHost, host.view.alpha == 0 else { return }
+        let lastTry = headerRemeasureTries >= 7
+        guard lastTry || (layout.headerHeight >= 40 && view.window != nil) else { return }
         updateInsets()
         if (lastKnownDistanceFromBottom ?? 0) <= Self.atNewestTolerance {
             UIView.performWithoutAnimation {
@@ -584,7 +585,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             }
         }
         let top = view.convert(host.view.frame, from: collectionView).minY
-        guard top >= view.safeAreaInsets.top || headerRemeasureTries >= 7 else { return }
+        guard top >= view.safeAreaInsets.top || lastTry else { return }
         UIView.animate(withDuration: 0.15) { host.view.alpha = 1 }
     }
 
