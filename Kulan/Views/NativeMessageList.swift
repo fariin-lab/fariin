@@ -4567,7 +4567,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// to lower makes it harmless where it lags and still lets it do the one thing it is uniquely
     /// good at. Coming down belongs to the notification, and to the finger during a drag.
     private func adoptSystemKeyboardGuide() {
-        guard Date() >= keyboardBlockUntil else { return }
+        guard Date() >= keyboardBlockUntil, !sheetCoversChat else { return }
         guard let win = view.window else { return }
         let frame = view.keyboardLayoutGuide.layoutFrame
         guard frame.height > 0 || frame.minY > 0 else { return }
@@ -4608,6 +4608,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     private var keyboardIsUp: Bool { keyboardOverlap > restSafeBottom + 0.5 }
 
+    /// ⛔ A SHEET'S KEYBOARD IS THE SHEET'S — owner 2026-11-01, his recording: GIF search, send, and
+    /// the sheet closes over a chat with a big empty gap above the bar, then the new GIF jumps down.
+    /// The search field's keys were read as this chat's, so the bar and the list's clearance rose
+    /// behind the sheet and had to come back in two motions as it closed. The reference app's GIF
+    /// search lives inside its panel, so its keys never touch the chat. Same rule here: while
+    /// something is presented over this chat, a keyboard may lower it but never raise it.
+    /// A chat that itself sits inside the presented screen keeps its own keys.
+    private var sheetCoversChat: Bool {
+        guard var top = view.window?.rootViewController else { return false }
+        let root = top
+        while let next = top.presentedViewController { top = next }
+        return top !== root && !view.isDescendant(of: top.view)
+    }
+
     @objc private func keyboardWillChangeFrame(_ note: Notification) { rideKeyboard(note, hiding: false) }
     @objc private func keyboardWillHideNote(_ note: Notification) { rideKeyboard(note, hiding: true) }
 
@@ -4647,6 +4661,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let bar = composerBar as? ChatComposerView {
             if bar.gifSearchOpen { return }
             if !up, bar.holdsKeyboardForGifSearch { return }
+        }
+        // A sheet's own keys are not this chat's keys (see `sheetCoversChat`).
+        if up, sheetCoversChat {
+            DiagLog.add("KEYSHEET# refused rise overlap=\(Int(overlap))")
+            DiagLog.flagForUpload(after: 6)
+            return
         }
         // The reader opened the keys: they have taken over, so the unread pin lets the list ride them
         // (the lockstep in `updateInsets`) instead of holding the landed row under the keyboard.
