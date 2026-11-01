@@ -1396,7 +1396,7 @@ struct ThreadView: View {
                         if let lift = Self.barLift(top: top) { composerLift = lift }
                     }
             } else if selecting {
-                selectionActionBar.transition(.opacity)
+                selectionActionBar.transition(.move(edge: .bottom).combined(with: .opacity))
             } else if searchActive {
                 searchNavBar.transition(.opacity)
             } else if let conv = conversation, conv.isChannel, !conv.users.contains(me), !groupModHidesChat,
@@ -3658,6 +3658,7 @@ struct ThreadView: View {
             .transition(.identity)
             .modifier(SelectableRow(selecting: selecting, wasSelecting: wasSelecting,
                                     selected: selectedIds.contains(msg.id),
+                                    incoming: msg.authorId != me || conversation?.isChannel == true,
                                     tint: selectionTint, onWallpaper: chatHasWallpaper,
                                     onToggle: { toggleSelect(msg.id) }))
         }
@@ -5329,12 +5330,22 @@ struct ThreadView: View {
     private func setUIMode(_ newValue: ChatUIMode) {
         let oldValue = uiMode
         guard newValue != oldValue else { return }
-        withAnimation(.easeInOut(duration: MessageRowLayout.selectionAnimationDuration)) {
+        // The reference moves its bottom panel on a 0.4 s spring; the rows keep their own 0.2 s slide.
+        withAnimation(.spring(response: 0.4, dampingFraction: 1)) {
             previousUIMode = oldValue
             selectedIds = []
             uiMode = newValue
         }
         uiModeDidChange(oldValue: oldValue)
+        // Selection has no text field, so the keyboard goes (owner 2026-11-01), as in the reference.
+        // ⛔ NOT INSIDE THE TAP: resigning there redraws the thread on top of the tap handler, the
+        // crash noted at `openGroupLink`. One run-loop turn later the tap has unwound.
+        if newValue.hasSelectionUI {
+            DispatchQueue.main.async { [self] in
+                inputFocused = false
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
+        }
     }
 
     private func uiModeDidChange(oldValue: ChatUIMode) {
@@ -10805,14 +10816,16 @@ struct SelectionToolbar: UIViewRepresentable {
 ///
 /// ⚠️ IT HAS TO MATCH `SelectionCheckboxView` EXACTLY. There are two renderers in this list until
 /// the migration finishes, and a person scrolling past a photo should not be able to tell which one
-/// drew the circle beside it. Every number and colour here is the same as the UIKit one's: 24pt, a
-/// 2pt ring inset 1pt, an 8pt gap, the chat's own colour when filled, no shadow.
+/// drew the circle beside it. Every number and colour here is the same as the UIKit one's: 28pt, a
+/// 2pt ring inset 1pt, the same slide, the chat's own colour when filled, no shadow.
 struct SelectableRow: ViewModifier {
     let selecting: Bool
     /// Their `wasShowingSelectionUI`. The lane stays for the pass that slides the circle out, and
     /// the pass after that removes it — the same two-pass exit the UIKit rows use.
     let wasSelecting: Bool
     let selected: Bool
+    /// A row on the leading side slides over; a row on the trailing side stays.
+    let incoming: Bool
     /// The chat's own colour for the filled state, as theirs tints the indicator with `chatColorValue`.
     let tint: Color
     let onWallpaper: Bool
@@ -10833,38 +10846,41 @@ struct SelectableRow: ViewModifier {
     /// closes with `selecting`, on the same 0.2 s ease as the UIKit rows, and the content slides with it.
     func body(content: Content) -> some View {
         let open = selecting
-        HStack(spacing: 0) {
-            ZStack {
-                // Unselected is an EMPTY RING. No disc behind it and no shadow — theirs hides the
-                // ring behind the fill rather than drawing one on top of the other.
-                Circle()
-                    .strokeBorder(ringColor, lineWidth: 2)
-                    .frame(width: 22, height: 22)
-                    .opacity(selected ? 0 : 1)
-                Circle()
-                    .fill(tint)
-                    .frame(width: 22, height: 22)
-                    .overlay(
-                        // ⚠️ The tick does NOT scale in. Theirs sets the state with
-                        // `animated: false`, so the fill and the glyph arrive together on the
-                        // frame the finger lands.
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(.white)
-                    )
-                    .opacity(selected ? 1 : 0)
+        let slide = MessageRowLayout.selectionShift
+        // An offset, not a lane: a lane narrows the row and the hosting cell measures it again.
+        content
+            .allowsHitTesting(!open)
+            .offset(x: open && incoming ? slide : 0)
+            .overlay(alignment: .leading) {
+                ZStack {
+                    // Unselected is an EMPTY RING. No disc behind it and no shadow — theirs hides the
+                    // ring behind the fill rather than drawing one on top of the other.
+                    Circle()
+                        .strokeBorder(ringColor, lineWidth: 2)
+                        .frame(width: 26, height: 26)
+                        .opacity(selected ? 0 : 1)
+                    Circle()
+                        .fill(tint)
+                        .frame(width: 26, height: 26)
+                        .overlay(
+                            // ⚠️ The tick does NOT scale in. Theirs sets the state with
+                            // `animated: false`, so the fill and the glyph arrive together on the
+                            // frame the finger lands.
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white)
+                        )
+                        .opacity(selected ? 1 : 0)
+                }
+                .frame(width: MessageRowLayout.checkboxSize, height: MessageRowLayout.checkboxSize)
+                .offset(x: MessageRowLayout.checkboxLeading - (open ? 0 : slide))
+                .opacity(open ? 1 : 0)
             }
-            .frame(width: 24, height: 24)
-            .offset(x: open ? 0 : -40)
-            .opacity(open ? 1 : 0)
-            .frame(width: open ? 32 : 0, alignment: .leading)   // 24 + the 8 pt gap
-            content.allowsHitTesting(!open)
-        }
-        .animation(.easeInOut(duration: MessageRowLayout.selectionAnimationDuration), value: open)
-        .contentShape(Rectangle())
-        .onTapGesture { if open { onToggle() } }
-        // `wasSelecting` no longer changes the shape; it stays in the API for the UIKit twin's two passes.
-        .id(0)
+            .animation(.easeOut(duration: MessageRowLayout.selectionAnimationDuration), value: open)
+            .contentShape(Rectangle())
+            .onTapGesture { if open { onToggle() } }
+            // `wasSelecting` no longer changes the shape; it stays in the API for the UIKit twin's two passes.
+            .id(0)
     }
 }
 

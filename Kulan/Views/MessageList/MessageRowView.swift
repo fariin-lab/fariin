@@ -869,6 +869,9 @@ final class MessageRowView: UIView {
     private var callView: CallBubbleView?
     private var checkbox: SelectionCheckboxView?
     /// The disappearing-message icon, drawn over the footer. See `setExpiryTimer`.
+    /// Where the date header and the unread divider live, so the selection slide leaves them still.
+    /// A sibling of this view, set by the cell.
+    weak var fixedHost: UIView?
     private var expiryRing: UIImageView?
 
     private(set) var plan: RowPlan?
@@ -972,6 +975,7 @@ final class MessageRowView: UIView {
             applyNoticeButtons(nil, dark: dark)
             applyBubble(b, model: m, dark: dark, cid: cid)
         case .notice(let n):
+        seatSelectionShift(p.selectionShift)
             bubbleBox.isHidden = true
             callView?.isHidden = true
             hideBubbleChrome()
@@ -1026,7 +1030,7 @@ final class MessageRowView: UIView {
     private func applyHeader(_ p: RowPlan, dark: Bool) {
         guard let h = p.dateHeader else { headerPill?.isHidden = true; return }
         let v = headerPill ?? {
-            let v = RowNoticePillView(); addSubview(v); headerPill = v; return v
+            let v = RowNoticePillView(); (fixedHost ?? self).addSubview(v); headerPill = v; return v
         }()
         v.isHidden = false
         v.configure(h, dark: dark)
@@ -1041,7 +1045,8 @@ final class MessageRowView: UIView {
         if dividerLeft == nil {
             let l = UIView(), r = UIView(), lab = UILabel()
             lab.textAlignment = .center
-            addSubview(l); addSubview(r); addSubview(lab)
+            let host = fixedHost ?? self
+            host.addSubview(l); host.addSubview(r); host.addSubview(lab)
             dividerLeft = l; dividerRight = r; dividerLabel = lab
         }
         let line = BubblePalette.accent.withAlphaComponent(0.3)
@@ -1076,6 +1081,11 @@ final class MessageRowView: UIView {
         let v = checkbox ?? {
             let v = SelectionCheckboxView(); addSubview(v); checkbox = v; return v
         }()
+            //
+            // A circle still sliding out is left to finish: the pass after the slide runs on its own
+            // 0.2 s timer and could land first, which took the circle off a frame or two early.
+            // The slide's completion takes it out.
+            if checkbox?.layer.animation(forKey: "remove") != nil { return }
         v.isHidden = false
         // Bounds and center, for the same reason the bubble box uses them: a translation may be
         // riding on this view from the slide, and a view's `frame` is undefined under a transform.
@@ -1090,41 +1100,84 @@ final class MessageRowView: UIView {
         // slide is added afterwards as a layer animation, which is theirs.
         if isNew { UIView.performWithoutAnimation(seat) } else { seat() }
         v.updateStyle(tint: m.selectionTint, onWallpaper: m.onWallpaper)
-        v.refreshSelected(m.selected)
+        // On the way out the selection is already empty; the circle leaves as it was, tick and all.
+        if m.selecting { v.refreshSelected(m.selected) }
         v.alpha = 1
     }
 
-    /// The slide, as a layer animation on top of a layout that is already final — their model
-    /// exactly (`CABasicAnimation` on `transform.translation.x`, 0.2s, ease-in-ease-out).
+    /// How far the row's picture sits to the right at this moment, mid-slide included. Read before
+    /// `apply` so a slide starts from what is on screen, and an X during the way in turns round
+    /// without a jump.
+    var shownSelectionShift: CGFloat {
+        let live = layer.presentation()?.value(forKeyPath: "sublayerTransform.translation.x") as? CGFloat
+        return live ?? layer.sublayerTransform.m41
+    }
+
+    /// Puts the row at its slide with no motion. Every subview rides this one transform, so the
+    /// bubble, its text, the sender's photo and the circle cannot drift apart.
+    private func seatSelectionShift(_ shift: CGFloat) {
+        guard layer.sublayerTransform.m41 != shift else { return }
+        layer.removeAnimation(forKey: "selection.shift")
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.sublayerTransform = CATransform3DMakeTranslation(shift, 0, 0)
+        CATransaction.commit()
+    }
+
+    /// The slide, on top of a row already seated at its end: the reference's numbers, 0.2 s ease-out
+    /// on the sublayer transform. Nothing is laid out while it runs.
+    func animateSelectionShift(from: CGFloat, to: CGFloat) {
+        guard from != to else { return }
+        let a = CABasicAnimation(keyPath: "sublayerTransform.translation.x")
+        a.fromValue = from
+        a.toValue = to
+        a.duration = MessageRowLayout.selectionAnimationDuration
+        a.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.add(a, forKey: "selection.shift")
+    }
+
+    /// The circle's way in and out, on top of a layout that is already final. It fades over the same
+    /// 0.2 s. A leading row's circle needs no move of its own: it rides the row's slide. A trailing
+    /// row does not move, so its circle slides the same distance by itself.
     ///
-    /// ⚠️ The circle travels FURTHER than the content: it starts fully outside the leading margin
-    /// (`checkboxTravel`), while the content only moves by its own lane (`selectionShift`). Their
-    /// two constants, `selectionOffset` and `hInnerStackOffset`, say the same thing.
-    ///
-    /// Leaving is `fillMode: .forwards` with `isRemovedOnCompletion = false`, so the circle STAYS
-    /// parked off the edge when the animation ends instead of snapping back for one frame. The pass
-    /// that follows removes the view outright, so nothing is left holding a stale animation.
+    /// Leaving fills forwards, so the circle stays gone when the animation ends instead of snapping
+    /// back for one frame, and the slide's completion takes the view out.
     func animateSelectionSlide(entering: Bool) {
         guard let box = checkbox else { return }
-        let travel = -MessageRowLayout.checkboxTravel
-        let a = CABasicAnimation(keyPath: "transform.translation.x")
-        a.duration = MessageRowLayout.selectionAnimationDuration
-        a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        let duration = MessageRowLayout.selectionAnimationDuration
+        let curve = CAMediaTimingFunction(name: .easeOut)
+        let shown = box.layer.animation(forKey: "remove") != nil
+            ? CGFloat(box.layer.presentation()?.opacity ?? 0) : (entering ? 0 : 1)
+        box.layer.removeAnimation(forKey: "remove")
+        box.layer.removeAnimation(forKey: "remove.slide")
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.duration = duration
+        fade.timingFunction = curve
+        fade.fromValue = shown
+        fade.toValue = entering ? 1 : 0
+        // A trailing row is the one whose circle sits at its real place, not one slide to the left.
+        var slide: CABasicAnimation?
+        if box.center.x > 0 {
+            let s = CABasicAnimation(keyPath: "transform.translation.x")
+            s.duration = duration
+            s.timingFunction = curve
+            s.fromValue = entering ? -MessageRowLayout.selectionShift : 0
+            s.toValue = entering ? 0 : -MessageRowLayout.selectionShift
+            slide = s
+        }
         if entering {
-            a.fromValue = travel
-            a.toValue = 0
-            box.layer.add(a, forKey: "insert")
+            box.layer.add(fade, forKey: "insert")
+            if let slide { box.layer.add(slide, forKey: "insert.slide") }
         } else {
-            a.fromValue = 0
-            a.toValue = travel
-            a.fillMode = .forwards
-            a.isRemovedOnCompletion = false
-            // ⛔ THE CIRCLE TAKES ITSELF AWAY WHEN IT HAS SLID OUT — owner, 2026-09-27, a screenshot of
-            // six empty circles left after X. The forwards fill was the only thing hiding it until the
-            // second pass rebuilt the row, and Core Animation drops such a fill whenever the layer
-            // leaves its window (a pre-rendered cell, the app going to the background): the circle
-            // then came back at its real place on any cell the second pass had not reached. Now the
-            // slide's own completion removes it, unless the row has gone back into selection.
+            fade.fillMode = .forwards
+            fade.isRemovedOnCompletion = false
+            slide?.fillMode = .forwards
+            slide?.isRemovedOnCompletion = false
+            // ⛔ THE CIRCLE TAKES ITSELF AWAY WHEN IT HAS GONE — owner, 2026-09-27, a screenshot of
+            // six empty circles left after X. Core Animation drops a forwards fill whenever the layer
+            // leaves its window (a pre-rendered cell, the app going to the background), so the fill
+            // alone cannot hide it. The animation's own completion removes it, unless the row has
+            // gone back into selection.
             CATransaction.begin()
             CATransaction.setCompletionBlock { [weak self, weak box] in
                 guard let self, let box, self.checkbox === box, self.model?.selecting != true else { return }
@@ -1132,7 +1185,8 @@ final class MessageRowView: UIView {
                 box.removeFromSuperview()
                 self.checkbox = nil
             }
-            box.layer.add(a, forKey: "remove")
+            box.layer.add(fade, forKey: "remove")
+            if let slide { box.layer.add(slide, forKey: "remove.slide") }
             CATransaction.commit()
         }
     }
@@ -2456,7 +2510,7 @@ final class MessageRowView: UIView {
         // onto the view from the tap handler: the fill appears on the same frame as the finger.
         // Ours used a 0.35s spring with a scale-up on the glyph, which is a third of a second of
         // catch-up on every tap of a twenty-message selection.
-        if let box = checkbox, m.selected != fromSelected {
+        if let box = checkbox, m.selecting, m.selected != fromSelected {
             box.refreshSelected(m.selected)
         }
         // The jump flash no longer rides `highlighted`: see `performJumpHighlight`.
@@ -2585,6 +2639,9 @@ private extension BubbleText {
     /// The meta string for a bubble that is already planned — keeps the two call sites in
     /// `MessageRowView` from restating the colour and the isMe test.
     static func meta(b: BubblePlan, m: MessageRowModel) -> NSAttributedString {
+        // The slide goes with it: the next row is seated at its own by `apply`.
+        seatSelectionShift(0)
+        layer.removeAnimation(forKey: "selection.shift")
         guard case .bubble(let row) = m.content else { return NSAttributedString() }
         return meta(row.meta, isMe: row.isMe, color: b.metaColor,
                     solidTicks: b.mediaPlan?.metaCapsule != nil || b.albumPlan?.metaCapsule != nil)

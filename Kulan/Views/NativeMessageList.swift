@@ -4960,6 +4960,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // container is collapsed and the clearance comes from the fallback, exactly as it does for
         // the announcements list. See `hideComposer`.
         guard let bar = composerBar, !bar.isHidden else {
+            // ⛔ THE SELECTION BAR STANDS IN FOR THE COMPOSER WITHOUT MOVING THE LIST (owner
+            // 2026-11-01). It is 9pt shorter, so on X every message jumped in one frame while the
+            // rows slid. In the reference the swap leaves the messages where they are.
+            if selectionUIState.selecting || selectionUIState.wasSelecting, let composer = composerBar as? ChatComposerView {
+                let width = max(1, view.bounds.width - (barLeading?.constant ?? 0) * 2)
+                return Self.barTopPad + composer.preferredHeight(forWidth: width)
+                    + (-(barBottom?.constant ?? 0)) + keyboardOverlap
+            }
             // ⛔ `barTopPad`, THE COMPOSER'S OWN GAP, not a separate 12 — owner, 2026-09-29: the
             // Official Chat's last post sat higher over its bar than a chat's over its composer
             // ("remove the large space… the exact same position as in Normal Chat"). With the

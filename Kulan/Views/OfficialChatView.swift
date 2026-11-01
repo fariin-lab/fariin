@@ -260,8 +260,11 @@ struct OfficialChatView: View {
                     searchTerm: searching ? searchQuery.trimmingCharacters(in: .whitespaces) : ""
                 )
                 .padding(.horizontal, 16)
+                // These cards fill the width, so the slide would run them off the trailing edge.
+                .padding(.trailing, selecting ? MessageRowLayout.selectionShift : 0)
                 .modifier(SelectableRow(selecting: selecting, wasSelecting: wasSelecting,
                                         selected: selectedIds.contains(a.id),
+                                        incoming: true,
                                         tint: Color.fariinAction,
                                         onWallpaper: WallpaperStore.shared.hasWallpaper(for: OfficialChannel.cid),
                                         onToggle: { toggle(a.id) })))

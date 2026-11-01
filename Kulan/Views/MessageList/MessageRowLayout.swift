@@ -332,22 +332,18 @@ struct RowPlan {
     var divider: DividerPlan?
     var body: RowBodyPlan
     var checkbox: CGRect?
-
+    /// How far the row's finished picture is slid right right now (`MessageRowView`). Layout never
+    /// reads it: a row is the same size in and out of selection.
+    var selectionShift: CGFloat = 0
 }
 
 enum MessageRowLayout {
 
-    // Selection chrome, to the reference's numbers: a 24pt circle (`selectionViewWidth`) sitting at
-    // the row's own leading margin, with their `messageStackSpacing` of 8 between it and the
-    // content. Ours had a 4pt outer pad and a 10pt gap, so the whole row moved 38 instead of 32 and
-    // the circle sat 4pt in from where theirs does.
-    static let checkboxSize: CGFloat = 24
-    private static let checkboxGap: CGFloat = 8
-    /// How far the CONTENT moves over. Their `hInnerStackOffset`: the circle's width plus the gap.
-    static var selectionShift: CGFloat { checkboxSize + checkboxGap }
-    /// How far the CIRCLE itself travels on the way in and out — further than the content, because it
-    /// starts fully outside the leading margin rather than at it. Their `selectionOffset`.
-    static var checkboxTravel: CGFloat { BubbleMetrics.rowMargin + checkboxSize }
+    // Selection chrome, to the reference's numbers: a 28pt circle 6pt in from the edge. A row on the
+    // leading side slides 42pt; a row on the trailing side stays and the circle slides in by itself.
+    static let checkboxSize: CGFloat = 28
+    static let checkboxLeading: CGFloat = 6
+    static let selectionShift: CGFloat = 42
     /// Their `CVComponentMessage.selectionAnimationDuration`. One number for the row slide, the bar
     /// swap and the delay before the second pass takes the circle out of the cell — if they drift,
     /// the circle is either removed mid-slide or left parked on screen after it.
@@ -384,18 +380,12 @@ enum MessageRowLayout {
         // pass that slides the circle out, and gone on the next. Keying it on `selecting` alone is
         // what left the row no space to animate out through.
         let selectionUI = m.selecting || m.wasSelecting
-        // ⛔ THE CONTENT GOES BACK WITH THE CIRCLE (owner 2026-10-31: on X the circles slid out, then
-        // the messages jumped back in one step). The circle keeps its lane for the leaving pass, but
-        // the content's shift follows `selecting` alone, so the leaving pass, which the cell animates,
-        // slides the messages back while the circle slides out, and the next pass changes nothing.
-        let shift = m.selecting ? selectionShift : 0
-        // ⚠️ NO TRAILING INSET. Theirs puts a FLEXIBLE spacer between the selection column and an
-        // outgoing bubble, so the bubble's right edge does not move at all when selection opens —
-        // only its cap shrinks. Ours took 4pt off the trailing side as well, which walked every
-        // outgoing bubble 4pt left on the way in and back again on the way out. Right-aligning to
-        // `rowMargin + shift + contentW` lands the trailing edge exactly where it was.
-        let contentX = BubbleMetrics.rowMargin + shift
-        let contentW = max(1, width - BubbleMetrics.rowMargin * 2 - shift)
+        // ⛔ SELECTION DOES NOT TOUCH THE LAYOUT (owner 2026-11-01: rows not smooth going in or out).
+        // Taking the lane off the width re-wrapped long text and changed row heights, so the list
+        // moved under the slide. The reference lays a row out once and slides the finished picture
+        // with a layer transform: nothing re-wraps, nothing re-measures, the bubble cap stays.
+        let contentX = BubbleMetrics.rowMargin
+        let contentW = max(1, width - BubbleMetrics.rowMargin * 2)
 
         var body: RowBodyPlan
         var contentHeight: CGFloat
@@ -418,12 +408,9 @@ enum MessageRowLayout {
             p.plan.offsetVertically(by: y)
             body = .bubble(p.plan)
         case .notice(let n):
-            // owner 2026-10-25: in select mode a long line ("You added a, b, c, ...") ran under the
-            // circles. It is laid out in the width right of the selection lane, and centred there.
-            var p = notice(n, width: width - shift)
+            var p = notice(n, width: width)
             p.capsule.origin.y += y + 6
-            p.capsule.origin.x += shift
-            for i in p.buttons.indices { p.buttons[i].rect.origin.y += y + 6; p.buttons[i].rect.origin.x += shift }
+            for i in p.buttons.indices { p.buttons[i].rect.origin.y += y + 6 }
             // The buttons hang under the pill, so the row is as tall as the lowest of them.
             // A story card holds its button inside, so the card itself can be the lowest thing.
             let bottom = max(p.capsule.maxY, p.buttons.map(\.rect.maxY).max() ?? 0)
@@ -444,15 +431,26 @@ enum MessageRowLayout {
 
         // The checkbox is centred against the row's content, not the whole row: with a date header
         // above, centring on the row would float it into the separator.
+        //
+        // A leading row's circle sits one slide to the left of its place, so the row's own slide
+        // carries it in and back out. A notice cannot be selected, as in the reference: no circle,
+        // and it does not move.
         var checkbox: CGRect?
-        if selectionUI {
+        let leading: Bool?
+        switch m.content {
+        case .bubble(let b): leading = !b.isMe
+        case .call(let c): leading = !c.mine
+        case .notice: leading = nil
+        }
+        if selectionUI, let leading {
             let cy = y + (contentHeight - checkboxSize) / 2
-            checkbox = CGRect(x: BubbleMetrics.rowMargin, y: cy,
+            checkbox = CGRect(x: checkboxLeading - (leading ? selectionShift : 0), y: cy,
                               width: checkboxSize, height: checkboxSize)
         }
 
         return RowPlan(width: width, height: y + contentHeight,
-                       dateHeader: header, divider: divider, body: body, checkbox: checkbox)
+                       dateHeader: header, divider: divider, body: body, checkbox: checkbox,
+                       selectionShift: m.selecting && leading == true ? selectionShift : 0)
     }
 
     // ── The bubble ──

@@ -47,6 +47,8 @@ final class MessageRowCell: UICollectionViewCell {
     static let reuseId = "MessageRowCell"
 
     private let rowView = MessageRowView()
+    /// The date header and unread divider: under the row, and outside its selection slide.
+    private let fixedHost = UIView()
     /// The emoji of the reaction pill last tapped, read by the delegate in `rowCellDidTapReactions`.
     private(set) var tappedReaction: String?
     private var tap: UITapGestureRecognizer!
@@ -194,7 +196,10 @@ final class MessageRowCell: UICollectionViewCell {
         backgroundColor = .clear
         contentView.backgroundColor = .clear
         contentView.addSubview(rowView)
+        fixedHost.isUserInteractionEnabled = false
+        contentView.addSubview(fixedHost)
         tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        rowView.fixedHost = fixedHost
         tap.cancelsTouchesInView = false   // the list's tap-to-dismiss-keyboard still gets its turn
         contentView.addGestureRecognizer(tap)
         rowView.failMenuItems = { [weak self] in
@@ -218,11 +223,11 @@ final class MessageRowCell: UICollectionViewCell {
         model = nil
         rowView.isHidden = true
         accessibilityLabel = nil
+        fixedHost.isHidden = true
         accessibilityValue = nil
     }
 
     func configure(_ m: MessageRowModel, plan: RowPlan, cid: String) {
-        let previous = model
         rowId = m.id
         model = m
         rowView.isHidden = false   // undo `blank()`
@@ -236,37 +241,24 @@ final class MessageRowCell: UICollectionViewCell {
         // animates correctly too, and a cell that missed the transition entirely cannot be left in
         // the wrong state: the pass after the slide carries neither flag, and the row is rebuilt
         // without a selection lane at all.
-        //
-        // What this replaced compared against `previous` — the last model THIS cell instance was
-        // configured with. A recycled cell has none, so it silently took the no-animation branch,
-        // and a cell whose reconfigure was skipped never learned the mode had changed.
         applyAccessibility(m)
         let entering = m.selecting && !m.wasSelecting
         let leaving = !m.selecting && m.wasSelecting
-        // The CONTENT's move is a layout change, so it is still gated to a cell already showing this
-        // row: a recycled one would slide from the previous row's geometry, which is motion out of
-        // nowhere mid-scroll. The circle's own slide is a layer animation and is safe either way.
-        let sameRow = previous?.id == m.id
+        fixedHost.frame = rowView.frame
+        fixedHost.isHidden = false
         defer { pinAvatar() }
-        guard entering || leaving else {
-            rowView.apply(m, plan: plan, cid: cid)
-            return
-        }
-        if sameRow {
-            // Incoming rows move over; outgoing ones do not. That falls out of the geometry rather
-            // than a direction test — theirs puts a flexible spacer between the selection lane and an
-            // outgoing bubble, and `MessageRowLayout` now right-aligns to the same trailing edge in
-            // both modes, so an outgoing row's rects simply do not change and there is nothing for
-            // this animation to interpolate.
-            UIView.animate(withDuration: MessageRowLayout.selectionAnimationDuration, delay: 0,
-                           options: [.curveEaseInOut, .allowUserInteraction]) {
-                self.rowView.apply(m, plan: plan, cid: cid)
-            }
-        } else {
-            rowView.apply(m, plan: plan, cid: cid)
-        }
+        // ⛔ THE ROW IS NEVER REBUILT FOR THE SLIDE. `apply` seats it at its end with no motion, and
+        // the slide is a layer animation on top, read from what was on screen a moment ago. So the
+        // same move works on a recycled cell (it starts from nothing), and an X during the way in
+        // turns round in place.
+        let shownShift = rowView.shownSelectionShift
+        rowView.apply(m, plan: plan, cid: cid)
+        guard entering || leaving else { return }
+        rowView.animateSelectionShift(from: shownShift, to: plan.selectionShift)
         rowView.animateSelectionSlide(entering: entering)
     }
+        WallpaperBlurSliceView.reposition(in: self)
+        BubbleFillView.repositionGradients(in: self)
 
     /// A geometry-neutral repaint — the tick upgraded, the time changed, the row was selected. Held
     /// to changes that cannot move anything, because a height-changing update has to go through the
@@ -513,6 +505,7 @@ final class MessageRowCell: UICollectionViewCell {
 
         if m.selecting {
             // In selection mode the whole row toggles — the checkbox is the affordance, not the
+            if case .notice = m.content { return }   // no circle, nothing to select
             // only target. Theirs suppresses every other tap handler here for the same reason.
             //
             // THE TICK IS WRITTEN ONTO THE VIEW FIRST, then the model is told. That is their
