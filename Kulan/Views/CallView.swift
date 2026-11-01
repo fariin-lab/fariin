@@ -1341,28 +1341,31 @@ struct CallView: View {
 
     /// Share Screen, moved down from the header (Kasim 2026-10-22). Its rules are the header
     /// button's (owner 2026-10-15): starting needs a connected call and nobody else sharing, STOPPING
-    /// is never disabled (audit M-165); dimmed = not yet, glass = ready, solid white = sharing.
+    /// is never disabled (audit M-165); dimmed = not yet, glass = ready, solid white = live.
     private var shareCircle: some View {
         let sharingOn = call.screenSharePhase != .off
+        // White only once the screen is really going out (owner 2026-11-01), as in a group call:
+        // while the system picker is up nothing is shared yet. A tap then still cancels it.
+        let lit = call.screenSharePhase == .live
         let canStart = call.state == .active && call.connectedDate != nil && !call.remoteScreenSharing
         return Button {
             buzz()
             showControls()
             if sharingOn { call.stopScreenShareByUser() } else { call.toggleScreenShare() }
         } label: {
-            // Owner, 2026-10-10: his own Share Screen icon (asset ic_share_screen, template).
-            Image("ic_share_screen").renderingMode(.template).resizable().scaledToFit()
+            // The group call's Share Screen icon, one icon for both calls (owner 2026-11-01).
+            Image("ic_share_screen_menu").renderingMode(.template).resizable().scaledToFit()
                 .frame(width: circleSize * 0.42, height: circleSize * 0.42)
-                .foregroundStyle(sharingOn ? .black : .white)
+                .foregroundStyle(lit ? .black : .white)
                 .frame(width: circleSize, height: circleSize)
-                .background(sharingOn ? AnyShapeStyle(.white) : AnyShapeStyle(.clear), in: Circle())
-                .liquidGlass(Circle(), interactive: true, enabled: !sharingOn)
+                .background(lit ? AnyShapeStyle(.white) : AnyShapeStyle(.clear), in: Circle())
+                .liquidGlass(Circle(), interactive: true, enabled: !lit)
                 .contentShape(Circle())
                 .opacity(sharingOn || canStart ? 1 : 0.4)
         }
         .disabled(!sharingOn && !canStart)
         .buttonStyle(CallControlStyle())
-        .accessibilityLabel(sharingOn ? "Stop Sharing" : "Share Screen")
+        .accessibilityLabel(lit ? "Stop Sharing" : sharingOn ? "Cancel Sharing" : "Share Screen")
     }
 
     // Smart speaker: no external device → plain earpiece/speaker toggle.
