@@ -131,6 +131,8 @@ struct CMAction {
     let title: String
     let icon: String            // SF Symbol name
     var destructive: Bool = false
+    /// When the message goes: the row counts down to it in a small second line (owner 2026-11-01).
+    var countdownTo: Date? = nil
     let handler: () -> Void
 }
 
@@ -993,6 +995,8 @@ private final class CMActionRow: UIView {
     private let title = UILabel()
     private let icon = UIImageView()
     private let highlight = UIView()
+    private var countdown: UILabel?
+    private var ticker: Timer?
     // NO separator lines — the owner rejected them against the reference app's clean glass ("u added lines
     // thats i don't"). The rows read as one sheet; the highlight fill is the only row chrome.
 
@@ -1037,8 +1041,56 @@ private final class CMActionRow: UIView {
         isAccessibilityElement = true
         accessibilityLabel = action.title
         accessibilityTraits = .button
+
+        if action.countdownTo != nil {
+            let l = UILabel()
+            // 13/17 of the title's size, the reference app's ratio for this line. Whole-width
+            // digits, so the line does not shiver as the seconds change.
+            l.font = .monospacedDigitSystemFont(ofSize: title.font.pointSize * 13 / 17, weight: .regular)
+            l.textColor = color
+            l.adjustsFontSizeToFitWidth = true
+            l.minimumScaleFactor = 0.7
+            addSubview(l)
+            countdown = l
+            refreshCountdown()
+        }
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    deinit { ticker?.invalidate() }
+
+    // Runs only while the row is on screen. Common mode: the finger is usually still down on the
+    // menu, and a default-mode timer would stand still until it lifts.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        ticker?.invalidate()
+        ticker = nil
+        guard window != nil, countdown != nil else { return }
+        let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.refreshCountdown() }
+        RunLoop.main.add(t, forMode: .common)
+        ticker = t
+        refreshCountdown()
+    }
+
+    private func refreshCountdown() {
+        guard let end = action.countdownTo else { return }
+        let text = Self.remaining(end.timeIntervalSinceNow)
+        countdown?.text = text
+        accessibilityLabel = "\(action.title), \(text)"
+    }
+
+    /// Whole days once there is a day or more, then h:mm:ss, then m:ss.
+    static func remaining(_ interval: TimeInterval) -> String {
+        let total = Int(max(0, interval))
+        if total >= 86_400 {
+            let days = Int((Double(total) / 86_400).rounded())
+            return "Disappears in \(days) \(days == 1 ? "day" : "days")"
+        }
+        let hours = total / 3600, minutes = total / 60 % 60, seconds = total % 60
+        return hours > 0
+            ? String(format: "Disappears in %d:%02d:%02d", hours, minutes, seconds)
+            : String(format: "Disappears in %d:%02d", minutes, seconds)
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -1065,6 +1117,15 @@ private final class CMActionRow: UIView {
         title.frame = CGRect(x: icon.frame.maxX + iconSpacing, y: 0,
                              width: bounds.width - icon.frame.maxX - iconSpacing - margin,
                              height: bounds.height)
+        if let countdown {
+            // The two lines stand as one block, centred in the same row height.
+            let titleH = ceil(title.font.lineHeight)
+            let countdownH = ceil(countdown.font.lineHeight)
+            let top = (bounds.height - titleH - countdownH) / 2
+            title.frame = CGRect(x: title.frame.minX, y: top, width: title.frame.width, height: titleH)
+            countdown.frame = CGRect(x: title.frame.minX, y: top + titleH,
+                                     width: title.frame.width, height: countdownH)
+        }
     }
 }
 

@@ -44,6 +44,22 @@ enum EmojiCatalog {
         })
     }
     static let all: [Item] = sections.flatMap { $0.items }
+
+    /// What a channel may offer as reactions: the reference app's free set, in its order, 73 emoji
+    /// (owner 2026-11-01: the whole keyboard was too many). Names come from the catalog for search;
+    /// the variation selector is ignored there, because the two lists spell some hearts differently.
+    static let channelReactions: [Item] = {
+        let names = Dictionary(all.map { (bare($0.char), $0.name) }, uniquingKeysWith: { first, _ in first })
+        return """
+        ❤️ 👍 👎 🔥 🥰 👏 😁 🤔 🤯 😱 🤬 😢 🎉 🤩 🤮 💩 🙏 👌 🕊️ 🤡 🥱 🥴 😍 🐳 ❤️‍🔥 🌚 🌭 💯 🤣 ⚡️ 🍌 🏆 💔 🤨 😐 \
+        🍓 🍾 💋 🖕 😈 😴 😭 🤓 👻 👨‍💻 👀 🎃 🙈 😇 😨 🤝 ✍️ 🤗 🫡 🎅 🎄 ☃️ 💅 🤪 🗿 🆒 💘 🙉 🦄 😘 💊 🙊 😎 👾 \
+        🤷‍♂️ 🤷 🤷‍♀️ 😡
+        """.split(separator: " ").map { Item(char: String($0), name: names[bare(String($0))] ?? "") }
+    }()
+
+    private static func bare(_ emoji: String) -> String {
+        String(String.UnicodeScalarView(emoji.unicodeScalars.filter { $0.value != 0xFE0F }))
+    }
 }
 
 // Full native-emoji grid for "more": categories when idle, name-search when typing.
@@ -52,6 +68,8 @@ struct EmojiMorePicker: View {
     var title: String = "React"
     /// How tall the sheet opens (owner 2026-10-31: the channel's reaction bar must stay in sight).
     var detents: Set<PresentationDetent> = [.medium, .large]
+    /// A short list to choose from instead of the whole keyboard, as one grid with no headings.
+    var only: [EmojiCatalog.Item]? = nil
     var onPick: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
@@ -60,13 +78,15 @@ struct EmojiMorePicker: View {
     private var filtered: [EmojiCatalog.Item] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return [] }
-        return EmojiCatalog.all.filter { $0.name.contains(q) }
+        return (only ?? EmojiCatalog.all).filter { $0.name.contains(q) }
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                if query.isEmpty {
+                if query.isEmpty, let only {
+                    grid(only).padding()
+                } else if query.isEmpty {
                     ForEach(EmojiCatalog.sections, id: \.title) { section in
                         VStack(alignment: .leading, spacing: 6) {
                             Text(section.title).font(.caption.weight(.semibold))

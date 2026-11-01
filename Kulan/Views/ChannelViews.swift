@@ -1207,7 +1207,8 @@ struct ChannelReactionsSettingsView: View {
         .animation(.snappy(duration: 0.25), value: list)
         .sheet(isPresented: $pickAny, onDismiss: { replacing = nil }) {
             // Low enough that the bar, and the emoji being replaced, stay in sight above it.
-            EmojiMorePicker(title: "Choose Emoji", detents: [.fraction(0.42), .large]) { e in
+            EmojiMorePicker(title: "Choose Emoji", detents: [.fraction(0.42), .large],
+                            only: EmojiCatalog.channelReactions) { e in
                 pickAny = false
                 place(e)
             }

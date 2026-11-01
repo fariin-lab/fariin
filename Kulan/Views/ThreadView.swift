@@ -579,6 +579,11 @@ struct ThreadView: View {
         if guest != nil { r.previewOnly = true }
         if guest?.readable == false { r.lockedGuest = true }
         _repo = State(initialValue: r)
+        // ⛔ KNOWN FROM THE FIRST BODY (owner 2026-11-01: a channel opened with its post on the right,
+        // as my own message, for the whole push). Rows are built in the first body and `onAppear`
+        // comes after it, so cached rows drew as a 1:1 until then. `onAppear` still does the full
+        // lookup with its stand-ins.
+        _cachedConv = HeapState(wrappedValue: ConversationsRepository.shared.conversations.first { $0.id == cid })
         // ALWAYS start hidden — even a warm cache hit. Video showed the bug: when revealed started true
         // (cache hit), the chat was visible DURING the push transition at a not-yet-bottom position, then
         // jumped to the bottom. Starting hidden + settling under the veil (revealAtOpenAnchor, run from
@@ -4295,7 +4300,7 @@ struct ThreadView: View {
             out.append(CMAction(title: "Select", icon: "checkmark.circle") {
                 setUIMode(.selection); selectedIds = [m.id]   // their order: mode first, then add the item
             })
-            if canDeleteHere(m) { out.append(CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = m }) }
+            out.append(contentsOf: deleteOrTimerRow(m))
             return out
         }
 
@@ -4391,8 +4396,21 @@ struct ThreadView: View {
                 confirmChannelReport = true
             })
         }
-        if canDeleteHere(m) { out.append(CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = m }) }
+        out.append(contentsOf: deleteOrTimerRow(m))
         return out
+    }
+
+    /// The last row of a message's menu. On a disappearing message Delete carries a live countdown,
+    /// from the server's stamp only, so it never promises a time the server has not set. Someone who
+    /// cannot delete, like a channel's follower, gets the countdown on a row of its own: the footer
+    /// icon says the post will go, and this is the only place that says when (owner 2026-11-01).
+    private func deleteOrTimerRow(_ m: Message) -> [CMAction] {
+        if canDeleteHere(m) {
+            return [CMAction(title: "Delete", icon: "trash", destructive: true,
+                             countdownTo: m.expiresAt) { pendingDelete = m }]
+        }
+        guard let end = m.expiresAt else { return [] }
+        return [CMAction(title: "Disappearing", icon: "timer", countdownTo: end) {}]
     }
 
     // The bar shows exactly when this row can be reacted to: on the server, and I am not muted.
