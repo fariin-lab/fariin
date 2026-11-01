@@ -3402,6 +3402,10 @@ struct ThreadView: View {
         // come back whole as "the other person": a group just created, opened before its document
         // arrived, showed the 1:1 call buttons for a moment (owner 2026-10-18, build 973).
         let parts = cid.split(separator: "_").map(String.init)
+        // App Store screenshot mode: a demo 1:1 ("demo-hooyo") draws its call buttons too.
+        if DemoMode.storeShots, DemoMode.isDemoConversation(cid), conversation?.isGroup != true {
+            return conversation?.users.first { $0 != me } ?? ""
+        }
         guard parts.count == 2 else { return "" }
         return parts.first { $0 != me } ?? ""
     }
