@@ -1198,10 +1198,13 @@ struct CallsView: View {
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         // The owner's own new-call glyph (2026-10-04), a template SVG like his others.
+                        // Filled in the action colour like Chats' compose pen (owner 2026-11-01:
+                        // missed when the one colour went in).
                         Button { showNew = true } label: {
                             Image("ic_new_call").renderingMode(.template).resizable().scaledToFit()
-                                .frame(width: 22, height: 22)
+                                .frame(width: 22, height: 22).foregroundStyle(Color.onFariinAction)
                         }
+                        .buttonStyle(.glassProminent).tint(Color.fariinAction)
                         .accessibilityLabel("New Call")
                     }
                 }
