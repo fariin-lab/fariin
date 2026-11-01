@@ -472,7 +472,7 @@ enum DemoMode {
             // a voice note, a reply, read ticks and emoji. English, two friends planning a trip.
             var beach = Message(demoImage: "\(cid)-2", from: "demo-hooyo",
                                 data: photoData("demo-photo-beach", .systemOrange, .systemPink, "Beach"),
-                                w: 1200, h: 900, t(-1500))
+                                w: 1900, h: 900, t(-1500))
             beach.reactions = [me: "❤️"]
             let note = Message(demoAudio: "\(cid)-4", from: me, data: silence(seconds: 14),
                                duration: 14, waveform: voicePattern, t(-1100))
