@@ -501,13 +501,6 @@ struct MainShell: View {
     }
 
     private func loadSettingsIcon() async {
-        // App Store screenshot mode: the demo "me", never the signed-in account's own picture
-        // (owner 2026-11-01: a real account's photo, maybe not ours to publish).
-        if DemoMode.storeShots {
-            let me = UIImage(named: "demo-face-me")?.circularIcon(28)
-            await MainActor.run { settingsIcon = me }
-            return
-        }
         // ⚠️ NO PHOTO MEANS TAKE THE OLD ONE DOWN, and that is the half this was missing. Removing
         // your picture writes an EMPTY `photoUrl`, so this ran, failed to make a URL out of "", and
         // returned — leaving `settingsIcon` holding the photograph that had just been deleted. The
