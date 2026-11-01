@@ -915,11 +915,28 @@ struct AttachRecentsStrip: View {
         load.pixelSize = CGSize(width: a.pixelWidth, height: a.pixelHeight)
         let id = a.localIdentifier
         var started = false
+        // ⛔ THE FLIGHT ONLY STARTS ON A DECODED PICTURE — owner 2026-11-01, "sometimes it opens like
+        // speed; find the real bug". Measured on 11 opens: the flight's clock starts at once, but the
+        // commit that puts its first frame up decoded the whole photo on the main thread first (60 ms
+        // at 6 MP, 120 ms at 12 MP), so the fast first part of the spring was never drawn and the
+        // photo was first seen 50-96% of the way there. Whether it happened depended on which
+        // picture won the race, hence "sometimes". Now the decode happens here, off the main thread,
+        // at screen size, and the flight begins with nothing left to wait for.
+        var preparing = false
         let start: (UIImage) -> Void = { img in
-            guard !started else { return }
-            started = true
-            loadingPick = false
-            onPickPhoto(img, id, load)
+            guard !started, !preparing else { return }
+            preparing = true
+            Task {
+                let ready = await Self.decodedForFlight(img)
+                await MainActor.run {
+                    preparing = false
+                    guard !started else { return }
+                    OpenTrace.note("decoded img=\(OpenTrace.s(ready.size))")
+                    started = true
+                    loadingPick = false
+                    onPickPhoto(ready, id, load)
+                }
+            }
         }
         // ⛔ NO BLUR, EVER — owner 2026-10-14, "this is the last time I tell you": the photo opened
         // blurred for a second. The opportunistic request handed over a tiny degraded picture FIRST
@@ -946,6 +963,14 @@ struct AttachRecentsStrip: View {
                 else if !started { loadingPick = false }   // nothing of it could be loaded at all
             }
         }
+    }
+
+    /// `img` as a bitmap no larger than the screen's pixels, ready to draw with no work left.
+    nonisolated private static func decodedForFlight(_ img: UIImage) async -> UIImage {
+        let fit = AVMakeRect(aspectRatio: img.size, insideRect: CGRect(origin: .zero, size: sharpOpenSize)).size
+        let small = img.size.width > fit.width || img.size.height > fit.height
+        if small, let t = await img.byPreparingThumbnail(ofSize: fit) { return t }
+        return await img.byPreparingForDisplay() ?? img
     }
 
     // MARK: Multi-select
