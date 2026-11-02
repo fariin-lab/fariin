@@ -901,17 +901,17 @@ enum StoryPhoto {
     /// smaller sharp picture beats a full-size mushy one.
     static let quality: CGFloat = 0.85
     /// Tried in order. The first rung is the canvas itself and almost always wins.
-    static let widthLadder: [CGFloat] = [wordsCanvasWidth, 1080, 900, 720, 540]
+    static let widthLadder: [CGFloat] = [1080, 900, 720, 540]
     /// A frame with words baked on it (typed text, a link, a place): as wide as the biggest phone,
-    /// so those letters are never stretched. Only such a frame is drawn this wide (`flatten`).
+    /// so those letters are never stretched. Only `flatten` asks for this, for such a frame.
     static let wordsCanvasWidth: CGFloat = 1320
 
     /// The one encode. Returns the first rung that fits the budget, or the smallest if none do.
     /// `q`: a repost card asks for more (0.93): its picture was already a JPEG once, and a second
     /// pass at 0.85 is the visible loss he reported (2026-10-12). Same budget and ladder either way.
-    static func encode(_ image: UIImage, quality q: CGFloat = quality) -> Data {
+    static func encode(_ image: UIImage, quality q: CGFloat = quality, top: CGFloat = canvasWidth) -> Data {
         var last = Data()
-        for w in widthLadder {
+        for w in (top > canvasWidth ? [top] : []) + widthLadder {
             guard let d = fit(image, toWidth: w).jpegData(compressionQuality: q) else { continue }
             last = d
             if d.count <= budget { return d }

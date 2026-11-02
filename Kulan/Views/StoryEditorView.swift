@@ -4686,7 +4686,7 @@ struct StoryEditorView: View {
         // to stay on main; the encode does not.
         if let img = r.uiImage {
             let q: CGFloat = repostOf != nil || hasWords ? 0.93 : StoryPhoto.quality
-            return await Task.detached(priority: .userInitiated) { StoryPhoto.encode(img, quality: q) }.value
+            return await Task.detached(priority: .userInitiated) { StoryPhoto.encode(img, quality: q, top: canvasW) }.value
         }
         // A card that could not be drawn falls back to a card drawn now by the plain renderer,
         // never to the bare original: that would post full screen still marked a card, with no
