@@ -5,7 +5,7 @@ import UIKit
 // `TGSEngine` (rlottie off the main thread), never converted. A reaction is a string key on the post,
 // "ce_1" to "ce_181", in the same `reactionCounts` as any emoji. Only @v may CHOOSE them for a
 // channel (the Custom tab; the server's `setChannelReactions` enforces it); everyone can react with
-// the ones a channel offers. A pill rests on a still and plays once when I react with it.
+// the ones a channel offers. A pill keeps moving while it is on screen (owner 2026-11-02).
 enum CustomReaction {
     /// @v, the only account that sees the Custom tab.
     private static let chooserUid = "SVf0zxDVZzO8oLbGvM150QWgIWd2"
@@ -84,6 +84,7 @@ final class CustomReactionView: UIView {
     /// Once through from the start, then it rests on the last frame.
     func playOnce() {
         guard !key.isEmpty else { return }
+        if case .loop = motion { return }   // already moving; a single pass would stop it at the end
         player.playOnce()
     }
 

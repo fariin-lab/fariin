@@ -202,7 +202,7 @@ final class ReactionChipView: UIView {
                 customView = v
             }
             customView?.isHidden = false
-            customView?.show(key, motion: .still)
+            customView?.show(key, motion: .loop(step: 1))
         } else if let customView, !customView.isHidden {
             customView.isHidden = true
             customView.clear()

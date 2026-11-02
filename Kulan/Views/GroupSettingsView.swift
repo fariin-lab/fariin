@@ -112,9 +112,6 @@ struct GroupSettingsView: View {
     private var reactionsValue: String {
         switch conv?.reactMode {
         case "off": return "Off"
-        case "some":
-            let words = CustomReaction.words(conv?.reactList ?? [], separator: "")
-            return words.isEmpty ? "Custom" : words
         default: return "Any"
         }
     }
@@ -129,7 +126,16 @@ struct GroupSettingsView: View {
                     HStack {
                         Text("Reactions")
                         Spacer()
-                        Text(reactionsValue).foregroundStyle(.secondary)
+                        // owner 2026-11-02: custom emojis show here too, not only the plain ones.
+                        if conv?.reactMode == "some" {
+                            let list = conv?.reactList ?? []
+                            ForEach(Array(list.prefix(6)), id: \.self) { ReactionGlyph(emoji: $0, size: 18) }
+                            if list.count > 6 {
+                                Text("+\(list.count - 6)").foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Text(reactionsValue).foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
