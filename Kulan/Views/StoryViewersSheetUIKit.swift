@@ -924,6 +924,17 @@ final class StoryViewersSheetView: UIView {
     /// extension: `UIView` already declares `gestureRecognizerShouldBegin(_:)` itself, so putting it
     /// in an extension is an override — and Swift does not allow overriding in an extension. The
     /// same method also serves as the DELEGATE gate for the two window pans (same selector).
+    /// ⛔ ANOTHER SCREEN IS UP OVER THE STORY (owner 2026-11-02): a viewer's profile, opened from
+    /// this sheet, is presented over the story in the same window, so the two WINDOW pans saw the
+    /// drag that closes that profile and took the sheet down with it. While anything is presented
+    /// above the controller this sheet lives in, the window pans are not ours to start.
+    private var screenAboveMe: Bool {
+        guard let root = window?.rootViewController else { return false }
+        var top = root
+        while let next = top.presentedViewController { top = next }   // a closing profile still counts
+        return !isDescendant(of: top.view)
+    }
+
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         if gestureRecognizer === pan {
             // The sheet's own pan starts only in the panel; vertical drags only.
@@ -934,7 +945,7 @@ final class StoryViewersSheetView: UIView {
         if gestureRecognizer === outsidePan {
             // Only while mounted with the sheet actually up, and only above the panel — the panel
             // belongs to `pan`.
-            guard window != nil, progress > 0.02 else { return false }
+            guard window != nil, progress > 0.02, !screenAboveMe else { return false }
             // ⚠️ NO DIRECTION TEST HERE ANY MORE, AND ITS ABSENCE IS THE POINT. This used to compare
             // `|vy|` against `|vx|` inside the carousel band, which is an arbitration made from one
             // velocity sample at the moment UIKit happened to ask. The recogniser itself decides now,
@@ -944,7 +955,7 @@ final class StoryViewersSheetView: UIView {
             return outsidePan.location(in: self).y < panelTop
         }
         if gestureRecognizer === bandGuard {
-            guard window != nil, progress > 0.95 else { return false }
+            guard window != nil, progress > 0.95, !screenAboveMe else { return false }
             return carouselBand.contains(bandGuard.location(in: self))
         }
         if gestureRecognizer === tapAbove {
