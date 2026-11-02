@@ -873,6 +873,12 @@ struct StoryDetailView: View {
         // anybody else.
         .onChange(of: viewModel.currentStoryUser) { newValue in
             announcedStart = false   // a new landing (or leaving) announces again
+            // ⛔ A PAGE TAKING THE SCREEN AGAIN REPORTS ITS ITEM AGAIN (owner 2026-11-02: my story,
+            // tap on to a friend, tap back, and the bar read "0 Views" instead of 7). Pages are built
+            // once and kept, so this latch still held my story's id from before I left; the tick saw
+            // nothing new and never called `onItemChanged`, and the host stayed on the friend's story
+            // id, whose count under my bar is 0. Cleared on landing, the next tick reports it.
+            if newValue == model.id { lastChangedItem = "" }
             // ⚠️ THE `.stopVideo` BROADCAST THAT USED TO OPEN THIS IS GONE, AND NOTHING REPLACES IT.
             // It was posted with `object: nil`, so it reached every mounted page's player and each
             // one had to work out whether it was the one being left. `videoMode`'s first line
