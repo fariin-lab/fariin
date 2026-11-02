@@ -3513,7 +3513,12 @@ struct ChatsView: View {
             // ⚠️ `.automatic` AT THE ROOT, NEVER `.visible` (owner 2026-10-21, same day: a quick
             // Search + Cancel left the tab bar gone and the top buttons empty). Forcing it visible
             // fought the system hiding it for the search field.
-            .toolbar(selecting || !path.isEmpty ? .hidden : .automatic, for: .tabBar)
+            // ⛔ HIDDEN WHILE SEARCH IS UP (owner 2026-11-02, screenshot): the system hides the bar
+            // only while the field has the keyboard, so a tap off the field (ChatSearchPage's
+            // keyboard dismiss) brought Stories / Calls / Chats / Settings back over the results.
+            // The reference apps keep the tabs away until search is closed. `.hidden`, still never
+            // `.visible`: when search closes this falls back to `.automatic` (see the note above).
+            .toolbar(selecting || !path.isEmpty || searchPresented ? .hidden : .automatic, for: .tabBar)
             // (The archive is PUSHED now — see `archiveRoute` on the navigationDestination above.)
             .sheet(isPresented: $showMyQR) { MyQRView() }
             // Get Started's New Group and Add Photo (owner 2026-10-18).
