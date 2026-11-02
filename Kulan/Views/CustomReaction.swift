@@ -132,13 +132,30 @@ struct CustomReactionIcon: UIViewRepresentable {
     func updateUIView(_ v: CustomReactionView, context: Context) { v.show(key, motion: motion) }
 }
 
+/// A custom emoji to put inside a SwiftUI button.
+/// ⛔ THE TOUCH NEVER REACHES THE UIKIT VIEW (owner 2026-11-02: "when I click this emoji nothing
+/// happens"). A hosted UIView takes the touch from the Button around it, so the Button never fired.
+/// The view is shut out of hit testing and a clear layer over it is what the Button feels.
+struct CustomReactionTile: View {
+    let key: String
+    var side: CGFloat
+    var motion: CustomReactionView.Motion = .loop(step: 1)
+    var body: some View {
+        ZStack {
+            CustomReactionIcon(key: key, motion: motion).allowsHitTesting(false)
+            Color.clear.contentShape(Rectangle())
+        }
+        .frame(width: side, height: side)
+    }
+}
+
 /// Any reaction in a SwiftUI screen: the emoji as text, or the custom one playing.
 struct ReactionGlyph: View {
     let emoji: String
     var size: CGFloat = 30
     var body: some View {
         if CustomReaction.isCustom(emoji) {
-            CustomReactionIcon(key: emoji).frame(width: size * 1.2, height: size * 1.2)
+            CustomReactionTile(key: emoji, side: size * 1.2)
         } else {
             Text(emoji).font(.system(size: size))
         }

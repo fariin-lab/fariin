@@ -126,7 +126,7 @@ struct EmojiMorePicker: View {
         LazyVGrid(columns: cols, spacing: 10) {
             ForEach(CustomReaction.all, id: \.self) { key in
                 Button { onPick(key); dismiss() } label: {
-                    CustomReactionIcon(key: key, motion: .loop(step: 2)).frame(width: 40, height: 40)
+                    CustomReactionTile(key: key, side: 40, motion: .loop(step: 2))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(CustomReaction.spoken(key))
