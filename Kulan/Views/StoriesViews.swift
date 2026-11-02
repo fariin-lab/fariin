@@ -2199,6 +2199,14 @@ struct StoryViewer: View {
             NavigationStack {
                 PostedStoriesView(uid: AuthService.shared.uid ?? "", isMe: true,
                                   title: StoriesRepository.shared.mine?.name ?? "My Story")
+                    // ⛔ A WAY OUT WITHOUT THE DRAG (owner 2026-11-02, his circle at the top left).
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button { myPostedUp = false } label: { Image(systemName: "xmark") }
+                                .tint(.primary)
+                                .accessibilityLabel("Close")
+                        }
+                    }
             }
             .presentationDetents([.large])
         }

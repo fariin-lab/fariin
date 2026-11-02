@@ -269,7 +269,13 @@ struct AddStorySheet: View {
             // link: the photo editor reaches the same sheet by its own route (see `StoryEditorView`)
             // and passes them, so the field existed and this call simply never used it.
             ShareStorySheet(image: s.data, stickers: s.stickers,
-                            onPosted: { onPosted(); closeAfterPost() })
+                            onPosted: {
+                                // ⛔ THE SAME FLIGHT AS A PHOTO (owner 2026-11-02): with nothing
+                                // prepared the text story had no picture to fly into My Story.
+                                StoryPostFlight.prepare(imageData: s.data, rect: StoryPostFlight.textCardRect,
+                                                        cornerRadius: StoryPostFlight.textCardRadius)
+                                onPosted(); closeAfterPost()
+                            })
         }
     }
 

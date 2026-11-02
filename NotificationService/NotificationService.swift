@@ -104,14 +104,19 @@ final class NotificationService: UNNotificationServiceExtension {
     private static func enrich(_ original: UNNotificationContent,
                                completion: @escaping (UNNotificationContent?) -> Void) {
         let info = original.userInfo
-        guard let cid = info["cid"] as? String, !cid.isEmpty,
-              let aid = info["aid"] as? String, !aid.isEmpty,
+        guard let aid = info["aid"] as? String, !aid.isEmpty,
               let senderName = info["sn"] as? String, !senderName.isEmpty,
               let copy = original.mutableCopy() as? UNMutableNotificationContent
         else { completion(nil); return }
+        let kind = (info["kind"] as? String) ?? "text"
+        // ⛔ A STORY PUSH HAS NO CHAT (owner 2026-11-02: the banner showed the bare app icon where a
+        // message shows the sender's face). It must never carry a `cid`: the app would route its tap
+        // and its foreground banner to a chat. The conversation id here only groups the banner.
+        let isStory = kind == "story"
+        let pushedCid = (info["cid"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        guard let cid = pushedCid ?? (isStory ? "story-\(aid)" : nil) else { completion(nil); return }
 
         let isGroup = (info["g"] as? String) == "1"
-        let kind = (info["kind"] as? String) ?? "text"
         let defaults = NotifShared.defaults
         let me = defaults?.string(forKey: NotifShared.uidKey) ?? ""
         let chats = defaults?.dictionary(forKey: NotifShared.chatsKey) as? [String: [String: Any]] ?? [:]
@@ -147,7 +152,8 @@ final class NotificationService: UNNotificationServiceExtension {
         let pushedPhoto = info["sp"] as? String
         let senderPhoto = isGroup
             ? ((chat[NotifShared.Chat.members] as? [String: String])?[aid] ?? direct[NotifShared.Chat.photo] as? String ?? pushedPhoto)
-            : (chat[NotifShared.Chat.photo] as? String ?? pushedPhoto)
+            : (chat[NotifShared.Chat.photo] as? String
+               ?? (isStory ? direct[NotifShared.Chat.photo] as? String : nil) ?? pushedPhoto)
         let groupPhoto = isGroup ? chat[NotifShared.Chat.photo] as? String : nil
         let photos = Avatars.load([senderPhoto, groupPhoto], timeout: 4)
 

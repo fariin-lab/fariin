@@ -135,7 +135,7 @@ struct ChatImageEditor: View {
     @State private var isHighlighter = false
     @State private var penWidth: CGFloat = 6
     @State private var showCrop = false
-    @State private var caption = ""
+    @State private var caption = AttachDraftCaption.text
     @State private var drawing = PKDrawing()
     @State private var isDrawing = false
     /// The story pen's two questions, same words (see `penBar`): Clear All, and ✕ with strokes drawn.

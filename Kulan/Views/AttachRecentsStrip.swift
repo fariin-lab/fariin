@@ -143,6 +143,13 @@ import UIKit
     }
 }
 
+/// The words waiting in the composer when "+" was tapped (owner 2026-11-02): they open as the caption
+/// in the attach sheet and in every media editor, and leave the composer only when media is really
+/// sent (`ThreadView.takeAttachDraft`). Closing the sheet without sending leaves them in the field.
+@MainActor enum AttachDraftCaption {
+    static var text = ""
+}
+
 // Standard recents strip for the attach panel: the newest camera-roll
 // photos + videos, one tap to send. Asks for read access on first use; with Limited
 // access it simply shows whatever the user granted. Photos open the chat editor
@@ -451,6 +458,7 @@ struct AttachRecentsStrip: View {
         // Focusing the caption grows the sheet to .large so this bar pins above the keyboard instead of
         // the medium sheet shoving the whole content up (the caption "jumping" to mid-screen).
         .onChange(of: captionFocused) { _, focused in if focused { onCaptionFocused() } }
+        .onAppear { if caption.isEmpty { caption = AttachDraftCaption.text } }
     }
 
     private var grid: some View {

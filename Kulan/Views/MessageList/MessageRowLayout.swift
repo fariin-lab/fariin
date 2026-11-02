@@ -974,9 +974,11 @@ enum MessageRowLayout {
                     }
                     return (s, false, [])
                 }
-                let s = NSMutableAttributedString(string: chip.emoji, attributes: [
-                    .font: UIFont.systemFont(ofSize: inside ? BubbleMetrics.reactionEmojiFont
-                                                            : BubbleMetrics.reactionEmojiFontSmall)])
+                let emojiFont = UIFont.systemFont(ofSize: inside ? BubbleMetrics.reactionEmojiFont
+                                                                 : BubbleMetrics.reactionEmojiFontSmall)
+                let s = CustomReaction.isCustom(chip.emoji)
+                    ? NSMutableAttributedString(attributedString: CustomReaction.pillText(chip.emoji, font: emojiFont))
+                    : NSMutableAttributedString(string: chip.emoji, attributes: [.font: emojiFont])
                 // The count appears only where there are no faces to show — see `ReactionChip`.
                 if chip.count > 1 || chip.showCount, chip.faces.isEmpty {
                     s.append(NSAttributedString(string: " \(chip.count)", attributes: [

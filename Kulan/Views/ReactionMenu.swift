@@ -12,6 +12,7 @@ enum ReactionRecents {
         (UserDefaults.standard.string(forKey: key) ?? "").split(separator: " ").map(String.init)
     }
     static func add(_ emoji: String) {
+        guard !CustomReaction.isCustom(emoji) else { return }   // belongs to one channel's list
         var r = get().filter { $0 != emoji }
         r.insert(emoji, at: 0)
         UserDefaults.standard.set(r.prefix(10).joined(separator: " "), forKey: key)
@@ -70,9 +71,12 @@ struct EmojiMorePicker: View {
     var detents: Set<PresentationDetent> = [.medium, .large]
     /// A short list to choose from instead of the whole keyboard, as one grid with no headings.
     var only: [EmojiCatalog.Item]? = nil
+    /// The Normal / Custom tabs (owner 2026-11-02): the animated set, for the one account allowed.
+    var showsCustom = false
     var onPick: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+    @State private var customTab = false
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
 
     private var filtered: [EmojiCatalog.Item] {
@@ -84,7 +88,17 @@ struct EmojiMorePicker: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                if query.isEmpty, let only {
+                if showsCustom {
+                    Picker("Emoji set", selection: $customTab) {
+                        Text("Normal").tag(false)
+                        Text("Custom").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+                }
+                if showsCustom && customTab {
+                    customGrid.padding()
+                } else if query.isEmpty, let only {
                     grid(only).padding()
                 } else if query.isEmpty {
                     ForEach(EmojiCatalog.sections, id: \.title) { section in
@@ -105,6 +119,19 @@ struct EmojiMorePicker: View {
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { dismiss() } label: { Image(systemName: "xmark") }.tint(.primary) } }
         }
         .presentationDetents(detents)
+    }
+
+    /// Half rate: a full sheet plays about 70 at once. Only the ones on screen play.
+    private var customGrid: some View {
+        LazyVGrid(columns: cols, spacing: 10) {
+            ForEach(CustomReaction.all, id: \.self) { key in
+                Button { onPick(key); dismiss() } label: {
+                    CustomReactionIcon(key: key, motion: .loop(step: 2)).frame(width: 40, height: 40)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(CustomReaction.spoken(key))
+            }
+        }
     }
 
     private func grid(_ items: [EmojiCatalog.Item]) -> some View {

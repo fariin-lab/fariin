@@ -942,8 +942,11 @@ struct RenderedTextStory {
     .frame(width: renderW, height: renderH)
 
     let renderer = ImageRenderer(content: card)
-    renderer.scale = 1
-    guard let data = renderer.uiImage?.jpegData(compressionQuality: 0.9) else { return nil }
+    // ⛔ SHARP WORDS (owner 2026-11-02: "text looks low quality"). At 1080 wide the file was stretched
+    // up on every big phone (1284-1320 px across), and JPEG halves colour detail, which is what
+    // softened the letter edges. 1.5 puts it past any phone's width; a flat colour stays a small file.
+    renderer.scale = 1.5
+    guard let data = renderer.uiImage?.jpegData(compressionQuality: 0.95) else { return nil }
     let tap = link.map { l in
         StoryTapTarget(x: 0.5,
                        y: place.cardCentreY,

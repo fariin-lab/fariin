@@ -3818,7 +3818,9 @@ struct StoryEditorView: View {
                                                  recipe: StickerOverlay.ChipRecipe? = nil,
                                                  @ViewBuilder _ chip: () -> C) {
         let r = ImageRenderer(content: chip())
-        r.scale = 3        // it is text at sticker size; a 1x bake of that is a smudge
+        // It is text at sticker size; a 1x bake of that is a smudge. 6, not 3 (owner 2026-11-02:
+        // location and link looked soft): a pinched-up chip is stretched from these pixels.
+        r.scale = 6
         r.isOpaque = false
         guard let img = r.uiImage else { return }
         drawingOnTop = false
@@ -3954,7 +3956,7 @@ struct StoryEditorView: View {
         guard let i = stickers.firstIndex(where: { $0.id == id }), let recipe = stickers[i].chip else { return }
         let next = stickers[i].chipStyle.next
         let r = ImageRenderer(content: stickerChip(symbol: recipe.symbol, text: recipe.text, style: next))
-        r.scale = 3
+        r.scale = 6   // the same as `chipSticker`
         r.isOpaque = false
         guard let img = r.uiImage else { return }
         stickers[i].chipStyle = next
@@ -4669,7 +4671,12 @@ struct StoryEditorView: View {
         // exactly 1080×1920 on every device — the size a story is posted at everywhere — and it is
         // free, because it is the same composition drawn at a different scale rather than a resample
         // afterwards. See `StoryPhoto`.
-        r.scale = size.width > 0 ? StoryPhoto.canvasWidth / size.width : UIScreen.main.scale
+        // ⛔ WORDS ON THE PICTURE GET THE BIG CANVAS (owner 2026-11-02: location and link looked low
+        // quality): a chip or typed text in a 1080 frame is stretched up on a 1284-1320 px phone.
+        // The byte budget still answers: a frame that will not fit drops down the same ladder.
+        let hasWords = !stickers.isEmpty || !overlays.isEmpty
+        let canvasW = hasWords ? StoryPhoto.wordsCanvasWidth : StoryPhoto.canvasWidth
+        r.scale = size.width > 0 ? canvasW / size.width : UIScreen.main.scale
         // The render is the story. There is no crop-back any more (see the note below), so the only
         // fallback left is the untouched photo, for a renderer that returned nothing at all.
         // ONE encode either way, through the ladder that answers for the byte budget.
@@ -4678,7 +4685,7 @@ struct StoryEditorView: View {
         // Post was tapped, which is a stutter on the button and the dismiss. The render above has
         // to stay on main; the encode does not.
         if let img = r.uiImage {
-            let q: CGFloat = repostOf != nil ? 0.93 : StoryPhoto.quality
+            let q: CGFloat = repostOf != nil || hasWords ? 0.93 : StoryPhoto.quality
             return await Task.detached(priority: .userInitiated) { StoryPhoto.encode(img, quality: q) }.value
         }
         // A card that could not be drawn falls back to a card drawn now by the plain renderer,
@@ -4957,6 +4964,7 @@ enum StoryOverlayTouch {
 func storyStickerImage(_ s: StickerOverlay) -> some View {
     Image(uiImage: s.image)
         .resizable()
+        .interpolation(.high)   // a chip's letters survive the resize into the posted frame
         .aspectRatio(contentMode: .fit)
         .frame(width: s.drawnSize.width, height: s.drawnSize.height)
 }

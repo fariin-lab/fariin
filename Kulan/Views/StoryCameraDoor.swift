@@ -364,6 +364,11 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
 
     private static var pending: Source?
     private static var window: UIWindow?
+    /// Where the text page's card sits on screen: a text story flies from here, as a photo flies
+    /// from the editor's card (owner 2026-11-02). Reported by `StoryCameraView`.
+    static var textCardRect: CGRect = .zero
+    /// The text card's corner on the camera page.
+    static let textCardRadius: CGFloat = 40
 
     /// The editor names the picture and where it is drawn, just before it reports the post.
     static func prepare(imageData: Data, rect: CGRect, cornerRadius: CGFloat) {

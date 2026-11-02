@@ -4523,7 +4523,8 @@ struct ThreadView: View {
         // 2026-10-30): only a post without it refuses it, as the server does (reactRefusal).
         let onPost = emoji.map { e in repo.items.first(where: { $0.id == mid }).map { channelCounts($0).keys.contains { ChannelEmoji.same($0, e) } } ?? false } ?? false
         if let e = emoji, !onPost, conversation?.reactMode == "some", !ChannelEmoji.contains(conversation?.reactList ?? [], e) {
-            showJumpToast("This channel allows only " + (conversation?.reactList.joined(separator: " ") ?? ""))
+            let allowed = CustomReaction.words(conversation?.reactList ?? [])
+            showJumpToast(allowed.isEmpty ? "This channel allows only its own reactions" : "This channel allows only " + allowed)
             return
         }
         if let e = emoji { ReactionRecents.add(e) }
@@ -7015,6 +7016,14 @@ struct ThreadView: View {
         return out
     }
 
+    /// The composer's words have left with the media (see `AttachDraftCaption`): the field empties.
+    @MainActor private func takeAttachDraft() {
+        guard !AttachDraftCaption.text.isEmpty else { return }
+        AttachDraftCaption.text = ""
+        input = ""
+        mentionMap = [:]
+    }
+
     private func send() {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -7427,6 +7436,7 @@ struct ThreadView: View {
     private func sendAlbum(_ images: [UIImage], caption: String, hd: Bool) async {
         let datas = images.compactMap { $0.jpegData(compressionQuality: hd ? 0.95 : 0.85) }
         guard !datas.isEmpty else { return }
+        await takeAttachDraft()
         for (i, chunk) in stride(from: 0, to: datas.count, by: Limits.albumMaxItems)
             .map({ Array(datas[$0 ..< min($0 + Limits.albumMaxItems, datas.count)]) })
             .enumerated() {
@@ -7539,6 +7549,7 @@ struct ThreadView: View {
             if let posted { await MainActor.run { repo.removePending(clientId: posted) } }
             return
         }
+        await takeAttachDraft()
         // A lone item → the normal single-media send (keeps the existing UX). That path posts its own
         // bubble, so retire the group bubble first — otherwise it would sit "sending" forever (this
         // happens when several were picked but only one survived the resolve).
@@ -7812,6 +7823,7 @@ struct ThreadView: View {
         // is text-only), so short-circuit rather than run a real upload against a person who does
         // not exist — it would only hang or fail (audit).
         if DemoMode.isDemoConversation(cid) { return }
+        await takeAttachDraft()
         // ONE ENCODE, OFF THE MAIN THREAD (2026-10-23). The bubble's picture and the upload used to
         // be two separate decode-resize-encode passes over the full 12 MP photo, one for each. Now
         // the photo is made once at the send size and the bubble shows those same bytes, so the
@@ -8626,6 +8638,7 @@ struct ThreadView: View {
             try? FileManager.default.removeItem(at: url)
             return
         }
+        await takeAttachDraft()
         // THE BUBBLE COMES FIRST, BEFORE THE TRANSCODE. It used to come after: this function awaited
         // `VideoTranscoder.prepare` and only then had a thumbnail to draw with, so tapping send on a
         // video did nothing visible for as long as the compression took — the owner timed it at 3.88
@@ -9865,13 +9878,14 @@ struct ThreadView: View {
     /// What the bar can ask of the chat. Each one is the exact body the SwiftUI button carried.
     private var composerActions: ChatComposerActions {
         var a = ChatComposerActions()
-        a.textChanged = { input = $0 }
+        a.textChanged = { if $0 != input { AttachDraftCaption.text = "" }; input = $0 }
         a.caretChanged = { composerCaret = $0 }   // 2026-09-24 decision D-composer-5
         // 2026-09-24 decision D-composer-5: a pasted picture opens the same approval the picker
         // does (one → the photo editor, several → the pager), after the keyboard is down, as "+".
         a.pasteImages = { imgs in
             if sendHeldBack(.sendPhotos, .photos) { return }
             let pick = Array(imgs.prefix(Limits.mediaPerMessage))
+            AttachDraftCaption.text = ""
             inputFocused = false
             keyboard.onceHidden {
                 if pick.count == 1 { editImage = EditImageWrap(image: pick[0]) }
@@ -9891,6 +9905,11 @@ struct ThreadView: View {
                     return
                 }
             }
+            // ⛔ WHAT I TYPED GOES WITH THE PHOTO (owner 2026-11-02, as the reference app does): the
+            // words become the caption of whatever is picked. Not an edit in progress, and not text
+            // too long for one bubble: a caption cannot split, so that stays in the field.
+            let typed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+            AttachDraftCaption.text = editingMessage == nil && typed.count <= 2500 ? typed : ""
             // ⛔ ONE DISMISSAL, THEN WAIT FOR THE SYSTEM TO SAY IT IS DOWN — owner, 2026-08-25:
             // tapping "+" with the keyboard up made the keyboard and the composer "fight", and the
             // sheet arrived over the mess. The focus flag is the one route to the responder now

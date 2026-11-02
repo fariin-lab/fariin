@@ -1106,7 +1106,7 @@ struct ChannelReactSheet: View {
                             dismiss()
                         } label: {
                             VStack(spacing: 6) {
-                                Text(e).font(.system(size: 30))
+                                ReactionGlyph(emoji: e, size: 30)
                                     .frame(width: 54, height: 54)
                                     .background(Circle().fill(isMine(e) ? Color.fariinAction.opacity(0.18)
                                                                          : Color(.secondarySystemBackground)))
@@ -1116,7 +1116,7 @@ struct ChannelReactSheet: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("\(e), \(count(of: e))")
+                        .accessibilityLabel("\(CustomReaction.spoken(e)), \(count(of: e))")
                     }
                     if canReact && allowMore {
                         Button { dismiss(); onMore() } label: {
@@ -1208,7 +1208,8 @@ struct ChannelReactionsSettingsView: View {
         .sheet(isPresented: $pickAny, onDismiss: { replacing = nil }) {
             // Low enough that the bar, and the emoji being replaced, stay in sight above it.
             EmojiMorePicker(title: "Choose Emoji", detents: [.fraction(0.42), .large],
-                            only: EmojiCatalog.channelReactions) { e in
+                            only: EmojiCatalog.channelReactions,
+                            showsCustom: CustomReaction.canChoose) { e in
                 pickAny = false
                 place(e)
             }
@@ -1235,14 +1236,14 @@ struct ChannelReactionsSettingsView: View {
         HStack(spacing: 6) {
             ForEach(Array(list.enumerated()), id: \.offset) { i, e in
                 Button { replacing = i; pickAny = true } label: {
-                    Text(e).font(.system(size: 30)).frame(width: 44, height: 44)
+                    ReactionGlyph(emoji: e, size: 30).frame(width: 44, height: 44)
                         // The one being replaced is ringed while the sheet is up (owner 2026-10-31).
                         .background(Circle().fill(Color.primary.opacity(replacing == i && pickAny ? 0.12 : 0)))
                         .overlay(Circle().strokeBorder(Color.fariinAction,
                                                        lineWidth: replacing == i && pickAny ? 2 : 0))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Replace \(e)")
+                .accessibilityLabel("Replace \(CustomReaction.spoken(e))")
                 // ⛔ ANY NUMBER UP TO SIX (owner 2026-11-01: "I can't make it only 3"): each one has
                 // its own x. The last one stays; to have none, No Reactions is the choice above.
                 .overlay(alignment: .topTrailing) {
@@ -1257,7 +1258,7 @@ struct ChannelReactionsSettingsView: View {
                         }
                         .buttonStyle(.plain)
                         .offset(x: 6, y: -6)
-                        .accessibilityLabel("Remove \(e)")
+                        .accessibilityLabel("Remove \(CustomReaction.spoken(e))")
                     }
                 }
             }

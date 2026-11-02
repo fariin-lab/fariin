@@ -388,8 +388,10 @@ struct GroupStatsChannelData {
             for (e, n) in P.dict(row["counts"]) {
                 let c = P.int(n)
                 guard c > 0 else { continue }
-                counts[e] = c
-                totals[e, default: 0] += c
+                // The chart's labels are text: custom reactions count together under one word.
+                let name = CustomReaction.isCustom(e) ? "Custom" : e
+                counts[name, default: 0] += c
+                totals[name, default: 0] += c
             }
             rows.append((day: day, counts: counts))
         }

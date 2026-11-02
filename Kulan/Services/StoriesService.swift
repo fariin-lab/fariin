@@ -901,7 +901,10 @@ enum StoryPhoto {
     /// smaller sharp picture beats a full-size mushy one.
     static let quality: CGFloat = 0.85
     /// Tried in order. The first rung is the canvas itself and almost always wins.
-    static let widthLadder: [CGFloat] = [1080, 900, 720, 540]
+    static let widthLadder: [CGFloat] = [wordsCanvasWidth, 1080, 900, 720, 540]
+    /// A frame with words baked on it (typed text, a link, a place): as wide as the biggest phone,
+    /// so those letters are never stretched. Only such a frame is drawn this wide (`flatten`).
+    static let wordsCanvasWidth: CGFloat = 1320
 
     /// The one encode. Returns the first rung that fits the budget, or the smallest if none do.
     /// `q`: a repost card asks for more (0.93): its picture was already a JPEG once, and a second

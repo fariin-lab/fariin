@@ -1308,18 +1308,32 @@ final class CMReactionBar: UIView {
                 disc.heightAnchor.constraint(equalToConstant: buttonSide),
             ])
         }
-        let label = UILabel()
-        label.text = emoji
-        label.font = .systemFont(ofSize: buttonSide * 0.72)
-        label.textAlignment = .center
-        label.isUserInteractionEnabled = false
-        holder.addSubview(label)
-        label.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: holder.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: holder.centerYAnchor),
-        ])
-        holder.accessibilityLabel = emoji
+        if CustomReaction.isCustom(emoji) {
+            // A channel's custom reaction plays here, at full rate, as long as the bar is up.
+            let v = CustomReactionView()
+            v.show(emoji, motion: .loop(step: 1))
+            holder.addSubview(v)
+            v.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                v.centerXAnchor.constraint(equalTo: holder.centerXAnchor),
+                v.centerYAnchor.constraint(equalTo: holder.centerYAnchor),
+                v.widthAnchor.constraint(equalToConstant: buttonSide * 0.86),
+                v.heightAnchor.constraint(equalToConstant: buttonSide * 0.86),
+            ])
+        } else {
+            let label = UILabel()
+            label.text = emoji
+            label.font = .systemFont(ofSize: buttonSide * 0.72)
+            label.textAlignment = .center
+            label.isUserInteractionEnabled = false
+            holder.addSubview(label)
+            label.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                label.centerXAnchor.constraint(equalTo: holder.centerXAnchor),
+                label.centerYAnchor.constraint(equalTo: holder.centerYAnchor),
+            ])
+        }
+        holder.accessibilityLabel = CustomReaction.spoken(emoji)
         holder.isAccessibilityElement = true
         return holder
     }

@@ -130,7 +130,7 @@ struct MediaApprovalView: View {
     @State private var closeFlag = ZoomRectProbe()   // only its buttonClose flag is used
 
     @State private var page = 0
-    @State private var caption = ""
+    @State private var caption = AttachDraftCaption.text
     /// Starts at Settings > Sent Media Quality, and is not remembered after the send (`PhotoQuality`).
     @State private var hd = PhotoQuality.default.isHD
     @State private var editCrop = false

@@ -349,8 +349,8 @@ final class MessageRowCell: UICollectionViewCell {
                 parts.append("Disappearing message")
             }
             for chip in b.reactions where !chip.isAdd {
-                parts.append(chip.count > 1 ? "\(chip.emoji) \(chip.count) reactions"
-                                            : "\(chip.emoji) reaction")
+                let spoken = CustomReaction.spoken(chip.emoji)
+                parts.append(chip.count > 1 ? "\(spoken) \(chip.count) reactions" : "\(spoken) reaction")
             }
         }
         return parts.joined(separator: ", ")

@@ -192,7 +192,7 @@ struct VideoApprovalView: View {
     private var activeURL: URL { clipList[current].url }
     private var activeClipId: UUID { clipList[current].id }
 
-    @State private var caption = ""
+    @State private var caption = AttachDraftCaption.text
     @State private var playing = false   // PAUSED by default — plays only when the user taps play (user request)
     @State private var hd = false
     @FocusState private var captionFocused: Bool

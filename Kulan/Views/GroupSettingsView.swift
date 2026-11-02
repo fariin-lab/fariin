@@ -112,7 +112,9 @@ struct GroupSettingsView: View {
     private var reactionsValue: String {
         switch conv?.reactMode {
         case "off": return "Off"
-        case "some": return (conv?.reactList ?? []).joined()
+        case "some":
+            let words = CustomReaction.words(conv?.reactList ?? [], separator: "")
+            return words.isEmpty ? "Custom" : words
         default: return "Any"
         }
     }

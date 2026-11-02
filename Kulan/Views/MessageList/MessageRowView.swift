@@ -151,6 +151,14 @@ final class ReactionChipView: UIView {
     private var faceViews: [RowAvatarView] = []
     private var faceCount = 0
     private var isFreeform = false
+    /// Built only for a pill that holds a custom reaction.
+    private var customView: CustomReactionView?
+
+    /// The custom emoji plays through once, the moment my reaction lands on it.
+    func playCustomOnce(after delay: CFTimeInterval) {
+        guard let customView, !customView.isHidden else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak customView] in customView?.playOnce() }
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -186,6 +194,19 @@ final class ReactionChipView: UIView {
                    freeform: Bool = false) {
         endRoll()
         label.attributedText = attr
+        // A custom reaction: the text leaves its room, and this view draws it there.
+        if attr.length > 0, let key = attr.attribute(CustomReaction.attribute, at: 0, effectiveRange: nil) as? String {
+            if customView == nil {
+                let v = CustomReactionView()
+                addSubview(v)
+                customView = v
+            }
+            customView?.isHidden = false
+            customView?.show(key, motion: .still)
+        } else if let customView, !customView.isHidden {
+            customView.isHidden = true
+            customView.clear()
+        }
         isFreeform = freeform
         if freeform {
             // Under a picture, on the wallpaper: the time capsule's own dark glass, so it reads on
@@ -356,6 +377,11 @@ final class ReactionChipView: UIView {
                                  cornerRadius: bounds.height / 2 - 0.5).cgPath
         ring.frame = bounds
         CATransaction.commit()
+        if let customView, !customView.isHidden {
+            let side = CustomReaction.pillSide(emojiFontSize)
+            let p = emojiPoint
+            customView.frame = CGRect(x: p.x - side / 2, y: p.y - side / 2, width: side, height: side)
+        }
     }
 }
 
@@ -2109,6 +2135,7 @@ final class MessageRowView: UIView {
         guard let win = window, let chip = v as? ReactionChipView else { return }
         let center = chip.convert(chip.emojiPoint, to: win)
         let begin = CACurrentMediaTime() + delay
+        chip.playCustomOnce(after: delay)
         // ⛔ NO BIG COPY (owner 2026-10-31: "every time a big emoji appears, fix"). The swelling copy
         // above the pill is gone; the pill's own pop and the small spray are the whole effect.
 
@@ -2141,16 +2168,28 @@ final class MessageRowView: UIView {
     }
 
     /// One emoji of the effect, invisible until its animation shows it, never in the way of a touch.
-    private func fxLabel(_ emoji: String, size: CGFloat, at p: CGPoint, in win: UIWindow) -> UILabel {
-        let l = UILabel()
-        l.text = emoji
-        l.font = .systemFont(ofSize: size)
-        l.sizeToFit()
+    private func fxLabel(_ emoji: String, size: CGFloat, at p: CGPoint, in win: UIWindow) -> UIView {
+        let l = Self.emojiCopy(emoji, size: size)
         l.center = p
         l.isUserInteractionEnabled = false
         l.layer.opacity = 0
         win.addSubview(l)
         fxViews.append(l)
+        return l
+    }
+
+    /// A loose copy of an emoji for the effects: a custom one plays as it moves.
+    private static func emojiCopy(_ emoji: String, size: CGFloat) -> UIView {
+        if CustomReaction.isCustom(emoji) {
+            let side = size * 1.2
+            let v = CustomReactionView(frame: CGRect(x: 0, y: 0, width: side, height: side))
+            v.show(emoji, motion: .loop(step: 2))
+            return v
+        }
+        let l = UILabel()
+        l.text = emoji
+        l.font = .systemFont(ofSize: size)
+        l.sizeToFit()
         return l
     }
 
@@ -2170,10 +2209,7 @@ final class MessageRowView: UIView {
         let start = win.convert(screenPoint, from: win.screen.coordinateSpace)
         guard win.bounds.insetBy(dx: -20, dy: -20).contains(start) else { return false }
         let end = chip.convert(chip.emojiPoint, to: win)
-        let label = UILabel()
-        label.text = emoji
-        label.font = .systemFont(ofSize: 30)
-        label.sizeToFit()
+        let label = Self.emojiCopy(emoji, size: 30)
         label.center = end
         label.isUserInteractionEnabled = false
         let endScale = max(0.3, min(1, chip.emojiFontSize / 30))

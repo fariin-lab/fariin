@@ -100,7 +100,9 @@ enum TGSSource {
 private final class TGSDocCache {
     private var docs: [String: TGSDoc] = [:]
     private var order: [String] = []
-    private let limit = 24
+    /// Per queue. A full-height grid of custom reactions shows about 70 at once; a smaller cache
+    /// would parse them again on every tick.
+    private let limit = 48
     func doc(_ key: String, _ source: TGSSource) -> TGSDoc? {
         if let d = docs[key] {
             if let i = order.firstIndex(of: key) { order.remove(at: i); order.append(key) }
@@ -211,6 +213,7 @@ final class TGSPlayer: CALayer {
     private var frameCount = 0
     private var frameRate = 30.0
     private var playing = false
+    private var playsOnce = false
     private var startedAt: CFTimeInterval = 0
     private var pausedAt: CFTimeInterval = 0
     /// Which render queue (and so which document cache) this sticker uses: by key, so every player
@@ -246,14 +249,25 @@ final class TGSPlayer: CALayer {
         shownFrame = -1
         frameCount = 0
         inFlight = false
+        playsOnce = false
         startedAt = CACurrentMediaTime()
         pausedAt = startedAt
         if playing { TGSEngine.shared.add(self) }
     }
 
+    /// From the first frame, once, then it stops and holds its last frame.
+    func playOnce() {
+        playsOnce = true
+        let now = CACurrentMediaTime()
+        startedAt = now
+        pausedAt = now
+        play()
+    }
+
     func clear() {
         generation += 1
         inFlight = false
+        playsOnce = false
         source = nil
         key = ""
         shownFrame = -1
@@ -282,6 +296,11 @@ final class TGSPlayer: CALayer {
         guard frameCount > 0 else { return 0 }   // not parsed yet: ask for frame 0
         let s = ProcessInfo.processInfo.isLowPowerModeEnabled ? step * 2 : step
         let tick = Int((now - startedAt) * frameRate / Double(s))
+        if playsOnce, tick * s >= frameCount {
+            playsOnce = false
+            pause()
+            return nil
+        }
         return (tick * s) % frameCount
     }
 

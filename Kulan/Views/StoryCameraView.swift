@@ -1021,6 +1021,8 @@ struct StoryCameraView: View {
                 // accepts exactly the proposal and centres anything oversized inside it, and the
                 // clip below then cuts it at the card's edge.
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Where a posted text story starts its flight (`StoryPostFlight.textCardRect`).
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { StoryPostFlight.textCardRect = $0 }
                 .clipShape(UnevenRoundedRectangle(
                     topLeadingRadius: previewCorner,
                     bottomLeadingRadius: typing ? 0 : previewCorner,
