@@ -334,10 +334,18 @@ struct PostedStory: Identifiable, Equatable, Codable {
             }
             for await (i, n) in group { counts[i] = n }
         }
-        var updated = rows
+        // One more ask for any that failed: a tile with no count is what the owner keeps reporting.
+        for (i, row) in rows.enumerated() where counts[i] == nil {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            counts[i] = await StoriesService.shared.fetchViewers(storyId: row.id)?.count
+        }
+        // ⚠️ THE LIST AS IT IS NOW, NOT AS IT WAS WHEN THE READS STARTED: a reload can land meanwhile,
+        // and writing the old rows back would lose what it brought.
+        guard case .loaded(var updated) = state else { return }
+        let counted = Dictionary(uniqueKeysWithValues: zip(rows.map(\.id), counts))
         var fresh: [String: Int] = [:]
-        for (i, n) in counts.enumerated() {
-            guard let n else {
+        for i in updated.indices {
+            guard let n = counted[updated[i].id] ?? nil else {
                 // A failed read keeps the cached number; with none, the tile still shows its icon and
                 // 0 (owner 2026-11-02). Not cached, so the next visit asks again.
                 if updated[i].views == nil { updated[i].views = 0 }
@@ -348,7 +356,7 @@ struct PostedStory: Identifiable, Equatable, Codable {
         }
         // Remembered for the next entry, and every id that is no longer live is dropped in the same
         // write — see `StoryViewCountCache`.
-        StoryViewCountCache.put(fresh, alive: Set(rows.map(\.id)))
+        StoryViewCountCache.put(fresh, alive: Set(updated.map(\.id)))
         state = .loaded(updated)
     }
 

@@ -89,7 +89,7 @@ struct ChannelStoryFooterView: View {
     var body: some View {
         let c = model.counts[storyId] ?? .init()
         HStack(spacing: 22) {
-            stat(Image(systemName: "eye"), c.views)
+            stat(Image("ic_views").renderingMode(.template).resizable(), c.views)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(c.views) views")
             repostItem(c.reposts)
