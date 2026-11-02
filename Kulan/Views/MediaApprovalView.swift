@@ -390,7 +390,8 @@ struct MediaApprovalView: View {
                 TextField("", text: $caption,
                           prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)),
                           axis: .vertical)
-                    .lineLimit(1...7)
+                    // One line with the keyboard down, the whole caption with it up (owner 2026-11-02).
+                    .lineLimit(captionFocused ? 1...7 : 1...1)
                     .foregroundStyle(.primary).focused($captionFocused)
                     .padding(.horizontal, 16).padding(.vertical, 9)
                     .frame(minHeight: 40)

@@ -414,7 +414,8 @@ struct AttachRecentsStrip: View {
                           prompt: Text(viewOnce ? "No caption for View Once" : "Add a caption…")
                             .foregroundColor(Color(.systemGray)),
                           axis: .vertical)
-                    .lineLimit(1...7)   // multi-line caption, grows up to ~7 lines then scrolls
+                    // One line with the keyboard down (owner 2026-11-02); with it up it grows to ~7 lines then scrolls
+                    .lineLimit(captionFocused ? 1...7 : 1...1)
                     .foregroundStyle(.primary)
                     .focused($captionFocused)
                     .disabled(viewOnce)
