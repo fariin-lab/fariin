@@ -1820,6 +1820,11 @@ struct ThreadView: View {
             attachSheetFull = false; attachGridScrolled = false
             panelEditImage = nil; panelVideoApprove = nil; panelMediaApprove = nil; panelMultiVideo = nil
             if let next = attachAfterClose { attachAfterClose = nil; next() }
+            // Nothing took the words (the sheet was just closed): they stop waiting, unless a tile
+            // of the sheet has opened an editor after it, which is still using them.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                if editImage == nil && mediaToApprove == nil && videoToApprove == nil { AttachDraftCaption.text = "" }
+            }
         }) {
             attachPanel
                 // (History, the `.sheet` era.) NO ZOOM TRANSITION, AND THAT IS NOW TWICE. Built again on his word 2026-08-24
@@ -7017,8 +7022,10 @@ struct ThreadView: View {
     }
 
     /// The composer's words have left with the media (see `AttachDraftCaption`): the field empties.
-    @MainActor private func takeAttachDraft() {
-        guard !AttachDraftCaption.text.isEmpty else { return }
+    /// ⛔ ONLY WHEN A CAPTION REALLY WENT. A send with none (camera, View Once, a cleared caption)
+    /// leaves the field alone, so typed words are never lost.
+    @MainActor private func takeAttachDraft(caption: String) {
+        guard !AttachDraftCaption.text.isEmpty, !caption.isEmpty else { return }
         AttachDraftCaption.text = ""
         input = ""
         mentionMap = [:]
@@ -7434,9 +7441,9 @@ struct ThreadView: View {
     /// ten without each needing their own clamp. The caption rides the FIRST chunk only, the way a
     /// caption belongs to one message.
     private func sendAlbum(_ images: [UIImage], caption: String, hd: Bool) async {
+        await takeAttachDraft(caption: caption)
         let datas = images.compactMap { $0.jpegData(compressionQuality: hd ? 0.95 : 0.85) }
         guard !datas.isEmpty else { return }
-        await takeAttachDraft()
         for (i, chunk) in stride(from: 0, to: datas.count, by: Limits.albumMaxItems)
             .map({ Array(datas[$0 ..< min($0 + Limits.albumMaxItems, datas.count)]) })
             .enumerated() {
@@ -7549,7 +7556,7 @@ struct ThreadView: View {
             if let posted { await MainActor.run { repo.removePending(clientId: posted) } }
             return
         }
-        await takeAttachDraft()
+        await takeAttachDraft(caption: caption)
         // A lone item → the normal single-media send (keeps the existing UX). That path posts its own
         // bubble, so retire the group bubble first — otherwise it would sit "sending" forever (this
         // happens when several were picked but only one survived the resolve).
@@ -7823,7 +7830,7 @@ struct ThreadView: View {
         // is text-only), so short-circuit rather than run a real upload against a person who does
         // not exist — it would only hang or fail (audit).
         if DemoMode.isDemoConversation(cid) { return }
-        await takeAttachDraft()
+        await takeAttachDraft(caption: caption)
         // ONE ENCODE, OFF THE MAIN THREAD (2026-10-23). The bubble's picture and the upload used to
         // be two separate decode-resize-encode passes over the full 12 MP photo, one for each. Now
         // the photo is made once at the send size and the bubble shows those same bytes, so the
@@ -8638,7 +8645,7 @@ struct ThreadView: View {
             try? FileManager.default.removeItem(at: url)
             return
         }
-        await takeAttachDraft()
+        await takeAttachDraft(caption: caption)
         // THE BUBBLE COMES FIRST, BEFORE THE TRANSCODE. It used to come after: this function awaited
         // `VideoTranscoder.prepare` and only then had a thumbnail to draw with, so tapping send on a
         // video did nothing visible for as long as the compression took — the owner timed it at 3.88
