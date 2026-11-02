@@ -77,6 +77,8 @@ struct NativeMessageList: UIViewControllerRepresentable {
     /// whenever what the card shows changes; the card is re-hosted and re-measured only then.
     var historyHeader: AnyView? = nil
     var historyHeaderKey: String? = nil
+    /// The chat is known to hold no rows (a channel with no posts): the card is all there is to show.
+    var headerIsWholeChat = false
     // The UIKit rows route their taps back up through these. A link, a quote, a reaction badge, the
     // retry line and a group sender are rectangles in the row's plan, so the CELL hit-tests them and
     // reports which one was hit — no gesture recogniser per element, and a row with none of them
@@ -254,6 +256,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.loadViewIfNeeded()
         vc.setCaptureProtected(noScreenshots)
         vc.setHeaderBlurHidden(hidesHeaderBlur)
+        vc.headerIsWholeChat = headerIsWholeChat
         vc.setHistoryHeader(historyHeader, key: historyHeaderKey)
         // The dark pin, before anything reads a colour. `.unspecified` is the way back to the
         // phone's own appearance, NOT `.light` — a chat whose wallpaper is removed has to start
@@ -516,6 +519,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var historyHeaderHost: UIHostingController<AnyView>?
     private var historyHeaderKey: String?
     private var historyHeaderWidth: CGFloat = 0
+    var headerIsWholeChat = false
 
     func setHistoryHeader(_ content: AnyView?, key: String?) {
         guard key != historyHeaderKey else { return }
@@ -586,7 +590,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         let top = view.convert(host.view.frame, from: collectionView).minY
         guard top >= view.safeAreaInsets.top || lastTry else { return }
-        UIView.animate(withDuration: 0.15) { host.view.alpha = 1 }
+        // ⛔ AN EMPTY CHANNEL'S CARD IS NOT LATE (owner 2026-11-02: "you fixed only a channel with
+        // posts"). The card lives inside the list, and the list stays invisible until its first rows
+        // land. With no rows coming that was `scheduleEmptyReveal`'s 0.6 s. Known empty, the card is
+        // the final picture, so the list shows now, with no fade.
+        guard !didReveal else {
+            UIView.animate(withDuration: 0.15) { host.view.alpha = 1 }
+            return
+        }
+        host.view.alpha = 1
+        if headerIsWholeChat, currentIds.isEmpty { reveal() }
     }
 
     /// Measures the card at the list's width and moves the rows by the difference, keeping every
@@ -5747,6 +5760,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         if historyHeaderHost != nil, collectionView.bounds.width != historyHeaderWidth { layoutHistoryHeader() }
+        // The first pass with a real size, not the next retry 0.12 s away.
+        if headerIsWholeChat, !didReveal, !isUpdatingInsets { placeHistoryHeader() }
         // ⛔ THE WIDTH CHANGE, ASKED AGAIN NOW THAT IT IS REAL — owner audit 2026-10-06 chat #30. In
         // `viewWillLayoutSubviews` the list's constraints have not been applied yet, so on the pass
         // that rotates it still reports the OLD width and the re-measure waited a whole extra pass,

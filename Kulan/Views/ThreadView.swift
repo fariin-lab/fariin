@@ -4776,6 +4776,7 @@ struct ThreadView: View {
             rowModelsProvider: { (uikitModels, uikitModelCache.version) },
             historyHeader: groupHistoryCard?.view,
             historyHeaderKey: groupHistoryCard?.key,
+            headerIsWholeChat: conversation?.isChannel == true && conversation?.postCount == 0 && repo.items.isEmpty,
             onTapLink: { url, rowId in routeThreadURL(url, rowId: rowId) },
             onTapQuote: { id in jumpToQuotedOriginal(id) },
             onTapStoryQuote: { rowId, replyId in
