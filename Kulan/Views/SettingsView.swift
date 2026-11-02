@@ -709,7 +709,7 @@ struct AccountSettingsView: View {
             } header: {
                 Text("Account").textCase(nil)
             } footer: {
-                Text("Saves your profile and all chats to a text file you can share or keep.")
+                Text("Saves your profile, devices and privacy settings to a text file you can share or keep. Messages are not included.")
             }
         }
         .listStyle(.insetGrouped)
