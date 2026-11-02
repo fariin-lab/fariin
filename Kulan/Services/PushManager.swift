@@ -387,6 +387,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     static let shared = AppRouter()
     private init() {}
     var pendingChatId: String?    // a chat to open from a notification tap
+    var pendingAddStory = false   // the widget's Add story: open the story camera
     var pendingChatName: String?  // fallback header name when the conv isn't in the cache yet
     var pendingChatPhoto: String? // fallback header photo
     /// The pending chat is pushed ON TOP of whatever page is showing, with the system's slide,

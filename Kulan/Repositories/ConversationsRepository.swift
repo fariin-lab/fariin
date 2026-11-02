@@ -79,6 +79,7 @@ final class ConversationsRepository {
                     guard let self else { return }
                     self.notifSharePending = false
                     NotifShare.noteConversations(self.conversations)
+                    MainActor.assumeIsolated { WidgetShare.note() }
                 }
             }
             // owner 2026-10-26: a group still showing an old "deleted" preview (written before groups

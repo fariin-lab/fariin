@@ -116,6 +116,24 @@ struct KulanApp: App {
     private func handleDeepLink(_ url: URL) {
         guard let route = Self.route(from: url) else { return }
         switch route {
+        // A Home Screen widget. Only what the widget is showing right now is obeyed: kulan:// can be
+        // opened by anything, and the widget data is cleared on sign-out.
+        case .widgetChat(let id):
+            guard WidgetShared.read().chats.contains(where: { $0.id == id }) else { return }
+            AppRouter.shared.pendingChatId = id
+        case .widgetStory(let id):
+            guard WidgetShared.read().stories.contains(where: { $0.id == id }) else { return }
+            Task { @MainActor in
+                let repo = StoriesRepository.shared
+                for _ in 0..<40 where repo.others.first(where: { $0.authorUid == id }) == nil {
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                }
+                guard let g = repo.others.first(where: { $0.authorUid == id }) else { return }
+                StoryDoor.open(g, among: repo.others, from: "widget-\(id)", deliveredToMe: true)
+            }
+        case .widgetAddStory:
+            guard WidgetShared.read().signedIn else { return }
+            AppRouter.shared.pendingAddStory = true
         case .group(let code):
             guard Flags.groupsEnabled else { return }
             AppRouter.shared.pendingInviteCode = code
@@ -191,7 +209,7 @@ struct KulanApp: App {
     /// neither is done. Parsed now so a link shared today is a link the app already understands the
     /// day those two land, rather than one it has to be taught to recognise afterwards.
     /// `name`: a bare fariin.com/<name> (2026-10-19 groups v2), a person's or a public group's @name.
-    enum DeepLink: Equatable { case user(String), group(String), story(String, handle: String?), call(key: String), name(String), adminInvite(String) }
+    enum DeepLink: Equatable { case user(String), group(String), story(String, handle: String?), call(key: String), name(String), adminInvite(String), widgetChat(String), widgetStory(String), widgetAddStory }
 
     /// The web host every shared link points at. One constant, because the entitlement, the
     /// apple-app-site-association file on fariin.com and the parser below must all name the same
@@ -345,6 +363,9 @@ struct KulanApp: App {
             return CallLinkKey(compact: value).map { .call(key: $0.text) }
         case "call" where custom:
             return CallLinkKey(text: value).map { .call(key: $0.text) }
+        case "wchat" where custom: return .widgetChat(value)
+        case "wstory" where custom: return .widgetStory(value)
+        case "wadd" where custom: return .widgetAddStory
         default:  return nil
         }
     }

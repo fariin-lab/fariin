@@ -30,6 +30,7 @@ enum NotifShare {
     static func clearAccount() {
         lastChats.withLock { lastChatsValue = nil }
         queue.async { NotifShared.clearAccount() }
+        Task { @MainActor in WidgetShare.cleared() }
     }
 
     /// Mirrors Crypto's disk cache of peers' public keys (`crypto.pubKeys.v1`).

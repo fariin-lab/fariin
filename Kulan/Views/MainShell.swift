@@ -183,6 +183,14 @@ struct MainShell: View {
         .onChange(of: AppRouter.shared.pendingInviteCode != nil || AppRouter.shared.pendingPublicGroup != nil) { _, on in
             if on { tab = 2 }   // 2 = Chats: Stories took 0 and Calls took 1
         }
+        // The widget's Add story. A task, not onChange: a cold launch sets it before this exists.
+        .task(id: AppRouter.shared.pendingAddStory) {
+            guard AppRouter.shared.pendingAddStory else { return }
+            AppRouter.shared.pendingAddStory = false
+            tab = 0
+            guard AppLimits.shared.storiesEnabled, !StoriesService.shared.dailyLimitReached else { return }
+            StoryCameraDoor.open()
+        }
         // Call UI is mounted at the root (CallContainer in RootView) so it survives all
         // navigation. Here we only start listening for incoming calls.
         .onAppear {
