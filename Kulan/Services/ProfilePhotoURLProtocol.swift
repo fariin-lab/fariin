@@ -47,6 +47,9 @@ final class ProfilePhotoURLProtocol: URLProtocol {
         Storage.storage().reference(withPath: path).getData(maxSize: 12 * 1024 * 1024) { [weak self] data, error in
             guard let self, !self.cancelled else { return }
             if let data, error == nil {
+                // The notification banner's face (see `NotifShared.saveAvatar`). Written only on an
+                // allowed download, so it never holds a photo this viewer may not see.
+                NotifShared.saveAvatarSoon(data, for: url.absoluteString)
                 let resp = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil,
                                            headerFields: ["Content-Type": "image/jpeg"])!
                 self.client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)

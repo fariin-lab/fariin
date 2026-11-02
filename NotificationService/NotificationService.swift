@@ -296,9 +296,12 @@ final class NotificationService: UNNotificationServiceExtension {
             let slots = Slots(urls.count)
             let group = DispatchGroup()
             for (i, s) in urls.enumerated() {
-                guard let s, s.hasPrefix("https://"), let url = URL(string: s) else { continue }
+                guard let s else { continue }
                 let file = cacheFile(s)
+                // First the copy the app left (the only way to a `fariin-photo://` face, which this
+                // extension cannot open itself; see `NotifShared.saveAvatar`), then a plain download.
                 if let file, let d = try? Data(contentsOf: file), !d.isEmpty { slots.set(i, d); continue }
+                guard s.hasPrefix("https://"), let url = URL(string: s) else { continue }
                 group.enter()
                 var req = URLRequest(url: url)
                 req.timeoutInterval = timeout
@@ -318,13 +321,7 @@ final class NotificationService: UNNotificationServiceExtension {
             return slots.all
         }
 
-        private static func cacheFile(_ url: String) -> URL? {
-            guard let dir = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: NotifShared.appGroup)
-            else { return nil }
-            let name = SHA256.hash(data: Data(url.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
-            return dir.appendingPathComponent(NotifShared.avatarFolder, isDirectory: true)
-                .appendingPathComponent(name + ".img")
-        }
+        private static func cacheFile(_ url: String) -> URL? { NotifShared.avatarFile(url) }
     }
 
     // MARK: Screen share privacy (1:1 audit #16, owner, 2026-10-08)

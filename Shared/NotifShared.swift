@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import CryptoKit
 
 /// ⛔ READABLE BANNERS — owner 2026-10-18: "notifications must look like the big messengers": the
 /// sender's name, the real message text and the sender's photo, for 1:1 chats and groups. The text
@@ -48,6 +49,32 @@ enum NotifShared {
 
     /// Folder in the App Group container where the extension keeps downloaded avatars.
     static let avatarFolder = "NotifAvatars"
+
+    /// The file for one avatar URL, the same name in the app and the extension: a hash of the URL.
+    static func avatarFile(_ url: String) -> URL? {
+        guard let dir = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)
+        else { return nil }
+        let name = SHA256.hash(data: Data(url.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
+        return dir.appendingPathComponent(avatarFolder, isDirectory: true).appendingPathComponent(name + ".img")
+    }
+
+    /// ⛔ THE APP HANDS OVER THE FACES IT WAS ALLOWED TO SEE (owner 2026-11-02: the banner kept a grey
+    /// face while the in-app banner showed the photo). Profile photos are `fariin-photo://` names that
+    /// only the signed-in Storage SDK can open, so the rules decide per viewer (ProfilePhotoURLProtocol),
+    /// and the extension is not signed in. Each photo the app opens is copied here under its own name;
+    /// a new photo, audience or Hide From list is a new `v`, so a new name, and sign-out deletes them.
+    static func saveAvatar(_ data: Data, for url: String) {
+        guard !data.isEmpty, data.count <= 2_000_000, let file = avatarFile(url) else { return }
+        if FileManager.default.fileExists(atPath: file.path) { return }
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    /// The same, off the caller's thread: the app's photo cache reads on the main thread.
+    static func saveAvatarSoon(_ data: Data, for url: String) {
+        guard url.hasPrefix("fariin-photo://") else { return }
+        DispatchQueue.global(qos: .utility).async { saveAvatar(data, for: url) }
+    }
 
     static var defaults: UserDefaults? { UserDefaults(suiteName: appGroup) }
 

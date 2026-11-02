@@ -66,6 +66,7 @@ final class ProfilePhotoLoader {
         }
         guard let data = DiskImageCache.shared.bytesSync(url), let img = Self.thumbnail(data) else { return nil }
         remember(img, url)
+        NotifShared.saveAvatarSoon(data, for: url)   // a face saved before the copy existed
         return img
     }
 
@@ -75,6 +76,7 @@ final class ProfilePhotoLoader {
         if let m = memory.object(forKey: url as NSString) { return m }
         if let data = await DiskImageCache.shared.rawData(for: url), let img = Self.thumbnail(data) {
             remember(img, url)
+            NotifShared.saveAvatarSoon(data, for: url)
             ProfilePhotoIndex.noteLoad(url, ok: true)
             return img
         }
