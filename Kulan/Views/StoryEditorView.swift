@@ -574,7 +574,7 @@ struct StoryEditorView: View {
     @State private var cardBottomGap: CGFloat = StoryEditorView.toolZoneHeight
     @State private var pendingShare: StoryShareData?
     @State private var pendingExtras: [StoryExtra] = []
-    @FocusState private var captionFocused: Bool
+    @State private var captionFocused = false
     /// ⚠️ FOR THE KEYBOARD'S CLOCK, NOT FOR ITS HEIGHT. Nothing on this screen computes a keyboard
     /// height and that rule stands — the bottom bar is a sibling of the canvas and SwiftUI's own
     /// avoidance lifts it, which is the system moving it on the system's curve.
@@ -2700,11 +2700,14 @@ struct StoryEditorView: View {
         HStack(spacing: 6) {
             addMoreButton
             // Grows with the text (up to 5 lines) instead of staying a single truncated line.
-            TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color.white.opacity(0.6)), axis: .vertical)
-                .foregroundStyle(.white).focused($captionFocused)
-                // ...and the text itself carries a hairline shadow so it reads on white.
-                .shadow(color: .black.opacity(0.45), radius: 1.5)
-                .lineLimit(1...5)
+            // A `UITextView`, not a SwiftUI field: see `StoryCaptionField`.
+            StoryCaptionField(text: $caption, focused: $captionFocused)
+                .overlay(alignment: .leading) {
+                    if caption.isEmpty {
+                        Text("Add a caption…").foregroundStyle(Color.white.opacity(0.6))
+                            .allowsHitTesting(false)
+                    }
+                }
                 // The text carries its own breathing room instead of the bar padding it. One
                 // line is then 34 tall, under the 40 the + pins, so the resting bar is exactly
                 // 40 and a long caption still grows from there.
