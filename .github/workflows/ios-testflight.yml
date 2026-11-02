@@ -74,7 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: STORY CANCEL, VIEWERS LIST, TEXT FIELDS.
+            THIS BUILD: HOME SCREEN WIDGETS, CHAT KEY, STORY FIXES.
+            Widgets: Recent chats and Stories for your Home Screen, small and wide. Tap a person to open them.
+            Chat Key: created only by choosing People who know my key. Going back to Everyone asks first, and Remove deletes the key and its card.
+            Story caption: the emoji key should no longer freeze the app.
+            Story notifications show the story's picture. Channels with a story keep their full photo size in the chat list. Posted stories always show the eye and count, even at 0.
+            PLEASE TEST: add both widgets and tap them; switch to the emoji keyboard while typing a story caption; switch Chat Key on and off; get a notification for a photo and a video story.
+
+            EARLIER: STORY CANCEL, VIEWERS LIST, TEXT FIELDS.
             Stories: the X on an uploading story really cancels it. The upload stops, and a story that had just gone live is removed.
             Story viewers: the faces at the bottom of the list no longer overlap while you scroll.
             Captions: dragging a text selection handle no longer closes the keyboard.
