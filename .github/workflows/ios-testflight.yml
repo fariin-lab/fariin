@@ -74,7 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: HOME SCREEN WIDGETS, CHAT KEY, STORY FIXES.
+            THIS BUILD: EMOJI KEY, SHARP STORIES, WIDGET FIX.
+            Story caption: the box was rebuilt, because the emoji key was still freezing the app.
+            Stories: your own story no longer stays soft for minutes when you come back to it.
+            Widgets: should now show chats and stories instead of grey bars. Open Fariin once, then remove the widget and add it again.
+            Channel stories: new eye icon. Posted stories: view counts load more reliably.
+            PLEASE TEST: tap the emoji key in a story caption, add an emoji, write several lines and post; post a photo story, leave and come straight back; add both widgets.
+
+            EARLIER: HOME SCREEN WIDGETS, CHAT KEY, STORY FIXES.
             Widgets: Recent chats and Stories for your Home Screen, small and wide. Tap a person to open them.
             Chat Key: created only by choosing People who know my key. Going back to Everyone asks first, and Remove deletes the key and its card.
             Story caption: the emoji key should no longer freeze the app.
