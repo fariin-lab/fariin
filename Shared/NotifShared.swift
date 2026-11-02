@@ -36,6 +36,7 @@ enum NotifShared {
     static let pubKeysKey = "notif.pubKeys.v1"   // uid -> b64 current public key (mirror of crypto.pubKeys.v1)
     static let pubRingKey = "notif.pubRing.v1"   // uid -> [b64] earlier keys, newest first (mirror of crypto.pubRing.v1)
     static let chatsKey = "notif.chats.v1"       // cid -> ChatInfo dictionary, see below
+    static let widgetKey = "widget.snapshot.v1"  // the Home Screen widgets' data (WidgetShared)
 
     /// Per chat, as stored under `chatsKey[cid]`:
     ///   "g": "1" for a group

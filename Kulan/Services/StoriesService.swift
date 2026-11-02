@@ -4027,6 +4027,7 @@ final class StoriesRepository {
             self.mine = mg; self.others = gs
             self.didLoad = true
             self.storiesVersion &+= 1
+            WidgetShare.note()
             // Persist the freshly built row so the NEXT cold start paints it on the first frame.
             StoryRowCache.save(uid: me, mine: mg, others: gs, profiles: self.profileCache)
             self.scheduleExpiryTick(nextExpiry)
