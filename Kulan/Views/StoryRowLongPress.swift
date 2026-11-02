@@ -892,6 +892,21 @@ struct StoryRowLongPress: UIViewRepresentable {
             return String(reflecting: type(of: other)).hasPrefix("SwiftUI.")
         }
 
+        /// Cancels the pan of every scroll view holding this touch. Switching a recogniser off and on
+        /// ends what it is tracking and leaves it ready for the next touch.
+        private static func stopScrolling(from starts: [UIView?]) {
+            for start in starts {
+                var v = start
+                while let view = v {
+                    if let s = view as? UIScrollView, s.panGestureRecognizer.isEnabled {
+                        s.panGestureRecognizer.isEnabled = false
+                        s.panGestureRecognizer.isEnabled = true
+                    }
+                    v = view.superview
+                }
+            }
+        }
+
         @objc private func pressed(_ g: UILongPressGestureRecognizer) {
             let p = g.location(in: nil)
             switch g.state {
@@ -1071,6 +1086,10 @@ struct StoryRowLongPress: UIViewRepresentable {
                 // lift, so leaving it in place shows nothing twice; only the card steps aside.
                 MediaSourceVisibility.shared.hide(t.key, withLabel: false)
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.8)
+                // ⛔ THE PAGE STOPS FOLLOWING THIS FINGER (owner 2026-11-02, with a video: the menu is up,
+                // the finger is still down, and the list scrolls under the blur). The press runs beside
+                // the scroll views' pans, so they kept tracking the same touch.
+                Self.stopScrolling(from: [g.view, window.hitTest(p, with: nil)])
                 o.present(in: window, startAtSqueeze: true)
 
             case .changed:
