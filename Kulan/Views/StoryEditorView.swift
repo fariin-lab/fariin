@@ -69,6 +69,7 @@ final class KeyboardWatcher: ObservableObject {
     }
 
     private var tokens: [NSObjectProtocol] = []
+    private var frameEvents = 0
     init() {
         // ⚠️ `queue: nil`, WHICH IS THEIRS, AND `.main` IS NOT THE SAME THING. With a queue handed
         // in, the block is ENQUEUED — even `.main` runs it in a later runloop turn than the post. The
@@ -80,6 +81,13 @@ final class KeyboardWatcher: ObservableObject {
                 guard let self else { return }
                 self.readClock(from: n)
                 guard let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+                // The emoji key's freeze leaves no clue behind (owner 2026-11-02): this shows whether the
+                // keyboard is flipping between two frames. Every event for the first 60, then each 200th.
+                self.frameEvents += 1
+                if self.frameEvents <= 60 || self.frameEvents % 200 == 0 {
+                    DiagLog.add("KBD# n=\(self.frameEvents) y=\(Int(f.origin.y)) h=\(Int(f.height)) "
+                                + "mode=\(UITextInputMode.activeInputModes.first?.primaryLanguage ?? "?")")
+                }
                 // ⚠️ ONLY A REAL CHANGE. `@Published` announces every assignment, equal or not, and each
                 // announcement rebuilds the whole editor from inside the keyboard's own layout pass.
                 let newHeight = max(0, UIScreen.main.bounds.height - f.origin.y)
