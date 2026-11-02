@@ -335,7 +335,7 @@ struct DiscoverChannelsView: View {
         } label: {
             Text(mine ? "Following" : "Follow")
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(mine ? Color.secondary : Color.white)
+                .foregroundStyle(mine ? Color.secondary : Color.onFariinAction)
                 .padding(.horizontal, 14).frame(height: 32)
                 .liquidGlass(Capsule(), interactive: !mine, tint: mine ? nil : Color.fariinAction)
                 .contentShape(Capsule())
@@ -806,7 +806,7 @@ struct AdminInviteSheet: View {
 
     private func wideButton(_ title: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title).fontWeight(.semibold).foregroundStyle(.white)
+            Text(title).fontWeight(.semibold).foregroundStyle(tint == .red ? Color.white : Color.onFariinAction)
                 .frame(maxWidth: .infinity).frame(height: 50)
                 .liquidGlass(Capsule(), interactive: true, tint: tint)
                 .contentShape(Capsule())

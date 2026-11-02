@@ -240,10 +240,10 @@ struct PublicGroupSheet: View {
         Button(action: action) {
             ZStack {
                 Text(title).opacity(loading ? 0 : 1)
-                if loading { BusyArc.small(.white) }
+                if loading { BusyArc.small(.onFariinAction) }
             }
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(enabled || loading ? Color.white : Color.secondary)
+                .foregroundStyle(enabled || loading ? Color.onFariinAction : Color.secondary)
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
                 .background(Capsule().fill(enabled || loading ? Self.blue : Color(.tertiarySystemFill)))
@@ -422,10 +422,10 @@ struct PublicJoinBar: View {
                 // Joining keeps the blue and spins, like the sheets' button (owner 2026-10-24).
                 ZStack {
                     Text(title).opacity(joining ? 0 : 1)
-                    if joining { BusyArc.small(.white) }
+                    if joining { BusyArc.small(.onFariinAction) }
                 }
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(enabled || joining ? Color.white : Color.secondary)
+                    .foregroundStyle(enabled || joining ? Color.onFariinAction : Color.secondary)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity)
                     .frame(height: Self.barHeight)
@@ -531,10 +531,10 @@ struct RejoinGroupBar: View {
             Button(action: join) {
                 ZStack {
                     Text(requestSent ? "Request Sent" : "Join Group").opacity(joining ? 0 : 1)
-                    if joining { BusyArc.small(.white) }
+                    if joining { BusyArc.small(.onFariinAction) }
                 }
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(requestSent ? Color.secondary : Color.white)
+                    .foregroundStyle(requestSent ? Color.secondary : Color.onFariinAction)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity)   // the one join bar (`PublicJoinBar.barHeight`)
                     .frame(height: PublicJoinBar.barHeight)
