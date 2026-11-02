@@ -424,9 +424,18 @@ struct MainShell: View {
         }
     }
 
+    /// `$tab`, plus the second tap on the tab already open (TabReselect): back to the root, then
+    /// to the top of the list.
+    private var tabSelection: Binding<Int> {
+        Binding(get: { tab }, set: { new in
+            if new == tab { TabReselect.post(new) }
+            tab = new
+        })
+    }
+
     @available(iOS 26.0, *)
     private var modernTabView: some View {
-        TabView(selection: $tab) {
+        TabView(selection: tabSelection) {
             // ⚠️ BACK TO HOW IT WAS, ON THE OWNER'S WORD (2026-08-19). A whole afternoon went into
             // making these two icons swap between outline and filled on selection, it shipped to a
             // browser preview, he looked at it and said something was still off and he needs time to
@@ -459,6 +468,7 @@ struct MainShell: View {
             // follow the position, so Calls is 1 and Chats is 2 everywhere in this file.
             Tab(value: 1) {
                 CallsView().tint(.primary)
+                    .onReceive(NotificationCenter.default.publisher(for: TabReselect.note)) { if ($0.object as? Int) == 1 { TabReselect.popOrScrollToTop() } }
             } label: {
                 callsTabLabel
             }
@@ -471,6 +481,7 @@ struct MainShell: View {
             .badge(unreadChatsBadge)   // 0 hides it, same as the Calls tab
             Tab(value: 3) {
                 SettingsView(onSignOut: onSignOut, asTab: true).tint(.primary)
+                    .onReceive(NotificationCenter.default.publisher(for: TabReselect.note)) { if ($0.object as? Int) == 3 { TabReselect.popOrScrollToTop() } }
             } label: {
                 settingsTabLabel
             }
@@ -478,13 +489,14 @@ struct MainShell: View {
     }
 
     private var legacyTabView: some View {
-        TabView(selection: $tab) {
+        TabView(selection: tabSelection) {
             StoriesTabView(onSignOut: onSignOut)
                 .tint(.primary)
                 .tabItem { storiesTabLabel }
                 .tag(0)
             CallsView()
                 .tint(.primary)
+                .onReceive(NotificationCenter.default.publisher(for: TabReselect.note)) { if ($0.object as? Int) == 1 { TabReselect.popOrScrollToTop() } }
                 .tabItem { callsTabLabel }
                 .badge(missedBadge)
                 .tag(1)
@@ -495,6 +507,7 @@ struct MainShell: View {
                 .tag(2)
             SettingsView(onSignOut: onSignOut, asTab: true)
                 .tint(.primary)
+                .onReceive(NotificationCenter.default.publisher(for: TabReselect.note)) { if ($0.object as? Int) == 3 { TabReselect.popOrScrollToTop() } }
                 .tabItem { settingsTabLabel }
                 .tag(3)
         }
@@ -3519,6 +3532,11 @@ struct ChatsView: View {
             // The reference apps keep the tabs away until search is closed. `.hidden`, still never
             // `.visible`: when search closes this falls back to `.automatic` (see the note above).
             .toolbar(selecting || !path.isEmpty || searchPresented ? .hidden : .automatic, for: .tabBar)
+            // Second tap on Chats (TabReselect): close the open chat first, then scroll to the top.
+            .onReceive(NotificationCenter.default.publisher(for: TabReselect.note)) { note in
+                guard (note.object as? Int) == 2 else { return }
+                if !path.isEmpty { path = NavigationPath() } else { TabReselect.popOrScrollToTop() }
+            }
             // (The archive is PUSHED now — see `archiveRoute` on the navigationDestination above.)
             .sheet(isPresented: $showMyQR) { MyQRView() }
             // Get Started's New Group and Add Photo (owner 2026-10-18).

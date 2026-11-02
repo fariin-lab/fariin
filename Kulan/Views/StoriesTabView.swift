@@ -146,6 +146,11 @@ struct StoriesTabView: View {
     var body: some View {
         NavigationStack(path: $path) {
             content
+                // Second tap on Stories (TabReselect): back to the root, then to the top.
+                .onReceive(NotificationCenter.default.publisher(for: TabReselect.note)) { note in
+                    guard (note.object as? Int) == 0 else { return }
+                    if !path.isEmpty { path = NavigationPath() } else { TabReselect.popOrScrollToTop() }
+                }
                 // ⛔ THE HOLD IS LATCHED HERE, ON THE PAGE, NOT ON THE LIST — audit #5: the list
                 // leaves the tree while a search is up, and its `initial: true` re-latched the split
                 // from the CURRENT seen state when it came back, moving people mid-session. The page
