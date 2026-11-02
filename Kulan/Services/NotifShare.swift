@@ -1,4 +1,5 @@
 import Foundation
+import os
 import FirebaseAuth
 
 /// ⛔ READABLE BANNERS — owner 2026-10-18 (see Shared/NotifShared.swift for the whole design).
@@ -45,21 +46,23 @@ enum NotifShare {
     static func noteConversations(_ convs: [Conversation]) {
         guard let me = Auth.auth().currentUser?.uid else { return }
         var map: [String: [String: Any]] = [:]
+        var faces: [String] = []
         for c in convs {
             var e: [String: Any] = [:]
             if c.isGroup {
                 e[NotifShared.Chat.group] = "1"
                 e[NotifShared.Chat.name] = c.displayName(me)
-                if let p = c.avatarUrl, p.hasPrefix("https://") { e[NotifShared.Chat.photo] = p }
+                if let p = c.avatarUrl, shareable(p) { e[NotifShared.Chat.photo] = p; faces.append(p) }
                 var members: [String: String] = [:]
-                for (uid, url) in c.photos where uid != me && url.hasPrefix("https://") {
+                for (uid, url) in c.photos where uid != me && shareable(url) {
                     if members.count >= memberPhotoCap { break }
                     members[uid] = url
+                    faces.append(url)
                 }
                 if !members.isEmpty { e[NotifShared.Chat.members] = members }
             } else {
                 e[NotifShared.Chat.name] = c.displayName(me)
-                if let p = c.displayPhoto(me), p.hasPrefix("https://") { e[NotifShared.Chat.photo] = p }
+                if let p = c.displayPhoto(me), shareable(p) { e[NotifShared.Chat.photo] = p; faces.append(p) }
             }
             map[c.id] = e
         }
@@ -70,5 +73,40 @@ enum NotifShare {
         }
         guard changed else { return }
         queue.async { NotifShared.defaults?.set(map, forKey: NotifShared.chatsKey) }
+        warmFaces(faces)
+    }
+
+    /// A photo the banner can show: a plain download, or a `fariin-photo://` name, which the banner
+    /// reads from the copy the app leaves (`NotifShared.saveAvatar`). Only https used to pass, so a
+    /// profile photo never reached the banner at all (owner 2026-11-02: grey face from kream).
+    private static func shareable(_ url: String) -> Bool {
+        url.hasPrefix("https://") || url.hasPrefix("fariin-photo://")
+    }
+
+    /// ⛔ THE FACES ARE READY BEFORE THE FIRST BANNER (owner 2026-11-02). A copy for the banner was
+    /// only made when a photo was drawn, so a chat not scrolled to yet still got a grey face. The
+    /// chats' photo names are loaded here, quietly, through the app's own loader (which leaves the
+    /// copy, and asks the storage rules as the viewer). Capped, two at a time, missing copies only.
+    private static let warming = OSAllocatedUnfairLock(initialState: false)
+    private static func warmFaces(_ urls: [String]) {
+        guard urls.contains(where: { $0.hasPrefix("fariin-photo://") }),
+              warming.withLock({ busy in if busy { return false }; busy = true; return true }) else { return }
+        Task.detached(priority: .utility) {
+            defer { warming.withLock { $0 = false } }
+            // Off the main thread: one file check per face.
+            var seen = Set<String>()
+            let list = Array(urls.filter { u in
+                guard u.hasPrefix("fariin-photo://"), seen.insert(u).inserted,
+                      let f = NotifShared.avatarFile(u) else { return false }
+                return !FileManager.default.fileExists(atPath: f.path)
+            }.prefix(80))
+            for start in stride(from: 0, to: list.count, by: 2) {
+                await withTaskGroup(of: Void.self) { g in
+                    for u in list[start..<min(start + 2, list.count)] {
+                        g.addTask { _ = await ProfilePhotoLoader.shared.avatar(u) }
+                    }
+                }
+            }
+        }
     }
 }
