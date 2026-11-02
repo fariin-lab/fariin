@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import Network
 import OSLog
+import os
 import FirebaseFirestore
 
 /// ⛔ FINDING THE TRIGGER OF "DEAD UNTIL RESTART" (owner 2026-10-24, 10th report). The black box
@@ -66,11 +67,26 @@ enum ConnectionDiag {
 
     /// A stall or a stuck client: copy the last `minutes` of Firebase's own log into the black box.
     /// Reads this process's log only (`OSLogStore`, no permission needed), off the main thread.
+    /// ⛔ ONE READ AT A TIME, AND NOT AGAIN FOR TWO MINUTES (crash 2026-11-02, build 1087, watchdog
+    /// 0x8BADF00D): every stall and wedge started its own scan of the process log, and six were found
+    /// running at once on the utility threads. The phone ran hot ("thermal serious", 84% CPU) and the
+    /// main thread missed the 10 s scene-update deadline. A second stall within the window adds
+    /// nothing the first read did not already capture.
+    nonisolated private static let gate = OSAllocatedUnfairLock(initialState: (busy: false, last: Date.distantPast))
+
     static func captureFirebaseLog(_ why: String, minutes: Double = 3) {
         guard startedFor != nil else { return }
-        let since = max(started, Date().addingTimeInterval(-minutes * 60))
+        let now = Date()
+        let go = gate.withLock { s -> Bool in
+            guard !s.busy, now.timeIntervalSince(s.last) > 120 else { return false }
+            s = (true, now)
+            return true
+        }
+        guard go else { DiagLog.add("FSLOG# \(why): skipped, a read ran in the last 2 min"); return }
+        let since = max(started, now.addingTimeInterval(-minutes * 60))
         Task.detached(priority: .utility) {
             let lines = firebaseLines(since: since, max: 160)
+            gate.withLock { $0.busy = false }
             DiagLog.add("FSLOG# \(why): \(lines.count) lines from Firebase's log")
             for l in lines { DiagLog.add("FSLOG# \(l)") }
         }
@@ -79,7 +95,10 @@ enum ConnectionDiag {
     nonisolated private static func firebaseLines(since: Date, max: Int) -> [String] {
         guard let store = try? OSLogStore(scope: .currentProcessIdentifier) else { return ["log store unavailable"] }
         let position = store.position(date: since)
-        guard let entries = try? store.getEntries(at: position) else { return ["log read failed"] }
+        // The store filters, so the loop below no longer composes and drops every other line the
+        // app logged in those minutes.
+        let only = NSPredicate(format: "subsystem CONTAINS[c] 'firebase' OR category CONTAINS[c] 'firestore'")
+        guard let entries = try? store.getEntries(at: position, matching: only) else { return ["log read failed"] }
         var out: [String] = []
         let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SSS"
         for case let e as OSLogEntryLog in entries {
