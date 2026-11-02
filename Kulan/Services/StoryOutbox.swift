@@ -99,8 +99,7 @@ enum StoryOutbox {
                          excluded: Set<String>, included: Set<String>, everyone: Bool,
                          allowsReplies: Bool, tag: StoryAudienceTag, captureProtected: Bool,
                          ownerUid: String, repostOf: StoryRepost? = nil, storyDocId: String? = nil,
-                         expiryHours: Double = 24) -> String {
-        let id = UUID().uuidString
+                         expiryHours: Double = 24, id: String = UUID().uuidString) -> String {
         lock.lock(); liveIds.insert(id); lock.unlock()
         var t = Ticket(id: id, caption: caption, stickers: stickers,
                        excluded: Array(excluded), included: Array(included),

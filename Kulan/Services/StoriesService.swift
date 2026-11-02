@@ -1123,6 +1123,10 @@ final class StoriesService {
         /// this card is still up, so the row stacked the story behind itself. The row leaves these
         /// out of "already posted". A video can land as several parts, hence a list.
         var docIds: [String] = []
+        /// Tears up this post's outbox ticket, at the tap of the X and not when its task unwinds:
+        /// that task can sit on the network for a long time, and a ticket still on disk comes back
+        /// as a story on the next launch or the next reconnect.
+        var dropTicket: @Sendable () -> Void = {}
     }
     /// Oldest first, which is the order stories are read in — so the placeholders sit at the end of
     /// my bucket in the same order they will land as real stories.
@@ -1199,6 +1203,7 @@ final class StoriesService {
     @MainActor func postStoryBackground(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends, captureProtected: Bool = false, repostOf: StoryRepost? = nil, storyDocId: String? = nil, resumed: Bool = false, expiryHours: Double = 24) {
         // One id for this post from the start, kept in the ticket, so a resume writes the same story.
         let docId = storyDocId ?? Self.newStoryId()
+        let ticketId = UUID().uuidString   // named here so the X can tear the ticket up by itself
         // Don't cancel an in-flight post (that silently DESTROYED the 1st story when a 2nd was
         // posted) — QUEUE instead: the new task waits for the previous one, so both post in order.
         let previous = uploadTask
@@ -1215,7 +1220,8 @@ final class StoriesService {
                                     tag: tag,   // the header says the chosen audience from frame one
                                     caption: caption,
                                     repostOf: repostOf,
-                                    docIds: [docId])
+                                    docIds: [docId],
+                                    dropTicket: { StoryOutbox.forget(ticketId) })
         let pendingId = pending.id
         let pendingURL = pending.url
         let me = uid
@@ -1251,7 +1257,7 @@ final class StoriesService {
                                               // 2026-09-24 audit: and whose story it reposts, so a
                                               // resumed repost keeps its credit.
                                               repostOf: repostOf,
-                                              storyDocId: docId, expiryHours: expiryHours)
+                                              storyDocId: docId, expiryHours: expiryHours, id: ticketId)
             // The card's thumbnail is NOT made here any more — see `quick` below.
             return (nil, ticket)
         }
@@ -1296,12 +1302,15 @@ final class StoriesService {
             }
             var failure: String?
             var cancelled = false
+            var landed: String?
             do {
-                try await postStory(image: image, caption: caption, stickers: stickers, expiryHours: expiryHours, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected, repostOf: repostOf, storyId: docId, replaceExisting: resumed)
+                landed = try await postStory(image: image, caption: caption, stickers: stickers, expiryHours: expiryHours, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected, repostOf: repostOf, storyId: docId, replaceExisting: resumed)
                 if await self.finishRunning(pendingId) { return }   // left behind on a swap: the retry owns it
                 StoryOutbox.forget(ticket)   // it landed; there is nothing to resume
             }
-            catch is CancellationError {
+            // ANY failure after the X is a cancel: as a plain failure it kept its ticket and came
+            // back as a story through the retry a minute later.
+            catch let error where error is CancellationError || Task.isCancelled {
                 if await self.finishRunning(pendingId) { return }
                 cancelled = true              // user hit cancel → postStory removed the doc
                 StoryOutbox.forget(ticket)    // …and a cancelled post must not come back next launch
@@ -1330,7 +1339,7 @@ final class StoriesService {
             }
             // ⚠️ A PLAIN FAILURE KEEPS ITS TICKET. That is the whole point: no connection now is the
             // case worth remembering, and the next sign-in puts it back through this same door.
-            if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
+            if !cancelled && failure == nil && !Task.isCancelled { await StoriesRepository.shared.load(force: true) }
             await MainActor.run {
                 self.queuedUploads[pendingId] = nil   // finished or cancelled: nothing left to cancel
                 // ⚠️ OUTSIDE THE TOKEN GUARD, and that is the point of keeping them separate. This
@@ -1356,6 +1365,8 @@ final class StoriesService {
                 guard self.currentUploadToken == token else { return }   // a newer post owns the rest
                 self.uploadTask = nil
             }
+            // After the placeholder went, so no X can come later than this check.
+            if Task.isCancelled, let landed { self.takeBack([landed]) }
         }
         if let t = uploadTask { queuedUploads[pendingId] = t }   // cancellable on its own, by its placeholder id
     }
@@ -1367,11 +1378,72 @@ final class StoriesService {
     /// The queue still holds: a post waiting behind this one awaits its task, which ends at once —
     /// `postStory` checks cancellation before its first write — so the next post simply starts.
     /// Cancelling a post that is mid-upload rolls its documents back exactly as before.
+    ///
+    /// ⛔ THE X IS FINAL (owner, 2026-11-02: a cancelled story appeared seconds later). The transfer
+    /// stops (`putStoppable`), the ticket goes now, a Firestore swap can no longer hand the post back
+    /// (`runningPosts`), and a story that had already gone live is deleted (`takeBack`).
     @MainActor func cancelUpload(id: String) {
+        inFlight.first { $0.id == id }?.dropTicket()
         queuedUploads[id]?.cancel()
         queuedUploads[id] = nil
+        runningPosts[id] = nil
         inFlight.removeAll { $0.id == id }
         refreshUploading()
+    }
+
+    /// Deletes stories that went live before the X reached them: the last moments of a post, after
+    /// the media write, are too late to stop. In its own task because the post's task is cancelled.
+    /// A delete that fails offline is tried again, or the story would stay up.
+    private func takeBack(_ ids: [String]) {
+        Task {
+            for id in ids {
+                for attempt in 0..<5 {
+                    if await self.deleteStory(id) { break }
+                    DiagLog.add("STORYPOST# take back failed try=\(attempt) id=\(id)")
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                }
+            }
+        }
+    }
+
+    /// One Storage upload that really stops. `putDataAsync` and `putFileAsync` ignore cancellation,
+    /// so a cancelled post went on sending every byte. Resumes exactly once, and at once on cancel,
+    /// so the queue behind this post never waits on the SDK's failure callback.
+    private static func putStoppable(_ start: () -> StorageUploadTask) async throws {
+        try Task.checkCancellation()
+        final class Box: @unchecked Sendable {
+            let lock = NSLock(); var done = false
+            var cont: CheckedContinuation<Void, Error>?
+            func finish(_ result: Result<Void, Error>) {
+                lock.lock()
+                if done { lock.unlock(); return }
+                done = true
+                let c = cont; cont = nil
+                lock.unlock()
+                c?.resume(with: result)
+            }
+        }
+        let box = Box()
+        let task = start()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+                box.lock.lock()
+                if box.done {   // the cancel came first
+                    box.lock.unlock()
+                    c.resume(throwing: CancellationError())
+                    return
+                }
+                box.cont = c
+                box.lock.unlock()
+                task.observe(.success) { _ in box.finish(.success(())) }
+                task.observe(.failure) { snap in
+                    box.finish(.failure(snap.error ?? NSError(domain: StorageErrorDomain, code: -1)))
+                }
+            }
+        } onCancel: {
+            box.finish(.failure(CancellationError()))
+            task.cancel()
+        }
     }
     /// Every post task still in the air (including the one currently uploading), keyed by its
     /// placeholder id, so the X on one story reaches that story only. Entries are dropped as they finish.
@@ -1935,11 +2007,13 @@ final class StoriesService {
     }
 
     // Post a photo to "My Status": chosen audience can see it for 24h.
+    /// Returns the id the story landed under, which a resumed post picks afresh.
+    @discardableResult
     func postStory(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], expiryHours: Double = 24,
                    excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends,
                    captureProtected: Bool = false,
                    repostOf: StoryRepost? = nil,
-                   storyId fixedId: String? = nil, replaceExisting: Bool = false) async throws {
+                   storyId fixedId: String? = nil, replaceExisting: Bool = false) async throws -> String {
         let me = uid
         // A quiet `return` here read as SUCCESS to the background poster — see `PostRefusal.signedOut`.
         guard !me.isEmpty else { throw PostRefusal.signedOut }
@@ -2024,9 +2098,8 @@ final class StoriesService {
         let copyFrom = Self.serverCopySource(repostOf)
         async let uploadedJPEG: Void = {
             guard copyFrom == nil else { return }
-            try Task.checkCancellation()
             let meta = StorageMetadata(); meta.contentType = "image/jpeg"
-            _ = try await ref.putDataAsync(jpeg, metadata: meta)
+            try await Self.putStoppable { ref.putData(jpeg, metadata: meta) }
         }()
         // Made once and used twice — the document and, for an "Everyone" story, the public mirror.
         // It is a resize and a JPEG encode, so asking for it twice is real work for one string.
@@ -2097,11 +2170,12 @@ final class StoriesService {
             try await uploadedJPEG   // `jpeg` is already in scope; this only waits for the transfer
             if let copyFrom, !(await copyRepostMedia(from: copyFrom, to: storyId)) {
                 let meta = StorageMetadata(); meta.contentType = "image/jpeg"
-                _ = try await ref.putDataAsync(jpeg, metadata: meta)
+                try await Self.putStoppable { ref.putData(jpeg, metadata: meta) }
             }
             try Task.checkCancellation()   // cancelled during upload → undo
             step = "url"
             let url = try await ref.downloadURL().absoluteString
+            try Task.checkCancellation()   // the write below is what makes the story live
             step = "media"
             try await docRef.updateData(["mediaUrl": url])
             // The story is up: tell the people its caption mentions (`StoryMentions`).
@@ -2140,6 +2214,7 @@ final class StoriesService {
             try? await ref.delete()
             throw error
         }
+        return storyId
     }
 
     // Fire-and-forget VIDEO post — same shape as postStoryBackground. `thumbnail` is the poster
@@ -2191,7 +2266,8 @@ final class StoriesService {
                                     tag: tag,
                                     caption: caption,
                                     repostOf: repostOf,
-                                    docIds: partIds)
+                                    docIds: partIds,
+                                    dropTicket: { VideoStoryOutbox.forget(ticketId) })
         // ⚠️ THE SAME BYTES, or the composed picture above is wasted. StoryUI's ImageLoader reads
         // URLCache FIRST, so seeding the raw poster here would win over `pending.image` and put the
         // black-letterboxed frame back on screen.
@@ -2222,14 +2298,16 @@ final class StoriesService {
             }
             var failure: String?
             var cancelled = false
+            var landed: [String] = []   // the real ids, for the X to take back (several for a long clip)
             do {
                 try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, stickers: stickers, expiryHours: expiryHours, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected, repostOf: repostOf,
                                          storyIds: partIds, done: done, replaceExisting: replaceExisting,
-                                         onPartDone: { VideoStoryOutbox.markDone(ticketId, storyId: $0) })
+                                         onPartDone: { VideoStoryOutbox.markDone(ticketId, storyId: $0) },
+                                         onLanded: { id in landed.append(id) })
                 if await self.finishRunning(pending.id) { return }   // left behind on a swap: the restart owns it
                 VideoStoryOutbox.forget(ticketId)          // it landed; nothing to resume
             }
-            catch is CancellationError {
+            catch let error where error is CancellationError || Task.isCancelled {   // see the photo path
                 if await self.finishRunning(pending.id) { return }
                 cancelled = true; VideoStoryOutbox.forget(ticketId)
             }
@@ -2240,7 +2318,7 @@ final class StoriesService {
                 if Self.isPermanentPostFailure(error) { VideoStoryOutbox.forget(ticketId) }
                 else { VideoStoryOutbox.release(ticketId) }
             }
-            if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
+            if !cancelled && failure == nil && !Task.isCancelled { await StoriesRepository.shared.load(force: true) }
             await MainActor.run {
                 self.queuedUploads[pending.id] = nil   // finished or cancelled: nothing left to cancel
                 self.inFlight.removeAll { $0.id == pending.id }   // outside the guard — see the photo path
@@ -2249,6 +2327,8 @@ final class StoriesService {
                 guard self.currentUploadToken == token else { return }
                 self.uploadTask = nil
             }
+            // The parts of a long clip that landed before the X go too. See the photo path.
+            if Task.isCancelled, !landed.isEmpty { self.takeBack(landed) }
         }
         // IN THE CANCEL CHAIN, like the photo path always was. This append was missing here, so
         // with video A uploading and B queued, the X reached only B — A finished and POSTED the
@@ -2276,7 +2356,8 @@ final class StoriesService {
                         captureProtected: Bool = false,
                         repostOf: StoryRepost? = nil,
                         storyIds: [String] = [], done: Set<String> = [], replaceExisting: Bool = false,
-                        onPartDone: @escaping (String) -> Void = { _ in }) async throws {
+                        onPartDone: @escaping (String) -> Void = { _ in },
+                        onLanded: @escaping (String) -> Void = { _ in }) async throws {
         // Part i posts under storyIds[i] when given (`VideoStoryOutbox`); a part already landed is skipped.
         func partId(_ i: Int) -> String? { i < storyIds.count ? storyIds[i] : nil }
         let full = (try? await AVURLAsset(url: videoURL).load(.duration).seconds) ?? 0
@@ -2293,12 +2374,13 @@ final class StoriesService {
             }
             // Short enough to be one story: the ordinary path, no segmenting, no behaviour change.
             if let id = partId(0), done.contains(id) { return }
-            try await postVideoSegment(videoURL: videoURL, range: range, caption: caption, muted: muted, burn: burn,
+            let landedId = try await postVideoSegment(videoURL: videoURL, range: range, caption: caption, muted: muted, burn: burn,
                                        stickers: stickers,
                                        expiryHours: expiryHours, excluded: excluded,
                                        included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag,
                                        captureProtected: captureProtected, repostOf: repostOf,
                                        fixedId: partId(0), replaceExisting: replaceExisting)
+            onLanded(landedId)
             if let id = partId(0) { onPartDone(id) }
             return
         }
@@ -2317,7 +2399,7 @@ final class StoriesService {
             var lastError: Error?
             for attempt in 0..<3 {
                 do {
-                    try await postVideoSegment(videoURL: videoURL, range: range,
+                    let landedId = try await postVideoSegment(videoURL: videoURL, range: range,
                                                caption: i == 0 ? caption : "", muted: muted, burn: burn,
                                                // Only the FIRST segment of a long clip keeps them:
                                                // the tap areas were placed against one frame, and a
@@ -2329,6 +2411,7 @@ final class StoriesService {
                                                fixedId: partId(i),
                                                // A retry of the same part may find its own half-written doc.
                                                replaceExisting: replaceExisting || attempt > 0)
+                    onLanded(landedId)
                     if let id = partId(i) { onPartDone(id) }
                     lastError = nil
                     break
@@ -2361,7 +2444,7 @@ final class StoriesService {
                                   everyone: Bool, allowsReplies: Bool, tag: StoryAudienceTag,
                                   captureProtected: Bool = false,
                                   repostOf: StoryRepost? = nil,
-                                  fixedId: String? = nil, replaceExisting: Bool = false) async throws {
+                                  fixedId: String? = nil, replaceExisting: Bool = false) async throws -> String {
         let me = uid
         // A quiet `return` here read as SUCCESS to the background poster — see `PostRefusal.signedOut`.
         guard !me.isEmpty else { throw PostRefusal.signedOut }
@@ -2499,7 +2582,7 @@ final class StoriesService {
             if !copied {
             async let thumbPut: Void = {
                 let thumbMeta = StorageMetadata(); thumbMeta.contentType = "image/jpeg"
-                _ = try await thumbRef.putDataAsync(prepared.thumbnail, metadata: thumbMeta)
+                try await Self.putStoppable { thumbRef.putData(prepared.thumbnail, metadata: thumbMeta) }
             }()
             async let videoPut: Void = {
                 let videoMeta = StorageMetadata(); videoMeta.contentType = "video/mp4"
@@ -2511,9 +2594,9 @@ final class StoriesService {
                     .appendingPathComponent("story-up-\(UUID().uuidString).mp4")
                 if (try? prepared.data.write(to: file, options: .atomic)) != nil {
                     defer { try? FileManager.default.removeItem(at: file) }
-                    _ = try await videoRef.putFileAsync(from: file, metadata: videoMeta)
+                    try await Self.putStoppable { videoRef.putFile(from: file, metadata: videoMeta) }
                 } else {
-                    _ = try await videoRef.putDataAsync(prepared.data, metadata: videoMeta)
+                    try await Self.putStoppable { videoRef.putData(prepared.data, metadata: videoMeta) }
                 }
             }()
             _ = try await (thumbPut, videoPut)
@@ -2522,6 +2605,7 @@ final class StoriesService {
             async let tURL = thumbRef.downloadURL()
             async let vURL = videoRef.downloadURL()
             let (thumbUrl, videoUrl) = try await (tURL.absoluteString, vURL.absoluteString)
+            try Task.checkCancellation()   // the write below is what makes the story live
             // One atomic update: recipients' listeners either see the full story or nothing.
             try await docRef.updateData(["mediaUrl": videoUrl, "thumbUrl": thumbUrl])
             // The story is up: tell the people its caption mentions (`StoryMentions`).
@@ -2561,6 +2645,7 @@ final class StoriesService {
             try? await Storage.storage().reference().child(thumbPath).delete()
             throw error
         }
+        return storyId
     }
 
     /// ⚠️ WHO CAN SEE A STORY THAT IS ALREADY UP — the SAME story, never a new one.
