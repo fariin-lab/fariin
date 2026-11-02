@@ -545,11 +545,33 @@ final class ImageLoader: UIView {
         // Stored into `StoryMemoryCache` so the next arrival of this story takes the branch above,
         // and marked loaded because it IS the media, not a placeholder for it — the progress bar
         // should run.
-        if let warm = StoryPosterSource.provider?(validatedUrl) {
+        if let warm = StoryPosterSource.fullMedia?(validatedUrl) {
             showShimmer(false)
             StoryMemoryCache.store(warm, for: imageURL)
             apply(warm)
             imageIsLoaded()
+            return
+        }
+        // ⛔ THE CARD'S SMALL COPY IS A FIRST FRAME, NEVER THE MEDIA — owner, 2026-11-02: my story looks
+        // low quality when I come back to it, and sharp a few minutes later. Since 82c2e4dc the provider
+        // can answer with the Stories page card (1000px on its long side). This branch stored that as
+        // the finished picture and never asked for the real one, so the story stayed soft until
+        // `StoryMemoryCache` let it go. It goes up for the frame, is not stored, and the real file
+        // replaces it; the progress bar waits for the real file.
+        if let card = StoryPosterSource.provider?(validatedUrl) {
+            showShimmer(false)
+            apply(card)
+            let wanted = imageURL
+            Task { [weak self] in
+                if let ready = await StoryMemoryCache.decoded(for: wanted) {
+                    guard let self, self.imageURL == wanted else { return }
+                    self.apply(ready)
+                    imageIsLoaded()
+                    return
+                }
+                guard let self, self.imageURL == wanted else { return }
+                self.loadFromNetwork(wanted, imageIsLoaded: imageIsLoaded)
+            }
             return
         }
 

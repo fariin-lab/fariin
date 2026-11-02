@@ -896,11 +896,7 @@ enum StoryPhoto {
     static let canvasWidth: CGFloat = 1080
     /// The reference app's standard-quality budget, and for the same reason: a predictable upload
     /// on a phone that may be on one bar.
-    /// ⚠️ 3 MB, NOT THEIR 1.5 (owner 2026-11-02: "sometimes low quality, sometimes good"). A frame with
-    /// words is asked for at 1320 and quality 0.93, which does not fit 1.5 MB, so it fell down the
-    /// ladder to 900 or 720 wide while a plain photo stayed at 1080. Which one you got depended on
-    /// how busy the picture was.
-    static let budget = 3_000_000
+    static let budget = 1_500_000
     /// Fixed, like theirs. When a frame will not fit, pixels give way rather than quality — a
     /// smaller sharp picture beats a full-size mushy one.
     static let quality: CGFloat = 0.85
@@ -2475,7 +2471,7 @@ final class StoriesService {
                 else { ((try? await AVURLAsset(url: videoURL).load(.duration))?.seconds) ?? Double(Limits.storyVideoSeconds) }
             repostRate = min(750_000, 23_000_000 / max(1, min(seconds, Double(Limits.storyVideoSeconds))))
         }
-        guard let prepared = await VideoTranscoder.prepare(videoURL, maxSeconds: Double(Limits.storyVideoSeconds), stripAudio: muted, hd: true, range: range,
+        guard let prepared = await VideoTranscoder.prepare(videoURL, maxSeconds: Double(Limits.storyVideoSeconds), stripAudio: muted, hd: repostQuality, range: range,
                                                            overlay: burn?.overlay, cropRect: burn?.cropRect,
                                                            canvasAspect: burn?.canvasAspect,
                                                            contentScale: burn?.contentScale ?? 1,

@@ -58,6 +58,7 @@ struct KulanApp: App {
                         DiskImageCache.shared.memoryImage($0)
                             ?? DiskImageCache.shared.memoryImage("\($0)#\(Int(StoryImage.cardPixels))")
                     }
+                    StoryPosterSource.fullMedia = { DiskImageCache.shared.memoryImage($0) }
                     // ⛔ AND THE SAME CACHE FOR THE STORY HEADER'S AVATAR, for the same reason one
                     // level down. That view knew only `URLCache.shared`, which nothing else in this
                     // app writes to — so the profile picture the app had just seeded on disk when

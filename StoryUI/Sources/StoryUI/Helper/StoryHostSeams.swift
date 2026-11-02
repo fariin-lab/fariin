@@ -110,6 +110,8 @@ public enum StoryPosterSource {
     /// Must be synchronous and memory-only — it is called on the main thread on the frame a story
     /// opens, which is the whole point of it.
     public static var provider: ((String) -> UIImage?)?
+    /// The same, but only the full picture and never a card's small copy: safe to keep as the media.
+    public static var fullMedia: ((String) -> UIImage?)?
 }
 
 /// WHAT THE APP CALLS WHEN THE VIEWER IS GONE.
