@@ -625,6 +625,23 @@ extension StoryViewersPanelView: UITableViewDataSource, UITableViewDelegate {
         showingReplies ? filteredReplies.count : filtered.count
     }
 
+    /// ⛔ ONE HEIGHT FOR EVERY VIEWER (owner 2026-11-02: "the spaces between avatars are sometimes
+    /// small, sometimes big, why is the list moving"). Rows measured themselves after they appeared,
+    /// and each `reloadData` from a viewer arriving measured them again, so gaps differed and rows
+    /// shifted. Every viewer row is the same shape: the 46pt avatar plus 9pt above and below, grown
+    /// only for a larger text size. A reply's length varies, so replies still measure.
+    private static var viewerRowHeight: CGFloat {
+        max(64, UIFontMetrics(forTextStyle: .body).scaledValue(for: 64).rounded())
+    }
+
+    func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
+        showingReplies ? UITableView.automaticDimension : Self.viewerRowHeight
+    }
+
+    func tableView(_ tableView: UITableView, estimatedHeightForRowAt indexPath: IndexPath) -> CGFloat {
+        showingReplies ? 64 : Self.viewerRowHeight
+    }
+
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "viewer", for: indexPath)
         cell.backgroundColor = .clear
