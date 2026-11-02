@@ -21,6 +21,9 @@ struct ChatPinKeypad: View {
     /// keys stayed live: typing during a verify mutated the value being verified and wiped the
     /// refusal the moment it arrived. A keypad that accepts presses it will not act on is lying.
     var disabled: Bool = false
+    /// The empty bottom-left key becomes Paste (owner 2026-11-02: "add paste so users can paste a
+    /// copied key"). Off for choosing your own key, on for entering someone else's.
+    var allowsPaste: Bool = false
 
     private static let rows: [[String]] = [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["", "0", "⌫"]]
 
@@ -29,6 +32,9 @@ struct ChatPinKeypad: View {
             ForEach(Self.rows, id: \.self) { row in
                 HStack(spacing: 0) {
                     ForEach(row, id: \.self) { key in
+                        if key.isEmpty && allowsPaste {
+                            pasteKey
+                        } else {
                         Button { tap(key) } label: {
                             Group {
                                 if key == "⌫" {
@@ -55,10 +61,30 @@ struct ChatPinKeypad: View {
                         // than gone, so the sheet does not appear to lose its keys mid-request.
                         .opacity(key.isEmpty ? 0 : (disabled ? 0.35 : 1))
                         .accessibilityLabel(key == "⌫" ? "Delete" : key)
+                        }
                     }
                 }
             }
         }
+    }
+
+    /// Apple's own Paste button, so iOS does not ask "Allow Paste?" every time: the tap itself is the
+    /// permission. Whatever was copied ("482913", "Key: 482 913"), only its digits are kept, and only
+    /// a whole key is taken.
+    private var pasteKey: some View {
+        PasteButton(payloadType: String.self) { strings in
+            let digits = (strings.first ?? "").filter { ("0"..."9").contains($0) }
+            guard digits.count >= ChatPin.minDigits else { return }
+            Task { @MainActor in pin = String(digits.prefix(ChatPin.maxDigits)) }
+        }
+        .labelStyle(.titleOnly)
+        .buttonBorderShape(.capsule)
+        .tint(Color(.secondarySystemFill))
+        .foregroundStyle(Color(.label))
+        .disabled(disabled)
+        .opacity(disabled ? 0.35 : 1)
+        .frame(maxWidth: .infinity)
+        .frame(height: 60)
     }
 
     private func tap(_ key: String) {
@@ -263,7 +289,7 @@ struct ChatPinEntrySheet: View {
                     .padding(.top, 6)
                     .opacity(failure.isEmpty ? 0 : 1)
 
-                ChatPinKeypad(pin: $pin, disabled: busy || isLocked)
+                ChatPinKeypad(pin: $pin, disabled: busy || isLocked, allowsPaste: true)
                     .padding(.horizontal, 20)
                     .padding(.top, 4)
 
