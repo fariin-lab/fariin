@@ -512,15 +512,12 @@ struct ChatPinPage: View {
                     // ⚠️ ONLY ON "Set", NEVER ON "Change". This row is on screen for an account that
                     // has no key; somebody changing one has already been through this. That is also
                     // what makes a seen-flag unnecessary — the door is rare by construction.
-                    Button { explaining = true } label: {
-                        HStack {
-                            Spacer()
-                            Text("Get a Chat Key")
-                            if generating { ProgressView().padding(.leading, 6) }
-                            Spacer()
-                        }
-                    }
-                    .disabled(generating)
+                    //
+                    // ⛔ AND ONLY FROM THE KEY MODE (owner 2026-11-02): a key is created by choosing
+                    // "People who know my key" in Privacy › Messages and nowhere else, so this page's
+                    // other doors say where to go instead of making one.
+                    Text("To create a Chat Key, go to Settings › Privacy › Messages and choose People who know my key.")
+                        .foregroundStyle(.secondary)
                 }
             } header: {
                 Text(isSet ? "Your Chat Key" : "")

@@ -5176,7 +5176,11 @@ struct ChatRow: View, Equatable {
             // photo is still exactly 56. The LAYOUT SLOT is still a flat 56 (see the frame below) —
             // the ring simply overhangs it by one point all round, which is why the text column, the
             // row height and the margins do not move. That was his condition.
-            let photoSize: CGFloat = storySeen.isEmpty ? 56 : Self.ringedPhotoSide
+            // A channel's squircle draws at `SquircleShape.scale` of its box, and its ring the same, so
+            // both boxes grow by that much with a story up; otherwise the channel photo comes out
+            // visibly smaller than a round one (owner 2026-11-02).
+            let ringGrow: CGFloat = conv.isChannel ? 1 / SquircleShape.scale : 1
+            let photoSize: CGFloat = storySeen.isEmpty ? 56 : Self.ringedPhotoSide * ringGrow
             Group {
                 // The official channel has no account and therefore no profile photo to fetch: its
                 // face is the app's own mark, drawn from the bundle. Same 56pt footprint as every
@@ -5215,7 +5219,7 @@ struct ChatRow: View, Equatable {
                         // round and changes no layout; the one point it takes vertically comes out
                         // of the 12pt padding below and is not visible.
                         StoryRingView(seen: storySeen, lineWidth: 2, squircle: conv.isChannel)
-                            .frame(width: Self.ringedSide, height: Self.ringedSide)
+                            .frame(width: Self.ringedSide * ringGrow, height: Self.ringedSide * ringGrow)
                     }
                 }
                 // ⛔ DISAPPEARING MESSAGES ON = A TIMER ON THE PHOTO — owner, 2026-09-29, with the

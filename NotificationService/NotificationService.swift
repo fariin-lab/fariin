@@ -190,8 +190,32 @@ final class NotificationService: UNNotificationServiceExtension {
         interaction.direction = .incoming
         interaction.donate { _ in
             let updated = try? copy.updating(from: intent)
-            completion(updated ?? copy)
+            let done = updated ?? copy
+            // The story's own picture at the banner's right edge (owner 2026-11-02). The server sends
+            // `pv` only with Message Preview on, and a failed download leaves the plain banner.
+            guard isStory, let raw = info["pv"] as? String, let url = URL(string: raw), url.scheme == "https",
+                  let out = done.mutableCopy() as? UNMutableNotificationContent else { completion(done); return }
+            attachPreview(url, to: out) { completion($0) }
         }
+    }
+
+    /// Downloads the story's picture with a short limit and hangs it on the banner as an attachment.
+    /// iOS moves the file into its own store, so nothing is left behind here.
+    private static func attachPreview(_ url: URL, to content: UNMutableNotificationContent,
+                                      completion: @escaping (UNNotificationContent) -> Void) {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            guard let data, !data.isEmpty, data.count <= 10_000_000,
+                  (response as? HTTPURLResponse)?.statusCode == 200 else { completion(content); return }
+            let file = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString).appendingPathExtension("jpg")
+            guard (try? data.write(to: file)) != nil,
+                  let attachment = try? UNNotificationAttachment(identifier: "story", url: file, options: nil)
+            else { completion(content); return }
+            content.attachments = [attachment]
+            completion(content)
+        }.resume()
     }
 
     /// Captions travel in the message's text; the kind keeps its sign in front of them.

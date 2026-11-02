@@ -401,6 +401,9 @@ struct MessagesPrivacyPage: View {
     private var pinState = ChatPinState.shared
     /// The Choose-a-key sheet, raised by picking the key-only mode without one — see `choose`.
     @State private var settingKey = false
+    /// "Are you sure you want to remove your Chat Key?", raised by choosing Everyone — see `choose`.
+    @State private var confirmRemoveKey = false
+    @State private var removeKeyFailure: String?
 
     /// ⛔ THE KEY-ONLY MODE CANNOT BE CHOSEN WITHOUT A KEY — owner, 2026-09-11: "this is a major
     /// bug, I can select people who know my key without creating a chat key ... if I click go back,
@@ -428,8 +431,27 @@ struct MessagesPrivacyPage: View {
             explainingKey = true
             return
         }
+        // ⛔ LEAVING THE KEY MODE REMOVES THE KEY — owner, 2026-11-02. Nothing changes until Remove
+        // has succeeded on the server; Cancel leaves the key and the selection as they were.
+        if a == .everyone, privMessages == Audience.contacts.rawValue, ChatPin.isSet,
+           MsgPolicy.shared.chatKeyVisible {
+            confirmRemoveKey = true
+            return
+        }
         privMessages = a.rawValue
         PrivacyPrefs.setMine("messages", a)
+    }
+
+    private func removeKeyAndOpenUp() {
+        Task {
+            do {
+                try await ChatPin.remove()
+                privMessages = Audience.everyone.rawValue
+                PrivacyPrefs.setMine("messages", .everyone)
+            } catch {
+                removeKeyFailure = error.localizedDescription
+            }
+        }
     }
 
     /// EVERYONE IS THE DEFAULT, AND IT IS ALSO THE FALLBACK — his "and also for default select
@@ -515,7 +537,10 @@ struct MessagesPrivacyPage: View {
             // CHAT PIN — owner's spec, 2026-09-11. The private invitation that goes past both modes,
             // beside the setting it goes past, and also behind the Chats title menu (see MainShell).
             // owner 2026-10-18: gone while the admin panel hides the Chat Key (MsgPolicy).
-            if MsgPolicy.shared.chatKeyVisible {
+            // owner 2026-11-02: the card belongs to the key mode. An older account on Everyone that
+            // still holds a key keeps seeing it, because a live key must never be invisible.
+            if MsgPolicy.shared.chatKeyVisible
+                && (privMessages == Audience.contacts.rawValue || { let _ = pinState.version; return ChatPin.isSet }()) {
             Section {
                 NavigationLink { ChatPinPage() } label: {
                     HStack {
@@ -597,6 +622,14 @@ struct MessagesPrivacyPage: View {
                 PrivacyPrefs.setMine("messages", .contacts)
             }
         }
+        .alert("Are you sure you want to remove your Chat Key?", isPresented: $confirmRemoveKey) {
+            Button("Cancel", role: .cancel) {}
+            Button("Remove", role: .destructive) { removeKeyAndOpenUp() }
+        }
+        .alert("Couldn't remove your Chat Key", isPresented: Binding(
+            get: { removeKeyFailure != nil }, set: { if !$0 { removeKeyFailure = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(removeKeyFailure ?? "") }
         // Every visit, not the first: a key can be removed from another device while this page is
         // cached. See `healIfKeyless`.
         .task { await healIfKeyless() }

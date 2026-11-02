@@ -337,7 +337,12 @@ struct PostedStory: Identifiable, Equatable, Codable {
         var updated = rows
         var fresh: [String: Int] = [:]
         for (i, n) in counts.enumerated() {
-            guard let n else { continue }   // a failed read keeps the cached number rather than blanking it
+            guard let n else {
+                // A failed read keeps the cached number; with none, the tile still shows its icon and
+                // 0 (owner 2026-11-02). Not cached, so the next visit asks again.
+                if updated[i].views == nil { updated[i].views = 0 }
+                continue
+            }
             updated[i].views = n
             fresh[updated[i].id] = n
         }
