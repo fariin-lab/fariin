@@ -149,6 +149,7 @@ struct ChatImageEditor: View {
     @State private var canvasSize: CGSize = .zero
     @State private var bottomChromeH: CGFloat = ChatImageEditor.lastChromeH   // measured live from the actual bottom bars (toolbar heights queried at runtime)
     @FocusState private var captionFocused: Bool
+    @State private var captionTopY: CGFloat = 0
     @State private var chromeShown = false   // set true on appear; see chromeOverlay's opacity
 
     private static let ctx = CIContext()
@@ -228,9 +229,13 @@ struct ChatImageEditor: View {
             }
         }
         // Swipe DOWN anywhere on the canvas closes the keyboard (reads the drag without consuming it).
+        // Not from the caption (owner 2026-11-02): a selection handle dragged down there is the same
+        // drag. 36pt above the field covers the top handle's knob.
         .simultaneousGesture(
-            DragGesture(minimumDistance: 18)
-                .onChanged { g in if captionFocused, g.translation.height > 24 { captionFocused = false } }
+            DragGesture(minimumDistance: 18, coordinateSpace: .global)
+                .onChanged { g in
+                    if captionFocused, g.startLocation.y < captionTopY - 36, g.translation.height > 24 { captionFocused = false }
+                }
         )
         .onAppear {
             canvasSize = canvasArea(size)
@@ -597,6 +602,7 @@ struct ChatImageEditor: View {
                 }
                 .padding(.leading, 16).padding(.trailing, 4).frame(minHeight: 40)
                 .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
+                .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).minY }) { captionTopY = $0 }
                 Button { send() } label: {
                     Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
                         .frame(width: 40, height: 40)   // 40px send button (user spec)

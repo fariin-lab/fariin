@@ -138,6 +138,7 @@ struct MediaApprovalView: View {
     @State private var exporting = false
     @State private var sent = false   // see send()
     @FocusState private var captionFocused: Bool
+    @State private var captionTopY: CGFloat = 0
 
     // Per-VIDEO trim state, keyed by item id (each video trims independently).
     @State private var trimStart: [String: Double] = [:]
@@ -181,9 +182,13 @@ struct MediaApprovalView: View {
             }
         }
         // Swipe DOWN on the media closes the keyboard (reads the drag without consuming zoom/pan).
+        // Not from the caption (owner 2026-11-02): a selection handle dragged down there is the same
+        // drag. 36pt above the field covers the top handle's knob.
         .simultaneousGesture(
-            DragGesture(minimumDistance: 18)
-                .onChanged { g in if captionFocused, g.translation.height > 24 { captionFocused = false } }
+            DragGesture(minimumDistance: 18, coordinateSpace: .global)
+                .onChanged { g in
+                    if captionFocused, g.startLocation.y < captionTopY - 36, g.translation.height > 24 { captionFocused = false }
+                }
         )
         // Swiping to another page pauses everything (single-editor parity) and resets the video zoom/pan
         // so each page opens fit (zoomed out), never carrying the previous page's zoom.
@@ -396,6 +401,7 @@ struct MediaApprovalView: View {
                     .padding(.horizontal, 16).padding(.vertical, 9)
                     .frame(minHeight: 40)
                     .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
+                    .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).minY }) { captionTopY = $0 }
                 Button { send() } label: {
                     Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
                         .frame(width: 40, height: 40)   // 40px send (user spec)
