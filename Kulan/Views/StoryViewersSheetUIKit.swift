@@ -1181,6 +1181,9 @@ struct StoryViewerRowContent: View {
     var body: some View {
         HStack(spacing: 12) {
             AvatarView(name: viewer.name, photoUrl: viewer.photoUrl, size: 46)
+                // ⛔ ONE AVATAR PER PERSON (owner 2026-11-02: Salmo flashed test2's face). A reused row keeps
+                // this view and its loaded picture while the next person's photo loads; a new id starts clean.
+                .id(viewer.id)
                 .overlay(alignment: .bottomTrailing) {
                     // HIS REFERENCE DESIGN (2026-08-05 image): a soft rose disc riding the
                     // avatar's bottom-right corner with a WHITE heart glyph — bigger than the old
