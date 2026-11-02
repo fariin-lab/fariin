@@ -1929,7 +1929,14 @@ struct Conversation: Identifiable, Equatable, Hashable {
     func pinRank(_ me: String) -> Double { pinOrder[me] ?? displayUpdatedAt(me) }
     func isArchived(_ me: String) -> Bool { isFollower(me) ? followerArchived : (archivedBy[me] ?? false) }
     /// "delete for me" until a newer message arrives (parity with RN Db.isCleared).
-    func isCleared(_ me: String) -> Bool { updatedAtMillis <= (clearedAt[me] ?? 0) }
+    /// ⛔ NEVER FOR A GROUP I AM STILL IN (owner 2026-11-02): an owner hid her group from the list in
+    /// October, stayed its owner, and could not find it again anywhere, search included. Removing a
+    /// group from the list means leaving it (LeaveGroupAlert, ChatService.deleteChats), the way the
+    /// reference apps do; a group I am a member of always shows.
+    func isCleared(_ me: String) -> Bool {
+        if isGroup && users.contains(me) { return false }
+        return updatedAtMillis <= (clearedAt[me] ?? 0)
+    }
     /// My message is the most recent one — show delivery/read ticks for it in the list.
     func lastIsMine(_ me: String) -> Bool { !lastSender.isEmpty && lastSender == me }
     /// The other person has read my last message once their unread count hits 0.

@@ -4438,6 +4438,34 @@ enum ChatService {
         }
     }
 
+    /// The chat list's multi-select Delete. A group I am in is LEFT, as the single Delete does
+    /// (LeaveGroupAlert); hiding it would keep me a member of a group I can no longer see. Every
+    /// other chat is deleted for me as before.
+    static func deleteChats(_ ids: Set<String>) async {
+        let me = uid
+        let convs = await MainActor.run { ConversationsRepository.shared.conversations }
+        await withTaskGroup(of: Void.self) { g in
+            for id in ids {
+                let leaves = convs.first(where: { $0.id == id }).map { $0.isGroup && $0.users.contains(me) } ?? false
+                g.addTask {
+                    if leaves {
+                        do { try await leaveGroup(cid: id) }
+                        catch { await MainActor.run { ToastNotice.show("Couldn't leave a group. Try again.") } }
+                    } else {
+                        await deleteForMe(id)
+                    }
+                }
+            }
+        }
+    }
+
+    /// How many of these chats are groups I would leave, for the multi-select Delete's question.
+    @MainActor static func groupsLeftBy(_ ids: Set<String>) -> Int {
+        let me = uid
+        return ConversationsRepository.shared.conversations
+            .filter { ids.contains($0.id) && $0.isGroup && $0.users.contains(me) }.count
+    }
+
     /// "Delete for me" — hides the thread until a newer message arrives (clearedAt).
     static func deleteForMe(_ cid: String) async {
         if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.clearHistory(); return }

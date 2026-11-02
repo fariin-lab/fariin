@@ -2492,7 +2492,7 @@ struct ChatsView: View {
     }
     private func deleteSelected() {
         let ids = selection
-        Task { await withTaskGroup(of: Void.self) { g in for id in ids { g.addTask { await ChatService.deleteForMe(id) } } } }
+        Task { await ChatService.deleteChats(ids) }
         exitSelect()
     }
 
@@ -3544,6 +3544,10 @@ struct ChatsView: View {
                                 isPresented: $showDeleteSelected, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) { deleteSelected() }
                 Button("Cancel", role: .cancel) {}
+            } message: {
+                // A group is left, not hidden (owner 2026-11-02), so say so before it happens.
+                let n = ChatService.groupsLeftBy(selection)
+                if n > 0 { Text(n == 1 ? "You will leave the group you selected." : "You will leave the \(n) groups you selected.") }
             }
     }
 
@@ -4347,6 +4351,10 @@ struct ArchivedChatsView: View {
                                 isPresented: $showDeleteSelected, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) { deleteSelected() }
                 Button("Cancel", role: .cancel) {}
+            } message: {
+                // A group is left, not hidden (owner 2026-11-02), so say so before it happens.
+                let n = ChatService.groupsLeftBy(selection)
+                if n > 0 { Text(n == 1 ? "You will leave the group you selected." : "You will leave the \(n) groups you selected.") }
             }
             // Word for word the chat list's own delete alert — one question, asked the same way
             // wherever a chat can go.
@@ -4430,7 +4438,7 @@ struct ArchivedChatsView: View {
     }
     private func deleteSelected() {
         let ids = selection
-        Task { for id in ids { await ChatService.deleteForMe(id) } }
+        Task { await ChatService.deleteChats(ids) }
         exitSelect()
     }
 }
