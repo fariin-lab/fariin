@@ -5144,7 +5144,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // protect here; ours does, and a lockstep shift landing mid-glide would leave the glide
         // short of the newest message. Deceleration is NOT guarded any more — theirs writes through
         // it, and so does this.
-        guard didFirstLand, !sendAnimating, !programmaticScrollAnimating else { return }
+        // ⛔ A CHAT THAT IS ONLY A CARD NEVER "LANDS" (owner 2026-11-02, an empty channel: the card
+        // went under the keyboard, then sat high after it closed). The first land needs rows, so with
+        // none this gate kept the card still while the keyboard moved. It stays on the composer.
+        let cardOnly = currentIds.isEmpty && historyHeaderHost != nil
+        guard didFirstLand || cardOnly, !sendAnimating, !programmaticScrollAnimating else { return }
         // ⛔ AND A SEND THAT HAS STARTED BUT NOT LANDED — owner, 2026-08-26: "when I tap Send the
         // previous messages move down underneath the composer first, and only afterward does the
         // message list scroll back up".
@@ -5195,7 +5199,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // the menu closes and the keyboard comes back. In practice the two net out.
             // Chat #36: and marked owed, so it is paid when the menu ends (see `customMenuDidEnd`).
             noteOwedShift()
-        } else if wasScrolledToBottom {
+        } else if wasScrolledToBottom || cardOnly {
             // Theirs, verbatim: "If we were scrolled to the bottom, don't do any fancy math. Just
             // stay at the bottom."
             let bound = maxContentOffsetY
