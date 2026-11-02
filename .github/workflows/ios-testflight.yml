@@ -74,7 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: CRASH FIX WHEN OPENING CHATS.
+            THIS BUILD: STORY CANCEL, VIEWERS LIST, TEXT FIELDS.
+            Stories: the X on an uploading story really cancels it. The upload stops, and a story that had just gone live is removed.
+            Story viewers: the faces at the bottom of the list no longer overlap while you scroll.
+            Captions: dragging a text selection handle no longer closes the keyboard.
+            Chat box: long text keeps a margin on the right.
+            PLEASE TEST: press X at different moments of a photo, text and video story upload; scroll a long viewers list; select caption text by dragging down; type a long message.
+
+            EARLIER: CRASH FIX WHEN OPENING CHATS.
             Fixed the crash when opening a chat (the chat screen now uses four times less memory while it opens).
             PLEASE TEST: open many chats, groups and channels one after another.
 
