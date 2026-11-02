@@ -66,6 +66,7 @@ targets:
       - path: Shared/ScreenShareIPC.swift
       # owner 2026-10-18 readable banners: what the app and the notification extension share.
       - path: Shared/NotifShared.swift
+      - path: Shared/WidgetShared.swift
     info:
       path: Kulan/Info.plist
       properties:
