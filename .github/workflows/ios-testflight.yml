@@ -79,7 +79,10 @@ jobs:
             Stories: your own story no longer stays soft for minutes when you come back to it.
             Widgets: should now show chats and stories instead of grey bars. Open Fariin once, then remove the widget and add it again.
             Channel stories: new eye icon. Posted stories: view counts load more reliably.
-            PLEASE TEST: tap the emoji key in a story caption, add an emoji, write several lines and post; post a photo story, leave and come straight back; add both widgets.
+            Custom emoji reactions keep moving on messages and show on the channel's Reactions row.
+            Story viewers: a row no longer flashes another person's face.
+            Stories list: the page no longer scrolls behind the long-press menu while your finger is down.
+            PLEASE TEST: tap the emoji key in a story caption, add an emoji, write several lines and post; post a photo story, leave and come straight back; add both widgets; react with a custom emoji; open a viewers list; long-press a story and drag without lifting.
 
             EARLIER: HOME SCREEN WIDGETS, CHAT KEY, STORY FIXES.
             Widgets: Recent chats and Stories for your Home Screen, small and wide. Tap a person to open them.
