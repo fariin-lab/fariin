@@ -306,6 +306,7 @@ final class StoryViewersPanelView: UIView {
         // genuinely at its top, so the two never claim the same pixels.
         table.alwaysBounceVertical = true
         table.register(UITableViewCell.self, forCellReuseIdentifier: "viewer")
+        table.register(ViewerRowCell.self, forCellReuseIdentifier: "viewerRow")
         addSubview(table)
 
         loadingHost.safeAreaRegions = []   // laid out by frame; no screen-edge padding of its own
@@ -599,6 +600,32 @@ final class StoryViewersPanelView: UIView {
     }
 }
 
+// MARK: - Viewer row
+
+/// ⛔ A VIEWER ROW IGNORES THE PHONE'S SAFE AREA (owner 2026-11-02: the bottom avatars overlap while
+/// scrolling, with a fixed 64pt row). `UIHostingConfiguration` lays its SwiftUI inside the safe area,
+/// so a row sliding over the 34pt home bar had 30pt to centre in and its content rode 17pt up into
+/// the row above: his screenshot measures exactly that. The list keeps its own insets, so this host
+/// takes the row's full box, the way `loadingHost` already does.
+private final class ViewerRowCell: UITableViewCell {
+    private var host: UIHostingController<StoryViewerRowContent>?
+
+    func show(_ row: StoryViewerRowContent) {
+        if let host { host.rootView = row; return }
+        let h = UIHostingController(rootView: row)
+        h.safeAreaRegions = []
+        h.view.backgroundColor = .clear
+        contentView.addSubview(h.view)
+        host = h
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        host?.view.frame = contentView.bounds.insetBy(dx: 16, dy: 9)
+    }
+}
+
 // MARK: - Search field
 
 extension StoryViewersPanelView: UITextFieldDelegate {
@@ -643,17 +670,20 @@ extension StoryViewersPanelView: UITableViewDataSource, UITableViewDelegate {
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "viewer", for: indexPath)
-        cell.backgroundColor = .clear
-        cell.selectionStyle = .none
         if showingReplies {
+            let cell = tableView.dequeueReusableCell(withIdentifier: "viewer", for: indexPath)
+            cell.backgroundColor = .clear
+            cell.selectionStyle = .none
             return replyCell(cell, filteredReplies[indexPath.row])
         }
+        let cell = tableView.dequeueReusableCell(withIdentifier: "viewerRow", for: indexPath) as! ViewerRowCell
+        cell.backgroundColor = .clear
+        cell.selectionStyle = .none
         let v = filtered[indexPath.row]
         // SwiftUI for the row's CONTENTS only. The avatar, its hashed letter fallback and the
         // reaction badge already exist and already look right; rebuilding them in UIKit would only
         // be a chance for the two to drift apart.
-        cell.contentConfiguration = UIHostingConfiguration {
+        cell.show(
             StoryViewerRowContent(
                 viewer: v,
                 onSendMessage: { [weak self] in self?.onSendMessage?(v) },
@@ -677,10 +707,7 @@ extension StoryViewersPanelView: UITableViewDataSource, UITableViewDelegate {
                 isHidden: StoryAudienceStore.shared.isHidden(v.id),
                 // owner 2026-10-25: no "…" on a group story's viewers, the poster's own included.
                 // Nor on an official Fariin story's (owner 2026-10-27): nothing to hide or block there.
-                readOnly: viewersReadOnly || isGroupStory || OfficialStoryViews.rawId(storyId) != nil)
-        }
-        .margins(.horizontal, 16)
-        .margins(.vertical, 9)
+                readOnly: viewersReadOnly || isGroupStory || OfficialStoryViews.rawId(storyId) != nil))
         return cell
     }
 
