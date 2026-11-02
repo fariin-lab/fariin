@@ -1414,7 +1414,7 @@ final class StoriesService {
         final class Box: @unchecked Sendable {
             let lock = NSLock(); var done = false
             var cont: CheckedContinuation<Void, Error>?
-            func finish(_ result: Result<Void, Error>) {
+            func finish(_ result: Swift.Result<Void, Error>) {
                 lock.lock()
                 if done { lock.unlock(); return }
                 done = true
