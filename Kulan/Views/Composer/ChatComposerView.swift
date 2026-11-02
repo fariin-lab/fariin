@@ -23,7 +23,7 @@ final class ChatComposerView: UIView {
         static let button: CGFloat = 40          // every round button, and the pill's resting height
         static let gap: CGFloat = 8              // "+" → pill and pill → send
         static let pillRadius: CGFloat = 20
-        static let fieldInsets = UIEdgeInsets(top: 9, left: 14, bottom: 9, right: 0)
+        static let fieldInsets = UIEdgeInsets(top: 9, left: 14, bottom: 9, right: 14)
         static let fieldFont = UIFont.systemFont(ofSize: 17)
         static let maxLines = 6
         static let inPillSpacing: CGFloat = 3    // field · GIF · mic (owner 2026-08-22: 3, down from 4)
@@ -1981,7 +1981,8 @@ final class ComposerTextView: UITextView {
         super.init(frame: .zero, textContainer: nil)
         font = .systemFont(ofSize: 17)
         backgroundColor = .clear
-        textContainerInset = UIEdgeInsets(top: 9, left: 14, bottom: 9, right: 0)
+        // 14 on BOTH sides (owner 2026-11-02: long text touched the field's right edge).
+        textContainerInset = UIEdgeInsets(top: 9, left: 14, bottom: 9, right: 14)
         textContainer.lineFragmentPadding = 0
         isScrollEnabled = false
         showsHorizontalScrollIndicator = false
