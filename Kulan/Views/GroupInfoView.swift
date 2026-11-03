@@ -790,9 +790,17 @@ struct GroupInfoView: View {
             // (`StoryPostFlight`, `groupCircleKey`).
             // A channel's photo is the squircle, so its story lands as one (owner 2026-10-30: it
             // landed as a circle): about a third of the drawn side, as `StoryCameraDoor` lands it.
+            // ⛔ THE RECT IS THE SQUIRCLE'S, NOT THE BOX'S (owner 2026-11-03: closing a channel story
+            // here left black blocks round the photo). A channel photo draws its squircle at
+            // `SquircleShape.scale` of its 132pt box, so the box has a ~4pt band of page all round.
+            // Reported at the box, the story landed 8pt too big and the close's picture of the photo
+            // (`renderBehindCover`) took that black band in with it. Measured at the drawn side, both
+            // fit the photo itself.
+            .frame(width: Self.drawnSide(isChannel), height: Self.drawnSide(isChannel))
             .modifier(MediaRectReporter(id: fromStory ? "" : "groupcircle-\(cid)", scope: .storyRow,
-                                        cornerRadius: isChannel ? Self.photoSide * SquircleShape.scale * 0.34
+                                        cornerRadius: isChannel ? Self.drawnSide(true) * 0.34
                                                                 : Self.photoSide / 2))
+            .frame(width: Self.photoSide, height: Self.photoSide)
             // ⛔ THE GROUP'S STORIES RING ITS PHOTO (owner 2026-10-23: "when the upload completes the
             // story is not appearing"; they were only in the Stories row). The same ring as a person's
             // page, one arc per story, seen ones grey; a tap on the photo opens them.
@@ -816,6 +824,10 @@ struct GroupInfoView: View {
     }
     /// The person profile's no-photo slot (ContactInfoView, 132pt).
     private static let photoSide: CGFloat = 132
+    /// The side of what is actually drawn: a channel's squircle fills `SquircleShape.scale` of the box.
+    private static func drawnSide(_ squircle: Bool) -> CGFloat {
+        squircle ? photoSide * SquircleShape.scale : photoSide
+    }
 
     /// The description with its links and @usernames in blue (the text's own grey would win over
     /// the tint otherwise).

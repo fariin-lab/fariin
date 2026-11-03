@@ -957,7 +957,11 @@ enum MessageRowLayout {
             let captioned = plan.mediaPlan?.caption != nil || plan.albumPlan?.caption != nil
             let inside = (plan.mediaPlan == nil && plan.albumPlan == nil) || captioned
 
-            let shown = Array(b.reactions.prefix(3))
+            // ⛔ EVERY REACTION, NO "+n" (owner 2026-11-03, a channel post with 5 showing 3 and "+2",
+            // beside the reference app's post with twelve). Inside a bubble the pills wrap onto as
+            // many rows as they need. Only the small badge hanging off a bare picture keeps the cap:
+            // it is one row on the wallpaper and has nowhere to wrap to.
+            let shown = inside ? b.reactions : Array(b.reactions.prefix(3))
             let extra = b.reactions.count - shown.count
             var chips: [(NSAttributedString, Bool, [ReactionFace])] = shown.map { chip in
                 // The channel's "add a reaction" chip: a smiling face and a small plus, real symbols.
@@ -1047,7 +1051,27 @@ enum MessageRowLayout {
                 // pills now sit the same distance off the bottom edge as the words sit off the top.
                 // The bubble gets its padding back instead of the strip eating it.
                 let gapBelow: CGFloat = 6   // theirs: 6 less a pixel under the row
-                let stripH = gapAbove + height + gapBelow
+
+                // The pills flow left to right and start a new row when the next one would not fit
+                // in the widest the bubble may be. `rowW` is each row's own width.
+                let rowGap: CGFloat = 6
+                let maxRowW = max(0, (captioned ? plan.bubble.width : columnW) - padH * 2)
+                var rows: [[Int]] = [[]]
+                var rowW: [CGFloat] = [0]
+                for (i, w) in widths.enumerated() {
+                    let r = rows.count - 1
+                    if rows[r].isEmpty {
+                        rows[r].append(i); rowW[r] = w
+                    } else if rowW[r] + BubbleMetrics.reactionChipGap + w > maxRowW {
+                        rows.append([i]); rowW.append(w)
+                    } else {
+                        rows[r].append(i); rowW[r] += BubbleMetrics.reactionChipGap + w
+                    }
+                }
+                let lastRowW = rowW.last ?? 0
+                let widestRow = rowW.max() ?? 0
+                let rowsH = CGFloat(rows.count) * height + CGFloat(rows.count - 1) * rowGap
+                let stripH = gapAbove + rowsH + gapBelow
 
                 // ⛔ THE FOOTER JOINS THE REACTION ROW WHEN IT FITS — the reference app's rule
                 // (its status node: `currentRowWidth + layoutSize.width > constrainedSize.width`
@@ -1067,7 +1091,8 @@ enum MessageRowLayout {
                 // `MessageRowView` places the one footer label from it), so a reaction added a whole
                 // row under a time that already had a row to itself. It joins the pills now, against
                 // the picture's own width, because a captioned bubble may not widen past its picture.
-                let fitsOnRow = padH + total + metaW + padH <= (captioned ? plan.bubble.width : columnW)
+                // The time joins the LAST row of pills when it fits there.
+                let fitsOnRow = padH + lastRowW + metaW + padH <= (captioned ? plan.bubble.width : columnW)
                 // ⛔ A FILE'S TIME ROW IS THE SAME KIND OF ROW — owner, 2026-10-03, a reacted zip: the
                 // time sat alone under the file and the pills hung below it, a whole empty band
                 // between. A file bubble has no text, so it never counted as a text row here; its
@@ -1096,7 +1121,7 @@ enum MessageRowLayout {
                 grown.size.height += stripH
 
                 // Widen only if it must, and never past the column the bubble was measured against.
-                let need = padH + total + (metaJoins ? metaW : 0) + padH
+                let need = padH + max(widestRow, lastRowW + (metaJoins ? metaW : 0)) + padH
                 if need > grown.width {
                     let want = min(need, columnW)
                     let delta = want - grown.width
@@ -1118,7 +1143,7 @@ enum MessageRowLayout {
                 if metaJoins {
                     plan.metaOnOwnLine = true
                     plan.meta.origin.x = grown.width - padH - plan.meta.width
-                    plan.meta.origin.y = grown.height - stripH + gapAbove + (height - plan.meta.height) / 2
+                    plan.meta.origin.y = grown.height - gapBelow - height + (height - plan.meta.height) / 2
                 }
 
                 // ⛔ THE SAME SIDE ON BOTH — owner, 2026-09-23, shown the two side by side and asked
@@ -1137,16 +1162,21 @@ enum MessageRowLayout {
                 // edge, which `gapBelow` above now fixes. Two faults in one screenshot, and the
                 // alignment change was my wrong guess at the first of them.
                 plan.reactionsOnMyBubble = b.isMe
-                var cx = grown.minX + padH
                 // Sat on `gapBelow` rather than centred in the band. Centring split the two gaps
-                // evenly, which is how a deliberate 2 above and 10 below became 6 and 6.
-                let cy = grown.maxY - gapBelow - height
-                for (i, w) in widths.enumerated() {
-                    plan.reactions.append(CGRect(x: cx, y: cy, width: w, height: height))
-                    plan.reactionAttrs.append(chips[i].0)
-                    plan.reactionMine.append(chips[i].1)
-                    plan.reactionFaces.append(chips[i].2)
-                    cx += w + BubbleMetrics.reactionChipGap
+                // evenly, which is how a deliberate 2 above and 10 below became 6 and 6. The last row
+                // sits there; earlier rows stack above it.
+                let lastY = grown.maxY - gapBelow - height
+                for (r, row) in rows.enumerated() {
+                    var cx = grown.minX + padH
+                    let cy = lastY - CGFloat(rows.count - 1 - r) * (height + rowGap)
+                    for i in row {
+                        let w = widths[i]
+                        plan.reactions.append(CGRect(x: cx, y: cy, width: w, height: height))
+                        plan.reactionAttrs.append(chips[i].0)
+                        plan.reactionMine.append(chips[i].1)
+                        plan.reactionFaces.append(chips[i].2)
+                        cx += w + BubbleMetrics.reactionChipGap
+                    }
                 }
                 // The bubble is taller now, so the row's bottom is its bottom. No overhang is
                 // reserved, because nothing hangs any more.

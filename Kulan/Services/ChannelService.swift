@@ -688,7 +688,13 @@ final class ChannelFollows {
                     if self.docs.removeValue(forKey: cid) != nil { self.queueListRebuild() }
                     return
                 }
-                self.docs[cid] = Conversation(id: cid, data: data)
+                let c = Conversation(id: cid, data: data)
+                self.docs[cid] = c
+                // ⛔ THE CHANNEL'S WALLPAPER REACHES ITS FOLLOWERS (owner 2026-11-03: "when I set a
+                // wallpaper users can't see it"). Shared wallpapers were only read off the chat
+                // list's own feed, and a follower is not in `users`, so a followed channel arrives
+                // only through here and its wallpaper was never handed on.
+                WallpaperStore.shared.syncGroupWallpapers([c])
                 self.queueListRebuild()
             }
     }

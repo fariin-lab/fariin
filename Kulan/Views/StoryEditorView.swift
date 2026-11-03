@@ -84,6 +84,8 @@ final class KeyboardWatcher: ObservableObject {
                 // The emoji key's freeze leaves no clue behind (owner 2026-11-02): this shows whether the
                 // keyboard is flipping between two frames. Every event for the first 60, then each 200th.
                 self.frameEvents += 1
+                // Send the log at the next launch even if this session freezes and is killed.
+                if self.frameEvents == 1 { DiagLog.flagForUpload(after: 30) }
                 if self.frameEvents <= 60 || self.frameEvents % 200 == 0 {
                     DiagLog.add("KBD# n=\(self.frameEvents) y=\(Int(f.origin.y)) h=\(Int(f.height)) "
                                 + "mode=\(UITextInputMode.activeInputModes.first?.primaryLanguage ?? "?")")
@@ -583,7 +585,12 @@ struct StoryEditorView: View {
     /// edge to just above the keys, about 70pt — was being animated at `.easeOut(0.25)` beside it.
     /// Two motions of one bar on two curves is his "not smooth". The watcher now carries the
     /// notification's duration and curve so the second motion can be run on the first one's clock.
-    @StateObject private var keyboard = KeyboardWatcher()
+    /// ⛔ HELD, NOT OBSERVED (owner 2026-11-03, build 1096: the emoji key still froze the editor with
+    /// the caption already a `UITextView`). The watcher announces every keyboard frame from INSIDE the
+    /// keyboard window's own layout (`queue: nil`), and as a `@StateObject` each announcement rebuilt
+    /// this whole editor right there. Only the clock is read, at the moment focus flips, so nothing
+    /// here needs to hear about a new keyboard height.
+    @State private var keyboard = KeyboardWatcher()
     // Adaptive control contrast: dark icons over a light photo region, light over dark (so buttons are
     // never invisible on a white background). Sampled per-region (top = X, bottom = tools).
     @State private var topIconDark = false
