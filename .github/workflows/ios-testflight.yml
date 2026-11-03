@@ -74,7 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: EMOJI KEY, SHARP STORIES, WIDGET FIX.
+            THIS BUILD: EMOJI KEY AGAIN, ALL REACTIONS, CHANNEL STORY CLOSE, CHANNEL WALLPAPER.
+            Story caption: the editor no longer redraws itself on every keyboard size change (the emoji key froze it). If it still freezes, open the app again so the log is sent.
+            Channel posts: every reaction shows, wrapping onto more lines; no "+2".
+            Channel profile: closing a story lands on the squircle photo with no black blocks.
+            Channel wallpaper: followers now see the wallpaper the channel sets.
+            PLEASE TEST: emoji key in a story caption; a post with 5+ reactions; close a channel story from its profile; set a channel wallpaper and check on a follower's phone.
+
+            EARLIER: EMOJI KEY, SHARP STORIES, WIDGET FIX.
             Story caption: the box was rebuilt, because the emoji key was still freezing the app.
             Stories: your own story no longer stays soft for minutes when you come back to it.
             Widgets: should now show chats and stories instead of grey bars. Open Fariin once, then remove the widget and add it again.
