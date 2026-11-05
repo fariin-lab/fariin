@@ -271,7 +271,7 @@ struct ShareStorySheet: View {
     /// one audience between posts (the first-ticked list), because "which lists went together" is a
     /// property of a post, not a setting. Empty = the store's single selection rules, as always.
     @State private var multiCustom: Set<String> = []
-    /// GROUP STORY (owner 2026-10-23): picked from New Group Story here, or handed in by the camera
+    /// GROUP STORY (owner 2026-10-23): picked from Groups & Channels here, or handed in by the camera
     /// opened for a group (`GroupStoryCompose`). Either way the sheet becomes `groupBody`.
     @State private var pickedGroup: GroupStoryTarget?
     @State private var groupPicking = false

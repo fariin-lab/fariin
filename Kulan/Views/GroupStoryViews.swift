@@ -5,7 +5,7 @@ import SwiftUI
 // A group story is an ordinary story with `groupId` on it, delivered to the group's members and
 // shown to them in a ring of the group's own. Who may post: the owner, and admins while the owner
 // leaves "Allow Admins to Add Story" on (`GroupStoryRights`, enforced by firestore.rules
-// `groupStoryOK`). Three doors lead in: New Group Story in the + New menu, the + on the group page,
+// `groupStoryOK`). Three doors lead in: Groups & Channels in the + New menu, the + on the group page,
 // and the + New menu on Settings > Stories. All of them end on the same camera and editor; only the
 // last sheet differs (`ShareStorySheet.groupBody`).
 
@@ -46,15 +46,23 @@ enum GroupStoryCompose {
     static func end() { target = nil }
 }
 
-/// NEW GROUP STORY: the groups I may post a story in. From the live chat list; the post itself
-/// re-reads the group from the server before it goes (`StoriesService.groupStoryAudience`).
+/// GROUPS & CHANNELS (owner 2026-11-05): the one + New item that replaced New Group Story. Two
+/// tabs, Groups and Channels, over the same list New Group Story offered: `GroupStoryRights`, the
+/// app's copy of firestore.rules `groupStoryOK`/`groupPoster` (owner, or an admin holding the
+/// postStories right; channels count followers). A pick of either kind goes down the same group
+/// story path (`ShareStorySheet.groupBody` -> `postToGroup`), which already posts a channel story.
+/// The post itself re-reads the group from the server before it goes (`StoriesService.groupStoryAudience`).
 struct GroupStoryPicker: View {
     let onPick: (GroupStoryTarget) -> Void
     let onCancel: () -> Void
 
-    @State private var repo = ConversationsRepository.shared
+    enum Tab: Hashable { case groups, channels }
 
-    private var groups: [Conversation] {
+    @State private var repo = ConversationsRepository.shared
+    @State private var tab: Tab = .groups
+    @State private var tabChosen = false
+
+    private var eligible: [Conversation] {
         _ = repo.conversations   // observed, so a promotion or a new group shows up while open
         return GroupStoryRights.eligibleGroups()
             .sorted { $0.displayName(me).localizedCaseInsensitiveCompare($1.displayName(me)) == .orderedAscending }
@@ -62,17 +70,21 @@ struct GroupStoryPicker: View {
     private var me: String { AuthService.shared.uid ?? "" }
 
     var body: some View {
+        let all = eligible
+        let shown = all.filter { tab == .channels ? $0.isChannel : !$0.isChannel }
         NavigationStack {
             List {
-                if groups.isEmpty {
+                if shown.isEmpty {
                     Section {
-                        Text("You can post a group story in groups you own, or where you're an admin and the owner allows it.")
+                        Text(tab == .channels
+                             ? "You can post a story in channels you own, or where you're an admin who may post stories."
+                             : "You can post a group story in groups you own, or where you're an admin and the owner allows it.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                 } else {
                     Section {
-                        ForEach(groups) { c in
+                        ForEach(shown) { c in
                             Button { onPick(GroupStoryTarget(c)) } label: {
                                 GroupStoryRow(name: c.displayName(me), photoUrl: c.displayPhoto(me),
                                               members: c.isChannel ? c.subscriberCount : c.users.count,
@@ -81,9 +93,8 @@ struct GroupStoryPicker: View {
                             .buttonStyle(.plain)
                         }
                     } footer: {
-                        // Channels are on the list too (owner 2026-10-30): their followers see it.
-                        Text(groups.contains(where: \.isChannel)
-                             ? "Members of the group you pick can see the story. On a channel, its followers can."
+                        Text(tab == .channels
+                             ? "The followers of the channel you pick can see the story."
                              : "Only the members of the group you pick can see the story.")
                     }
                 }
@@ -91,11 +102,28 @@ struct GroupStoryPicker: View {
             // owner 2026-10-27: the big gap above the card, same spacing as Group Settings.
             .listSectionSpacing(20)
             .contentMargins(.top, 12, for: .scrollContent)
-            .navigationTitle("New Group Story")
+            .navigationTitle("Groups & Channels")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { onCancel() } label: { Image(systemName: "xmark") }
+                }
+                // The system segmented control in the principal slot, as the Add Story sheet has it.
+                ToolbarItem(placement: .principal) {
+                    Picker("", selection: Binding(get: { tab },
+                                                  set: { tab = $0; tabChosen = true })) {
+                        Text("Groups").tag(Tab.groups)
+                        Text("Channels").tag(Tab.channels)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 220)
+                }
+            }
+            // Someone who runs only channels lands on Channels rather than an empty Groups tab.
+            .onAppear {
+                guard !tabChosen else { return }
+                if !all.contains(where: { !$0.isChannel }) && all.contains(where: \.isChannel) {
+                    tab = .channels
                 }
             }
         }
