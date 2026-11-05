@@ -1876,6 +1876,23 @@ struct StoryViewer: View {
 
     private var reconcileSignature: [String] { groups.flatMap { [$0.id] + $0.stories.map(\.id) } }
 
+    /// The header's tick. Fariin is not in the index; its badge is the official setting
+    /// (2026-10-16). ⛔ A GROUP OR CHANNEL RING ("g:" + conversation id) is not a person, so the
+    /// person index never knew it and a verified channel's story showed no badge (owner
+    /// 2026-11-05): its badge is the conversation's own, as the chat list shows it.
+    @MainActor private static func storyBadge(_ g: StoryGroup) -> (on: Bool, gold: Bool) {
+        if OfficialChannel.isOfficial(g.authorUid) {
+            return (OfficialConfig.shared.badge != .none, OfficialConfig.shared.badge == .gold)
+        }
+        if let cid = g.groupConvId {
+            // A channel I follow is not a member's chat: its document lives in `ChannelFollows`.
+            let conv = ConversationsRepository.shared.conversations.first { $0.id == cid }
+                ?? ChannelFollows.shared.conversations.first { $0.id == cid }
+            return (conv?.showsGroupBadge == true, conv?.groupVerifiedType?.isGold == true)
+        }
+        return (VerificationIndex.isVerified(g.authorUid), VerificationIndex.of(g.authorUid)?.kind?.isGold == true)
+    }
+
     private var models: [StoryUIModel] {
         groups.map { g in
             StoryUIModel(
@@ -1885,13 +1902,8 @@ struct StoryViewer: View {
                 // the app reads), so the story header cannot disagree with the chat list about who
                 // is verified.
                 user: StoryUIUser(id: g.authorUid, name: g.name, image: g.photoUrl ?? "",
-                                  // Fariin is not in the index; its badge is the official setting (2026-10-16).
-                                  isVerified: OfficialChannel.isOfficial(g.authorUid)
-                                      ? OfficialConfig.shared.badge != .none
-                                      : VerificationIndex.isVerified(g.authorUid),
-                                  isGoldVerified: OfficialChannel.isOfficial(g.authorUid)
-                                      ? OfficialConfig.shared.badge == .gold
-                                      : VerificationIndex.of(g.authorUid)?.kind?.isGold == true),
+                                  isVerified: Self.storyBadge(g).on,
+                                  isGoldVerified: Self.storyBadge(g).gold),
                 isMine: g.isMine,   // drives the "…" menu: my story shows Delete, others show Hide Stories
                 hasOwnerBar: Self.hasOwnerBar(g),   // owner and admins of a group (owner 2026-10-25)
                 stories: g.stories.map { s in

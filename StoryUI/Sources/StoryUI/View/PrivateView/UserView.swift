@@ -45,13 +45,13 @@ struct UserView: View {
     @ViewBuilder private var verifiedTick: some View {
         if isVerified {
             Image(systemName: "checkmark.seal.fill")
-                // The app's one badge blue and weight (`VerifiedMark` in the app, owner 2026-10-13).
+                // ⛔ WHITE HERE, AND ONLY HERE (owner 2026-11-05, the reference photo app's story
+                // header): a white seal with the check cut out, for people, groups and channels,
+                // gold included. Every other badge in the app keeps its blue / gold.
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white, isGoldVerified
-                                 ? Color(red: 0xE8 / 255.0, green: 0xB2 / 255.0, blue: 0x1E / 255.0)
-                                 : Color(red: 0x23 / 255.0, green: 0x92 / 255.0, blue: 0xFE / 255.0))
-                .symbolRenderingMode(.palette)
-                .accessibilityLabel("Verified")
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(.white)
+                .accessibilityLabel(isGoldVerified ? "Verified business" : "Verified")
         }
     }
 
