@@ -219,6 +219,11 @@ struct AddStorySheet: View {
             // story arrives here already rendered and goes straight to the audience sheet.
             onTextStory: { d, taps in shareTextStory = StoryShareData(data: d, stickers: taps) },
             onLibrary: { showLibrary = true })
+        // ⛔ NOT FOLLOWING THE KEYBOARD WHILE AN EDITOR COVERS IT (owner 2026-11-05, build 1098 crash:
+        // the emoji key froze the story editor inside the keyboard's tracking pass). Screens under a
+        // full-screen cover are still laid out by that pass; one that follows the keyboard gives it
+        // frames to animate that nobody can see. The camera keeps its keyboard for its own text mode.
+        .ignoresSafeArea(.keyboard, edges: (editorImage != nil || editorVideo != nil || showLibrary) ? .bottom : [])
         // These two are the CAMERA's editors. A photo taken here closes back to the camera, which is
         // where it was taken. The library has its own pair, presented from the library itself.
         .fullScreenCover(item: $editorImage) { item in
@@ -246,6 +251,8 @@ struct AddStorySheet: View {
                 onImage: { ui, id in openLibraryImage(ui, assetID: id) },
                 onVideo: { url, id in openLibraryVideo(url, assetID: id) },
                 flyScope: .story)
+            // No text field on the picker, and the editor it presents types over it: see above.
+            .ignoresSafeArea(.keyboard)
             .fullScreenCover(item: $libraryEditorImage) { item in
                 StoryEditorView(source: item.image, onPosted: { onPosted(); closeAfterPost() },
                                 sourceAssetID: item.assetID,

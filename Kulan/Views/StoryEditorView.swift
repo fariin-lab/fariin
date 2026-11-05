@@ -2525,13 +2525,15 @@ struct StoryEditorView: View {
     /// the keyboard, never moves a pixel.
     /// How far the keyboard covers the screen above the home-indicator area. See `captionLayer`.
     private func liftCaption(for n: Notification) {
-        var lift: CGFloat = 0
-        if n.name != UIResponder.keyboardWillHideNotification,
-           let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue {
-            let win = UIApplication.shared.connectedScenes
-                .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
-            let screenH = win?.bounds.height ?? UIScreen.main.bounds.height
-            lift = max(0, screenH - f.origin.y - (win?.safeAreaInsets.bottom ?? 0))
+        let lift = Self.keyboardLift(n)
+        // ⛔ AN OPEN KEYBOARD THAT ONLY CHANGES HEIGHT MOVES NOTHING UNTIL IT HAS SETTLED (owner
+        // 2026-11-05, build 1098 crash Kulan-2026-11-05-211049: still frozen on the emoji key). His log
+        // shows show and hide were fine and the freeze came on 347 -> 399, the emoji keys. The crash
+        // stack is SwiftUI piling animations onto one frame inside the keyboard's own tracking pass.
+        // So for a resize of a keyboard already up, `willChange` does nothing and `didChange` (below,
+        // `settleCaption`) places the bar once, unanimated, after the keyboard is done.
+        if n.name == UIResponder.keyboardWillChangeFrameNotification, captionKeyboardLift > 0, lift > 0 {
+            return
         }
         let d = (n.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
         let c = (n.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.uintValue ?? 7
@@ -2542,6 +2544,28 @@ struct StoryEditorView: View {
             guard abs(captionKeyboardLift - lift) > 0.5 else { return }
             withAnimation(anim) { captionKeyboardLift = lift }
         }
+    }
+
+    /// The resize of an open keyboard, applied once it has finished, with no animation (see above).
+    private func settleCaption(for n: Notification) {
+        let lift = Self.keyboardLift(n)
+        guard captionKeyboardLift > 0, lift > 0 else { return }
+        DispatchQueue.main.async {
+            guard abs(captionKeyboardLift - lift) > 0.5 else { return }
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { captionKeyboardLift = lift }
+        }
+    }
+
+    /// How far the keyboard in `n` covers the screen above the home-indicator area; 0 for a hide.
+    private static func keyboardLift(_ n: Notification) -> CGFloat {
+        guard n.name != UIResponder.keyboardWillHideNotification,
+              let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+        else { return 0 }
+        let win = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+        let screenH = win?.bounds.height ?? UIScreen.main.bounds.height
+        return max(0, screenH - f.origin.y - (win?.safeAreaInsets.bottom ?? 0))
     }
 
     private var captionLayer: some View {
@@ -2624,6 +2648,9 @@ struct StoryEditorView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { n in
             liftCaption(for: n)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidChangeFrameNotification)) { n in
+            settleCaption(for: n)
         }
         // Trash owns the bottom while dragging text. The Aa editor takes it too, but only once its
         // keyboard is standing over this bar rather than the instant it opens — see `textToolBarsDown`.
