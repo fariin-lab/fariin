@@ -3,8 +3,9 @@ import SwiftUI
 /// ⛔ SETTINGS SEARCH, FROM THE SETTINGS PAGE'S OWN SEARCH BUTTON — owner 2026-10-13, with the
 /// reference's screen: the search field at the top with a round X beside it, the keyboard up, and
 /// every settings page listed underneath, the pages that live inside another page carrying that
-/// page's name under their own ("Two-step verification / Account"). Typing narrows the list by title
-/// or by the words people type for it (`SettingsIndex`, the same list the app-wide search reads).
+/// page's name under their own ("Two-step verification / Account"). Typing searches every setting,
+/// rows and toggles inside the pages included (`SettingsIndex`, the same list the app-wide search
+/// reads), and a tap opens the page that holds it.
 struct SettingsSearchPage: View {
     var onSignOut: () -> Void
     @Environment(\.dismiss) private var dismiss
@@ -18,7 +19,7 @@ struct SettingsSearchPage: View {
             VStack(spacing: 0) {
                 searchBar
                 List(results) { e in
-                    NavigationLink { e.dest } label: { row(e) }
+                    SettingsIndexResultRow(entry: e)
                         .listRowBackground(Color.clear)
                 }
                 .listStyle(.plain)
@@ -41,8 +42,13 @@ struct SettingsSearchPage: View {
     private var searchBar: some View {
         HStack(spacing: 10) {
             HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search", text: $query)
+                // owner 2026-11-05: the typed words and the placeholder were hard to read on the glass,
+                // in dark mode and in light. The system label colours, set outright, so nothing
+                // inherited from the page can wash them out.
+                Image(systemName: "magnifyingglass").foregroundStyle(Color(uiColor: .secondaryLabel))
+                TextField("Search", text: $query,
+                          prompt: Text("Search").foregroundStyle(Color(uiColor: .secondaryLabel)))
+                    .foregroundStyle(Color(uiColor: .label))
                     .focused($focused)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -72,22 +78,5 @@ struct SettingsSearchPage: View {
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 6)
-    }
-
-    /// A top-level page wears its icon; a page inside another page has no icon and its parent's name
-    /// beneath. 2026-10-18 (owner): no empty icon column in front of it any more, the words start at
-    /// the row's edge.
-    @ViewBuilder private func row(_ e: SettingsIndex.Entry) -> some View {
-        if let parent = e.parent {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(e.title).font(.body)
-                Text(parent).font(.footnote).foregroundStyle(.secondary)
-            }
-            .padding(.vertical, 2)
-        } else if e.system {
-            SettingsRowLabel(e.title, system: e.icon)
-        } else {
-            SettingsRowLabel(e.title, e.icon)
-        }
     }
 }

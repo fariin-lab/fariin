@@ -624,93 +624,7 @@ struct ContactsSearchView: View {
 
 // MARK: - Settings search
 
-/// Every settings page, searchable by its title and a few words people type for it. Used by the
-/// settings search page and by the Settings sheet's own search bar, so the two never disagree.
-enum SettingsIndex {
-    struct Entry: Identifiable {
-        var id: String { title }   // stable identity (was UUID() -> new id each render = List flicker)
-        let title: String
-        let icon: String
-        /// true = an SF Symbol, false = one of the app's own icon assets. Same distinction
-        /// SettingsRowLabel makes, because these rows now ARE settings rows.
-        var system = false
-        let keywords: String
-        let dest: AnyView
-        /// The page this one lives inside, shown under the title (the reference's "Password /
-        /// Account"). Nil for a top-level settings page.
-        var parent: String? = nil
-    }
-
-    static func entries(onSignOut: @escaping () -> Void) -> [Entry] {
-        [
-            Entry(title: "Account", icon: "ic_account",
-                  keywords: "account name username id sign out delete",
-                  dest: AnyView(AccountSettingsView(onSignOut: onSignOut))),
-            Entry(title: "My Profile", icon: "ic_account",
-                  keywords: "profile bio photo edit stories",
-                  dest: AnyView(MyProfileView())),
-            Entry(title: "Devices", icon: "ic_linked_devices",
-                  keywords: "devices sessions linked signed in log out sign out",
-                  dest: AnyView(DevicesView())),
-            Entry(title: "Notifications", icon: "ic_notifications",
-                  keywords: "notifications push sound vibrate preview",
-                  dest: AnyView(NotificationsSettingsView())),
-            Entry(title: "Appearance", icon: "paintbrush", system: true,
-                  keywords: "appearance theme dark light",
-                  dest: AnyView(AppearanceSettingsView())),
-            // The Settings page's own icons (owner 2026-10-13: "use my icons, the ones my settings use").
-            Entry(title: "Chats", icon: "ic_settings_chats",
-                  keywords: "chats save to photos camera roll clear chat history delete everything",
-                  dest: AnyView(ChatsSettingsView())),
-            Entry(title: "Stories", icon: "ic_stories_stack",
-                  keywords: "stories status view receipts",
-                  dest: AnyView(StorySettingsView())),
-            Entry(title: "Privacy & Security", icon: "ic_privacy",
-                  keywords: "privacy security read receipts typing last seen app lock screen",
-                  dest: AnyView(PrivacySettingsView())),
-            Entry(title: "Storage and Data", icon: "externaldrive", system: true,
-                  keywords: "storage data cache download network usage",
-                  dest: AnyView(StorageDataView())),
-            Entry(title: "Chat Key", icon: "ic_chat_key",
-                  keywords: "chat key pin number code private",
-                  dest: AnyView(ChatPinPage()), parent: "Chats"),
-            // Pages INSIDE pages, so a search reaches them directly (owner 2026-10-13, with the
-            // reference's settings search).
-            Entry(title: "Email address", icon: "envelope", system: true,
-                  keywords: "email address change mail",
-                  dest: AnyView(ChangeEmailView()), parent: "Account"),
-            Entry(title: "Passkeys", icon: "person.badge.key", system: true,
-                  keywords: "passkeys passkey face id sign in key",
-                  dest: AnyView(PasskeysView()), parent: "Account"),
-            Entry(title: "Two-step verification", icon: "lock.shield", system: true,
-                  keywords: "two step verification 2fa password code security",
-                  dest: AnyView(TwoStepVerificationView()), parent: "Account"),
-            Entry(title: "Security notifications", icon: "bell.badge", system: true,
-                  keywords: "security notifications alerts new login",
-                  dest: AnyView(SecurityNotificationsView()), parent: "Account"),
-            Entry(title: "App Lock", icon: "lock", system: true,
-                  keywords: "app lock face id passcode",
-                  dest: AnyView(AppLockPage()), parent: "Privacy & Security"),
-            Entry(title: "Blocked Users", icon: "hand.raised", system: true,
-                  keywords: "blocked block users",
-                  dest: AnyView(BlockedUsersView()), parent: "Privacy & Security"),
-            Entry(title: "Help & About", icon: "questionmark.circle", system: true,
-                  keywords: "help about version",
-                  dest: AnyView(AboutView())),
-        ]
-        // owner 2026-10-18: settings search does not find the Chat Key while the admin panel hides it.
-        .filter { $0.title != "Chat Key" || MsgPolicy.shared.chatKeyVisible }
-    }
-
-
-    static func matching(_ query: String, onSignOut: @escaping () -> Void) -> [Entry] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        let all = entries(onSignOut: onSignOut)
-        guard !q.isEmpty else { return all }
-        return all.filter { $0.title.lowercased().contains(q) || $0.keywords.contains(q) }
-    }
-}
-
+// `SettingsIndex` (every page AND every row inside it) lives in SettingsSearchIndex.swift.
 
 struct SettingsSearchView: View {
     var onSignOut: () -> Void
@@ -722,24 +636,14 @@ struct SettingsSearchView: View {
     @FocusState private var searchFocused: Bool
     private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
 
-    private typealias Entry = SettingsIndex.Entry
-    private var entries: [Entry] { SettingsIndex.entries(onSignOut: onSignOut) }
-
-    private var results: [Entry] {
-        let q = trimmed.lowercased()
-        guard !q.isEmpty else { return entries }
-        return entries.filter { $0.title.lowercased().contains(q) || $0.keywords.contains(q) }
-    }
+    private var results: [SettingsIndex.Entry] { SettingsIndex.matching(query, onSignOut: onSignOut) }
 
     var body: some View {
         NavigationStack {
             List(results) { e in
-                NavigationLink { e.dest } label: {
-                    // The SAME row as the settings page itself, so a result and the row it leads to
-                    // are the same thing wearing the same icon.
-                    e.system ? SettingsRowLabel(e.title, system: e.icon)
-                             : SettingsRowLabel(e.title, e.icon)
-                }
+                // The SAME row as the settings page itself, so a result and the row it leads to
+                // are the same thing wearing the same icon; a row inside a page carries its path.
+                SettingsIndexResultRow(entry: e)
             }
             .listStyle(.insetGrouped)
             .overlay {

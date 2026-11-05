@@ -1315,16 +1315,16 @@ struct PrivacySettingsView: View {
                 // the pattern the Calls and Messages footers set ("Who can… Everyone: … Nobody: …").
                 // Only these three-choice rows lacked it; the shared tail is `Self.threeChoiceFooter`.
                 audienceRow("Last seen & online", key: "lastSeen", value: privLastSeen,
-                            footerText: "Who can see when you're online and when you were last active. " + Self.threeChoiceFooter)
+                            footerText: Self.audienceFooter("lastSeen"))
                 audienceRow("Profile photo", key: "photo", value: privPhoto,
-                            footerText: "Who can see your profile photo when they find you on Fariin. " + Self.threeChoiceFooter)
+                            footerText: Self.audienceFooter("photo"))
                 audienceRow("Bio", key: "bio", value: privBio,
-                            footerText: "Who can see the few words about you. " + Self.threeChoiceFooter)
+                            footerText: Self.audienceFooter("bio"))
                 if Flags.groupsEnabled {
                     // One setting for both (owner 2026-10-30): the server reads it for a channel's
                     // Add Followers as for a group add.
                     audienceRow("Groups & Channels", key: "groups", value: privGroups,
-                                footerText: "Who can add you to groups and channels. My Chats means people you have a one-to-one chat with. A shared group or channel doesn't count.")
+                                footerText: Self.audienceFooter("groups"))
                 }
                 // Shows its value like every other row here. It was the one row with a bare title, so
                 // it read as broken next to five rows that each state their setting (user: "messages
@@ -1340,7 +1340,7 @@ struct PrivacySettingsView: View {
                             // ⛔ TWO CHOICES — owner, 2026-09-11: "Everyone should mean everyone,
                             // including people who send message requests"; Nobody is nobody NEW.
                             // People in your chats can always call; a block always wins.
-                            footerText: "My Chats: people you already chat with, including anyone who used your Chat Key.")
+                            footerText: Self.audienceFooter("calls"))
                 // ⛔ NO STORIES ROW — owner, 2026-09-27, the row ringed: "remove the Stories card
                 // from Privacy". It was added here 2026-09-16; Settings › Stories is still the door.
             }
@@ -1437,6 +1437,19 @@ struct PrivacySettingsView: View {
     /// Messages, named with their on-screen labels ("My Chats", "No One").
     private static let threeChoiceFooter =
         "My Chats means people you have a one-to-one chat with. A shared group doesn't count."
+
+    /// Each audience page's footer, by storage key. One place, so the settings search
+    /// (`SettingsIndex`) opens the same page this list does.
+    static func audienceFooter(_ key: String) -> String {
+        switch key {
+        case "lastSeen": return "Who can see when you're online and when you were last active. " + threeChoiceFooter
+        case "photo":    return "Who can see your profile photo when they find you on Fariin. " + threeChoiceFooter
+        case "bio":      return "Who can see the few words about you. " + threeChoiceFooter
+        case "groups":   return "Who can add you to groups and channels. My Chats means people you have a one-to-one chat with. A shared group or channel doesn't count."
+        case "calls":    return "My Chats: people you already chat with, including anyone who used your Chat Key."
+        default:         return ""
+        }
+    }
 
     private func audienceRow(_ title: String, key: String, value: String, footerText: String) -> some View {
         NavigationLink { AudiencePage(title: title, key: key, footer: footerText) } label: {
