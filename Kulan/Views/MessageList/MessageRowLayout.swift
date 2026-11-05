@@ -1055,7 +1055,10 @@ enum MessageRowLayout {
                 // The pills flow left to right and start a new row when the next one would not fit
                 // in the widest the bubble may be. `rowW` is each row's own width.
                 let rowGap: CGFloat = 6
-                let maxRowW = max(0, (captioned ? plan.bubble.width : columnW) - padH * 2)
+                // ⛔ AT THE BUBBLE'S OWN CAP, NOT THE COLUMN (owner 2026-11-05: six pills on one row ran
+                // past the bubble and pushed the share button off screen). The reference wraps the
+                // pills inside the widest the bubble may be, about four to a row on a phone.
+                let maxRowW = max(0, (captioned ? plan.bubble.width : maxBubble) - padH * 2)
                 var rows: [[Int]] = [[]]
                 var rowW: [CGFloat] = [0]
                 for (i, w) in widths.enumerated() {
@@ -1092,7 +1095,7 @@ enum MessageRowLayout {
                 // row under a time that already had a row to itself. It joins the pills now, against
                 // the picture's own width, because a captioned bubble may not widen past its picture.
                 // The time joins the LAST row of pills when it fits there.
-                let fitsOnRow = padH + lastRowW + metaW + padH <= (captioned ? plan.bubble.width : columnW)
+                let fitsOnRow = padH + lastRowW + metaW + padH <= (captioned ? plan.bubble.width : maxBubble)
                 // ⛔ A FILE'S TIME ROW IS THE SAME KIND OF ROW — owner, 2026-10-03, a reacted zip: the
                 // time sat alone under the file and the pills hung below it, a whole empty band
                 // between. A file bubble has no text, so it never counted as a text row here; its
@@ -1105,14 +1108,13 @@ enum MessageRowLayout {
                 // ate into the button and the pills landed on it. The footer stays put; the pills get a
                 // row of their own under the button.
                 let hasBottomButton = plan.linkPlan?.join != nil
-                // ⛔ MORE THAN THREE REACTIONS: THE TIME GOES UNDER THEM, BOTTOM RIGHT (owner
-                // 2026-11-05, two screenshots: five pills sent the time back up beside "Hello").
-                // The reference app's status line takes a row of its own under the reactions when it
-                // does not fit on their last row; it never climbs back to the text. His rule on top
-                // of that: past three pills it always takes its own row.
+                // ⛔ WHEN IT DOES NOT FIT, THE TIME GOES UNDER THE PILLS, BOTTOM RIGHT (owner 2026-11-05,
+                // screenshots: five pills sent the time back up beside "Hello"). The reference app's
+                // status line joins the last pill row when there is room and otherwise takes a row of
+                // its own under them; it never climbs back to the text.
                 let textLike = plan.text != .zero || captioned || plan.filePlan != nil
                 let canMove = !hasBottomButton && (!plan.metaOnOwnLine || ownTextRow)
-                let metaJoins = fitsOnRow && widths.count <= 3 && canMove
+                let metaJoins = fitsOnRow && canMove
                 let metaBelow = !metaJoins && canMove && textLike
                 // Two points under the last pill row, then the time, then the strip's own bottom gap.
                 let metaBelowExtra: CGFloat = metaBelow ? 2 + plan.meta.height : 0
@@ -1134,7 +1136,7 @@ enum MessageRowLayout {
                 let need = padH + max(widestRow, lastRowW + (metaJoins ? metaW : 0),
                                       metaBelow ? plan.meta.width : 0) + padH
                 if need > grown.width {
-                    let want = min(need, columnW)
+                    let want = min(need, max(maxBubble, grown.width))
                     let delta = want - grown.width
                     grown.size.width += delta
                     // A bubble of mine is right-aligned: it grows leftwards, away from its own edge.
