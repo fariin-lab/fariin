@@ -21,8 +21,22 @@ final class LeaveGroupUndo {
 
     enum Kind: String { case leave, deleteGroup, deleteChannel }
 
-    /// Groups hidden from my lists and screens while their leave is waiting.
-    private(set) var hiddenIds: Set<String> = []
+    /// Groups hidden from my lists and screens while their leave is waiting, each with the ACCOUNT that
+    /// hid it.
+    /// ⛔ PER ACCOUNT (owner 2026-11-05: account 2 left account 1's channel on the same phone, and after
+    /// switching back to account 1 the channel was gone from its chat list for good). This used to be
+    /// one set for the whole app, never cleared on an account switch, so one account's leave hid the
+    /// chat from every account on the phone until the app was killed.
+    private(set) var hiddenByUid: [String: String] = [:]
+    /// What the signed-in account has hidden. Another account's leave never hides anything here.
+    var hiddenIds: Set<String> {
+        let me = AuthService.shared.uid ?? ""
+        return Set(hiddenByUid.compactMap { $0.value == me ? $0.key : nil })
+    }
+    private func hide(_ cid: String, for uid: String? = nil) {
+        hiddenByUid[cid] = uid ?? AuthService.shared.uid ?? ""
+    }
+    private func unhide(_ cid: String) { hiddenByUid[cid] = nil }
     /// The bar: the group that was left and can still be taken back.
     private(set) var barTitle: String?
     /// What the bar is about: a leave or a delete.
@@ -68,7 +82,7 @@ final class LeaveGroupUndo {
               let uid = d["uid"], let cid = d["cid"] else { return }
         let title = d["title"] ?? "the group"
         let kind = Kind(rawValue: d["kind"] ?? "") ?? .leave
-        hiddenIds.insert(cid)
+        hide(cid, for: uid)
         Task { @MainActor [weak self] in
             // Signed in as that account first (up to 30 s); another account never runs it.
             for _ in 0..<60 where AuthService.shared.uid == nil {
@@ -76,7 +90,7 @@ final class LeaveGroupUndo {
             }
             guard let self else { return }
             guard AuthService.shared.uid == uid else {
-                self.hiddenIds.remove(cid)
+                self.unhide(cid)
                 if AuthService.shared.uid != nil { self.save(nil) }
                 return
             }
@@ -87,9 +101,9 @@ final class LeaveGroupUndo {
 
     /// A group or channel I deleted (owner 2026-10-29): off my list and screens at once, which closes
     /// its chat (ThreadView watches `hiddenIds`). Nothing to undo; the server already removed it.
-    func closeChat(_ cid: String) { hiddenIds.insert(cid) }
+    func closeChat(_ cid: String) { hide(cid) }
     /// Back in it (a channel followed again): it shows in the list again.
-    func reopen(_ cid: String) { if pending?.cid != cid { hiddenIds.remove(cid) } }
+    func reopen(_ cid: String) { if pending?.cid != cid { unhide(cid) } }
 
     /// Hide the group now; leave for real in 5 s unless `undo()` comes first. A second leave while one
     /// is waiting commits the first straight away, so two bars never stack.
@@ -97,7 +111,7 @@ final class LeaveGroupUndo {
         if pending != nil { commit() }
         pending = (cid, title, kind)
         save(pending)
-        hiddenIds.insert(cid)
+        hide(cid)
         barKind = kind
         let me = AuthService.shared.uid ?? ""
         barPhoto = ConversationsRepository.shared.conversations.first { $0.id == cid }?.displayPhoto(me)
@@ -114,7 +128,7 @@ final class LeaveGroupUndo {
     /// Taken back: nothing was ever sent to the server, so the group simply comes back.
     func undo() {
         timer?.cancel(); timer = nil
-        if let p = pending { hiddenIds.remove(p.cid) }
+        if let p = pending { unhide(p.cid) }
         pending = nil
         save(nil)
         barTitle = nil
@@ -138,11 +152,11 @@ final class LeaveGroupUndo {
                 self?.save(nil)
                 // Leave it hidden a moment longer: the list drops it when the server's copy arrives.
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
-                self?.hiddenIds.remove(p.cid)
+                self?.unhide(p.cid)
             } catch {
                 // Shown and given back; not retried at every launch.
                 self?.save(nil)
-                self?.hiddenIds.remove(p.cid)
+                self?.unhide(p.cid)
                 let what = p.kind == .leave ? "leave" : "delete"
                 self?.failure = "Couldn't \(what) \"\(p.title)\". Check your connection and try again."
             }
