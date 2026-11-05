@@ -399,7 +399,7 @@ struct ChatPinEntrySheet: View {
 /// with Copy and Share; says "set on another device" when it cannot; offers Set, Change and Remove.
 struct ChatPinPage: View {
     /// ⛔ ONE PAGE, ONE FLOW, EVERY DOOR (owner 2026-11-05): the Chats menu, Settings › Chats and
-    /// Privacy › Messages all land here. With no key the page itself shows the explainer, and "Got it"
+    /// Privacy › Messages all land here. With no key, "Create Chat Key" shows the explainer, and "Got it"
     /// starts the count-up and makes the key. `autoCreate` is the Privacy door, which has already
     /// shown the explainer: the page opens straight into making the key.
     var autoCreate: Bool = false
@@ -656,12 +656,9 @@ struct ChatPinPage: View {
         mine = ChatPin.mine
         setAt = ChatPin.lastSetAt
         checking = false
-        // No key: say what one is, and "Got it" makes it (owner 2026-11-05). Once per visit, so
-        // closing the sheet leaves the page with its Create button instead of reopening it.
-        if !isSet, !introOffered, !explaining, MsgPolicy.shared.chatKeyVisible {
-            introOffered = true
-            explaining = true
-        }
+        // ⛔ THE EXPLAINER NEVER OPENS BY ITSELF (owner 2026-11-05, build 1098: opening Chat Key by
+        // mistake threw the sheet at him). It opens only from "Create Chat Key"; "Got it" there makes
+        // the key. Reverses the same day's open-on-arrival.
     }
 
     /// ⛔ KEY EXISTS ⇔ "People who know my key" (owner 2026-11-05). Only ever called with a real
