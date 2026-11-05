@@ -3630,7 +3630,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
 
         // The last row(s) deleted while the reader sat at the newest (see `settleAfterNewestRemoved`).
-        let newestWentAway = wasAtNewest && ids.count < oldSet.count && oldNewestId.map { !ids.contains($0) } == true
+        // ⛔ ANY ROW, NOT ONLY THE NEWEST (owner 2026-11-05: deleting the "You pinned" notice above his
+        // last post jumped the chat up and left a gap over the composer). Every row under a deleted one
+        // moves up the same way, so any removal while the reader sits at the newest settles the list.
+        let newestWentAway = wasAtNewest && ids.count < oldSet.count
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self else { return }
             self.layout.pendingContentOffsetAdjustment = 0   // never let the fallback channel go stale

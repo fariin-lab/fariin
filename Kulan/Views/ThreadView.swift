@@ -3211,7 +3211,10 @@ struct ThreadView: View {
         VStack(spacing: 0) {
             if !visiblePinIds.isEmpty {
                 pinnedBarContent
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    // ⛔ FADES WHERE IT IS, NOT UP (owner 2026-11-05: on Unpin the bar slid up under
+                    // the header and sat there behind the back button). A glass bar is not cut by
+                    // `.clipped()`, so the move to the top edge showed through the header.
+                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
             }
         }
         .clipped()
