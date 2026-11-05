@@ -5707,7 +5707,11 @@ struct ThreadView: View {
         // `ChatService.isForward`, and stays editable like any other of mine.)
         m.authorId == me && !m.forwarded && !iAmMuted && !m.deleted && !m.isAudio && !m.isCall && !m.isSystem
             && !m.isFeatureMarker && !m.viewOnce && !m.text.isEmpty && m.sendState == nil
-            && Date().timeIntervalSince(m.createdAt) < Limits.editWindowSeconds
+            // ⛔ A CHANNEL POST HAS NO WINDOW (owner 2026-11-05): the owner and admins who post may
+            // correct a post at any age, as in the reference app. Only admins post, so only they get
+            // here. The rules' `editAllowedNow` drops the window for channels too.
+            && (conversation?.isChannel == true
+                || Date().timeIntervalSince(m.createdAt) < Limits.editWindowSeconds)
     }
 
     /// EVERY selected row must be forwardable, not merely one of them.

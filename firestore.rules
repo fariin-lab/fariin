@@ -2578,20 +2578,15 @@ service cloud.firestore {
                      || (d.duration is number && d.duration >= 0 && d.duration <= 1900))
                     && (d.get('viewOnce', false) != true || d.get('waveform', []).size() == 0)));
         }
-        // 2026-09-24 feature-audit: WHEN AN EDIT MAY LAND. The client's 15-minute window
-        // (`Limits.editWindowSeconds`) was only ever a menu condition, so any authored message could
-        // be rewritten at any age by a client that skipped the menu. Now the server asks the same
-        // three questions: not a tombstone (an edit queued before a Delete for Everyone would put
-        // live text back into the scrubbed document), still inside the window measured from the
-        // message's own server `createdAt` (900s + 120s clock margin; keep in sync with Limits.swift),
-        // and the author not restricted from sending text (a muted member cannot rewrite what they
-        // already said either).
+        // WHEN AN EDIT MAY LAND: not a tombstone, inside the window from server `createdAt` (900s +
+        // 120s margin, Limits.swift), author not muted. A channel post has no window (owner 11-05).
         function editAllowedNow() {
           return resource.data.get('deleted', false) == false
             // 2026-09-29, owner: a forwarded message is never edited (its words are not mine).
             && resource.data.get('forwarded', false) == false
             && resource.data.get('createdAt', null) is timestamp
-            && request.time < resource.data.createdAt + duration.value(1020, 's')
+            && (request.time < resource.data.createdAt + duration.value(1020, 's')
+                || convData().get('channel', false) == true)
             && request.resource.data.get('edited', false) == true
             && !restrictedIn(convData(), 'sendText');
         }
