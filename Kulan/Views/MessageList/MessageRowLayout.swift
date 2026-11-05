@@ -1105,10 +1105,20 @@ enum MessageRowLayout {
                 // ate into the button and the pills landed on it. The footer stays put; the pills get a
                 // row of their own under the button.
                 let hasBottomButton = plan.linkPlan?.join != nil
-                let metaJoins = fitsOnRow && !hasBottomButton && (!plan.metaOnOwnLine || ownTextRow)
+                // ⛔ MORE THAN THREE REACTIONS: THE TIME GOES UNDER THEM, BOTTOM RIGHT (owner
+                // 2026-11-05, two screenshots: five pills sent the time back up beside "Hello").
+                // The reference app's status line takes a row of its own under the reactions when it
+                // does not fit on their last row; it never climbs back to the text. His rule on top
+                // of that: past three pills it always takes its own row.
+                let textLike = plan.text != .zero || captioned || plan.filePlan != nil
+                let canMove = !hasBottomButton && (!plan.metaOnOwnLine || ownTextRow)
+                let metaJoins = fitsOnRow && widths.count <= 3 && canMove
+                let metaBelow = !metaJoins && canMove && textLike
+                // Two points under the last pill row, then the time, then the strip's own bottom gap.
+                let metaBelowExtra: CGFloat = metaBelow ? 2 + plan.meta.height : 0
 
                 var grown = plan.bubble
-                if metaJoins && ownTextRow {
+                if (metaJoins || metaBelow) && ownTextRow {
                     // The gap given back is the one that row was laid out with: a text line's footer
                     // sits `metaGap` under it, a file's sits 4 under the file row (see `file`).
                     let gapAbove: CGFloat = plan.filePlan != nil ? 4 : BubbleMetrics.metaGap
@@ -1118,10 +1128,11 @@ enum MessageRowLayout {
                     plan.mediaPlan?.caption?.size.height -= freed
                     plan.albumPlan?.caption?.size.height -= freed
                 }
-                grown.size.height += stripH
+                grown.size.height += stripH + metaBelowExtra
 
                 // Widen only if it must, and never past the column the bubble was measured against.
-                let need = padH + max(widestRow, lastRowW + (metaJoins ? metaW : 0)) + padH
+                let need = padH + max(widestRow, lastRowW + (metaJoins ? metaW : 0),
+                                      metaBelow ? plan.meta.width : 0) + padH
                 if need > grown.width {
                     let want = min(need, columnW)
                     let delta = want - grown.width
@@ -1144,6 +1155,10 @@ enum MessageRowLayout {
                     plan.metaOnOwnLine = true
                     plan.meta.origin.x = grown.width - padH - plan.meta.width
                     plan.meta.origin.y = grown.height - gapBelow - height + (height - plan.meta.height) / 2
+                } else if metaBelow {
+                    plan.metaOnOwnLine = true
+                    plan.meta.origin.x = grown.width - padH - plan.meta.width
+                    plan.meta.origin.y = grown.height - gapBelow - plan.meta.height
                 }
 
                 // ⛔ THE SAME SIDE ON BOTH — owner, 2026-09-23, shown the two side by side and asked
@@ -1165,7 +1180,7 @@ enum MessageRowLayout {
                 // Sat on `gapBelow` rather than centred in the band. Centring split the two gaps
                 // evenly, which is how a deliberate 2 above and 10 below became 6 and 6. The last row
                 // sits there; earlier rows stack above it.
-                let lastY = grown.maxY - gapBelow - height
+                let lastY = grown.maxY - gapBelow - metaBelowExtra - height
                 for (r, row) in rows.enumerated() {
                     var cx = grown.minX + padH
                     let cy = lastY - CGFloat(rows.count - 1 - r) * (height + rowGap)
