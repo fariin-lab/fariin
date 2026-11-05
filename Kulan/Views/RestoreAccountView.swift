@@ -79,7 +79,7 @@ struct RestoreAccountView: View {
                     act { try await ProfileStore.shared.restoreAccount(); onRestored() }
                 } label: {
                     Group {
-                        if working { BusyArc.small(.white) }
+                        if working { BusyArc.small(Color.onFariinAction) }
                         // owner 2026-10-18: named for what it does to the deletion.
                         else { Text("Cancel Deletion") }
                     }

@@ -1054,7 +1054,7 @@ struct EmailAuthView: View {
                     } label: {
                         Group {
                             if busy {
-                                BusyArc.small(.white)
+                                BusyArc.small(Color.onFariinAction)
                             } else if onEmailStep {
                                 Text("Continue")
                             } else {

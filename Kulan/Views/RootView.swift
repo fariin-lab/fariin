@@ -1249,7 +1249,7 @@ struct OnboardingView: View {
                     } label: {
                         Group {
                             if saving {
-                                BusyArc.small(.white)   // the app's own arc, white on the blue pill
+                                BusyArc.small(Color.onFariinAction)   // the pill's own text colour: a white arc vanished on the white pill (owner 2026-11-05)
                             } else {
                                 Text("Continue")
                             }
