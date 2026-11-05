@@ -1058,6 +1058,12 @@ enum MessageRowLayout {
                 // ⛔ AT THE BUBBLE'S OWN CAP, NOT THE COLUMN (owner 2026-11-05: six pills on one row ran
                 // past the bubble and pushed the share button off screen). The reference wraps the
                 // pills inside the widest the bubble may be, about four to a row on a phone.
+                // The bubble's own cap, as `layout` sets it (this function is not handed it): a channel
+                // post 44 pt short of the column, any other bubble the usual fraction of it. Never less
+                // than the bubble already is.
+                let maxBubble = max(plan.bubble.width,
+                                    b.wide ? max(1, columnW - 44)
+                                           : min(BubbleMetrics.maxBubbleWidth(in: columnW), columnW))
                 let maxRowW = max(0, (captioned ? plan.bubble.width : maxBubble) - padH * 2)
                 var rows: [[Int]] = [[]]
                 var rowW: [CGFloat] = [0]
