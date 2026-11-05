@@ -454,6 +454,11 @@ final class StoryComposerHostVC: UIHostingController<AnyView> {
     override init(rootView: AnyView) {
         super.init(rootView: rootView)
         modalPresentationStyle = .overFullScreen
+        // ⛔ NO KEYBOARD REGION (owner 2026-11-05, the emoji-key freeze in the story caption): every
+        // layer of the editor already ignores the keyboard and lifts its caption by hand, so the host
+        // has nothing to gain from tracking it, and a host that tracks it is laid out inside the
+        // keyboard's own pass. The Aa editor bounds itself with UIKit's `keyboardLayoutGuide`.
+        safeAreaRegions = .container
         // The composer is black; the clock over it must be white whatever theme the app is in.
         modalPresentationCapturesStatusBarAppearance = true
     }

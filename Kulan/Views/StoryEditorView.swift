@@ -1370,7 +1370,9 @@ struct StoryEditorView: View {
         }
         // Any keyboard (the caption's, or Aa) is up, and when it last went down. See the canvas tap.
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-            anyKeyboardUp = true
+            // Only a real change: iOS sends willShow again when an open keyboard changes height (the
+            // emoji keys), from inside its own layout pass, and nothing here may stir in that pass.
+            if !anyKeyboardUp { anyKeyboardUp = true }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             anyKeyboardUp = false
