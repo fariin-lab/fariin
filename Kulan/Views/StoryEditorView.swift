@@ -577,6 +577,8 @@ struct StoryEditorView: View {
     @State private var pendingShare: StoryShareData?
     @State private var pendingExtras: [StoryExtra] = []
     @State private var captionFocused = false
+    /// The caption bar's lift over the keyboard, set off the keyboard's layout pass (`liftCaption`).
+    @State private var captionKeyboardLift: CGFloat = 0
     /// ⚠️ FOR THE KEYBOARD'S CLOCK, NOT FOR ITS HEIGHT. Nothing on this screen computes a keyboard
     /// height and that rule stands — the bottom bar is a sibling of the canvas and SwiftUI's own
     /// avoidance lifts it, which is the system moving it on the system's curve.
@@ -2521,6 +2523,27 @@ struct StoryEditorView: View {
     /// edge — the reference layout ("move the caption bar to the same position shown in the second
     /// reference image"). Its own layer so it can ride the keyboard while the canvas, which ignores
     /// the keyboard, never moves a pixel.
+    /// How far the keyboard covers the screen above the home-indicator area. See `captionLayer`.
+    private func liftCaption(for n: Notification) {
+        var lift: CGFloat = 0
+        if n.name != UIResponder.keyboardWillHideNotification,
+           let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue {
+            let win = UIApplication.shared.connectedScenes
+                .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+            let screenH = win?.bounds.height ?? UIScreen.main.bounds.height
+            lift = max(0, screenH - f.origin.y - (win?.safeAreaInsets.bottom ?? 0))
+        }
+        let d = (n.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
+        let c = (n.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.uintValue ?? 7
+        let anim: Animation = c == 7 ? .timingCurve(0.23, 1.0, 0.32, 1.0, duration: max(d, 0.01))
+                                     : .easeInOut(duration: max(d, 0.01))
+        // OUT of the keyboard's layout pass, which is the whole fix. An equal value writes nothing.
+        DispatchQueue.main.async {
+            guard abs(captionKeyboardLift - lift) > 0.5 else { return }
+            withAnimation(anim) { captionKeyboardLift = lift }
+        }
+    }
+
     private var captionLayer: some View {
         VStack(spacing: 12) {
             Spacer()
@@ -2585,10 +2608,23 @@ struct StoryEditorView: View {
         //
         // Both numbers now come off the notification itself. See `KeyboardWatcher.systemAnimation`.
         .animation(keyboard.systemAnimation, value: captionFocused)
-        // ⚠️ NOT FOR THE Aa EDITOR'S KEYBOARD. `edges: []` is "ignore nothing", so this is one
-        // modifier with one identity rather than a branch that would rebuild the layer. See
-        // `textToolKeyboardUp` for why it is latched rather than read off `editingID`.
-        .ignoresSafeArea(.keyboard, edges: textToolKeyboardUp ? .bottom : [])
+        // ⛔ NO SwiftUI KEYBOARD AVOIDANCE ON THIS SCREEN AT ALL (owner 2026-11-05, build 1097: the emoji
+        // key still froze the caption). On iOS 26+ the keyboard lays out every view that follows it
+        // from INSIDE its own layout pass (UICoreKeyboardTracking -> layoutBelowIfNeeded ->
+        // _UIHostingView.layoutSubviews), and this bar was the last thing here that followed it. The
+        // emoji keys change the keyboard's height, the host moved the bar, and the keyboard laid out
+        // again. Now the bar ignores the keyboard and is lifted by `captionKeyboardLift`, which is
+        // written one runloop turn AFTER the keyboard reports, on the keyboard's own curve, so
+        // nothing on this screen moves while the keyboard is mid-layout.
+        // Not for the Aa editor's keyboard: `textToolKeyboardUp` is latched until that one is down.
+        .padding(.bottom, textToolKeyboardUp ? 0 : captionKeyboardLift)
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
+            liftCaption(for: n)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { n in
+            liftCaption(for: n)
+        }
         // Trash owns the bottom while dragging text. The Aa editor takes it too, but only once its
         // keyboard is standing over this bar rather than the instant it opens — see `textToolBarsDown`.
         .opacity(draggingID == nil && !textToolBarsDown ? 1 : 0)
