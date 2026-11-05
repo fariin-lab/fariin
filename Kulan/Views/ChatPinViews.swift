@@ -189,7 +189,8 @@ private struct ChatKeyContinueButton: View {
         Button(action: action) {
             ZStack {
                 Text("Continue").font(.body.weight(.semibold)).opacity(busy ? 0 : 1)
-                if busy { ProgressView().tint(.white) }
+                // fariinAction is white at night, so the spinner takes the text's colour.
+                if busy { ProgressView().tint(Color.onFariinAction) }
             }
             .frame(maxWidth: .infinity)
             .frame(height: 54)
@@ -397,6 +398,15 @@ struct ChatPinEntrySheet: View {
 /// Behind "Chat Key" in the Chats title menu and Privacy › Messages. Shows the pin this phone set,
 /// with Copy and Share; says "set on another device" when it cannot; offers Set, Change and Remove.
 struct ChatPinPage: View {
+    /// ⛔ ONE PAGE, ONE FLOW, EVERY DOOR (owner 2026-11-05): the Chats menu, Settings › Chats and
+    /// Privacy › Messages all land here. With no key the page itself shows the explainer, and "Got it"
+    /// starts the count-up and makes the key. `autoCreate` is the Privacy door, which has already
+    /// shown the explainer: the page opens straight into making the key.
+    var autoCreate: Bool = false
+    init(autoCreate: Bool = false) { self.autoCreate = autoCreate }
+    /// The explainer opens by itself once per visit at most; closing it leaves the Create button.
+    @State private var introOffered = false
+    @State private var autoStarted = false
     @State private var isSet = ChatPin.isSet
     @State private var mine = ChatPin.mine
     /// ⛔ THE SPINNER ONLY ON A GENUINELY FIRST VISIT — owner, 2026-09-11: "fix this loading",
@@ -437,11 +447,18 @@ struct ChatPinPage: View {
         List {
             Section {
                 if rolling {
-                    ChatKeySlotView(final: rollingTo) {
-                        mine = rollingTo
-                        isSet = true
-                        rolling = false
-                        rollingTo = nil
+                    VStack(spacing: 8) {
+                        ChatKeySlotView(final: rollingTo) {
+                            mine = rollingTo
+                            isSet = true
+                            rolling = false
+                            rollingTo = nil
+                        }
+                        // ⛔ SAY WHAT IS HAPPENING (owner 2026-11-05: "the user doesn't know a key is
+                        // being created"). The zeroes alone read as a frozen screen.
+                        Text(rollingTo == nil ? "Creating your Chat Key…" : "Your new Chat Key")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
@@ -513,11 +530,13 @@ struct ChatPinPage: View {
                     // has no key; somebody changing one has already been through this. That is also
                     // what makes a seen-flag unnecessary — the door is rare by construction.
                     //
-                    // ⛔ AND ONLY FROM THE KEY MODE (owner 2026-11-02): a key is created by choosing
-                    // "People who know my key" in Privacy › Messages and nowhere else, so this page's
-                    // other doors say where to go instead of making one.
-                    Text("To create a Chat Key, go to Settings › Privacy › Messages and choose People who know my key.")
-                        .foregroundStyle(.secondary)
+                    // ⛔ EVERY DOOR CAN MAKE A KEY (owner 2026-11-05, reverses 2026-11-02's "only from
+                    // the key mode"): this page sent people to Privacy › Messages instead, so Settings
+                    // could not create one. Making a key here also sets the key mode (`makeKey`).
+                    Button { explaining = true } label: {
+                        HStack { Text("Create Chat Key"); if generating { Spacer(); ProgressView() } }
+                    }
+                    .disabled(generating)
                 }
             } header: {
                 Text(isSet ? "Your Chat Key" : "")
@@ -577,7 +596,18 @@ struct ChatPinPage: View {
         // `@State isSet` is seeded once, so a page SwiftUI had kept alive went on showing what the
         // server said the first time: remove the key on another phone, come back here, and this one
         // still offered to "Change" a key that no longer existed. `onAppear` is the re-entry.
-        .task { ChatPin.warmGenerate(); await refresh() }
+        .task {
+            // The Privacy door already explained the key and the person said "Got it": start at
+            // once rather than after the status round trip (up to 8 s of a page doing nothing).
+            if autoCreate, !autoStarted {
+                autoStarted = true
+                introOffered = true   // already shown by the Privacy page
+                makeKey()
+            } else {
+                ChatPin.warmGenerate()
+            }
+            await refresh()
+        }
         .onAppear { Task { await refresh() } }
         .sheet(isPresented: $explaining, onDismiss: {
             // Only when "Got it" was pressed; the ✕ leaves this false and nothing follows.
@@ -616,10 +646,36 @@ struct ChatPinPage: View {
     /// What this phone knows is shown at once; the server's answer refines it. A phone that could
     /// not ask keeps what it had rather than flipping to "not set".
     private func refresh() async {
-        if let set = await ChatPin.refreshStatus() { isSet = set }
+        let answer = await ChatPin.refreshStatus()
+        // A key being made right now outranks a status answer read before it existed.
+        guard !generating, !rolling else { checking = false; return }
+        if let set = answer {
+            isSet = set
+            ChatPinPage.syncMessagesMode(keyExists: set)
+        }
         mine = ChatPin.mine
         setAt = ChatPin.lastSetAt
         checking = false
+        // No key: say what one is, and "Got it" makes it (owner 2026-11-05). Once per visit, so
+        // closing the sheet leaves the page with its Create button instead of reopening it.
+        if !isSet, !introOffered, !explaining, MsgPolicy.shared.chatKeyVisible {
+            introOffered = true
+            explaining = true
+        }
+    }
+
+    /// ⛔ KEY EXISTS ⇔ "People who know my key" (owner 2026-11-05). Only ever called with a real
+    /// server answer or right after a successful create / remove, never on a failed status check.
+    /// Hidden by the admin panel: the stored choice is left alone, as the Privacy page does.
+    @MainActor
+    static func syncMessagesMode(keyExists: Bool) {
+        let mode = PrivacyPrefs.mine("messages")
+        if keyExists {
+            guard MsgPolicy.shared.chatKeyVisible, mode != .contacts else { return }
+            PrivacyPrefs.setMine("messages", .contacts)
+        } else if mode == .contacts {
+            PrivacyPrefs.setMine("messages", .everyone)
+        }
     }
 
     /// A new random key from the server, shown here at once.
@@ -636,6 +692,8 @@ struct ChatPinPage: View {
                 // The digits spin until the key arrives, then settle one by one (`ChatKeySlotView`),
                 // which shows it and ends the roll.
                 let pin = try await ChatPin.generate()
+                // A key exists now, so the Messages mode is the key mode (owner 2026-11-05).
+                ChatPinPage.syncMessagesMode(keyExists: true)
                 setAt = ChatPin.lastSetAt
                 copied = false
                 failure = ""
@@ -661,9 +719,7 @@ struct ChatPinPage: View {
                 // with no key is an account nobody new can contact at all. Removing the key here is
                 // the one moment we KNOW that has happened, so it is healed at the source rather
                 // than left for the privacy page to notice on its next visit (it does that too).
-                if PrivacyPrefs.mine("messages") == .contacts {
-                    PrivacyPrefs.setMine("messages", .everyone)
-                }
+                ChatPinPage.syncMessagesMode(keyExists: false)
             } catch {
                 failure = error.localizedDescription
             }

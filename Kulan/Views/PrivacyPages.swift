@@ -467,12 +467,15 @@ struct MessagesPrivacyPage: View {
     @State private var explainingKey = false
     /// Raised by the explainer's "Got it" and acted on once that sheet is really gone.
     @State private var continueToKeySheet = false
+    /// "Got it" opens the Chat Key page, which runs the count-up and makes the key (owner
+    /// 2026-11-05). Before, the key was made silently behind this page and nothing said so.
+    @State private var creatingKey = false
 
+    /// ⛔ BOTH WAYS NOW (owner 2026-11-05): key exists ⇔ "People who know my key". A key with
+    /// Everyone selected is moved to the key mode; the key mode with no key goes back to Everyone.
     private func healIfKeyless() async {
-        guard let set = await ChatPin.refreshStatus(), !set,
-              privMessages == Audience.contacts.rawValue else { return }
-        privMessages = Audience.everyone.rawValue
-        PrivacyPrefs.setMine("messages", .everyone)
+        guard let set = await ChatPin.refreshStatus() else { return }
+        ChatPinPage.syncMessagesMode(keyExists: set)
     }
 
     var body: some View {
@@ -604,17 +607,20 @@ struct MessagesPrivacyPage: View {
         // it without saving leaves the selection where it was.
         .sheet(isPresented: $explainingKey, onDismiss: {
             // The app makes the key now (owner 2026-10-27); the mode follows a key that exists.
+            // ⛔ ROOT CAUSE OF "THE FLOW STOPS" (owner 2026-11-05): "Got it" used to call
+            // `generate()` in a detached Task right here, with no animation, no spinner and no error,
+            // so the sheet closed onto an unchanged page while a key was (maybe) being made. Now it
+            // opens the Chat Key page, which shows the count-up and writes the mode on success; a
+            // failure or Back leaves Everyone selected.
             if continueToKeySheet {
                 continueToKeySheet = false
-                Task {
-                    if (try? await ChatPin.generate()) != nil {
-                        privMessages = Audience.contacts.rawValue
-                        PrivacyPrefs.setMine("messages", .contacts)
-                    }
-                }
+                creatingKey = true
             }
         }) {
             ChatKeyIntroSheet { continueToKeySheet = true }
+        }
+        .navigationDestination(isPresented: $creatingKey) {
+            ChatPinPage(autoCreate: true)
         }
         .sheet(isPresented: $settingKey) {
             ChatPinSetSheet {
