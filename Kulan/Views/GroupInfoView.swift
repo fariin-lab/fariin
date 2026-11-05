@@ -2325,7 +2325,7 @@ struct AddMembersSheet: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { add() } label: {
-                        if adding { ProgressView().tint(.white) } else { Text("Add").fontWeight(.semibold) }
+                        if adding { ProgressView().tint(Color.onFariinAction) } else { Text("Add").fontWeight(.semibold) }
                     }
                     .disabled(selected.isEmpty || adding)
                     .buttonStyle(.borderedProminent).tint(Color.fariinAction)

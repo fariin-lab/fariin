@@ -1673,7 +1673,7 @@ struct EditGroupView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { save() } label: {
-                        if saving { ProgressView().tint(.white) } else { Text("Save").fontWeight(.semibold) }
+                        if saving { ProgressView().tint(Color.onFariinAction) } else { Text("Save").fontWeight(.semibold) }
                     }
                     .disabled(trimmed.isEmpty || !changed || saving)
                     .buttonStyle(.borderedProminent).tint(Color.fariinAction)

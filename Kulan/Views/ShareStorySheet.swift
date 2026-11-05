@@ -1306,7 +1306,7 @@ private struct OfficialStoryForm: View {
             .safeAreaInset(edge: .bottom) {
                 Button { post() } label: {
                     Group {
-                        if posting || preparing { ProgressView().tint(.white) }
+                        if posting || preparing { ProgressView().tint(Color.onFariinAction) }
                         else { Text("Post Story").font(.headline) }
                     }
                     .foregroundStyle(Color.onFariinAction)

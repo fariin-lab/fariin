@@ -173,7 +173,7 @@ struct ChatStorageView: View {
                         Circle().fill(isOn ? Color.fariinAction : .black.opacity(0.25))
                         Circle().stroke(.white, lineWidth: 1.5)
                         if isOn {
-                            Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
+                            Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(isOn ? Color.onFariinAction : .white)
                         }
                     }
                     .frame(width: 22, height: 22)

@@ -311,7 +311,7 @@ struct PasskeysView: View {
                     Text("Create Passkey")   // no spinner: the system sheet is the feedback (see Add Passkey)
                 }
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.onFariinAction)   // white pill in dark mode (owner 2026-11-05)
                 .frame(maxWidth: .infinity).frame(height: 54)
                 .background(brand, in: Capsule())
             }
