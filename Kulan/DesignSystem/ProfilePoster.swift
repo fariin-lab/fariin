@@ -795,6 +795,9 @@ struct StoryStackBadge: View {
     /// The diameter of one circle in the stack. Public because the flight's landing shape is derived
     /// from it and a second copy of this number is how a shape drifts.
     static let circleSize: CGFloat = 30
+    @Environment(\.colorScheme) private var scheme
+    /// Bumped when any story is marked seen, so the rings go grey as soon as the viewer closes.
+    @State private var seenTick = 0
 
     /// The first three in play order: tapping opens the story, and the leftmost circle on top is the
     /// one that opens first.
@@ -819,15 +822,17 @@ struct StoryStackBadge: View {
             Text(countLabel).font(.subheadline.weight(.semibold)).foregroundStyle(textColor)
         }
         .shadow(color: .black.opacity(0.28), radius: 5, y: 1)
+        .onReceive(NotificationCenter.default.publisher(for: .storySeenChanged)) { _ in seenTick &+= 1 }
     }
 
     /// The app's own story rule, per story rather than per person: watched goes quiet, unwatched
-    /// keeps the colour. Grey would vanish against a photo, so watched is a soft white instead.
+    /// keeps the colour. ⛔ THE SAME COLOURS AS EVERY OTHER RING (owner 2026-11-05): this stack
+    /// still wore the old pink-orange-yellow; now it is `StoryRingView`'s gradient and watched grey.
     private func ring(for s: Story) -> AnyShapeStyle {
+        let _ = seenTick
         let seen = StoryPrefs.isStorySeen(s.id) || s.createdAt <= (group.lastViewedAt ?? .distantPast)
         return seen
-            ? AnyShapeStyle(Color.white.opacity(0.6))
-            : AnyShapeStyle(LinearGradient(colors: [.pink, .orange, .yellow],
-                                           startPoint: .topLeading, endPoint: .bottomTrailing))
+            ? AnyShapeStyle(StoryRingView.seenColor(dark: scheme == .dark))
+            : AnyShapeStyle(StoryRingView.unseenGradient)
     }
 }

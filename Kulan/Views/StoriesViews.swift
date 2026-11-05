@@ -60,8 +60,15 @@ struct StoryRingView: View {
     /// light. It has to be two colours rather than one: "already seen" is said by being QUIETER than
     /// the page, and quieter means darker on white and lighter on black. A single grey that reads as
     /// spent on one background reads as a deliberate mark on the other.
-    private var seenColor: Color {
-        scheme == .dark ? Color(hex: 0x505052) : Color(hex: 0xCACACA)
+    private var seenColor: Color { Self.seenColor(dark: scheme == .dark) }
+
+    /// The two ring colours, shared so a surface that cannot use this view (the profile's story
+    /// stack, owner 2026-11-05) still paints the same unseen gradient and the same watched grey.
+    static func seenColor(dark: Bool) -> Color {
+        dark ? Color(hex: 0x505052) : Color(hex: 0xCACACA)
+    }
+    static var unseenGradient: LinearGradient {
+        LinearGradient(colors: [Color(hex: 0x34C76F), Color(hex: 0x3DA1FD)], startPoint: .top, endPoint: .bottom)
     }
 
     var body: some View {
@@ -77,8 +84,7 @@ struct StoryRingView: View {
             let arcs = StoryRingGeometry.condensed(seen)
             let n = max(1, arcs.count)
             let seenW = max(1, lineWidth * 0.66)                       // inactiveLineWidth
-            let gradient = AnyShapeStyle(LinearGradient(colors: [Color(hex: 0x34C76F), Color(hex: 0x3DA1FD)],
-                                                        startPoint: .top, endPoint: .bottom))
+            let gradient = AnyShapeStyle(Self.unseenGradient)
             let grey = AnyShapeStyle(seenColor)
             let gap = StoryRingGeometry.gap(count: n, diameter: d, lineWidth: activeW)
             let seg = 1.0 / CGFloat(n)

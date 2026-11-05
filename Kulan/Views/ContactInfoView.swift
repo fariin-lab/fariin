@@ -237,6 +237,8 @@ struct ContactInfoView: View {
     private var posterArtRect: CGRect { posterRects.art }
     @AppStorage(ProfileLayoutStyle.storageKey) private var profileLayout = ProfileLayoutStyle.modern.rawValue
     @State private var publicStory: StoryGroup?    // their active "Everyone" story, shown as a ring here
+    /// Bumped by `refreshStorySeen` (the viewer closed), so the hero ring re-reads the seen flags.
+    @State private var storySeenTick = 0
     /// Their story, from whichever of this screen's two circles was tapped: the hero avatar's ring or
     /// the toolbar's story stack. Both are circles, so both land the story back as a circle.
     ///
@@ -333,6 +335,7 @@ struct ContactInfoView: View {
     /// Every story in their group already watched → the ring goes grey instead of coloured, same rule
     /// as the chat list and the stories row.
     private var storyAllSeen: Bool {
+        let _ = storySeenTick
         guard let g = publicStory, !g.stories.isEmpty else { return false }
         return !StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt).contains(false)
     }
@@ -340,6 +343,9 @@ struct ContactInfoView: View {
     /// Re-seed from the repository after the viewer closes: markSeenLocally advanced the group's
     /// watermark there, and reassigning `publicStory` is what re-evaluates the ring.
     private func refreshStorySeen() {
+        // A person not in the stories list (e.g. a chat with no messages yet) is never found
+        // below, so the rings are also told directly (owner 2026-11-05).
+        storySeenTick &+= 1
         if let known = StoriesRepository.shared.others.first(where: { $0.authorUid == otherUid }),
            !known.stories.isEmpty {
             publicStory = known
@@ -1874,6 +1880,13 @@ struct ContactInfoView: View {
         min(1, max(0, Double(-heroOffset) / 96))
     }
 
+    /// Per-story seen flags for the hero ring; one unseen arc while nothing is loaded (it is hidden then).
+    private var heroRingSeen: [Bool] {
+        let _ = storySeenTick
+        guard let g = publicStory, !g.stories.isEmpty else { return [false] }
+        return StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt)
+    }
+
     private var hero: some View {
         VStack(spacing: 6) {
             ZStack {
@@ -1885,12 +1898,9 @@ struct ContactInfoView: View {
                 // landed — the page visibly re-arranged itself a beat after opening. Reserving the
                 // space (same trick as the @handle line below) means the ring can only fade in, and
                 // nothing ever moves.
-                Circle()
-                    .stroke(storyAllSeen
-                            ? AnyShapeStyle(Color.secondary.opacity(0.5))     // watched → quiet grey
-                            : AnyShapeStyle(LinearGradient(colors: [Color.pink, Color.orange, Color.yellow],
-                                                           startPoint: .topLeading, endPoint: .bottomTrailing)),
-                            lineWidth: 3)
+                // ⛔ THE APP'S OWN RING (owner 2026-11-05): was the old pink-orange-yellow; now
+                // `StoryRingView`, one arc per story, its gradient and its watched grey.
+                StoryRingView(seen: heroRingSeen, lineWidth: 3)
                     .frame(width: 132, height: 132)   // the photo below plus the same 6pt gap
                     .opacity(publicStory != nil && !chromeHiddenForPhoto ? 1 : 0)
                     .animation(.easeOut(duration: 0.2), value: publicStory != nil)
