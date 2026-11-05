@@ -519,6 +519,19 @@ enum ChatWallpapers {
             groupShared[c.id] = c.groupWallpaper
             changed = true
         }
+        // ⛔ FETCHED BEFORE THE CHAT OPENS (owner 2026-11-05: a group or channel with a photo
+        // wallpaper opened bare and the photo came a second later). The photo was only fetched by
+        // the chat's own first draw, so every open after a sign-in (which wipes the photo folder)
+        // or on a new phone waited for the download. Every group photo missing from the folder is
+        // asked for here, when the chat list lands; a file check, no decode.
+        for c in convs where c.isGroup {
+            guard let raw = c.groupWallpaper, raw.hasPrefix("u:") else { continue }
+            let link = String(raw.dropFirst(2))
+            let id = groupUrlIds[link] ?? Self.sharedPhotoId(link)
+            if imageCache[id] == nil, !FileManager.default.fileExists(atPath: Self.libraryURL(id).path) {
+                fetchGroupPhoto(link, id: id)
+            }
+        }
         guard changed else { return }
         UserDefaults.standard.set(groupShared, forKey: Self.groupSharedKey)
         version &+= 1
