@@ -2454,14 +2454,18 @@ enum ChatService {
             AudioCache.store(data, for: msgRef.documentID)
             if let clientId { AudioCache.store(data, for: clientId) }
         }
-        // ⛔ UPLOAD STARTED, NOT AWAITED. The message goes out first — see the note in sendImage.
-        // A voice note is the one that matters most here: it is the main way this app is used, and
-        // the recipient can be shown a REAL voice bubble immediately, with the true waveform and the
-        // true length, because both are computed on the recorder before a byte is uploaded.
-        async let uploadedURL = uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).m4a.enc",
-                                                progressId: clientId,
-                                                attach: .init(cid: cid, messageId: msgRef.documentID,
-                                                              urlField: "audioUrl", enc: nil))
+        // ⛔ VOICE: THE SOUND GOES UP FIRST, THE MESSAGE AFTER (owner 2026-11-06, the long-standing
+        // "voice note keeps loading"). Written first, the note reached the other phone before its
+        // file and showed a loading spinner there until the upload landed (about a second on his
+        // Pixel recording, longer on a slow network, forever if it failed). A note is small, so it
+        // uploads in about a second; the sender's own bubble shows the clock meanwhile, and the other
+        // phone only ever gets a note that plays. Photos and videos keep the message-first order
+        // (the poster and progress matter there, see sendImage); this is for voice only, the same as
+        // the Android app. The Storage rule checks membership from the path, not the message.
+        let audioPath = "chat/\(cid)/\(msgRef.documentID).m4a.enc"
+        let url: String
+        do { url = try await uploadEncrypted(cipher, to: audioPath, progressId: clientId) }
+        catch { url = try await retryUpload(cipher, to: audioPath, after: error) }
 
         // Encrypt the reply snippet the same way as the conversation (group vs 1:1).
         var replyEnc: [String: Any]?
@@ -2479,7 +2483,7 @@ enum ChatService {
             // meant to exist for one listen.
             "type": "audio", "duration": duration, "waveform": viewOnce ? [] : waveform,
             "enc": meta.asDict, "text": "", "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
-            "clientTs": clientTs, "uploading": true,
+            "clientTs": clientTs, "audioUrl": url,
         ]
         if let clientId { msg["clientId"] = clientId }   // reconcile the optimistic bubble in place
         if let replyEnc { msg["replyTo"] = replyEnc }    // voice notes can be replies too (Bug 1)
@@ -2502,12 +2506,6 @@ enum ChatService {
         }
         batch.updateData(convUpdate, forDocument: convRef)
         try await batch.commit()
-
-        // Now the audio itself; the bubble has been on their screen since before this line.
-        let url: String
-        do { url = try await uploadedURL }
-        catch { url = try await retryUpload(cipher, to: "chat/\(cid)/\(msgRef.documentID).m4a.enc", after: error) }
-        try await attachMedia(["audioUrl": url], to: msgRef)
     }
 
     /// Encrypt + send a VIDEO message. Same E2EE pipeline as photos: the transcoded mp4
