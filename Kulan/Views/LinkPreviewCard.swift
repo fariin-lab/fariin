@@ -138,8 +138,16 @@ struct LinkPreviewCard: View {
                         SecureImageView(imageUrl: img, enc: enc, cid: cid, smallSync: true)
                             .frame(width: 44, height: 44)
                             .clipShape(channel ? AnyShape(SquircleShape()) : AnyShape(Circle()))
+                    } else if channel {
+                        AvatarView(name: name, photoUrl: nil, size: 44)   // the squircle's megaphone
                     } else {
-                        AvatarView(name: name, photoUrl: nil, size: 44)
+                        // A group with no photo: the group glyph, not a person (2026-11-06).
+                        ZStack {
+                            AvatarPalette.placeholderFill
+                            Image(systemName: "person.2.fill").font(.system(size: 44 * 0.35, weight: .medium))
+                                .foregroundStyle(.white)
+                        }
+                        .frame(width: 44, height: 44).clipShape(Circle())
                     }
                 }
                 .avatarSquircle(channel)

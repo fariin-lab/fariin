@@ -301,11 +301,66 @@ enum GroupNameCheck: Equatable {
     @MainActor private static var naming = Set<String>()
     @MainActor static func prewarm(name: String) {
         let n = name.lowercased()
-        if let cid = cachedCid(name: n) { warm(cid: cid); return }
+        if let cid = cachedCid(name: n) {
+            warm(cid: cid)
+            refreshCard(name: n, cid: cid)
+            return
+        }
+        // A name already known dead is asked again only after `cardTrust` (2026-11-06).
+        if let at = deadNames[n], Date().timeIntervalSince(at) < cardTrust { return }
         guard naming.insert(n).inserted else { return }
         Task {
-            if case .group(let cid) = await resolve(n) { await MainActor.run { warm(cid: cid) } }
-            await MainActor.run { _ = naming.remove(n) }
+            switch await resolve(n) {
+            case .group(let cid):
+                if deadNames.removeValue(forKey: n) != nil { LiveGroupCard.noteChanged() }
+                warm(cid: cid)
+            case .person, .none:
+                // `resolve` also says none when offline, so the page lookup decides: only the
+                // server's refusal marks the card "This link is no longer valid".
+                if case .refused = await preview(name: n, cid: nil) {
+                    if deadNames[n] == nil { LiveGroupCard.noteChanged() }
+                    deadNames[n] = Date()
+                }
+            }
+            _ = naming.remove(n)
+        }
+    }
+
+    // MARK: - A name link's card, kept current (2026-11-06)
+
+    /// How long a card trusts what it has before it asks again: the same two minutes as
+    /// `GroupLinkDoor`, at most one ask every 30 s per name, so scrolling costs nothing.
+    private static let cardTrust: TimeInterval = 120
+    @MainActor private static var deadNames: [String: Date] = [:]
+    @MainActor private static var previewAt: [String: Date] = [:]
+    @MainActor private static var cardAskedAt: [String: Date] = [:]
+
+    /// The server said no group has this public name any more (renamed, made private, deleted).
+    @MainActor static func nameIsDead(_ name: String) -> Bool {
+        deadNames[name.lowercased()] != nil
+    }
+
+    /// A card for a name already looked up: asks again once the answer is older than `cardTrust`.
+    /// If the group no longer carries this name, the name is forgotten and resolved afresh.
+    @MainActor private static func refreshCard(name n: String, cid: String) {
+        if let at = previewAt[cid], Date().timeIntervalSince(at) < cardTrust { return }
+        if let at = cardAskedAt[n], Date().timeIntervalSince(at) < 30 { return }
+        cardAskedAt[n] = Date()
+        Task {
+            let out = await preview(name: nil, cid: cid)
+            let moved: Bool
+            switch out {
+            case .found(let p): moved = p.username.lowercased() != n
+            case .refused: moved = true
+            case .failed: moved = false
+            }
+            if moved {
+                nameToCid[n] = nil
+                previews["n:" + n] = nil
+                cardAskedAt[n] = nil
+                LiveGroupCard.noteChanged()
+                prewarm(name: n)   // resolves the name again; a dead one is marked by its refusal
+            }
         }
     }
 
@@ -333,6 +388,16 @@ enum GroupNameCheck: Equatable {
     @MainActor static func cachedPeek(_ cid: String) -> Bool? { peeks[cid] }
 
     @MainActor fileprivate static func remember(_ p: PublicGroupPreview) {
+        // A name card on screen redraws when its name, photo or count moved (`LiveGroupCard`).
+        let old = previews["c:" + p.cid]
+        if old?.title != p.title || old?.photoUrl != p.photoUrl || old?.memberCount != p.memberCount
+            || old?.followerCount != p.followerCount || old?.isMember != p.isMember {
+            LiveGroupCard.noteChanged()
+        }
+        previewAt[p.cid] = Date()
+        if !p.username.isEmpty, deadNames.removeValue(forKey: p.username.lowercased()) != nil {
+            LiveGroupCard.noteChanged()
+        }
         previews["c:" + p.cid] = p
         if p.isChannel { ChannelCountBias.noteKnown(p.cid, followers: p.followerCount) }
         if !p.username.isEmpty { previews["n:" + p.username.lowercased()] = p }

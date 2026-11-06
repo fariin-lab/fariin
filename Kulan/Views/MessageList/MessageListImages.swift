@@ -322,6 +322,12 @@ final class RowAvatarView: UIView {
     var squircle = false {
         didSet { if squircle != oldValue { setNeedsLayout() } }
     }
+    /// The symbol drawn when there is no photo; nil is the person silhouette. A group invite card
+    /// sets the group glyph and a channel's the megaphone (2026-11-06), so an empty photo never
+    /// reads as a person.
+    var placeholderSymbol: String? {
+        didSet { if placeholderSymbol != oldValue { glyphSize = 0; setNeedsLayout() } }
+    }
     private var maskedSide: CGFloat = 0
 
     override func layoutSubviews() {
@@ -345,7 +351,13 @@ final class RowAvatarView: UIView {
         // comparing the two would re-render on every layout pass of every cell in the chat.
         if glyphSize != bounds.height {
             glyphSize = bounds.height
-            glyph.image = AvatarPalette.placeholderCanvas(size: bounds.height)
+            if let symbol = placeholderSymbol {
+                glyph.image = UIImage(systemName: symbol)?
+                    .withConfiguration(UIImage.SymbolConfiguration(pointSize: bounds.height * 0.35, weight: .medium))
+                    .withTintColor(.white, renderingMode: .alwaysOriginal)
+            } else {
+                glyph.image = AvatarPalette.placeholderCanvas(size: bounds.height)
+            }
         }
         imageView.frame = bounds
     }

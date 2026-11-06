@@ -254,6 +254,11 @@ final class LinkPreviewBubbleView: UIView {
             avatar.isHidden = false
             avatar.frame = rect
             avatar.squircle = channelCard
+            // No photo: a group's card shows the group glyph, a channel's the megaphone, never a person.
+            switch p.shape {
+            case .group, .groupUnavailable: avatar.placeholderSymbol = channelCard ? "megaphone.fill" : "person.2.fill"
+            default: avatar.placeholderSymbol = nil
+            }
             avatar.configure(name: p.title, photoUrl: groupPhotoRect == nil ? p.imageUrl : nil)
         } else {
             avatar.isHidden = true

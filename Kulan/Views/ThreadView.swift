@@ -177,6 +177,9 @@ struct ThreadView: View {
     /// process-wide set with no observation of its own; without this the album kept its OLD height
     /// in the layout cache while the mosaic re-solved to a new one.
     @State private var hiddenTick = 0
+    /// Bumped when a group or channel invite card's live answer lands (`LiveGroupCard`), so the card
+    /// shows today's name, photo and count, or "This link is no longer valid" (2026-11-06).
+    @State private var groupCardTick = 0
     @HeapState private var pendingViewOnceConsume: Message? = nil   // view-once photo open in the viewer → mark on close
     @State private var sendingPhoto = false
     @State private var typingSent = false
@@ -2696,6 +2699,7 @@ struct ThreadView: View {
         // A hide from anywhere (the image viewer, the gallery, the row itself) reaches the signature
         // through this tick. See `hiddenTick`.
         .onReceive(NotificationCenter.default.publisher(for: .hiddenMessagesChanged)) { _ in hiddenTick += 1 }
+        .onReceive(NotificationCenter.default.publisher(for: .groupCardsChanged)) { _ in groupCardTick += 1 }
         // Scrubbing the review knob right-to-left runs along the HOME INDICATOR's strip, and iOS
         // read it as the app-switch swipe (his report: "the app thinks I am swiping to leave").
         // While the locked bar owns the bottom edge, the system gesture goes soft: the first swipe
@@ -3873,7 +3877,7 @@ struct ThreadView: View {
         // A channel's reactions (2026-10-29): my picks live apart from the posts, so they key too.
         let chanRx = conversation?.isChannel == true
         let chanTok = chanRx ? "\(ChannelFollows.shared.myReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.pendingReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.countOverrides[cid]?.count ?? 0):\(channelReactOn)\(channelCanReact)" : "-"
-        let key = "\(chanTok)|\(CallService.shared.calleeRinging)|\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)|\(liveRequest ?? "-")"   // 2026-09-24 feature-audit: edit clock
+        let key = "\(chanTok)|\(CallService.shared.calleeRinging)|\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(groupCardTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)|\(liveRequest ?? "-")"   // 2026-09-24 feature-audit: edit clock
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
@@ -3978,6 +3982,8 @@ struct ThreadView: View {
                 var linkTok: String = "-"
                 if let lp = m.linkPreview {
                     linkTok = "L\(lp.imageUrl != nil ? 1 : 0):\(lp.title.hashValue):\(lp.desc.hashValue)"
+                    // A group card draws the server's live answer, not only the copy it carries.
+                    if lp.url.contains("fariin.com") { linkTok += ":" + LiveGroupCard.token(lp.url) }
                 }
                 out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)|\(m.views)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
             }
@@ -4091,6 +4097,7 @@ struct ThreadView: View {
         // viewedOnceTick (the view-once pill), expiryTick (the countdown).
         add("\(storiesRepo.storiesVersion)"); add("\(storiesRepo.didLoad)"); add("\(hiddenTick)")
         add("\(viewedOnceTick)")
+        add("\(groupCardTick)")   // a group invite card's live answer (`LiveGroupCard`)
         add("\(repo.expiryTick)")
         // An edit waiting for the server draws the sending clock; the chat's timer draws its icon.
         add("\(editPendingIds.count):\(editPendingIds.hashValue)")

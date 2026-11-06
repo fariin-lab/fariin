@@ -143,8 +143,10 @@ private let memberCodes = OSAllocatedUnfairLock(initialState: [String: String]()
     }
 
     /// The server's refusal for `code` ("This link is no longer valid."), if that was the last answer.
+    /// However old, like `lastFound`: a revoked link's card stays dead until a later answer says
+    /// otherwise, instead of flipping back to the sender's snapshot after `trust` (2026-11-06).
     static func refusal(_ code: String) -> String? {
-        if case .refused(let why)? = fresh(code)?.outcome { return why }
+        if case .refused(let why)? = known[code]?.outcome { return why }
         return nil
     }
 
@@ -196,10 +198,22 @@ private let memberCodes = OSAllocatedUnfairLock(initialState: [String: String]()
         default:
             // A lite answer never replaces a full one that is still trusted.
             if !(lite && (fresh(code)?.full ?? false)) {
+                let before = cardSig(known[code]?.outcome)
                 known[code] = Known(outcome: out, full: !lite, at: Date())
+                // A card on screen redraws when what it shows moved (`LiveGroupCard`).
+                if cardSig(out) != before { LiveGroupCard.noteChanged() }
             }
         }
         return out
+    }
+
+    /// The parts of an answer a chat's card draws: name, photo, count, member, dead.
+    private static func cardSig(_ o: Outcome?) -> String {
+        switch o {
+        case .found(let p)?: return "\(p.title)|\(p.photoUrl ?? "")|\(p.memberCount)|\(p.isMember)|\(p.isChannel)"
+        case .refused?: return "X"
+        case .failed?, nil: return "-"
+        }
     }
 
     /// After a join through the sheet: the card says Open Group from now on, and the next tap goes
