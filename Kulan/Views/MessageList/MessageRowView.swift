@@ -801,15 +801,6 @@ final class MessageRowView: UIView {
     private let metaLabel = UILabel()
 
     private var mediaView: MediaBubbleView?
-    /// The channel capsule of a forwarded channel post (`FwdChannelCapsule`), made on first need.
-    private(set) var fwdCapsule: FwdChannelCapsule?
-
-    /// Is this point on the channel capsule, and on its Follow part.
-    func hitsFwdCapsule(_ p: CGPoint) -> Bool { fwdCapsule.map { !$0.isHidden && $0.frame.contains(p) } ?? false }
-    func hitsFwdFollow(_ p: CGPoint) -> Bool {
-        guard let c = fwdCapsule, !c.isHidden else { return false }
-        return c.hitsFollow(convert(p, to: c))
-    }
 
     /// While the picture is lifted into the viewer, the bubble shows nothing where it was: the
     /// fill and the rim get a hole the picture's size (owner 2026-10-29, "hide that empty
@@ -1790,19 +1781,6 @@ final class MessageRowView: UIView {
     }
 
     private func applyForwarded(_ b: BubblePlan) {
-        // A channel post forwarded here: the channel capsule instead of the word (2026-10-30). Its
-        // rect is the tag's, which starts 3pt after a zero-width glyph; the capsule takes that back.
-        if let rect = b.forwarded, case .bubble(let row)? = model?.content, let fc = row.fwdChannel {
-            forwardedLabel?.isHidden = true; forwardedIcon?.isHidden = true
-            let cap = fwdCapsule ?? {
-                let v = FwdChannelCapsule(); addSubview(v); fwdCapsule = v; return v
-            }()
-            cap.isHidden = false
-            cap.frame = CGRect(x: rect.minX - 3, y: rect.minY, width: rect.width + 3, height: rect.height)
-            cap.configure(fc)
-            return
-        }
-        fwdCapsule?.isHidden = true
         guard let rect = b.forwarded, let iconRect = b.forwardedIcon else {
             forwardedLabel?.isHidden = true; forwardedIcon?.isHidden = true; return
         }
