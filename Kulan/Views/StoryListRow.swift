@@ -307,6 +307,13 @@ struct StoryListRow: View {
     /// The row's time line for a story: none for Fariin's welcome stories (owner 2026-10-24).
     static func ago(_ s: Story) -> String { s.isWelcome ? "" : ago(s.createdAt) }
 
+    /// The small line under a list row's name. Fariin's own stories (and the welcome stories) say
+    /// "Official" instead of a time (owner 2026-11-06).
+    static func subtitle(_ g: StoryGroup) -> String {
+        if OfficialChannel.isOfficial(g.authorUid) || g.stories.last?.isWelcome == true { return "Official" }
+        return g.stories.last.map { ago($0) } ?? ""
+    }
+
     /// "10h ago" — the wording on his screenshot.
     static func ago(_ d: Date) -> String {
         let s = max(0, Int(Date().timeIntervalSince(d)))
