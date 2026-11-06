@@ -1303,6 +1303,7 @@ struct StoryViewer: View {
     @State private var editViewers: Story?
     @State private var editCaption: Story?          // "…" → Edit Caption (owner 2026-10-27)
     @State private var ownRepostGone = false            // the repost's original was mine and is gone
+    @State private var photosDenied = false             // Save refused by Photos -> "open Settings" alert
     @State private var profileSheet: StoryGroup?        // tap the header → profile sheet OVER the story (paused)
     @State private var myPostedUp = false                // tap MY header → my Posted Stories, over the story
     /// Fariin's header tapped (official stories, owner 2026-10-16): the channel's own info page.
@@ -1803,7 +1804,7 @@ struct StoryViewer: View {
     // the composer that was the whole "repost is frozen" report (see `StoryComposerPresenter`).
     private var sheetUp: Bool {
         shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || myPostedUp || officialInfoUp || editViewers != nil || editCaption != nil
-            || repostUp || repostLoading || shareURL != nil || ownRepostGone
+            || repostUp || repostLoading || shareURL != nil || ownRepostGone || photosDenied
             // ⛔ The group page from the header (owner 2026-10-26: it closed by itself after a few
             // seconds). It was not on this list, so the story ran on under it, reached its end and
             // closed the viewer, taking the page with it.
@@ -2255,6 +2256,12 @@ struct StoryViewer: View {
         } message: {
             Text("This repost is of your own story, which you deleted or which has expired, so it can't be opened.")
         }
+        .alert("Photos access is off", isPresented: $photosDenied) {
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Allow Fariin to add photos in Settings to save this story.") }
         .alert("Delete this story?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) {
                 // Seamless delete: the viewer slides to the adjacent item itself; we just remove from the db.
@@ -5458,13 +5465,17 @@ struct StoryViewer: View {
         Task {
             guard let img = await loadCurrentImage(captured) else { return }
             let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-            guard status == .authorized || status == .limited else { return }
-            try? await PHPhotoLibrary.shared().performChanges {
-                PHAssetChangeRequest.creationRequestForAsset(from: img)
+            guard status == .authorized || status == .limited else {
+                await MainActor.run { photosDenied = true }
+                return
             }
+            let saved = (try? await PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAsset(from: img)
+            }) != nil
             await MainActor.run {
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-                flashSentToast("Saved")
+                // "Saved" and the success tap only when the photo really landed.
+                if saved { UINotificationFeedbackGenerator().notificationOccurred(.success) }
+                flashSentToast(saved ? "Saved" : "Couldn't save")
             }
         }
     }
@@ -5478,14 +5489,18 @@ struct StoryViewer: View {
             let mp4 = FileManager.default.temporaryDirectory.appendingPathComponent("story-save-\(UUID().uuidString).mp4")
             try? FileManager.default.moveItem(at: tmp, to: mp4)
             let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-            guard status == .authorized || status == .limited else { return }
-            try? await PHPhotoLibrary.shared().performChanges {
-                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: mp4)
+            guard status == .authorized || status == .limited else {
+                try? FileManager.default.removeItem(at: mp4)
+                await MainActor.run { photosDenied = true }
+                return
             }
+            let saved = (try? await PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: mp4)
+            }) != nil
             try? FileManager.default.removeItem(at: mp4)
             await MainActor.run {
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-                flashSentToast("Saved")
+                if saved { UINotificationFeedbackGenerator().notificationOccurred(.success) }
+                flashSentToast(saved ? "Saved" : "Couldn't save")
             }
         }
     }
