@@ -1901,14 +1901,14 @@ service cloud.firestore {
       //     owner 2026-10-18: except through delegatedAdminEditOK (the `addAdmins` right).
       // Everything else (sends, previews, own private state) is untouched by this check.
       // owner 2026-10-18: THE GROUP WALLPAPER ("only the owner or an admin can change it; everyone
-      // sees it"). A group's `wallpaper` is `ChatWallpaper.stored` (none, g:/c:/b: + an id) or
+      // sees it"). A group's `wallpaper` is `ChatWallpaper.stored` (none, g:/c:/b:/a: + an id) or
       // "u:" + a Firebase Storage download link for a photo. Never on a 1:1. WHO may write it is
       // the change-info test below, like the name and photo.
       function groupWallpaperOK() {
         let w = request.resource.data.get('wallpaper', null);
         return resource.data.get('type', '') == 'group'
           && w is string && w.size() <= 1024
-          && (w == 'none' || w.matches('[gcb]:[A-Za-z0-9_-]{1,64}')
+          && (w == 'none' || w.matches('[gcba]:[A-Za-z0-9_-]{1,64}')
               || w.matches('u:https://firebasestorage[.]googleapis[.]com/.*'));
       }
       // ⛔ ROLE — owner 2026-10-18: a member's tag in the group (`roles.{uid}` = {text, emoji?}),
@@ -2917,14 +2917,14 @@ service cloud.firestore {
                       'fileName', 'fileSize', 'waveform', 'duration', 'blurhash', 'thumb',
                       'linkPreview', 'poll', 'locationCard', 'contactCard', 'replyTo', 'reactions',
                       'videoEnc', 'thumbEnc', 'viewOnce', 'mentions', 'forwarded', 'fwdChannel',
-                      'edits', 'quote'])   // 2026-09-24 feature-audit: the edit history is content too
+                      'edits', 'quote', 'bs', 'bsd'])   // 2026-09-24 feature-audit: the edit history is content too
                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
                      ['deleted', 'text', 'type', 'enc', 'imageUrl', 'videoUrl', 'thumbUrl',
                       'audioUrl', 'fileUrl', 'album', 'fileName', 'fileSize', 'waveform',
                       'duration', 'blurhash', 'thumb', 'linkPreview', 'poll', 'locationCard',
                       'contactCard', 'replyTo', 'reactions', 'videoEnc', 'thumbEnc',
                       'viewOnce', 'mentions', 'forwarded', 'fwdChannel', 'edits', 'editedAt',
-                      'deletedBy', 'quote']))   // 2026-09-24 feature-audit: the admin's signature
+                      'deletedBy', 'quote', 'bs', 'bsd']))   // 2026-09-24 feature-audit: the admin's signature
             // LIVE CALL ROW (2026-08-12): a call record is created at ring time ("Ringing") and the
             // SAME doc is finalised later (ongoing / answered / missed, duration, voice→video
             // upgrade). Either participant may update ONLY these call fields — the callee must be

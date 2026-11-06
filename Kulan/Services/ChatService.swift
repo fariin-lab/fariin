@@ -3540,7 +3540,11 @@ enum ChatService {
                               // missing here while the rule refuses a tombstone that keeps either.
                               // So every media or edited message had its tombstone REFUSED and fell
                               // to the hard delete below, losing the placeholder.
-                              "thumb", "edits", "editedAt"] {
+                              "thumb", "edits", "editedAt",
+                              // 2026-11-06 check: a quote, and the bubble style, go with the content
+                              // (the rule refuses a tombstone that keeps `quote`, and a deleted bubble
+                              // must not keep its style).
+                              "quote", "bs", "bsd"] {
                         strip[k] = FieldValue.delete()
                     }
                     // 2026-09-24 feature-audit: a group admin (the "Delete messages" right) deleting
