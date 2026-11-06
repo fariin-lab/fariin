@@ -294,6 +294,10 @@ struct ImageViewerView: View {
             MediaDismissHost.scheduleOrphanSweep()
         }
         .alert("Couldn't save photo", isPresented: $saveError) {
+            // The usual cause is Photos access being off: one tap to the switch.
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+            }
             Button("OK", role: .cancel) {}
         } message: { Text("Check Photos permission and try again.") }
         .alert("Couldn't delete for everyone", isPresented: $deleteFailed) {
