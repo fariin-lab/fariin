@@ -408,7 +408,9 @@ enum MessageRowModelBuilder {
                              // now but a bit behind other apps"). The server counts the author's view
                              // as the post is created (onNewMessage), so 1 is already true; waiting for
                              // the server's write only made it appear late.
-                             views: ctx.isChannel && !msg.deleted
+                             // Not while it is still on its way (offline): the clock says so, and
+                             // a "1" beside it read as posted (Android check, 2026-11-06).
+                             views: ctx.isChannel && !msg.deleted && msg.sendState == nil
                                  ? (msg.authorId == ctx.me ? max(msg.views, 1) : msg.views) : nil,
                              signature: ctx.isChannel && ctx.signPosts && !msg.deleted ? ctx.nameFor(msg.authorId) : nil,
                              tick: tick,
