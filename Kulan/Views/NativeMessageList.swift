@@ -2560,7 +2560,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// The field the newest row's text left from, when that row is a text bubble this phone just
     /// sent. Taken once from the composer, so a later land cannot fly the same send twice.
     private func textSendSource(for id: String?) -> ChatComposerView.TextSendSource? {
-        guard let id, case .bubble(let b)? = rowModels[id]?.content, b.isMe else { return nil }
+        guard let id, case .bubble(let b)? = rowModels[id]?.content,
+              b.isMe || (b.wide && b.meta.tick == .sending) else { return nil }
         switch b.body {
         case .text, .jumbomoji, .voice: break
         default: return nil
@@ -3556,7 +3557,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let ownSendLanded = newlyNewest > 0 && ids.count > oldSet.count
             && ids.suffix(newlyNewest).contains { id in
                 switch rowModels[id]?.content {
-                case .bubble(let b)?: return b.isMe && (b.meta.tick == .sending || b.meta.tick == .failed)
+                // A channel post of mine is drawn on the reader's side (`wide`), not as mine, but a
+                // sending tick on one can only be my own post (owner 2026-11-06: "add my send
+                // animation when I post in a channel").
+                case .bubble(let b)?: return (b.isMe || b.wide) && (b.meta.tick == .sending || b.meta.tick == .failed)
                 case .call(let c)?: return c.mine
                 default: return false
                 }
