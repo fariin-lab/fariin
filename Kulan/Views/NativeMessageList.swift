@@ -6338,10 +6338,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard case .bubble(let b)? = rowModels[id]?.content, b.fill.isWallpaperBlur else { return snap }
         let box = cell.previewBubble
         let r = box.convert(box.bounds, to: nil).offsetBy(dx: -frame.minX, dy: -frame.minY)
-        let back = UIView(frame: r)
-        back.backgroundColor = BubblePalette.receivedFill
+        // The same live glass the bubble wears in the chat, not a solid colour (owner 2026-11-06:
+        // "long press bubble becomes full color, use the color you used before").
+        let back = UIVisualEffectView(effect: UIBlurEffect(style: Theme.receivedBlurStyle))
+        back.frame = r
         back.layer.cornerRadius = min(18, r.height / 2)
         back.layer.cornerCurve = .continuous
+        back.clipsToBounds = true
         back.isUserInteractionEnabled = false
         back.autoresizingMask = [.flexibleWidth, .flexibleHeight]   // follows the overlay's resize
         let holder = UIView(frame: CGRect(origin: .zero, size: snap.bounds.size))

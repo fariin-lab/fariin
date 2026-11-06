@@ -36,6 +36,9 @@ struct QuotedInItem: Identifiable, Equatable {
 /// the quote's views). A short count line on top; quotes in private chats, groups and private
 /// channels are only a number at the bottom, the server never names them (`getPostQuotes`).
 struct QuotesPage: View {
+    /// The card's soft grey. In dark mode the sheet itself is that grey, so the card goes one step
+    /// lighter there or it vanishes (owner 2026-11-06 screenshot).
+    static let cardGrey = UIColor { $0.userInterfaceStyle == .dark ? .tertiarySystemBackground : .secondarySystemBackground }
     let cid: String
     let mid: String
     let post: Message?
@@ -185,16 +188,16 @@ struct QuotesPage: View {
         }
         .padding(9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))   // seen in dark mode too
+        .background(Color(Self.cardGrey), in: RoundedRectangle(cornerRadius: 18, style: .continuous))   // the bubble's corners
     }
 
     @ViewBuilder private var cardPicture: some View {
         if let thumb {
             Image(uiImage: thumb).resizable().scaledToFill()
                 .frame(width: 40, height: 40)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         } else if let post, hasPicture(post) {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.secondary.opacity(0.15))
                 .frame(width: 40, height: 40)
                 .overlay(Image(systemName: kindIcon(post)).font(.caption).foregroundStyle(.secondary))

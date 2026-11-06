@@ -204,6 +204,8 @@ final class LinkPreviewBubbleView: UIView {
         // line only, give it a colour", then "don't use blue"). The bubble's own text tint, faint.
         let quoteCard = p.url.hasPrefix("fariin-quote://")
         backing.backgroundColor = tint.withAlphaComponent(quoteCard ? 0.08 : 0.10)
+        // A quote card is as round as the bubble (owner 2026-11-06: "use exactly the rounded the bubble uses").
+        if quoteCard { backing.layer.cornerRadius = 18 }
         backing.layer.borderWidth = 0
         backing.layer.borderColor = nil
 
@@ -241,7 +243,7 @@ final class LinkPreviewBubbleView: UIView {
             // A story card's picture sits inside the card with its own corners; an article's runs
             // edge to edge and the card clips it.
             if quoteCard {
-                hero.layer.cornerRadius = 10
+                hero.layer.cornerRadius = 14   // rounder with the card (owner 2026-11-06)
                 hero.layer.cornerCurve = .continuous
                 hero.clipsToBounds = true
             } else if case .story = p.shape {
