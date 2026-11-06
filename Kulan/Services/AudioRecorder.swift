@@ -109,6 +109,10 @@ final class AudioRecorder {
     /// long after the question stopped being relevant.
     private var wantsRecording = false
 
+    /// Called on the main thread when the first-ever permission prompt is answered "Don't Allow",
+    /// so the chat can show the same "Microphone access is off" alert a later hold gets.
+    @ObservationIgnored var onPermissionRefused: (() -> Void)?
+
     init() {
         // Observe audio-session interruptions (phone call, Siri, alarm, another app grabbing the mic).
         interruptionObserver = NotificationCenter.default.addObserver(
@@ -260,7 +264,12 @@ final class AudioRecorder {
         // — it records the permission — and nothing else. The next hold starts instantly, because by
         // then the warm path above has what it needs.
         AVAudioApplication.requestRecordPermission { [weak self] granted in
-            guard let self, granted, self.wantsRecording else { return }
+            guard let self else { return }
+            guard granted else {
+                DispatchQueue.main.async { self.onPermissionRefused?() }
+                return
+            }
+            guard self.wantsRecording else { return }
             DispatchQueue.global(qos: .userInitiated).async {
                 let session = AVAudioSession.sharedInstance()
                 try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .duckOthers])

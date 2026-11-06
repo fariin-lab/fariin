@@ -10232,6 +10232,8 @@ struct ThreadView: View {
         // not recording yet, so nothing can mute it. Every later tap is covered by the opt-in.
         // See `AudioRecorder.allowHapticsWhileRecording`.
         impact(.medium)
+        // The first-ever "Don't Allow" gets the same Settings alert as a later hold.
+        recorder.onPermissionRefused = { micDenied = true }
         recorder.requestAndStart()
     }
 
