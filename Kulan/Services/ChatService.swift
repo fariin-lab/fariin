@@ -1313,6 +1313,8 @@ enum ChatService {
         }
 
         let cipher = try await Crypto.shared.encryptForConversation(cid, t)
+        // A quote with no words of mine: the chat list says "Quoted post" (owner 2026-11-06).
+        let summary = t.isEmpty && quote != nil ? try await Crypto.shared.encryptForConversation(cid, "Quoted post") : cipher
         var replyEnc: [String: Any]?
         if let r = replyTo {
             let rc = try await Crypto.shared.encryptForConversation(cid, r.text)
@@ -1454,7 +1456,7 @@ enum ChatService {
         }
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
-            "lastMessage": cipher,
+            "lastMessage": summary,
             "lastSender": uid,                 // drives the read-receipt ticks in the chat list
             "updatedAt": FieldValue.serverTimestamp(),
         ]
@@ -1538,6 +1540,7 @@ enum ChatService {
                                       preview: OutgoingLinkPreview? = nil, forwarded: Bool = false,
                                       clientTs: Double, turn: SendTurn, quote: String? = nil) async throws {
         let cipher = try await Crypto.shared.sealForGroup(t, members: members, cid: cid)
+        let summary = t.isEmpty && quote != nil ? try await Crypto.shared.sealForGroup("Quoted post", members: members, cid: cid) : cipher
         var replyEnc: [String: Any]?
         if let r = replyTo {
             let rc = try await Crypto.shared.sealForGroup(r.text, members: members, cid: cid)
@@ -1587,12 +1590,12 @@ enum ChatService {
         }
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
-            "lastMessage": cipher,
+            "lastMessage": summary,
             "lastSender": uid,
             "updatedAt": FieldValue.serverTimestamp(),
         ]
         // 2026-10-19 groups v2: words in the clear say they are a member's (Conversation.lastPlainTag).
-        if !cipher.hasPrefix("enc") { convUpdate["lastPlainTag"] = Conversation.plainTag(cipher) }
+        if !summary.hasPrefix("enc") { convUpdate["lastPlainTag"] = Conversation.plainTag(summary) }
         for m in members where m != uid {
             convUpdate["unreadCount.\(m)"] = FieldValue.increment(Int64(1))
         }

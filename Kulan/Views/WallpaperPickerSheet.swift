@@ -104,11 +104,10 @@ struct WallpaperPickerSheet: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
                         noneTile.id("none")
-                        // Moving wallpapers (owner 2026-11-06), playing in their tiles. Not for a
-                        // group's shared wallpaper yet: members on older builds would see none.
-                        if !sharedGroup {
-                            ForEach(AnimatedWallpapers.all) { a in animatedTile(a).id("a-\(a.id)") }
-                        }
+                        // Moving wallpapers (owner 2026-11-06), playing in their tiles. In a group
+                        // too (his word): admins set it (server setGroupWallpaper accepts "a:"),
+                        // every member sees it; members on older builds see no wallpaper.
+                        ForEach(AnimatedWallpapers.all) { a in animatedTile(a).id("a-\(a.id)") }
                         ForEach(ChatWallpapers.all) { g in gradientTile(g).id(g.id) }   // built-ins: never deletable
                         // The user's WALLPAPER LIBRARY: every gallery photo ever imported, newest first,
                         // always shown (full history, not just the current one). Long-press → Delete.
