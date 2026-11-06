@@ -1125,7 +1125,17 @@ struct CallsView: View {
                         }
                         // The empty states live INSIDE the list, under whatever links there are, so
                         // the create row above them is always there, even before the first call.
-                        if (!repo.hasLoaded || repo.calls.isEmpty) && liveEntry == nil {
+                        if repo.hasLoaded && repo.loadFailed && repo.calls.isEmpty && liveEntry == nil {
+                            // A failed or stalled load is not an empty history: say so, with a retry.
+                            ContentUnavailableView {
+                                Label("Couldn't Load Calls", systemImage: "wifi.exclamationmark")
+                            } description: {
+                                Text("Check your connection and try again.")
+                            } actions: {
+                                Button("Try Again") { Task { await repo.load(force: true) } }
+                            }
+                            .callsPlaceholderRow()
+                        } else if (!repo.hasLoaded || repo.calls.isEmpty) && liveEntry == nil {
                             EmptyStateView(title: "No Calls Yet", icon: "phone",
                                            text: "Your call history will appear here.")
                                 .callsPlaceholderRow()

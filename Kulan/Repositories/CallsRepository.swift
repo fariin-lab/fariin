@@ -153,6 +153,9 @@ final class CallsRepository {
     var calls: [CallEntry] = []
     var loading = false
     var hasLoaded = false   // false until the first load finishes -> drives the skeleton
+    /// The last load failed or stalled before any history arrived. With an empty list the tab shows
+    /// the failure and Try Again instead of "No Calls Yet". Cleared by the next good load.
+    var loadFailed = false
     private var lastLoadedAt: Date?
     /// audit M-090, 2026-10-07: a forced load that arrived while another was running used to be
     /// dropped, so the post-call refresh could publish the row as it was BEFORE the call's final
@@ -189,6 +192,7 @@ final class CallsRepository {
         lastFullAt = nil
         calls = []
         hasLoaded = false
+        loadFailed = false
         loading = false
         reloadRequested = false
         lastLoadedAt = nil
@@ -220,7 +224,7 @@ final class CallsRepository {
 
         // Safety net: never leave the shimmer skeleton up forever if a query stalls on bad network.
         Task { try? await Task.sleep(nanoseconds: 8_000_000_000)
-            await MainActor.run { if !self.hasLoaded { self.hasLoaded = true; self.loading = false } } }
+            await MainActor.run { if !self.hasLoaded { self.hasLoaded = true; self.loading = false; self.loadFailed = true } } }
 
         // audit M-090, 2026-10-07: a thrown query is NOT an empty history. `try?` made the two the
         // same, so a weak network published "No calls", zeroed the badge, and the 30 s TTL then
@@ -229,7 +233,7 @@ final class CallsRepository {
             .whereField("users", arrayContains: me).getDocuments() else {
             let again = await MainActor.run { () -> Bool in
                 guard self.generation == myGeneration else { return false }
-                self.loading = false; self.hasLoaded = true
+                self.loading = false; self.hasLoaded = true; self.loadFailed = true
                 defer { self.reloadRequested = false }
                 return self.reloadRequested
             }
@@ -312,7 +316,7 @@ final class CallsRepository {
             if adhocFailed { merged += self.calls.filter { $0.adhoc != nil } }
             merged.removeAll { HiddenCalls.isHidden($0.id) }   // locally deleted entries stay gone
             merged.sort { $0.date > $1.date }
-            self.calls = merged; self.loading = false; self.hasLoaded = true
+            self.calls = merged; self.loading = false; self.hasLoaded = true; self.loadFailed = false
             self.chatCache = newCache   // chats gone from my list drop out with it
             // A partial read is not a fresh list: leave the TTL open so the next visit tries again.
             if failed.isEmpty, !adhocFailed {
