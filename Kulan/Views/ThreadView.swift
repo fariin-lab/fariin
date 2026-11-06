@@ -2788,7 +2788,8 @@ struct ThreadView: View {
         // ⛔ THE KEYBOARD AFTER THE PUSH, NOT DURING IT (owner 2026-11-06: it slid in from the right
         // with the chat). This chat was just pushed; focusing at once raised the keyboard inside the
         // sliding screen. Once the push has landed it rises from the bottom as usual.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { inputFocused = true }
+        // 0.4 s: the push is just landing, so the keyboard follows it without a visible wait.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { inputFocused = true }
     }
 
     private func startOwnGroupDoc() {
