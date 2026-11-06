@@ -1098,6 +1098,7 @@ struct ActivityView: UIViewControllerRepresentable {
 // (AppearancePages.swift). Theme cards and the doors apply to ALL chats.
 struct AppearanceSettingsView: View {
     @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
+    @AppStorage(AnimatedWallpapers.enabledKey) private var animatedWallpapers = true
     @Environment(\.colorScheme) private var scheme
     private var dark: Bool { scheme == .dark }
     private var wallStore: WallpaperStore { .shared }
@@ -1141,6 +1142,14 @@ struct AppearanceSettingsView: View {
                         accessory: AnyView(Text(AppAppearance(rawValue: appearanceRaw)?.label ?? "System")
                             .foregroundStyle(.secondary))) { NightModePage() }
             }
+
+            // Owner 2026-11-06: moving wallpapers can be stilled here, on top of the phone's own
+            // Reduce Motion and Low Power Mode, which still them anyway.
+            Section {
+                Toggle("Animated Wallpapers", isOn: $animatedWallpapers)
+            } footer: {
+                Text("When off, animated wallpapers show a still picture. They also stop moving with Reduce Motion or Low Power Mode on.")
+            }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Appearance")
@@ -1176,6 +1185,10 @@ struct AppearanceSettingsView: View {
             } else { Color(.secondarySystemGroupedBackground) }
         case .color(let hex):
             Color(hex: hex)
+        case .animated(let id):
+            if let a = AnimatedWallpapers.find(id) {
+                AnimatedWallpaperView(wallpaper: a, dark: dark, preview: true)
+            } else { Color(.secondarySystemGroupedBackground) }
         case .preset(let id):
             if let g = WallpaperPreset(id: id).theme {
                 GradientWallpaperView(g: g, dark: dark)

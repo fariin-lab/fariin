@@ -78,6 +78,7 @@ struct WallpaperPickerSheet: View {
         case .photo(let id):   return "p-\(id)"
         case .color(let hex):  return "c-\(hex)"
         case .preset(let id):  return "b-\(id)"
+        case .animated(let id): return "a-\(id)"
         }
     }
 
@@ -87,7 +88,7 @@ struct WallpaperPickerSheet: View {
     private var applyTint: Color {
         switch selected {
         case .gradient(let id): return ChatWallpapers.gradient(id)?.tint ?? Color(hex: 0x3DA1FD)
-        case .photo, .preset:   return Color(hex: 0x3DA1FD)
+        case .photo, .preset, .animated: return Color(hex: 0x3DA1FD)
         case .color(let hex):   return Color(hex: hex)
         case .none:             return selectedColor?.swatch ?? Color.secondary   // colour-only change → tint with it
         }
@@ -103,6 +104,11 @@ struct WallpaperPickerSheet: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
                         noneTile.id("none")
+                        // Moving wallpapers (owner 2026-11-06), playing in their tiles. Not for a
+                        // group's shared wallpaper yet: members on older builds would see none.
+                        if !sharedGroup {
+                            ForEach(AnimatedWallpapers.all) { a in animatedTile(a).id("a-\(a.id)") }
+                        }
                         ForEach(ChatWallpapers.all) { g in gradientTile(g).id(g.id) }   // built-ins: never deletable
                         // The user's WALLPAPER LIBRARY: every gallery photo ever imported, newest first,
                         // always shown (full history, not just the current one). Long-press → Delete.
@@ -595,6 +601,23 @@ struct WallpaperPickerSheet: View {
                     .foregroundStyle(.secondary)
                 }
         } action: { preview(.none) }
+    }
+
+    /// A moving wallpaper's tile: the real animation at tile size, with a small "play" mark so it
+    /// reads as animated even while motion is off.
+    private func animatedTile(_ a: AnimatedWallpaper) -> some View {
+        tile(isSelected: selected == .animated(a.id)) {
+            AnimatedWallpaperView(wallpaper: a, dark: dark, preview: true)
+                .overlay(alignment: .topLeading) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(5)
+                        .background(Circle().fill(.black.opacity(0.35)))
+                        .padding(6)
+                }
+                .accessibilityLabel("\(a.name), animated")
+        } action: { preview(.animated(a.id)) }
     }
 
     private func gradientTile(_ g: WallpaperGradient) -> some View {

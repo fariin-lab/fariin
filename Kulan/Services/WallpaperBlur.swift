@@ -74,6 +74,10 @@ import UIKit
     static func headerBackdrop(for cid: String, dark: Bool) -> UIUserInterfaceStyle {
         let store = WallpaperStore.shared
         guard store.hasWallpaper(for: cid) else { return .unspecified }
+        // A moving wallpaper says itself whether its top is dark (nothing still to measure).
+        if case .animated(let id) = store.wallpaper(for: cid), let a = AnimatedWallpapers.find(id) {
+            return a.topIsDark(dark) ? .dark : .light
+        }
         let frame = windowFrame
         guard frame.width > 1, frame.height > 1 else { return .unspecified }
         let key = "hdr|\(cid)|\(dark)|\(store.version)"
@@ -147,8 +151,11 @@ import UIKit
         let store = WallpaperStore.shared
         // The wallpaper going AWAY is the same staleness the other way round: an off-screen bubble
         // would go on showing a slice of a picture the chat no longer has. Same broadcast, emptied.
+        // A moving wallpaper has no still picture to cut slices from (owner 2026-11-06): no state,
+        // so `Theme.receivedSurface` gives the live material blur, which follows the motion.
         guard !UIAccessibility.isReduceTransparencyEnabled,
               store.hasWallpaper(for: cid),
+              !store.wallpaper(for: cid).isAnimated,
               frame.width > 1, frame.height > 1
         else {
             WallpaperBlurSliceView.clear(cid)
@@ -251,7 +258,9 @@ import UIKit
 
     static func headerPicture(for cid: String, dark: Bool, size: CGSize) -> UIImage? {
         let store = WallpaperStore.shared
-        guard store.hasWallpaper(for: cid), size.width > 1, size.height > 1 else { return nil }
+        // A moving wallpaper: no still copy behind the header (it would freeze over the motion).
+        guard store.hasWallpaper(for: cid), !store.wallpaper(for: cid).isAnimated,
+              size.width > 1, size.height > 1 else { return nil }
         let key = "\(cid)|\(dark)|\(Int(size.width))x\(Int(size.height))|\(store.version)"
         if let hit = headerCache[key] { return hit }
         let view = ChatWallpaperBackground(cid: cid, pictureSize: size)

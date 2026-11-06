@@ -161,6 +161,7 @@ enum SettingsIndex {
         page("App Icon", ap, "app icon home screen icon alternate logo") { AppIconPage() }
         page("Quick Reaction", ap, "quick reaction double tap emoji react heart like") { QuickReactionPage() }
         page("Night Mode", ap, "night mode dark mode light mode theme system appearance") { NightModePage() }
+        row("Animated Wallpapers", ap, "animated wallpapers moving background motion liquid water aurora still") { AppearanceSettingsView() }
 
         // ── Chats ───────────────────────────────────────────────────────────────────────────
         let ch = [chats]

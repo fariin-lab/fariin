@@ -21,6 +21,9 @@ enum ChatWallpaper: Equatable {
     case photo(String)      // library photo id (WallpaperStore.libraryIds)
     case color(UInt)        // a plain solid-colour background (hex)
     case preset(String)     // legacy id for a built-in theme (see WallpaperPreset.theme)
+    /// A moving wallpaper (owner 2026-11-06): an id in `AnimatedWallpapers.all`, drawn live by a
+    /// shader. Builds before this one read "a:" as no wallpaper.
+    case animated(String)
 
     // Compact string form for UserDefaults.
     var stored: String {
@@ -30,6 +33,7 @@ enum ChatWallpaper: Equatable {
         case .photo(let id):   return "p:\(id)"
         case .color(let hex):  return "c:\(String(format: "%06X", hex))"
         case .preset(let id):  return "b:\(id)"
+        case .animated(let id): return "a:\(id)"
         }
     }
     init(stored: String?) {
@@ -39,9 +43,15 @@ enum ChatWallpaper: Equatable {
         case let s? where s.hasPrefix("p:"): self = .photo(String(s.dropFirst(2)))
         case let s? where s.hasPrefix("c:"): self = .color(UInt(s.dropFirst(2), radix: 16) ?? 0)
         case let s? where s.hasPrefix("b:"): self = .preset(String(s.dropFirst(2)))
+        case let s? where s.hasPrefix("a:"):
+            let id = String(s.dropFirst(2))
+            self = AnimatedWallpapers.find(id) == nil ? .none : .animated(id)
         default: self = .none
         }
     }
+
+    /// A moving wallpaper: bubbles and pills over it take a live blur, not a still picture of it.
+    var isAnimated: Bool { if case .animated = self { return true } else { return false } }
     static let legacyMarker = "__legacy__"
 
     /// The bubble colour Auto uses on this wallpaper — its theme's `bubbleHex`, the reference app's
@@ -50,7 +60,7 @@ enum ChatWallpaper: Equatable {
         switch self {
         case .gradient(let id): return ChatWallpapers.themeColor(id)
         case .preset(let id):   return WallpaperPreset(id: id).theme?.autoColor
-        case .none, .photo, .color: return nil
+        case .none, .photo, .color, .animated: return nil
         }
     }
 }
@@ -860,6 +870,14 @@ struct ChatWallpaperBackground: View {
             }
         case .color(let hex):
             Color(hex: hex)
+        case .animated(let id):
+            // A moving wallpaper (owner 2026-11-06). Nothing over it uses a still picture of it:
+            // `WallpaperBlur` hands out none, so incoming bubbles and pills take the live blur.
+            if let a = AnimatedWallpapers.find(id) {
+                AnimatedWallpaperView(wallpaper: a, dark: dark)
+            } else {
+                Theme.bg(dark)
+            }
         case .preset(let id):
             // ⚠️ NO SCRIM ON A BUILT-IN, and that is a decision rather than an omission.
             // The scrim exists because an imported gallery photo can be anything — a white

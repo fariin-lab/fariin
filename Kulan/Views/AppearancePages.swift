@@ -595,6 +595,10 @@ struct WallpaperPreviewScreen: View {
             } else { Theme.bg(dark) }
         case .color(let hex):
             Color(hex: hex)
+        case .animated(let id):
+            if let a = AnimatedWallpapers.find(id) {
+                AnimatedWallpaperView(wallpaper: a, dark: dark, preview: true)
+            } else { Theme.bg(dark) }
         case .preset(let id):
             if let g = WallpaperPreset(id: id).theme {
                 GradientWallpaperView(g: g, dark: dark, blur: blurred ? 10 : 0)
@@ -790,6 +794,10 @@ struct ChatColorPage: View {
             } else { Color(.secondarySystemGroupedBackground) }
         case .color(let hex):
             Color(hex: hex)
+        case .animated(let id):
+            if let a = AnimatedWallpapers.find(id) {
+                AnimatedWallpaperView(wallpaper: a, dark: dark, preview: true)
+            } else { Color(.secondarySystemGroupedBackground) }
         case .preset(let id):
             if let g = WallpaperPreset(id: id).theme {
                 GradientWallpaperView(g: g, dark: dark)
