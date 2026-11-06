@@ -65,7 +65,10 @@ enum BubbleDecorSets {
 
     /// Placed for one bubble. Theirs is a mirror of mine (the art stays on the outer side). A top
     /// corner only on the run's first bubble, so it never lands on the bubble above.
-    static func placed(styleId: String, isMe: Bool, dark: Bool, first: Bool) -> [PlacedDecor] {
+    /// `besideAvatar`: their bubble in a group, whose bottom-leading corner is next to the sender's
+    /// face; nothing is drawn there (5-angle check: it covered the avatar).
+    static func placed(styleId: String, isMe: Bool, dark: Bool, first: Bool,
+                       besideAvatar: Bool = false) -> [PlacedDecor] {
         decor(for: styleId).compactMap { d in
             var c = d.corner
             if !isMe {
@@ -77,6 +80,7 @@ enum BubbleDecorSets {
                 }
             }
             if !first, c == .topLeading || c == .topTrailing { return nil }
+            if besideAvatar, c == .bottomLeading { return nil }
             return PlacedDecor(corner: c, glyph: d.glyph, size: d.size, color: dark ? d.dark : d.light,
                                out: d.out, rotation: isMe ? d.rotation : -d.rotation)
         }

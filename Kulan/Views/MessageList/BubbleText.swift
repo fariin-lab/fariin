@@ -41,7 +41,7 @@ enum BubbleText {
     /// Body text with tappable links, @usernames, group mentions and the in-chat search highlight.
     /// `textColor` is the resolved foreground for this bubble (white on mine, black/white on theirs).
     static func body(_ t: BubbleBody.TextBody, isMe: Bool, textColor: UIColor,
-                     accent: UIColor) -> (NSMutableAttributedString, [LinkRun]) {
+                     accent: UIColor, linkColor styledLink: UIColor? = nil) -> (NSMutableAttributedString, [LinkRun]) {
         let full = t.text
         let out = NSMutableAttributedString(string: full, attributes: [
             .font: BubbleMetrics.bodyFont,
@@ -70,7 +70,8 @@ enum BubbleText {
 
         // WHITE on my bubble: the fill is systemBlue (or a vivid custom chat colour), so a blue link
         // was blue-on-blue and effectively invisible. The underline still marks it as tappable.
-        let linkColor: UIColor = isMe ? .white : .systemBlue
+        // A bubble style passes its own text colour: white links vanished on a pastel (5-angle check).
+        let linkColor: UIColor = styledLink ?? (isMe ? .white : .systemBlue)
         func style(_ r: NSRange, url: URL?, underline: Bool) {
             guard r.location != NSNotFound, r.location + r.length <= ns.length else { return }
             out.addAttribute(.foregroundColor, value: linkColor, range: r)
@@ -303,8 +304,9 @@ enum BubbleText {
     /// `minContentWidth` is what the content must be at least as wide as when the footer shares the
     /// last line: that line plus the footer.
     static func build(_ t: BubbleBody.TextBody, meta: MetaChrome, isMe: Bool,
-                      textColor: UIColor, accent: UIColor, textAvail: CGFloat) -> Built {
-        let (body, links) = self.body(t, isMe: isMe, textColor: textColor, accent: accent)
+                      textColor: UIColor, accent: UIColor, textAvail: CGFloat,
+                      linkColor: UIColor? = nil) -> Built {
+        let (body, links) = self.body(t, isMe: isMe, textColor: textColor, accent: accent, linkColor: linkColor)
         let footer = footerWidth(meta, isMe: isMe)
         if let trailing = trailingLineWidth(body, width: textAvail), trailing + footer <= textAvail {
             return Built(body: body, links: links, metaOnOwnLine: false,

@@ -145,7 +145,7 @@ inline float2 awCircle(float phase, float r) { return float2(cos(phase), sin(pha
         // Brightest just above the base line, fading upward, cut off below it. (smoothstep's edges
         // must ascend in Metal, so the cut is written as 1 − an ascending step.)
         float rise = smoothstep(base - 0.75, base - 0.05, s.y) * (1.0 - smoothstep(base, base + 0.06, s.y));
-        float rays = 0.55 + 0.45 * awNoise(float2(s.x * 38.0 + fi * 7.0, phase * 0.6 + fi));
+        float rays = 0.55 + 0.45 * awNoise(float2(s.x * 38.0 + fi * 7.0 + cos(phase) * 2.0, fi * 5.0 + sin(phase) * 2.0));   // a circle: no seam
         float glow = curtain * rise * rays;
         light += mix(a, b, smoothstep(base - 0.6, base, s.y)) * glow * (0.85 - fi * 0.2);
     }
@@ -244,7 +244,7 @@ inline float2 awCircle(float phase, float r) { return float2(cos(phase), sin(pha
         float2 spot = float2(awHash(cell + 3.1), awHash(cell + 7.7)) * 0.8 + 0.1;
         float d = length(f - spot);
         float radius = (layer == 0 ? 0.06 : 0.04) * (0.5 + h);
-        float star = smoothstep(radius, 0.0, d);
+        float star = (1.0 - smoothstep(0.0, radius, d));
         float rate = floor(1.0 + h * 4.0);                      // whole turns per loop: no seam
         float tw = 0.55 + 0.45 * sin(phase * rate + h * 6.2831);
         float show = step(0.55, h);                            // not every cell has a star
@@ -276,37 +276,45 @@ inline float2 awCircle(float phase, float r) { return float2(cos(phase), sin(pha
         if (layer >= layers) break;
         float fl = float(layer);
         float scale = kind < 1.5 ? (9.0 + fl * 5.0) : (6.0 + fl * 3.0);
-        float speed = kind < 0.5 ? (3.0 + fl * 2.0) : (kind < 1.5 ? (14.0 + fl * 6.0) : 1.0);
+        // ⛔ A LOOP WITH NO SEAM (5-angle check 2026-11-06): the rows a particle's randomness is read
+        // from repeat every `rows` cells, and a layer falls exactly rows x (1 + layer) cells per loop,
+        // so the last frame of a loop shows the same particles as the first. `rows` is more than a
+        // screen of cells, so the repeat never shows.
+        float rows = kind < 0.5 ? 24.0 : (kind < 1.5 ? 48.0 : 16.0);
+        float speed = rows * (1.0 + fl);
         float2 g = uv * scale;
         // Rain leans a little. Set from the position BEFORE the fall, so the lean never moves with
         // time and the loop stays whole.
         if (kind > 0.5 && kind < 1.5) g.x += g.y * 0.12;
         g.y -= t * speed;                                     // whole cells per loop
         float2 cell = floor(g);
+        cell.y = cell.y - rows * floor(cell.y / rows);          // the repeating rows (see above)
         float2 f = fract(g);
         float h = awHash(cell + fl * 17.0);
         if (h < (kind < 1.5 ? 0.35 : 0.55)) continue;          // empty cells keep it airy
-        float2 spot = float2(awHash(cell + 1.3), awHash(cell + 5.9)) * 0.7 + 0.15;
+        // Spots stay in the middle of their cell, so nothing is cut at a cell's edge.
+        float2 spot = float2(awHash(cell + 1.3), awHash(cell + 5.9)) * 0.4 + 0.3;
         if (kind < 0.5) {
-            spot.x += 0.12 * sin(phase * floor(1.0 + h * 2.0) + h * 6.2831);   // a flake sways
+            spot.x += 0.12 * sin(phase * floor(1.0 + h * 2.0) * 8.0 + h * 6.2831);   // a flake sways
             float d = length(f - spot);
-            float flake = smoothstep(0.10 - fl * 0.02, 0.0, d);
+            float flake = (1.0 - smoothstep(0.0, 0.10 - fl * 0.02, d));
             float3 c = dark > 0.5 ? float3(0.92, 0.95, 1.0) : float3(1.0, 1.0, 1.0);
             rgb = mix(rgb, c, flake * (0.85 - fl * 0.2));
         } else if (kind < 1.5) {
             float2 q = f - spot;
-            float streak = smoothstep(0.018, 0.0, abs(q.x)) * smoothstep(0.30, 0.0, abs(q.y));
+            float streak = (1.0 - smoothstep(0.0, 0.018, abs(q.x))) * (1.0 - smoothstep(0.0, 0.22, abs(q.y)));
             float3 c = dark > 0.5 ? float3(0.65, 0.75, 0.90) : float3(0.95, 0.97, 1.0);
             rgb = mix(rgb, c, streak * (0.55 - fl * 0.12));
         } else {
-            float2 drift = float2(cos(phase * floor(1.0 + h * 2.0) + h * 9.0), sin(phase + h * 5.0)) * 0.12;
+            float2 drift = float2(cos(phase * floor(1.0 + h * 2.0) * 8.0 + h * 9.0), sin(phase * 8.0 + h * 5.0)) * 0.08;
             float d = length(f - spot - drift);
-            float pulse = 0.6 + 0.4 * sin(phase * floor(1.0 + h * 3.0) + h * 6.2831);
-            float core = smoothstep(0.06, 0.0, d);
-            float halo = smoothstep(0.30, 0.0, d) * 0.45;
+            float pulse = 0.6 + 0.4 * sin(phase * floor(1.0 + h * 3.0) * 16.0 + h * 6.2831);
+            float core = (1.0 - smoothstep(0.0, 0.06, d));
+            float halo = (1.0 - smoothstep(0.0, 0.20, d)) * 0.45;
             float3 c = dark > 0.5 ? mix(float3(1.0, 0.85, 0.45), float3(0.55, 0.85, 1.0), h)
                                   : mix(float3(1.0, 0.65, 0.35), float3(0.55, 0.55, 1.0), h);
-            rgb += c * (core + halo) * pulse * (dark > 0.5 ? 0.9 : 0.6);
+            if (dark > 0.5) { rgb += c * (core + halo) * pulse * 0.9; }
+            else { rgb = mix(rgb, c, saturate((core + halo) * pulse * 0.75)); }   // a light ground would only whiten
         }
     }
     return half4(half3(saturate(rgb)), 1.0h);

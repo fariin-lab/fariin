@@ -1261,10 +1261,13 @@ final class MessageRowView: UIView {
             }
             v.isHidden = false
             v.image = img
-            v.transform = .identity
-            v.bounds = CGRect(origin: .zero, size: img.size)
-            v.center = p
-            v.transform = CGAffineTransform(rotationAngle: d.rotation)
+            // Never animated: a repaint inside an animation block would swing the art in.
+            UIView.performWithoutAnimation {
+                v.transform = .identity
+                v.bounds = CGRect(origin: .zero, size: img.size)
+                v.center = p
+                v.transform = CGAffineTransform(rotationAngle: d.rotation)
+            }
             bubbleBox.bringSubviewToFront(v)
         }
     }

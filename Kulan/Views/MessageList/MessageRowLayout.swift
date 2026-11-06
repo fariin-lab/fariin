@@ -462,7 +462,7 @@ enum MessageRowLayout {
         // A bubble style brings its own text colour, so a pastel keeps dark, readable words.
         let styledText = b.textHex.map { BubblePalette.hex(UInt32(truncatingIfNeeded: $0)) }
         let textColor: UIColor = styledText ?? (b.isMe ? BubblePalette.myText : BubblePalette.receivedText)
-        let metaColor: UIColor = styledText?.withAlphaComponent(0.62) ?? (b.isMe ? BubblePalette.myMeta : BubblePalette.receivedMeta)
+        let metaColor: UIColor = styledText?.withAlphaComponent(0.8) ?? (b.isMe ? BubblePalette.myMeta : BubblePalette.receivedMeta)
         // The group-mention tint. `.accentColor` in the SwiftUI bubble, which in this app is
         // `.primary` — see the note on BubblePalette.accent.
         let accent = BubblePalette.accent
@@ -587,7 +587,8 @@ enum MessageRowLayout {
         switch b.body {
         case .text(let t):
             let built = BubbleText.build(t, meta: b.meta, isMe: b.isMe, textColor: textColor,
-                                         accent: accent, textAvail: maxContent)
+                                         accent: accent, textAvail: maxContent,
+                                         linkColor: b.textHex != nil ? textColor : nil)   // styled: links in its text colour
             bodyAttr = built.body
             links = built.links
             metaOwnLine = built.metaOnOwnLine

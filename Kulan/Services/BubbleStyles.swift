@@ -79,7 +79,14 @@ enum BubbleStyles {
     }
 
     /// May I use this style now? A Plus style: the Fariin team only, until Plus is on sale.
-    @MainActor static func mayUse(_ s: BubbleStyle) -> Bool { !s.plus || AdminStore.shared.isAdmin }
+    /// The admin record loads a moment after launch; until it does a team member is remembered from
+    /// the last time it said so (5-angle check: a Plus style was silently dropped right after launch).
+    private static let teamKey = "bubbleStyle.team.v1"
+    @MainActor static func mayUse(_ s: BubbleStyle) -> Bool {
+        guard s.plus else { return true }
+        if AdminStore.shared.isAdmin { UserDefaults.standard.set(true, forKey: teamKey); return true }
+        return UserDefaults.standard.bool(forKey: teamKey)
+    }
 
     /// What goes on a message I send: my style, if I may still use it (a Plus style picked while
     /// on the team is not sent after leaving it).

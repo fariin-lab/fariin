@@ -339,12 +339,15 @@ actor LinkPreviewService {
     /// both sides ("fariin.com", "x.so/abc"). The detector then decides, using its own list of real
     /// domain endings, so "end.Then" in a sentence is not made a link.
     nonisolated static func mayHoldLink(_ s: String) -> Bool {
+        // No dot, no link: the common case costs one byte scan (5-angle check: it ran on every bubble).
+        guard s.utf8.contains(UInt8(ascii: ".")) else { return false }
         if s.contains("http") || s.contains("www.") { return true }
-        let u = Array(s.unicodeScalars)
-        guard u.count >= 4 else { return false }
-        for i in 1..<(u.count - 2) where u[i] == "." {
-            if CharacterSet.alphanumerics.contains(u[i - 1]),
-               CharacterSet.letters.contains(u[i + 1]), CharacterSet.letters.contains(u[i + 2]) { return true }
+        // A sliding window of four scalars, no array: <alnum> . <letter> <letter>.
+        var w0: Unicode.Scalar = " ", w1: Unicode.Scalar = " ", w2: Unicode.Scalar = " "
+        for w3 in s.unicodeScalars {
+            if w1 == ".", CharacterSet.alphanumerics.contains(w0),
+               CharacterSet.letters.contains(w2), CharacterSet.letters.contains(w3) { return true }
+            w0 = w1; w1 = w2; w2 = w3
         }
         return false
     }

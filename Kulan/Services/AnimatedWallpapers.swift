@@ -41,9 +41,9 @@ enum AnimatedWallpapers {
         AnimatedWallpaper(id: "aurora-pink", name: "Aurora Pink", look: .aurora(palette: 2), period: 75),
         // Stage two (owner 2026-11-06): space, particles, doodles.
         AnimatedWallpaper(id: "stars", name: "Stars", look: .stars, period: 60),
-        AnimatedWallpaper(id: "snow", name: "Snow", look: .particles(kind: 0), period: 20),
-        AnimatedWallpaper(id: "rain", name: "Rain", look: .particles(kind: 1), period: 6),
-        AnimatedWallpaper(id: "glow-dots", name: "Glowing Dots", look: .particles(kind: 2), period: 30),
+        AnimatedWallpaper(id: "snow", name: "Snow", look: .particles(kind: 0), period: 160),
+        AnimatedWallpaper(id: "rain", name: "Rain", look: .particles(kind: 1), period: 20),
+        AnimatedWallpaper(id: "glow-dots", name: "Glowing Dots", look: .particles(kind: 2), period: 480),
         AnimatedWallpaper(id: "doodles-1", name: "Doodles", look: .doodles(theme: 0), period: 40),
         AnimatedWallpaper(id: "doodles-2", name: "Doodles 2", look: .doodles(theme: 1), period: 40),
         AnimatedWallpaper(id: "doodles-3", name: "Doodles 3", look: .doodles(theme: 2), period: 40),
@@ -68,6 +68,9 @@ struct AnimatedWallpaperView: View {
     let dark: Bool
     /// Tiles in the picker run slower and smaller; the chat runs the full look.
     var preview = false
+    /// A picker tile that is not the chosen one shows a still frame (5-angle check: fourteen tiles
+    /// all moving at once was heavy for a row nobody is watching).
+    var animates = true
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -75,18 +78,35 @@ struct AnimatedWallpaperView: View {
     @AppStorage(AnimatedWallpapers.intensityKey) private var intensity = 1
     @State private var onScreen = false
     @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
-    /// The loop's own clock: phase is measured from here, so it starts at 0 and never grows large.
-    @State private var start = Date()
+    /// The loop's own clock. Time only counts while moving: `elapsed` holds what ran before the last
+    /// pause and `resumedAt` is when it last started, so a pause stops the picture where it is and
+    /// it carries on from there (5-angle check: it used to jump on by however long it was paused).
+    @State private var elapsed: TimeInterval = 0
+    @State private var resumedAt = Date()
 
     private var moving: Bool {
-        enabledSetting && !reduceMotion && !lowPower && scenePhase == .active && onScreen
+        animates && enabledSetting && !reduceMotion && !lowPower && scenePhase == .active && onScreen
+    }
+
+    private func seconds(at date: Date) -> TimeInterval {
+        elapsed + (moving ? max(0, date.timeIntervalSince(resumedAt)) : 0)
     }
 
     var body: some View {
-        if case .doodles(let theme) = wallpaper.look {
-            doodles(theme)
-        } else {
-            shaderBody
+        Group {
+            if case .doodles(let theme) = wallpaper.look {
+                doodles(theme)
+            } else {
+                shaderBody
+            }
+        }
+        // Both looks (doodles too: 5-angle check) follow Low Power Mode while on screen.
+        .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)
+            .receive(on: DispatchQueue.main)) { _ in
+            lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+        }
+        .onChange(of: moving) { _, now in
+            if now { resumedAt = Date() } else { elapsed += max(0, Date().timeIntervalSince(resumedAt)) }
         }
     }
 
@@ -98,8 +118,7 @@ struct AnimatedWallpaperView: View {
         if theme < themes.count, let sheet = ChatPattern.sheet {
             let g = themes[theme]
             TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: !moving)) { ctx in
-                let seconds = max(0, ctx.date.timeIntervalSince(start))
-                let phase = (seconds / wallpaper.period).truncatingRemainder(dividingBy: 1) * 2 * .pi
+                let phase = (seconds(at: ctx.date) / wallpaper.period).truncatingRemainder(dividingBy: 1) * 2 * .pi
                 let ground = MeshGradient(width: 3, height: 3, points: WallpaperGradient.meshPoints,
                                           colors: g.meshColors(dark))
                 ground
@@ -123,7 +142,9 @@ struct AnimatedWallpaperView: View {
                                            startPoint: .topLeading, endPoint: .bottomTrailing)
                                 .frame(width: geo.size.width * 0.8, height: geo.size.height * 1.6)
                                 .rotationEffect(.degrees(20))
-                                .offset(x: -geo.size.width + (geo.size.width * 2.2) * (phase / (2 * .pi)),
+                                // From fully off the left to fully off the right, so the jump back at
+                                // the loop's end is never seen (5-angle check).
+                                .offset(x: geo.size.width * (bandAt(phase) * 3.0 - 1.4),
                                         y: -geo.size.height * 0.3)
                         }
                         .allowsHitTesting(false)
@@ -139,16 +160,18 @@ struct AnimatedWallpaperView: View {
         }
     }
 
+    /// Where the doodle light band is, 0 to 1 over a loop (a plain CGFloat for the type checker).
+    private func bandAt(_ phase: Double) -> CGFloat { CGFloat(phase / (2 * Double.pi)) }
+
     private var shaderBody: some View {
         GeometryReader { geo in
             let full = geo.size
-            let k: CGFloat = preview ? 2 : 3
+            // A third of the resolution for the soft looks; Stars keeps more, or its smallest stars
+            // would vanish between pixels.
+            let k: CGFloat = preview ? 2 : (wallpaper.look == .stars ? 1.5 : 3)
             let small = CGSize(width: max(1, full.width / k), height: max(1, full.height / k))
             TimelineView(.animation(minimumInterval: 1.0 / (preview ? 20.0 : 30.0), paused: !moving)) { ctx in
-                // The timeline's own date: paused, it stays on the last frame shown, so stopping and
-                // starting again carries on from there instead of jumping back to the beginning.
-                let seconds = max(0, ctx.date.timeIntervalSince(start))
-                let phase = Float((seconds / wallpaper.period).truncatingRemainder(dividingBy: 1) * 2 * .pi)
+                let phase = Float((seconds(at: ctx.date) / wallpaper.period).truncatingRemainder(dividingBy: 1) * 2 * .pi)
                 Rectangle()
                     .frame(width: small.width, height: small.height)
                     .colorEffect(shader(size: small, phase: phase))
@@ -162,10 +185,6 @@ struct AnimatedWallpaperView: View {
         .accessibilityHidden(true)
         .onAppear { onScreen = true }
         .onDisappear { onScreen = false }
-        .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)
-            .receive(on: DispatchQueue.main)) { _ in
-            lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
-        }
     }
 
     private func shader(size: CGSize, phase: Float) -> Shader {

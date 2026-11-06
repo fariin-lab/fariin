@@ -606,7 +606,10 @@ struct WallpaperPickerSheet: View {
     /// reads as animated even while motion is off.
     private func animatedTile(_ a: AnimatedWallpaper) -> some View {
         tile(isSelected: selected == .animated(a.id)) {
-            AnimatedWallpaperView(wallpaper: a, dark: dark, preview: true)
+            // Only the chosen tile moves (5-angle check: fourteen moving tiles was heavy); the
+            // rest show a still frame of their look.
+            AnimatedWallpaperView(wallpaper: a, dark: dark, preview: true,
+                                  animates: selected == .animated(a.id))
                 .overlay(alignment: .topLeading) {
                     Image(systemName: "sparkles")
                         .font(.system(size: 11, weight: .semibold))

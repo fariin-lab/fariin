@@ -7170,6 +7170,9 @@ struct ThreadView: View {
         // A quoted channel post may go with no words (owner 2026-11-06); its own short path, which
         // also takes the slow-mode gate. A quote's words stay one bubble (up to the field's limit).
         if let q = quoting, editingMessage == nil, !DemoMode.isDemoConversation(cid), text.count <= 2500 {
+            // Links off here applies to a quote's words too (5-angle check: it went round the rule).
+            if LinkPreviewService.firstURL(in: text) != nil || text.range(of: "www.", options: .caseInsensitive) != nil,
+               sendHeldBack(.sendLinks, .links) { return }
             if slowModeHeldBack() { return }
             sendQuote(q, text: text)
             return

@@ -288,9 +288,19 @@ enum MessageRowModelBuilder {
         // tick — not a different colour.
         // A bubble style the sender chose (owner 2026-11-06, `BubbleStyles`): its fill and its own
         // text colour, on their side and mine alike. Unknown ids and deleted messages draw as before.
-        let bubbleStyle = msg.deleted ? nil : BubbleStyles.find(msg.bubbleStyle)
-        let fill: BubbleFill = bubbleStyle.map { BubbleStyles.fill($0.look(ctx.dark)) }
-            ?? (isMe ? myFill(ctx) : receivedFill(ctx))
+        // Text bubbles only (5-angle check): poll, location and contact cards draw their own white
+        // details for my side, which a pastel would swallow.
+        let bubbleStyle: BubbleStyle? = {
+            guard !msg.deleted, case .text = body else { return nil }
+            return BubbleStyles.find(msg.bubbleStyle)
+        }()
+        let fill: BubbleFill = bubbleStyle.map { s -> BubbleFill in
+            let look = s.look(ctx.dark)
+            // Soft Glass with no wallpaper behind: a blur of the plain page is nearly invisible,
+            // so it takes its own soft colour there.
+            if look.glass && !ctx.onWallpaper { return .solid(look.fill.first ?? 0xF2F2F7) }
+            return BubbleStyles.fill(look)
+        } ?? (isMe ? myFill(ctx) : receivedFill(ctx))
 
         let tick: BubbleTicks.Kind
         if ctx.isChannel, authored, !msg.deleted, msg.sendState == .sending {
@@ -414,7 +424,7 @@ enum MessageRowModelBuilder {
             showsFailedBadge: authored && msg.sendState == .failed,
             // Theirs only, and only on a wallpaper — the reference guards it `hasWallpaper,
             // isIncoming`, and an outgoing bubble never wears one.
-            rim: !isMe && ctx.onWallpaper,
+            rim: (!isMe && ctx.onWallpaper) || bubbleStyle?.look(ctx.dark).glass == true,
             canSwipeToReply: msg.sendState == nil && !msg.deleted && !msg.isStoryReaction,
             // Media whose single tap opens something. Deliberately NOT gifs: a gif plays where it
             // sits and opens nothing, so there is no tap for the recogniser to hold up — which is
@@ -424,8 +434,10 @@ enum MessageRowModelBuilder {
             textHex: bubbleStyle.map { $0.look(ctx.dark).text },
             // Decorations: the sender chose them, this is a text bubble, and it is the LAST of its run.
             decor: {
-                guard let s = bubbleStyle, msg.bubbleDecor, last, case .text = body else { return [] }
-                return BubbleDecorSets.placed(styleId: s.id, isMe: isMe, dark: ctx.dark, first: first)
+                // Not on a failed send (the red retry mark sits there), and not over a group's avatar.
+                guard let s = bubbleStyle, msg.bubbleDecor, last, case .text = body, msg.sendState != .failed else { return [] }
+                return BubbleDecorSets.placed(styleId: s.id, isMe: isMe, dark: ctx.dark, first: first,
+                                              besideAvatar: !isMe && ctx.isGroup && !ctx.isChannel)
             }(),
             wide: ctx.isChannel && !msg.deleted,
             shareable: ctx.isChannel && !msg.deleted && !ctx.noForwarding)

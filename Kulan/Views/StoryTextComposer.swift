@@ -1075,6 +1075,14 @@ struct StoryTextLinkPreview: View {
     /// It is part of the card, so the posted picture shows it too, and the whole card is the tap,
     /// which opens the channel page or the chat in the app (`StoryLinkOpener` in the story viewer).
     private var action: String? {
+        // Only for OUR links (5-angle check: any site whose description read "120 members" got Join).
+        let ours: Bool = {
+            switch KulanApp.route(from: draft.url) {
+            case .name(_)?, .group(_)?, .user(_)?: return true
+            default: return false
+            }
+        }()
+        guard ours else { return nil }
         if draft.desc.range(of: #"^[0-9.,KMB]+ (members?|followers?)$"#, options: .regularExpression) != nil {
             return "Join"
         }
