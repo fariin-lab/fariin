@@ -2529,6 +2529,9 @@ struct ThreadView: View {
         }
         .onAppear {
             cachedConv = openingConversation()
+            // A channel hides its notices from followers and visitors (owner 2026-11-06); the
+            // repository needs to know it is one even when the chat is not in my lists (a visitor).
+            repo.channelHint = cachedConv?.isChannel == true
             startOwnGroupDoc()
             noteHistoryStart()
             // A preview owns its repository; a real chat shares the live one (`forChat`), so it
@@ -7161,6 +7164,13 @@ struct ThreadView: View {
 
     private func send() {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A quoted channel post may go with no words (owner 2026-11-06); its own short path, which
+        // also takes the slow-mode gate. A quote's words stay one bubble (up to the field's limit).
+        if let q = quoting, editingMessage == nil, !DemoMode.isDemoConversation(cid), text.count <= 2500 {
+            if slowModeHeldBack() { return }
+            sendQuote(q, text: text)
+            return
+        }
         guard !text.isEmpty else { return }
         // ⛔ ONE BUBBLE HOLDS 2,500 (owner 2026-10-29, the reference app's way): longer text goes out as
         // several bubbles, in order, each through this same path (the send line, `SendTurn`, keeps
@@ -7184,10 +7194,6 @@ struct ThreadView: View {
         if LinkPreviewService.firstURL(in: text) != nil || text.range(of: "www.", options: .caseInsensitive) != nil,
            sendHeldBack(.sendLinks, .links) { return }
         if slowModeHeldBack() { return }
-        if let q = quoting, !DemoMode.isDemoConversation(cid) {
-            sendQuote(q, text: text)
-            return
-        }
         // owner 2026-10-27: no vibration when a text message is sent.
         // ⛔ BEFORE THE COMPOSER IS TOUCHED. Everything below shrinks the bar — the input clears,
         // the reply banner animates away — and the list is pinned to the bottom, so it follows the
@@ -10034,6 +10040,7 @@ struct ThreadView: View {
             s.canSchedule = false
         }
         s.banners = composerBanners
+        s.sendsWithoutText = quoting != nil && editingMessage == nil   // a quote may go with no words
         // The bar is shown the REVEALED hold, not the raw touch-down — see `holdRevealed`.
         s.holdStarted = holdStarted && holdRevealed
         s.recordLocked = recordLocked

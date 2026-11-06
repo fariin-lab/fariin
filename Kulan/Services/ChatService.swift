@@ -3889,6 +3889,17 @@ enum ChatService {
         let data = snap.data() ?? [:]
         guard data["deleted"] as? Bool != true else { return [] }
         let author = data["authorId"] as? String ?? ""
+        // A channel's history is on the server, for its owner and admins only (owner 2026-11-06).
+        if ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.isChannel == true {
+            let r = try await Functions.functions(region: "me-central1").httpsCallable("getChannelEdits")
+                .call(["cid": cid, "mid": messageId])
+            let versions = ((r.data as? [String: Any])?["versions"] as? [[String: Any]]) ?? []
+            return versions.map { v in
+                let clear = Crypto.shared.decrypt(v["t"] as? String ?? "", cid: cid, authorId: author)
+                let ms = (v["at"] as? NSNumber)?.doubleValue ?? 0
+                return (clear, ms > 0 ? Date(timeIntervalSince1970: ms / 1000) : Date.distantPast)
+            }
+        }
         return ((data["edits"] as? [[String: Any]]) ?? []).map { e in
             let clear = Crypto.shared.decrypt(e["t"] as? String ?? "", cid: cid, authorId: author)
             return (clear, (e["at"] as? Timestamp)?.dateValue() ?? Date.distantPast)
@@ -3924,7 +3935,10 @@ enum ChatService {
         func size(_ e: [[String: Any]]) -> Int { e.reduce(cipher.utf8.count) { $0 + (($1["t"] as? String)?.utf8.count ?? 0) } }
         while edits.count > 10 || (edits.count > 1 && size(edits) > 700_000) { edits.removeFirst() }
         var update: [String: Any] = ["text": cipher, "edited": true, "editedAt": FieldValue.serverTimestamp()]
-        if size(edits) <= 700_000 { update["edits"] = edits }
+        // ⛔ NOT IN A CHANNEL POST (owner 2026-11-06): every follower reads the post, so the old
+        // versions stay off it; the server keeps them for the owner and admins (onChannelPostEdited).
+        let isChannel = ConversationsRepository.shared.conversations.first { $0.id == cid }?.isChannel == true
+        if size(edits) <= 700_000 && !isChannel { update["edits"] = edits }
         try await msgRef.updateData(update)
         // If this WAS the newest message, the chat list still shows the pre-edit text on both
         // phones until something else arrives (audit) — re-point the summary at the new wording.

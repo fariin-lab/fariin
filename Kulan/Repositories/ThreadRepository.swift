@@ -545,6 +545,22 @@ final class ThreadRepository {
     /// (glided, let neighbours move). Every publish now says which it is; the list holds the reader
     /// still for anything that is not `.live`. Read together with `itemsVersion`.
     private(set) var itemsUpdateReason: MessageListUpdateReason = .initial
+    /// Set by the chat screen when it opens: this conversation is a channel. Used when the channel is
+    /// in none of my lists (a visitor), where its kind cannot be looked up.
+    var channelHint = false {
+        didSet { if channelHint != oldValue { refreshItems() } }
+    }
+
+    /// A channel I neither own nor run: its notices are not shown to me.
+    private var hidesChannelNotices: Bool {
+        let me = AuthService.shared.uid ?? ""
+        let conv = ConversationsRepository.shared.conversations.first { $0.id == cid }
+            ?? ChannelFollows.shared.conversations.first { $0.id == cid }
+        guard let c = conv else { return channelHint }
+        guard c.isChannel else { return false }
+        return !(c.isOwner(me) || c.isAdmin(me))
+    }
+
     private func refreshItems(reason: MessageListUpdateReason = .live) {
         itemsUpdateReason = reason
         // ⚠️ MY OWN PHOTO MUST NOT TURN INTO A BLUR WHILE IT UPLOADS.
@@ -579,6 +595,12 @@ final class ThreadRepository {
             HiddenMessages.isHidden(m.id)
                 || (m.notForMe && (cuts.joined.map { m.createdAt < $0.addingTimeInterval(5) } ?? true))
                 || (group && m.deleted && !m.isCall)
+        }
+        // ⛔ A CHANNEL'S NOTICES ARE FOR ITS OWNER AND ADMINS (owner 2026-11-06): wallpaper changed,
+        // verified, pinned, "X joined" and the other activity lines are not shown to followers or
+        // visitors as messages. (Deleted posts already go, above.)
+        if group, hidesChannelNotices {
+            merged.removeAll { $0.isSystem || $0.pinNotice != nil }
         }
         // Chat history hidden from new members, and I came in after that: the chat starts at my
         // join (2 s early, so the "joined" line written with it stays).

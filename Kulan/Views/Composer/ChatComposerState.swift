@@ -80,7 +80,12 @@ struct ChatComposerState: Equatable {
     /// The tip above the send button after a send that came too soon; nil hides it.
     var slowTip: String? = nil
 
-    var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    /// Something waits to be sent with no words needed: a quoted channel post (owner 2026-11-06,
+    /// "adding text must be optional"). The send button shows as if text were typed.
+    var sendsWithoutText = false
+
+    /// "There is something to send": typed words, or an attachment that may go alone.
+    var hasText: Bool { sendsWithoutText || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     /// A finger is on the mic right now (not yet locked). The big overlay and the hold row.
     var recordingHeld: Bool { holdStarted && !recordLocked }
     /// "The composer is not the composer at the moment" — any recording, held or locked.

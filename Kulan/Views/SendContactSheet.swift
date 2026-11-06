@@ -275,6 +275,20 @@ struct SendContactSheet: View {
             .padding(.bottom, 12)
         }
         .scrollDismissesKeyboard(.interactively)
+        .modifier(NoBottomScrollEdge())
+    }
+
+    /// ⛔ NO WHITE BAND ABOVE THE BUTTON (owner 2026-11-06: "a white bar directly behind Copy Link;
+    /// the faces go under it"). iOS 26 draws a soft fade at a scroll view's edge; at the bottom of this
+    /// grid it read as a white bar with the faces sliding beneath it. The grid simply ends there now.
+    private struct NoBottomScrollEdge: ViewModifier {
+        func body(content: Content) -> some View {
+            if #available(iOS 26.0, *) {
+                content.scrollEdgeEffectHidden(true, for: .bottom)
+            } else {
+                content
+            }
+        }
     }
 
     @ViewBuilder private func personTile(_ c: Conversation) -> some View {
