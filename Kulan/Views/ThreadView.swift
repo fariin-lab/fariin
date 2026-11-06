@@ -2514,14 +2514,7 @@ struct ThreadView: View {
         // Owner, 2026-10-14: arriving from the No answer page's "Record voice message", the recorder
         // starts at once, locked hands-free, the same state a hold dragged up to the lock leaves.
         .task {
-            // A channel post quoted into this chat (owner 2026-11-06): above the composer, keyboard up.
-            // Inside this task, not a modifier of its own: body's chain is at the type-checker's limit.
-            if let q = AppRouter.shared.pendingQuote, q.cid == cid {
-                AppRouter.shared.pendingQuote = nil
-                replyingTo = nil
-                quoting = QuoteDraft(qid: q.qid, card: q.card)
-                inputFocused = true
-            }
+            takePendingQuote()   // a function, not inline: body's chain is at the type-checker's limit
             guard !quiet, AppRouter.shared.pendingVoiceNoteCid == cid else { return }
             AppRouter.shared.pendingVoiceNoteCid = nil
             beginHoldRecording()
@@ -2529,9 +2522,6 @@ struct ThreadView: View {
         }
         .onAppear {
             cachedConv = openingConversation()
-            // A channel hides its notices from followers and visitors (owner 2026-11-06); the
-            // repository needs to know it is one even when the chat is not in my lists (a visitor).
-            repo.channelHint = cachedConv?.isChannel == true
             startOwnGroupDoc()
             noteHistoryStart()
             // A preview owns its repository; a real chat shares the live one (`forChat`), so it
@@ -2771,7 +2761,20 @@ struct ThreadView: View {
     /// composer obeys is taken, so ordinary messages (which touch the doc) do not redraw the chat.
     /// A class box in @State: a pointer on the stack (the build 990 stack note).
     @State private var ownGroupDoc = ListenerBox()
+    /// A channel post quoted into this chat (owner 2026-11-06): above the composer, keyboard up.
+    private func takePendingQuote() {
+        guard let q = AppRouter.shared.pendingQuote, q.cid == cid else { return }
+        AppRouter.shared.pendingQuote = nil
+        replyingTo = nil
+        quoting = QuoteDraft(qid: q.qid, card: q.card)
+        inputFocused = true
+    }
+
     private func startOwnGroupDoc() {
+        // A channel hides its notices from followers and visitors (owner 2026-11-06); the repository
+        // needs to know it is one even when the chat is not in my lists (a visitor). Here, not in the
+        // onAppear closure: body's chain is at the type-checker's limit (TF 42229671102 failed on it).
+        repo.channelHint = cachedConv?.isChannel == true
         // A guest may not read the group's document (owner 2026-10-21); a refused listener would
         // only count as a refusal in SessionRecovery.
         // ⛔ NOT KNOWN YET IS NOT "A 1:1" (owner 2026-10-25, a major bug: "the group became like a user
