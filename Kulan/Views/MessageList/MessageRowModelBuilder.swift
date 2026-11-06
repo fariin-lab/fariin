@@ -684,7 +684,10 @@ enum MessageRowModelBuilder {
             return BubbleBody.LinkPreview(
                 shape: .group(code: name, member: live?.isMember ?? false),
                 url: p.url, title: live?.title ?? p.title,
-                desc: live.map { GroupDirectory.membersLine($0.memberCount) } ?? p.desc, host: p.host,
+                // A channel counts followers, so the card says Channel + Open Channel (owner 2026-11-06).
+                desc: live.map { $0.isChannel
+                    ? GroupDirectory.followersLine(ChannelCountBias.visitorCount($0.cid, memberCount: $0.memberCount, followerCount: $0.followerCount))
+                    : GroupDirectory.membersLine($0.memberCount) } ?? p.desc, host: p.host,
                 imageUrl: p.imageUrl, imageEnc: p.imageEnc)
         }
         let shape: BubbleBody.LinkPreview.Shape

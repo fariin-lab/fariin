@@ -216,8 +216,14 @@ actor LinkPreviewService {
                 photo = UIImage(data: data)
             }
         }
+        // A channel's card counts followers (owner 2026-11-06: a channel @name link said "Group invite
+        // · 9 members" + Open Group). "N followers" is what the bubble reads as a channel
+        // (GroupDirectory.isChannelLine), so older and newer receivers both draw it as one.
         let n = g.memberCount
-        return LinkDraft(url: url, title: g.title, desc: "\(n) member\(n == 1 ? "" : "s")", image: photo)
+        let line = g.isChannel
+            ? GroupDirectory.followersLine(ChannelCountBias.visitorCount(g.cid, memberCount: g.memberCount, followerCount: g.followerCount))
+            : "\(n) member\(n == 1 ? "" : "s")"
+        return LinkDraft(url: url, title: g.title, desc: line, image: photo)
     }
 
     /// The story in one of OUR story links: fariin.com/<username>/s/<id>, or the older /s/<id>.

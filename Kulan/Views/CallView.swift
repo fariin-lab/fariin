@@ -603,7 +603,9 @@ struct CallView: View {
                 .ignoresSafeArea(edges: .top)
                 .allowsHitTesting(false)
                 // Never dim a shared screen (owner, 2026-10-08): it has to read exactly as sent.
-                .opacity(stageShown || !controlsVisible ? 0 : 1)   // r2 H2: fades with the controls
+                // Owner, 2026-11-06: no scrim over the flat colour + photo (voice, cameras off); it
+                // only read as a shadow there. Video under the header still gets it.
+                .opacity(stageShown || !controlsVisible || showAvatar ? 0 : 1)   // r2 H2: fades with the controls
         )
     }
 
@@ -916,6 +918,23 @@ struct CallView: View {
                 // keep it clear of the header and control bar, so nothing interactive is covered.
                 callLayers(geo).zIndex(2)
 
+                if showAvatar {
+                    // Owner, 2026-11-06: tapping mute made the photo move. It used to sit in the
+                    // header/controls VStack, so the header's "Muted" line shifted it. Centred on the
+                    // whole screen in its own layer, nothing in the header can move it now.
+                    // WHOSE photo follows who is on the big screen, not always theirs.
+                    AvatarView(name: showLocalFull ? call.myName : call.otherName,
+                               photoUrl: showLocalFull ? call.myPhotoUrl : call.otherPhotoUrl,
+                               size: 180)
+                        .overlay(Circle().stroke(.white.opacity(0.12), lineWidth: 1))
+                        // No pulsing rings while Calling: the owner had them removed 2026-10-04.
+                        .shadow(color: .black.opacity(0.45), radius: 26, y: 10)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)   // centre of the screen
+                        .allowsHitTesting(false)       // decoration: let the show/hide tap through
+                        .accessibilityElement(children: .ignore)   // r2 H7: say whose photo it is
+                        .accessibilityLabel(showLocalFull ? "Your photo" : call.otherName)
+                }
+
                 VStack(spacing: 0) {
                     topBar(safeTop: winInsets.top)
                         // The No answer page has only its own card (owner, 2026-10-14; card 2026-10-30).
@@ -931,21 +950,9 @@ struct CallView: View {
                         // 1:1 audit r3 G6, 2026-10-08: on their shared screen too (the header as a
                         // whole used to leave there, taking "Video paused" and "On hold" with it).
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }   // r3 G4
+                    // The photo is its own layer above (owner, 2026-11-06): here it sat between two
+                    // spacers, so "Muted" adding a header line pushed it down on every mute.
                     Spacer()
-                    if showAvatar {
-                        // WHOSE photo follows who is on the big screen, not always theirs.
-                        AvatarView(name: showLocalFull ? call.myName : call.otherName,
-                                   photoUrl: showLocalFull ? call.myPhotoUrl : call.otherPhotoUrl,
-                                   size: 180)
-                            .overlay(Circle().stroke(.white.opacity(0.12), lineWidth: 1))
-                            // No pulsing rings while Calling: the owner had them removed 2026-10-04.
-                            .shadow(color: .black.opacity(0.45), radius: 26, y: 10)
-                            .frame(maxWidth: .infinity)    // guarantee horizontal centering
-                            .allowsHitTesting(false)       // decoration: let the show/hide tap through
-                            .accessibilityElement(children: .ignore)   // r2 H7: say whose photo it is
-                            .accessibilityLabel(showLocalFull ? "Your photo" : call.otherName)
-                        Spacer()
-                    }
                     // Audit M-011, 2026-10-07: the camera was refused, so the camera button cannot do
                     // anything and the other side sees no video. Say where to fix it, just above the
                     // controls, in the status line's style. `cameraDenied` is set by CallService.
