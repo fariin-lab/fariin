@@ -74,6 +74,11 @@ struct EmojiMorePicker: View {
     var only: [EmojiCatalog.Item]? = nil
     /// The Normal / Custom tabs (owner 2026-11-02): the animated set, for the one account allowed.
     var showsCustom = false
+    /// MANY AT ONCE (owner 2026-11-06, channel Reactions: "adding one by one is too slow, and the x
+    /// is tapped by mistake"). With a list here the sheet stays open: a tap turns an emoji on or off
+    /// in it, picks wear a ring and a tick, the title counts them, and Done closes. `onPick` unused.
+    var multi: Binding<[String]>? = nil
+    var maxPicks = 12
     var onPick: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
@@ -120,9 +125,18 @@ struct EmojiMorePicker: View {
                 }
             }
             .searchable(text: $query, prompt: "Search emoji")
-            .navigationTitle(title)
+            // Many at once: the count is the title ("6 of 12"), and Done, not an x, closes.
+            .navigationTitle(multi.map { "\($0.wrappedValue.count) of \(maxPicks)" } ?? title)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { dismiss() } label: { Image(systemName: "xmark") }.tint(.primary) } }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    if multi != nil {
+                        Button("Done") { dismiss() }.fontWeight(.semibold)
+                    } else {
+                        Button { dismiss() } label: { Image(systemName: "xmark") }.tint(.primary)
+                    }
+                }
+            }
         }
         .presentationDetents(detents)
         // Any file: iOS has no type for .tgs, so a .tgs filter would grey them all out. The server
@@ -168,8 +182,9 @@ struct EmojiMorePicker: View {
             .disabled(uploadedSoFar != nil)
             .accessibilityLabel("Add custom emoji from Files")
             ForEach(CustomReaction.all, id: \.self) { key in
-                Button { onPick(key); dismiss() } label: {
+                Button { tapped(key) } label: {
                     CustomReactionTile(key: key, side: 40, motion: .loop(step: 2))
+                        .overlay { pickMark(key) }
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(CustomReaction.spoken(key))
@@ -180,9 +195,45 @@ struct EmojiMorePicker: View {
     private func grid(_ items: [EmojiCatalog.Item]) -> some View {
         LazyVGrid(columns: cols, spacing: 10) {
             ForEach(items, id: \.self) { item in
-                Button { onPick(item.char); dismiss() } label: { Text(item.char).font(.system(size: 30)) }
+                Button { tapped(item.char) } label: {
+                    Text(item.char).font(.system(size: 30))
+                        .frame(width: 44, height: 44)
+                        .overlay { pickMark(item.char) }
+                }
                     .buttonStyle(.plain)
             }
+        }
+    }
+
+    /// One pick: closes the sheet with it, or (many at once) turns it on or off in the list.
+    private func tapped(_ e: String) {
+        guard let multi else { onPick(e); dismiss(); return }
+        var list = multi.wrappedValue
+        if let i = list.firstIndex(where: { ChannelEmoji.same($0, e) }) {
+            // The last one stays: none at all is "No Reactions", chosen above, not by accident here.
+            guard list.count > 1 else { uploadNote = "Keep at least one. To turn reactions off, choose No Reactions."; return }
+            list.remove(at: i)
+        } else {
+            guard list.count < maxPicks else { uploadNote = "Up to \(maxPicks) reactions."; return }
+            list.append(e)
+        }
+        Haptics.impact(.light)
+        multi.wrappedValue = list
+    }
+
+    /// The ring and tick on an emoji that is in the list (many-at-once mode only).
+    @ViewBuilder private func pickMark(_ e: String) -> some View {
+        if let multi, multi.wrappedValue.contains(where: { ChannelEmoji.same($0, e) }) {
+            ZStack(alignment: .bottomTrailing) {
+                Circle().fill(Color.accentColor.opacity(0.18))
+                Circle().strokeBorder(Color.accentColor, lineWidth: 2)
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white, Color.accentColor)
+                    .offset(x: 3, y: 3)
+            }
+            .frame(width: 46, height: 46)
+            .allowsHitTesting(false)
         }
     }
 }

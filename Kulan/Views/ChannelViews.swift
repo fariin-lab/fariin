@@ -1197,7 +1197,7 @@ struct ChannelReactionsSettingsView: View {
                         .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 4, trailing: 0))
                 } footer: {
                     Text(list.isEmpty ? "Pick at least one, or reactions will be off."
-                         : list.count > 1 ? "Tap to replace an emoji, or tap its x to remove it" : "Tap to replace an emoji")
+                         : "Tap to choose reactions, up to \(Self.maxPicked)")
                         .frame(maxWidth: .infinity)
                         .multilineTextAlignment(.center)
                 }
@@ -1208,14 +1208,18 @@ struct ChannelReactionsSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .animation(.snappy(duration: 0.25), value: mode)
         .animation(.snappy(duration: 0.25), value: list)
-        .sheet(isPresented: $pickAny, onDismiss: { replacing = nil }) {
-            // Low enough that the bar, and the emoji being replaced, stay in sight above it.
+        // ⛔ MANY AT ONCE, SAVED ONCE (owner 2026-11-06: "one by one is too slow, and the x gets tapped
+        // by mistake"). The sheet stays open while emoji are turned on and off in `list` (the bar above
+        // follows live); closing it saves once if anything changed.
+        .sheet(isPresented: $pickAny, onDismiss: {
+            replacing = nil
+            if list != savedList || mode != savedMode { save() }
+        }) {
+            // Low enough that the bar stays in sight above it.
             EmojiMorePicker(title: "Choose Emoji", detents: [.fraction(0.42), .large],
                             only: EmojiCatalog.channelReactions,
-                            showsCustom: CustomReaction.canChoose) { e in
-                pickAny = false
-                place(e)
-            }
+                            showsCustom: CustomReaction.canChoose,
+                            multi: $list, maxPicks: Self.maxPicked) { _ in }
         }
         .onAppear { loadFromList() }
         // Not in the list yet when the page opened: taken as soon as it arrives.
@@ -1240,36 +1244,17 @@ struct ChannelReactionsSettingsView: View {
     private var reactionBar: some View {
         LazyVGrid(columns: Array(repeating: GridItem(.fixed(44), spacing: 6), count: min(Self.perRow, list.count + (list.count < Self.maxPicked ? 1 : 0))),
                   spacing: 8) {
-            ForEach(Array(list.enumerated()), id: \.offset) { i, e in
-                Button { replacing = i; pickAny = true } label: {
+            // ⛔ NO X ON THE BAR (owner 2026-11-06: tapped by mistake). Any emoji, or the "+", opens the
+            // sheet, where a tap turns an emoji on or off (`EmojiMorePicker.multi`).
+            ForEach(Array(list.enumerated()), id: \.offset) { _, e in
+                Button { pickAny = true } label: {
                     ReactionGlyph(emoji: e, size: 30).frame(width: 44, height: 44)
-                        // The one being replaced is ringed while the sheet is up (owner 2026-10-31).
-                        .background(Circle().fill(Color.primary.opacity(replacing == i && pickAny ? 0.12 : 0)))
-                        .overlay(Circle().strokeBorder(Color.fariinAction,
-                                                       lineWidth: replacing == i && pickAny ? 2 : 0))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Replace \(CustomReaction.spoken(e))")
-                // ⛔ ANY NUMBER UP TO `maxPicked` (owner 2026-11-01: "I can't make it only 3"): each one has
-                // its own x. The last one stays; to have none, No Reactions is the choice above.
-                .overlay(alignment: .topTrailing) {
-                    if list.count > 1 {
-                        Button { remove(at: i) } label: {
-                            Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(Color(.systemBackground))
-                                .frame(width: 18, height: 18)
-                                .background(Circle().fill(Color.secondary))
-                                .frame(width: 30, height: 30, alignment: .topTrailing)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .offset(x: 6, y: -6)
-                        .accessibilityLabel("Remove \(CustomReaction.spoken(e))")
-                    }
-                }
+                .accessibilityLabel("\(CustomReaction.spoken(e)). Change reactions")
             }
             if list.count < Self.maxPicked {
-                Button { replacing = nil; pickAny = true } label: {
+                Button { pickAny = true } label: {
                     Image(systemName: "plus").font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 44, height: 44)
@@ -1283,26 +1268,6 @@ struct ChannelReactionsSettingsView: View {
         // 30 = half of one row's height, so a single row is still the same capsule as before.
         .background(RoundedRectangle(cornerRadius: 30, style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
         .overlay(RoundedRectangle(cornerRadius: 30, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
-    }
-
-    private func remove(at i: Int) {
-        guard list.count > 1, list.indices.contains(i) else { return }
-        list.remove(at: i)
-        replacing = nil
-        Haptics.impact(.light)
-        save()
-    }
-
-    /// The emoji sheet's pick: it takes the tapped place (an emoji already in the bar swaps places
-    /// with it), or joins the end from the "+".
-    private func place(_ e: String) {
-        if let i = replacing, list.indices.contains(i) {
-            if let j = list.firstIndex(of: e) { list.swapAt(i, j) } else { list[i] = e }
-        } else if !list.contains(e), list.count < Self.maxPicked {
-            list.append(e)
-        } else { return }
-        replacing = nil
-        save()
     }
 
     private func choice(_ value: String, _ title: String) -> some View {
