@@ -2460,7 +2460,7 @@ struct ChatsView: View {
             Task { await ChatService.setPinned(conv.id, !pinned) }
         })
         out.append(UIAction(title: "Archive", image: ChatListIcon.asset("ic_archive")) { _ in
-            Task { await ChatService.setArchived(conv.id, true) }
+            Task { await Self.archive(conv.id) }
         })
         // `.destructive` reddens the row itself, which is what `MenuIcon(ink: .systemRed)` was doing
         // by hand on the SwiftUI side. The delete still goes through the app's own alert.
@@ -2474,8 +2474,32 @@ struct ChatsView: View {
     // Batch ops run the per-chat writes CONCURRENTLY (was sequential = N round-trips in series).
     private func archiveSelected() {
         let ids = selection
-        Task { await withTaskGroup(of: Void.self) { g in for id in ids { g.addTask { await ChatService.setArchived(id, true) } } } }
+        Task {
+            let refused = await withTaskGroup(of: Bool.self, returning: Int.self) { g in
+                for id in ids { g.addTask { await ChatService.setArchived(id, true) } }
+                var n = 0
+                for await ok in g where !ok { n += 1 }
+                return n
+            }
+            if refused > 0 { await Self.archiveRefused(refused) }
+        }
         exitSelect()
+    }
+
+    /// A refused archive (the server said no) puts the chat straight back in the list. It used to do
+    /// that with no word, so the swipe looked like it had simply not worked. Offline the write waits
+    /// in Firestore's queue and lands later, so only a real refusal reaches this.
+    @MainActor private static func archive(_ cid: String) async {
+        let ok = await ChatService.setArchived(cid, true)
+        if !ok { archiveRefused(1) }
+    }
+    @MainActor private static func archiveRefused(_ count: Int) {
+        let alert = UIAlertController(title: nil,
+                                      message: count > 1 ? "\(count) chats couldn't be archived. Try again."
+                                                         : "Couldn't archive this chat. Try again.",
+                                      preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+        WebLink.topViewController()?.present(alert, animated: true)
     }
     // SELECT MODE'S READ BUTTON, that same messenger's rule (the reference implementation).
     //
@@ -2633,7 +2657,7 @@ struct ChatsView: View {
             onTogglePin: { conv in
                 Task { await ChatService.setPinned(conv.id, !conv.isPinned(me)) }
             },
-            onArchive: { conv in Task { await ChatService.setArchived(conv.id, true) } },
+            onArchive: { conv in Task { await Self.archive(conv.id) } },
             // Delete raises the screen's own alert rather than acting — the swipe is the question,
             // not the answer. Mute acts at once (Always); the table only calls it for an unmuted chat.
             onDelete: { pendingDelete = $0 },
