@@ -11419,9 +11419,10 @@ struct MessageBubble: View, Equatable {
 
     // First https link in the text (for the Open-Graph preview card). Only web links, not kulan:// ones.
     private var firstLinkURL: URL? {
-        guard message.text.contains("http"), let d = Self.linkDetector else { return nil }
+        // A bare "fariin.com" too, read as https (owner 2026-11-06, LinkPreviewService.mayHoldLink).
+        guard LinkPreviewService.mayHoldLink(message.text), let d = Self.linkDetector else { return nil }
         let r = NSRange(message.text.startIndex..., in: message.text)
-        return d.matches(in: message.text, range: r).compactMap(\.url).first { $0.scheme == "https" }
+        return d.matches(in: message.text, range: r).compactMap { LinkPreviewService.linkURL($0, in: message.text) }.first { $0.scheme == "https" }
     }
 
     private var bodyText: Text {
@@ -11444,7 +11445,7 @@ struct MessageBubble: View, Equatable {
             }
         }
         // Fast path: plain text with no links/@/mentions skips ALL regex work (the common case).
-        guard full.contains("http") || full.contains("@") || !message.mentions.isEmpty else { return Text(str) }
+        guard LinkPreviewService.mayHoldLink(full) || full.contains("@") || !message.mentions.isEmpty else { return Text(str) }
         let ns = full as NSString
         let whole = NSRange(location: 0, length: ns.length)
 
@@ -11466,7 +11467,7 @@ struct MessageBubble: View, Equatable {
         // Web links → tappable (blue, underlined).
         if let detector = Self.linkDetector {
             for m in detector.matches(in: full, range: whole) where m.url != nil {
-                style(m.range, link: m.url, underline: true)
+                style(m.range, link: LinkPreviewService.linkURL(m, in: full), underline: true)
             }
         }
         // @usernames → kulan://u/<handle> (resolved on tap).

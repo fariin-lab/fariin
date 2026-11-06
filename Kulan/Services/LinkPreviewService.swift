@@ -325,12 +325,39 @@ actor LinkPreviewService {
                          image: photo)
     }
 
-    /// First https URL in a text, if any — the one the preview is built for.
+    /// First https URL in a text, if any — the one the preview is built for. A bare "fariin.com" counts
+    /// (owner 2026-11-06, the reference app's way): read as https, like the reference app.
     static func firstURL(in text: String) -> URL? {
-        guard text.contains("http"),
+        guard mayHoldLink(text),
               let d = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return nil }
         let r = NSRange(text.startIndex..., in: text)
-        return d.matches(in: text, range: r).compactMap(\.url).first { $0.scheme == "https" }
+        return d.matches(in: text, range: r).compactMap { linkURL($0, in: text) }.first { $0.scheme == "https" }
+    }
+
+    /// ⛔ A LINK WITHOUT "http" IS STILL A LINK (owner 2026-11-06: "fariin.com became plain text").
+    /// The cheap test before the detector runs: an explicit scheme, "www.", or a dot with letters on
+    /// both sides ("fariin.com", "x.so/abc"). The detector then decides, using its own list of real
+    /// domain endings, so "end.Then" in a sentence is not made a link.
+    nonisolated static func mayHoldLink(_ s: String) -> Bool {
+        if s.contains("http") || s.contains("www.") { return true }
+        let u = Array(s.unicodeScalars)
+        guard u.count >= 4 else { return false }
+        for i in 1..<(u.count - 2) where u[i] == "." {
+            if CharacterSet.alphanumerics.contains(u[i - 1]),
+               CharacterSet.letters.contains(u[i + 1]), CharacterSet.letters.contains(u[i + 2]) { return true }
+        }
+        return false
+    }
+
+    /// The URL a detector match stands for. Typed with no scheme ("fariin.com"), it is https, as the
+    /// reference app opens it; a typed "http://" stays http.
+    nonisolated static func linkURL(_ m: NSTextCheckingResult, in text: String) -> URL? {
+        guard let url = m.url else { return nil }
+        guard url.scheme == "http", let r = Range(m.range, in: text),
+              !text[r].lowercased().hasPrefix("http") else { return url }
+        var c = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        c?.scheme = "https"
+        return c?.url ?? url
     }
 
     // Fetch the first ~300 KB of the page and scrape og:title / og:description / og:image

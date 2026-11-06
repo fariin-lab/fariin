@@ -62,7 +62,9 @@ enum BubbleText {
         }
 
         // Fast path: no links, no @, no mentions → skip all regex work (the common case).
-        guard full.contains("http") || full.contains("@") || !t.mentionTokens.isEmpty else {
+        // A bare "fariin.com" is a link too (owner 2026-11-06), so the test is the detector's own
+        // cheap pre-check, not only "http".
+        guard LinkPreviewService.mayHoldLink(full) || full.contains("@") || !t.mentionTokens.isEmpty else {
             return (out, links)
         }
 
@@ -78,7 +80,8 @@ enum BubbleText {
 
         if let detector = linkDetector {
             for m in detector.matches(in: full, range: whole) where m.url != nil {
-                style(m.range, url: m.url, underline: true)
+                // A bare domain opens as https (LinkPreviewService.linkURL).
+                style(m.range, url: LinkPreviewService.linkURL(m, in: full), underline: true)
             }
         }
         // @usernames → kulan://u/<handle>, resolved on tap.
