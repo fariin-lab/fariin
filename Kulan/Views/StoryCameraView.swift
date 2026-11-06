@@ -1424,20 +1424,9 @@ struct StoryCameraView: View {
                 }
 
             // Camera access denied/restricted → explain + route to Settings instead of a dead black screen.
+            // The same panel every other camera shows (`CameraDeniedPanel`, CameraPicker.swift).
             if cam.denied {
-                VStack(spacing: 14) {
-                    Image(systemName: "camera.fill").font(.system(size: 34)).foregroundStyle(.white.opacity(0.6))
-                    Text("Camera access is off — enable it in Settings")
-                        .font(.subheadline).foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                    Button("Open Settings") {
-                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
-                    }
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.black)
-                    .padding(.horizontal, 18).padding(.vertical, 9)
-                    .background(.white, in: Capsule())
-                }
-                .padding(.horizontal, 40)
+                CameraDeniedPanel()
             }
 
             // THE CAPTURED FRAME, PINNED WHERE THE PREVIEW WAS. Above the live layer so the scene
