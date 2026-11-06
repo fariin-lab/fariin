@@ -1165,7 +1165,10 @@ struct ChannelReactionsSettingsView: View {
     /// Any other emoji comes in through the emoji sheet.
     static let palette = ["👍", "❤️", "🔥", "😂", "😮", "😢", "🙏", "👏", "🎉", "💯", "🤔", "😍",
                           "👎", "😡", "🤝", "💪", "✅", "⭐️", "🌙", "☀️", "⚽️", "📌", "💡", "🙌"]
-    static let maxPicked = 6
+    /// Owner 2026-11-06: up to 12 (was 6). The server's REACT_LIST_MAX matches.
+    static let maxPicked = 12
+    /// How many a fresh "Selected" starts with, and how many sit on one row of the bar.
+    static let perRow = 6
     private let blue = Color.fariinAction
 
     // Three plain choices and, for Selected, the bar of picks (owner
@@ -1232,9 +1235,11 @@ struct ChannelReactionsSettingsView: View {
         loaded = true
     }
 
-    /// The chosen emoji in one rounded bar; each one opens the emoji sheet to replace it.
+    /// The chosen emoji in one rounded bar; each one opens the emoji sheet to replace it. Six to a
+    /// row: with more than six (up to 12, owner 2026-11-06) the bar grows a second row.
     private var reactionBar: some View {
-        HStack(spacing: 6) {
+        LazyVGrid(columns: Array(repeating: GridItem(.fixed(44), spacing: 6), count: min(Self.perRow, list.count + (list.count < Self.maxPicked ? 1 : 0))),
+                  spacing: 8) {
             ForEach(Array(list.enumerated()), id: \.offset) { i, e in
                 Button { replacing = i; pickAny = true } label: {
                     ReactionGlyph(emoji: e, size: 30).frame(width: 44, height: 44)
@@ -1245,7 +1250,7 @@ struct ChannelReactionsSettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Replace \(CustomReaction.spoken(e))")
-                // ⛔ ANY NUMBER UP TO SIX (owner 2026-11-01: "I can't make it only 3"): each one has
+                // ⛔ ANY NUMBER UP TO `maxPicked` (owner 2026-11-01: "I can't make it only 3"): each one has
                 // its own x. The last one stays; to have none, No Reactions is the choice above.
                 .overlay(alignment: .topTrailing) {
                     if list.count > 1 {
@@ -1275,8 +1280,9 @@ struct ChannelReactionsSettingsView: View {
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(Capsule().fill(Color(.secondarySystemGroupedBackground)))
-        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+        // 30 = half of one row's height, so a single row is still the same capsule as before.
+        .background(RoundedRectangle(cornerRadius: 30, style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
+        .overlay(RoundedRectangle(cornerRadius: 30, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
     }
 
     private func remove(at i: Int) {
@@ -1306,7 +1312,7 @@ struct ChannelReactionsSettingsView: View {
             // The earlier picks come back (owner 2026-10-30): after Any / No Reactions the server
             // answers with an empty list, and Selected used to start over from the palette.
             if value == "some" && list.isEmpty {
-                list = lastPicks.isEmpty ? Array(Self.palette.prefix(Self.maxPicked)) : lastPicks
+                list = lastPicks.isEmpty ? Array(Self.palette.prefix(Self.perRow)) : lastPicks
             }
             Haptics.impact(.light)
             save()
