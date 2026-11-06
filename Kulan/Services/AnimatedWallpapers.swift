@@ -121,7 +121,7 @@ struct AnimatedWallpaperView: View {
         let themes = ChatWallpapers.all.filter { $0.pattern }
         if theme < themes.count, let sheet = ChatPattern.sheet {
             let g = themes[theme]
-            TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: !moving)) { ctx in
+            TimelineView(.animation(minimumInterval: 1.0 / 12.0, paused: !moving)) { ctx in   // a slow drift: 12 is plenty
                 let phase = (seconds(at: ctx.date) / wallpaper.period).truncatingRemainder(dividingBy: 1) * 2 * .pi
                 let ground = MeshGradient(width: 3, height: 3, points: WallpaperGradient.meshPoints,
                                           colors: g.meshColors(dark))
@@ -164,6 +164,25 @@ struct AnimatedWallpaperView: View {
         }
     }
 
+    /// ⛔ BATTERY FIRST (owner 2026-11-06: "the big messengers never eat battery, make it like that").
+    /// These looks change slowly (loops of 40 to 480 seconds), so most of them need far fewer frames
+    /// than a game: 15 a second reads as smooth motion for a slow drift and is half of the old 30.
+    /// Only Rain falls fast enough to need 24. The GPU work per frame shrinks too: the soft liquid
+    /// and aurora looks draw at a quarter of the screen's resolution (blur hides it), the particles
+    /// at a third, the stars at two thirds (small points vanish lower).
+    private var framesPerSecond: Double {
+        if case .particles(let kind) = wallpaper.look, kind == 1 { return 24 }
+        return 15
+    }
+
+    private var renderScale: CGFloat {
+        switch wallpaper.look {
+        case .stars: return 1.5
+        case .particles: return 3
+        default: return 4
+        }
+    }
+
     /// Where the doodle light band is, 0 to 1 over a loop (a plain CGFloat for the type checker).
     private func bandAt(_ phase: Double) -> CGFloat { CGFloat(phase / (2 * Double.pi)) }
 
@@ -172,9 +191,9 @@ struct AnimatedWallpaperView: View {
             let full = geo.size
             // A third of the resolution for the soft looks; Stars keeps more, or its smallest stars
             // would vanish between pixels.
-            let k: CGFloat = preview ? 2 : (wallpaper.look == .stars ? 1.5 : 3)
+            let k: CGFloat = preview ? 2 : renderScale
             let small = CGSize(width: max(1, full.width / k), height: max(1, full.height / k))
-            TimelineView(.animation(minimumInterval: 1.0 / (preview ? 20.0 : 30.0), paused: !moving)) { ctx in
+            TimelineView(.animation(minimumInterval: 1.0 / (preview ? 12.0 : framesPerSecond), paused: !moving)) { ctx in
                 let phase = Float((seconds(at: ctx.date) / wallpaper.period).truncatingRemainder(dividingBy: 1) * 2 * .pi)
                 Rectangle()
                     .frame(width: small.width, height: small.height)
