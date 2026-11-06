@@ -402,7 +402,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     var pendingVoiceNoteCid: String?
     /// A channel post being quoted (owner 2026-11-06): the chat it goes to and the server's quote.
     /// Spent by that chat's `ThreadView`, which shows it above the composer.
-    var pendingQuote: (cid: String, qid: String, card: QuoteCard, picture: UIImage?)?
+    /// A quote on its way into a chat (owner 2026-11-06): the token `QuoteStore.made` resolves, the
+    /// card as the post looked on screen, and its picture if one was at hand.
+    var pendingQuote: (cid: String, token: String, card: QuoteCard, picture: UIImage?)?
     var pendingInviteCode: String? // a kulan://g/<code> invite link to resolve into a Join sheet
     /// A channel admin invite link, fariin.com/a/<code> (2026-10-29): its Accept / Decline sheet.
     var pendingAdminInvite: String?

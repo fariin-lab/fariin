@@ -127,8 +127,10 @@ struct ThreadView: View {
     @HeapState private var replyingTo: Message? = nil
     /// A channel post quoted into this chat, waiting above the composer for my words (owner 2026-11-06).
     struct QuoteDraft: Equatable {
-        let qid: String
-        let card: QuoteCard
+        /// Empty until the server has made the quote (`token` resolves it, see `QuoteStore.start`).
+        var qid: String
+        var card: QuoteCard
+        var token: String = ""
         /// The post's picture as this phone made it for the quote (the bar's thumbnail, owner 2026-11-06).
         var picture: UIImage? = nil
     }
@@ -2781,7 +2783,8 @@ struct ThreadView: View {
         guard let q = AppRouter.shared.pendingQuote, q.cid == cid else { return }
         AppRouter.shared.pendingQuote = nil
         replyingTo = nil
-        quoting = QuoteDraft(qid: q.qid, card: q.card, picture: q.picture)
+        quoting = QuoteDraft(qid: "", card: q.card, token: q.token, picture: q.picture)
+        resolveQuote(q.token)
         // ⛔ THE KEYBOARD AFTER THE PUSH, NOT DURING IT (owner 2026-11-06: it slid in from the right
         // with the chat). This chat was just pushed; focusing at once raised the keyboard inside the
         // sliding screen. Once the push has landed it rises from the bottom as usual.
@@ -7372,31 +7375,48 @@ struct ThreadView: View {
     /// Quote picked a chat: the server snapshots the post (it checks I may see it), then that chat
     /// opens with the quote above its composer. Quoting into the chat already open stays here.
     private func startQuote(_ m: Message, into dest: Conversation) {
-        let sourceCid = cid
-        let mid = m.id
-        Task {
+        // The server makes the quote in the background; the chat opens NOW with the card drawn from
+        // the post on screen (owner 2026-11-06: it waited seconds before opening).
+        let token = QuoteStore.shared.start(cid: cid, mid: m.id) { await Self.quotePicture(m) }
+        var card = QuoteCard(state: .ok)
+        card.cid = cid
+        card.mid = m.id
+        card.title = conversation?.title ?? "Channel"
+        card.photoUrl = conversation?.avatarUrl ?? ""
+        card.text = m.text
+        card.kind = !m.album.isEmpty ? "album" : (m.type == "video" ? "video" : (m.type == "image" ? "photo" : "text"))
+        if dest.id == cid {
+            replyingTo = nil
+            quoting = QuoteDraft(qid: "", card: card, token: token)
+            inputFocused = true
+            resolveQuote(token)
+            return
+        }
+        let r = AppRouter.shared
+        r.pendingQuote = (dest.id, token, card, nil)
+        r.pendingChatName = dest.displayName(me)
+        r.pendingChatPhoto = dest.displayPhoto(me)
+        r.pendingChatPush = true
+        r.pendingChatId = dest.id
+    }
+
+    /// The server's quote landing under a draft that is still open: its id, its card and the picture
+    /// (seeded under the card's address, so my own bubble shows it at once). A refusal takes the
+    /// draft away and says so.
+    private func resolveQuote(_ token: String) {
+        Task { @MainActor in
             do {
-                let picture = await Self.quotePicture(m)
-                let made = try await QuoteStore.create(cid: sourceCid, mid: mid, picture: picture)
-                let shown = picture.flatMap { UIImage(data: $0) }
-                // The card's picture under its server address, so my own bubble shows it at once.
+                let made = try await QuoteStore.shared.made(token)
+                let shown = made.picture.flatMap { UIImage(data: $0) }
                 if let shown, !made.card.image.isEmpty { DiskImageCache.shared.store(shown, for: made.card.image) }
-                await MainActor.run {
-                    if dest.id == cid {
-                        replyingTo = nil
-                        quoting = QuoteDraft(qid: made.qid, card: made.card, picture: shown)
-                        inputFocused = true
-                        return
-                    }
-                    let r = AppRouter.shared
-                    r.pendingQuote = (dest.id, made.qid, made.card, shown)
-                    r.pendingChatName = dest.displayName(me)
-                    r.pendingChatPhoto = dest.displayPhoto(me)
-                    r.pendingChatPush = true
-                    r.pendingChatId = dest.id
-                }
+                guard quoting?.token == token else { return }
+                quoting?.qid = made.qid
+                quoting?.card = made.card
+                if let shown { quoting?.picture = shown }
             } catch {
-                await MainActor.run { showJumpToast("Couldn't quote this post. Try again.") }
+                guard quoting?.token == token else { return }
+                quoting = nil
+                showJumpToast("Couldn't quote this post. Try again.")
             }
         }
     }
@@ -7406,6 +7426,19 @@ struct ThreadView: View {
     /// quote's id. A send that fails takes the bubble back and puts the quote and the words back in
     /// the composer, rather than leaving a Resend that would go without its quote.
     private func sendQuote(_ q: QuoteDraft, text: String) {
+        if q.qid.isEmpty, !q.token.isEmpty {
+            Task { @MainActor in
+                guard let made = try? await QuoteStore.shared.made(q.token) else {
+                    showJumpToast("Couldn't quote this post. Try again.")
+                    return
+                }
+                var ready = q
+                ready.qid = made.qid
+                ready.card = made.card
+                sendQuote(ready, text: text)
+            }
+            return
+        }
         sendTick &+= 1
         lastSendAt = Date()
         let mentions = resolveMentions(in: text).filter { groupMembers.contains($0) }
@@ -10164,7 +10197,7 @@ struct ThreadView: View {
         }
         // A channel post being quoted here (owner 2026-11-06): its channel and words, its picture.
         if let q = quoting, editingMessage == nil {
-            out.append(ChatComposerBanner(id: "quote:\(q.qid)", style: .quote, title: "Quote from \(q.card.heading)",
+            out.append(ChatComposerBanner(id: "quote:\(q.token.isEmpty ? q.qid : q.token)", style: .quote, title: "Quote from \(q.card.heading)",
                                           detail: .text(q.card.body),
                                           thumb: q.picture.map { .image($0) } ?? (q.card.image.isEmpty ? nil : .cached(url: q.card.image)),
                                           footnote: nil))

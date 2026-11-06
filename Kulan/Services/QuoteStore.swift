@@ -173,6 +173,28 @@ struct QuoteCard: Equatable, Codable {
 
     /// Quote a channel post: the server checks I may see it and keeps a snapshot. Returns the id the
     /// message will carry, and seeds the card so my own bubble shows it at once.
+    /// ⛔ THE CHAT OPENS BEFORE THE SERVER ANSWERS (owner 2026-11-06: "I pick the chat in Quote in and
+    /// wait seconds before it opens"). The quote is made in the background under a local token; the
+    /// composer shows the card at once from the post on screen, and asks `made(_:)` for the real id
+    /// when it needs it (a send). One request per quote, however many times it is asked.
+    struct Made { let qid: String; let card: QuoteCard; let picture: Data? }
+    private var pending: [String: Task<Made, Error>] = [:]
+
+    func start(cid: String, mid: String, picture: @escaping () async -> Data?) -> String {
+        let token = UUID().uuidString
+        pending[token] = Task { @MainActor in
+            let pic = await picture()
+            let r = try await Self.create(cid: cid, mid: mid, picture: pic)
+            return Made(qid: r.qid, card: r.card, picture: pic)
+        }
+        return token
+    }
+
+    func made(_ token: String) async throws -> Made {
+        guard let t = pending[token] else { throw NSError(domain: "Quote", code: 2) }
+        return try await t.value
+    }
+
     static func create(cid: String, mid: String, picture: Data? = nil) async throws -> (qid: String, card: QuoteCard) {
         var args: [String: Any] = ["cid": cid, "mid": mid]
         // The post's picture as this phone has it open (channel media is sealed; see createQuote).
