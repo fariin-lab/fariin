@@ -4632,6 +4632,9 @@ struct ThreadView: View {
                 flashAndScroll(target)
             }
         case .ok:
+            // Leaving for the other channel closes my keyboard, so it is not still up when I swipe
+            // back (owner 2026-11-06).
+            inputFocused = false
             // Not mine and not followed (a public channel's visitor): its public page, the visitor
             // door every other public channel link uses.
             let known = ConversationsRepository.shared.conversations.contains { $0.id == c.cid }
