@@ -101,6 +101,16 @@ final class ChatHeaderBlurView: UIView {
             // ⛔ Owner, 2026-10-04: "with a black wallpaper the blur feels too dark". A near-black
             // copy at 0.7 over bright bubbles reads as a dark wash, so a dark top edge gets less.
             content.alpha = Self.isDark(image, topHeight: Self.minHeight) ? base * Self.darkScale : base
+        } else if case .animated(let id) = kind, let a = AnimatedWallpapers.find(id) {
+            // ⛔ A MOVING WALLPAPER SHOWS THROUGH (owner 2026-11-06: "the header is a dark blur in dark
+            // mode and a white one in light mode; it must look like the wallpaper"). It has no still
+            // picture to lay here, and the page colour at 0.85 painted over it. The live wallpaper is
+            // already under the blur; only a light wash of its own top tone goes on top, dark or light
+            // by the WALLPAPER (a starry sky stays dark in light mode), never by the app's mode.
+            picture.image = nil
+            picture.isHidden = true
+            content.backgroundColor = a.topIsDark(dark) ? .black : .white
+            content.alpha = a.topIsDark(dark) ? 0.28 : 0.38
         } else {
             // No wallpaper: the background is the plain page colour, a single colour.
             picture.image = nil
