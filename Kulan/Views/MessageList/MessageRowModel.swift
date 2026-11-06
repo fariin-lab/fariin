@@ -420,6 +420,8 @@ struct BubbleRow: Equatable {
 struct QuoteBarChrome: Equatable {
     var count: Int
     var faces: [String]
+    /// Replies under the post; nil when replies are off there (owner 2026-11-06).
+    var replies: Int? = nil
 }
 
 /// A centred capsule notice: the day separator, a system event, a pin notice.

@@ -1299,8 +1299,12 @@ enum MessageRowLayout {
                 plan.reactions = plan.reactions.map { $0.offsetBy(dx: 0, dy: barH) }
             }
             plan.quoteBar = CGRect(x: 0, y: top, width: grown.width, height: barH)
+            // "3 Replies · 4 Quotes"; "Reply" on a post with neither yet (owner 2026-11-06).
+            var parts: [String] = []
+            if let r = qb.replies { parts.append(r == 0 ? "Reply" : "\(r.formatted()) \(r == 1 ? "Reply" : "Replies")") }
+            if qb.count > 0 { parts.append("\(qb.count.formatted()) \(qb.count == 1 ? "Quote" : "Quotes")") }
             plan.quoteBarAttr = NSAttributedString(
-                string: "\(qb.count.formatted()) \(qb.count == 1 ? "Quote" : "Quotes")",
+                string: parts.joined(separator: " · "),
                 attributes: [.font: UIFont.systemFont(ofSize: 14, weight: .semibold),
                              .foregroundColor: UIColor.label])   // no blue (owner 2026-11-06)
             plan.quoteBarFaces = qb.faces

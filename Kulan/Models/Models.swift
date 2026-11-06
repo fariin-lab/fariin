@@ -239,6 +239,10 @@ struct PostCounts: Codable, Equatable {
     var quoteCount = 0
     var quoteFaces: [String] = []
     var reactionCounts: [String: Int] = [:]
+    /// Replies under the post and whether the post has them off (owner 2026-11-06). Optional, so a
+    /// cache written before them still decodes.
+    var replyCount: Int? = nil
+    var repliesOff: Bool? = nil
 }
 
 extension Message {
@@ -398,6 +402,9 @@ struct Message: Identifiable, Equatable, Codable {
     var quoteFaces: [String] { get { counts.quoteFaces } set { counts.quoteFaces = newValue } }
     /// A channel post's reactions as counts only (2026-10-29): who picked what is never on the post.
     var reactionCounts: [String: Int] { get { counts.reactionCounts } set { counts.reactionCounts = newValue } }
+    /// Replies under a channel post (server `addReply`), and the post's own "replies off".
+    var replyCount: Int { get { counts.replyCount ?? 0 } set { counts.replyCount = newValue > 0 ? newValue : nil } }
+    var repliesOff: Bool { get { counts.repliesOff ?? false } set { counts.repliesOff = newValue ? true : nil } }
     var edited: Bool = false               // text was edited after sending
     /// Deleted for everyone. The document SURVIVES as a tombstone so both sides see that something
     /// was here and removed, the way the standard messengers do it, instead of a message silently
@@ -874,7 +881,9 @@ struct Message: Identifiable, Equatable, Codable {
             quoteCount: max(0, (data["quoteCount"] as? NSNumber)?.intValue ?? 0),
             quoteFaces: Array(((data["quoteFaces"] as? [Any]) ?? []).compactMap { $0 as? String }.prefix(3)),
             reactionCounts: ((data["reactionCounts"] as? [String: Any]) ?? [:])
-                .compactMapValues { ($0 as? NSNumber)?.intValue }.filter { $0.value > 0 })
+                .compactMapValues { ($0 as? NSNumber)?.intValue }.filter { $0.value > 0 },
+            replyCount: ((data["replyCount"] as? NSNumber)?.intValue).flatMap { $0 > 0 ? $0 : nil },
+            repliesOff: (data["repliesOff"] as? Bool) == true ? true : nil)
         self.countsStore = pc == PostCounts() ? nil : pc
         self.deleted = data["deleted"] as? Bool ?? false
         self.deletedBy = data["deletedBy"] as? String   // 2026-09-24 feature-audit
@@ -1469,6 +1478,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var groupMod: GroupMod = GroupMod(data: nil)
     /// 2026-10-18: the group's verified badge (`verified`, admin panel only).
     var groupVerified: Bool = false
+    /// A channel with replies turned off for every post (`repliesOff`, set by `setReplies`).
+    var repliesOff: Bool = false
     /// The badge's type (`verifiedType`, admin panel, owner 2026-10-26): the person list, gold for
     /// Business / Organization. Nil on an older badge or a type this build does not know: plain blue.
     var groupVerifiedType: Verification.Kind?
@@ -1631,6 +1642,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         // group circle everywhere the app draws this group.
         if data["type"] as? String == "group", groupMod.locksGroup() { self.avatarUrl = nil }
         self.groupVerified = data["verified"] as? Bool ?? false
+        self.repliesOff = data["repliesOff"] as? Bool ?? false
         self.groupVerifiedType = (data["verifiedType"] as? String).flatMap(Verification.Kind.init(rawValue:))
         self.groupNoReport = data["noReport"] as? Bool ?? false
         self.restrictedFlags = stringArrayMap(data["restrictedFlags"])

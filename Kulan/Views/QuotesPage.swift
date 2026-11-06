@@ -46,6 +46,8 @@ struct QuotesPage: View {
     /// The post's picture, made on this phone (channel media is sealed).
     var picture: () async -> UIImage?
     var onOpen: (QuotedInItem) -> Void
+    /// Inside the Replies / Quotes sheet (`PostThreadSheet`): no navigation bar of its own.
+    var embedded = false
 
     @Environment(\.dismiss) private var dismiss
     @State private var items: [QuotedInItem] = []
@@ -56,7 +58,19 @@ struct QuotesPage: View {
     @State private var thumb: UIImage?
 
     var body: some View {
-        NavigationStack {
+        if embedded {
+            page
+        } else {
+            NavigationStack {
+                page
+                    .navigationTitle("Quotes")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            }
+        }
+    }
+
+    private var page: some View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if loaded {
@@ -77,12 +91,8 @@ struct QuotesPage: View {
                 }
             }
             .overlay { overlay }
-            .navigationTitle("Quotes")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
             .task { await load() }
             .task { thumb = await picture() }
-        }
     }
 
     @ViewBuilder private var overlay: some View {

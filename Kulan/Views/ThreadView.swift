@@ -2417,7 +2417,7 @@ struct ThreadView: View {
             goToMessageJump(p.messageId)
         }
         .sheet(item: $quotesFor) { t in
-            QuotesPage(cid: cid, mid: t.id, post: repo.items.first(where: { $0.id == t.id }),
+            PostThreadSheet(cid: cid, mid: t.id, post: repo.items.first(where: { $0.id == t.id }),
                        sourceTitle: conversation?.title ?? "Channel", sourcePhoto: conversation?.avatarUrl,
                        sourceVerified: conversation?.groupVerified == true,
                        picture: { await quotesPicture(t.id) }) { item in
@@ -4186,6 +4186,7 @@ struct ThreadView: View {
             calleeRinging: CallService.shared.calleeRinging,
             channelReactionsOn: channelReactOn, channelCanReact: channelCanReact,
             noForwarding: repo.noForwarding,
+            repliesOff: conversation?.repliesOff == true,
             channelMine: { [cid] in ChannelFollows.shared.myReaction(cid, $0) },
             channelConfirmed: { [cid] in ChannelFollows.shared.confirmedReaction(cid, $0) },
             channelCounts: { [cid] in ChannelFollows.shared.displayCounts(cid, $0, post: $1) },

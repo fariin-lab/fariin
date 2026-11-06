@@ -28,6 +28,8 @@ struct MessageRowContext {
     var channelCanReact: Bool = false
     /// Disable Sharing is on in this chat (`ThreadRepository.noForwarding`).
     var noForwarding: Bool = false
+    /// The channel has replies off for every post (`Conversation.repliesOff`).
+    var repliesOff: Bool = false
     var channelMine: (String) -> String? = { _ in nil }
     var channelConfirmed: (String) -> String? = { _ in nil }
     /// The counts to draw for a post (mid, the post's own): the server's answer to my pick while the
@@ -443,8 +445,18 @@ enum MessageRowModelBuilder {
             }(),
             wide: ctx.isChannel && !msg.deleted,
             shareable: ctx.isChannel && !msg.deleted && !ctx.noForwarding,
-            quoteBar: ctx.isChannel && !msg.deleted && msg.quoteCount > 0
-                ? QuoteBarChrome(count: msg.quoteCount, faces: msg.quoteFaces) : nil)
+            quoteBar: postBar(msg, ctx: ctx))
+    }
+
+    /// ⛔ "REPLIES · QUOTES" UNDER A CHANNEL POST (owner 2026-11-06). Shown once the post is out, when
+    /// it can take replies or has been quoted. Replies off (the channel's or the post's) leaves only
+    /// the quotes; neither leaves no bar.
+    private static func postBar(_ msg: Message, ctx: MessageRowContext) -> QuoteBarChrome? {
+        guard ctx.isChannel, !msg.deleted, msg.sendState == nil else { return nil }
+        let repliesOn = !ctx.repliesOff && !msg.repliesOff
+        guard repliesOn || msg.quoteCount > 0 else { return nil }
+        return QuoteBarChrome(count: msg.quoteCount, faces: msg.quoteCount > 0 ? msg.quoteFaces : [],
+                              replies: repliesOn ? msg.replyCount : nil)
     }
 
     /// ⛔ THE TIMER ICON FROM THE FIRST FRAME — owner, 2026-09-29: messages sent right after the
