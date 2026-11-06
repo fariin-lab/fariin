@@ -397,6 +397,8 @@ struct Message: Identifiable, Equatable, Codable {
     var quoteId: String? = nil
     /// The sender's bubble style (owner 2026-11-06, `BubbleStyles`): a plain id, nil = the normal bubble.
     var bubbleStyle: String? = nil
+    /// The sender chose the style's decorations too (`bsd`, owner 2026-11-06, `BubbleDecorSets`).
+    var bubbleDecor: Bool = false
     var pollClosed: Bool = false            // 2026-10-19: the poll's creator tapped Stop Poll
     /// THE MESSAGE EXISTS, THE PICTURE DOES NOT YET.
     ///
@@ -533,6 +535,7 @@ struct Message: Identifiable, Equatable, Codable {
         m.forwarded = false
         m.quoteId = nil
         m.bubbleStyle = nil
+        m.bubbleDecor = false
         m.localImageData = nil; m.localAudioData = nil; m.localFile = false; m.localMediaURL = nil
         return m
     }
@@ -760,7 +763,7 @@ struct Message: Identifiable, Equatable, Codable {
         case clientId, replyTo, storyMention, reactions, mentions, viewOnce, album
         case createdAt, width, blurhash, thumb, height
         case callerUid, callOutcome, callVideo, callDuration, callJoinedUids, callRungUids
-        case quoteId, bubbleStyle
+        case quoteId, bubbleStyle, bubbleDecor
         case edited, deleted, deletedBy, forwarded, clientTs, linkPreview, hasServerTime, uploading, albumSizes
         case expiresAt   // owner audit 2026-10-06 chat #21: a cold open must know what has already expired
         case stickerPack, stickerId, stickerEmoji, stickerAnimated   // 2026-10-17 chat stickers, all optional
@@ -851,6 +854,7 @@ struct Message: Identifiable, Equatable, Codable {
         self.forwarded = data["forwarded"] as? Bool ?? false
         if let q = (data["quote"] as? [String: Any])?["qid"] as? String, QuoteStore.isQid(q) { self.quoteId = q }
         if let bs = data["bs"] as? String, !bs.isEmpty, bs.count <= 32 { self.bubbleStyle = bs }
+        self.bubbleDecor = data["bsd"] as? Bool ?? false
         self.pollClosed = data["pollClosed"] as? Bool ?? false
         self.uploading = data["uploading"] as? Bool ?? false
         self.albumSizes = (data["albumSizes"] as? [[Double]]) ?? []

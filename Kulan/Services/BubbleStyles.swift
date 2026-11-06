@@ -71,6 +71,13 @@ enum BubbleStyles {
         }
     }
 
+    /// Send my style's decorations too (owner: "optional decorative elements"). On by default.
+    static let decorKey = "bubbleStyle.decor.v1"
+    static var decorations: Bool {
+        get { UserDefaults.standard.object(forKey: decorKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: decorKey) }
+    }
+
     /// May I use this style now? A Plus style: the Fariin team only, until Plus is on sale.
     @MainActor static func mayUse(_ s: BubbleStyle) -> Bool { !s.plus || AdminStore.shared.isAdmin }
 

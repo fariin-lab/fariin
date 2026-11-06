@@ -403,6 +403,8 @@ struct BubbleRow: Equatable {
     var canDoubleTapReact: Bool
     /// A bubble style's text colour (owner 2026-11-06); nil = the usual mine / theirs colours.
     var textHex: UInt? = nil
+    /// A styled bubble's decorations, placed (`BubbleDecorSets.placed`); empty for most bubbles.
+    var decor: [PlacedDecor] = []
     /// A channel post (owner 2026-10-29, the reference app's channel feed): the bubble takes the
     /// column's whole width and a photo or video fills it edge to edge.
     var wide: Bool = false

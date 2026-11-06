@@ -792,6 +792,8 @@ final class MessageRowView: UIView {
     /// for the double tap, and translates it for the reply swipe — so its frame has to be the
     /// bubble's real frame, not the row's.
     let bubbleBox = UIView()
+    /// A styled bubble's decorations (owner 2026-11-06), reused across rows.
+    private var decorViews: [UIImageView] = []
 
     private let fill = BubbleFillView()
     private let rim = BubbleShapeView()
@@ -1231,6 +1233,42 @@ final class MessageRowView: UIView {
         }
     }
 
+    /// A styled bubble's decorations at its corners, hanging slightly outside (the box does not
+    /// clip). Hidden extras are kept for the next row.
+    private func applyDecor(_ list: [PlacedDecor], size: CGSize) {
+        while decorViews.count < list.count {
+            let v = UIImageView()
+            v.isUserInteractionEnabled = false
+            v.contentMode = .scaleAspectFit
+            v.layer.shadowColor = UIColor.black.cgColor
+            v.layer.shadowOpacity = 0.18
+            v.layer.shadowRadius = 1.5
+            v.layer.shadowOffset = CGSize(width: 0, height: 1)
+            bubbleBox.addSubview(v)
+            decorViews.append(v)
+        }
+        for (i, v) in decorViews.enumerated() {
+            guard i < list.count, let img = BubbleDecorArt.image(list[i].glyph, size: list[i].size, color: list[i].color) else {
+                v.isHidden = true; v.image = nil; continue
+            }
+            let d = list[i]
+            let p: CGPoint
+            switch d.corner {
+            case .topLeading: p = CGPoint(x: 4 - d.out, y: 2 - d.out)
+            case .topTrailing: p = CGPoint(x: size.width - 4 + d.out, y: 2 - d.out)
+            case .bottomLeading: p = CGPoint(x: 4 - d.out, y: size.height - 2 + d.out)
+            case .bottomTrailing: p = CGPoint(x: size.width - 4 + d.out, y: size.height - 2 + d.out)
+            }
+            v.isHidden = false
+            v.image = img
+            v.transform = .identity
+            v.bounds = CGRect(origin: .zero, size: img.size)
+            v.center = p
+            v.transform = CGAffineTransform(rotationAngle: d.rotation)
+            bubbleBox.bringSubviewToFront(v)
+        }
+    }
+
     private func applyBubble(_ b: BubblePlan, model m: MessageRowModel, dark: Bool, cid: String) {
         // ⚠️ BOUNDS AND CENTER, NOT FRAME. The reply swipe puts a translation transform on this
         // view, and a view's `frame` is undefined while a transform is applied — writing it there
@@ -1263,6 +1301,7 @@ final class MessageRowView: UIView {
         CATransaction.commit()
         bubbleBox.bringSubviewToFront(rim)
         bubbleBox.bringSubviewToFront(highlight)
+        if case .bubble(let row) = m.content { applyDecor(row.decor, size: b.bubble.size) } else { applyDecor([], size: .zero) }
 
         bodyLabel.attributedText = b.bodyAttr
         bodyLabel.frame = b.text

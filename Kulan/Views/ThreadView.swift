@@ -7270,6 +7270,7 @@ struct ThreadView: View {
         var outgoing = Message(localText: text, authorId: me, clientId: clientId, replyTo: reply,
                                sendState: .sending, linkPreview: pendingPreview)
         outgoing.bubbleStyle = BubbleStyles.forSending()   // my style from the first frame (2026-11-06)
+        outgoing.bubbleDecor = outgoing.bubbleStyle != nil && BubbleStyles.decorations
         repo.addPending(outgoing)
         // 2026-10-23: the card is attached after the text lands; my bubble keeps it meanwhile.
         if let pendingPreview { repo.showLocalCard(clientId: clientId, card: pendingPreview) }
@@ -7339,6 +7340,7 @@ struct ThreadView: View {
         var bubble = Message(localText: text, authorId: me, clientId: clientId, replyTo: nil, sendState: .sending)
         bubble.quoteId = q.qid
         bubble.bubbleStyle = BubbleStyles.forSending()
+        bubble.bubbleDecor = bubble.bubbleStyle != nil && BubbleStyles.decorations
         repo.addPending(bubble)
         broadcastTyping(false)
         typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil

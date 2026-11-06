@@ -422,6 +422,11 @@ enum MessageRowModelBuilder {
             opensOnTap: msg.isImage || msg.isVideo || msg.isAlbum || msg.isFile,
             canDoubleTapReact: msg.sendState == nil && !msg.deleted && !msg.isStoryReaction,
             textHex: bubbleStyle.map { $0.look(ctx.dark).text },
+            // Decorations: the sender chose them, this is a text bubble, and it is the LAST of its run.
+            decor: {
+                guard let s = bubbleStyle, msg.bubbleDecor, last, case .text = body else { return [] }
+                return BubbleDecorSets.placed(styleId: s.id, isMe: isMe, dark: ctx.dark, first: first)
+            }(),
             wide: ctx.isChannel && !msg.deleted,
             shareable: ctx.isChannel && !msg.deleted && !ctx.noForwarding)
     }

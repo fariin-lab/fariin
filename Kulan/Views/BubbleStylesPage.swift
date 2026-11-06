@@ -7,6 +7,7 @@ struct BubbleStylesPage: View {
     @Environment(\.colorScheme) private var scheme
     @State private var selected: String? = BubbleStyles.current
     @State private var plusNote = false
+    @State private var decorOn = BubbleStyles.decorations
     private var dark: Bool { scheme == .dark }
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
 
@@ -22,6 +23,12 @@ struct BubbleStylesPage: View {
                     tile(nil)
                     ForEach(BubbleStyles.all) { s in tile(s) }
                 }
+                // Optional decorations (owner 2026-11-06): hearts, bows, stars at the corners of the
+                // last bubble in a run, never on every bubble.
+                Toggle("Decorations", isOn: $decorOn)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .disabled(selected == nil)
             }
             .padding(16)
         }
@@ -32,7 +39,7 @@ struct BubbleStylesPage: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Save") { save() }
                     .fontWeight(.semibold)
-                    .disabled(selected == BubbleStyles.current)
+                    .disabled(selected == BubbleStyles.current && decorOn == BubbleStyles.decorations)
             }
         }
         .alert("Fariin Plus", isPresented: $plusNote) {
@@ -45,6 +52,7 @@ struct BubbleStylesPage: View {
     private func save() {
         if let s = BubbleStyles.find(selected), !BubbleStyles.mayUse(s) { plusNote = true; return }
         BubbleStyles.current = selected
+        BubbleStyles.decorations = decorOn
         Haptics.impact(.light)
         dismiss()
     }
@@ -68,6 +76,7 @@ struct BubbleStylesPage: View {
                     .foregroundStyle(textColor(BubbleStyles.find(selected)))
                     .padding(.horizontal, 14).padding(.vertical, 9)
                     .background { bubbleFill(BubbleStyles.find(selected), corner: 18) }
+                    .overlay { decorPreview(BubbleStyles.find(selected)) }
             }
         }
         .padding(16)
@@ -131,6 +140,32 @@ struct BubbleStylesPage: View {
             }
         } else {
             shape.fill(Color(hex: dark ? 0x0A84FF : 0x007AFF))
+        }
+    }
+
+    /// The style's decorations on the preview bubble, placed as the chat places them.
+    @ViewBuilder private func decorPreview(_ s: BubbleStyle?) -> some View {
+        if let s, decorOn {
+            GeometryReader { g in
+                ForEach(Array(BubbleDecorSets.placed(styleId: s.id, isMe: true, dark: dark, first: true).enumerated()), id: \.offset) { _, d in
+                    if let img = BubbleDecorArt.image(d.glyph, size: d.size, color: d.color) {
+                        let w = g.size.width, h = g.size.height
+                        let p: CGPoint = {
+                            switch d.corner {
+                            case .topLeading: return CGPoint(x: 4 - d.out, y: 2 - d.out)
+                            case .topTrailing: return CGPoint(x: w - 4 + d.out, y: 2 - d.out)
+                            case .bottomLeading: return CGPoint(x: 4 - d.out, y: h - 2 + d.out)
+                            case .bottomTrailing: return CGPoint(x: w - 4 + d.out, y: h - 2 + d.out)
+                            }
+                        }()
+                        Image(uiImage: img)
+                            .rotationEffect(.radians(Double(d.rotation)))
+                            .shadow(color: .black.opacity(0.18), radius: 1.5, y: 1)
+                            .position(p)
+                    }
+                }
+            }
+            .allowsHitTesting(false)
         }
     }
 
