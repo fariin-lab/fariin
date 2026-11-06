@@ -59,8 +59,8 @@ enum AnimatedWallpapers {
     static let intensityKey = "animatedWallpapers.intensity"
 }
 
-/// One animated wallpaper on screen. It MOVES only when all of these hold: the setting is on, Reduce
-/// Motion is off, Low Power Mode is off, the app is active, and this view is on screen. Otherwise it
+/// One animated wallpaper on screen. It MOVES only when all of these hold: Reduce Motion is off,
+/// the app is active, and this view is on screen. Otherwise it
 /// shows one still frame of the same look. At most 30 frames a second, drawn at a third of the
 /// screen's resolution and scaled up (the looks are soft, the difference does not show).
 struct AnimatedWallpaperView: View {
@@ -74,8 +74,10 @@ struct AnimatedWallpaperView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
-    @AppStorage(AnimatedWallpapers.enabledKey) private var enabledSetting = true
-    @AppStorage(AnimatedWallpapers.intensityKey) private var intensity = 1
+    /// ⛔ NO ON/OFF SWITCH AND NO PARTICLES SETTING (owner 2026-11-06: the big messengers have
+    /// neither; a moving wallpaper moves, and whoever wants it still picks another wallpaper). Medium
+    /// particles for everyone. Old saved values of those two settings are simply not read.
+    private let intensity = 1
     @State private var onScreen = false
     @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
     /// The loop's own clock. Time only counts while moving: `elapsed` holds what ran before the last
@@ -85,7 +87,9 @@ struct AnimatedWallpaperView: View {
     @State private var resumedAt = Date()
 
     private var moving: Bool {
-        animates && enabledSetting && !reduceMotion && !lowPower && scenePhase == .active && onScreen
+        // Low Power Mode does NOT stop it (owner 2026-11-06, as the reference app does). Reduce
+        // Motion still does: that is the phone's accessibility setting, not a battery choice.
+        animates && !reduceMotion && scenePhase == .active && onScreen
     }
 
     private func seconds(at date: Date) -> TimeInterval {
