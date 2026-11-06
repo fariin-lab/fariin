@@ -182,7 +182,8 @@ struct PostReply: Identifiable, Equatable {
             let ids = Set(page.map(\.id))
             if threads.isEmpty || olderCursor.isEmpty { olderCursor = d["next"] as? String ?? "" }
             // Pages loaded further up stay (a Try Again or a switch flip used to drop them).
-            let kept = threads.filter { !ids.contains($0.id) && ($0.send != .sent || (page.first.map { f in $0.at < f.at } ?? true)) }
+            let firstAt = page.first?.at
+            let kept = threads.filter { r in !ids.contains(r.id) && (r.send != .sent || (firstAt.map { r.at < $0 } ?? true)) }
             threads = (kept + page).sorted { $0.at < $1.at }
             if lastRev < 0 { lastRev = (d["rev"] as? NSNumber)?.intValue ?? 0 }
             loaded = true
