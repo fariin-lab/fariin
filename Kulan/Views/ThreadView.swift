@@ -2319,6 +2319,9 @@ struct ThreadView: View {
                   let saved = ChatScrollStore.shared.position(for: cid) else { return }
             await repo.ensureLoaded(rowId: saved.rowId, deadline: Date().addingTimeInterval(3))
         }
+        // Here, not in `body` (2026-11-06): one more modifier on body's chain made the compiler give
+        // up type-checking it ("unable to type-check this expression in reasonable time").
+        .onReceive(NotificationCenter.default.publisher(for: .groupCardsChanged)) { _ in groupCardTick += 1 }
         .toolbar(searchActive ? .hidden : .automatic, for: .navigationBar)
     }
 
@@ -2699,7 +2702,6 @@ struct ThreadView: View {
         // A hide from anywhere (the image viewer, the gallery, the row itself) reaches the signature
         // through this tick. See `hiddenTick`.
         .onReceive(NotificationCenter.default.publisher(for: .hiddenMessagesChanged)) { _ in hiddenTick += 1 }
-        .onReceive(NotificationCenter.default.publisher(for: .groupCardsChanged)) { _ in groupCardTick += 1 }
         // Scrubbing the review knob right-to-left runs along the HOME INDICATOR's strip, and iOS
         // read it as the app-switch swipe (his report: "the app thinks I am swiping to leave").
         // While the locked bar owns the bottom edge, the system gesture goes soft: the first swipe
