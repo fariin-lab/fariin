@@ -65,7 +65,9 @@ inline float2 awCircle(float phase, float r) { return float2(cos(phase), sin(pha
 
     float body = smoothstep(0.52, 0.78, f);
     float glow = smoothstep(0.40, 0.80, f) * 0.35;
-    float edge = exp(-pow((f - 0.53) / 0.016, 2.0));
+    // x*x, not pow(x, 2.0): pow is undefined for a negative base in Metal (half the edge).
+    float e = (f - 0.53) / 0.016;
+    float edge = exp(-e * e);
 
     float3 rgb;
     if (dark > 0.5) {
@@ -203,7 +205,8 @@ inline float2 awCircle(float phase, float r) { return float2(cos(phase), sin(pha
     float f = 0.055 / dot(uv - b0, uv - b0) + 0.075 / dot(uv - b1, uv - b1) + 0.05 / dot(uv - b2, uv - b2);
     f += (awFbm(uv * 3.0 + m * 0.4) - 0.5) * 0.35;
     float inside = smoothstep(0.95, 1.10, f);
-    float edge = exp(-pow((f - 1.0) / 0.06, 2.0));
+    float e = (f - 1.0) / 0.06;   // x*x, not pow (undefined for a negative base)
+    float edge = exp(-e * e);
     float3 rgb;
     if (dark > 0.5) {
         float3 ground = float3(0.020, 0.022, 0.026);
