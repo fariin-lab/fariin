@@ -1099,6 +1099,7 @@ struct ActivityView: UIViewControllerRepresentable {
 struct AppearanceSettingsView: View {
     @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
     @AppStorage(AnimatedWallpapers.enabledKey) private var animatedWallpapers = true
+    @AppStorage(AnimatedWallpapers.intensityKey) private var particleIntensity = 1
     @AppStorage(BubbleStyles.key) private var bubbleStyleId = ""   // the row's label follows a Save
     @Environment(\.colorScheme) private var scheme
     private var dark: Bool { scheme == .dark }
@@ -1151,6 +1152,13 @@ struct AppearanceSettingsView: View {
             // Reduce Motion and Low Power Mode, which still them anyway.
             Section {
                 Toggle("Animated Wallpapers", isOn: $animatedWallpapers)
+                // Snow, rain and glowing dots: how much of it (owner's "adjustable intensity").
+                Picker("Particles", selection: $particleIntensity) {
+                    Text("Low").tag(0)
+                    Text("Medium").tag(1)
+                    Text("High").tag(2)
+                }
+                .disabled(!animatedWallpapers)
             } footer: {
                 Text("When off, animated wallpapers show a still picture. They also stop moving with Reduce Motion or Low Power Mode on.")
             }

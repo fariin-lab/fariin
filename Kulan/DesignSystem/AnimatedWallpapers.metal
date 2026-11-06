@@ -218,3 +218,93 @@ inline float2 awCircle(float phase, float r) { return float2(cos(phase), sin(pha
     }
     return half4(half3(saturate(rgb)), 1.0h);
 }
+
+// ── Stars ─────────────────────────────────────────────────────────────────────────────────────────
+// A deep sky: a faint nebula drifting on a slow loop, and stars on a grid of cells (one per cell, at a
+// random spot, random size), each twinkling at its own whole-number rate so the loop stays seamless.
+
+[[ stitchable ]] half4 fariinStars(float2 position, half4 color, float2 size, float phase, float dark) {
+    float2 uv = position / max(size.y, 1.0);
+    float y = position.y / max(size.y, 1.0);
+    float3 sky = dark > 0.5 ? mix(float3(0.010, 0.012, 0.040), float3(0.030, 0.020, 0.075), y)
+                            : mix(float3(0.075, 0.085, 0.190), float3(0.150, 0.110, 0.260), y);
+    float2 m = awCircle(phase, 0.25);
+    float neb = awFbm(uv * 1.6 + m);
+    float3 rgb = sky + float3(0.20, 0.10, 0.35) * smoothstep(0.45, 0.85, neb) * 0.45
+                     + float3(0.05, 0.15, 0.30) * smoothstep(0.55, 0.90, awFbm(uv * 2.3 - m + 7.0)) * 0.35;
+    for (int layer = 0; layer < 2; layer++) {
+        float scale = layer == 0 ? 22.0 : 40.0;
+        float2 g = uv * scale;
+        float2 cell = floor(g);
+        float2 f = fract(g);
+        float h = awHash(cell + float(layer) * 31.0);
+        float2 spot = float2(awHash(cell + 3.1), awHash(cell + 7.7)) * 0.8 + 0.1;
+        float d = length(f - spot);
+        float radius = (layer == 0 ? 0.06 : 0.04) * (0.5 + h);
+        float star = smoothstep(radius, 0.0, d);
+        float rate = floor(1.0 + h * 4.0);                      // whole turns per loop: no seam
+        float tw = 0.55 + 0.45 * sin(phase * rate + h * 6.2831);
+        float show = step(0.55, h);                            // not every cell has a star
+        rgb += float3(0.85, 0.90, 1.0) * star * tw * show * (layer == 0 ? 1.0 : 0.6);
+    }
+    return half4(half3(saturate(rgb)), 1.0h);
+}
+
+// ── Particles: snow, rain, glowing dots ───────────────────────────────────────────────────────────
+// One particle per cell, cells scrolling down by a WHOLE number of cells per loop, so the last frame
+// of a loop is the first. `kind` 0 snow, 1 rain, 2 glowing dots; `amount` 0…2 is the intensity (how
+// many layers are drawn).
+
+[[ stitchable ]] half4 fariinParticles(float2 position, half4 color, float2 size, float phase, float dark,
+                                       float kind, float amount) {
+    float2 uv = position / max(size.y, 1.0);
+    float y = position.y / max(size.y, 1.0);
+    float t = phase / 6.28318;                                 // 0…1 over one loop
+    float3 ground;
+    if (kind < 0.5)      ground = dark > 0.5 ? mix(float3(0.06, 0.08, 0.14), float3(0.10, 0.12, 0.20), y)
+                                             : mix(float3(0.70, 0.78, 0.88), float3(0.86, 0.90, 0.95), y);
+    else if (kind < 1.5) ground = dark > 0.5 ? mix(float3(0.05, 0.07, 0.10), float3(0.09, 0.11, 0.15), y)
+                                             : mix(float3(0.55, 0.62, 0.70), float3(0.72, 0.77, 0.82), y);
+    else                 ground = dark > 0.5 ? mix(float3(0.03, 0.03, 0.08), float3(0.06, 0.04, 0.12), y)
+                                             : mix(float3(0.92, 0.88, 0.96), float3(0.97, 0.93, 0.90), y);
+    float3 rgb = ground;
+    int layers = 1 + int(clamp(amount, 0.0, 2.0));
+    for (int layer = 0; layer < 3; layer++) {
+        if (layer >= layers) break;
+        float fl = float(layer);
+        float scale = kind < 1.5 ? (9.0 + fl * 5.0) : (6.0 + fl * 3.0);
+        float speed = kind < 0.5 ? (3.0 + fl * 2.0) : (kind < 1.5 ? (14.0 + fl * 6.0) : 1.0);
+        float2 g = uv * scale;
+        // Rain leans a little. Set from the position BEFORE the fall, so the lean never moves with
+        // time and the loop stays whole.
+        if (kind > 0.5 && kind < 1.5) g.x += g.y * 0.12;
+        g.y -= t * speed;                                     // whole cells per loop
+        float2 cell = floor(g);
+        float2 f = fract(g);
+        float h = awHash(cell + fl * 17.0);
+        if (h < (kind < 1.5 ? 0.35 : 0.55)) continue;          // empty cells keep it airy
+        float2 spot = float2(awHash(cell + 1.3), awHash(cell + 5.9)) * 0.7 + 0.15;
+        if (kind < 0.5) {
+            spot.x += 0.12 * sin(phase * floor(1.0 + h * 2.0) + h * 6.2831);   // a flake sways
+            float d = length(f - spot);
+            float flake = smoothstep(0.10 - fl * 0.02, 0.0, d);
+            float3 c = dark > 0.5 ? float3(0.92, 0.95, 1.0) : float3(1.0, 1.0, 1.0);
+            rgb = mix(rgb, c, flake * (0.85 - fl * 0.2));
+        } else if (kind < 1.5) {
+            float2 q = f - spot;
+            float streak = smoothstep(0.018, 0.0, abs(q.x)) * smoothstep(0.30, 0.0, abs(q.y));
+            float3 c = dark > 0.5 ? float3(0.65, 0.75, 0.90) : float3(0.95, 0.97, 1.0);
+            rgb = mix(rgb, c, streak * (0.55 - fl * 0.12));
+        } else {
+            float2 drift = float2(cos(phase * floor(1.0 + h * 2.0) + h * 9.0), sin(phase + h * 5.0)) * 0.12;
+            float d = length(f - spot - drift);
+            float pulse = 0.6 + 0.4 * sin(phase * floor(1.0 + h * 3.0) + h * 6.2831);
+            float core = smoothstep(0.06, 0.0, d);
+            float halo = smoothstep(0.30, 0.0, d) * 0.45;
+            float3 c = dark > 0.5 ? mix(float3(1.0, 0.85, 0.45), float3(0.55, 0.85, 1.0), h)
+                                  : mix(float3(1.0, 0.65, 0.35), float3(0.55, 0.55, 1.0), h);
+            rgb += c * (core + halo) * pulse * (dark > 0.5 ? 0.9 : 0.6);
+        }
+    }
+    return half4(half3(saturate(rgb)), 1.0h);
+}
