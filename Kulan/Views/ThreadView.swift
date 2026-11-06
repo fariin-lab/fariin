@@ -4213,7 +4213,7 @@ struct ThreadView: View {
                 inputFocused = true
             })
         }
-        if m.edited && !m.deleted {   // 2026-09-24 feature-audit: earlier versions
+        if m.edited && !m.deleted && canSeeEditHistory {   // 2026-09-24 feature-audit: earlier versions
             items.append(UIAction(title: "Edit History", image: UIImage(systemName: "clock.arrow.circlepath")) { _ in
                 editHistoryTarget = MessageRef(id: m.id)
             })
@@ -4409,7 +4409,7 @@ struct ThreadView: View {
                 inputFocused = true
             })
         }
-        if m.edited && !m.deleted {   // 2026-09-24 feature-audit: earlier versions, either side
+        if m.edited && !m.deleted && canSeeEditHistory {   // 2026-09-24 feature-audit: earlier versions, either side
             out.append(CMAction(title: "Edit History", icon: "clock.arrow.circlepath") { editHistoryTarget = MessageRef(id: m.id) })
         }
         if m.isImage && !m.viewOnce && savingAllowed {
@@ -4552,6 +4552,13 @@ struct ThreadView: View {
             && ((conversation?.users.contains(me) ?? false) || ChannelFollows.shared.follows(cid)
                 || conversation?.isPublic == true)
     }
+    /// Owner 2026-11-06: in a channel only the owner and admins get Edit History; followers and
+    /// visitors see the post as it is now. Groups and 1:1 chats keep it for everyone.
+    private var canSeeEditHistory: Bool {
+        guard let c = conversation, c.isChannel else { return true }
+        return c.isOwner(me) || c.isAdmin(me)
+    }
+
     /// What the bar offers in a channel: its own list, or the usual quick set.
     private var channelOffered: [String] {
         // A custom emoji removed in the admin panel is left out (check-3 2026-11-06).
