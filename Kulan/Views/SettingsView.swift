@@ -1135,9 +1135,11 @@ struct AppearanceSettingsView: View {
             Section {
                 doorRow("Chat Wallpaper") { ChatWallpaperPage() }
                 doorRow("Chat Color", accessory: AnyView(colorDot)) { ChatColorPage() }
-                doorRow("Bubble Styles",
-                        accessory: AnyView(Text(BubbleStyles.find(bubbleStyleId)?.name ?? "Default")
-                            .foregroundStyle(.secondary))) { BubbleStylesPage() }
+                if BubbleStyles.shown {
+                    doorRow("Bubble Styles",
+                            accessory: AnyView(Text(BubbleStyles.find(bubbleStyleId)?.name ?? "Default")
+                                .foregroundStyle(.secondary))) { BubbleStylesPage() }
+                }
                 doorRow("App Icon") { AppIconPage() }
                 doorRow("Quick Reaction", accessory: AnyView(Text(QuickReaction.current))) { QuickReactionPage() }
             }

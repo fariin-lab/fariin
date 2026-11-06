@@ -56,8 +56,13 @@ enum BubbleStyles {
                     dark: .init(fill: [0x2C2C2E], text: 0xF2F2F7, glass: true)),
     ]
 
+    /// ⛔ HIDDEN UNTIL HE BUILDS IT PROPERLY (owner 2026-11-06: "I will do this feature next year,
+    /// completely hide it"). Off: no Settings row, no search entry, nothing sent with a style, and a
+    /// style on any message (mine or someone else's) draws as the normal bubble. The code stays.
+    static let shown = false
+
     static func find(_ id: String?) -> BubbleStyle? {
-        guard let id, !id.isEmpty else { return nil }
+        guard shown, let id, !id.isEmpty else { return nil }
         return all.first { $0.id == id }
     }
 
