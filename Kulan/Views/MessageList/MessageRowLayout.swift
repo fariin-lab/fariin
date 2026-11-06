@@ -459,8 +459,10 @@ enum MessageRowLayout {
 
     private static func bubble(_ b: BubbleRow, originX: CGFloat, availableWidth: CGFloat,
                                rowWidth: CGFloat, topSpacing: CGFloat) -> BubbleResult {
-        let textColor: UIColor = b.isMe ? BubblePalette.myText : BubblePalette.receivedText
-        let metaColor: UIColor = b.isMe ? BubblePalette.myMeta : BubblePalette.receivedMeta
+        // A bubble style brings its own text colour, so a pastel keeps dark, readable words.
+        let styledText = b.textHex.map { BubblePalette.hex(UInt32(truncatingIfNeeded: $0)) }
+        let textColor: UIColor = styledText ?? (b.isMe ? BubblePalette.myText : BubblePalette.receivedText)
+        let metaColor: UIColor = styledText?.withAlphaComponent(0.62) ?? (b.isMe ? BubblePalette.myMeta : BubblePalette.receivedMeta)
         // The group-mention tint. `.accentColor` in the SwiftUI bubble, which in this app is
         // `.primary` — see the note on BubblePalette.accent.
         let accent = BubblePalette.accent

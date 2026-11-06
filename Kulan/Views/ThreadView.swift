@@ -7267,8 +7267,10 @@ struct ThreadView: View {
             pendingPreview = Message.LinkPreviewData(url: d.url.absoluteString, title: d.title,
                                                     desc: d.desc, imageUrl: imageKey, imageEnc: nil)
         }
-        repo.addPending(Message(localText: text, authorId: me, clientId: clientId, replyTo: reply,
-                                sendState: .sending, linkPreview: pendingPreview))
+        var outgoing = Message(localText: text, authorId: me, clientId: clientId, replyTo: reply,
+                               sendState: .sending, linkPreview: pendingPreview)
+        outgoing.bubbleStyle = BubbleStyles.forSending()   // my style from the first frame (2026-11-06)
+        repo.addPending(outgoing)
         // 2026-10-23: the card is attached after the text lands; my bubble keeps it meanwhile.
         if let pendingPreview { repo.showLocalCard(clientId: clientId, card: pendingPreview) }
         broadcastTyping(false)   // serialized with any in-flight typing write (no stuck "typing…")
@@ -7336,6 +7338,7 @@ struct ThreadView: View {
         let turn = ChatService.SendTurn.take(cid)
         var bubble = Message(localText: text, authorId: me, clientId: clientId, replyTo: nil, sendState: .sending)
         bubble.quoteId = q.qid
+        bubble.bubbleStyle = BubbleStyles.forSending()
         repo.addPending(bubble)
         broadcastTyping(false)
         typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil

@@ -286,7 +286,11 @@ enum MessageRowModelBuilder {
         // ("always use same color like other bubble, if i change color change it"). What keeps it
         // quieter than the message it replaced is that it is a CAPSULE and carries no time and no
         // tick — not a different colour.
-        let fill: BubbleFill = isMe ? myFill(ctx) : receivedFill(ctx)
+        // A bubble style the sender chose (owner 2026-11-06, `BubbleStyles`): its fill and its own
+        // text colour, on their side and mine alike. Unknown ids and deleted messages draw as before.
+        let bubbleStyle = msg.deleted ? nil : BubbleStyles.find(msg.bubbleStyle)
+        let fill: BubbleFill = bubbleStyle.map { BubbleStyles.fill($0.look(ctx.dark)) }
+            ?? (isMe ? myFill(ctx) : receivedFill(ctx))
 
         let tick: BubbleTicks.Kind
         if ctx.isChannel, authored, !msg.deleted, msg.sendState == .sending {
@@ -417,6 +421,7 @@ enum MessageRowModelBuilder {
             // why it keeps the double-tap shortcut and the others give it away.
             opensOnTap: msg.isImage || msg.isVideo || msg.isAlbum || msg.isFile,
             canDoubleTapReact: msg.sendState == nil && !msg.deleted && !msg.isStoryReaction,
+            textHex: bubbleStyle.map { $0.look(ctx.dark).text },
             wide: ctx.isChannel && !msg.deleted,
             shareable: ctx.isChannel && !msg.deleted && !ctx.noForwarding)
     }

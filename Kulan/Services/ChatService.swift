@@ -1441,6 +1441,7 @@ enum ChatService {
         if let storyMention { msg["storyMention"] = ["id": storyMention.id, "thumb": storyMention.thumbUrl] }
         // A quoted channel post: only the server snapshot's id (owner 2026-11-06, `QuoteStore`).
         if let quote { msg["quote"] = ["qid": quote] }
+        if let bs = await BubbleStyles.forSending() { msg["bs"] = bs }   // my bubble style (owner 2026-11-06)
         // 2026-09-24 feature-audit: a knock carries no link card. The rules take a request's one
         // message as plain short text and refuse `linkPreview` on it, so the card turned every first
         // message holding a link into a send that failed on every Resend. Stripped here rather than
@@ -1560,6 +1561,7 @@ enum ChatService {
         if !mentions.isEmpty { msg["mentions"] = mentions }
         if forwarded { msg["forwarded"] = true }
         if let quote { msg["quote"] = ["qid": quote] }   // a quoted channel post (owner 2026-11-06)
+        if let bs = await BubbleStyles.forSending() { msg["bs"] = bs }   // my bubble style (owner 2026-11-06)
         // 2026-09-24 decision D-composer-3: a poll says in the clear only whether it takes one answer
         // or several, so the rules can hold a single-answer vote to one option. The question and the
         // options stay sealed in `text`.

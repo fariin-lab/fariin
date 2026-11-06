@@ -1099,6 +1099,7 @@ struct ActivityView: UIViewControllerRepresentable {
 struct AppearanceSettingsView: View {
     @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
     @AppStorage(AnimatedWallpapers.enabledKey) private var animatedWallpapers = true
+    @AppStorage(BubbleStyles.key) private var bubbleStyleId = ""   // the row's label follows a Save
     @Environment(\.colorScheme) private var scheme
     private var dark: Bool { scheme == .dark }
     private var wallStore: WallpaperStore { .shared }
@@ -1133,6 +1134,9 @@ struct AppearanceSettingsView: View {
             Section {
                 doorRow("Chat Wallpaper") { ChatWallpaperPage() }
                 doorRow("Chat Color", accessory: AnyView(colorDot)) { ChatColorPage() }
+                doorRow("Bubble Styles",
+                        accessory: AnyView(Text(BubbleStyles.find(bubbleStyleId)?.name ?? "Default")
+                            .foregroundStyle(.secondary))) { BubbleStylesPage() }
                 doorRow("App Icon") { AppIconPage() }
                 doorRow("Quick Reaction", accessory: AnyView(Text(QuickReaction.current))) { QuickReactionPage() }
             }
