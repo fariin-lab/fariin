@@ -76,6 +76,10 @@ struct QuoteCard: Equatable, Codable {
     }
 
     private var cards: [String: QuoteCard] = [:]
+    /// When each card was last drawn: the oldest go first past `keep` (2026-11-06 audit: the old
+    /// trim kept an arbitrary 500, so random cards read "Loading…" again after a relaunch).
+    private var lastUsed: [String: Date] = [:]
+    private let keep = 800
     private var fetchedAt: [String: Date] = [:]
     private var queued = Set<String>()
     private var inFlight = Set<String>()
@@ -107,7 +111,8 @@ struct QuoteCard: Equatable, Codable {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             saveScheduled = false
-            let snap = cards.count > 500 ? Dictionary(uniqueKeysWithValues: cards.prefix(500).map { ($0.key, $0.value) }) : cards
+            let newest = cards.keys.sorted { (lastUsed[$0] ?? .distantPast) > (lastUsed[$1] ?? .distantPast) }.prefix(500)
+            let snap = Dictionary(uniqueKeysWithValues: newest.compactMap { k in cards[k].map { (k, $0) } })
             Task.detached(priority: .utility) {
                 if let d = try? JSONEncoder().encode(snap) { try? d.write(to: url, options: .atomic) }
             }
@@ -119,7 +124,22 @@ struct QuoteCard: Equatable, Codable {
     func card(_ qid: String) -> QuoteCard? {
         let stale = fetchedAt[qid].map { Date().timeIntervalSince($0) > fresh } ?? true
         if stale { request(qid) }
+        if cards[qid] != nil { lastUsed[qid] = Date() }
         return cards[qid]
+    }
+
+    /// Past `keep` cards in memory, the least recently drawn go.
+    private func trim() {
+        guard cards.count > keep else { return }
+        let old = cards.keys.sorted { (lastUsed[$0] ?? .distantPast) < (lastUsed[$1] ?? .distantPast) }.prefix(cards.count - keep)
+        for k in old { cards[k] = nil; lastUsed[k] = nil; fetchedAt[k] = nil }
+    }
+
+    /// Sign-out (SessionWipe): nothing of this account's cards outlives it, in memory or on disk.
+    func reset() {
+        if let url = Self.fileURL() { try? FileManager.default.removeItem(at: url) }
+        cards.removeAll(); lastUsed.removeAll(); fetchedAt.removeAll(); queued.removeAll()
+        pending.removeAll(); done.removeAll()
     }
 
     /// What the row signature carries for this quote.
@@ -162,7 +182,7 @@ struct QuoteCard: Equatable, Codable {
                 guard let d = got[q] as? [String: Any], let card = QuoteCard(d) else { continue }
                 if cards[q] != card { cards[q] = card; changed = true }
             }
-            if changed { LiveGroupCard.noteChanged(); scheduleSave() }
+            if changed { trim(); LiveGroupCard.noteChanged(); scheduleSave() }
         } catch {
             // Asked again on the next draw after a short pause, not in a loop.
             let retryAt = Date().addingTimeInterval(-fresh + 15)
@@ -179,6 +199,9 @@ struct QuoteCard: Equatable, Codable {
     /// when it needs it (a send). One request per quote, however many times it is asked.
     struct Made { let qid: String; let card: QuoteCard; let picture: Data? }
     private var pending: [String: Task<Made, Error>] = [:]
+    /// Finished quotes by token, without their picture bytes (2026-11-06 audit: every Task kept its
+    /// JPEG for the whole session). The few most recent are enough for a late send.
+    private var done: [String: (qid: String, card: QuoteCard)] = [:]
 
     func start(cid: String, mid: String, picture: @escaping () async -> Data?) -> String {
         let token = UUID().uuidString
@@ -191,8 +214,15 @@ struct QuoteCard: Equatable, Codable {
     }
 
     func made(_ token: String) async throws -> Made {
+        if let d = done[token] { return Made(qid: d.qid, card: d.card, picture: nil) }
         guard let t = pending[token] else { throw NSError(domain: "Quote", code: 2) }
-        return try await t.value
+        let m = try await t.value
+        if pending[token] != nil {
+            pending[token] = nil
+            if done.count > 20 { done.removeAll() }
+            done[token] = (m.qid, m.card)
+        }
+        return m
     }
 
     static func create(cid: String, mid: String, picture: Data? = nil) async throws -> (qid: String, card: QuoteCard) {

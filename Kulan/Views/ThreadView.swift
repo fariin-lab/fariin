@@ -2311,6 +2311,7 @@ struct ThreadView: View {
         // different chat while this was still paging would let THAT chat pick the id up and go looking
         // for a message that was never in it.
         .task(id: cid) {
+            await openPendingReplies()
             guard let target = AppRouter.shared.pendingMessageId else { return }
             AppRouter.shared.pendingMessageId = nil
             // The repository starts loading with the view, so give the first page a moment to land
@@ -4011,6 +4012,8 @@ struct ThreadView: View {
                 // the mosaic to a different height, and a signature that did not change meant a layout
                 // frame that did not change either. (`hiddenTick` in the key is what makes this
                 // recompute at all; this token is what makes the right row differ.)
+                // The Replies / Quotes bar (owner 2026-11-06): its counts and the channel's replies switch.
+                let chanRepliesOff = conversation?.repliesOff == true
                 let hiddenTiles = m.album.isEmpty ? "-"
                     : (0..<m.album.count).filter { HiddenMessages.isHidden("\(m.id)-\($0)") }.map(String.init).joined(separator: ",")
                 // ⛔ WHAT THE FOOTER AND THE MEDIA FRAME ARE MADE FROM — owner 2026-10-21, the same
@@ -4036,7 +4039,7 @@ struct ThreadView: View {
                 }
                 // A quoted channel post draws the server's answer (QuoteStore), so that is its token.
                 if let q = m.quoteId { linkTok += ":Q" + QuoteStore.shared.token(q) }
-                out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)|\(m.views)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
+                out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)|\(m.views)|\(m.quoteCount)|\(m.quoteFaces.hashValue)|\(m.replyCount)|\(m.repliesOff)|\(chanRepliesOff)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
             }
             sigCache.key = key
             sigCache.base = out
@@ -4454,6 +4457,14 @@ struct ThreadView: View {
                     forwardTarget = live
                 })
             }
+            // Replies off or on for this post, for the channel's admins (owner 2026-11-06; the server
+            // checks the Change info right and refuses otherwise).
+            if conversation?.isChannel == true, conversation?.createdBy == me || conversation?.admins.contains(me) == true {
+                let off = m.repliesOff
+                out.append(CMAction(title: off ? "Turn On Replies" : "Turn Off Replies", icon: off ? "bubble.left" : "nosign") {
+                    setPostReplies(m.id, off: !off)
+                })
+            }
         }
         if !m.text.isEmpty && !m.isFeatureMarker && !m.viewOnce && savingAllowed {
             out.append(CMAction(title: "Copy", icon: "doc.on.doc") {
@@ -4633,6 +4644,27 @@ struct ThreadView: View {
     /// answer decides; a channel this reader may not see, or a deleted post, is said, not opened.
     /// A row of the Quotes page: that channel's quote. My own chat scrolls to it; a channel I have
     /// opens at it; a public channel I don't follow opens its public page, as a quote card does.
+    private func setPostReplies(_ mid: String, off: Bool) {
+        let cid = self.cid
+        Task {
+            let ok = (try? await Functions.functions(region: "me-central1").httpsCallable("setReplies")
+                .call(["cid": cid, "mid": mid, "off": off] as [String: Any])) != nil
+            await MainActor.run {
+                showJumpToast(ok ? (off ? "Replies turned off for this post" : "Replies turned on for this post")
+                                 : "Couldn't change replies")
+            }
+        }
+    }
+
+    /// A reply alert's post (owner 2026-11-06): its Replies open once this channel is on screen.
+    private func openPendingReplies() async {
+        guard let p = AppRouter.shared.pendingRepliesPost, p.cid == cid else { return }
+        AppRouter.shared.pendingRepliesPost = nil
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        guard !Task.isCancelled else { return }
+        quotesFor = MessageRef(id: p.mid)
+    }
+
     /// The post's picture for the Quotes page's cards, the same one a quote of it carries.
     private func quotesPicture(_ id: String) async -> UIImage? {
         guard let m = repo.items.first(where: { $0.id == id }) else { return nil }
@@ -7360,18 +7392,21 @@ struct ThreadView: View {
         }
         if img == nil, let t = m.thumb, let d = Data(base64Encoded: t) { img = UIImage(data: d) }
         guard let img, img.size.width > 0, img.size.height > 0 else { return nil }
-        let scale = min(1, 900 / max(img.size.width, img.size.height))
-        let size = CGSize(width: (img.size.width * scale).rounded(), height: (img.size.height * scale).rounded())
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        let small = UIGraphicsImageRenderer(size: size, format: format).image { _ in img.draw(in: CGRect(origin: .zero, size: size)) }
-        var quality: CGFloat = 0.72
-        var data = small.jpegData(compressionQuality: quality)
-        while let d = data, d.count > 380_000, quality > 0.3 {
-            quality -= 0.12
-            data = small.jpegData(compressionQuality: quality)
-        }
-        return data
+        // Off the main thread (2026-11-06 audit: a hitch while the chat was being pushed).
+        return await Task.detached(priority: .userInitiated) { () -> Data? in
+            let scale = min(1, 900 / max(img.size.width, img.size.height))
+            let size = CGSize(width: (img.size.width * scale).rounded(), height: (img.size.height * scale).rounded())
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            let small = UIGraphicsImageRenderer(size: size, format: format).image { _ in img.draw(in: CGRect(origin: .zero, size: size)) }
+            var quality: CGFloat = 0.72
+            var data = small.jpegData(compressionQuality: quality)
+            while let d = data, d.count > 380_000, quality > 0.3 {
+                quality -= 0.12
+                data = small.jpegData(compressionQuality: quality)
+            }
+            return data
+        }.value
     }
 
     /// Quote picked a chat: the server snapshots the post (it checks I may see it), then that chat
@@ -7379,7 +7414,10 @@ struct ThreadView: View {
     private func startQuote(_ m: Message, into dest: Conversation) {
         // The server makes the quote in the background; the chat opens NOW with the card drawn from
         // the post on screen (owner 2026-11-06: it waited seconds before opening).
-        let token = QuoteStore.shared.start(cid: cid, mid: m.id) { await Self.quotePicture(m) }
+        // Only an older SEALED post needs a picture from this phone (one shared copy per post on the
+        // server); a plain one is pointed at as it is (2026-11-06 audit).
+        let sealed = [m.enc, m.thumbEnc].compactMap { $0 }.contains { !$0.isPlain } || m.album.contains { !$0.enc.isPlain }
+        let token = QuoteStore.shared.start(cid: cid, mid: m.id) { sealed ? await Self.quotePicture(m) : nil }
         var card = QuoteCard(state: .ok)
         card.cid = cid
         card.mid = m.id
@@ -7387,6 +7425,8 @@ struct ThreadView: View {
         card.photoUrl = conversation?.avatarUrl ?? ""
         card.text = m.text
         card.kind = !m.album.isEmpty ? "album" : (m.type == "video" ? "video" : (m.type == "image" ? "photo" : "text"))
+        // The post's own picture, the one the server will point at, for the bar until it answers.
+        if !sealed { card.image = (m.isVideo ? m.thumbUrl : (m.album.first?.imageUrl ?? m.imageUrl ?? m.thumbUrl)) ?? "" }
         if dest.id == cid {
             replyingTo = nil
             quoting = QuoteDraft(qid: "", card: card, token: token)
@@ -7429,8 +7469,14 @@ struct ThreadView: View {
     /// the composer, rather than leaving a Resend that would go without its quote.
     private func sendQuote(_ q: QuoteDraft, text: String) {
         if q.qid.isEmpty, !q.token.isEmpty {
+            // The composer clears NOW (2026-11-06 audit: a second tap while the quote was still being
+            // made sent it twice, and words typed meanwhile were wiped); a refusal puts both back.
+            input = ""
+            withAnimation(.easeInOut(duration: 0.2)) { quoting = nil; replyingTo = nil }
             Task { @MainActor in
                 guard let made = try? await QuoteStore.shared.made(q.token) else {
+                    if quoting == nil { quoting = q }
+                    if input.isEmpty { input = text }
                     showJumpToast("Couldn't quote this post. Try again.")
                     return
                 }

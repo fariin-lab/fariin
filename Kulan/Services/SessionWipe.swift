@@ -163,6 +163,8 @@ enum SessionWipe {
         // Who has a profile photo, and who may see it — both are answers about OTHER people, read
         // through the last account's contact relationships. The next account must ask again.
         ProfilePhotoIndex.reset()
+        // Quote cards and replies pages are answers to THIS account's access (2026-11-06 audit).
+        Task { @MainActor in QuoteStore.shared.reset(); RepliesModel.reset() }
         ProfilePhotoLoader.shared.reset()       // and the avatars drawn for it (memory; disk goes below)
         Task { @MainActor in PhotoPrivacy.shared.reset() }   // my Hide From list: never the next account's
         Task { @MainActor in DeliveryReceipts.reset() }      // which chats this account confirmed

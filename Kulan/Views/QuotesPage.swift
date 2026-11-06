@@ -53,6 +53,9 @@ struct QuotesPage: View {
     @State private var items: [QuotedInItem] = []
     @State private var total = 0
     @State private var hidden = 0
+    @State private var publicTotal = 0
+    @State private var next = ""
+    @State private var loadingMore = false
     @State private var loaded = false
     @State private var failed = false
     @State private var thumb: UIImage?
@@ -82,8 +85,14 @@ struct QuotesPage: View {
                                 .buttonStyle(.plain)
                             Divider().padding(.leading, 16 + indent)
                         }
+                        if !next.isEmpty {
+                            Text(loadingMore ? "Loading…" : "Show more")
+                                .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                                .onAppear { Task { await loadMore() } }
+                        }
                         if hidden > 0 {
-                            Label("\(hidden) more in private chats and groups", systemImage: "lock.fill")
+                            Label("\(hidden.formatted()) in private chats and groups", systemImage: "lock.fill")
                                 .font(.footnote).foregroundStyle(.secondary)
                                 .padding(16)
                         }
@@ -97,8 +106,13 @@ struct QuotesPage: View {
 
     @ViewBuilder private var overlay: some View {
         if failed {
-            ContentUnavailableView("Couldn't load quotes", image: "ic_quote",
-                                   description: Text("Check your connection and try again."))
+            ContentUnavailableView {
+                Label("Couldn't load quotes", image: "ic_quote")
+            } description: {
+                Text("Check your connection and try again.")
+            } actions: {
+                Button("Try Again") { Task { failed = false; await load() } }
+            }
         } else if !loaded {
             QuotesSkeleton()
         } else if items.isEmpty && hidden == 0 {
@@ -106,13 +120,11 @@ struct QuotesPage: View {
         }
     }
 
+    /// The post's own count, and how many of them are in public channels (the ones listed). Never a
+    /// sum over the rows on screen, which is only a page (2026-11-06 audit).
     private var summary: String {
-        let channels = Set(items.map(\.cid)).count
-        let views = items.reduce(0) { $0 + $1.views }
         let q = "\(total.formatted()) \(total == 1 ? "quote" : "quotes")"
-        let c = "\(channels) \(channels == 1 ? "channel" : "channels")"
-        let v = views.formatted(.number.notation(.compactName)) + (views == 1 ? " view" : " views")
-        return q + " · " + c + " · " + v
+        return publicTotal > 0 ? q + " · \(publicTotal.formatted()) in public channels" : q
     }
 
     /// ⛔ THE OWNER'S PICK, OPTION 1 "SOFT GREY CARD" (2026-11-06): his layout kept, made quiet. One
@@ -130,7 +142,8 @@ struct QuotesPage: View {
                     Image(systemName: "checkmark.seal.fill").font(.caption).foregroundStyle(.blue)
                 }
                 Spacer(minLength: 6)
-                Text(it.at.formatted(date: .omitted, time: .shortened))
+                Text(Calendar.current.isDateInToday(it.at) ? it.at.formatted(date: .omitted, time: .shortened)
+                                                           : it.at.formatted(.dateTime.day().month(.abbreviated)))
                     .font(.caption).foregroundStyle(.secondary)
             }
             if !it.text.isEmpty {
@@ -215,12 +228,31 @@ struct QuotesPage: View {
                 .call(["cid": cid, "mid": mid])
             let d = r.data as? [String: Any] ?? [:]
             items = ((d["items"] as? [[String: Any]]) ?? []).compactMap(QuotedInItem.init)
-            total = (d["total"] as? NSNumber)?.intValue ?? items.count
-            hidden = (d["hidden"] as? NSNumber)?.intValue ?? 0
+            apply(d)
             loaded = true
         } catch {
             failed = true
         }
+    }
+
+    private func apply(_ d: [String: Any]) {
+        total = (d["total"] as? NSNumber)?.intValue ?? items.count
+        hidden = (d["hidden"] as? NSNumber)?.intValue ?? 0
+        publicTotal = (d["publicTotal"] as? NSNumber)?.intValue ?? 0
+        next = d["next"] as? String ?? ""
+    }
+
+    /// The next page (20), when the end of the list comes into view.
+    private func loadMore() async {
+        guard !next.isEmpty, !loadingMore else { return }
+        loadingMore = true
+        defer { loadingMore = false }
+        guard let r = try? await Functions.functions(region: "me-central1").httpsCallable("getPostQuotes")
+            .call(["cid": cid, "mid": mid, "cursor": next]) else { return }
+        let d = r.data as? [String: Any] ?? [:]
+        let more = ((d["items"] as? [[String: Any]]) ?? []).compactMap(QuotedInItem.init)
+        items += more.filter { m in !items.contains { $0.id == m.id } }
+        apply(d)
     }
 }
 

@@ -352,7 +352,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         if let cid = response.notification.request.content.userInfo["cid"] as? String,
            !cid.isEmpty, !cid.contains("/"),
            await Self.mayOpenFromPush(cid) {
-            await MainActor.run { AppRouter.shared.pendingChatId = cid }
+            // A reply alert (owner 2026-11-06): the channel opens, then that post's Replies.
+            let info = response.notification.request.content.userInfo
+            let kind = info["kind"] as? String ?? ""
+            let mid = info["mid"] as? String ?? ""
+            await MainActor.run {
+                if kind == "postReplies" || kind == "replyAnswer", !mid.isEmpty, !mid.contains("/") {
+                    AppRouter.shared.pendingRepliesPost = (cid, mid)
+                }
+                AppRouter.shared.pendingChatId = cid
+            }
         }
     }
 
@@ -368,7 +377,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // `conversations/official-fariin`, and the checks below dropped every tap on its banner.
         // Every signed-in account has it; there is no one it could be the wrong chat for.
         if cid == OfficialChannel.cid { return true }
-        let known = await MainActor.run { ConversationsRepository.shared.conversations.contains { $0.id == cid } }
+        // A channel I follow is not in the chat repository (2026-11-06: reply alerts go to followers).
+        let known = await MainActor.run { ConversationsRepository.shared.conversations.contains { $0.id == cid }
+            || ChannelFollows.shared.conversations.contains { $0.id == cid } }
         if known { return true }
         do {
             let snap = try await FirestoreHub.db.collection("conversations").document(cid).getDocument()
@@ -424,6 +435,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     /// page back to a message and flash it, because that is what a tap on a reply quote does. This is
     /// the wire between them. Nothing else sets it, so every other caller behaves exactly as before.
     var pendingMessageId: String?
+    /// A reply alert tapped: open this post's Replies once its channel is on screen.
+    var pendingRepliesPost: (cid: String, mid: String)?
 }
 
 // Clear a chat's delivered notifications + fix the app badge when you read it.

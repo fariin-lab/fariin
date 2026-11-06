@@ -2161,7 +2161,7 @@ service cloud.firestore {
         // `e2eeOffAt`) is the server's to change (the groupsE2eeOff migration). In the same list, not
         // a line of its own: a second diff here pushed a busy admin write past the rules engine's
         // 1,000-expression ceiling (rules-tests/role-1018).
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt', 'memberSince', 'endedAt', 'hideMembers', 'hideMembersBy', 'channel', 'followerCount', 'postCount', 'country'])
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'repliesOff', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt', 'memberSince', 'endedAt', 'hideMembers', 'hideMembersBy', 'channel', 'followerCount', 'postCount', 'country'])
         && groupModWriteOK()
         && groupAddOK()   // audit F4: no adding someone with a block either way
         // owner 2026-10-18: the group wallpaper, groups only and a known shape (groupWallpaperOK).
@@ -2940,6 +2940,8 @@ service cloud.firestore {
         // Poll votes: one doc per voter (messages/{mid}/votes/{uid}). Any member may READ (to tally),
         // but a voter may only write their OWN vote doc — no one can forge or overwrite another's vote.
         // The poll's question/options stay E2EE in the message text; a vote is just option indices.
+        // Replies' change marker (2026-11-06): the replies sheet listens; the server writes it.
+        match /rh/{x} { allow get: if signedIn() && (request.auth.uid in convData().users || follows(convData()) || convData().get('isPublic', false) == true); }
         match /votes/{voter} {
           // 2026-10-29 audit S4: in a channel only my own vote; tallies = post pollCounts/pollVoters.
           allow read: if signedIn() && (

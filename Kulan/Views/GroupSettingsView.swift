@@ -1,4 +1,5 @@
 import SwiftUI
+import FirebaseFunctions
 import UIKit
 import FirebaseFirestore
 
@@ -138,6 +139,18 @@ struct GroupSettingsView: View {
                         }
                     }
                 }
+                // Replies under posts, for the whole channel (owner 2026-11-06). Off = read-only:
+                // replies already there stay; no new ones. The Change info right (server-checked).
+                Toggle("Replies", isOn: Binding(
+                    get: { conv?.repliesOff != true },
+                    set: { on in
+                        Task {
+                            _ = try? await Functions.functions(region: "me-central1").httpsCallable("setReplies")
+                                .call(["cid": cid, "off": !on] as [String: Any])
+                        }
+                    }))
+            } footer: {
+                Text("When off, followers can read replies already posted but can't add new ones.")
             }
         }
     }

@@ -1,44 +1,394 @@
 import SwiftUI
+import Observation
 import FirebaseFunctions
+import FirebaseFirestore
 
-/// One reply under a channel post, as `getReplies` / `addReply` answer it.
+/// One reply or answer under a channel post, as the server sends it (short keys, lib/replies.js).
 struct PostReply: Identifiable, Equatable {
+    enum Send: Equatable { case sent, sending, failed }
     var id: String
-    var uid: String
+    var text: String
+    var at: Date
     var name: String
     var photoUrl: String
     var verified: Bool
-    var text: String
-    var at: Date
+    var likes: Int
+    var answers: Int
     var mine: Bool
     var canDelete: Bool
-    /// The reply this one answers ("" = it starts a thread). One level deep (server `addReply`).
-    var parentId: String
-    var likes: Int
     var liked: Bool
+    var held: Bool
+    /// The author's uid: only for moderators (the server leaves it out for everyone else).
+    var uid: String?
+    var send: Send = .sent
 
     init?(_ d: [String: Any]) {
-        guard let id = d["id"] as? String, let uid = d["uid"] as? String else { return nil }
+        guard let id = d["id"] as? String else { return nil }
         self.id = id
-        self.uid = uid
-        name = d["name"] as? String ?? "Someone"
-        photoUrl = d["photoUrl"] as? String ?? ""
-        verified = d["verified"] as? Bool ?? false
-        text = d["text"] as? String ?? ""
+        text = d["t"] as? String ?? ""
         at = Date(timeIntervalSince1970: ((d["at"] as? NSNumber)?.doubleValue ?? 0) / 1000)
+        name = d["n"] as? String ?? "Someone"
+        photoUrl = d["ph"] as? String ?? ""
+        verified = d["v"] as? Bool ?? false
+        likes = (d["lc"] as? NSNumber)?.intValue ?? 0
+        answers = (d["ac"] as? NSNumber)?.intValue ?? 0
         mine = d["mine"] as? Bool ?? false
-        canDelete = d["canDelete"] as? Bool ?? false
-        parentId = d["parentId"] as? String ?? ""
-        likes = (d["likes"] as? NSNumber)?.intValue ?? 0
+        canDelete = d["del"] as? Bool ?? false
         liked = d["liked"] as? Bool ?? false
+        held = d["held"] as? Bool ?? false
+        uid = d["u"] as? String
+    }
+
+    /// A reply of mine on its way (shown at once, "Sending…", Retry if it fails).
+    init(pendingId: String, text: String, name: String, photoUrl: String) {
+        id = pendingId
+        self.text = text
+        at = Date()
+        self.name = name
+        self.photoUrl = photoUrl
+        verified = false
+        likes = 0
+        answers = 0
+        mine = true
+        canDelete = true
+        liked = false
+        held = false
+        uid = nil
+        send = .sending
+    }
+}
+
+/// ⛔ THE REPLIES OF ONE POST, KEPT BY ONE MODEL (owner 2026-11-06, rebuilt after five audits).
+/// Threads arrive newest first a page at a time (shown oldest at the top); a thread's answers are
+/// fetched when it is opened. While the sheet is open it listens to ONE tiny doc
+/// (`messages/{mid}/rh/head`) and asks for the newest page only when that changes: no polling.
+/// Every local action (a send, a heart, a delete) is applied at once and kept over any answer that
+/// left the server before it (the `pendingLikes` / `deletedIds` overlays), so a late refresh never
+/// flips it back. A send carries the phone's id, which becomes the reply's id on the server: a retry
+/// after a lost answer cannot post twice.
+@MainActor @Observable final class RepliesModel {
+    struct Rights: Equatable { var del = false, ban = false, settings = false }
+
+    let cid: String
+    let mid: String
+    private(set) var threads: [PostReply] = []           // oldest first
+    private(set) var answers: [String: [PostReply]] = [:]  // thread id -> answers, oldest first
+    private(set) var answerNext: [String: String] = [:]
+    var openThreads: Set<String> = []
+    private(set) var olderCursor = ""
+    private(set) var loaded = false
+    private(set) var failed = false
+    private(set) var loadingOlder = false
+    private(set) var off = false
+    private(set) var channelOff = false
+    private(set) var postOff = false
+    private(set) var may = Rights()
+    private(set) var staff = false
+    private(set) var count = 0
+    /// Replies by others that landed while I was reading further up ("N new replies" pill).
+    var unseenNew = 0
+    /// The id the list should bring into view next (my own new reply).
+    var scrollTarget: String?
+
+    private var pendingLikes: [String: Bool] = [:]      // key -> wanted state, while in flight
+    private var likeInFlight: Set<String> = []
+    private var deletedIds: Set<String> = []
+    private var headListener: ListenerRegistration?
+    private var lastRev = -1
+    private var refreshTask: Task<Void, Never>?
+
+    /// The last first page per post, for an instant paint when the sheet opens again (this launch).
+    private static var cache: [String: [PostReply]] = [:]
+
+    init(cid: String, mid: String) {
+        self.cid = cid
+        self.mid = mid
+        if let c = Self.cache[mid] { threads = c; loaded = true }
+    }
+
+    static func reset() { cache.removeAll() }
+
+    private var fn: Functions { Functions.functions(region: "me-central1") }
+    private func args(_ extra: [String: Any] = [:]) -> [String: Any] {
+        var a: [String: Any] = ["cid": cid, "mid": mid]
+        for (k, v) in extra { a[k] = v }
+        return a
+    }
+
+    // MARK: Loading
+
+    func start() {
+        Task { await loadFirst() }
+        guard headListener == nil else { return }
+        headListener = FirestoreHub.db.collection("conversations").document(cid).collection("messages").document(mid)
+            .collection("rh").document("head")
+            .addSnapshotListener { [weak self] snap, _ in
+                let rev = (snap?.data()?["rev"] as? NSNumber)?.intValue ?? 0
+                Task { @MainActor in self?.headChanged(rev) }
+            }
+    }
+
+    func stop() {
+        headListener?.remove()
+        headListener = nil
+        refreshTask?.cancel()
+    }
+
+    private func headChanged(_ rev: Int) {
+        defer { lastRev = rev }
+        guard lastRev >= 0, rev != lastRev, loaded else { return }
+        // Several changes close together become one fetch (a busy thread).
+        refreshTask?.cancel()
+        refreshTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.refreshNewest()
+        }
+    }
+
+    private func applyFlags(_ d: [String: Any]) {
+        off = d["off"] as? Bool ?? false
+        channelOff = d["channelOff"] as? Bool ?? false
+        postOff = d["postOff"] as? Bool ?? false
+        staff = d["staff"] as? Bool ?? false
+        count = (d["count"] as? NSNumber)?.intValue ?? count
+        let m = d["may"] as? [String: Any] ?? [:]
+        may = Rights(del: m["del"] as? Bool ?? false, ban: m["ban"] as? Bool ?? false, settings: m["settings"] as? Bool ?? false)
+    }
+
+    private func rows(_ d: [String: Any]) -> [PostReply] {
+        ((d["items"] as? [[String: Any]]) ?? []).compactMap(PostReply.init).filter { !deletedIds.contains($0.id) }.map(overlay)
+    }
+
+    /// A heart still on its way wins over what an earlier answer said.
+    private func overlay(_ r: PostReply) -> PostReply {
+        var r = r
+        if let want = pendingLikes[r.id], want != r.liked { r.liked = want; r.likes = max(0, r.likes + (want ? 1 : -1)) }
+        return r
+    }
+
+    func loadFirst() async {
+        do {
+            let res = try await fn.httpsCallable("getReplies").call(args())
+            let d = res.data as? [String: Any] ?? [:]
+            applyFlags(d)
+            let page = Array(rows(d).reversed())
+            olderCursor = d["next"] as? String ?? ""
+            let local = threads.filter { $0.send != .sent }
+            threads = page + local.filter { l in !page.contains { $0.id == l.id } }
+            if lastRev < 0 { lastRev = (d["rev"] as? NSNumber)?.intValue ?? 0 }
+            loaded = true
+            failed = false
+            Self.cache[mid] = page
+        } catch {
+            failed = true
+            loaded = true
+        }
+    }
+
+    /// The newest page again, merged by id: new ones added at the end, changed ones updated, ones
+    /// gone from inside the page's time range removed. Open threads' first pages too.
+    func refreshNewest() async {
+        guard let res = try? await fn.httpsCallable("getReplies").call(args()) else { return }
+        let d = res.data as? [String: Any] ?? [:]
+        applyFlags(d)
+        let page = Array(rows(d).reversed())
+        guard let oldestShown = page.first?.at else {
+            threads.removeAll { $0.send == .sent }
+            return
+        }
+        let ids = Set(page.map(\.id))
+        var next = threads.filter { $0.send != .sent || $0.at < oldestShown || ids.contains($0.id) }
+        var added = 0
+        for r in page {
+            if let i = next.firstIndex(where: { $0.id == r.id }) {
+                if next[i].send == .sent { next[i] = r } else { next[i] = r }   // my pending one confirmed
+            } else {
+                next.append(r)
+                if !r.mine { added += 1 }
+            }
+        }
+        next.sort { $0.at < $1.at }
+        threads = next
+        if added > 0 { unseenNew += added }
+        Self.cache[mid] = page
+        for t in openThreads.prefix(5) { await loadAnswers(t, more: false) }
+    }
+
+    func loadOlder() async {
+        guard !olderCursor.isEmpty, !loadingOlder else { return }
+        loadingOlder = true
+        defer { loadingOlder = false }
+        guard let res = try? await fn.httpsCallable("getReplies").call(args(["cursor": olderCursor])) else { return }
+        let d = res.data as? [String: Any] ?? [:]
+        let page = Array(rows(d).reversed()).filter { r in !threads.contains { $0.id == r.id } }
+        olderCursor = d["next"] as? String ?? ""
+        threads.insert(contentsOf: page, at: 0)
+    }
+
+    func loadAnswers(_ rid: String, more: Bool) async {
+        let cursor = more ? (answerNext[rid] ?? "") : ""
+        guard let res = try? await fn.httpsCallable("getReplyAnswers").call(args(["rid": rid, "cursor": cursor])) else { return }
+        let d = res.data as? [String: Any] ?? [:]
+        let page = rows(d)
+        let local = (answers[rid] ?? []).filter { $0.send != .sent }
+        var list = more ? (answers[rid] ?? []).filter { $0.send == .sent } : []
+        for r in page where !list.contains(where: { $0.id == r.id }) { list.append(r) }
+        for l in local where !list.contains(where: { $0.id == l.id }) { list.append(l) }
+        answers[rid] = list
+        answerNext[rid] = d["next"] as? String ?? ""
+    }
+
+    func toggleThread(_ rid: String) {
+        if openThreads.contains(rid) { openThreads.remove(rid); return }
+        openThreads.insert(rid)
+        if answers[rid] == nil { Task { await loadAnswers(rid, more: false) } }
+    }
+
+    // MARK: Actions
+
+    /// Sends a reply (`thread` nil) or an answer. Shown at once; on failure it stays with Retry.
+    func send(_ text: String, thread: String?, me: (name: String, photo: String), clientId: String? = nil) {
+        let id = clientId ?? UUID().uuidString
+        let row = PostReply(pendingId: id, text: text, name: me.name, photoUrl: me.photo)
+        if let t = thread {
+            var list = answers[t] ?? []
+            if let i = list.firstIndex(where: { $0.id == id }) { list[i].send = .sending } else { list.append(row) }
+            answers[t] = list
+            openThreads.insert(t)
+        } else {
+            if let i = threads.firstIndex(where: { $0.id == id }) { threads[i].send = .sending } else { threads.append(row) }
+        }
+        scrollTarget = id
+        Task {
+            var a: [String: Any] = ["text": text, "clientId": id]
+            if let t = thread { a["rid"] = t }
+            do {
+                let res = try await fn.httpsCallable("addReply").call(args(a))
+                guard let d = (res.data as? [String: Any])?["reply"] as? [String: Any], let saved = PostReply(d) else { return }
+                replace(id, with: saved, thread: thread)
+                if let t = thread, let i = threads.firstIndex(where: { $0.id == t }) { threads[i].answers += 1 }
+                count += 1
+            } catch {
+                mark(id, thread: thread, .failed)
+            }
+        }
+    }
+
+    func retry(_ r: PostReply, thread: String?) {
+        send(r.text, thread: thread, me: (r.name, r.photoUrl), clientId: r.id)
+    }
+
+    func discard(_ r: PostReply, thread: String?) {
+        if let t = thread { answers[t]?.removeAll { $0.id == r.id } } else { threads.removeAll { $0.id == r.id } }
+    }
+
+    private func replace(_ id: String, with saved: PostReply, thread: String?) {
+        if let t = thread {
+            if let i = answers[t]?.firstIndex(where: { $0.id == id }) { answers[t]?[i] = saved }
+        } else if let i = threads.firstIndex(where: { $0.id == id }) {
+            threads[i] = saved
+        }
+    }
+
+    private func mark(_ id: String, thread: String?, _ s: PostReply.Send) {
+        if let t = thread {
+            if let i = answers[t]?.firstIndex(where: { $0.id == id }) { answers[t]?[i].send = s }
+        } else if let i = threads.firstIndex(where: { $0.id == id }) {
+            threads[i].send = s
+        }
+    }
+
+    private func update(_ id: String, thread: String?, _ change: (inout PostReply) -> Void) {
+        if let t = thread {
+            if let i = answers[t]?.firstIndex(where: { $0.id == id }) { change(&answers[t]![i]) }
+        } else if let i = threads.firstIndex(where: { $0.id == id }) {
+            change(&threads[i])
+        }
+    }
+
+    /// One call in flight per heart; taps meanwhile only change what is wanted, sent when it returns.
+    func toggleLike(_ r: PostReply, thread: String?) {
+        guard r.send == .sent else { return }
+        let want = !r.liked
+        update(r.id, thread: thread) { $0.liked = want; $0.likes = max(0, $0.likes + (want ? 1 : -1)) }
+        pendingLikes[r.id] = want
+        if want { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+        guard !likeInFlight.contains(r.id) else { return }
+        likeInFlight.insert(r.id)
+        Task { await flushLike(r.id, thread: thread) }
+    }
+
+    private func flushLike(_ id: String, thread: String?) async {
+        while let want = pendingLikes[id] {
+            var a: [String: Any] = ["on": want]
+            if let t = thread { a["rid"] = t; a["aid"] = id } else { a["rid"] = id }
+            let ok = (try? await fn.httpsCallable("likeReply").call(args(a))) != nil
+            if pendingLikes[id] == want {
+                pendingLikes[id] = nil
+                if !ok { update(id, thread: thread) { $0.liked = !want; $0.likes = max(0, $0.likes + (want ? -1 : 1)) } }
+            }
+        }
+        likeInFlight.remove(id)
+    }
+
+    func delete(_ r: PostReply, thread: String?) async {
+        deletedIds.insert(r.id)
+        let threadsBefore = threads, answersBefore = answers[thread ?? ""]
+        if let t = thread {
+            answers[t]?.removeAll { $0.id == r.id }
+            if let i = threads.firstIndex(where: { $0.id == t }) { threads[i].answers = max(0, threads[i].answers - 1) }
+        } else {
+            threads.removeAll { $0.id == r.id }
+            answers[r.id] = nil
+        }
+        var a: [String: Any] = [:]
+        if let t = thread { a["rid"] = t; a["aid"] = r.id } else { a["rid"] = r.id }
+        do {
+            _ = try await fn.httpsCallable("deleteReply").call(args(a))
+            count = max(0, count - (thread == nil ? 1 + r.answers : 1))
+        } catch {
+            deletedIds.remove(r.id)
+            // Only the one row comes back, never a whole saved list over newer arrivals.
+            if let t = thread, let before = answersBefore, let row = before.first(where: { $0.id == r.id }) {
+                answers[t, default: []].append(row)
+                answers[t]?.sort { $0.at < $1.at }
+            } else if thread == nil, let row = threadsBefore.first(where: { $0.id == r.id }) {
+                threads.append(row)
+                threads.sort { $0.at < $1.at }
+            }
+        }
+    }
+
+    func report(_ r: PostReply, thread: String?, reason: String) async -> Bool {
+        var a: [String: Any] = ["reason": reason]
+        if let t = thread { a["rid"] = t; a["aid"] = r.id } else { a["rid"] = r.id }
+        return (try? await fn.httpsCallable("reportReply").call(args(a))) != nil
+    }
+
+    func ban(_ r: PostReply, thread: String?, all: Bool) async -> Bool {
+        var a: [String: Any] = ["all": all]
+        if let t = thread { a["rid"] = t; a["aid"] = r.id } else { a["rid"] = r.id }
+        guard (try? await fn.httpsCallable("banReplier").call(args(a))) != nil else { return false }
+        await refreshNewest()
+        return true
+    }
+
+    func setOff(post: Bool, off newValue: Bool) async {
+        var a: [String: Any] = ["cid": cid, "off": newValue]
+        if post { a["mid"] = mid }
+        if (try? await fn.httpsCallable("setReplies").call(a)) != nil { await loadFirst() }
+    }
+
+    func setAlerts(on: Bool) async {
+        _ = try? await fn.httpsCallable("setReplyAlerts").call(["cid": cid, "on": on])
     }
 }
 
 /// ⛔ REPLIES AND QUOTES UNDER A CHANNEL POST (owner 2026-11-06). A sheet with two tabs, opening on
-/// Replies. Replies are bubbles with the person's photo beside them and their name and age above;
-/// a heart on each (tap the heart, or double-tap the bubble), and answers to a reply gathered under
-/// it behind "View N replies". The field at the bottom answers the post, or the reply picked with
-/// Reply. The channel's admins turn replies off here, for this post or the whole channel.
+/// Replies. Replies are bubbles with the person's photo beside them, their name and age above; a
+/// heart on each (tap it, or double-tap the bubble); answers gathered under a reply behind
+/// "View N replies". Turning replies off makes the thread read-only; it stays readable.
 struct PostThreadSheet: View {
     enum Tab: Hashable { case replies, quotes }
 
@@ -50,21 +400,32 @@ struct PostThreadSheet: View {
     var sourceVerified: Bool
     var picture: () async -> UIImage?
     var onOpen: (QuotedInItem) -> Void
+    var startTab: Tab = .replies
 
     @Environment(\.dismiss) private var dismiss
     @State private var tab: Tab = .replies
-    @State private var replies: [PostReply] = []
-    @State private var loaded = false
-    @State private var failed = false
-    @State private var off = false
-    @State private var channelOff = false
-    @State private var postOff = false
-    @State private var staff = false
-    @State private var draft = ""
-    @State private var sending = false
-    @State private var answering: PostReply?
-    @State private var open: Set<String> = []
-    @FocusState private var fieldFocused: Bool
+    @State private var model: RepliesModel
+    @State private var answering: (id: String, name: String)?
+    @State private var reporting: (PostReply, String?)?
+    @State private var banning: (PostReply, String?)?
+    @State private var toast: String?
+    @State private var quotesShown = false
+
+    init(cid: String, mid: String, post: Message?, sourceTitle: String, sourcePhoto: String?, sourceVerified: Bool,
+         picture: @escaping () async -> UIImage?, onOpen: @escaping (QuotedInItem) -> Void, startTab: Tab = .replies) {
+        self.cid = cid
+        self.mid = mid
+        self.post = post
+        self.sourceTitle = sourceTitle
+        self.sourcePhoto = sourcePhoto
+        self.sourceVerified = sourceVerified
+        self.picture = picture
+        self.onOpen = onOpen
+        self.startTab = startTab
+        _tab = State(initialValue: startTab)
+        _quotesShown = State(initialValue: startTab == .quotes)
+        _model = State(initialValue: RepliesModel(cid: cid, mid: mid))
+    }
 
     var body: some View {
         NavigationStack {
@@ -76,28 +437,63 @@ struct PostThreadSheet: View {
                 }
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 16).padding(.bottom, 8)
-                if tab == .replies {
-                    repliesTab
-                } else {
-                    QuotesPage(cid: cid, mid: mid, post: post, sourceTitle: sourceTitle, sourcePhoto: sourcePhoto,
-                               sourceVerified: sourceVerified, picture: picture, onOpen: onOpen, embedded: true)
+                // Both tabs stay built once shown, so switching back does not load them again.
+                ZStack {
+                    repliesTab.opacity(tab == .replies ? 1 : 0).allowsHitTesting(tab == .replies)
+                    if quotesShown {
+                        QuotesPage(cid: cid, mid: mid, post: post, sourceTitle: sourceTitle, sourcePhoto: sourcePhoto,
+                                   sourceVerified: sourceVerified, picture: picture, onOpen: onOpen, embedded: true)
+                            .opacity(tab == .quotes ? 1 : 0).allowsHitTesting(tab == .quotes)
+                    }
                 }
             }
             .toolbar {
-                if staff {
+                if model.staff {
                     ToolbarItem(placement: .topBarLeading) { adminMenu }
                 }
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
             .navigationBarTitleDisplayMode(.inline)
+            .overlay(alignment: .top) { toastView }
         }
-        .task { await load() }
-        // While the sheet is open, new replies and hearts arrive every few seconds.
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 6_000_000_000)
-                if tab == .replies, !sending { await load() }
+        .onChange(of: tab) { _, t in if t == .quotes { quotesShown = true } }
+        .onAppear { model.start() }
+        .onDisappear { model.stop() }
+        .confirmationDialog("Report this reply?", isPresented: reportingShown, titleVisibility: .visible) {
+            ForEach(Self.reasons, id: \.0) { key, label in
+                Button(label) { if let (r, t) = reporting { Task { show(await model.report(r, thread: t, reason: key) ? "Thanks. We'll take a look." : "Couldn't send the report.") } } }
             }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Remove this person?", isPresented: banningShown, titleVisibility: .visible) {
+            Button("Delete and Ban", role: .destructive) { if let (r, t) = banning { Task { show(await model.ban(r, thread: t, all: false) ? "Removed and banned." : "Couldn't do that.") } } }
+            Button("Ban and Delete All Their Replies", role: .destructive) { if let (r, t) = banning { Task { show(await model.ban(r, thread: t, all: true) ? "Banned. Their replies are gone." : "Couldn't do that.") } } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("They leave the channel and can't come back or reply.")
+        }
+    }
+
+    private static let reasons: [(String, String)] = [
+        ("spam", "Spam"), ("abuse", "Harassment or bullying"), ("hate", "Hate speech"),
+        ("sexual", "Sexual content"), ("violence", "Violence"), ("other", "Something else"),
+    ]
+
+    private var reportingShown: Binding<Bool> { Binding(get: { reporting != nil }, set: { if !$0 { reporting = nil } }) }
+    private var banningShown: Binding<Bool> { Binding(get: { banning != nil }, set: { if !$0 { banning = nil } }) }
+
+    private func show(_ text: String) {
+        withAnimation { toast = text }
+        Task { try? await Task.sleep(nanoseconds: 2_200_000_000); withAnimation { toast = nil } }
+    }
+
+    @ViewBuilder private var toastView: some View {
+        if let toast {
+            Text(toast).font(.footnote.weight(.semibold))
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(.regularMaterial, in: Capsule())
+                .padding(.top, 6)
+                .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
 
@@ -115,117 +511,269 @@ struct PostThreadSheet: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: Replies
 
-    private var threads: [PostReply] { replies.filter { $0.parentId.isEmpty } }
-    private func answers(_ id: String) -> [PostReply] { replies.filter { $0.parentId == id } }
+    private enum Item: Identifiable {
+        case older
+        case thread(PostReply)
+        case answer(PostReply, String)
+        case toggle(String, Int, Bool)
+        case moreAnswers(String)
+        var id: String {
+            switch self {
+            case .older: return "older"
+            case .thread(let r): return "t-\(r.id)"
+            case .answer(let r, _): return "a-\(r.id)"
+            case .toggle(let t, _, _): return "g-\(t)"
+            case .moreAnswers(let t): return "m-\(t)"
+            }
+        }
+    }
+
+    /// The list as one flat run of rows (lazy all the way down, a long thread included).
+    private var items: [Item] {
+        var out: [Item] = []
+        if !model.olderCursor.isEmpty { out.append(.older) }
+        for r in model.threads {
+            out.append(.thread(r))
+            let loaded = model.answers[r.id] ?? []
+            let total = max(r.answers, loaded.count)
+            guard total > 0 else { continue }
+            let open = model.openThreads.contains(r.id)
+            if open {
+                for a in loaded { out.append(.answer(a, r.id)) }
+                if !(model.answerNext[r.id] ?? "").isEmpty { out.append(.moreAnswers(r.id)) }
+            }
+            out.append(.toggle(r.id, total, open))
+        }
+        return out
+    }
 
     private var repliesTab: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(threads) { r in
-                            thread(r).id(r.id)
-                        }
-                        Color.clear.frame(height: 8).id("end")
+                        ForEach(items) { item in itemView(item).id(item.id) }
+                        Color.clear.frame(height: 6).id("end")
                     }
                     .padding(.top, 4)
                 }
+                .defaultScrollAnchor(.bottom)
                 .scrollDismissesKeyboard(.interactively)
                 .overlay { repliesOverlay }
-                .onChange(of: replies.count) { old, new in
-                    guard new > old, loaded else { return }
-                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("end", anchor: .bottom) }
+                .overlay(alignment: .bottom) { newPill(proxy) }
+                .onChange(of: model.scrollTarget) { _, id in
+                    guard let id else { return }
+                    let key = model.threads.contains(where: { $0.id == id }) ? "t-\(id)" : "a-\(id)"
+                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(key, anchor: .bottom) }
+                    model.scrollTarget = nil
                 }
             }
-            composer
-        }
-    }
-
-    @ViewBuilder private func thread(_ r: PostReply) -> some View {
-        let kids = answers(r.id)
-        VStack(alignment: .leading, spacing: 0) {
-            row(r, small: false)
-            if !kids.isEmpty {
-                if open.contains(r.id) {
-                    ForEach(kids) { k in row(k, small: true).padding(.leading, 46) }
-                    threadToggle("Hide replies", r.id)
-                } else {
-                    threadToggle("View \(kids.count) \(kids.count == 1 ? "reply" : "replies")", r.id)
-                }
+            ReplyComposer(off: model.off, loaded: model.loaded, answering: $answering) { text, thread in
+                let me = ProfileStore.shared.me
+                model.send(text, thread: thread, me: (me?.name ?? "You", me?.photoUrl ?? ""))
             }
         }
     }
 
-    private func threadToggle(_ title: String, _ id: String) -> some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                if open.contains(id) { open.remove(id) } else { open.insert(id) }
+    @ViewBuilder private func newPill(_ proxy: ScrollViewProxy) -> some View {
+        if model.unseenNew > 0 {
+            Button {
+                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("end", anchor: .bottom) }
+                model.unseenNew = 0
+            } label: {
+                Label("\(model.unseenNew) new \(model.unseenNew == 1 ? "reply" : "replies")", systemImage: "arrow.down")
+                    .font(.footnote.weight(.semibold))
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(.regularMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 8)
+        }
+    }
+
+    @ViewBuilder private func itemView(_ item: Item) -> some View {
+        switch item {
+        case .older:
+            Button { Task { await model.loadOlder() } } label: {
+                Text(model.loadingOlder ? "Loading…" : "Show earlier replies")
+                    .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity).padding(.vertical, 10)
+            }
+            .buttonStyle(.plain)
+            .onAppear { Task { await model.loadOlder() } }
+        case .thread(let r):
+            ReplyRow(reply: r, small: false, actions: actions(r, thread: nil))
+        case .answer(let r, let t):
+            ReplyRow(reply: r, small: true, actions: actions(r, thread: t)).padding(.leading, 46)
+        case .toggle(let t, let n, let open):
+            Button { withAnimation(.easeInOut(duration: 0.2)) { model.toggleThread(t) } } label: {
+                HStack(spacing: 8) {
+                    Rectangle().fill(Color.secondary.opacity(0.35)).frame(width: 20, height: 1)
+                    Text(open ? "Hide replies" : "View \(n) \(n == 1 ? "reply" : "replies")")
+                        .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 62).padding(.bottom, 10)
+        case .moreAnswers(let t):
+            Button { Task { await model.loadAnswers(t, more: true) } } label: {
+                Text("Show more replies").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 108).padding(.bottom, 8)
+        }
+    }
+
+    private func actions(_ r: PostReply, thread: String?) -> ReplyRow.Actions {
+        ReplyRow.Actions(
+            like: { model.toggleLike(r, thread: thread) },
+            reply: model.off ? nil : { answering = (thread ?? r.id, r.name) },
+            delete: r.canDelete ? { Task { await model.delete(r, thread: thread) } } : nil,
+            report: r.mine ? nil : { reporting = (r, thread) },
+            ban: (model.may.ban && !r.mine && r.uid != nil) ? { banning = (r, thread) } : nil,
+            retry: r.send == .failed ? { model.retry(r, thread: thread) } : nil,
+            discard: r.send == .failed ? { model.discard(r, thread: thread) } : nil)
+    }
+
+    @ViewBuilder private var repliesOverlay: some View {
+        if model.failed && model.threads.isEmpty {
+            ContentUnavailableView {
+                Label("Couldn't load replies", systemImage: "bubble.left.and.bubble.right")
+            } description: {
+                Text("Check your connection and try again.")
+            } actions: {
+                Button("Try Again") { Task { await model.loadFirst() } }
+            }
+        } else if !model.loaded {
+            RepliesSkeleton()
+        } else if model.threads.isEmpty {
+            ContentUnavailableView(model.off ? "Replies are off" : "No replies yet",
+                                   systemImage: "bubble.left.and.bubble.right",
+                                   description: Text(model.off ? "The channel turned off replies for this post."
+                                                               : "Be the first to reply."))
+        }
+    }
+
+    private var adminMenu: some View {
+        Menu {
+            if model.may.settings {
+                Button {
+                    Task { await model.setOff(post: true, off: !model.postOff) }
+                } label: {
+                    Label(model.postOff ? "Turn On Replies for This Post" : "Turn Off Replies for This Post",
+                          systemImage: model.postOff ? "bubble.left" : "nosign")
+                }
+            }
+            Menu("Reply Alerts") {
+                Button("On") { Task { await model.setAlerts(on: true); show("Reply alerts on.") } }
+                Button("Off") { Task { await model.setAlerts(on: false); show("Reply alerts off.") } }
             }
         } label: {
-            HStack(spacing: 8) {
-                Rectangle().fill(Color.secondary.opacity(0.35)).frame(width: 20, height: 1)
-                Text(title).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-            }
+            Image(systemName: "ellipsis").accessibilityLabel("Reply settings")
         }
-        .buttonStyle(.plain)
-        .padding(.leading, 62).padding(.bottom, 10)
+    }
+}
+
+/// One reply: photo, name and age above a bubble, a heart and Reply under it.
+private struct ReplyRow: View {
+    struct Actions {
+        var like: () -> Void
+        var reply: (() -> Void)?
+        var delete: (() -> Void)?
+        var report: (() -> Void)?
+        var ban: (() -> Void)?
+        var retry: (() -> Void)?
+        var discard: (() -> Void)?
     }
 
-    private func row(_ r: PostReply, small: Bool) -> some View {
+    let reply: PostReply
+    let small: Bool
+    let actions: Actions
+    @ScaledMetric(relativeTo: .footnote) private var nameLine: CGFloat = 20
+
+    var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            AvatarView(name: r.name, photoUrl: r.photoUrl.isEmpty ? nil : r.photoUrl, size: small ? 26 : 34)
-                .padding(.top, 20)
+            AvatarView(name: reply.name, photoUrl: reply.photoUrl.isEmpty ? nil : reply.photoUrl, size: small ? 26 : 34)
+                .padding(.top, nameLine)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 4) {
-                    Text(r.name).font(.footnote.weight(.semibold)).lineLimit(1)
-                    if r.verified {
+                    Text(reply.name).font(.footnote.weight(.semibold)).lineLimit(1)
+                    if reply.verified {
                         Image(systemName: "checkmark.seal.fill").font(.caption2).foregroundStyle(.blue)
                     }
-                    Text(Self.age(r.at)).font(.footnote).foregroundStyle(.secondary)
+                    Text(Self.age(reply.at)).font(.footnote).foregroundStyle(.secondary)
                 }
                 .padding(.leading, 4)
-                Text(r.text)
+                Text(reply.text)
                     .font(small ? .subheadline : .body)
                     .padding(.horizontal, 14).padding(.vertical, 9)
                     .background(Color(.secondarySystemBackground),
                                 in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .onTapGesture(count: 2) { Task { await toggleLike(r) } }
-                    .contextMenu {
-                        if !off { Button { startAnswer(r) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") } }
-                        Button { UIPasteboard.general.string = r.text } label: { Label("Copy", systemImage: "doc.on.doc") }
-                        if r.canDelete {
-                            Button(role: .destructive) { Task { await delete(r) } } label: { Label("Delete", systemImage: "trash") }
-                        }
-                    }
-                HStack(spacing: 14) {
-                    Button { Task { await toggleLike(r) } } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: r.liked ? "heart.fill" : "heart")
-                                .foregroundStyle(r.liked ? Color.red : Color.secondary)
-                            if r.likes > 0 { Text(r.likes.formatted()).foregroundStyle(.secondary) }
-                        }
-                        .font(.caption.weight(.semibold))
-                    }
-                    if !off {
-                        Button { startAnswer(r) } label: {
-                            Text("Reply").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-                .padding(.leading, 6).padding(.top, 2)
+                    .opacity(reply.held || reply.send != .sent ? 0.55 : 1)
+                    .onTapGesture(count: 2) { if reply.send == .sent { actions.like() } }
+                    .contextMenu { menu }
+                footer
+                    .padding(.leading, 6).padding(.top, 2)
             }
             Spacer(minLength: 24)
         }
         .padding(.horizontal, 16).padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(reply.name), \(reply.text), \(Self.spokenAge(reply.at))\(reply.likes > 0 ? ", \(reply.likes) likes" : "")")
+        .accessibilityAction(named: reply.liked ? "Unlike" : "Like") { actions.like() }
+        .accessibilityAction(named: "Reply") { actions.reply?() }
+        .accessibilityAction(named: "Delete") { actions.delete?() }
+    }
+
+    @ViewBuilder private var footer: some View {
+        switch reply.send {
+        case .sending:
+            Text("Sending…").font(.caption).foregroundStyle(.secondary)
+        case .failed:
+            HStack(spacing: 14) {
+                Text("Not sent").font(.caption.weight(.semibold)).foregroundStyle(.red)
+                if let retry = actions.retry { Button("Retry", action: retry).font(.caption.weight(.semibold)) }
+                if let discard = actions.discard { Button("Delete", action: discard).font(.caption).foregroundStyle(.secondary) }
+            }
+            .buttonStyle(.plain)
+        case .sent:
+            HStack(spacing: 14) {
+                Button(action: actions.like) {
+                    HStack(spacing: 4) {
+                        Image(systemName: reply.liked ? "heart.fill" : "heart")
+                            .foregroundStyle(reply.liked ? Color.red : Color.secondary)
+                        if reply.likes > 0 { Text(reply.likes.formatted()).foregroundStyle(.secondary) }
+                    }
+                    .font(.caption.weight(.semibold))
+                }
+                .accessibilityLabel(reply.liked ? "Unlike" : "Like")
+                if let r = actions.reply {
+                    Button(action: r) { Text("Reply").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+                }
+                if reply.held {
+                    Text("Hidden after reports").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder private var menu: some View {
+        if let r = actions.reply { Button { r() } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") } }
+        Button { UIPasteboard.general.string = reply.text } label: { Label("Copy", systemImage: "doc.on.doc") }
+        if let r = actions.report { Button { r() } label: { Label("Report", systemImage: "exclamationmark.bubble") } }
+        if let d = actions.delete { Button(role: .destructive) { d() } label: { Label("Delete", systemImage: "trash") } }
+        if let b = actions.ban { Button(role: .destructive) { b() } label: { Label("Delete and Ban", systemImage: "nosign") } }
     }
 
     /// "now", "5m", "3h", "2d", "6w": the age of a reply, short.
-    private static func age(_ d: Date) -> String {
+    static func age(_ d: Date) -> String {
         let s = max(0, Date().timeIntervalSince(d))
         if s < 60 { return "now" }
         if s < 3600 { return "\(Int(s / 60))m" }
@@ -234,26 +782,26 @@ struct PostThreadSheet: View {
         return "\(Int(s / (7 * 86_400)))w"
     }
 
-    @ViewBuilder private var repliesOverlay: some View {
-        if failed && replies.isEmpty {
-            ContentUnavailableView("Couldn't load replies", systemImage: "bubble.left.and.bubble.right",
-                                   description: Text("Check your connection and try again."))
-        } else if !loaded {
-            ProgressView()
-        } else if replies.isEmpty {
-            ContentUnavailableView(off ? "Replies are off" : "No replies yet",
-                                   systemImage: "bubble.left.and.bubble.right",
-                                   description: Text(off ? "The channel turned off replies for this post."
-                                                         : "Be the first to reply."))
-        }
+    static func spokenAge(_ d: Date) -> String {
+        RelativeDateTimeFormatter().localizedString(for: d, relativeTo: Date())
     }
+}
 
-    @ViewBuilder private var composer: some View {
+/// The field at the bottom: its own view, so typing redraws only it, not the whole list.
+private struct ReplyComposer: View {
+    let off: Bool
+    let loaded: Bool
+    @Binding var answering: (id: String, name: String)?
+    let onSend: (String, String?) -> Void
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
         if off {
             Text("Replies are turned off for this post.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity).padding(14)
-        } else if loaded {
+        } else {
             VStack(spacing: 6) {
                 if let a = answering {
                     HStack {
@@ -261,125 +809,57 @@ struct PostThreadSheet: View {
                         Spacer()
                         Button { answering = nil } label: { Image(systemName: "xmark").font(.caption.weight(.semibold)) }
                             .foregroundStyle(.secondary)
+                            .accessibilityLabel("Cancel reply")
                     }
                     .padding(.horizontal, 20)
                 }
                 HStack(spacing: 8) {
                     TextField("Add a reply…", text: $draft, axis: .vertical)
                         .lineLimit(1...5)
-                        .focused($fieldFocused)
-                    Button("Send") { Task { await send() } }
-                        .font(.body.weight(.semibold))
-                        .disabled(sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .focused($focused)
+                    Button("Send") {
+                        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !text.isEmpty else { return }
+                        onSend(text, answering?.id)
+                        draft = ""
+                        answering = nil
+                    }
+                    .font(.body.weight(.semibold))
+                    .disabled(!loaded || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 .padding(.horizontal, 18).padding(.vertical, 12)
                 .background(Color(.secondarySystemBackground), in: Capsule())
                 .padding(.horizontal, 12)
             }
             .padding(.vertical, 8)
+            .onChange(of: answering?.id) { _, id in if id != nil { focused = true } }
         }
     }
+}
 
-    private func startAnswer(_ r: PostReply) {
-        answering = r
-        // Its thread opens, so the answer is seen landing under it.
-        open.insert(r.parentId.isEmpty ? r.id : r.parentId)
-        fieldFocused = true
-    }
-
-    private var adminMenu: some View {
-        Menu {
-            Button {
-                Task { await setOff(post: true, off: !postOff) }
-            } label: {
-                Label(postOff ? "Turn On Replies for This Post" : "Turn Off Replies for This Post",
-                      systemImage: postOff ? "bubble.left" : "bubble.left.slash")
+/// Skeleton rows in the replies' own shape while the first page loads.
+private struct RepliesSkeleton: View {
+    @State private var dim = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            ForEach(0..<4, id: \.self) { i in
+                HStack(alignment: .top, spacing: 10) {
+                    Circle().fill(fill).frame(width: 34, height: 34).padding(.top, 20)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Capsule().fill(fill).frame(width: 90, height: 10)
+                        RoundedRectangle(cornerRadius: 18, style: .continuous).fill(fill)
+                            .frame(width: CGFloat([220, 160, 250, 130][i]), height: 38)
+                    }
+                }
             }
-            Button {
-                Task { await setOff(post: false, off: !channelOff) }
-            } label: {
-                Label(channelOff ? "Turn On Replies in Channel" : "Turn Off Replies in Channel",
-                      systemImage: channelOff ? "bubble.left.and.bubble.right" : "bubble.left.and.bubble.right.fill")
-            }
-        } label: {
-            Image(systemName: "ellipsis")
+            Spacer(minLength: 0)
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color(.systemBackground))
+        .opacity(dim ? 0.45 : 1)
+        .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { dim = true } }
+        .accessibilityLabel("Loading replies")
     }
-
-    // MARK: Server
-
-    private var fn: Functions { Functions.functions(region: "me-central1") }
-
-    private func load() async {
-        do {
-            let r = try await fn.httpsCallable("getReplies").call(["cid": cid, "mid": mid])
-            let d = r.data as? [String: Any] ?? [:]
-            let list = ((d["replies"] as? [[String: Any]]) ?? []).compactMap(PostReply.init)
-            if list != replies { replies = list }
-            off = d["off"] as? Bool ?? false
-            channelOff = d["channelOff"] as? Bool ?? false
-            postOff = d["postOff"] as? Bool ?? false
-            staff = d["staff"] as? Bool ?? false
-            loaded = true
-            failed = false
-        } catch {
-            failed = true
-            loaded = true
-        }
-    }
-
-    private func send() async {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !sending else { return }
-        sending = true
-        let parent = answering
-        draft = ""
-        answering = nil
-        defer { sending = false }
-        do {
-            var args: [String: Any] = ["cid": cid, "mid": mid, "text": text]
-            if let parent { args["parentId"] = parent.id }
-            let r = try await fn.httpsCallable("addReply").call(args)
-            if let d = (r.data as? [String: Any])?["reply"] as? [String: Any], let reply = PostReply(d) {
-                replies.append(reply)
-                if !reply.parentId.isEmpty { open.insert(reply.parentId) }
-            }
-        } catch {
-            if draft.isEmpty { draft = text }   // the words come back to try again
-            answering = parent
-        }
-    }
-
-    private func toggleLike(_ r: PostReply) async {
-        guard let i = replies.firstIndex(where: { $0.id == r.id }) else { return }
-        let before = replies[i]
-        let on = !before.liked
-        replies[i].liked = on
-        replies[i].likes = max(0, before.likes + (on ? 1 : -1))
-        if on { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
-        do {
-            _ = try await fn.httpsCallable("likeReply").call(["cid": cid, "mid": mid, "rid": r.id, "on": on])
-        } catch {
-            if let j = replies.firstIndex(where: { $0.id == r.id }) { replies[j] = before }
-        }
-    }
-
-    private func delete(_ r: PostReply) async {
-        let before = replies
-        replies.removeAll { $0.id == r.id || $0.parentId == r.id }
-        do {
-            _ = try await fn.httpsCallable("deleteReply").call(["cid": cid, "mid": mid, "rid": r.id])
-        } catch {
-            replies = before
-        }
-    }
-
-    private func setOff(post: Bool, off newValue: Bool) async {
-        var args: [String: Any] = ["cid": cid, "off": newValue]
-        if post { args["mid"] = mid }
-        do {
-            _ = try await fn.httpsCallable("setReplies").call(args)
-            await load()
-        } catch {}
-    }
+    private var fill: Color { Color.secondary.opacity(0.16) }
 }
