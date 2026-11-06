@@ -200,12 +200,12 @@ final class LinkPreviewBubbleView: UIView {
         }
 
         backing.frame = plan.card
-        // A quoted channel post: a soft blue card, the colour of the channel's name on it (owner
-        // 2026-11-06: the outline alone "looks like a line only, give it a colour").
+        // A quoted channel post: a soft grey card (owner 2026-11-06: the outline alone "looks like a
+        // line only, give it a colour", then "don't use blue"). The bubble's own text tint, faint.
         let quoteCard = p.url.hasPrefix("fariin-quote://")
-        backing.backgroundColor = quoteCard ? UIColor.systemBlue.withAlphaComponent(0.10) : tint.withAlphaComponent(0.10)
-        backing.layer.borderWidth = quoteCard ? 1 : 0
-        backing.layer.borderColor = quoteCard ? UIColor.systemBlue.withAlphaComponent(0.18).cgColor : nil
+        backing.backgroundColor = tint.withAlphaComponent(quoteCard ? 0.08 : 0.10)
+        backing.layer.borderWidth = 0
+        backing.layer.borderColor = nil
 
         // owner 2026-10-18: a group card's photo as it travelled in the message is ENCRYPTED, which
         // the avatar pipeline cannot open; the hero view can. So it sits in the avatar's circle, over

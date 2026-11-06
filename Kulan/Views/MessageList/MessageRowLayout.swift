@@ -1302,7 +1302,7 @@ enum MessageRowLayout {
             plan.quoteBarAttr = NSAttributedString(
                 string: "\(qb.count.formatted()) \(qb.count == 1 ? "Quote" : "Quotes")",
                 attributes: [.font: UIFont.systemFont(ofSize: 14, weight: .semibold),
-                             .foregroundColor: UIColor.systemBlue])
+                             .foregroundColor: UIColor.label])   // no blue (owner 2026-11-06)
             plan.quoteBarFaces = qb.faces
             y = max(y, grown.maxY, plan.reactions.map(\.maxY).max() ?? 0)
         }
@@ -2117,8 +2117,9 @@ enum MessageRowLayout {
             let tagRect = CGRect(x: pad + inner - tagSize.width, y: y + (20 - tagSize.height) / 2,
                                  width: tagSize.width, height: tagSize.height)
             let titleW = max(1, inner - 26 - tagSize.width - 8)
+            // The text colour, no blue (owner 2026-11-06: "don't use blue").
             let titleAttr = NSAttributedString(string: p.title, attributes: [
-                .font: UIFont.systemFont(ofSize: 14, weight: .semibold), .foregroundColor: UIColor.systemBlue])
+                .font: UIFont.systemFont(ofSize: 14, weight: .semibold), .foregroundColor: textColor])
             let tH = lineSizeOf(titleAttr, cap: titleW).height
             let titleRect = CGRect(x: pad + 26, y: y + (20 - tH) / 2, width: titleW, height: tH)
             y += 28
