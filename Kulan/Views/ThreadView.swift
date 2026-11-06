@@ -383,8 +383,6 @@ struct ThreadView: View {
     @State private var showBulkDeleteConfirm = false
     /// 2026-09-24 feature-audit (delete-message): a bulk Delete for Everyone is still talking to the
     /// server; the selection bar shows a spinner and takes no taps until it ends.
-    @State private var bulkDeleting = false
-    @State private var bulkDeleteRun = 0   // which bulk delete owns the spinner
     /// The header's "Delete All" — the whole conversation, not the selection. See `navigationBar`.
     @State private var showDeleteAllConfirm = false
     // In-chat search (opened from the profile's "search" tile) — a top bar + ↑/↓ through matches.
@@ -5772,11 +5770,10 @@ struct ThreadView: View {
     // everyone == true: my messages are removed for everyone, others hidden locally (mixed selection).
     // everyone == false: every selected message is hidden locally only (Delete for Me).
     private func bulkDelete(everyone: Bool) {
-        guard !bulkDeleting else { return }
         // 2026-09-24 feature-audit (delete-message): ALL AT ONCE, THEN THE SERVER IN PARALLEL. The
         // old loop awaited each message's whole delete (read, tombstone, every file) before marking
         // the next one, so ten photos flipped one by one. Now every bubble flips in this one pass,
-        // the server calls run four at a time, and the selection bar shows a spinner until they end.
+        // the server calls run four at a time behind a selection that has already closed.
         var serverIds: [String] = []
         for id in selectedIds {
             guard let m = repo.items.first(where: { $0.id == id }) else { continue }
@@ -5791,25 +5788,15 @@ struct ThreadView: View {
         // `let` copies: the Task below must not capture a mutable local.
         let toServer = serverIds
         let restorable = Set(toServer.filter { repo.markDeletedLocally($0) })
-        guard !toServer.isEmpty else { exitSelection(); return }
-        bulkDeleting = true
-        bulkDeleteRun += 1
-        let run = bulkDeleteRun
+        // ⛔ THE SELECTION CLOSES AT ONCE, NO SPINNER (owner 2026-11-06: "when I delete selected
+        // messages the buttons stay with a loading circle until it finishes; delete must not show
+        // any loading"). The bubbles are already tombstoned above, which is the whole delete as far
+        // as the screen is concerned; the server writes run behind it. A refusal that comes back
+        // later restores those messages and says so in a toast over the chat.
+        exitSelection()
+        guard !toServer.isEmpty else { return }
         let cid = self.cid
-        // OFFLINE: a Firestore write only returns when the server answers, so without a network the
-        // spinner would sit on a locked bar until the connection came back. The tombstones are
-        // already on screen and queued on disk by Firestore (persistence is on, PushManager), so
-        // after 8 seconds the bar lets go; a refusal that arrives later still restores and says so.
         Task {
-            try? await Task.sleep(nanoseconds: 8_000_000_000)
-            await MainActor.run {
-                if bulkDeleting && bulkDeleteRun == run { bulkDeleting = false; exitSelection() }
-            }
-        }
-        Task {
-            // The single-message path was fixed to SAY when the server refuses; this one discarded
-            // the result, so a refused bulk delete left the messages in place with no alert and the
-            // selection already dismissed as if it had worked (audit).
             let refused = await withTaskGroup(of: (String, Bool).self, returning: [String].self) { group in
                 var queue = toServer[...]
                 var out: [String] = []
@@ -5825,20 +5812,10 @@ struct ThreadView: View {
                 }
                 return out
             }
-            let anyRefused = !refused.isEmpty
+            guard !refused.isEmpty else { return }
             await MainActor.run {
                 for id in refused where restorable.contains(id) { repo.restoreAfterFailedDelete(id) }
-                // Only this run's bar: the 8-second release may already have closed it, and a new
-                // selection made since then is not ours to close.
-                let ownsBar = bulkDeleting && bulkDeleteRun == run
-                if ownsBar { bulkDeleting = false }
-                // ⛔ THE MODE CLOSES AFTER THE WRITE, NOT BEFORE IT. Theirs runs `uiMode = .normal`
-                // inside the completion of the modal that covered the delete, so the selection is
-                // still up if the write fails and the toast lands over the messages it is about.
-                // Ours closed it synchronously while the deletes were still in flight, which is how
-                // "some messages couldn't be deleted" arrived on a screen with nothing selected.
-                if anyRefused { showJumpToast("Some messages couldn't be deleted") }
-                if ownsBar { exitSelection() }
+                showJumpToast("Some messages couldn't be deleted")
             }
         }
     }
@@ -5847,10 +5824,10 @@ struct ThreadView: View {
     /// `threadDeletionManager.removeAllInteractions`; ours is the same "clear chat" write the group
     /// screen and the chat-list swipe already use, so there is one meaning of a cleared thread.
     private func deleteAllMessages() {
-        Task {
-            await ChatService.deleteForMe(cid)
-            await MainActor.run { exitSelection() }
-        }
+        // Closed at once, like a bulk delete (owner 2026-11-06: no waiting on the server).
+        exitSelection()
+        let cid = self.cid
+        Task { await ChatService.deleteForMe(cid) }
     }
 
     /// THE one answer to "can this message be forwarded". Every forward path asks this and only this:
@@ -9292,10 +9269,6 @@ struct ThreadView: View {
                          },
                          onForward: { bulkForwardStart() })
             .frame(height: 44)
-            // 2026-09-24 feature-audit (delete-message): a bulk Delete for Everyone in flight.
-            .disabled(bulkDeleting)
-            .opacity(bulkDeleting ? 0.5 : 1)
-            .overlay { if bulkDeleting { ProgressView() } }
     }
 
     /// ONE SHAPE FOR EVERY BAR THAT STANDS IN FOR THE COMPOSER.
