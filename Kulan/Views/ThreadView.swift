@@ -4677,6 +4677,7 @@ struct ThreadView: View {
     private func openPendingReplies() async {
         guard let p = AppRouter.shared.pendingRepliesPost, p.cid == cid else { return }
         AppRouter.shared.pendingRepliesPost = nil
+        guard Date().timeIntervalSince(p.at) < 30 else { return }   // the alert was long ago
         try? await Task.sleep(nanoseconds: 500_000_000)
         guard !Task.isCancelled else { return }
         quotesFor = MessageRef(id: p.mid)

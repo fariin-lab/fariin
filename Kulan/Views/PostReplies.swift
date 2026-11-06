@@ -285,6 +285,9 @@ struct PostReply: Identifiable, Equatable {
         let id = clientId ?? UUID().uuidString
         let row = PostReply(pendingId: id, text: text, name: me.name, photoUrl: me.photo)
         if let t = thread {
+            // A thread never opened: its other answers load too, or only this one would show and the
+            // thread would look fully loaded (2026-11-06 verify pass). loadAnswers keeps this row.
+            if answers[t] == nil { Task { await loadAnswers(t, more: false) } }
             var list = answers[t] ?? []
             if let i = list.firstIndex(where: { $0.id == id }) { list[i].send = .sending } else { list.append(row) }
             answers[t] = list

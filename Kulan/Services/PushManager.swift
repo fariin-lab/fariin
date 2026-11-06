@@ -361,7 +361,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
                 // would pop up later by surprise the next time it does (2026-11-06 audit).
                 if kind == "postReplies" || kind == "replyAnswer", !mid.isEmpty, !mid.contains("/"),
                    AppRouter.shared.activeChatId != cid {
-                    AppRouter.shared.pendingRepliesPost = (cid, mid)
+                    AppRouter.shared.pendingRepliesPost = (cid, mid, Date())
+                } else {
+                    AppRouter.shared.pendingRepliesPost = nil   // any other alert replaces an older one
                 }
                 AppRouter.shared.pendingChatId = cid
             }
@@ -442,7 +444,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     /// the wire between them. Nothing else sets it, so every other caller behaves exactly as before.
     var pendingMessageId: String?
     /// A reply alert tapped: open this post's Replies once its channel is on screen.
-    var pendingRepliesPost: (cid: String, mid: String)?
+    /// `at` lets a stale one (its channel never opened) be ignored later (2026-11-06 verify pass).
+    var pendingRepliesPost: (cid: String, mid: String, at: Date)?
 }
 
 // Clear a chat's delivered notifications + fix the app badge when you read it.
