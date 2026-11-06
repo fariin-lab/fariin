@@ -58,11 +58,15 @@ final class RemoteFeatures {
                 let emoji = UploadedEmoji.parse(snap.data()?["customEmoji"])
                 UserDefaults.standard.set(UploadedEmoji.stored(emoji), forKey: UploadedEmoji.storeKey)
                 UploadedEmoji.set(emoji)
+                // Built-in custom emoji the admin panel hid (owner 2026-11-06): left out of the picker.
+                let hidden = Set((snap.data()?["customEmojiHidden"] as? [String]) ?? [])
+                UserDefaults.standard.set(Array(hidden), forKey: "remoteFeatures.customEmojiHidden.v1")
                 DispatchQueue.main.async {
                     LiveFeatures.shared.values = out
                     LiveFeatures.shared.memberCloud = cloud
                     LiveFeatures.shared.newBadges = badges
                     if LiveFeatures.shared.customEmoji != emoji { LiveFeatures.shared.customEmoji = emoji }
+                    if LiveFeatures.shared.customEmojiHidden != hidden { LiveFeatures.shared.customEmojiHidden = hidden }
                 }
             }
     }
@@ -99,6 +103,8 @@ final class RemoteFeatures {
     var newBadges: [String: Double] = NewBadges.parse(UserDefaults.standard.dictionary(forKey: NewBadges.storeKey))
     /// Custom emoji uploaded in the admin panel (see `UploadedEmoji`), in the panel's order.
     var customEmoji: [UploadedEmoji.Item] = UploadedEmoji.parse(UserDefaults.standard.array(forKey: UploadedEmoji.storeKey))
+    /// Built-in custom emoji hidden in the admin panel ("ce_N"); the picker leaves them out.
+    var customEmojiHidden: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "remoteFeatures.customEmojiHidden.v1") ?? [])
     private init() {}
 }
 

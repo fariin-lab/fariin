@@ -4614,6 +4614,18 @@ struct ThreadView: View {
     private func openQuote(_ qid: String) {
         guard let c = QuoteStore.shared.card(qid) else { return }
         switch c.state {
+        case .ok where c.cid == cid:
+            // The quoted post is in THIS chat (owner 2026-11-06: his own post quoted in his own
+            // channel did nothing): scroll to it and flash it, as a reply's quote does.
+            let target = c.mid
+            Task { @MainActor in
+                if !repo.items.contains(where: { $0.id == target }) { await repo.ensureLoaded(target) }
+                guard repo.items.contains(where: { $0.id == target }) else {
+                    showJumpToast("That post is too far back to show")
+                    return
+                }
+                flashAndScroll(target)
+            }
         case .ok:
             // Not mine and not followed (a public channel's visitor): its public page, the visitor
             // door every other public channel link uses.

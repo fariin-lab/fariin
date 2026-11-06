@@ -14,7 +14,11 @@ enum CustomReaction {
     static let builtIn: [String] = (1...count).map { "ce_\($0)" }
     /// The built-in ones, then the ones uploaded in the admin panel (owner 2026-11-06), newest last.
     /// Read from a view, so the Custom tab redraws when the panel adds or removes one.
-    @MainActor static var all: [String] { builtIn + LiveFeatures.shared.customEmoji.map { "cu_" + $0.id } }
+    /// Built-in ones the admin panel hid are left out (a channel that already uses one keeps it).
+    @MainActor static var all: [String] {
+        let hidden = LiveFeatures.shared.customEmojiHidden
+        return builtIn.filter { !hidden.contains($0) } + LiveFeatures.shared.customEmoji.map { "cu_" + $0.id }
+    }
 
     @MainActor static var canChoose: Bool { AuthService.shared.uid == chooserUid }
 

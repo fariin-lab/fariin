@@ -243,9 +243,13 @@ struct ForwardPicker: View {
                 Spacer(minLength: 8)
                 // `Color.primary`, NOT `Color.accentColor`: the accent reads the environment's
                 // TINT, which anything up the tree can pull grey (owner's rule, 2026-08-16).
-                Image(systemName: on ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 22, weight: .light))
-                    .foregroundStyle(on ? Color.primary : Color.secondary)
+                // Pick-one (Quote) has no circles (owner 2026-11-06): a tap picks the chat at once,
+                // so a tick to fill would be a step that is not there.
+                if onPick == nil {
+                    Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 22, weight: .light))
+                        .foregroundStyle(on ? Color.primary : Color.secondary)
+                }
             }
             .frame(minHeight: 44)
             .contentShape(Rectangle())
