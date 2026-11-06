@@ -283,6 +283,8 @@ struct GroupStatsPost: Identifiable {
     let views: Int?
     let reactions: Int?
     let shares: Int?
+    /// How many times the post was quoted (owner 2026-11-06); nil for stories and older servers.
+    var quotes: Int? = nil
 }
 
 struct GroupStatsChannelData {
@@ -425,7 +427,8 @@ struct GroupStatsChannelData {
                                       thumb: thumb,
                                       views: P.optInt(m["views"]),
                                       reactions: P.optInt(m["reactions"]),
-                                      shares: P.optInt(m["shares"])))
+                                      shares: P.optInt(m["shares"]),
+                                      quotes: P.optInt(m["quotes"])))
         }
         return out
     }
@@ -1123,6 +1126,7 @@ struct GroupStatsPostsCard: View {
         if let at = p.at { parts.append(at.formatted(.dateTime.month(.abbreviated).day())) }
         if let v = p.views { parts.append("\(v.formatted()) \(v == 1 ? "view" : "views")") }
         if let r = p.reactions { parts.append("\(r.formatted()) \(r == 1 ? "reaction" : "reactions")") }
+        if let q = p.quotes, !p.isStory { parts.append("\(q.formatted()) \(q == 1 ? "quote" : "quotes")") }
         if let s = p.shares {
             let word = p.isStory ? (s == 1 ? "repost" : "reposts") : (s == 1 ? "share" : "shares")
             parts.append("\(s.formatted()) \(word)")

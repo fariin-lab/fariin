@@ -124,7 +124,12 @@ struct ThreadView: View {
     struct MessageRef: Identifiable { let id: String }
     @HeapState private var replyingTo: Message? = nil
     /// A channel post quoted into this chat, waiting above the composer for my words (owner 2026-11-06).
-    struct QuoteDraft: Equatable { let qid: String; let card: QuoteCard }
+    struct QuoteDraft: Equatable {
+        let qid: String
+        let card: QuoteCard
+        /// The post's picture as this phone made it for the quote (the bar's thumbnail, owner 2026-11-06).
+        var picture: UIImage? = nil
+    }
     @HeapState private var quoting: QuoteDraft? = nil
     @State private var photoItem: PhotosPickerItem?
     @State private var photoItems: [PhotosPickerItem] = []
@@ -2766,7 +2771,7 @@ struct ThreadView: View {
         guard let q = AppRouter.shared.pendingQuote, q.cid == cid else { return }
         AppRouter.shared.pendingQuote = nil
         replyingTo = nil
-        quoting = QuoteDraft(qid: q.qid, card: q.card)
+        quoting = QuoteDraft(qid: q.qid, card: q.card, picture: q.picture)
         // ⛔ THE KEYBOARD AFTER THE PUSH, NOT DURING IT (owner 2026-11-06: it slid in from the right
         // with the chat). This chat was just pushed; focusing at once raised the keyboard inside the
         // sliding screen. Once the push has landed it rises from the bottom as usual.
@@ -7349,15 +7354,18 @@ struct ThreadView: View {
             do {
                 let picture = await Self.quotePicture(m)
                 let made = try await QuoteStore.create(cid: sourceCid, mid: mid, picture: picture)
+                let shown = picture.flatMap { UIImage(data: $0) }
+                // The card's picture under its server address, so my own bubble shows it at once.
+                if let shown, !made.card.image.isEmpty { DiskImageCache.shared.store(shown, for: made.card.image) }
                 await MainActor.run {
                     if dest.id == cid {
                         replyingTo = nil
-                        quoting = QuoteDraft(qid: made.qid, card: made.card)
+                        quoting = QuoteDraft(qid: made.qid, card: made.card, picture: shown)
                         inputFocused = true
                         return
                     }
                     let r = AppRouter.shared
-                    r.pendingQuote = (dest.id, made.qid, made.card)
+                    r.pendingQuote = (dest.id, made.qid, made.card, shown)
                     r.pendingChatName = dest.displayName(me)
                     r.pendingChatPhoto = dest.displayPhoto(me)
                     r.pendingChatPush = true
@@ -10138,7 +10146,8 @@ struct ThreadView: View {
         if let q = quoting, editingMessage == nil {
             out.append(ChatComposerBanner(id: "quote:\(q.qid)", style: .quote, title: "Quote from \(q.card.heading)",
                                           detail: .text(q.card.body),
-                                          thumb: q.card.image.isEmpty ? nil : .cached(url: q.card.image), footnote: nil))
+                                          thumb: q.picture.map { .image($0) } ?? (q.card.image.isEmpty ? nil : .cached(url: q.card.image)),
+                                          footnote: nil))
         }
         if let e = editingMessage {
             out.append(ChatComposerBanner(id: "edit:\(e.id)", style: .edit, title: "Edit Message",
