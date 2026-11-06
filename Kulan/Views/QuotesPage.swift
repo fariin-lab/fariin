@@ -30,14 +30,21 @@ struct QuotedInItem: Identifiable, Equatable {
     }
 }
 
-/// ⛔ WHO QUOTED A POST (owner 2026-11-06, his pick of the previews): the post on top, its numbers,
-/// then each quote in a public channel as a card with its views, most seen first. Quotes in private
-/// chats, groups and private channels are only a number: the server never names them
-/// (`getPostQuotes`). Opens from the "N Quotes" bar under a channel post.
+/// ⛔ WHO QUOTED A POST (owner 2026-11-06). Laid out after his reference (about two thirds of it, his
+/// words): a plain page, each quote as the quoting channel's photo and name, its words, and under them
+/// an outlined card of MY post (my channel's name, the post's picture and text, when it was quoted,
+/// the quote's views). A short count line on top; quotes in private chats, groups and private
+/// channels are only a number at the bottom, the server never names them (`getPostQuotes`).
 struct QuotesPage: View {
     let cid: String
     let mid: String
     let post: Message?
+    /// My channel as the card shows it.
+    var sourceTitle: String
+    var sourcePhoto: String?
+    var sourceVerified: Bool
+    /// The post's picture, made on this phone (channel media is sealed).
+    var picture: () async -> UIImage?
     var onOpen: (QuotedInItem) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -46,103 +53,131 @@ struct QuotesPage: View {
     @State private var hidden = 0
     @State private var loaded = false
     @State private var failed = false
+    @State private var thumb: UIImage?
 
     var body: some View {
         NavigationStack {
-            List {
-                if let post { Section { header(post) } }
-                if loaded {
-                    Section { numbers }
-                    if !items.isEmpty {
-                        Section("Public channels") {
-                            ForEach(items) { it in
-                                Button { onOpen(it) } label: { row(it) }
-                                    .buttonStyle(.plain)
-                            }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if loaded {
+                        Text(summary)
+                            .font(.footnote).foregroundStyle(.secondary)
+                            .padding(.horizontal, 16).padding(.vertical, 10)
+                        ForEach(items) { it in
+                            Button { onOpen(it) } label: { quote(it) }
+                                .buttonStyle(.plain)
+                            Divider().padding(.leading, 16)
                         }
-                    }
-                    if hidden > 0 {
-                        Section {
+                        if hidden > 0 {
                             Label("\(hidden) more in private chats and groups", systemImage: "lock.fill")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                                .font(.footnote).foregroundStyle(.secondary)
+                                .padding(16)
                         }
                     }
                 }
             }
-            .overlay {
-                if failed {
-                    ContentUnavailableView("Couldn't load quotes", systemImage: "quote.opening",
-                                           description: Text("Check your connection and try again."))
-                } else if !loaded {
-                    ProgressView()
-                }
-            }
+            .overlay { overlay }
             .navigationTitle("Quotes")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
             .task { await load() }
+            .task { thumb = await picture() }
         }
     }
 
-    private func header(_ m: Message) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: kindIcon(m))
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 44, height: 44)
-                .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(m.text.isEmpty ? kindName(m) : m.text).lineLimit(2)
-                Text("Posted \(m.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
+    @ViewBuilder private var overlay: some View {
+        if failed {
+            ContentUnavailableView("Couldn't load quotes", systemImage: "quote.opening",
+                                   description: Text("Check your connection and try again."))
+        } else if !loaded {
+            ProgressView()
+        } else if items.isEmpty && hidden == 0 {
+            ContentUnavailableView("No quotes yet", systemImage: "quote.opening")
         }
     }
 
-    private var numbers: some View {
-        HStack {
-            stat(total, total == 1 ? "quote" : "quotes")
-            stat(Set(items.map(\.cid)).count, "channels")
-            stat(items.reduce(0) { $0 + $1.views }, "views")
-        }
+    private var summary: String {
+        let channels = Set(items.map(\.cid)).count
+        let views = items.reduce(0) { $0 + $1.views }
+        let q = "\(total.formatted()) \(total == 1 ? "quote" : "quotes")"
+        let c = "\(channels) \(channels == 1 ? "channel" : "channels")"
+        let v = views.formatted(.number.notation(.compactName)) + (views == 1 ? " view" : " views")
+        return q + " · " + c + " · " + v
     }
 
-    private func stat(_ n: Int, _ label: String) -> some View {
-        VStack(spacing: 2) {
-            Text(n.formatted(.number.notation(.compactName))).font(.title3.weight(.semibold))
-            Text(label).font(.caption).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private func row(_ it: QuotedInItem) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            AvatarView(name: it.title, photoUrl: it.photoUrl.isEmpty ? nil : it.photoUrl, size: 36)
-                .environment(\.avatarSquircle, true)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 4) {
-                    Text(it.title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    if it.verified {
-                        Image(systemName: "checkmark.seal.fill").font(.caption).foregroundStyle(.blue)
+    /// One quote: who, what they wrote, then my post as an outlined card.
+    private func quote(_ it: QuotedInItem) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                AvatarView(name: it.title, photoUrl: it.photoUrl.isEmpty ? nil : it.photoUrl, size: 40)
+                    .environment(\.avatarSquircle, true)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 4) {
+                        Text(it.title).font(.body.weight(.semibold)).lineLimit(1)
+                        if it.verified {
+                            Image(systemName: "checkmark.seal.fill").font(.subheadline).foregroundStyle(.blue)
+                        }
                     }
-                    Spacer(minLength: 6)
-                    Text(it.at.formatted(date: .omitted, time: .shortened))
+                    Text(it.followers.formatted(.number.notation(.compactName))
+                         + (it.followers == 1 ? " follower" : " followers"))
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if it.text.isEmpty {
-                    Text("Quote with no text").font(.subheadline).italic().foregroundStyle(.secondary)
-                } else {
-                    Text(it.text).font(.subheadline).lineLimit(3)
+            }
+            if !it.text.isEmpty {
+                Text(it.text).font(.body).lineLimit(4)
+            }
+            card(it)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .contentShape(Rectangle())
+    }
+
+    private func card(_ it: QuotedInItem) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                AvatarView(name: sourceTitle, photoUrl: sourcePhoto, size: 20)
+                    .environment(\.avatarSquircle, true)
+                Text(sourceTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
+                if sourceVerified {
+                    Image(systemName: "checkmark.seal.fill").font(.caption).foregroundStyle(.blue)
                 }
-                Label(it.views.formatted(.number.notation(.compactName)) + (it.views == 1 ? " view" : " views"),
-                      systemImage: "eye")
+                Spacer(minLength: 6)
+                Text(it.at.formatted(date: .omitted, time: .shortened))
                     .font(.caption).foregroundStyle(.secondary)
             }
+            HStack(alignment: .top, spacing: 10) {
+                cardPicture
+                Text(postText).font(.subheadline).lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Label(it.views.formatted(.number.notation(.compactName)) + (it.views == 1 ? " view" : " views"),
+                  systemImage: "eye")
+                .font(.caption).foregroundStyle(.secondary)
         }
-        .contentShape(Rectangle())
-        .padding(.vertical, 2)
+        .padding(12)
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .strokeBorder(Color.secondary.opacity(0.3), lineWidth: 1))
     }
+
+    @ViewBuilder private var cardPicture: some View {
+        if let thumb {
+            Image(uiImage: thumb).resizable().scaledToFill()
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        } else if let post, hasPicture(post) {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.secondary.opacity(0.15))
+                .frame(width: 56, height: 56)
+                .overlay(Image(systemName: kindIcon(post)).foregroundStyle(.secondary))
+        }
+    }
+
+    private var postText: String {
+        guard let post else { return "Channel post" }
+        return post.text.isEmpty ? kindName(post) : post.text
+    }
+
+    private func hasPicture(_ m: Message) -> Bool { !m.album.isEmpty || m.type == "image" || m.type == "video" }
 
     private func kindIcon(_ m: Message) -> String {
         if !m.album.isEmpty { return "photo.on.rectangle" }

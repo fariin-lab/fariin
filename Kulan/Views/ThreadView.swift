@@ -2417,7 +2417,10 @@ struct ThreadView: View {
             goToMessageJump(p.messageId)
         }
         .sheet(item: $quotesFor) { t in
-            QuotesPage(cid: cid, mid: t.id, post: repo.items.first(where: { $0.id == t.id })) { item in
+            QuotesPage(cid: cid, mid: t.id, post: repo.items.first(where: { $0.id == t.id }),
+                       sourceTitle: conversation?.title ?? "Channel", sourcePhoto: conversation?.avatarUrl,
+                       sourceVerified: conversation?.groupVerified == true,
+                       picture: { await quotesPicture(t.id) }) { item in
                 quotesFor = nil
                 // After the sheet is down, so the push is not lost under it.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { openQuoteSource(item) }
@@ -4627,6 +4630,12 @@ struct ThreadView: View {
     /// answer decides; a channel this reader may not see, or a deleted post, is said, not opened.
     /// A row of the Quotes page: that channel's quote. My own chat scrolls to it; a channel I have
     /// opens at it; a public channel I don't follow opens its public page, as a quote card does.
+    /// The post's picture for the Quotes page's cards, the same one a quote of it carries.
+    private func quotesPicture(_ id: String) async -> UIImage? {
+        guard let m = repo.items.first(where: { $0.id == id }) else { return nil }
+        return await Self.quotePicture(m).flatMap { UIImage(data: $0) }
+    }
+
     private func openQuoteSource(_ it: QuotedInItem) {
         inputFocused = false
         if it.cid == cid {
