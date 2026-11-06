@@ -1033,7 +1033,7 @@ struct StoriesTabView: View {
         // until that strip went (owner, 2026-10-11) — the friend menu with Unhide in Hide's place.
         for g in hiddenFriends {
             if let t = listLift(row: g.id, title: g.name,
-                                subtitle: g.stories.last.map { StoryListRow.ago($0) } ?? "",
+                                subtitle: StoryListRow.subtitle(g),
                                 badge: false, badgeUid: g.authorUid, at: p, actions: [
                 CMAction(title: "Send Message", icon: "ic_menu_chat") { openStoryChat(g) },
                 CMAction(title: "View Profile", icon: "ic_account") { profileGroup = g },

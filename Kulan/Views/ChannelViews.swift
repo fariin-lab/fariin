@@ -1224,7 +1224,8 @@ struct ChannelReactionsSettingsView: View {
     private func loadFromList() {
         guard !loaded, let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) else { return }
         mode = c.reactMode
-        list = c.reactList
+        // Custom emoji removed in the admin panel leave the editor (the server drops them on save too).
+        list = c.reactList.filter { !UploadedEmoji.isRemoved($0) }
         savedMode = c.reactMode
         savedList = c.reactList
         if !c.reactList.isEmpty { lastPicks = c.reactList }

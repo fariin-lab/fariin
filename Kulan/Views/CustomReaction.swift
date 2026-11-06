@@ -29,6 +29,8 @@ enum CustomReaction {
     static func url(_ key: String) -> URL? {
         if UploadedEmoji.isKey(key) {
             let id = String(key.dropFirst(3))
+            // Removed in the panel: gone here too, even if this phone kept a copy (check-3 2026-11-06).
+            guard UploadedEmoji.isListed(id) else { UploadedEmoji.forget(id); return nil }
             if let file = UploadedEmoji.fileURL(id) { return file }
             UploadedEmoji.fetch(id)
             return nil
@@ -108,6 +110,16 @@ enum UploadedEmoji {
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         return d
     }()
+
+    static func isListed(_ id: String) -> Bool { lock.withLock { remote[id] != nil } }
+
+    /// Deletes this phone's copy of an emoji that left the list.
+    static func forget(_ id: String) {
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(id).tgs"))
+    }
+
+    /// Off the panel's list: a reaction bar or chip leaves it out rather than drawing an empty slot.
+    static func isRemoved(_ key: String) -> Bool { isKey(key) && !isListed(String(key.dropFirst(3))) }
 
     static func fileURL(_ id: String) -> URL? {
         let f = dir.appendingPathComponent("\(id).tgs")

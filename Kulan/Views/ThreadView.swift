@@ -4554,7 +4554,8 @@ struct ThreadView: View {
     }
     /// What the bar offers in a channel: its own list, or the usual quick set.
     private var channelOffered: [String] {
-        conversation?.reactMode == "some" ? (conversation?.reactList ?? []) : QuickReaction.bar
+        // A custom emoji removed in the admin panel is left out (check-3 2026-11-06).
+        conversation?.reactMode == "some" ? (conversation?.reactList ?? []).filter { !UploadedEmoji.isRemoved($0) } : QuickReaction.bar
     }
     /// My reaction on a message: in a channel from my own entry, never from the post.
     private func myReaction(_ m: Message) -> String? {

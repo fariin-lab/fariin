@@ -933,6 +933,8 @@ struct CallView: View {
                         .allowsHitTesting(false)       // decoration: let the show/hide tap through
                         .accessibilityElement(children: .ignore)   // r2 H7: say whose photo it is
                         .accessibilityLabel(showLocalFull ? "Your photo" : call.otherName)
+                        // Now a layer BEFORE the header: read after it, not before (check-3 2026-11-06).
+                        .accessibilitySortPriority(-1)
                 }
 
                 VStack(spacing: 0) {
