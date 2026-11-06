@@ -53,9 +53,12 @@ final class RemoteFeatures {
                 UserDefaults.standard.set(out, forKey: Self.storeKey)
                 let cloud = MemberCloudSetting(snap.data()?["memberCloud"])
                 UserDefaults.standard.set(cloud.stored, forKey: MemberCloudSetting.storeKey)
+                let badges = NewBadges.parse(snap.data()?["newBadges"])
+                UserDefaults.standard.set(badges, forKey: NewBadges.storeKey)
                 DispatchQueue.main.async {
                     LiveFeatures.shared.values = out
                     LiveFeatures.shared.memberCloud = cloud
+                    LiveFeatures.shared.newBadges = badges
                 }
             }
     }
@@ -88,7 +91,44 @@ final class RemoteFeatures {
         (UserDefaults.standard.dictionary(forKey: "remoteFeatures.v1") as? [String: Bool]) ?? [:]
     /// The group page's member cloud (not a Bool, so it lives beside `values`).
     var memberCloud = MemberCloudSetting(UserDefaults.standard.dictionary(forKey: MemberCloudSetting.storeKey))
+    /// Settings rows wearing "New", row key -> end time in ms (see `NewBadges`).
+    var newBadges: [String: Double] = NewBadges.parse(UserDefaults.standard.dictionary(forKey: NewBadges.storeKey))
     private init() {}
+}
+
+/// ⛔ THE "NEW" BADGE ON A SETTINGS ROW — owner 2026-11-06, set from the admin panel:
+/// `config/features.newBadges = { "<row key>": <end time, ms> }`. A row shows the badge while the
+/// end time is still ahead. Opening the row does NOT remove it (owner's word): it leaves only when an
+/// admin removes it or the end time passes. Applies live (LiveFeatures).
+enum NewBadges {
+    static let storeKey = "remoteFeatures.newBadges.v1"
+
+    /// The rows the panel offers, key -> the row's title in Settings. Keep in step with the
+    /// panel's list (functions-admin policy NEW_BADGE_ROWS).
+    static let rows: [String: String] = [
+        "subscriptions": "Subscriptions", "account": "Account", "devices": "Devices",
+        "notifications": "Notifications", "appearance": "Appearance", "chats": "Chats",
+        "stories": "Stories", "privacy": "Privacy & Security", "storage": "Storage and Data",
+        "invite": "Invite Friends", "safety": "Safety", "help": "Help & About",
+    ]
+    private static let keyByTitle: [String: String] =
+        Dictionary(uniqueKeysWithValues: rows.map { ($0.value, $0.key) })
+
+    static func key(forTitle title: String) -> String? { keyByTitle[title] }
+
+    /// Anything that is not a positive number is ignored.
+    static func parse(_ raw: Any?) -> [String: Double] {
+        guard let d = raw as? [String: Any] else { return [:] }
+        var out: [String: Double] = [:]
+        for (k, v) in d {
+            if let n = v as? NSNumber, n.doubleValue > 0, rows[k] != nil { out[k] = n.doubleValue }
+        }
+        return out
+    }
+
+    /// The end time of this row's badge, or nil. Read from a view, so it redraws when the panel
+    /// changes it; the view compares it with the clock itself (see SettingsRowLabel).
+    @MainActor static func until(_ key: String) -> Double? { LiveFeatures.shared.newBadges[key] }
 }
 
 /// THE GROUP PAGE'S BUBBLE CLOUD (owner 2026-10-19, admin panel): `config/features.memberCloud` =

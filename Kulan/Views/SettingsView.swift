@@ -36,8 +36,30 @@ struct SettingsRowLabel: View {
             .frame(width: 24, height: 24)
             Text(title).font(.body)
                 .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+            if let key = NewBadges.key(forTitle: title), let until = NewBadges.until(key) {
+                NewBadgePill(until: Date(timeIntervalSince1970: until / 1000))
+            }
         }
         .padding(.vertical, 2)   // system row inset 11 + 2 = their 13
+    }
+}
+
+/// The "New" pill beside a Settings row's title (owner 2026-11-06, set in the admin panel; see
+/// `NewBadges`). The timeline wakes once, at the end time, so an open screen loses it on time.
+struct NewBadgePill: View {
+    let until: Date
+    var body: some View {
+        TimelineView(.explicit([until])) { _ in
+            if Date() < until {
+                Text("New")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.green)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.green.opacity(0.16), in: Capsule())
+                    .accessibilityLabel("New")
+            }
+        }
     }
 }
 
