@@ -1463,6 +1463,25 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.photos = data["photos"] as? [String: String] ?? [:]
         self.posters = data["posters"] as? [String: String] ?? [:]
         self.lastMessageCipher = data["lastMessage"] as? String ?? ""
+        // A channel I only follow or visit (not in `users`, which is its owner and admins): the chat
+        // list shows its last POST, never a notice (2026-11-06, server `postPreview`). Its notices are
+        // not shown inside the channel to followers either.
+        if data["channel"] as? Bool == true, let me = AuthService.shared.uid,
+           !(data["users"] as? [String] ?? []).contains(me) {
+            let pv = data["postPreview"] as? [String: Any]
+            let text = (pv?["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let label: String = {
+                switch pv?["type"] as? String ?? "" {
+                case "image": return "📷 Photo"
+                case "video": return "🎥 Video"
+                case "album": return "📷 Album"
+                case "audio": return "🎤 Voice message"
+                case "file": return "📎 File"
+                default: return ""
+                }
+            }()
+            self.lastMessageCipher = !text.isEmpty ? text : label
+        }
         self.lastImageUrl = data["lastImageUrl"] as? String
         self.lastImageEnc = (data["lastImageEnc"] as? [String: Any]).flatMap(EncMeta.init(map:))
         self.lastImages = (data["lastImages"] as? [[String: Any]] ?? []).prefix(3).compactMap { d in
