@@ -142,8 +142,11 @@ struct QuoteCard: Equatable {
 
     /// Quote a channel post: the server checks I may see it and keeps a snapshot. Returns the id the
     /// message will carry, and seeds the card so my own bubble shows it at once.
-    static func create(cid: String, mid: String) async throws -> (qid: String, card: QuoteCard) {
-        let r = try await Functions.functions(region: "me-central1").httpsCallable("createQuote").call(["cid": cid, "mid": mid])
+    static func create(cid: String, mid: String, picture: Data? = nil) async throws -> (qid: String, card: QuoteCard) {
+        var args: [String: Any] = ["cid": cid, "mid": mid]
+        // The post's picture as this phone has it open (channel media is sealed; see createQuote).
+        if let picture { args["image"] = picture.base64EncodedString() }
+        let r = try await Functions.functions(region: "me-central1").httpsCallable("createQuote").call(args)
         guard let d = r.data as? [String: Any], let qid = d["qid"] as? String, isQid(qid) else {
             throw NSError(domain: "Quote", code: 1, userInfo: [NSLocalizedDescriptionKey: "Couldn't quote this post."])
         }

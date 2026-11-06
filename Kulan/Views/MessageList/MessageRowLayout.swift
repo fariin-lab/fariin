@@ -764,6 +764,10 @@ enum MessageRowLayout {
         var contentW = max(bodySize.width, quoteOuter.width)
         // On its own line the footer is a real row, so it can drive the bubble wider than the words
         // do — a two-character message from me still has to fit "12:34 ✓✓".
+        // A quoted channel post's card goes UNDER my words (owner 2026-11-06), so the time takes its
+        // own line below the card.
+        let cardBelow = linkCard?.url.hasPrefix("fariin-quote://") == true
+        if cardBelow { metaOwnLine = true }
         if metaOwnLine { contentW = max(contentW, metaSize.width) }
         // Sharing the last line, the bubble widens until that line and the footer both fit — the
         // reference app's `contentWidth + statusWidth`. `build` already checked it is within the cap.
@@ -792,7 +796,8 @@ enum MessageRowLayout {
         }
 
         var linkPlan: LinkPreviewPlan?
-        if let card = linkCard {
+        func placeCard() {
+            guard let card = linkCard else { return }
             let (size, plan) = linkPreview(card, textColor: textColor, width: contentW)
             var placed = plan
             let rect = CGRect(x: hPad, y: innerY, width: contentW, height: size.height)
@@ -800,6 +805,7 @@ enum MessageRowLayout {
             linkPlan = placed
             innerY += size.height + 4                   // VStack spacing 4
         }
+        if !cardBelow { placeCard() }
 
         // Re-measure the body at the FINAL content width. With a quote driving the bubble wider the
         // text has more room than it was measured with, and a stale height would leave a gap under
@@ -810,6 +816,11 @@ enum MessageRowLayout {
         let finalBodySize = BubbleText.size(bodyAttr, width: contentW)
         let textRect = CGRect(x: hPad, y: innerY, width: contentW, height: finalBodySize.height)
         innerY += finalBodySize.height
+        if cardBelow {
+            if finalBodySize.height > 0 { innerY += 6 }
+            placeCard()
+            innerY -= 4   // the card's own trailing spacing; the footer adds its gap
+        }
 
         var metaRect: CGRect
         if metaOwnLine {
@@ -2059,6 +2070,40 @@ enum MessageRowLayout {
         var y: CGFloat = 0
 
         switch p.shape {
+        case .article where p.url.hasPrefix("fariin-quote://"):
+            // A QUOTED CHANNEL POST (owner 2026-11-06, his reference): a 20pt channel photo with the
+            // channel's name in blue, the post's picture with its own corners, then its words.
+            y = 10
+            let avatar = CGRect(x: pad, y: y, width: 20, height: 20)
+            let titleAttr = NSAttributedString(string: p.title, attributes: [
+                .font: UIFont.systemFont(ofSize: 14, weight: .semibold), .foregroundColor: UIColor.systemBlue])
+            let tH = lineSizeOf(titleAttr, cap: inner - 26).height
+            let titleRect = CGRect(x: pad + 26, y: y + (20 - tH) / 2, width: inner - 26, height: tH)
+            y += 28
+            var hero: CGRect?
+            if p.imageUrl != nil {
+                let h = min(220, inner * 0.75)
+                hero = CGRect(x: pad, y: y, width: inner, height: h)
+                y += h + 8
+            }
+            var subtitle: CGRect?
+            var subtitleAttr: NSAttributedString?
+            if !p.desc.isEmpty {
+                let attr = NSAttributedString(string: p.desc, attributes: [
+                    .font: UIFont.systemFont(ofSize: 14), .foregroundColor: textColor])
+                let h = cappedHeight(attr, width: inner, lines: 4)
+                subtitle = CGRect(x: pad, y: y, width: inner, height: h)
+                subtitleAttr = attr
+                y += h
+            }
+            y += 10
+            return (CGSize(width: width, height: y),
+                    LinkPreviewPlan(card: .zero, hero: hero, avatar: avatar,
+                                    title: titleRect, titleAttr: titleAttr,
+                                    subtitle: subtitle, subtitleAttr: subtitleAttr,
+                                    host: nil, hostAttr: nil,
+                                    divider: nil, button: nil, buttonLabel: nil, buttonAttr: nil))
+
         case .article:
             var hero: CGRect?
             if p.imageUrl != nil {

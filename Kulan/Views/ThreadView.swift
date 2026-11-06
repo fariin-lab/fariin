@@ -2767,7 +2767,10 @@ struct ThreadView: View {
         AppRouter.shared.pendingQuote = nil
         replyingTo = nil
         quoting = QuoteDraft(qid: q.qid, card: q.card)
-        inputFocused = true
+        // ⛔ THE KEYBOARD AFTER THE PUSH, NOT DURING IT (owner 2026-11-06: it slid in from the right
+        // with the chat). This chat was just pushed; focusing at once raised the keyboard inside the
+        // sliding screen. Once the push has landed it rises from the bottom as usual.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { inputFocused = true }
     }
 
     private func startOwnGroupDoc() {
@@ -7297,6 +7300,34 @@ struct ThreadView: View {
         }
     }
 
+    /// The post's picture for a quote, as this phone already has it open (owner 2026-11-06: quoted
+    /// photo posts showed none; channel media is sealed, so the server cannot read it). The full
+    /// picture from the cache when it has been seen, else the post's small inline thumbnail; a video
+    /// gives its poster. At most 900px and about 380 KB, as a JPEG.
+    private static func quotePicture(_ m: Message) async -> Data? {
+        guard m.isImage || m.isVideo || m.isAlbum else { return nil }
+        var img: UIImage?
+        let key = m.isVideo ? (m.thumbUrl ?? "") : (m.imageUrl ?? m.thumbUrl ?? "")
+        if !key.isEmpty {
+            img = DiskImageCache.shared.memoryImage(key)
+            if img == nil { img = await DiskImageCache.shared.image(for: key) }
+        }
+        if img == nil, let t = m.thumb, let d = Data(base64Encoded: t) { img = UIImage(data: d) }
+        guard let img, img.size.width > 0, img.size.height > 0 else { return nil }
+        let scale = min(1, 900 / max(img.size.width, img.size.height))
+        let size = CGSize(width: (img.size.width * scale).rounded(), height: (img.size.height * scale).rounded())
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let small = UIGraphicsImageRenderer(size: size, format: format).image { _ in img.draw(in: CGRect(origin: .zero, size: size)) }
+        var quality: CGFloat = 0.72
+        var data = small.jpegData(compressionQuality: quality)
+        while let d = data, d.count > 380_000, quality > 0.3 {
+            quality -= 0.12
+            data = small.jpegData(compressionQuality: quality)
+        }
+        return data
+    }
+
     /// Quote picked a chat: the server snapshots the post (it checks I may see it), then that chat
     /// opens with the quote above its composer. Quoting into the chat already open stays here.
     private func startQuote(_ m: Message, into dest: Conversation) {
@@ -7304,7 +7335,8 @@ struct ThreadView: View {
         let mid = m.id
         Task {
             do {
-                let made = try await QuoteStore.create(cid: sourceCid, mid: mid)
+                let picture = await Self.quotePicture(m)
+                let made = try await QuoteStore.create(cid: sourceCid, mid: mid, picture: picture)
                 await MainActor.run {
                     if dest.id == cid {
                         replyingTo = nil

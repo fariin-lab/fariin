@@ -346,6 +346,8 @@ enum BubbleBody: Equatable {
         var host: String
         var imageUrl: String?
         var imageEnc: EncMeta?
+        /// A quoted channel post's card: the channel's own photo beside its name (owner 2026-11-06).
+        var avatarUrl: String? = nil
     }
 
     struct TextBody: Equatable {

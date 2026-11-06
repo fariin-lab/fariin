@@ -200,7 +200,11 @@ final class LinkPreviewBubbleView: UIView {
         }
 
         backing.frame = plan.card
-        backing.backgroundColor = tint.withAlphaComponent(0.10)
+        // A quoted channel post is an outlined card, not a filled one (owner 2026-11-06, his reference).
+        let quoteCard = p.url.hasPrefix("fariin-quote://")
+        backing.backgroundColor = quoteCard ? .clear : tint.withAlphaComponent(0.10)
+        backing.layer.borderWidth = quoteCard ? 1 : 0
+        backing.layer.borderColor = quoteCard ? tint.withAlphaComponent(0.22).cgColor : nil
 
         // owner 2026-10-18: a group card's photo as it travelled in the message is ENCRYPTED, which
         // the avatar pipeline cannot open; the hero view can. So it sits in the avatar's circle, over
@@ -235,7 +239,11 @@ final class LinkPreviewBubbleView: UIView {
             hero.layer.mask = nil   // a reused cell may still carry a channel card's squircle
             // A story card's picture sits inside the card with its own corners; an article's runs
             // edge to edge and the card clips it.
-            if case .story = p.shape {
+            if quoteCard {
+                hero.layer.cornerRadius = 10
+                hero.layer.cornerCurve = .continuous
+                hero.clipsToBounds = true
+            } else if case .story = p.shape {
                 hero.layer.cornerRadius = 8
                 hero.layer.cornerCurve = .continuous
                 hero.clipsToBounds = true
@@ -253,13 +261,14 @@ final class LinkPreviewBubbleView: UIView {
         if let rect = plan.avatar {
             avatar.isHidden = false
             avatar.frame = rect
-            avatar.squircle = channelCard
+            avatar.squircle = channelCard || quoteCard
             // No photo: a group's card shows the group glyph, a channel's the megaphone, never a person.
             switch p.shape {
             case .group, .groupUnavailable: avatar.placeholderSymbol = channelCard ? "megaphone.fill" : "person.2.fill"
-            default: avatar.placeholderSymbol = nil
+            default: avatar.placeholderSymbol = quoteCard ? "megaphone.fill" : nil
             }
-            avatar.configure(name: p.title, photoUrl: groupPhotoRect == nil ? p.imageUrl : nil)
+            // A quote card's photo is the CHANNEL's (`avatarUrl`); its `imageUrl` is the post's picture.
+            avatar.configure(name: p.title, photoUrl: quoteCard ? p.avatarUrl : (groupPhotoRect == nil ? p.imageUrl : nil))
         } else {
             avatar.isHidden = true
         }
