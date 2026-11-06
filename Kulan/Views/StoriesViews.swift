@@ -1852,6 +1852,34 @@ struct StoryViewer: View {
         // A caption link opens in the app's browser over the story, which holds still meanwhile
         // (owner 2026-10-16). Tagged "browser" so only the browser's own close lifts that pause.
         StoryLinkOpener.handler = { url in
+            // ⛔ OUR OWN LINKS OPEN IN THE APP (owner 2026-11-06: a channel link in a story shows
+            // Join, a person's shows Chat). The story closes, then a channel or group opens on its
+            // page (Join / Follow there) and a person's link opens the chat with them. Everything
+            // else is still the in-app browser over the story.
+            if let route = KulanApp.route(from: url) {
+                switch route {
+                case .name(let name):
+                    onClose()
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 350_000_000)   // the story's close first
+                        if Flags.groupsEnabled, case .group(let cid) = await GroupDirectory.resolve(name) {
+                            GroupDirectory.open(cid: cid, name: name)
+                        } else {
+                            AppRouter.shared.pendingUserHandle = name   // opens the chat (RootView)
+                        }
+                    }
+                    return
+                case .group(let code):
+                    onClose()
+                    AppRouter.shared.pendingInviteCode = code
+                    return
+                case .user(let handle):
+                    onClose()
+                    AppRouter.shared.pendingUserHandle = handle
+                    return
+                default: break
+                }
+            }
             NotificationCenter.default.post(name: .init("pauseStory"), object: "browser")
             WebLink.open(url) {
                 NotificationCenter.default.post(name: .init("resumeStory"), object: "browser")

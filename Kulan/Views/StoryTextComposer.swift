@@ -1059,14 +1059,40 @@ struct StoryTextLinkPreview: View {
                 .lineLimit(1)
         }
         .multilineTextAlignment(.leading)
-        // Pinned to the declared height and top-aligned, so a one-line title leaves its space empty
-        // rather than making the card a different size from the one `height(width:style:draft:)`
-        // promised. That promise is what the layout above is built on.
+        // Pinned to the declared height, so a one-line title cannot make the card a different size
+        // from the one `height(width:style:draft:)` promised (the layout above is built on it).
+        // CENTRED in that height (owner 2026-11-06: "the text is not centred, it jumps up"): it was
+        // top-aligned, so short words sat at the top beside a picture centred on the whole card.
         .frame(maxWidth: .infinity, minHeight: Self.textBlockHeight * k,
-               maxHeight: Self.textBlockHeight * k, alignment: .topLeading)
+               maxHeight: Self.textBlockHeight * k, alignment: .leading)
         .padding(.horizontal, 12 * k)
         .padding(.vertical, 7 * k)
         .clipped()
+    }
+
+    /// ⛔ JOIN OR CHAT ON THE CARD (owner 2026-11-06). A channel's or group's link ("N followers" /
+    /// "N members", the line our own cards carry) says Join; a person's link ("@handle") says Chat.
+    /// It is part of the card, so the posted picture shows it too, and the whole card is the tap,
+    /// which opens the channel page or the chat in the app (`StoryLinkOpener` in the story viewer).
+    private var action: String? {
+        if draft.desc.range(of: #"^[0-9.,KMB]+ (members?|followers?)$"#, options: .regularExpression) != nil {
+            return "Join"
+        }
+        if draft.desc.hasPrefix("@"), LinkPreviewService.profileHandle(in: draft.url) != nil { return "Chat" }
+        return nil
+    }
+
+    @ViewBuilder private var actionPill: some View {
+        if let action {
+            Text(action)
+                .font(.system(size: 13 * k, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14 * k)
+                .padding(.vertical, 7 * k)
+                .background(Capsule().fill(Color(red: 0.0, green: 0.48, blue: 1.0)))
+                .padding(.trailing, 12 * k)
+                .fixedSize()
+        }
     }
 
     var body: some View {
@@ -1087,6 +1113,7 @@ struct StoryTextLinkPreview: View {
                             .clipped()
                     }
                     words
+                    actionPill
                 }
             case .large:
                 VStack(alignment: .leading, spacing: 0) {
@@ -1097,7 +1124,10 @@ struct StoryTextLinkPreview: View {
                             .frame(width: width, height: Self.bannerHeight * k)
                             .clipped()
                     }
-                    words
+                    HStack(spacing: 0) {
+                        words
+                        actionPill
+                    }
                 }
             }
         }
