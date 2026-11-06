@@ -233,6 +233,14 @@ struct ReplyRef: Equatable, Codable {
     var isReaction: Bool? = nil
 }
 
+/// A channel post's server-counted numbers, cached with the message (see `Message.countsStore`).
+struct PostCounts: Codable, Equatable {
+    var views = 0
+    var quoteCount = 0
+    var quoteFaces: [String] = []
+    var reactionCounts: [String: Int] = [:]
+}
+
 extension Message {
     /// ⛔ A STORY REACTION (an emoji sent from a story's react bar) is a mark on the story, not a
     /// message to answer: owner 2026-10-13, "when somebody reacts to my story I can reply to it or
@@ -373,14 +381,23 @@ struct Message: Identifiable, Equatable, Codable {
     /// A "<name> asked to turn off Restricted chat" notice (2026-10-03). Tapping it lets the person
     /// it was asked of accept or decline, while the request on the chat is still pending.
     var isRestrictRequest = false
+    /// ⛔ A CHANNEL POST'S NUMBERS TRAVEL WITH THE CACHED MESSAGE (owner 2026-11-06: after a restart a
+    /// channel opened with no reactions and views of 1, and they popped in once the server answered).
+    /// Kept in ONE optional, so every cache written before this still decodes (synthesized Codable
+    /// reads an optional with decodeIfPresent) and a message with no numbers stores nothing.
+    private var countsStore: PostCounts?
+    private var counts: PostCounts {
+        get { countsStore ?? PostCounts() }
+        set { countsStore = newValue == PostCounts() ? nil : newValue }
+    }
     /// A channel post's views (2026-10-28), counted by the server (functions-groups channelViews).
-    var views: Int = 0
+    var views: Int { get { counts.views } set { counts.views = newValue } }
     /// How many times a channel post was quoted and sent (owner 2026-11-06), counted by the server
     /// (noteQuoteSent), and up to three photos of public channels that quoted it ("" = no photo).
-    var quoteCount: Int = 0
-    var quoteFaces: [String] = []
+    var quoteCount: Int { get { counts.quoteCount } set { counts.quoteCount = newValue } }
+    var quoteFaces: [String] { get { counts.quoteFaces } set { counts.quoteFaces = newValue } }
     /// A channel post's reactions as counts only (2026-10-29): who picked what is never on the post.
-    var reactionCounts: [String: Int] = [:]
+    var reactionCounts: [String: Int] { get { counts.reactionCounts } set { counts.reactionCounts = newValue } }
     var edited: Bool = false               // text was edited after sending
     /// Deleted for everyone. The document SURVIVES as a tombstone so both sides see that something
     /// was here and removed, the way the standard messengers do it, instead of a message silently
@@ -768,6 +785,7 @@ struct Message: Identifiable, Equatable, Codable {
         case createdAt, width, blurhash, thumb, height
         case callerUid, callOutcome, callVideo, callDuration, callJoinedUids, callRungUids
         case quoteId, bubbleStyle, bubbleDecor
+        case countsStore   // a channel post's views, reactions and quotes (owner 2026-11-06)
         case edited, deleted, deletedBy, forwarded, clientTs, linkPreview, hasServerTime, uploading, albumSizes
         case expiresAt   // owner audit 2026-10-06 chat #21: a cold open must know what has already expired
         case stickerPack, stickerId, stickerEmoji, stickerAnimated   // 2026-10-17 chat stickers, all optional
@@ -850,11 +868,14 @@ struct Message: Identifiable, Equatable, Codable {
         self.disappearSeconds = (data["disappearSeconds"] as? NSNumber)?.intValue
         self.isRestrictRequest = data["restrictRequest"] as? Bool ?? false
         self.edited = data["edited"] as? Bool ?? false
-        self.views = max(0, (data["views"] as? NSNumber)?.intValue ?? 0)
-        self.quoteCount = max(0, (data["quoteCount"] as? NSNumber)?.intValue ?? 0)
-        self.quoteFaces = Array(((data["quoteFaces"] as? [Any]) ?? []).compactMap { $0 as? String }.prefix(3))
-        self.reactionCounts = ((data["reactionCounts"] as? [String: Any]) ?? [:])
-            .compactMapValues { ($0 as? NSNumber)?.intValue }.filter { $0.value > 0 }
+        // Straight into the stored optional: the computed setters may not run before init is done.
+        let pc = PostCounts(
+            views: max(0, (data["views"] as? NSNumber)?.intValue ?? 0),
+            quoteCount: max(0, (data["quoteCount"] as? NSNumber)?.intValue ?? 0),
+            quoteFaces: Array(((data["quoteFaces"] as? [Any]) ?? []).compactMap { $0 as? String }.prefix(3)),
+            reactionCounts: ((data["reactionCounts"] as? [String: Any]) ?? [:])
+                .compactMapValues { ($0 as? NSNumber)?.intValue }.filter { $0.value > 0 })
+        self.countsStore = pc == PostCounts() ? nil : pc
         self.deleted = data["deleted"] as? Bool ?? false
         self.deletedBy = data["deletedBy"] as? String   // 2026-09-24 feature-audit
         self.forwarded = data["forwarded"] as? Bool ?? false

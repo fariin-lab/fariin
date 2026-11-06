@@ -1,12 +1,13 @@
 import Foundation
 import FirebaseFunctions
+import FirebaseAuth
 
 /// What a quoted channel post's card shows (owner 2026-11-06). Everything here comes from the
 /// server's `getQuotes`, which decides per reader, every time, whether the source channel may be
 /// seen: `.ok` is the post as it was when quoted, `.deleted` keeps the channel's face and says Post
 /// deleted, `.hidden` shows nothing of the post (the channel is private to this reader, or closed).
-struct QuoteCard: Equatable {
-    enum State: Equatable { case ok, deleted, hidden, gone }
+struct QuoteCard: Equatable, Codable {
+    enum State: String, Equatable, Codable { case ok, deleted, hidden, gone }
     var state: State
     var cid = ""
     var mid = ""
@@ -82,7 +83,36 @@ struct QuoteCard: Equatable {
     /// How long an answer is trusted before the server is asked again (access can change).
     private let fresh: TimeInterval = 120
 
-    private init() {}
+    /// ⛔ THE CARDS ARE KEPT ON DISK (owner 2026-11-06: after a restart every quote in a channel read
+    /// "Loading…" until the server answered). The last answers draw on the first frame; each is still
+    /// asked again at once (no `fetchedAt` is restored), so access lost since then hides it within a
+    /// moment. One file per account, up to 500 cards.
+    private static func fileURL() -> URL? {
+        guard let uid = Auth.auth().currentUser?.uid else { return nil }
+        return FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("quoteCards.\(uid).v1.json")
+    }
+    private var saveScheduled = false
+
+    private init() {
+        if let url = Self.fileURL(), let d = try? Data(contentsOf: url),
+           let saved = try? JSONDecoder().decode([String: QuoteCard].self, from: d) {
+            cards = saved
+        }
+    }
+
+    private func scheduleSave() {
+        guard !saveScheduled, let url = Self.fileURL() else { return }
+        saveScheduled = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            saveScheduled = false
+            let snap = cards.count > 500 ? Dictionary(uniqueKeysWithValues: cards.prefix(500).map { ($0.key, $0.value) }) : cards
+            Task.detached(priority: .utility) {
+                if let d = try? JSONEncoder().encode(snap) { try? d.write(to: url, options: .atomic) }
+            }
+        }
+    }
 
     /// The card for `qid`, or nil while the first answer is on its way. Asking also schedules a
     /// refresh when the answer is old.
@@ -102,6 +132,7 @@ struct QuoteCard: Equatable {
     func seed(_ qid: String, _ card: QuoteCard) {
         cards[qid] = card
         fetchedAt[qid] = Date()
+        scheduleSave()
     }
 
     private func request(_ qid: String) {
@@ -131,7 +162,7 @@ struct QuoteCard: Equatable {
                 guard let d = got[q] as? [String: Any], let card = QuoteCard(d) else { continue }
                 if cards[q] != card { cards[q] = card; changed = true }
             }
-            if changed { LiveGroupCard.noteChanged() }
+            if changed { LiveGroupCard.noteChanged(); scheduleSave() }
         } catch {
             // Asked again on the next draw after a short pause, not in a loop.
             let retryAt = Date().addingTimeInterval(-fresh + 15)
