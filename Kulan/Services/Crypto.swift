@@ -779,8 +779,12 @@ final class Crypto {
         c.countLimit = 500   // bounded (cap every hot cache) — plaintext previews are small but not free
         return c
     }()
+    /// A short cache key for a sealed text: its length and last 96 characters (the sealed body and
+    /// its tag, random per message), not the whole text. A group message carries a key wrap per
+    /// member, about 17 KB at 100 members; keyed whole, 500 entries could hold 8 MB of keys alone.
+    private static func previewKey(_ raw: String) -> String { "\(raw.utf8.count)|\(raw.suffix(96))" }
     func decryptCached(_ raw: String, cid: String) -> String {
-        let key = "\(cid)|\(raw)" as NSString
+        let key = "\(cid)|\(Self.previewKey(raw))" as NSString
         if let hit = previewCache.object(forKey: key) { return hit as String }
         let out = decrypt(raw, cid: cid)
         // Don't memoize failure sentinels — the recipient's key may just not be warm yet.
@@ -793,7 +797,7 @@ final class Crypto {
     // (base64 + JSON + sodium), which is expensive to run on the main thread per render. Memoize
     // it (the cid|author|cipher tuple is stable) so chat-list/peek group previews don't re-decrypt.
     func decryptGroupCached(_ raw: String, cid: String, authorId: String) -> String {
-        let key = "g|\(cid)|\(authorId)|\(raw)" as NSString
+        let key = "g|\(cid)|\(authorId)|\(Self.previewKey(raw))" as NSString
         if let hit = previewCache.object(forKey: key) { return hit as String }
         let out = decrypt(raw, cid: cid, authorId: authorId)
         if out != "…" && out != "🔒" { previewCache.setObject(out as NSString, forKey: key) }
