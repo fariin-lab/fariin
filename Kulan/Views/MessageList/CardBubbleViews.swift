@@ -253,7 +253,10 @@ final class LinkPreviewBubbleView: UIView {
             }
             // `smallSync` in the SwiftUI card's terms: a preview picture is small and is read
             // synchronously off disk, so it is there on the first frame instead of a beat late.
-            hero.configure(url: p.imageUrl, enc: p.imageEnc, cid: cid)
+            // ⛔ THE RADIUS GOES IN HERE: `configure` sets the layer's corner radius itself (0 by
+            // default), so the rounding set above was undone and the quote's picture came out square
+            // (owner 2026-11-06, "make the quote image rounded").
+            hero.configure(url: p.imageUrl, enc: p.imageEnc, cid: cid, cornerRadius: hero.layer.cornerRadius)
         } else {
             hero.isHidden = true
             hero.reset()
