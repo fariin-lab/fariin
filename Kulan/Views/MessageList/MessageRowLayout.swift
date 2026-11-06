@@ -267,6 +267,10 @@ struct BubblePlan {
     var reactionsFreeform: Bool = false
     /// The red (!) outside a failed send's bubble, in row coordinates. See `decorations`.
     var failBadge: CGRect?
+    /// A channel post's "N Quotes" bar along the bubble's bottom, BUBBLE coordinates (owner 2026-11-06).
+    var quoteBar: CGRect? = nil
+    var quoteBarAttr: NSAttributedString? = nil
+    var quoteBarFaces: [String] = []
 }
 
 struct NoticePlan {
@@ -1281,6 +1285,28 @@ enum MessageRowLayout {
         //
         // ⚠️ NO TEXT — his instruction, twice ("no more text"). Theirs replaces the timestamp with
         // "Send Failed"; ours keeps the time. The badge is the whole of the message.
+        // ⛔ "N QUOTES" ALONG A CHANNEL POST'S BOTTOM (owner 2026-11-06, his pick of the previews):
+        // the photos of up to three public channels that quoted it, the count, a chevron; a tap opens
+        // the Quotes page. Last, under the reactions and the time, so none of their arithmetic moves:
+        // the bubble only grows downward. Pills hanging off a bare picture move down with the edge.
+        if let qb = b.quoteBar {
+            let barH: CGFloat = 40
+            var grown = plan.bubble
+            let top = grown.height
+            grown.size.height += barH
+            plan.bubble = grown
+            if plan.reactionsFreeform {
+                plan.reactions = plan.reactions.map { $0.offsetBy(dx: 0, dy: barH) }
+            }
+            plan.quoteBar = CGRect(x: 0, y: top, width: grown.width, height: barH)
+            plan.quoteBarAttr = NSAttributedString(
+                string: "\(qb.count.formatted()) \(qb.count == 1 ? "Quote" : "Quotes")",
+                attributes: [.font: UIFont.systemFont(ofSize: 14, weight: .semibold),
+                             .foregroundColor: UIColor.systemBlue])
+            plan.quoteBarFaces = qb.faces
+            y = max(y, grown.maxY, plan.reactions.map(\.maxY).max() ?? 0)
+        }
+
         if b.showsFailedBadge {
             // `plan.meta` is bubble-local; the badge lives in row coordinates like the avatar.
             let cy = plan.meta == .zero ? bubbleRect.maxY - BubbleMetrics.vPad - BubbleMetrics.failBadge / 2

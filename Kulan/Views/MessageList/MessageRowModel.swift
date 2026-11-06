@@ -412,6 +412,14 @@ struct BubbleRow: Equatable {
     var wide: Bool = false
     /// The round share button beside a channel post; not where the channel restricts sharing.
     var shareable: Bool = false
+    /// "N Quotes" along a channel post's bottom (owner 2026-11-06); nil when nobody quoted it.
+    var quoteBar: QuoteBarChrome? = nil
+}
+
+/// The quotes bar's content: the count and up to three quoting channels' photos ("" = none).
+struct QuoteBarChrome: Equatable {
+    var count: Int
+    var faces: [String]
 }
 
 /// A centred capsule notice: the day separator, a system event, a pin notice.

@@ -97,6 +97,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onTapLinkProfile: (String) -> Void = { _ in }
     var onTapLocation: (String) -> Void = { _ in }
     var onTapPollResults: (String) -> Void = { _ in }   // 2026-10-19 the poll footer
+    var onTapQuotes: (String) -> Void = { _ in }        // 2026-11-06 a channel post's quotes bar
     var onTapContactCard: (String) -> Void = { _ in }
     var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
@@ -316,6 +317,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onTapLinkProfile = onTapLinkProfile
         vc.onTapLocation = onTapLocation
         vc.onTapPollResults = onTapPollResults
+        vc.onTapQuotes = onTapQuotes
         vc.onTapContactCard = onTapContactCard
         vc.onTapContactMessage = onTapContactMessage
         vc.onTapReactions = onTapReactions
@@ -957,6 +959,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onTapLinkProfile: (String) -> Void = { _ in }
     var onTapLocation: (String) -> Void = { _ in }
     var onTapPollResults: (String) -> Void = { _ in }   // 2026-10-19 the poll footer
+    var onTapQuotes: (String) -> Void = { _ in }        // 2026-11-06 a channel post's quotes bar
     var onTapContactCard: (String) -> Void = { _ in }
     var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
@@ -7249,6 +7252,11 @@ extension MessageListController: MessageRowCellDelegate {
     func rowCellDidTapPollResults(_ cell: MessageRowCell) {
         guard let id = cell.rowId else { return }
         onTapPollResults(id)
+    }
+
+    func rowCellDidTapQuotes(_ cell: MessageRowCell) {
+        guard let id = cell.rowId else { return }
+        onTapQuotes(id)
     }
 
     func rowCellDidTapContactCard(_ cell: MessageRowCell) {

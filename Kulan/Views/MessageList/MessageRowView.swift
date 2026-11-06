@@ -885,6 +885,8 @@ final class MessageRowView: UIView {
     /// A channel post's share button (`applyShareButton`) and where it is.
     private var shareButton: UIView?
     private var shareRect: CGRect?
+    /// A channel post's "N Quotes" bar (`applyQuoteBar`), inside the bubble.
+    private var quoteBarView: QuoteBarView?
     /// The failed badge's menu items, asked for when it is tapped. Set by the cell.
     var failMenuItems: (() -> [UIMenuElement])?
     private var reactionViews: [ReactionChipView] = []
@@ -1335,6 +1337,26 @@ final class MessageRowView: UIView {
         applyReactions(b)
         applyFailBadge(b)
         applyShareButton(b, model: m)
+        applyQuoteBar(b)
+    }
+
+    private func applyQuoteBar(_ b: BubblePlan) {
+        guard let rect = b.quoteBar, let attr = b.quoteBarAttr else { quoteBarView?.isHidden = true; return }
+        let v = quoteBarView ?? {
+            let v = QuoteBarView()
+            bubbleBox.addSubview(v); quoteBarView = v; return v
+        }()
+        v.isHidden = false
+        v.frame = rect
+        v.set(attr, faces: b.quoteBarFaces)
+        bubbleBox.bringSubviewToFront(v)
+    }
+
+    /// The quotes bar, row coordinates in; its rect is in bubble coordinates.
+    func hitsQuoteBar(_ point: CGPoint) -> Bool {
+        guard let p = plan, case .bubble(let b) = p.body, let r = b.quoteBar,
+              quoteBarView?.isHidden == false else { return false }
+        return r.offsetBy(dx: b.bubble.minX, dy: b.bubble.minY).contains(point)
     }
 
     /// ⛔ A SHARE BUTTON BESIDE EVERY CHANNEL POST (owner 2026-10-29, with the reference app's feed):

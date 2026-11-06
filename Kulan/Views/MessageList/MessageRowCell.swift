@@ -26,6 +26,8 @@ protocol MessageRowCellDelegate: AnyObject {
     func rowCellDidTapCallJoin(_ cell: MessageRowCell)
     func rowCellDidTapLocation(_ cell: MessageRowCell)
     func rowCellDidTapPollResults(_ cell: MessageRowCell)
+    /// A channel post's "N Quotes" bar (owner 2026-11-06).
+    func rowCellDidTapQuotes(_ cell: MessageRowCell)
     func rowCellDidTapContactCard(_ cell: MessageRowCell)
     func rowCellDidTapContactMessage(_ cell: MessageRowCell)
     func rowCellDidTapReactions(_ cell: MessageRowCell)   // `cell.tappedReaction` = the pill's emoji
@@ -93,6 +95,7 @@ final class MessageRowCell: UICollectionViewCell {
         case .bubble(let b):
             if b.showsFailedBadge, rowView.hitsFailBadge(p) { return true }
             if rowView.hitsShare(p) { return true }
+            if rowView.hitsQuoteBar(p) { return true }
             if rowView.hitsReactions(p) { return true }
             if b.sender != nil, rowView.hitsSenderName(p) || rowView.hitsAvatar(p) { return true }
             if rowView.hitsPill(p) {
@@ -589,6 +592,10 @@ final class MessageRowCell: UICollectionViewCell {
                a.tiles.indices.contains(i), let key = a.tiles[i].uploadKey,
                !MediaSend.shared.isItemDone(key), !MediaSend.shared.isItemCancelled(key) {
                 MediaSend.shared.cancelItem(key)
+                return
+            }
+            if rowView.hitsQuoteBar(p) {
+                delegate?.rowCellDidTapQuotes(self)
                 return
             }
             if rowView.hitsMedia(p) {

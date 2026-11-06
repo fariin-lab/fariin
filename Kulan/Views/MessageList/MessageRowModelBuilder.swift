@@ -440,7 +440,9 @@ enum MessageRowModelBuilder {
                                               besideAvatar: !isMe && ctx.isGroup && !ctx.isChannel)
             }(),
             wide: ctx.isChannel && !msg.deleted,
-            shareable: ctx.isChannel && !msg.deleted && !ctx.noForwarding)
+            shareable: ctx.isChannel && !msg.deleted && !ctx.noForwarding,
+            quoteBar: ctx.isChannel && !msg.deleted && msg.quoteCount > 0
+                ? QuoteBarChrome(count: msg.quoteCount, faces: msg.quoteFaces) : nil)
     }
 
     /// ⛔ THE TIMER ICON FROM THE FIRST FRAME — owner, 2026-09-29: messages sent right after the

@@ -121,6 +121,8 @@ struct ThreadView: View {
     /// thread's stack while it builds the chat, and the extra size overflowed the stack the moment
     /// a chat opened (EXC_BAD_ACCESS, stack guard). Keep every @State here small.
     @State private var pollResultsFor: MessageRef?
+    /// A channel post whose Quotes page is open (owner 2026-11-06).
+    @State private var quotesFor: MessageRef?
     struct MessageRef: Identifiable { let id: String }
     @HeapState private var replyingTo: Message? = nil
     /// A channel post quoted into this chat, waiting above the composer for my words (owner 2026-11-06).
@@ -2414,6 +2416,13 @@ struct ThreadView: View {
             // jumps. #10: superseded by a newer jump or the down arrow.
             goToMessageJump(p.messageId)
         }
+        .sheet(item: $quotesFor) { t in
+            QuotesPage(cid: cid, mid: t.id, post: repo.items.first(where: { $0.id == t.id })) { item in
+                quotesFor = nil
+                // After the sheet is down, so the push is not lost under it.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { openQuoteSource(item) }
+            }
+        }
         .sheet(item: $pollResultsFor) { t in
             if let m = repo.items.first(where: { $0.id == t.id }), let poll = m.poll {
                 PollResultsSheet(poll: poll, cid: cid, messageId: m.id, closed: m.pollClosed,
@@ -4616,6 +4625,28 @@ struct ThreadView: View {
 
     /// A quote card's tap (owner 2026-11-06): the source channel, scrolled to the post. The server's
     /// answer decides; a channel this reader may not see, or a deleted post, is said, not opened.
+    /// A row of the Quotes page: that channel's quote. My own chat scrolls to it; a channel I have
+    /// opens at it; a public channel I don't follow opens its public page, as a quote card does.
+    private func openQuoteSource(_ it: QuotedInItem) {
+        inputFocused = false
+        if it.cid == cid {
+            Task { @MainActor in
+                if !repo.items.contains(where: { $0.id == it.mid }) { await repo.ensureLoaded(it.mid) }
+                if repo.items.contains(where: { $0.id == it.mid }) { flashAndScroll(it.mid) }
+            }
+            return
+        }
+        let known = ConversationsRepository.shared.conversations.contains { $0.id == it.cid }
+            || ChannelFollows.shared.conversations.contains { $0.id == it.cid }
+        if !known, !it.username.isEmpty, let u = URL(string: "https://fariin.com/\(it.username)"), openGroupLink(u) { return }
+        let r = AppRouter.shared
+        r.pendingChatName = it.title
+        r.pendingChatPhoto = it.photoUrl
+        r.pendingMessageId = it.mid
+        r.pendingChatPush = true
+        r.pendingChatId = it.cid
+    }
+
     private func openQuote(_ qid: String) {
         guard let c = QuoteStore.shared.card(qid) else { return }
         switch c.state {
@@ -5087,6 +5118,10 @@ struct ThreadView: View {
             onTapPollResults: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }), m.poll != nil else { return }
                 pollResultsFor = MessageRef(id: m.id)
+            },
+            onTapQuotes: { id in
+                guard let m = repo.items.first(where: { $0.rowId == id }) else { return }
+                quotesFor = MessageRef(id: m.id)
             },
             onTapContactCard: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }), let card = m.contactCard else { return }

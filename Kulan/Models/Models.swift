@@ -375,6 +375,10 @@ struct Message: Identifiable, Equatable, Codable {
     var isRestrictRequest = false
     /// A channel post's views (2026-10-28), counted by the server (functions-groups channelViews).
     var views: Int = 0
+    /// How many times a channel post was quoted and sent (owner 2026-11-06), counted by the server
+    /// (noteQuoteSent), and up to three photos of public channels that quoted it ("" = no photo).
+    var quoteCount: Int = 0
+    var quoteFaces: [String] = []
     /// A channel post's reactions as counts only (2026-10-29): who picked what is never on the post.
     var reactionCounts: [String: Int] = [:]
     var edited: Bool = false               // text was edited after sending
@@ -847,6 +851,8 @@ struct Message: Identifiable, Equatable, Codable {
         self.isRestrictRequest = data["restrictRequest"] as? Bool ?? false
         self.edited = data["edited"] as? Bool ?? false
         self.views = max(0, (data["views"] as? NSNumber)?.intValue ?? 0)
+        self.quoteCount = max(0, (data["quoteCount"] as? NSNumber)?.intValue ?? 0)
+        self.quoteFaces = Array(((data["quoteFaces"] as? [Any]) ?? []).compactMap { $0 as? String }.prefix(3))
         self.reactionCounts = ((data["reactionCounts"] as? [String: Any]) ?? [:])
             .compactMapValues { ($0 as? NSNumber)?.intValue }.filter { $0.value > 0 }
         self.deleted = data["deleted"] as? Bool ?? false
