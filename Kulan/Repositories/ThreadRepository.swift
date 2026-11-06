@@ -1256,6 +1256,15 @@ final class ThreadRepository {
     private var listenerRetries = 0
     /// The message listener ended in an error and no snapshot has arrived since.
     private var listenerFailed = false
+    /// The load failed and there is nothing to show. The chat says so with a Try Again button
+    /// instead of looking like an empty new chat. Rows from the cache, if any, win.
+    var loadFailed: Bool { listenerFailed && messages.isEmpty && !moderationLocked && !previewOnly && !lockedGuest }
+    /// Try Again on the failed-load panel: skip the backoff wait and attach now.
+    func retryLoad() {
+        retryWork?.cancel()
+        listenerRetries = 0
+        start()
+    }
     private var recoveredObserver: NSObjectProtocol?
     /// 2026-10-20 (owner): `FirestoreHub.swapped`, the Firestore client was replaced by a fresh one.
     private var swappedObserver: NSObjectProtocol?

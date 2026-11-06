@@ -1216,7 +1216,18 @@ struct ThreadView: View {
         // welcome card instead (owner 2026-10-19). Only while the chat is truly empty: once it holds
         // even system lines the card is a row above them (`groupHistoryCard`), because centred over
         // the list it covered them (owner 2026-10-26, "badges text is going under the card").
-        if repo.didInitialLoad, isGroup, !notAMember, !preview, let conv = conversation,
+        if repo.loadFailed, repo.items.isEmpty, !preview {
+            // The load failed: say so, never pass it off as an empty new chat.
+            VStack(spacing: 8) {
+                Text("Couldn't load messages")
+                    .font(.subheadline.weight(.semibold))
+                Text("Check your connection and try again.")
+                Button("Try Again") { repo.retryLoad() }
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.top, 2)
+            }
+            .modifier(EmptyChatNotice())
+        } else if repo.didInitialLoad, isGroup, !notAMember, !preview, let conv = conversation,
            repo.items.isEmpty, !conv.isChannel {
             GroupWelcomeCard(conv: conv, me: me, dark: dark)
         } else if repo.didInitialLoad, repo.items.isEmpty, !notAMember, !isGroup {
