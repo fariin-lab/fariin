@@ -184,6 +184,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         // Square at rest (the panel's look); its top corners round only while it is out for search.
         cardView.layer.cornerCurve = .continuous
         cardView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        cardView.layer.cornerRadius = Self.restRadius
         cardView.clipsToBounds = true
         addSubview(cardView)
         backdrop.contentView.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.65)
@@ -593,7 +594,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         UIView.animate(withDuration: 0.36, delay: 0, usingSpringWithDamping: 0.92, initialSpringVelocity: 0,
                        options: [.beginFromCurrentState, .allowUserInteraction]) {
             self.cardView.frame = collapsedFrame
-            self.cardView.layer.cornerRadius = 0
+            self.cardView.layer.cornerRadius = Self.restRadius
             self.layoutCardSubviews()
             self.cardView.layoutIfNeeded()
         } completion: { [weak self] _ in
@@ -627,11 +628,19 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         }
     }
 
+    /// ⛔ THE CARD'S TOP CORNERS AT REST FOLLOW THE SYSTEM KEYBOARD'S (owner 2026-11-06: scrolled GIFs
+    /// showed square past the panel's rounded top corners). The keyboard behind this panel is rounded on
+    /// iOS 26, so the card clips to the same curve; older systems keep the square panel.
+    static var restRadius: CGFloat {
+        if #available(iOS 26, *) { return 26 }
+        return 0
+    }
+
     /// Back in the panel, square, keyboard background, no extra window or overlay left behind.
     private func putCardHome() {
         UIView.performWithoutAnimation {
             backdrop.isHidden = true
-            cardView.layer.cornerRadius = 0
+            cardView.layer.cornerRadius = Self.restRadius
             if cardView.superview !== self { addSubview(cardView) }
             cardView.frame = bounds
             layoutCardSubviews()
@@ -810,7 +819,7 @@ final class StickerKeyboardView: UIInputView, UICollectionViewDataSource, UIColl
         let f = restCardFrame
         let frac = liftRange > 0 ? min(1, l / liftRange) : 0
         cardView.frame = CGRect(x: f.minX, y: f.minY - l, width: f.width, height: f.height + l)
-        cardView.layer.cornerRadius = 10 * frac
+        cardView.layer.cornerRadius = max(Self.restRadius, 10 * frac)
         expandDim.alpha = frac
         expandDim.frame.size.height = max(0, f.minY - chromeH - l)
         layoutCardSubviews()
