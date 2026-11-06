@@ -2104,11 +2104,10 @@ enum MessageRowLayout {
             // A short "Quote" tag with its icon at the header's right end (owner 2026-11-06).
             let tagColor = textColor.withAlphaComponent(0.55)
             let tagAttr = NSMutableAttributedString()
-            if let icon = UIImage(systemName: "quote.opening",
-                                  withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold))?
-                .withTintColor(tagColor, renderingMode: .alwaysOriginal) {
+            // The owner's quote icon (asset ic_quote, 2026-11-06), 12pt, in the tag's colour.
+            if let icon = UIImage(named: "ic_quote")?.withTintColor(tagColor, renderingMode: .alwaysOriginal) {
                 let a = NSTextAttachment(image: icon)
-                a.bounds = CGRect(x: 0, y: -1, width: icon.size.width, height: icon.size.height)
+                a.bounds = CGRect(x: 0, y: -2, width: 12, height: 12)
                 tagAttr.append(NSAttributedString(attachment: a))
                 tagAttr.append(NSAttributedString(string: " "))
             }

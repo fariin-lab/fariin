@@ -4290,7 +4290,7 @@ struct ThreadView: View {
             })
             // Quote a channel post into a chat of mine, with my words (owner 2026-11-06).
             if conversation?.isChannel == true {
-                items.append(UIAction(title: "Quote", image: UIImage(systemName: "quote.bubble")) { _ in
+                items.append(UIAction(title: "Quote", image: UIImage(named: "ic_quote")) { _ in
                     forwardIsQuote = true
                     forwardTarget = m
                 })
@@ -4442,7 +4442,7 @@ struct ThreadView: View {
             })
             // Quote a channel post into a chat of mine, with my words (owner 2026-11-06).
             if conversation?.isChannel == true {
-                out.append(CMAction(title: "Quote", icon: "quote.bubble") {
+                out.append(CMAction(title: "Quote", icon: "ic_quote") {
                     guard let live = repo.items.first(where: { $0.id == m.id }), canForward(live) else {
                         showJumpToast("That message is no longer available")
                         return

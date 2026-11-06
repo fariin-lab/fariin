@@ -87,12 +87,12 @@ struct QuotesPage: View {
 
     @ViewBuilder private var overlay: some View {
         if failed {
-            ContentUnavailableView("Couldn't load quotes", systemImage: "quote.opening",
+            ContentUnavailableView("Couldn't load quotes", image: "ic_quote",
                                    description: Text("Check your connection and try again."))
         } else if !loaded {
             ProgressView()
         } else if items.isEmpty && hidden == 0 {
-            ContentUnavailableView("No quotes yet", systemImage: "quote.opening")
+            ContentUnavailableView("No quotes yet", image: "ic_quote")
         }
     }
 
