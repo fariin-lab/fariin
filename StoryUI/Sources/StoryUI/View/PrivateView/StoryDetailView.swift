@@ -1569,7 +1569,16 @@ private extension StoryDetailView {
     /// story that ran on while a browser covered it would be finished by the time anybody came back.
     private func open(_ url: URL) {
         armedTapID = nil
-        UIApplication.shared.open(url)
+        // ⛔ THROUGH THE HOST FIRST (owner 2026-11-06: a channel or group link card in a story, View
+        // Link or Join, went to Safari). The host opens our own links in the app (the channel, the
+        // group, the chat) and anything else in its in-app browser with its own pause, so the arming
+        // pause is let go here to keep the two balanced.
+        if let host = StoryLinkOpener.handler {
+            NotificationCenter.default.post(name: .resumeStory, object: nil)
+            host(url)
+        } else {
+            UIApplication.shared.open(url)
+        }
     }
 
     /// The host opens the profile (a sheet over this story), so the story stays paused, exactly as
