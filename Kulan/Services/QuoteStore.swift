@@ -137,7 +137,13 @@ struct QuoteCard: Equatable, Codable {
 
     /// Sign-out (SessionWipe): nothing of this account's cards outlives it, in memory or on disk.
     func reset() {
-        if let url = Self.fileURL() { try? FileManager.default.removeItem(at: url) }
+        // Every account's card file (2026-11-06 audit: sign-out runs after Auth.signOut, so there is no
+        // uid left to name this account's file by).
+        if let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first,
+           let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) {
+            for n in names where n.hasPrefix("quoteCards.") { try? FileManager.default.removeItem(at: dir.appendingPathComponent(n)) }
+        }
+        for t in pending.values { t.cancel() }
         cards.removeAll(); lastUsed.removeAll(); fetchedAt.removeAll(); queued.removeAll()
         pending.removeAll(); done.removeAll()
     }
@@ -216,7 +222,11 @@ struct QuoteCard: Equatable, Codable {
     func made(_ token: String) async throws -> Made {
         if let d = done[token] { return Made(qid: d.qid, card: d.card, picture: nil) }
         guard let t = pending[token] else { throw NSError(domain: "Quote", code: 2) }
-        let m = try await t.value
+        let m: Made
+        do { m = try await t.value } catch {
+            pending[token] = nil   // a failed attempt is not asked again (a retry starts a new one)
+            throw error
+        }
         if pending[token] != nil {
             pending[token] = nil
             if done.count > 20 { done.removeAll() }

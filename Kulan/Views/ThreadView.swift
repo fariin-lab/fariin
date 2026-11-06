@@ -123,6 +123,7 @@ struct ThreadView: View {
     @State private var pollResultsFor: MessageRef?
     /// A channel post whose Quotes page is open (owner 2026-11-06).
     @State private var quotesFor: MessageRef?
+    @State private var quotesStartOnQuotes = false
     struct MessageRef: Identifiable { let id: String }
     @HeapState private var replyingTo: Message? = nil
     /// A channel post quoted into this chat, waiting above the composer for my words (owner 2026-11-06).
@@ -2418,14 +2419,7 @@ struct ThreadView: View {
             goToMessageJump(p.messageId)
         }
         .sheet(item: $quotesFor) { t in
-            PostThreadSheet(cid: cid, mid: t.id, post: repo.items.first(where: { $0.id == t.id }),
-                       sourceTitle: conversation?.title ?? "Channel", sourcePhoto: conversation?.avatarUrl,
-                       sourceVerified: conversation?.groupVerified == true,
-                       picture: { await quotesPicture(t.id) }) { item in
-                quotesFor = nil
-                // After the sheet is down, so the push is not lost under it.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { openQuoteSource(item) }
-            }
+            postThreadSheet(t.id)   // a function: body's chain is at the type-checker's limit
         }
         .sheet(item: $pollResultsFor) { t in
             if let m = repo.items.first(where: { $0.id == t.id }), let poll = m.poll {
@@ -3927,7 +3921,7 @@ struct ThreadView: View {
         // A channel's reactions (2026-10-29): my picks live apart from the posts, so they key too.
         let chanRx = conversation?.isChannel == true
         let chanTok = chanRx ? "\(ChannelFollows.shared.myReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.pendingReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.countOverrides[cid]?.count ?? 0):\(channelReactOn)\(channelCanReact)" : "-"
-        let key = "\(chanTok)|\(CallService.shared.calleeRinging)|\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(groupCardTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)|\(liveRequest ?? "-")"   // 2026-09-24 feature-audit: edit clock
+        let key = "\(chanTok)|\(CallService.shared.calleeRinging)|\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(groupCardTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)|\(liveRequest ?? "-")|\(conversation?.repliesOff == true)"   // 2026-09-24 feature-audit: edit clock; replies switch 2026-11-06
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
@@ -4151,6 +4145,7 @@ struct ThreadView: View {
         // viewedOnceTick (the view-once pill), expiryTick (the countdown).
         add("\(storiesRepo.storiesVersion)"); add("\(storiesRepo.didLoad)"); add("\(hiddenTick)")
         add("\(viewedOnceTick)")
+        add("\(conversation?.repliesOff == true)")   // the channel's replies switch moves every post's bar (2026-11-06)
         add("\(groupCardTick)")   // a group invite card's live answer (`LiveGroupCard`)
         add("\(repo.expiryTick)")
         // An edit waiting for the server draws the sending clock; the chat's timer draws its icon.
@@ -4459,7 +4454,7 @@ struct ThreadView: View {
             }
             // Replies off or on for this post, for the channel's admins (owner 2026-11-06; the server
             // checks the Change info right and refuses otherwise).
-            if conversation?.isChannel == true, conversation?.createdBy == me || conversation?.admins.contains(me) == true {
+            if conversation?.isChannel == true, mayChangeChannelInfo {
                 let off = m.repliesOff
                 out.append(CMAction(title: off ? "Turn On Replies" : "Turn Off Replies", icon: off ? "bubble.left" : "nosign") {
                     setPostReplies(m.id, off: !off)
@@ -4644,6 +4639,15 @@ struct ThreadView: View {
     /// answer decides; a channel this reader may not see, or a deleted post, is said, not opened.
     /// A row of the Quotes page: that channel's quote. My own chat scrolls to it; a channel I have
     /// opens at it; a public channel I don't follow opens its public page, as a quote card does.
+    /// The owner, or an admin with Change info (no rights entry = a full admin), as the server checks.
+    private var mayChangeChannelInfo: Bool {
+        guard let c = conversation else { return false }
+        if c.createdBy == me { return true }
+        guard c.admins.contains(me) else { return false }
+        guard let r = c.adminRights[me] else { return true }
+        return r.contains("changeInfo")
+    }
+
     private func setPostReplies(_ mid: String, off: Bool) {
         let cid = self.cid
         Task {
@@ -4654,6 +4658,19 @@ struct ThreadView: View {
                                  : "Couldn't change replies")
             }
         }
+    }
+
+    private func postThreadSheet(_ mid: String) -> PostThreadSheet {
+        PostThreadSheet(cid: cid, mid: mid, post: repo.items.first(where: { $0.id == mid }),
+                        sourceTitle: conversation?.title ?? "Channel", sourcePhoto: conversation?.avatarUrl,
+                        sourceVerified: conversation?.groupVerified == true,
+                        picture: { await quotesPicture(mid) },
+                        onOpen: { item in
+                            quotesFor = nil
+                            // After the sheet is down, so the push is not lost under it.
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { openQuoteSource(item) }
+                        },
+                        startTab: quotesStartOnQuotes ? .quotes : .replies)
     }
 
     /// A reply alert's post (owner 2026-11-06): its Replies open once this channel is on screen.
@@ -5165,6 +5182,9 @@ struct ThreadView: View {
             },
             onTapQuotes: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }) else { return }
+                // A bar showing only quotes (replies off, none written) opens on Quotes (2026-11-06 audit).
+                let repliesOff = m.repliesOff || conversation?.repliesOff == true
+                quotesStartOnQuotes = m.replyCount == 0 && repliesOff
                 quotesFor = MessageRef(id: m.id)
             },
             onTapContactCard: { id in
@@ -7467,7 +7487,7 @@ struct ThreadView: View {
     /// card (the quote was seeded when it was made), then the message goes out carrying only the
     /// quote's id. A send that fails takes the bubble back and puts the quote and the words back in
     /// the composer, rather than leaving a Resend that would go without its quote.
-    private func sendQuote(_ q: QuoteDraft, text: String) {
+    private func sendQuote(_ q: QuoteDraft, text: String, composerCleared: Bool = false) {
         if q.qid.isEmpty, !q.token.isEmpty {
             // The composer clears NOW (2026-11-06 audit: a second tap while the quote was still being
             // made sent it twice, and words typed meanwhile were wiped); a refusal puts both back.
@@ -7475,7 +7495,11 @@ struct ThreadView: View {
             withAnimation(.easeInOut(duration: 0.2)) { quoting = nil; replyingTo = nil }
             Task { @MainActor in
                 guard let made = try? await QuoteStore.shared.made(q.token) else {
-                    if quoting == nil { quoting = q }
+                    // The failed attempt is dropped; Send again starts a fresh one (2026-11-06 audit:
+                    // the same failed token was reused and every retry failed at once).
+                    var again = q
+                    again.token = QuoteStore.shared.start(cid: q.card.cid, mid: q.card.mid) { nil }
+                    if quoting == nil { quoting = again; resolveQuote(again.token) }
                     if input.isEmpty { input = text }
                     showJumpToast("Couldn't quote this post. Try again.")
                     return
@@ -7483,16 +7507,20 @@ struct ThreadView: View {
                 var ready = q
                 ready.qid = made.qid
                 ready.card = made.card
-                sendQuote(ready, text: text)
+                sendQuote(ready, text: text, composerCleared: true)
             }
             return
         }
         sendTick &+= 1
         lastSendAt = Date()
         let mentions = resolveMentions(in: text).filter { groupMembers.contains($0) }
-        mentionMap = [:]
-        input = ""
-        withAnimation(.easeInOut(duration: 0.2)) { quoting = nil; replyingTo = nil }
+        // The deferred pass (the quote was still being made) already cleared the composer; whatever was
+        // typed or started since then is left alone (2026-11-06 audit).
+        if !composerCleared {
+            mentionMap = [:]
+            input = ""
+            withAnimation(.easeInOut(duration: 0.2)) { quoting = nil; replyingTo = nil }
+        }
         typingSent = false
         let clientId = UUID().uuidString
         let tapTs = Date().timeIntervalSince1970 * 1000

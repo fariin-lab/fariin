@@ -96,6 +96,12 @@ struct PostReply: Identifiable, Equatable {
     private var headListener: ListenerRegistration?
     private var lastRev = -1
     private var refreshTask: Task<Void, Never>?
+    /// Only the newest refresh may land (2026-11-06 audit: an older one finishing last flickered rows).
+    private var refreshGen = 0
+    /// My replies confirmed lately: a refresh that left before they were saved must not drop them.
+    private var recentMine: [String: Date] = [:]
+    /// Is the end of the list on screen? New replies then scroll in instead of counting in the pill.
+    var atEnd = true
 
     /// The last first page per post, for an instant paint when the sheet opens again (this launch).
     private static var cache: [String: [PostReply]] = [:]
@@ -140,7 +146,7 @@ struct PostReply: Identifiable, Equatable {
         // Several changes close together become one fetch (a busy thread).
         refreshTask?.cancel()
         refreshTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard !Task.isCancelled else { return }
             await self?.refreshNewest()
         }
@@ -173,9 +179,11 @@ struct PostReply: Identifiable, Equatable {
             let d = res.data as? [String: Any] ?? [:]
             applyFlags(d)
             let page = Array(rows(d).reversed())
-            olderCursor = d["next"] as? String ?? ""
-            let local = threads.filter { $0.send != .sent }
-            threads = page + local.filter { l in !page.contains { $0.id == l.id } }
+            let ids = Set(page.map(\.id))
+            if threads.isEmpty || olderCursor.isEmpty { olderCursor = d["next"] as? String ?? "" }
+            // Pages loaded further up stay (a Try Again or a switch flip used to drop them).
+            let kept = threads.filter { !ids.contains($0.id) && ($0.send != .sent || (page.first.map { f in $0.at < f.at } ?? true)) }
+            threads = (kept + page).sorted { $0.at < $1.at }
             if lastRev < 0 { lastRev = (d["rev"] as? NSNumber)?.intValue ?? 0 }
             loaded = true
             failed = false
@@ -186,33 +194,57 @@ struct PostReply: Identifiable, Equatable {
         }
     }
 
-    /// The newest page again, merged by id: new ones added at the end, changed ones updated, ones
-    /// gone from inside the page's time range removed. Open threads' first pages too.
+    /// The newest page again, merged by id: new ones added at the end, changed ones updated, ones gone
+    /// from inside the page's time range removed. Only the newest refresh lands; my own replies saved
+    /// in the last seconds are kept; a page that does not reach back to what is shown replaces the
+    /// list (and the "earlier" cursor), so no gap is left between them (2026-11-06 audits).
     func refreshNewest() async {
+        refreshGen &+= 1
+        let gen = refreshGen
         guard let res = try? await fn.httpsCallable("getReplies").call(args()) else { return }
+        guard gen == refreshGen else { return }
         let d = res.data as? [String: Any] ?? [:]
         applyFlags(d)
         let page = Array(rows(d).reversed())
+        let next = d["next"] as? String ?? ""
+        let now = Date()
+        recentMine = recentMine.filter { now.timeIntervalSince($0.value) < 8 }
+        let keepMine: (PostReply) -> Bool = { $0.send != .sent || self.recentMine[$0.id] != nil }
         guard let oldestShown = page.first?.at else {
-            threads.removeAll { $0.send == .sent }
+            // Nothing visible on the newest page: only rows newer than what that page covered can go.
+            if next.isEmpty { threads.removeAll { !keepMine($0) } }
             return
         }
         let ids = Set(page.map(\.id))
-        var next = threads.filter { $0.send != .sent || $0.at < oldestShown || ids.contains($0.id) }
+        let newestKnown = threads.filter { $0.send == .sent }.map(\.at).max()
+        let overlaps = newestKnown.map { $0 >= oldestShown } ?? true
+        var list: [PostReply]
+        if overlaps {
+            list = threads.filter { keepMine($0) || $0.at < oldestShown || ids.contains($0.id) }
+        } else {
+            // More arrived than one page: start again from this page, older ones load on scroll.
+            list = threads.filter(keepMine)
+            olderCursor = next
+        }
         var added = 0
         for r in page {
-            if let i = next.firstIndex(where: { $0.id == r.id }) {
-                if next[i].send == .sent { next[i] = r } else { next[i] = r }   // my pending one confirmed
-            } else {
-                next.append(r)
-                if !r.mine { added += 1 }
-            }
+            if let i = list.firstIndex(where: { $0.id == r.id }) { list[i] = r }
+            else { list.append(r); if !r.mine { added += 1 } }
         }
-        next.sort { $0.at < $1.at }
-        threads = next
-        if added > 0 { unseenNew += added }
+        list.sort { $0.at < $1.at }
+        threads = list
+        if added > 0 {
+            if atEnd { scrollTarget = list.last?.id } else { unseenNew += added }
+        }
         Self.cache[mid] = page
-        for t in openThreads.prefix(5) { await loadAnswers(t, more: false) }
+        // Open threads whose answer count moved, together.
+        let changed = openThreads.filter { t in
+            guard let r = page.first(where: { $0.id == t }) else { return false }
+            return r.answers != (answers[t]?.filter { $0.send == .sent }.count ?? -1)
+        }
+        await withTaskGroup(of: Void.self) { g in
+            for t in changed.prefix(5) { g.addTask { await self.loadAnswers(t, more: false) } }
+        }
     }
 
     func loadOlder() async {
@@ -266,9 +298,13 @@ struct PostReply: Identifiable, Equatable {
             do {
                 let res = try await fn.httpsCallable("addReply").call(args(a))
                 guard let d = (res.data as? [String: Any])?["reply"] as? [String: Any], let saved = PostReply(d) else { return }
+                let firstTime = clientId == nil
                 replace(id, with: saved, thread: thread)
-                if let t = thread, let i = threads.firstIndex(where: { $0.id == t }) { threads[i].answers += 1 }
-                count += 1
+                recentMine[id] = Date()
+                if firstTime {
+                    if let t = thread, let i = threads.firstIndex(where: { $0.id == t }) { threads[i].answers += 1 }
+                    count += 1
+                }
             } catch {
                 mark(id, thread: thread, .failed)
             }
@@ -345,10 +381,12 @@ struct PostReply: Identifiable, Equatable {
         var a: [String: Any] = [:]
         if let t = thread { a["rid"] = t; a["aid"] = r.id } else { a["rid"] = r.id }
         do {
-            _ = try await fn.httpsCallable("deleteReply").call(args(a))
-            count = max(0, count - (thread == nil ? 1 + r.answers : 1))
+            let res = try await fn.httpsCallable("deleteReply").call(args(a))
+            let removed = ((res.data as? [String: Any])?["removed"] as? NSNumber)?.intValue ?? 0
+            count = max(0, count - removed)
         } catch {
             deletedIds.remove(r.id)
+            if let t = thread, let i = threads.firstIndex(where: { $0.id == t }) { threads[i].answers += 1 }
             // Only the one row comes back, never a whole saved list over newer arrivals.
             if let t = thread, let before = answersBefore, let row = before.first(where: { $0.id == r.id }) {
                 answers[t, default: []].append(row)
@@ -448,7 +486,7 @@ struct PostThreadSheet: View {
                 }
             }
             .toolbar {
-                if model.staff {
+                if model.may.settings || model.may.del {
                     ToolbarItem(placement: .topBarLeading) { adminMenu }
                 }
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
@@ -456,20 +494,28 @@ struct PostThreadSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .overlay(alignment: .top) { toastView }
         }
-        .onChange(of: tab) { _, t in if t == .quotes { quotesShown = true } }
+        .onChange(of: tab) { _, t in
+            if t == .quotes {
+                quotesShown = true
+                // The field is on the Replies tab: the keyboard goes with it (2026-11-06 audit).
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
+        }
         .onAppear { model.start() }
         .onDisappear { model.stop() }
-        .confirmationDialog("Report this reply?", isPresented: reportingShown, titleVisibility: .visible) {
+        // `presenting:` hands each button the item itself (2026-11-06 audit: reading the state in the
+        // action could find it already cleared by the dialog closing).
+        .confirmationDialog("Report this reply?", isPresented: reportingShown, titleVisibility: .visible, presenting: reporting) { item in
             ForEach(Self.reasons, id: \.0) { key, label in
-                Button(label) { if let (r, t) = reporting { Task { show(await model.report(r, thread: t, reason: key) ? "Thanks. We'll take a look." : "Couldn't send the report.") } } }
+                Button(label) { Task { show(await model.report(item.0, thread: item.1, reason: key) ? "Thanks. We'll take a look." : "Couldn't send the report.") } }
             }
             Button("Cancel", role: .cancel) {}
         }
-        .confirmationDialog("Remove this person?", isPresented: banningShown, titleVisibility: .visible) {
-            Button("Delete and Ban", role: .destructive) { if let (r, t) = banning { Task { show(await model.ban(r, thread: t, all: false) ? "Removed and banned." : "Couldn't do that.") } } }
-            Button("Ban and Delete All Their Replies", role: .destructive) { if let (r, t) = banning { Task { show(await model.ban(r, thread: t, all: true) ? "Banned. Their replies are gone." : "Couldn't do that.") } } }
+        .confirmationDialog("Remove this person?", isPresented: banningShown, titleVisibility: .visible, presenting: banning) { item in
+            Button("Delete and Ban", role: .destructive) { Task { show(await model.ban(item.0, thread: item.1, all: false) ? "Removed and banned." : "Couldn't do that.") } }
+            Button("Ban and Delete All Their Replies", role: .destructive) { Task { show(await model.ban(item.0, thread: item.1, all: true) ? "Banned. Their replies are gone." : "Couldn't do that.") } }
             Button("Cancel", role: .cancel) {}
-        } message: {
+        } message: { _ in
             Text("They leave the channel and can't come back or reply.")
         }
     }
@@ -484,7 +530,10 @@ struct PostThreadSheet: View {
 
     private func show(_ text: String) {
         withAnimation { toast = text }
-        Task { try? await Task.sleep(nanoseconds: 2_200_000_000); withAnimation { toast = nil } }
+        Task {
+            try? await Task.sleep(nanoseconds: 2_200_000_000)
+            if toast == text { withAnimation { toast = nil } }
+        }
     }
 
     @ViewBuilder private var toastView: some View {
@@ -559,6 +608,8 @@ struct PostThreadSheet: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(items) { item in itemView(item).id(item.id) }
                         Color.clear.frame(height: 6).id("end")
+                            .onAppear { model.atEnd = true; model.unseenNew = 0 }
+                            .onDisappear { model.atEnd = false }
                     }
                     .padding(.top, 4)
                 }
@@ -569,8 +620,12 @@ struct PostThreadSheet: View {
                 .onChange(of: model.scrollTarget) { _, id in
                     guard let id else { return }
                     let key = model.threads.contains(where: { $0.id == id }) ? "t-\(id)" : "a-\(id)"
-                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(key, anchor: .bottom) }
                     model.scrollTarget = nil
+                    // After the new row is laid out, not in the same pass that added it.
+                    Task { @MainActor in
+                        await Task.yield()
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(key, anchor: .bottom) }
+                    }
                 }
             }
             ReplyComposer(off: model.off, loaded: model.loaded, answering: $answering) { text, thread in
@@ -605,7 +660,6 @@ struct PostThreadSheet: View {
                     .frame(maxWidth: .infinity).padding(.vertical, 10)
             }
             .buttonStyle(.plain)
-            .onAppear { Task { await model.loadOlder() } }
         case .thread(let r):
             ReplyRow(reply: r, small: false, actions: actions(r, thread: nil))
         case .answer(let r, let t):
@@ -635,7 +689,7 @@ struct PostThreadSheet: View {
             reply: model.off ? nil : { answering = (thread ?? r.id, r.name) },
             delete: r.canDelete ? { Task { await model.delete(r, thread: thread) } } : nil,
             report: r.mine ? nil : { reporting = (r, thread) },
-            ban: (model.may.ban && !r.mine && r.uid != nil) ? { banning = (r, thread) } : nil,
+            ban: (model.may.ban && !r.mine) ? { banning = (r, thread) } : nil,
             retry: r.send == .failed ? { model.retry(r, thread: thread) } : nil,
             discard: r.send == .failed ? { model.discard(r, thread: thread) } : nil)
     }
@@ -669,9 +723,12 @@ struct PostThreadSheet: View {
                           systemImage: model.postOff ? "bubble.left" : "nosign")
                 }
             }
-            Menu("Reply Alerts") {
-                Button("On") { Task { await model.setAlerts(on: true); show("Reply alerts on.") } }
-                Button("Off") { Task { await model.setAlerts(on: false); show("Reply alerts off.") } }
+            // The summaries go to admins who can delete messages; others have nothing to switch.
+            if model.may.del {
+                Menu("Reply Alerts") {
+                    Button("On") { Task { await model.setAlerts(on: true); show("Reply alerts on.") } }
+                    Button("Off") { Task { await model.setAlerts(on: false); show("Reply alerts off.") } }
+                }
             }
         } label: {
             Image(systemName: "ellipsis").accessibilityLabel("Reply settings")
@@ -726,9 +783,13 @@ private struct ReplyRow: View {
         .padding(.horizontal, 16).padding(.vertical, 6)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(reply.name), \(reply.text), \(Self.spokenAge(reply.at))\(reply.likes > 0 ? ", \(reply.likes) likes" : "")")
-        .accessibilityAction(named: reply.liked ? "Unlike" : "Like") { actions.like() }
-        .accessibilityAction(named: "Reply") { actions.reply?() }
-        .accessibilityAction(named: "Delete") { actions.delete?() }
+        .accessibilityActions {
+            if reply.send == .sent { Button(reply.liked ? "Unlike" : "Like") { actions.like() } }
+            if let r = actions.reply { Button("Reply", action: r) }
+            if let r = actions.retry { Button("Retry", action: r) }
+            if let d = actions.delete { Button("Delete", action: d) }
+            if let r = actions.report { Button("Report", action: r) }
+        }
     }
 
     @ViewBuilder private var footer: some View {
@@ -782,8 +843,9 @@ private struct ReplyRow: View {
         return "\(Int(s / (7 * 86_400)))w"
     }
 
+    private static let spoken = RelativeDateTimeFormatter()
     static func spokenAge(_ d: Date) -> String {
-        RelativeDateTimeFormatter().localizedString(for: d, relativeTo: Date())
+        spoken.localizedString(for: d, relativeTo: Date())
     }
 }
 
@@ -828,7 +890,7 @@ private struct ReplyComposer: View {
                     .disabled(!loaded || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 .padding(.horizontal, 18).padding(.vertical, 12)
-                .background(Color(.secondarySystemBackground), in: Capsule())
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                 .padding(.horizontal, 12)
             }
             .padding(.vertical, 8)
@@ -858,7 +920,8 @@ private struct RepliesSkeleton: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(.systemBackground))
         .opacity(dim ? 0.45 : 1)
-        .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { dim = true } }
+        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: dim)
+        .onAppear { dim = true }
         .accessibilityLabel("Loading replies")
     }
     private var fill: Color { Color.secondary.opacity(0.16) }

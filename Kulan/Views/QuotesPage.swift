@@ -86,10 +86,14 @@ struct QuotesPage: View {
                             Divider().padding(.leading, 16 + indent)
                         }
                         if !next.isEmpty {
-                            Text(loadingMore ? "Loading…" : "Show more")
-                                .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity).padding(.vertical, 12)
-                                .onAppear { Task { await loadMore() } }
+                            // A button as well as the auto-load, so a failed or empty page can be asked again.
+                            Button { Task { await loadMore() } } label: {
+                                Text(loadingMore ? "Loading…" : "Show more")
+                                    .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity).padding(.vertical, 12)
+                            }
+                            .buttonStyle(.plain)
+                            .onAppear { Task { await loadMore() } }
                         }
                         if hidden > 0 {
                             Label("\(hidden.formatted()) in private chats and groups", systemImage: "lock.fill")
@@ -181,7 +185,7 @@ struct QuotesPage: View {
         }
         .padding(9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))   // seen in dark mode too
     }
 
     @ViewBuilder private var cardPicture: some View {

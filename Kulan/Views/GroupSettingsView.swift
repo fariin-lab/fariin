@@ -119,6 +119,8 @@ struct GroupSettingsView: View {
 
     // Sign Posts is gone (owner 2026-10-29: "remove this feature"): a post always comes from the
     // channel. What is left here is Reactions.
+    @State private var repliesOverride: Bool?
+
     @ViewBuilder private var channelPostsSection: some View {
         if canEdit {
             Section {
@@ -141,14 +143,19 @@ struct GroupSettingsView: View {
                 }
                 // Replies under posts, for the whole channel (owner 2026-11-06). Off = read-only:
                 // replies already there stay; no new ones. The Change info right (server-checked).
+                // Shows the new state at once and holds it while the server answers; a refusal puts it
+                // back (2026-11-06 audit: it sprang back, then flipped again when the doc arrived).
                 Toggle("Replies", isOn: Binding(
-                    get: { conv?.repliesOff != true },
+                    get: { repliesOverride ?? (conv?.repliesOff != true) },
                     set: { on in
+                        repliesOverride = on
                         Task {
-                            _ = try? await Functions.functions(region: "me-central1").httpsCallable("setReplies")
-                                .call(["cid": cid, "off": !on] as [String: Any])
+                            let ok = (try? await Functions.functions(region: "me-central1").httpsCallable("setReplies")
+                                .call(["cid": cid, "off": !on] as [String: Any])) != nil
+                            await MainActor.run { if !ok { repliesOverride = nil } }
                         }
                     }))
+                    .onChange(of: conv?.repliesOff) { _, _ in repliesOverride = nil }
             } footer: {
                 Text("When off, followers can read replies already posted but can't add new ones.")
             }

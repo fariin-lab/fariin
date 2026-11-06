@@ -357,7 +357,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
             let kind = info["kind"] as? String ?? ""
             let mid = info["mid"] as? String ?? ""
             await MainActor.run {
-                if kind == "postReplies" || kind == "replyAnswer", !mid.isEmpty, !mid.contains("/") {
+                // Not when that channel is already on screen: it would not re-open, and the Replies
+                // would pop up later by surprise the next time it does (2026-11-06 audit).
+                if kind == "postReplies" || kind == "replyAnswer", !mid.isEmpty, !mid.contains("/"),
+                   AppRouter.shared.activeChatId != cid {
                     AppRouter.shared.pendingRepliesPost = (cid, mid)
                 }
                 AppRouter.shared.pendingChatId = cid
@@ -384,6 +387,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         do {
             let snap = try await FirestoreHub.db.collection("conversations").document(cid).getDocument()
             guard snap.exists, let users = snap.data()?["users"] as? [String] else { return false }
+            // A public channel opens for anyone (2026-11-06 audit: a reply alert to someone who replied
+            // without following was dropped).
+            if snap.data()?["channel"] as? Bool == true, snap.data()?["isPublic"] as? Bool == true { return true }
             return users.contains(me)
         } catch {
             // 7 = permissionDenied, by wire number (see StoriesService on why not the SDK enum).
