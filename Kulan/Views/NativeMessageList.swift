@@ -6323,6 +6323,32 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
+    /// ⛔ THE LIFTED BUBBLE KEEPS ITS COLOUR OVER A MOVING WALLPAPER (owner 2026-11-06: "with an
+    /// animated wallpaper, long-press and the bubble colour disappears"). There an incoming bubble is
+    /// a live system blur (`.material`), and a snapshot cannot carry a live blur: the copy came out
+    /// see-through over the menu's dimmed backdrop. The bubble's solid received colour goes behind
+    /// the copy, in the bubble's own place and corners, so the lifted bubble reads as a bubble.
+    /// ⚠️ IN A CONTAINER, UNDER THE SNAPSHOT: a snapshot view draws its picture beneath its own
+    /// subviews, so a colour added inside it would have covered the bubble.
+    private func withMaterialBacking(of cell: MessageRowCell, id: String, snap: UIView, frame: CGRect) -> UIView {
+        guard case .bubble(let b)? = rowModels[id]?.content, b.fill.isWallpaperBlur else { return snap }
+        let box = cell.previewBubble
+        let r = box.convert(box.bounds, to: nil).offsetBy(dx: -frame.minX, dy: -frame.minY)
+        let back = UIView(frame: r)
+        back.backgroundColor = BubblePalette.receivedFill
+        back.layer.cornerRadius = min(18, r.height / 2)
+        back.layer.cornerCurve = .continuous
+        back.isUserInteractionEnabled = false
+        back.autoresizingMask = [.flexibleWidth, .flexibleHeight]   // follows the overlay's resize
+        let holder = UIView(frame: CGRect(origin: .zero, size: snap.bounds.size))
+        holder.isUserInteractionEnabled = false
+        holder.addSubview(back)
+        snap.frame = holder.bounds
+        snap.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        holder.addSubview(snap)
+        return holder
+    }
+
     private func bubbleSource(at indexPath: IndexPath, id: String)
         -> (source: UIView, snapshot: UIView, frame: CGRect)? {
         guard let cell = collectionView.cellForItem(at: indexPath) else { return nil }
@@ -6347,13 +6373,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 live.frame = stickerFrame.offsetBy(dx: -frame.minX, dy: -frame.minY)
                 snap.addSubview(live)
                 addLiftOverlays(of: native, to: snap, frame: frame)
-                return (native.previewBubble, snap, frame)
+                return (native.previewBubble, withMaterialBacking(of: native, id: id, snap: snap, frame: frame), frame)
             }
             guard let snap = native.previewBubble.resizableSnapshotView(from: inBubble,
                                                                        afterScreenUpdates: false,
                                                                        withCapInsets: .zero) else { return nil }
             addLiftOverlays(of: native, to: snap, frame: frame)
-            return (native.previewBubble, snap, frame)
+            return (native.previewBubble, withMaterialBacking(of: native, id: id, snap: snap, frame: frame), frame)
         }
         // Hosted (SwiftUI) row: crop the row snapshot to the published bubble rect. The bubble draws
         // its own rounded corners over a clear row background, so the crop needs no masking. When no
