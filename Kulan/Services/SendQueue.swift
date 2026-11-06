@@ -218,6 +218,12 @@ enum SendQueue {
         save(map)
     }
 
+    /// How many messages are still waiting to go out. Log Out warns when this is not zero.
+    static var pendingCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return load().count
+    }
+
     /// Sign-out/delete: unsent plaintext from the old account must not be re-driven
     /// (or readable) under the next account.
     static func removeAll() {

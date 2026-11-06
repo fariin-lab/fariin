@@ -10,6 +10,17 @@ import FirebaseFirestore
 /// of the old documents.
 @MainActor
 enum SessionWipe {
+    /// What a sign-out would throw away that never left this phone: queued messages and drafts.
+    /// nil when there is nothing. Read BEFORE the wipe; Log Out and the session-ended notice say it.
+    static func unsentSummary() -> String? {
+        let unsent = SendQueue.pendingCount
+        let drafts = Drafts.shared.map.values.filter { !$0.isEmpty }.count
+        var parts: [String] = []
+        if unsent > 0 { parts.append(unsent == 1 ? "1 unsent message" : "\(unsent) unsent messages") }
+        if drafts > 0 { parts.append(drafts == 1 ? "1 draft" : "\(drafts) drafts") }
+        return parts.isEmpty ? nil : parts.joined(separator: " and ")
+    }
+
     /// What every sign-out does while it still has auth: stop pushes and call rings, drop this phone's
     /// row in Devices, go offline, end any call. ⛔ BOUNDED, 20 s (bug search 2026-11-01): Firestore
     /// writes never finish offline, so Log Out sat on "Signing Out..." for ever and the only way out

@@ -800,7 +800,12 @@ struct AccountSettingsView: View {
                 }
             }
         } message: {
-            Text("You'll need to log in again to use Fariin on this device.")
+            // Queued messages and drafts are wiped with the account: say so before the tap.
+            if let lost = SessionWipe.unsentSummary() {
+                Text("\(lost) on this phone will be lost. You'll need to log in again to use Fariin on this device.")
+            } else {
+                Text("You'll need to log in again to use Fariin on this device.")
+            }
         }
         // Deletion is a PAGE, not a one-tap alert: it names the account, spells out what's lost,
         // and re-verifies you first (an alert can't do the provider re-auth, and skipping it is

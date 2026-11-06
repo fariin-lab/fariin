@@ -33,6 +33,8 @@ struct RootView: View {
     // Someone signed this phone out from Settings › Devices on another phone.
     @ObservedObject private var devices = DeviceRegistry.shared
     @State private var showRevokedNotice = false
+    /// Unsent messages and drafts the remote sign-out wiped, read before the wipe (nil: none).
+    @State private var lostOnSignOut: String?
     // The session ended because the account was disabled (a suspension from the admin panel), not
     // because another device signed this one out. 2026-10-13.
     @State private var endedBySuspension = false
@@ -287,6 +289,7 @@ struct RootView: View {
             // Read before the teardown, which resets it.
             let overLimit = DeviceRegistry.shared.refusedForLimit
             let newPhone = DeviceRegistry.shared.replacedByNewPhone
+            lostOnSignOut = SessionWipe.unsentSummary()
             Task {
                 await DeviceRegistry.shared.performRevokedSignOut()
                 await route()
@@ -318,6 +321,7 @@ struct RootView: View {
         // the front door, instead of a signed-in-looking app that can do nothing.
         .onReceive(NotificationCenter.default.publisher(for: SessionRecovery.sessionEnded)) { note in
             let suspended = SessionRecovery.endedBySuspension(note)
+            lostOnSignOut = SessionWipe.unsentSummary()
             Task {
                 await DeviceRegistry.shared.performRevokedSignOut()
                 await route()
@@ -332,13 +336,19 @@ struct RootView: View {
                : endedByDeviceLimit ? "Too many devices" : "Logged out", isPresented: $showRevokedNotice) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(endedBySuspension
+            let reason: String = endedBySuspension
                  ? "This account can't be used right now. If you think this is a mistake, contact us at fariin.com/help."
                  : endedByNewPhone
                  ? "Your account was logged in on another phone, so it was logged out here. Fariin works on one phone at a time. To use it here again, log in."
                  : endedByDeviceLimit
                  ? "Your account is already logged in on \(DeviceRegistry.maxDevices) devices. On one of them, open Settings > Devices and log out a device you no longer use, then log in here again."
-                 : "This device was logged out from another device.")
+                 : "This device was logged out from another device."
+            // Queued messages and drafts were wiped with the session: say so, never silently.
+            if let lost = lostOnSignOut {
+                Text(reason + " " + lost + " on this phone could not be kept.")
+            } else {
+                Text(reason)
+            }
         }
         // 2026-09-24 fix-all #167: see `openPendingUserLink`.
         .alert(userLinkAlert ?? "", isPresented: Binding(get: { userLinkAlert != nil },
