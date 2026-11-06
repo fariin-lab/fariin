@@ -303,6 +303,7 @@ struct ThreadView: View {
     @State private var holdRevealed = false
     @State private var holdBeganAt: Date = .distantPast   // touch-down time: a sub-0.3s release is a TAP, not a hold
     @State private var micDenied = false            // mic permission denied → "open Settings" alert
+    @State private var photosDenied = false         // Photos add permission denied → "open Settings" alert
     @State private var recordingBlockedByCall = false   // tried to record while a call owns the mic
     @State private var voiceRestricted = false          // 2026-09-24 feature-audit: tried to record while restricted from voice
     @State private var recorder = AudioRecorder()
@@ -1639,6 +1640,12 @@ struct ThreadView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { Text("Allow microphone access in Settings to record voice messages.") }
+        .alert("Photos access is off", isPresented: $photosDenied) {
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Allow Fariin to add photos in Settings to save this photo.") }
         // ⛔ NO TITLE — owner, 2026-09-26, with the reference app's alert: the one sentence and OK.
         // SwiftUI's `.alert` always draws a title, so this is a UIKit alert with `title: nil`.
         .onChange(of: recordingBlockedByCall) { _, on in
@@ -7911,11 +7918,16 @@ struct ThreadView: View {
                 .compactMap { UIImage(data: $0.element) }
             guard !images.isEmpty else { return }
             let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-            guard status == .authorized || status == .limited else { return }
-            try? await PHPhotoLibrary.shared().performChanges {
-                for image in images { PHAssetChangeRequest.creationRequestForAsset(from: image) }
+            guard status == .authorized || status == .limited else { photosDenied = true; return }
+            do {
+                try await PHPhotoLibrary.shared().performChanges {
+                    for image in images { PHAssetChangeRequest.creationRequestForAsset(from: image) }
+                }
+                Haptics.notify(.success)
+                showJumpToast("Saved")
+            } catch {
+                showJumpToast("Couldn't save photo")
             }
-            Haptics.notify(.success)
             return
         }
         var ui: UIImage?
@@ -7929,11 +7941,17 @@ struct ThreadView: View {
                 } else { ui = UIImage(data: cipher) }
             }
         }
-        guard let image = ui else { return }
+        guard let image = ui else { showJumpToast("Couldn't save photo"); return }
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-        guard status == .authorized || status == .limited else { return }
-        try? await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.creationRequestForAsset(from: image) }
-        Haptics.notify(.success)
+        guard status == .authorized || status == .limited else { photosDenied = true; return }
+        // Success haptic and "Saved" only when the photo really landed in the library.
+        do {
+            try await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.creationRequestForAsset(from: image) }
+            Haptics.notify(.success)
+            showJumpToast("Saved")
+        } catch {
+            showJumpToast("Couldn't save photo")
+        }
     }
 
     private func deliver(text: String, reply: ReplyRef?, clientId: String, mentions: [String] = [],
