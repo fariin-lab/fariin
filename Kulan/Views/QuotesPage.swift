@@ -66,7 +66,7 @@ struct QuotesPage: View {
                         ForEach(items) { it in
                             Button { onOpen(it) } label: { quote(it) }
                                 .buttonStyle(.plain)
-                            Divider().padding(.leading, 16)
+                            Divider().padding(.leading, 16 + indent)
                         }
                         if hidden > 0 {
                             Label("\(hidden) more in private chats and groups", systemImage: "lock.fill")
@@ -105,70 +105,74 @@ struct QuotesPage: View {
         return q + " · " + c + " · " + v
     }
 
-    /// One quote: who, what they wrote, then my post as an outlined card.
-    private func quote(_ it: QuotedInItem) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                AvatarView(name: it.title, photoUrl: it.photoUrl.isEmpty ? nil : it.photoUrl, size: 40)
-                    .environment(\.avatarSquircle, true)
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 4) {
-                        Text(it.title).font(.body.weight(.semibold)).lineLimit(1)
-                        if it.verified {
-                            Image(systemName: "checkmark.seal.fill").font(.subheadline).foregroundStyle(.blue)
-                        }
-                    }
-                    Text(it.followers.formatted(.number.notation(.compactName))
-                         + (it.followers == 1 ? " follower" : " followers"))
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            if !it.text.isEmpty {
-                Text(it.text).font(.body).lineLimit(4)
-            }
-            card(it)
-        }
-        .padding(.horizontal, 16).padding(.vertical, 12)
-        .contentShape(Rectangle())
-    }
+    /// ⛔ THE OWNER'S PICK, OPTION 2 "THIN LINE" (2026-11-06): his layout kept, made quiet. One quote:
+    /// a 32pt photo with the name and the time on one line; under the name, what they wrote; then my
+    /// post marked only by a thin grey line on its left (no box), its channel, picture and words; the
+    /// quote's views last. Everything after the first line starts under the name (`indent`).
+    private let indent: CGFloat = 41
 
-    private func card(_ it: QuotedInItem) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                AvatarView(name: sourceTitle, photoUrl: sourcePhoto, size: 20)
+    private func quote(_ it: QuotedInItem) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 9) {
+                AvatarView(name: it.title, photoUrl: it.photoUrl.isEmpty ? nil : it.photoUrl, size: 32)
                     .environment(\.avatarSquircle, true)
-                Text(sourceTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
-                if sourceVerified {
+                Text(it.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                if it.verified {
                     Image(systemName: "checkmark.seal.fill").font(.caption).foregroundStyle(.blue)
                 }
                 Spacer(minLength: 6)
                 Text(it.at.formatted(date: .omitted, time: .shortened))
                     .font(.caption).foregroundStyle(.secondary)
             }
-            HStack(alignment: .top, spacing: 10) {
-                cardPicture
-                Text(postText).font(.subheadline).lineLimit(3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            if !it.text.isEmpty {
+                Text(it.text).font(.subheadline).lineLimit(4)
+                    .padding(.leading, indent).padding(.top, 4)
             }
+            card
+                .padding(.leading, indent).padding(.top, 8)
             Label(it.views.formatted(.number.notation(.compactName)) + (it.views == 1 ? " view" : " views"),
                   systemImage: "eye")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption2).foregroundStyle(.secondary)
+                .padding(.leading, indent).padding(.top, 6)
         }
-        .padding(12)
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .strokeBorder(Color.secondary.opacity(0.3), lineWidth: 1))
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .contentShape(Rectangle())
+    }
+
+    /// My post, the same in every row: a thin grey line, its channel, its picture and words.
+    private var card: some View {
+        HStack(alignment: .top, spacing: 10) {
+            RoundedRectangle(cornerRadius: 1.5).fill(Color(.systemGray3)).frame(width: 3)   // grey (owner 2026-11-06)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    AvatarView(name: sourceTitle, photoUrl: sourcePhoto, size: 16)
+                        .environment(\.avatarSquircle, true)
+                    Text(sourceTitle).font(.footnote.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
+                    if sourceVerified {
+                        Image(systemName: "checkmark.seal.fill").font(.caption2).foregroundStyle(.blue)
+                    }
+                }
+                HStack(alignment: .center, spacing: 9) {
+                    cardPicture
+                    Text(postText).font(.footnote).lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.vertical, 2)
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder private var cardPicture: some View {
         if let thumb {
             Image(uiImage: thumb).resizable().scaledToFill()
-                .frame(width: 56, height: 56)
+                .frame(width: 40, height: 40)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         } else if let post, hasPicture(post) {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.secondary.opacity(0.15))
-                .frame(width: 56, height: 56)
-                .overlay(Image(systemName: kindIcon(post)).foregroundStyle(.secondary))
+                .frame(width: 40, height: 40)
+                .overlay(Image(systemName: kindIcon(post)).font(.caption).foregroundStyle(.secondary))
         }
     }
 
