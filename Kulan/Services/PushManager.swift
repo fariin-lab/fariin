@@ -400,6 +400,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     /// Owner, 2026-10-14: "Record voice message" on the No answer page opens this chat with the
     /// voice recorder already running, hands-free. Spent by `ThreadView` when that chat appears.
     var pendingVoiceNoteCid: String?
+    /// A channel post being quoted (owner 2026-11-06): the chat it goes to and the server's quote.
+    /// Spent by that chat's `ThreadView`, which shows it above the composer.
+    var pendingQuote: (cid: String, qid: String, card: QuoteCard)?
     var pendingInviteCode: String? // a kulan://g/<code> invite link to resolve into a Join sheet
     /// A channel admin invite link, fariin.com/a/<code> (2026-10-29): its Accept / Decline sheet.
     var pendingAdminInvite: String?

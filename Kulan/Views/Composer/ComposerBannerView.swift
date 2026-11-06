@@ -98,7 +98,7 @@ final class ComposerBannerView: UIView {
         if detailH > 0 { text += 2 + detailH }
         if b.footnote != nil { text += 2 + ceil(M.caption2.lineHeight) }
         switch b.style {
-        case .reply: return max(b.thumb != nil ? M.thumb : M.barH, text)
+        case .reply, .quote: return max(b.thumb != nil ? M.thumb : M.barH, text)
         case .edit:  return max(M.barH, text)
         case .link:  return max(b.thumb != nil ? M.linkThumb : 0, text)
         }

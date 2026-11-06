@@ -15,6 +15,16 @@ struct ForwardPicker: View {
     /// SHARING, not forwarding (owner 2026-10-18: Share Group opens this sheet, not the system one).
     /// The text goes out as the person's own new message: no "Forwarded" line, no forwarding switch.
     var isShare = false
+    /// PICK ONE CHAT (owner 2026-11-06, Quote): a tap hands the chat back and closes the sheet; no
+    /// composer, nothing is sent from here. The same list and the same "can't post there" refusals.
+    var onPick: ((Conversation) -> Void)? = nil
+
+    /// Quote: choose where a channel post goes.
+    init(pickOne onPick: @escaping (Conversation) -> Void) {
+        self.messages = []
+        self.sourceCid = ""
+        self.onPick = onPick
+    }
 
     // Single-message convenience (unchanged call sites).
     init(message: Message, sourceCid: String, onSent: @escaping () -> Void = {},
@@ -191,13 +201,13 @@ struct ForwardPicker: View {
             // Add-your-own-text (owner's pick): appears once a chat is chosen; lands as its OWN
             // message right after the forwards, in every picked chat — never glued to a caption.
             .safeAreaInset(edge: .bottom) {
-                if !selected.isEmpty { forwardComposer }
+                if !selected.isEmpty && onPick == nil { forwardComposer }
             }
             // "Send to", ✕ on the left — the reference's sheet (owner, 2026-09-29). Its right-hand
             // "New group" is not here: groups are switched off in this app (`Flags.groupsEnabled`),
             // and a button that leads nowhere is worse than none. The greyed "Send" that used to
             // sit there went with the preview; Send is the composer's, beside the text.
-            .navigationTitle("Send to")
+            .navigationTitle(onPick == nil ? "Send to" : "Quote in")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button { dismiss() } label: { Image(systemName: "xmark") }.tint(.primary) }
@@ -265,6 +275,11 @@ struct ForwardPicker: View {
         // fails after the sheet is gone (audit 2026-10-20).
         if let c = repo.conversations.first(where: { $0.id == id }), let why = refusal(in: c) {
             refusedNote = why
+            return
+        }
+        if let onPick, let c = repo.conversations.first(where: { $0.id == id }) {
+            dismiss()
+            onPick(c)
             return
         }
         selected.insert(id)

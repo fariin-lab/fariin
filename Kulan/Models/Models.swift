@@ -391,6 +391,10 @@ struct Message: Identifiable, Equatable, Codable {
     /// message, so its author is not told "You deleted this message". Nil = the author did it.
     var deletedBy: String? = nil
     var forwarded: Bool = false             // passed along from another chat (bubble shows the tag)
+    /// A quoted channel post (owner 2026-11-06): only the id of the server's snapshot travels in the
+    /// message, `quote: { qid }`. What the card shows is asked from the server (`QuoteStore`), which
+    /// checks every time that the reader may see the source channel.
+    var quoteId: String? = nil
     var pollClosed: Bool = false            // 2026-10-19: the poll's creator tapped Stop Poll
     /// THE MESSAGE EXISTS, THE PICTURE DOES NOT YET.
     ///
@@ -525,6 +529,7 @@ struct Message: Identifiable, Equatable, Codable {
         m.mentions = []
         m.viewOnce = false
         m.forwarded = false
+        m.quoteId = nil
         m.localImageData = nil; m.localAudioData = nil; m.localFile = false; m.localMediaURL = nil
         return m
     }
@@ -752,6 +757,7 @@ struct Message: Identifiable, Equatable, Codable {
         case clientId, replyTo, storyMention, reactions, mentions, viewOnce, album
         case createdAt, width, blurhash, thumb, height
         case callerUid, callOutcome, callVideo, callDuration, callJoinedUids, callRungUids
+        case quoteId
         case edited, deleted, deletedBy, forwarded, clientTs, linkPreview, hasServerTime, uploading, albumSizes
         case expiresAt   // owner audit 2026-10-06 chat #21: a cold open must know what has already expired
         case stickerPack, stickerId, stickerEmoji, stickerAnimated   // 2026-10-17 chat stickers, all optional
@@ -840,6 +846,7 @@ struct Message: Identifiable, Equatable, Codable {
         self.deleted = data["deleted"] as? Bool ?? false
         self.deletedBy = data["deletedBy"] as? String   // 2026-09-24 feature-audit
         self.forwarded = data["forwarded"] as? Bool ?? false
+        if let q = (data["quote"] as? [String: Any])?["qid"] as? String, QuoteStore.isQid(q) { self.quoteId = q }
         self.pollClosed = data["pollClosed"] as? Bool ?? false
         self.uploading = data["uploading"] as? Bool ?? false
         self.albumSizes = (data["albumSizes"] as? [[Double]]) ?? []

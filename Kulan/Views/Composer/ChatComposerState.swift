@@ -96,7 +96,8 @@ final class TouchClock {
 
 /// One card above the field: what you are replying to, what you are editing, or the link preview.
 struct ChatComposerBanner: Equatable {
-    enum Style: Equatable { case reply, edit, link }
+    /// `.quote`: a channel post being quoted into this chat (owner 2026-11-06); drawn like a reply.
+    enum Style: Equatable { case reply, edit, link, quote }
     enum Thumb: Equatable {
         /// A chat photo or video poster the bubble already put in `DiskImageCache`.
         case cached(url: String)

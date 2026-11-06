@@ -1288,7 +1288,8 @@ enum ChatService {
     /// stamped and queued on entry here, which is still before every await below.
     static func sendText(cid: String, text: String, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, mentions: [String] = [], preview: OutgoingLinkPreview? = nil, forwarded: Bool = false, countsAsUnread: Bool = true,
                          tapTs: Double? = nil, turn: SendTurn? = nil,
-                         storyMention: StoryMentionRef? = nil) async throws {
+                         storyMention: StoryMentionRef? = nil,
+                         quote: String? = nil) async throws {
         // owner audit 2026-10-06 chat #24: stamped and queued BEFORE the first await. `clientTs` used
         // to be read after encryption and the server reads, so of two quick sends whichever cleared
         // those awaits first took the earlier stamp, and nothing kept their writes in tap order.
@@ -1296,7 +1297,9 @@ enum ChatService {
         let turn = turn ?? SendTurn.take(cid)
         defer { turn.finish() }   // every exit, thrown or returned, lets the next send go
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else { return }
+        // A quoted channel post may go with no words of mine (owner 2026-11-06).
+        let quote = quote.flatMap { QuoteStore.isQid($0) ? $0 : nil }
+        guard !t.isEmpty || quote != nil else { return }
         // Group path: per-member encryption + unread fan-out. 1:1 path below is untouched.
         // Resolve members even if the caller didn't pass them (e.g. the very first message
         // right after creation, before the conversations listener has the doc). A group cid
@@ -1305,7 +1308,7 @@ enum ChatService {
         if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
         if let members {
             try await sendGroupText(cid: cid, members: members, text: t, replyTo: replyTo, clientId: clientId, mentions: mentions, preview: preview, forwarded: forwarded,
-                                    clientTs: clientTs, turn: turn)
+                                    clientTs: clientTs, turn: turn, quote: quote)
             return
         }
 
@@ -1436,6 +1439,8 @@ enum ChatService {
         if forwarded { msg["forwarded"] = true }
         // A story mention card (`Message.storyMention`, owner 2026-10-16). 1:1 only, like replies.
         if let storyMention { msg["storyMention"] = ["id": storyMention.id, "thumb": storyMention.thumbUrl] }
+        // A quoted channel post: only the server snapshot's id (owner 2026-11-06, `QuoteStore`).
+        if let quote { msg["quote"] = ["qid": quote] }
         // 2026-09-24 feature-audit: a knock carries no link card. The rules take a request's one
         // message as plain short text and refuse `linkPreview` on it, so the card turned every first
         // message holding a link into a send that failed on every Resend. Stripped here rather than
@@ -1530,7 +1535,7 @@ enum ChatService {
     private static func sendGroupText(cid: String, members: [String], text t: String,
                                       replyTo: ReplyRef?, clientId: String?, mentions: [String] = [],
                                       preview: OutgoingLinkPreview? = nil, forwarded: Bool = false,
-                                      clientTs: Double, turn: SendTurn) async throws {
+                                      clientTs: Double, turn: SendTurn, quote: String? = nil) async throws {
         let cipher = try await Crypto.shared.sealForGroup(t, members: members, cid: cid)
         var replyEnc: [String: Any]?
         if let r = replyTo {
@@ -1554,6 +1559,7 @@ enum ChatService {
         if let replyEnc { msg["replyTo"] = replyEnc }
         if !mentions.isEmpty { msg["mentions"] = mentions }
         if forwarded { msg["forwarded"] = true }
+        if let quote { msg["quote"] = ["qid": quote] }   // a quoted channel post (owner 2026-11-06)
         // 2026-09-24 decision D-composer-3: a poll says in the clear only whether it takes one answer
         // or several, so the rules can hold a single-answer vote to one option. The question and the
         // options stay sealed in `text`.

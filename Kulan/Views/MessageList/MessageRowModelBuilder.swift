@@ -254,7 +254,7 @@ enum MessageRowModelBuilder {
                 // No button for my own card, and none for the person I am already talking to —
                 // there is no chat to open, and a button that does nothing is worse than none.
                 canMessage: card.uid != ctx.me && ChatService.convId(ctx.me, card.uid) != ctx.cid))
-        } else if text.jumbomojiCount > 0, msg.linkPreview == nil,
+        } else if text.jumbomojiCount > 0, msg.linkPreview == nil, msg.quoteId == nil,
                   msg.replyTo == nil || msg.replyTo?.isStatus == true {
             // Borderless applies only to a message with nothing else in the box: an emoji-only
             // REPLY keeps its bubble, because the quote shares that box with it, and so does one
@@ -273,7 +273,8 @@ enum MessageRowModelBuilder {
                 // an older message without an embedded preview stays a plain link.
                 // A call link takes the call card whatever preview travelled with it: the web page
                 // behind the link knows nothing about the call, and older messages carry none.
-                linkPreview: callLinkPreview(text) ?? msg.linkPreview.map(linkPreviewBody)))
+                // A quoted channel post takes the card's place (owner 2026-11-06, `quoteBody`).
+                linkPreview: msg.quoteId.map(quoteBody) ?? callLinkPreview(text) ?? msg.linkPreview.map(linkPreviewBody)))
         }
 
         // MY fill is the chat colour if one is set, else the default blue — a colour is a colour and
@@ -707,6 +708,21 @@ enum MessageRowModelBuilder {
             shape: shape, url: p.url, title: p.title, desc: p.desc,
             host: URL(string: p.url).flatMap { LinkPreviewService.youtubeID(in: $0) } != nil ? "YouTube" : p.host,
             imageUrl: p.imageUrl, imageEnc: p.imageEnc)
+    }
+
+    /// ⛔ A QUOTED CHANNEL POST (owner 2026-11-06): the article card's shape, filled from the server's
+    /// answer for this reader (`QuoteStore`): the channel's name, the post's text as quoted, its first
+    /// picture, "Quoted post" under them. Post deleted / This channel is private when that is the
+    /// answer, with no picture. "Loading…" until the first answer lands.
+    private static func quoteBody(_ qid: String) -> BubbleBody.LinkPreview {
+        guard let c = QuoteStore.shared.card(qid) else {
+            return BubbleBody.LinkPreview(shape: .article, url: "fariin-quote://\(qid)", title: "Channel post",
+                                          desc: "Loading…", host: "Quoted post", imageUrl: nil, imageEnc: nil)
+        }
+        let image = c.state == .ok && !c.image.isEmpty ? c.image : nil
+        let host = c.state == .ok && !c.username.isEmpty ? "Quoted from @\(c.username)" : "Quoted post"
+        return BubbleBody.LinkPreview(shape: .article, url: "fariin-quote://\(qid)", title: c.heading,
+                                      desc: c.body, host: host, imageUrl: image, imageEnc: nil)
     }
 
     /// owner 2026-10-18: a group link's card. What the sender's phone got from the server travels in

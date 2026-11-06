@@ -123,6 +123,9 @@ struct ThreadView: View {
     @State private var pollResultsFor: MessageRef?
     struct MessageRef: Identifiable { let id: String }
     @HeapState private var replyingTo: Message? = nil
+    /// A channel post quoted into this chat, waiting above the composer for my words (owner 2026-11-06).
+    struct QuoteDraft: Equatable { let qid: String; let card: QuoteCard }
+    @HeapState private var quoting: QuoteDraft? = nil
     @State private var photoItem: PhotosPickerItem?
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var editImage: EditImageWrap?     // single picked/captured photo → chat editor
@@ -515,6 +518,8 @@ struct ThreadView: View {
     @State private var editHistoryTarget: MessageRef?   // id only
     @State private var editPendingIds: Set<String> = []
     @HeapState private var forwardTarget: Message? = nil    // forward-to-chat picker
+    /// The forward sheet is open for Quote: it picks one chat and sends nothing itself.
+    @State private var forwardIsQuote = false
     /// A channel post's share arrow: the Share with sheet (owner 2026-10-31).
     @HeapState private var sharePost: Message? = nil
     /// A plain flag now that the field is a `UITextView`: in, it asks the field to take or give up
@@ -2142,9 +2147,15 @@ struct ThreadView: View {
             }
         }
         .sheet(item: $forwardTarget) { m in
-            ForwardPicker(message: m, sourceCid: cid,
-                          onQueued: { showJumpToast($0) },
-                          onFailed: { showJumpToast("Couldn't forward some messages. Check your connection and try again.") })
+            // Quote (owner 2026-11-06) shares this sheet, in its pick-one mode: no new modifier on a
+            // chain that is at the type-checker's limit.
+            if forwardIsQuote {
+                ForwardPicker(pickOne: { dest in startQuote(m, into: dest) })
+            } else {
+                ForwardPicker(message: m, sourceCid: cid,
+                              onQueued: { showJumpToast($0) },
+                              onFailed: { showJumpToast("Couldn't forward some messages. Check your connection and try again.") })
+            }
         }
         .sheet(isPresented: $showGroupAdd) {
             AddMembersSheet(cid: cid, existing: Set(groupMembers))
@@ -2503,6 +2514,14 @@ struct ThreadView: View {
         // Owner, 2026-10-14: arriving from the No answer page's "Record voice message", the recorder
         // starts at once, locked hands-free, the same state a hold dragged up to the lock leaves.
         .task {
+            // A channel post quoted into this chat (owner 2026-11-06): above the composer, keyboard up.
+            // Inside this task, not a modifier of its own: body's chain is at the type-checker's limit.
+            if let q = AppRouter.shared.pendingQuote, q.cid == cid {
+                AppRouter.shared.pendingQuote = nil
+                replyingTo = nil
+                quoting = QuoteDraft(qid: q.qid, card: q.card)
+                inputFocused = true
+            }
             guard !quiet, AppRouter.shared.pendingVoiceNoteCid == cid else { return }
             AppRouter.shared.pendingVoiceNoteCid = nil
             beginHoldRecording()
@@ -3640,7 +3659,7 @@ struct ThreadView: View {
                     sendReaction(messageId: msg.id, emoji: emoji, toAuthor: msg.authorId)
                 },
                 onPin: { m in togglePin(m) },
-                onForward: { forwardTarget = $0 },
+                onForward: { forwardIsQuote = false; forwardTarget = $0 },
                 // THE SELECTION BLUR, THIRD PASS — the first two were real but incomplete. Entering
                 // selection reloads every visible cell; a context menu dismisses by animating its lifted
                 // preview back INTO the source cell; reload that cell mid-flight and the system's
@@ -3987,6 +4006,8 @@ struct ThreadView: View {
                     // A group card draws the server's live answer, not only the copy it carries.
                     if lp.url.contains("fariin.com") { linkTok += ":" + LiveGroupCard.token(lp.url) }
                 }
+                // A quoted channel post draws the server's answer (QuoteStore), so that is its token.
+                if let q = m.quoteId { linkTok += ":Q" + QuoteStore.shared.token(q) }
                 out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)|\(m.views)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
             }
             sigCache.key = key
@@ -4238,8 +4259,16 @@ struct ThreadView: View {
         // canForward from missing this copy, which is how the view-once hole opened in the first place.
         if canForward(m) {
             items.append(UIAction(title: "Forward", image: UIImage(systemName: "arrowshape.turn.up.right")) { _ in
+                forwardIsQuote = false
                 forwardTarget = m
             })
+            // Quote a channel post into a chat of mine, with my words (owner 2026-11-06).
+            if conversation?.isChannel == true {
+                items.append(UIAction(title: "Quote", image: UIImage(systemName: "quote.bubble")) { _ in
+                    forwardIsQuote = true
+                    forwardTarget = m
+                })
+            }
         }
         if savingAllowed, let fav = StickerSend.favoriteTitle(m) {   // 2026-10-17 chat stickers
             items.append(UIAction(title: fav, image: UIImage(systemName: fav.hasPrefix("Remove") ? "star.slash" : "star")) { _ in
@@ -4382,8 +4411,20 @@ struct ThreadView: View {
                     showJumpToast("That message is no longer available")
                     return
                 }
+                forwardIsQuote = false
                 forwardTarget = live
             })
+            // Quote a channel post into a chat of mine, with my words (owner 2026-11-06).
+            if conversation?.isChannel == true {
+                out.append(CMAction(title: "Quote", icon: "quote.bubble") {
+                    guard let live = repo.items.first(where: { $0.id == m.id }), canForward(live) else {
+                        showJumpToast("That message is no longer available")
+                        return
+                    }
+                    forwardIsQuote = true
+                    forwardTarget = live
+                })
+            }
         }
         if !m.text.isEmpty && !m.isFeatureMarker && !m.viewOnce && savingAllowed {
             out.append(CMAction(title: "Copy", icon: "doc.on.doc") {
@@ -4557,6 +4598,29 @@ struct ThreadView: View {
     private var canSeeEditHistory: Bool {
         guard let c = conversation, c.isChannel else { return true }
         return c.isOwner(me) || c.isAdmin(me)
+    }
+
+    /// A quote card's tap (owner 2026-11-06): the source channel, scrolled to the post. The server's
+    /// answer decides; a channel this reader may not see, or a deleted post, is said, not opened.
+    private func openQuote(_ qid: String) {
+        guard let c = QuoteStore.shared.card(qid) else { return }
+        switch c.state {
+        case .ok:
+            // Not mine and not followed (a public channel's visitor): its public page, the visitor
+            // door every other public channel link uses.
+            let known = ConversationsRepository.shared.conversations.contains { $0.id == c.cid }
+                || ChannelFollows.shared.conversations.contains { $0.id == c.cid }
+            if !known, !c.username.isEmpty, let u = URL(string: "https://fariin.com/\(c.username)"), openGroupLink(u) { return }
+            let r = AppRouter.shared
+            r.pendingChatName = c.title
+            r.pendingChatPhoto = c.photoUrl
+            r.pendingMessageId = c.mid
+            r.pendingChatPush = true
+            r.pendingChatId = c.cid
+        case .deleted: showJumpToast("This post was deleted")
+        case .hidden: showJumpToast("This channel is private")
+        case .gone: showJumpToast("Content unavailable")
+        }
     }
 
     /// What the bar offers in a channel: its own list, or the usual quick set.
@@ -4956,8 +5020,13 @@ struct ThreadView: View {
                 openStory(r.id, r.authorId, anchorId: "storyreply-\(m.id)")   // matches StoryReplyChrome.anchorKey
             },
             onTapLinkCard: { id in
-                guard let m = repo.items.first(where: { $0.rowId == id }),
-                      let lp = m.linkPreview, let u = URL(string: lp.url) else { return }
+                guard let m = repo.items.first(where: { $0.rowId == id }) else { return }
+                // A quoted channel post opens the post in its channel, when this reader may see it.
+                if let q = m.quoteId {
+                    openQuote(q)
+                    return
+                }
+                guard let lp = m.linkPreview, let u = URL(string: lp.url) else { return }
                 // A profile card's body goes where its button goes (owner, 2026-10-03).
                 if let handle = LinkPreviewService.profileHandle(in: u) {
                     openProfileHandle(handle)
@@ -7115,6 +7184,10 @@ struct ThreadView: View {
         if LinkPreviewService.firstURL(in: text) != nil || text.range(of: "www.", options: .caseInsensitive) != nil,
            sendHeldBack(.sendLinks, .links) { return }
         if slowModeHeldBack() { return }
+        if let q = quoting, !DemoMode.isDemoConversation(cid) {
+            sendQuote(q, text: text)
+            return
+        }
         // owner 2026-10-27: no vibration when a text message is sent.
         // ⛔ BEFORE THE COMPOSER IS TOUCHED. Everything below shrinks the bar — the input clears,
         // the reply banner animates away — and the list is pinned to the bottom, so it follows the
@@ -7206,6 +7279,70 @@ struct ThreadView: View {
         Task {
             await deliver(text: text, reply: reply, clientId: clientId, mentions: mentions, draft: draft,
                           lateCard: lateCard, tapTs: tapTs, turn: turn)
+        }
+    }
+
+    /// Quote picked a chat: the server snapshots the post (it checks I may see it), then that chat
+    /// opens with the quote above its composer. Quoting into the chat already open stays here.
+    private func startQuote(_ m: Message, into dest: Conversation) {
+        let sourceCid = cid
+        let mid = m.id
+        Task {
+            do {
+                let made = try await QuoteStore.create(cid: sourceCid, mid: mid)
+                await MainActor.run {
+                    if dest.id == cid {
+                        replyingTo = nil
+                        quoting = QuoteDraft(qid: made.qid, card: made.card)
+                        inputFocused = true
+                        return
+                    }
+                    let r = AppRouter.shared
+                    r.pendingQuote = (dest.id, made.qid, made.card)
+                    r.pendingChatName = dest.displayName(me)
+                    r.pendingChatPhoto = dest.displayPhoto(me)
+                    r.pendingChatPush = true
+                    r.pendingChatId = dest.id
+                }
+            } catch {
+                await MainActor.run { showJumpToast("Couldn't quote this post. Try again.") }
+            }
+        }
+    }
+
+    /// ⛔ MY WORDS WITH A QUOTED CHANNEL POST (owner 2026-11-06). The bubble shows at once with the
+    /// card (the quote was seeded when it was made), then the message goes out carrying only the
+    /// quote's id. A send that fails takes the bubble back and puts the quote and the words back in
+    /// the composer, rather than leaving a Resend that would go without its quote.
+    private func sendQuote(_ q: QuoteDraft, text: String) {
+        sendTick &+= 1
+        lastSendAt = Date()
+        let mentions = resolveMentions(in: text).filter { groupMembers.contains($0) }
+        mentionMap = [:]
+        input = ""
+        withAnimation(.easeInOut(duration: 0.2)) { quoting = nil; replyingTo = nil }
+        typingSent = false
+        let clientId = UUID().uuidString
+        let tapTs = Date().timeIntervalSince1970 * 1000
+        let turn = ChatService.SendTurn.take(cid)
+        var bubble = Message(localText: text, authorId: me, clientId: clientId, replyTo: nil, sendState: .sending)
+        bubble.quoteId = q.qid
+        repo.addPending(bubble)
+        broadcastTyping(false)
+        typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
+        let members = isGroup ? groupMembers : nil
+        Task {
+            do {
+                try await ChatService.sendText(cid: cid, text: text, clientId: clientId, group: members,
+                                               mentions: mentions, tapTs: tapTs, turn: turn, quote: q.qid)
+            } catch {
+                await MainActor.run {
+                    repo.removePending(clientId: clientId)
+                    quoting = q
+                    if input.isEmpty { input = text }
+                    showJumpToast("Couldn't send the quote. Try again.")
+                }
+            }
         }
     }
 
@@ -9935,6 +10072,12 @@ struct ThreadView: View {
                                           title: "Reply to \(r.authorId == me ? "yourself" : personName(r.authorId))",
                                           detail: replyDetail(r), thumb: replyThumb(r), footnote: nil))
         }
+        // A channel post being quoted here (owner 2026-11-06): its channel and words, its picture.
+        if let q = quoting, editingMessage == nil {
+            out.append(ChatComposerBanner(id: "quote:\(q.qid)", style: .quote, title: "Quote from \(q.card.heading)",
+                                          detail: .text(q.card.body),
+                                          thumb: q.card.image.isEmpty ? nil : .cached(url: q.card.image), footnote: nil))
+        }
         if let e = editingMessage {
             out.append(ChatComposerBanner(id: "edit:\(e.id)", style: .edit, title: "Edit Message",
                                           detail: .text(e.text), thumb: nil, footnote: nil))
@@ -10081,6 +10224,7 @@ struct ThreadView: View {
         a.dismissBanner = { style in
             switch style {
             case .reply: withAnimation(.easeInOut(duration: 0.2)) { replyingTo = nil }
+            case .quote: withAnimation(.easeInOut(duration: 0.2)) { quoting = nil }
             case .edit: cancelEdit()
             case .link:
                 withAnimation(.easeInOut(duration: 0.2)) {
