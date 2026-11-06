@@ -1188,9 +1188,13 @@ final class CMReactionBar: UIView {
         }
     }
 
+    /// ⛔ AT MOST SEVEN WIDE (owner 2026-11-06: a channel with 12 reactions ran the bar off the
+    /// screen). A channel's own list sized the bar to all of it; now it is the same width as a chat's
+    /// (six + "+"), and the rest are a sideways swipe inside the strip, as in a normal chat.
+    private static let maxSlots = 7
     var naturalSize: CGSize {
-        CGSize(width: CGFloat(config.emojis.count + (config.showsMore ? 1 : 0)) * buttonSide + padding * 2,
-               height: barHeight)
+        let slots = min(config.emojis.count + (config.showsMore ? 1 : 0), Self.maxSlots)
+        return CGSize(width: CGFloat(slots) * buttonSide + padding * 2, height: barHeight)
     }
 
     /// The "+"'s place in `holders` (always last), or nil when the bar has none.
@@ -1263,8 +1267,10 @@ final class CMReactionBar: UIView {
         backdrop.frame = bounds
         backdrop.layer.cornerRadius = bounds.height / 2
         let side = buttonSide
-        // The strip's window is the quick set's width, exactly the room those emoji had before.
-        let window = CGFloat(config.emojis.count) * side
+        // The strip's window is the quick set's width, exactly the room those emoji had before,
+        // capped like the bar (`maxSlots`): a longer channel list scrolls inside it.
+        let shown = min(config.emojis.count, Self.maxSlots - (config.showsMore ? 1 : 0))
+        let window = CGFloat(shown) * side
         clip.frame = CGRect(x: padding, y: -Self.liftRoom, width: window, height: bounds.height + Self.liftRoom)
         scroll.frame = CGRect(x: 0, y: Self.liftRoom, width: window, height: bounds.height)
         stack.frame = CGRect(x: 0, y: 0, width: CGFloat(allEmojis.count) * side, height: bounds.height)
@@ -1276,7 +1282,7 @@ final class CMReactionBar: UIView {
         // swipe part was highlighted out of sight, and he had to swipe to find it. Once, on the first
         // real layout, the strip scrolls so that emoji is the last one showing.
         if !revealedSelected, window > 0, let sel = config.selected,
-           let i = allEmojis.firstIndex(of: sel), i >= config.emojis.count {
+           let i = allEmojis.firstIndex(of: sel), i >= shown {
             revealedSelected = true
             let maxX = max(0, scroll.contentSize.width - window)
             scroll.contentOffset.x = min(maxX, CGFloat(i + 1) * side - window)
@@ -1423,7 +1429,8 @@ final class CMReactionBar: UIView {
         var delay: TimeInterval = 0
         // The ripple covers what is on screen: the quick set and the "+". The emoji past the window
         // are simply there, or the "+" would wait out forty-odd steps of delay behind them.
-        let onScreen = Array(holders.prefix(config.emojis.count)) + (moreIndex.map { [holders[$0]] } ?? [])
+        let shown = min(config.emojis.count, Self.maxSlots - (config.showsMore ? 1 : 0))
+        let onScreen = Array(holders.prefix(shown)) + (moreIndex.map { [holders[$0]] } ?? [])
         for holder in onScreen {
             holder.alpha = 0
             holder.transform = CGAffineTransform(translationX: 0, y: 24)
