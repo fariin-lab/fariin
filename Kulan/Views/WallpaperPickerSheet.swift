@@ -619,6 +619,10 @@ struct WallpaperPickerSheet: View {
                         .padding(6)
                 }
                 .accessibilityLabel("\(a.name), animated")
+                // ⛔ THE WALLPAPER VIEW TAKES NO TOUCHES (`allowsHitTesting(false)`, right for a chat
+                // background), which left the tile with nothing to tap (owner 2026-11-06: "I tap an
+                // animated wallpaper and nothing happens"). A near-clear layer gives the button its area.
+                .overlay(Color.white.opacity(0.001))
         } action: { preview(.animated(a.id)) }
     }
 

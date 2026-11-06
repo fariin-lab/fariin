@@ -209,6 +209,23 @@ struct ChatWallpaperPage: View {
                             }
                         }
                     }
+                    // Moving wallpapers (owner 2026-11-06: "add the animated ones here too"), with the
+                    // sparkle mark the chat's own picker gives them. Only the one in use moves.
+                    ForEach(AnimatedWallpapers.all) { a in
+                        presetTile(.animated(a.id)) {
+                            AnimatedWallpaperView(wallpaper: a, dark: dark, preview: true,
+                                                  animates: current == .animated(a.id))
+                                .overlay(alignment: .topLeading) {
+                                    Image(systemName: "sparkles")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                        .padding(5)
+                                        .background(Circle().fill(.black.opacity(0.35)))
+                                        .padding(8)
+                                }
+                        }
+                        .accessibilityLabel("\(a.name), animated")
+                    }
                     // The built-in themes. There used to be a SECOND row above this one listing the
                     // same six as "built-in photo wallpapers", from when a preset was a JPEG and a
                     // gradient was a fallback palette. They are one thing now and rendered by one
@@ -273,6 +290,7 @@ struct ChatWallpaperPage: View {
             } else {
                 WallpaperPreviewScreen(wallpaper: w,
                                        siblings: store.libraryIds.map { ChatWallpaper.photo($0) }
+                                           + AnimatedWallpapers.all.map { ChatWallpaper.animated($0.id) }
                                            + ChatWallpapers.all.map { ChatWallpaper.gradient($0.id) })
             }
         }
@@ -295,6 +313,8 @@ struct ChatWallpaperPage: View {
     private func presetTile<C: View>(_ w: ChatWallpaper, @ViewBuilder content: () -> C) -> some View {
         Button { previewing = w } label: {
             content()
+                // An animated wallpaper takes no touches; this gives every tile its tap area.
+                .overlay(Color.white.opacity(0.001))
                 .frame(height: 150)
                 .frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
