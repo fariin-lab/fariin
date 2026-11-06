@@ -55,10 +55,14 @@ final class RemoteFeatures {
                 UserDefaults.standard.set(cloud.stored, forKey: MemberCloudSetting.storeKey)
                 let badges = NewBadges.parse(snap.data()?["newBadges"])
                 UserDefaults.standard.set(badges, forKey: NewBadges.storeKey)
+                let emoji = UploadedEmoji.parse(snap.data()?["customEmoji"])
+                UserDefaults.standard.set(UploadedEmoji.stored(emoji), forKey: UploadedEmoji.storeKey)
+                UploadedEmoji.set(emoji)
                 DispatchQueue.main.async {
                     LiveFeatures.shared.values = out
                     LiveFeatures.shared.memberCloud = cloud
                     LiveFeatures.shared.newBadges = badges
+                    if LiveFeatures.shared.customEmoji != emoji { LiveFeatures.shared.customEmoji = emoji }
                 }
             }
     }
@@ -93,6 +97,8 @@ final class RemoteFeatures {
     var memberCloud = MemberCloudSetting(UserDefaults.standard.dictionary(forKey: MemberCloudSetting.storeKey))
     /// Settings rows wearing "New", row key -> end time in ms (see `NewBadges`).
     var newBadges: [String: Double] = NewBadges.parse(UserDefaults.standard.dictionary(forKey: NewBadges.storeKey))
+    /// Custom emoji uploaded in the admin panel (see `UploadedEmoji`), in the panel's order.
+    var customEmoji: [UploadedEmoji.Item] = UploadedEmoji.parse(UserDefaults.standard.array(forKey: UploadedEmoji.storeKey))
     private init() {}
 }
 

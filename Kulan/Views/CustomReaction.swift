@@ -10,17 +10,30 @@ enum CustomReaction {
     /// @v, the only account that sees the Custom tab.
     private static let chooserUid = "SVf0zxDVZzO8oLbGvM150QWgIWd2"
     private static let count = 181
-    static let all: [String] = (1...count).map { "ce_\($0)" }
+    static let builtIn: [String] = (1...count).map { "ce_\($0)" }
+    /// The built-in ones, then the ones uploaded in the admin panel (owner 2026-11-06), newest last.
+    /// Read from a view, so the Custom tab redraws when the panel adds or removes one.
+    @MainActor static var all: [String] { builtIn + LiveFeatures.shared.customEmoji.map { "cu_" + $0.id } }
 
     @MainActor static var canChoose: Bool { AuthService.shared.uid == chooserUid }
 
     static func isCustom(_ emoji: String?) -> Bool {
-        guard let emoji, emoji.hasPrefix("ce_"), let n = Int(emoji.dropFirst(3)) else { return false }
+        guard let emoji else { return false }
+        if UploadedEmoji.isKey(emoji) { return true }
+        guard emoji.hasPrefix("ce_"), let n = Int(emoji.dropFirst(3)) else { return false }
         return n >= 1 && n <= count
     }
 
+    /// The file to play. An uploaded one is nil until it has downloaded (asked for here); the view
+    /// that wanted it reloads when it lands (`UploadedEmoji.landed`).
     static func url(_ key: String) -> URL? {
-        Bundle.main.url(forResource: key, withExtension: "tgs", subdirectory: "CustomReactions")
+        if UploadedEmoji.isKey(key) {
+            let id = String(key.dropFirst(3))
+            if let file = UploadedEmoji.fileURL(id) { return file }
+            UploadedEmoji.fetch(id)
+            return nil
+        }
+        return Bundle.main.url(forResource: key, withExtension: "tgs", subdirectory: "CustomReactions")
     }
 
     /// A list as words: custom keys are not text, so they stay out of any sentence.
@@ -49,6 +62,78 @@ enum CustomReaction {
     static func pillSide(_ fontSize: CGFloat) -> CGFloat { (fontSize * 1.3).rounded() }
 }
 
+/// ⛔ CUSTOM EMOJI UPLOADED IN THE ADMIN PANEL (owner 2026-11-06). `config/features.customEmoji` =
+/// `[{ id, url, name, at }]` (functions-admin customEmojiAdd). Key "cu_" + id, a 10-character id.
+/// Files download once into Caches/CustomEmoji/<id>.tgs, checked to be gzip and at most 64 KB (the
+/// server's own cap). Thread-safe: `url(_:)` is asked from drawing code on any thread.
+enum UploadedEmoji {
+    struct Item: Equatable { let id: String; let url: String }
+
+    static let storeKey = "remoteFeatures.customEmoji.v1"
+    /// Posted on the main thread with the id as `object` when a file has landed.
+    static let landed = Notification.Name("UploadedEmoji.landed")
+
+    private static let lock = NSLock()
+    private static var remote: [String: String] = Dictionary(
+        uniqueKeysWithValues: parse(UserDefaults.standard.array(forKey: storeKey)).map { ($0.id, $0.url) })
+    private static var inFlight = Set<String>()
+
+    static func isKey(_ s: String) -> Bool {
+        guard s.count == 13, s.hasPrefix("cu_") else { return false }
+        return s.dropFirst(3).allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) }
+    }
+
+    /// The panel's list, keeping only well-formed https entries, in its order.
+    static func parse(_ raw: Any?) -> [Item] {
+        guard let list = raw as? [Any] else { return [] }
+        var seen = Set<String>(), out: [Item] = []
+        for x in list {
+            guard let d = x as? [String: Any], let id = d["id"] as? String, let url = d["url"] as? String,
+                  isKey("cu_" + id), url.hasPrefix("https://"), !seen.contains(id) else { continue }
+            seen.insert(id); out.append(Item(id: id, url: url))
+        }
+        return out
+    }
+
+    /// Stored form for UserDefaults (plist-safe).
+    static func stored(_ items: [Item]) -> [[String: String]] { items.map { ["id": $0.id, "url": $0.url] } }
+
+    static func set(_ items: [Item]) {
+        lock.withLock { remote = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.url) }) }
+    }
+
+    private static let dir: URL = {
+        let d = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("CustomEmoji", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }()
+
+    static func fileURL(_ id: String) -> URL? {
+        let f = dir.appendingPathComponent("\(id).tgs")
+        return FileManager.default.fileExists(atPath: f.path) ? f : nil
+    }
+
+    /// Download once. An id no longer on the list is not fetched (it was removed in the panel).
+    static func fetch(_ id: String) {
+        let link: URL? = lock.withLock {
+            guard !inFlight.contains(id), let s = remote[id], let u = URL(string: s) else { return nil }
+            inFlight.insert(id)
+            return u
+        }
+        guard let link else { return }
+        Task.detached(priority: .utility) {
+            defer { UploadedEmoji.lock.withLock { _ = UploadedEmoji.inFlight.remove(id) } }
+            guard let (data, resp) = try? await URLSession.shared.data(from: link),
+                  (resp as? HTTPURLResponse)?.statusCode == 200,
+                  data.count > 20, data.count <= 64 * 1024, data[0] == 0x1f, data[1] == 0x8b else { return }
+            let f = UploadedEmoji.dir.appendingPathComponent("\(id).tgs")
+            guard (try? data.write(to: f, options: .atomic)) != nil else { return }
+            await MainActor.run { NotificationCenter.default.post(name: UploadedEmoji.landed, object: id) }
+        }
+    }
+}
+
 /// One custom emoji on screen. It plays only while it is in a window, and its frames are drawn off
 /// the main thread, so a screen full of them never holds up scrolling.
 final class CustomReactionView: UIView {
@@ -62,12 +147,21 @@ final class CustomReactionView: UIView {
     private var key = ""
     private var motion = Motion.still
 
+    private var landedObserver: NSObjectProtocol?
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
         layer.addSublayer(player)
+        // An uploaded emoji (cu_) can arrive after this view asked for it: draw it then.
+        landedObserver = NotificationCenter.default.addObserver(
+            forName: UploadedEmoji.landed, object: nil, queue: .main) { [weak self] note in
+            guard let self, let id = note.object as? String, self.key == "cu_" + id else { return }
+            self.load()
+        }
     }
     required init?(coder: NSCoder) { fatalError() }
+    deinit { if let landedObserver { NotificationCenter.default.removeObserver(landedObserver) } }
 
     func show(_ key: String, motion: Motion) {
         if key != self.key { player.clear() }
