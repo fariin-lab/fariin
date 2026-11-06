@@ -105,10 +105,9 @@ struct QuotesPage: View {
         return q + " · " + c + " · " + v
     }
 
-    /// ⛔ THE OWNER'S PICK, OPTION 2 "THIN LINE" (2026-11-06): his layout kept, made quiet. One quote:
-    /// a 32pt photo with the name and the time on one line; under the name, what they wrote; then my
-    /// post marked only by a thin grey line on its left (no box), its channel, picture and words; the
-    /// quote's views last. Everything after the first line starts under the name (`indent`).
+    /// ⛔ THE OWNER'S PICK, OPTION 1 "SOFT GREY CARD" (2026-11-06): his layout kept, made quiet. One
+    /// quote: a 32pt photo with the name and the time on one line; under the name, what they wrote;
+    /// then my post in a soft grey card; the quote's views last. Everything after the first line starts under the name (`indent`).
     private let indent: CGFloat = 41
 
     private func quote(_ it: QuotedInItem) -> some View {
@@ -139,28 +138,27 @@ struct QuotesPage: View {
         .contentShape(Rectangle())
     }
 
-    /// My post, the same in every row: a thin grey line, its channel, its picture and words.
+    /// My post, the same in every row: a soft grey card with no border (the owner's option 1,
+    /// 2026-11-06), its channel, its picture and words.
     private var card: some View {
-        HStack(alignment: .top, spacing: 10) {
-            RoundedRectangle(cornerRadius: 1.5).fill(Color(.systemGray4)).frame(width: 3)   // soft grey (owner 2026-11-06)
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    AvatarView(name: sourceTitle, photoUrl: sourcePhoto, size: 16)
-                        .environment(\.avatarSquircle, true)
-                    Text(sourceTitle).font(.footnote.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
-                    if sourceVerified {
-                        Image(systemName: "checkmark.seal.fill").font(.caption2).foregroundStyle(.blue)
-                    }
-                }
-                HStack(alignment: .center, spacing: 9) {
-                    cardPicture
-                    Text(postText).font(.footnote).lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                AvatarView(name: sourceTitle, photoUrl: sourcePhoto, size: 16)
+                    .environment(\.avatarSquircle, true)
+                Text(sourceTitle).font(.footnote.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
+                if sourceVerified {
+                    Image(systemName: "checkmark.seal.fill").font(.caption2).foregroundStyle(.blue)
                 }
             }
-            .padding(.vertical, 2)
+            HStack(alignment: .center, spacing: 9) {
+                cardPicture
+                Text(postText).font(.footnote).lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
-        .fixedSize(horizontal: false, vertical: true)
+        .padding(9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     @ViewBuilder private var cardPicture: some View {
