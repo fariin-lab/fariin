@@ -90,7 +90,7 @@ struct QuotesPage: View {
             ContentUnavailableView("Couldn't load quotes", image: "ic_quote",
                                    description: Text("Check your connection and try again."))
         } else if !loaded {
-            ProgressView()
+            QuotesSkeleton()
         } else if items.isEmpty && hidden == 0 {
             ContentUnavailableView("No quotes yet", image: "ic_quote")
         }
@@ -209,5 +209,70 @@ struct QuotesPage: View {
         } catch {
             failed = true
         }
+    }
+}
+
+/// ⛔ SKELETON, NOT A SPINNER (owner 2026-11-06: "use skeleton loading"). Three quotes' shapes, the
+/// layout the page is about to show (photo and name, a line of words, the outlined card with its
+/// picture and lines), pulsing softly until the answer lands. Top-aligned like the real rows.
+private struct QuotesSkeleton: View {
+    @State private var dim = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            bar(width: 180, height: 12).padding(.horizontal, 16).padding(.vertical, 14)
+            ForEach(0..<3, id: \.self) { _ in
+                row
+                Divider().padding(.leading, 16)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color(.systemBackground))
+        .opacity(dim ? 0.45 : 1)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { dim = true }
+        }
+        .accessibilityLabel("Loading quotes")
+    }
+
+    private var row: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(fill).frame(width: 40, height: 40)
+                VStack(alignment: .leading, spacing: 6) {
+                    bar(width: 130, height: 12)
+                    bar(width: 80, height: 10)
+                }
+            }
+            bar(width: 220, height: 12)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous).fill(fill).frame(width: 20, height: 20)
+                    bar(width: 90, height: 10)
+                    Spacer()
+                    bar(width: 44, height: 10)
+                }
+                HStack(alignment: .top, spacing: 10) {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous).fill(fill).frame(width: 56, height: 56)
+                    VStack(alignment: .leading, spacing: 6) {
+                        bar(width: nil, height: 10)
+                        bar(width: 140, height: 10)
+                    }
+                }
+                bar(width: 60, height: 9)
+            }
+            .padding(12)
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1))
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+    }
+
+    private var fill: Color { Color.secondary.opacity(0.16) }
+
+    private func bar(width: CGFloat?, height: CGFloat) -> some View {
+        Capsule().fill(fill).frame(width: width, height: height)
+            .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
     }
 }
