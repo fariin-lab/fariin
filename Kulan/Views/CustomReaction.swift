@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import FirebaseFunctions
 
 // ⛔ ANIMATED CUSTOM REACTIONS (owner 2026-11-02). 181 .tgs files ship in the app, played by
 // `TGSEngine` (rlottie off the main thread), never converted. A reaction is a string key on the post,
@@ -112,6 +113,23 @@ enum UploadedEmoji {
     }()
 
     static func isListed(_ id: String) -> Bool { lock.withLock { remote[id] != nil } }
+
+    /// Add .tgs files from this phone (owner 2026-11-06), the chooser account only: the server
+    /// (`addCustomEmoji`) checks each file again, saves it and adds it to the list, which comes back
+    /// through the live feature listener. Sent 20 at a time. Returns how many were added; throws the
+    /// server's reason (which names the file) when it refuses one.
+    static func upload(_ files: [(name: String, data: Data)], progress: @escaping @MainActor (Int) -> Void) async throws -> Int {
+        var added = 0
+        for start in stride(from: 0, to: files.count, by: 20) {
+            let part = files[start..<min(files.count, start + 20)]
+            let payload = part.map { ["name": $0.name, "data": $0.data.base64EncodedString()] }
+            _ = try await Functions.functions(region: "me-central1").httpsCallable("addCustomEmoji").call(["files": payload])
+            added += part.count
+            let n = added
+            await MainActor.run { progress(n) }
+        }
+        return added
+    }
 
     /// Deletes this phone's copy of an emoji that left the list.
     static func forget(_ id: String) {

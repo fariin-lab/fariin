@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 // Long-press reaction + actions menu, the any-emoji picker, and the "who reacted"
 // sheet. The standard reaction logic (one emoji per user, recents, full picker, reactor list),
@@ -77,6 +78,11 @@ struct EmojiMorePicker: View {
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var customTab = false
+    /// Adding .tgs files from this phone (owner 2026-11-06): the Files sheet, how many are up so far
+    /// (nil when nothing is uploading), and what to tell when it is done.
+    @State private var pickingFiles = false
+    @State private var uploadedSoFar: Int?
+    @State private var uploadNote: String?
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
 
     private var filtered: [EmojiCatalog.Item] {
@@ -119,11 +125,48 @@ struct EmojiMorePicker: View {
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { dismiss() } label: { Image(systemName: "xmark") }.tint(.primary) } }
         }
         .presentationDetents(detents)
+        // Any file: iOS has no type for .tgs, so a .tgs filter would grey them all out. The server
+        // checks every file and names any it refuses.
+        .fileImporter(isPresented: $pickingFiles, allowedContentTypes: [.data], allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result, !urls.isEmpty else { return }
+            var files: [(name: String, data: Data)] = []
+            for u in urls {
+                let scoped = u.startAccessingSecurityScopedResource()
+                defer { if scoped { u.stopAccessingSecurityScopedResource() } }
+                if let d = try? Data(contentsOf: u) { files.append((u.lastPathComponent, d)) }
+            }
+            guard !files.isEmpty else { uploadNote = "Couldn't read those files."; return }
+            uploadedSoFar = 0
+            Task {
+                do {
+                    let n = try await UploadedEmoji.upload(files) { uploadedSoFar = $0 }
+                    uploadNote = n == 1 ? "1 emoji added." : "\(n) emoji added."
+                } catch {
+                    uploadNote = (error as NSError).localizedDescription
+                }
+                uploadedSoFar = nil
+            }
+        }
+        .alert(uploadNote ?? "", isPresented: Binding(get: { uploadNote != nil }, set: { if !$0 { uploadNote = nil } })) {
+            Button("OK", role: .cancel) { uploadNote = nil }
+        }
     }
 
     /// Half rate: a full sheet plays about 70 at once. Only the ones on screen play.
+    /// Owner 2026-11-06: a "+" first, to add .tgs files from this phone (`UploadedEmoji.upload`);
+    /// they appear here by themselves once the server has them.
     private var customGrid: some View {
         LazyVGrid(columns: cols, spacing: 10) {
+            Button { pickingFiles = true } label: {
+                ZStack {
+                    Circle().fill(Color(.tertiarySystemFill)).frame(width: 40, height: 40)
+                    if uploadedSoFar != nil { ProgressView() }
+                    else { Image(systemName: "plus").font(.system(size: 18, weight: .semibold)).foregroundStyle(.secondary) }
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(uploadedSoFar != nil)
+            .accessibilityLabel("Add custom emoji from Files")
             ForEach(CustomReaction.all, id: \.self) { key in
                 Button { onPick(key); dismiss() } label: {
                     CustomReactionTile(key: key, side: 40, motion: .loop(step: 2))
