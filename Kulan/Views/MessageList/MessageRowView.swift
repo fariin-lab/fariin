@@ -801,6 +801,15 @@ final class MessageRowView: UIView {
     private let metaLabel = UILabel()
 
     private var mediaView: MediaBubbleView?
+    /// The channel capsule of a forwarded channel post (`FwdChannelCapsule`), made on first need.
+    private(set) var fwdCapsule: FwdChannelCapsule?
+
+    /// Is this point on the channel capsule, and on its Follow part.
+    func hitsFwdCapsule(_ p: CGPoint) -> Bool { fwdCapsule.map { !$0.isHidden && $0.frame.contains(p) } ?? false }
+    func hitsFwdFollow(_ p: CGPoint) -> Bool {
+        guard let c = fwdCapsule, !c.isHidden else { return false }
+        return c.hitsFollow(convert(p, to: c))
+    }
 
     /// While the picture is lifted into the viewer, the bubble shows nothing where it was: the
     /// fill and the rim get a hole the picture's size (owner 2026-10-29, "hide that empty
@@ -1781,6 +1790,19 @@ final class MessageRowView: UIView {
     }
 
     private func applyForwarded(_ b: BubblePlan) {
+        // A channel post forwarded here: the channel capsule instead of the word (2026-10-30). Its
+        // rect is the tag's, which starts 3pt after a zero-width glyph; the capsule takes that back.
+        if let rect = b.forwarded, case .bubble(let row)? = model?.content, let fc = row.fwdChannel {
+            forwardedLabel?.isHidden = true; forwardedIcon?.isHidden = true
+            let cap = fwdCapsule ?? {
+                let v = FwdChannelCapsule(); addSubview(v); fwdCapsule = v; return v
+            }()
+            cap.isHidden = false
+            cap.frame = CGRect(x: rect.minX - 3, y: rect.minY, width: rect.width + 3, height: rect.height)
+            cap.configure(fc)
+            return
+        }
+        fwdCapsule?.isHidden = true
         guard let rect = b.forwarded, let iconRect = b.forwardedIcon else {
             forwardedLabel?.isHidden = true; forwardedIcon?.isHidden = true; return
         }
@@ -2083,7 +2105,11 @@ final class MessageRowView: UIView {
             // appeared somewhere else). At this moment the row has its new size but the list has not
             // yet moved it into place, so the pill's spot on screen is not where it will settle.
             // The pill is held hidden for the flight now; where to fly is asked once layout is done.
-            let from = ReactionFlight.take(chip.emoji)
+            // ⛔ A CUSTOM EMOJI DOES NOT FLY (owner 2026-11-06: "react badge is appearing late"). Its
+            // flying copy has to unpack and decode its animation first, so it travelled blank and the
+            // pill, held back for the flight, showed up late. The pill pops at once with its burst.
+            let taken = ReactionFlight.take(chip.emoji)   // taken either way, so it cannot go stale
+            let from = CustomReaction.isCustom(chip.emoji) ? nil : taken
             let settle: CFTimeInterval = 0.06
             // The pill is solid as the emoji lands, not after it (owner 2026-11-01: the bubble had
             // grown, an empty gap sat there, and the pill came late). Its fade takes 0.22 s.
