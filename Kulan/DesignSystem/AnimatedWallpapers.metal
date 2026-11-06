@@ -199,25 +199,34 @@ inline float2 awCircle(float phase, float r) { return float2(cos(phase), sin(pha
     float aspect = size.x / max(size.y, 1.0);
     float2 m = float2(cos(phase), sin(phase));
     // Three overlapping blobs make one body; a little noise keeps its outline organic.
-    float2 b0 = float2(aspect * 0.55, 0.30) + m * float2(0.06, 0.05);
-    float2 b1 = float2(aspect * 0.45, 0.60) + float2(m.y, -m.x) * float2(0.07, 0.06);
-    float2 b2 = float2(aspect * 0.60, 0.88) + float2(-m.x, m.y) * float2(0.05, 0.05);
-    float f = 0.055 / dot(uv - b0, uv - b0) + 0.075 / dot(uv - b1, uv - b1) + 0.05 / dot(uv - b2, uv - b2);
+    // A body that FLOATS on a phone screen (owner 2026-11-06): smaller blobs and a wider drift, so its
+    // whole glowing outline is in view and changes shape as it moves, instead of one shape filling
+    // the screen with only a glint of edge at the top.
+    float2 b0 = float2(aspect * 0.55, 0.32) + m * float2(0.10, 0.08);
+    float2 b1 = float2(aspect * 0.45, 0.52) + float2(m.y, -m.x) * float2(0.10, 0.08);
+    float2 b2 = float2(aspect * 0.58, 0.70) + float2(-m.x, m.y) * float2(0.09, 0.08);
+    float f = 0.020 / dot(uv - b0, uv - b0) + 0.028 / dot(uv - b1, uv - b1) + 0.018 / dot(uv - b2, uv - b2);
     f += (awFbm(uv * 3.0 + m * 0.4) - 0.5) * 0.35;
-    float inside = smoothstep(0.95, 1.10, f);
-    float e = (f - 1.0) / 0.06;   // x*x, not pow (undefined for a negative base)
+    // ⛔ SEEN, NOT GUESSED AT (owner 2026-11-06: "99% is black, let the user see it"). The body was
+    // 0.075 on a 0.02 ground and the rim a hairline (0.06 of f), so on a phone only a corner glinted.
+    // Now: a navy ground with its own gradient, a body clearly lighter than it with light falling
+    // from the top, a rim four times wider, and a soft halo of the rim's colour outside the body.
+    float inside = smoothstep(0.90, 1.15, f);
+    float e = (f - 1.0) / 0.24;   // x*x, not pow (undefined for a negative base)
     float edge = exp(-e * e);
+    float halo = exp(-max(0.0, 1.0 - f) * 2.5) * (1.0 - inside);
+    float y = position.y / max(size.y, 1.0);
     float3 rgb;
     if (dark > 0.5) {
-        float3 ground = float3(0.020, 0.022, 0.026);
-        float3 body = float3(0.075, 0.080, 0.090);
-        float3 rim = float3(0.42, 0.52, 0.68);
-        rgb = mix(ground, body, inside) + rim * edge * 0.75;
+        float3 ground = mix(float3(0.035, 0.045, 0.095), float3(0.060, 0.045, 0.120), y);
+        float3 body = mix(float3(0.16, 0.20, 0.30), float3(0.10, 0.12, 0.20), y);
+        float3 rim = float3(0.35, 0.60, 0.95);
+        rgb = mix(ground, body, inside) + rim * (edge * 0.85 + halo * 0.22);
     } else {
-        float3 ground = float3(0.93, 0.94, 0.96);
-        float3 body = float3(0.86, 0.88, 0.92);
-        float3 rim = float3(0.30, 0.45, 0.75);
-        rgb = mix(mix(ground, body, inside), rim, edge * 0.55);
+        float3 ground = mix(float3(0.93, 0.94, 0.97), float3(0.88, 0.90, 0.96), y);
+        float3 body = mix(float3(0.80, 0.85, 0.94), float3(0.74, 0.79, 0.90), y);
+        float3 rim = float3(0.25, 0.45, 0.85);
+        rgb = mix(mix(ground, body, inside), rim, saturate(edge * 0.60 + halo * 0.15));
     }
     return half4(half3(saturate(rgb)), 1.0h);
 }
