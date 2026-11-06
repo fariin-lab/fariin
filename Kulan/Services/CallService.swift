@@ -6020,6 +6020,7 @@ final class CallService: NSObject {
         // this phone's gate and iOS accepting the ring (this hook); whichever lands second tells
         // the caller. A refused ring never says "Ringing...". Delivery itself is untouched.
         ringKitShownId = id
+        mark("kitShown")   // 2026-11-05: iOS has the ring up (half of "ringing")
         markRingingIfAlerted(id)
     }
     /// The two halves of "the callee is really being alerted" (see `ringShown`).
@@ -6067,6 +6068,10 @@ final class CallService: NSObject {
     /// ring that ends at once (`reportAndDiscard`), the shape iOS requires and never sees as a call.
     @discardableResult
     func prepareIncoming(callId: String, name: String, uid: String, photo: String?, video: Bool = false) -> Bool {
+        // 2026-11-05 (owner, Android -> iPhone calls ring ~4 s after the server's push, iPhone ->
+        // iPhone 0.4 s): the push's arrival is the timeline's origin, so the gap before "ring" and
+        // "kitShown" says which step holds the ring.
+        mark("pushIn")
         // 1:1 audit r2 A3, 2026-10-08: a cold launch from a VoIP push builds no UI, so the block list
         // was never started and the phone-side block check read an empty list. Idempotent; it puts
         // the saved copy from disk in place at once.
@@ -6217,6 +6222,7 @@ final class CallService: NSObject {
                 self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
                 return
             }
+            self.mark("gateAnswered")   // 2026-11-05: the privacy/block read is done (allowed or not)
             guard self.state == .incoming else { return }   // answered during the read: nothing left to do here
             self.ringGateAllowed(callId)   // allowed; "ringing" once iOS has the ring up (ringShown)
             self.mark("ring")
