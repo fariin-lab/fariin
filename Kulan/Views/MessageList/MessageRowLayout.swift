@@ -2075,10 +2075,27 @@ enum MessageRowLayout {
             // channel's name in blue, the post's picture with its own corners, then its words.
             y = 10
             let avatar = CGRect(x: pad, y: y, width: 20, height: 20)
+            // A short "Quote" tag with its icon at the header's right end (owner 2026-11-06).
+            let tagColor = textColor.withAlphaComponent(0.55)
+            let tagAttr = NSMutableAttributedString()
+            if let icon = UIImage(systemName: "quote.opening",
+                                  withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold))?
+                .withTintColor(tagColor, renderingMode: .alwaysOriginal) {
+                let a = NSTextAttachment(image: icon)
+                a.bounds = CGRect(x: 0, y: -1, width: icon.size.width, height: icon.size.height)
+                tagAttr.append(NSAttributedString(attachment: a))
+                tagAttr.append(NSAttributedString(string: " "))
+            }
+            tagAttr.append(NSAttributedString(string: "Quote", attributes: [
+                .font: UIFont.systemFont(ofSize: 12), .foregroundColor: tagColor]))
+            let tagSize = lineSizeOf(tagAttr)
+            let tagRect = CGRect(x: pad + inner - tagSize.width, y: y + (20 - tagSize.height) / 2,
+                                 width: tagSize.width, height: tagSize.height)
+            let titleW = max(1, inner - 26 - tagSize.width - 8)
             let titleAttr = NSAttributedString(string: p.title, attributes: [
                 .font: UIFont.systemFont(ofSize: 14, weight: .semibold), .foregroundColor: UIColor.systemBlue])
-            let tH = lineSizeOf(titleAttr, cap: inner - 26).height
-            let titleRect = CGRect(x: pad + 26, y: y + (20 - tH) / 2, width: inner - 26, height: tH)
+            let tH = lineSizeOf(titleAttr, cap: titleW).height
+            let titleRect = CGRect(x: pad + 26, y: y + (20 - tH) / 2, width: titleW, height: tH)
             y += 28
             var hero: CGRect?
             if p.imageUrl != nil {
@@ -2101,7 +2118,7 @@ enum MessageRowLayout {
                     LinkPreviewPlan(card: .zero, hero: hero, avatar: avatar,
                                     title: titleRect, titleAttr: titleAttr,
                                     subtitle: subtitle, subtitleAttr: subtitleAttr,
-                                    host: nil, hostAttr: nil,
+                                    host: tagRect, hostAttr: tagAttr,
                                     divider: nil, button: nil, buttonLabel: nil, buttonAttr: nil))
 
         case .article:
