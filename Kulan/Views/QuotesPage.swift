@@ -142,7 +142,7 @@ struct QuotesPage: View {
     /// My post, the same in every row: a thin grey line, its channel, its picture and words.
     private var card: some View {
         HStack(alignment: .top, spacing: 10) {
-            RoundedRectangle(cornerRadius: 1.5).fill(Color(.systemGray3)).frame(width: 3)   // grey (owner 2026-11-06)
+            RoundedRectangle(cornerRadius: 1.5).fill(Color(.systemGray4)).frame(width: 3)   // soft grey (owner 2026-11-06)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
                     AvatarView(name: sourceTitle, photoUrl: sourcePhoto, size: 16)
