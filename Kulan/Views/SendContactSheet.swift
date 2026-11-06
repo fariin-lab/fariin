@@ -360,7 +360,9 @@ struct SendContactSheet: View {
                 // quieter of the two states; the text does not have to say it twice.
                 // Black on the light-mode Copy Link, white everywhere else — on the blue Send in
                 // both themes, and on the dark-mode wash his 2026-08-21 white-text rule was about.
-                .foregroundStyle(Color.onFariinAction)
+                // Owner 2026-11-06: white on a plain blue capsule, no edge (the reference app's share
+                // button). Overrides the black action colour below for this button only.
+                .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
                 // ⛔ GREY WHILE IT COPIES, BLUE ONCE IT SENDS (owner 2026-08-22: "make it grey
@@ -381,7 +383,7 @@ struct SendContactSheet: View {
                 // Dark keeps the system's own wash, which reads perfectly well there and is what he
                 // signed off.
                 // The one action colour in both states (owner 2026-10-31: black, white at night).
-                .background(Color.fariinAction, in: Capsule())
+                .background(Color(uiColor: .systemBlue), in: Capsule())
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
