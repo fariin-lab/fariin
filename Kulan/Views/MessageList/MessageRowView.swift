@@ -957,6 +957,7 @@ final class MessageRowView: UIView {
     func apply(_ m: MessageRowModel, plan p: RowPlan, cid: String) {
         fill.layer.mask = nil; rim.layer.mask = nil   // a reused row is never left holed
         shareButton?.isHidden = true; shareRect = nil  // the bubble path puts it back (`applyShareButton`)
+        quoteBarView?.isHidden = true                   // and `applyQuoteBar` this one (a reused row)
         // A reaction arriving on, or leaving, the message this view is ALREADY showing. Never on a
         // recycled cell (a different id): that would be motion out of nowhere mid-scroll.
         let oldKeys = Self.reactionKeys(model), newKeys = Self.reactionKeys(m)
