@@ -168,8 +168,9 @@ struct AnimatedWallpaperView: View {
     /// These looks change slowly (loops of 40 to 480 seconds), so most of them need far fewer frames
     /// than a game: 15 a second reads as smooth motion for a slow drift and is half of the old 30.
     /// Only Rain falls fast enough to need 24. The GPU work per frame shrinks too: the soft liquid
-    /// and aurora looks draw at a quarter of the screen's resolution (blur hides it), the particles
-    /// at a third, the stars at two thirds (small points vanish lower).
+    /// and aurora looks draw at HALF the screen's resolution, as do the particles; the stars at full
+    /// (owner 2026-11-06: "low quality, especially in light mode": a quarter showed as soft steps
+    /// on the light grounds). Half the frames at twice the pixels costs about what 1108 did.
     private var framesPerSecond: Double {
         if case .particles(let kind) = wallpaper.look, kind == 1 { return 24 }
         return 15
@@ -177,9 +178,8 @@ struct AnimatedWallpaperView: View {
 
     private var renderScale: CGFloat {
         switch wallpaper.look {
-        case .stars: return 1.5
-        case .particles: return 3
-        default: return 4
+        case .stars: return 1
+        default: return 2
         }
     }
 

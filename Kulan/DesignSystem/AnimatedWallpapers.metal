@@ -55,7 +55,12 @@ inline float2 awCircle(float phase, float r) { return float2(cos(phase), sin(pha
 // light); a thin cyan line rides the body's edge; the rest is the deep ground.
 
 [[ stitchable ]] half4 fariinLiquidMetal(float2 position, half4 color, float2 size, float phase, float dark) {
-    float2 uv = position / max(size.y, 1.0) * 1.7;
+    // ⛔ FILLS A PHONE SCREEN (owner 2026-11-06: "the user sees nothing"). The warped noise sits
+    // around 0.31 on average, and the body only began at 0.52, so most of the screen was ground with
+    // a corner of metal. Thresholds now sit on the noise's real spread (checked on a CPU render at
+    // phone shape, light and dark, four points of the loop).
+    float2 uv = position / max(size.y, 1.0) * 2.0;
+    float y = position.y / max(size.y, 1.0);
     float2 m1 = awCircle(phase, 0.55);
     float2 m2 = awCircle(phase + 2.1, 0.45);
     float2 q = float2(awFbm(uv + m1), awFbm(uv + float2(5.2, 1.3) - m2));
@@ -63,24 +68,25 @@ inline float2 awCircle(float phase, float r) { return float2(cos(phase), sin(pha
                       awFbm(uv + 2.0 * q + float2(8.3, 2.8) - m1 * 0.6));
     float f = awFbm(uv + 2.2 * r);
 
-    float body = smoothstep(0.52, 0.78, f);
-    float glow = smoothstep(0.40, 0.80, f) * 0.35;
+    float body = smoothstep(0.33, 0.46, f);
+    float glow = smoothstep(0.23, 0.52, f) * 0.5;
     // x*x, not pow(x, 2.0): pow is undefined for a negative base in Metal (half the edge).
-    float e = (f - 0.53) / 0.016;
+    float e = (f - 0.34) / 0.03;
     float edge = exp(-e * e);
+    float shade = (1.0 - y) * 0.3 + 0.7;   // light from above
 
     float3 rgb;
     if (dark > 0.5) {
-        float3 ground = float3(0.012, 0.020, 0.040);
+        float3 ground = mix(float3(0.02, 0.03, 0.06), float3(0.04, 0.06, 0.11), y);
         float3 metal = float3(0.78, 0.83, 0.90);
         float3 cyan = float3(0.30, 0.78, 1.00);
-        rgb = ground + metal * (body * 0.80 + glow * 0.30) + cyan * edge * 0.85;
+        rgb = ground + metal * (body * 0.70 + glow * 0.35) * shade + cyan * edge * 0.90;
     } else {
         float3 ground = float3(0.90, 0.92, 0.95);
-        float3 metal = float3(0.40, 0.48, 0.60);
+        float3 metal = float3(0.42, 0.50, 0.62);
         float3 cyan = float3(0.05, 0.55, 0.85);
-        rgb = mix(ground, metal, body * 0.55 + glow * 0.20);
-        rgb = mix(rgb, cyan, edge * 0.70);
+        rgb = mix(ground, metal, body * 0.60 + glow * 0.25);
+        rgb = mix(rgb, cyan, edge * 0.75);
     }
     return half4(half3(saturate(rgb)), 1.0h);
 }
@@ -120,10 +126,13 @@ inline float2 awCircle(float phase, float r) { return float2(cos(phase), sin(pha
 // fine vertical rays. `palette` 0 green, 1 purple, 2 pink.
 
 [[ stitchable ]] half4 fariinAurora(float2 position, half4 color, float2 size, float phase, float dark, float palette) {
-    float2 uv = position / max(size.y, 1.0);
-    float y = position.y / max(size.y, 1.0);
-    // Lean the curtains: x runs along the slant.
-    float2 s = float2(uv.x * 0.94 + uv.y * 0.34, uv.y * 0.94 - uv.x * 0.34);
+    // ⛔ ACROSS THE WHOLE SCREEN (owner 2026-11-06: the aurora sat in one corner, the rest black).
+    // x was measured in screen HEIGHTS, so on a tall phone it ran 0 to 0.46 and only the edge of one
+    // curtain fell inside. Now x runs 0 to 1 across the width, the curtains are wider (power 3, not
+    // 7), they reach two thirds of the way up, and a faint glow of their colour lifts the lower sky.
+    float2 uv = float2(position.x / max(size.x, 1.0), position.y / max(size.y, 1.0));
+    float y = uv.y;
+    float2 s = float2(uv.x + uv.y * 0.25, uv.y - uv.x * 0.15);
     float2 m = awCircle(phase, 0.7);
 
     float3 a, b;
@@ -138,18 +147,20 @@ inline float2 awCircle(float phase, float r) { return float2(cos(phase), sin(pha
     float3 light = float3(0.0);
     for (int i = 0; i < 3; i++) {
         float fi = float(i);
-        float wob = awFbm(float2(s.y * 1.2 + fi * 3.1, m.x * 0.8 + fi)) * 1.6;
-        float x = s.x * 2.4 + wob + m.y * 0.35 + fi * 1.9;
-        float curtain = pow(0.5 + 0.5 * sin(x * 3.14159), 7.0);
-        float base = 0.55 + 0.18 * sin(s.x * 2.0 + phase + fi) + 0.08 * fi;
+        float wob = awFbm(float2(s.y * 1.5 + fi * 3.1, m.x * 0.8 + fi)) * 1.2;
+        float x = s.x * 1.6 + wob + m.y * 0.3 + fi * 0.7;
+        float c = 0.5 + 0.5 * sin(x * 3.14159);
+        float curtain = c * c * c;
+        float base = 0.62 + 0.10 * sin(s.x * 3.0 + phase + fi) + 0.06 * fi;
         // Brightest just above the base line, fading upward, cut off below it. (smoothstep's edges
         // must ascend in Metal, so the cut is written as 1 − an ascending step.)
-        float rise = smoothstep(base - 0.75, base - 0.05, s.y) * (1.0 - smoothstep(base, base + 0.06, s.y));
-        float rays = 0.55 + 0.45 * awNoise(float2(s.x * 38.0 + fi * 7.0 + cos(phase) * 2.0, fi * 5.0 + sin(phase) * 2.0));   // a circle: no seam
+        float rise = smoothstep(base - 0.62, base - 0.04, s.y) * (1.0 - smoothstep(base, base + 0.08, s.y));
+        float rays = 0.6 + 0.4 * awNoise(float2(s.x * 30.0 + fi * 7.0 + cos(phase) * 2.0, fi * 5.0 + sin(phase) * 2.0));   // a circle: no seam
         float glow = curtain * rise * rays;
-        light += mix(a, b, smoothstep(base - 0.6, base, s.y)) * glow * (0.85 - fi * 0.2);
+        light += mix(a, b, smoothstep(base - 0.5, base, s.y)) * glow * (0.9 - fi * 0.2);
     }
-    float3 rgb = sky + light * 0.9;
+    float3 haze = mix(a, b, 0.5) * smoothstep(0.3, 1.0, y) * 0.10;
+    float3 rgb = sky + light + haze;
     return half4(half3(saturate(rgb)), 1.0h);
 }
 
@@ -242,8 +253,9 @@ inline float2 awCircle(float phase, float r) { return float2(cos(phase), sin(pha
                             : mix(float3(0.075, 0.085, 0.190), float3(0.150, 0.110, 0.260), y);
     float2 m = awCircle(phase, 0.25);
     float neb = awFbm(uv * 1.6 + m);
-    float3 rgb = sky + float3(0.20, 0.10, 0.35) * smoothstep(0.45, 0.85, neb) * 0.45
-                     + float3(0.05, 0.15, 0.30) * smoothstep(0.55, 0.90, awFbm(uv * 2.3 - m + 7.0)) * 0.35;
+    // Brighter (owner 2026-11-06: faint on a phone): the nebula half again as strong, stars larger.
+    float3 rgb = sky + float3(0.20, 0.10, 0.35) * smoothstep(0.40, 0.85, neb) * 0.65
+                     + float3(0.05, 0.15, 0.30) * smoothstep(0.50, 0.90, awFbm(uv * 2.3 - m + 7.0)) * 0.50;
     for (int layer = 0; layer < 2; layer++) {
         float scale = layer == 0 ? 22.0 : 40.0;
         float2 g = uv * scale;
@@ -252,7 +264,7 @@ inline float2 awCircle(float phase, float r) { return float2(cos(phase), sin(pha
         float h = awHash(cell + float(layer) * 31.0);
         float2 spot = float2(awHash(cell + 3.1), awHash(cell + 7.7)) * 0.8 + 0.1;
         float d = length(f - spot);
-        float radius = (layer == 0 ? 0.06 : 0.04) * (0.5 + h);
+        float radius = (layer == 0 ? 0.10 : 0.065) * (0.5 + h);
         float star = (1.0 - smoothstep(0.0, radius, d));
         float rate = floor(1.0 + h * 4.0);                      // whole turns per loop: no seam
         float tw = 0.55 + 0.45 * sin(phase * rate + h * 6.2831);
@@ -311,9 +323,9 @@ inline float2 awCircle(float phase, float r) { return float2(cos(phase), sin(pha
             rgb = mix(rgb, c, flake * (0.85 - fl * 0.2));
         } else if (kind < 1.5) {
             float2 q = f - spot;
-            float streak = (1.0 - smoothstep(0.0, 0.018, abs(q.x))) * (1.0 - smoothstep(0.0, 0.22, abs(q.y)));
+            float streak = (1.0 - smoothstep(0.0, 0.026, abs(q.x))) * (1.0 - smoothstep(0.0, 0.24, abs(q.y)));
             float3 c = dark > 0.5 ? float3(0.65, 0.75, 0.90) : float3(0.95, 0.97, 1.0);
-            rgb = mix(rgb, c, streak * (0.55 - fl * 0.12));
+            rgb = mix(rgb, c, streak * (0.75 - fl * 0.15));
         } else {
             float2 drift = float2(cos(phase * floor(1.0 + h * 2.0) * 8.0 + h * 9.0), sin(phase * 8.0 + h * 5.0)) * 0.08;
             float d = length(f - spot - drift);
