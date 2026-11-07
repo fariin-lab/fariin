@@ -3713,6 +3713,7 @@ struct ThreadView: View {
                 onInfo: { infoTarget = MessageRef(id: $0.id) },
                 onEdit: { m in
                     withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
+                    ComposerFormat.setPrefill(m.text, bold: m.boldRanges)   // the post's bold comes with it
                     input = m.text
                     mentionMap = [:]   // a stale pick from before must not resurface (audit)
                     inputFocused = true
@@ -4044,6 +4045,8 @@ struct ThreadView: View {
                 }
                 // A quoted channel post draws the server's answer (QuoteStore), so that is its token.
                 if let q = m.quoteId { linkTok += ":Q" + QuoteStore.shared.token(q) }
+                // Bold spans: an edit may change only them.
+                if let b = m.boldSpans { linkTok += ":B\(b.hashValue)" }
                 out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)|\(m.views)|\(m.quoteCount)|\(m.quoteFaces.hashValue)|\(m.replyCount)|\(m.replyFaces.hashValue)|\(m.repliesOff(channelDefault: chanRepliesOff))"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
             }
             sigCache.key = key
@@ -4273,6 +4276,7 @@ struct ThreadView: View {
         if canEdit(m) {
             items.append(UIAction(title: "Edit", image: UIImage(systemName: "pencil")) { _ in
                 withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
+                ComposerFormat.setPrefill(m.text, bold: m.boldRanges)   // the post's bold comes with it
                 input = m.text
                 mentionMap = [:]   // a stale pick from before must not resurface (audit)
                 inputFocused = true
@@ -4506,6 +4510,7 @@ struct ThreadView: View {
         if canEdit(m) {
             out.append(CMAction(title: "Edit", icon: "pencil") {
                 withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
+                ComposerFormat.setPrefill(m.text, bold: m.boldRanges)   // the post's bold comes with it
                 input = m.text
                 mentionMap = [:]   // a stale pick from before must not resurface (audit)
                 inputFocused = true
@@ -7359,6 +7364,8 @@ struct ThreadView: View {
         // 2026-09-24 decision D-composer-5: only people still in the group. A member picked and then
         // gone before Send was still tagged and notified.
         let mentions = resolveMentions(in: text).filter { groupMembers.contains($0) }
+        // Bold spans from the field, on the trimmed text (channel posts; empty anywhere else).
+        let bold = ComposerFormat.bold(for: input)
         mentionMap = [:]
         input = ""
         let reply = replyingTo.map {
@@ -7415,6 +7422,7 @@ struct ThreadView: View {
         let style = BubbleStyles.snapshotForSending()
         outgoing.bubbleStyle = style.id
         outgoing.bubbleDecor = style.decor
+        outgoing.boldSpans = TextFormat.spans(bold)
         repo.addPending(outgoing)
         // 2026-10-23: the card is attached after the text lands; my bubble keeps it meanwhile.
         if let pendingPreview { repo.showLocalCard(clientId: clientId, card: pendingPreview) }
@@ -7434,7 +7442,7 @@ struct ThreadView: View {
         }
         Task {
             await deliver(text: text, reply: reply, clientId: clientId, mentions: mentions, draft: draft,
-                          lateCard: lateCard, tapTs: tapTs, turn: turn, style: style)
+                          lateCard: lateCard, tapTs: tapTs, turn: turn, style: style, bold: bold)
         }
     }
 
@@ -8362,7 +8370,7 @@ struct ThreadView: View {
                          draft: LinkPreviewService.LinkDraft? = nil,
                          lateCard: Task<LinkPreviewService.LinkDraft?, Never>? = nil,
                          tapTs: Double? = nil, turn: ChatService.SendTurn? = nil,
-                         style: BubbleStyles.Snapshot? = nil) async {
+                         style: BubbleStyles.Snapshot? = nil, bold: [NSRange]? = nil) async {
         // owner audit 2026-10-06 chat #24: a place in the send line taken at the tap is given back on
         // EVERY way out of here (the early return below included), or the next send would wait on it.
         defer { turn?.finish() }
@@ -8376,6 +8384,7 @@ struct ThreadView: View {
         // The bubble style taken when the message was written; a retry keeps the queued one.
         let now = BubbleStyles.snapshotForSending()
         let style = style ?? prior?.style ?? now
+        let bold = bold ?? TextFormat.ranges(prior?.bold)   // a retry keeps the queued spans
         var storedPreview: (url: String, title: String, desc: String)?
         if let d = draft {
             storedPreview = (url: d.url.absoluteString, title: d.title, desc: d.desc)
@@ -8385,7 +8394,8 @@ struct ThreadView: View {
         var priorPreview: ChatService.OutgoingLinkPreview?
         if draft == nil, let p = prior { priorPreview = await SendQueue.outgoingPreview(for: p) }
         SendQueue.add(clientId: clientId, cid: cid, text: text, mentions: mentions, reply: reply,
-                      ts: Date().timeIntervalSince1970, preview: storedPreview, style: style)
+                      ts: Date().timeIntervalSince1970, preview: storedPreview, style: style,
+                      bold: TextFormat.spans(bold))
         // Already on its way (an offline send suspends, it does not fail): a Retry tap or a reopen
         // drain must not start a second copy (2026-09-24 audit, see `SendQueue.beginSending`). The
         // bubble stays; the original's echo or failure settles it.
@@ -8412,7 +8422,7 @@ struct ThreadView: View {
             // seal, image upload) stands between Send and the write. The card follows below.
             try await ChatService.sendText(cid: cid, text: text, replyTo: reply, clientId: clientId,
                                            group: isGroup ? groupMembers : nil, mentions: mentions,
-                                           preview: nil, tapTs: tapTs, turn: turn, style: style)
+                                           preview: nil, tapTs: tapTs, turn: turn, style: style, bold: bold)
             SendQueue.remove(clientId: clientId)   // landed → no re-drive needed
             let members = isGroup ? groupMembers : nil
             let convId = cid
@@ -8480,6 +8490,7 @@ struct ThreadView: View {
                         redrawn.bubbleStyle = style.id
                         redrawn.bubbleDecor = style.decor
                     }
+                    redrawn.boldSpans = entry.bold
                     repo.addPending(redrawn)
                     if let card { repo.showLocalCard(clientId: entry.clientId, card: card) }   // 2026-10-23
                 }
@@ -10054,6 +10065,9 @@ struct ThreadView: View {
     private func saveEdit() {
         guard let e = editingMessage else { return }
         let newText = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A change of bold alone is an edit too (channel posts).
+        let newBold = ComposerFormat.bold(for: input)
+        let changed = newText != e.text || newBold != TextFormat.normalized(e.boldRanges, length: (e.text as NSString).length)
         // Empty text = cancel the edit (an edit can't erase a message) — the old silent return
         // left the composer STUCK in edit mode with no way out.
         // Unchanged text = nothing to save; just leave edit mode.
@@ -10062,14 +10076,14 @@ struct ThreadView: View {
         // meanwhile. Too late reads as the same refusal the server would give.
         // The typed words are not thrown away: they stay in the composer as an ordinary draft, so
         // they can still go out as a new message.
-        if !newText.isEmpty && newText != e.text,
+        if !newText.isEmpty && changed,
            !canEdit(repo.items.first(where: { $0.id == e.id }) ?? e) {
             sendError = "Couldn't save your edit. The message still has its original text for both of you."
             withAnimation(.easeInOut(duration: 0.2)) { editingMessage = nil }
             Drafts.shared.set(cid, newText)
             setInputSilently(newText)   // no phantom typing
             return
-        } else if !newText.isEmpty && newText != e.text {
+        } else if !newText.isEmpty && changed {
             // 2026-09-24 audit: a refused edit (message deleted meanwhile, or the server said no) was
             // dropped by `try?` and edit mode closed as if it had saved. Say so, the way Delete for
             // Everyone does. The original text needs no restoring by hand: the edit is only a pending
@@ -10080,7 +10094,7 @@ struct ThreadView: View {
             // answers (offline, on reconnect), so the footer's sending clock shows for exactly that long.
             editPendingIds.insert(mid)
             Task {
-                do { try await ChatService.editMessage(cid: cid, messageId: mid, newText: newText, group: members) }
+                do { try await ChatService.editMessage(cid: cid, messageId: mid, newText: newText, group: members, bold: newBold) }
                 catch {
                     await MainActor.run {
                         sendError = "Couldn't save your edit. The message still has its original text for both of you."
@@ -10284,9 +10298,11 @@ struct ThreadView: View {
             ChannelPosting.shared.load(cid)   // once per launch; the answer lands a moment later
             s.channelSilent = ChannelPosting.shared.isSilent(cid)
             s.canSchedule = true
+            s.canFormat = true
         } else {
             s.channelSilent = nil
             s.canSchedule = false
+            s.canFormat = false
         }
         s.banners = composerBanners
         s.sendsWithoutText = quoting != nil && editingMessage == nil   // a quote may go with no words

@@ -282,7 +282,8 @@ enum MessageRowModelBuilder {
                 // A call link takes the call card whatever preview travelled with it: the web page
                 // behind the link knows nothing about the call, and older messages carry none.
                 // A quoted channel post takes the card's place (owner 2026-11-06, `quoteBody`).
-                linkPreview: msg.quoteId.map(quoteBody) ?? callLinkPreview(text) ?? msg.linkPreview.map(linkPreviewBody)))
+                linkPreview: msg.quoteId.map(quoteBody) ?? callLinkPreview(text) ?? msg.linkPreview.map(linkPreviewBody),
+                bold: text == msg.text ? msg.boldRanges : []))
         }
 
         // MY fill is the chat colour if one is set, else the default blue — a colour is a colour and
@@ -505,7 +506,7 @@ enum MessageRowModelBuilder {
         let kind: BubbleBody.MediaBody.Kind = m.isGif ? .gif : (m.isVideo ? .video : .photo)
         let caption = m.text.isEmpty ? nil : BubbleBody.TextBody(
             text: m.text, searchTerm: ctx.searchTerm,
-            mentionTokens: m.mentions.map { "@\(ctx.nameFor($0))" })
+            mentionTokens: m.mentions.map { "@\(ctx.nameFor($0))" }, bold: m.boldRanges)
         let duration: String? = {
             guard kind == .video, let d = m.duration, d > 0 else { return nil }
             let s = Int(d)
@@ -633,7 +634,7 @@ enum MessageRowModelBuilder {
         }
         let caption = m.text.isEmpty ? nil : BubbleBody.TextBody(
             text: m.text, searchTerm: ctx.searchTerm,
-            mentionTokens: m.mentions.map { "@\(ctx.nameFor($0))" })
+            mentionTokens: m.mentions.map { "@\(ctx.nameFor($0))" }, bold: m.boldRanges)
         return BubbleBody.AlbumBody(
             tiles: tiles, extra: n - shown, caption: caption,
             // ⚠️ `|| m.uploading` — the RECEIVER's half, and it was missing while the single-photo

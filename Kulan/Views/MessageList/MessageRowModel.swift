@@ -375,6 +375,8 @@ enum BubbleBody: Equatable {
         /// The OG card, when one travelled with this message. It sits between the reply quote and
         /// the words, inside the same bubble.
         var linkPreview: LinkPreview? = nil
+        /// Bold spans the author set (channel posts), UTF-16 ranges of `text`.
+        var bold: [NSRange] = []
     }
 }
 

@@ -51,6 +51,15 @@ enum BubbleText {
         let whole = NSRange(location: 0, length: ns.length)
         var links: [LinkRun] = []
 
+        // Bold spans the author set (channel posts). Same size, heavier weight; this one string is
+        // both measured and drawn, so the height stays right.
+        if !t.bold.isEmpty {
+            let boldFont = UIFont.systemFont(ofSize: BubbleMetrics.bodyFont.pointSize, weight: .semibold)
+            for r in TextFormat.normalized(t.bold, length: ns.length) {
+                out.addAttribute(.font, value: boldFont, range: r)
+            }
+        }
+
         // In-chat search: highlight the matched TERM, never the whole bubble. Case, diacritic and
         // width insensitive so the highlight finds exactly what the search matched.
         // 2026-09-24 decision D2: each query term, not the whole query as one string (see ChatSearch).
