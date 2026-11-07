@@ -65,51 +65,73 @@ struct DeleteAccountView: View {
         !methods.contains(.apple) && !methods.contains(.google) && methods.contains(.email)
     }
 
+    /// Height of the step on screen, measured, so the sheet is exactly as tall as what it shows
+    /// (owner 2026-11-07: no empty band under Cancel). Re-measured when "Other reason" opens its field.
+    @State private var contentHeight: CGFloat = 420
+
     var body: some View {
-        NavigationStack {
-            reasonPage
-                .navigationDestination(isPresented: $showConfirm) { confirmPage }
+        Group {
+            if showConfirm { confirmPage } else { reasonPage }
         }
+        .padding(.horizontal, 20)
+        .padding(.top, 26)
+        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+        .presentationDetents([.height(contentHeight)])
+        .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(deleting)
         .sheet(item: $exportFile, onDismiss: { DataExport.cleanup() }) { f in ActivityView(items: [f.url]) }
     }
 
     // MARK: - Step 1: why
 
+    // One way out on both steps (owner rule, same as Android): no corner button, only the plain
+    // Cancel under the main button. Dragging the sheet down still closes it.
     private var reasonPage: some View {
-        List {
-            Section {
-                ForEach(LeaveReason.allCases) { r in
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Why are you leaving?").font(.title2.weight(.bold))
+                Text("Optional. It helps us make Fariin better.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+
+            VStack(spacing: 0) {
+                ForEach(Array(LeaveReason.allCases.enumerated()), id: \.element) { i, r in
+                    if i > 0 { Divider().padding(.leading, 16) }
                     Button {
-                        reason = (reason == r) ? nil : r   // a second tap clears it: it is optional
+                        withAnimation(.snappy) { reason = (reason == r) ? nil : r }   // a second tap clears it
                     } label: {
                         HStack {
-                            Text(r.label).foregroundStyle(.primary)
-                            Spacer()
+                            Text(r.label).foregroundStyle(.primary).multilineTextAlignment(.leading)
+                            Spacer(minLength: 8)
                             if reason == r {
                                 Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(Color.accentColor)
                             }
                         }
+                        .padding(.horizontal, 16).frame(minHeight: 48)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                 }
                 if reason == .other {
+                    Divider().padding(.leading, 16)
                     TextField("Tell us more (optional)", text: $otherText, axis: .vertical)
                         .lineLimit(2...5)
+                        .padding(.horizontal, 16).padding(.vertical, 12)
                         .onChange(of: otherText) { _, v in
                             if v.count > Self.otherLimit { otherText = String(v.prefix(Self.otherLimit)) }
                         }
                 }
-            } footer: {
-                Text("Optional. It helps us make Fariin better.")
             }
-        }
-        .navigationTitle("Why are you leaving?")
-        .navigationBarTitleDisplayMode(.inline)
-        // One way out (owner rule, same as Android): no corner button in the bar, only the plain
-        // Cancel under the main button. Dragging the sheet down still closes it.
-        .safeAreaInset(edge: .bottom) {
+            .background(Color(uiColor: .secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
             VStack(spacing: 6) {
-                Button { showConfirm = true } label: {
+                Button { withAnimation(.snappy) { showConfirm = true } } label: {
                     Text("Continue").fontWeight(.semibold)
                         .frame(maxWidth: .infinity).frame(height: 52)
                         .foregroundStyle(Color.onFariinAction)
@@ -119,81 +141,69 @@ struct DeleteAccountView: View {
                 Button("Cancel") { dismiss() }
                     .frame(maxWidth: .infinity).frame(height: 44)
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 8)
         }
     }
 
     // MARK: - Step 2: confirm
 
     private var confirmPage: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text(handle.isEmpty ? "Delete your account?" : "Delete @\(handle)?")
-                    .font(.title2.weight(.bold))
-                    .padding(.top, 8)
+        VStack(alignment: .leading, spacing: 18) {
+            Text(handle.isEmpty ? "Delete your account?" : "Delete @\(handle)?")
+                .font(.title2.weight(.bold))
 
-                VStack(alignment: .leading, spacing: 12) {
-                    line("calendar", "Your account will be deleted on \(dueText). Sign in before then to cancel.")
-                    line("person.crop.circle.badge.xmark", "Your profile, photo and stories are removed.")
-                    line("bubble.left.and.bubble.right", "Messages you sent stay with the people who got them.")
-                }
-
-                Button { Task { await exportData() } } label: {
-                    HStack(spacing: 6) {
-                        Text("Download my data first")
-                        if exporting { BusyArc.small(.secondary) }
-                    }
-                    .font(.subheadline)
-                }
-                .disabled(exporting || deleting)
-
-                if needsPassword {
-                    SecureField("Password", text: $password)
-                        .textContentType(.password)
-                        .submitLabel(.done)
-                        .padding(.horizontal, 18).frame(height: 52)
-                        .background(Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
-                        .disabled(deleting)
-                }
-
-                if let error {
-                    Text(error).font(.footnote).foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                VStack(spacing: 10) {
-                    Button { deleteTapped() } label: {
-                        HStack(spacing: 10) {
-                            if deleting {
-                                BusyArc.small(.white)
-                                Text("Deleting...")
-                            } else {
-                                Text("Delete Account")
-                            }
-                        }
-                        .fontWeight(.semibold)
-                        .frame(maxWidth: .infinity).frame(height: 52)
-                        .foregroundStyle(.white)
-                        .background(Color.red.opacity(deleteEnabled || deleting ? 1 : 0.4), in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!deleteEnabled)
-
-                    Button("Cancel") { dismiss() }
-                        .frame(maxWidth: .infinity).frame(height: 44)
-                        .disabled(deleting)
-                }
-                .padding(.top, 6)
+            VStack(alignment: .leading, spacing: 12) {
+                line("calendar", "Your account will be deleted on \(dueText). Sign in before then to cancel.")
+                line("person.crop.circle.badge.xmark", "Your profile, photo and stories are removed.")
+                line("bubble.left.and.bubble.right", "Messages you sent stay with the people who got them.")
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 24)
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button { Task { await exportData() } } label: {
+                HStack(spacing: 6) {
+                    Text("Download my data first")
+                    if exporting { BusyArc.small(.secondary) }
+                }
+                .font(.subheadline)
+            }
+            .disabled(exporting || deleting)
+
+            if needsPassword {
+                SecureField("Password", text: $password)
+                    .textContentType(.password)
+                    .submitLabel(.done)
+                    .padding(.horizontal, 18).frame(height: 52)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
+                    .disabled(deleting)
+            }
+
+            if let error {
+                Text(error).font(.footnote).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(spacing: 10) {
+                Button { deleteTapped() } label: {
+                    HStack(spacing: 10) {
+                        if deleting {
+                            BusyArc.small(.white)
+                            Text("Deleting...")
+                        } else {
+                            Text("Delete Account")
+                        }
+                    }
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity).frame(height: 52)
+                    .foregroundStyle(.white)
+                    .background(Color.red.opacity(deleteEnabled || deleting ? 1 : 0.4), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!deleteEnabled)
+
+                Button("Cancel") { dismiss() }
+                    .frame(maxWidth: .infinity).frame(height: 44)
+                    .disabled(deleting)
+            }
+            .padding(.top, 6)
         }
-        .scrollDismissesKeyboard(.interactively)
-        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
-        .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(deleting)
     }
 
     private var deleteEnabled: Bool { !deleting && !(needsPassword && password.isEmpty) }
