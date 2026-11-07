@@ -638,7 +638,11 @@ struct PostThreadSheet: View {
                     }
                     .padding(.top, 4)
                 }
-                .defaultScrollAnchor(.bottom)
+                // A few replies start at the top, under the tabs (owner 2026-11-07); a long thread still
+                // opens at its newest reply and stays there as new ones land.
+                .defaultScrollAnchor(.top, for: .alignment)
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                .defaultScrollAnchor(.bottom, for: .sizeChanges)
                 .scrollDismissesKeyboard(.interactively)
                 .overlay { repliesOverlay }
                 .overlay(alignment: .bottom) { newPill(proxy) }
