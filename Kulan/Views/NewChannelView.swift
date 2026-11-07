@@ -35,6 +35,8 @@ struct NewChannelView: View {
     /// The group made by a try whose channel step failed: the next try finishes THIS one instead of
     /// making another (owner 2026-10-30 audit: each "Try again" left a plain group behind).
     @State private var halfMadeCid: String?
+    /// The name that half-made group was created with: a retry after the name changed renames it.
+    @State private var halfMadeTitle = ""
     /// The owned-count check, asked as the page opens rather than at Next (owner 2026-10-31: Next
     /// "takes a bit longer"). Its answer is waiting by the time the name is typed.
     @State private var earlyCheck: Task<[String: Any]?, Never>?
@@ -291,10 +293,17 @@ struct NewChannelView: View {
                 let cid: String
                 if let half = halfMadeCid {
                     cid = half
+                    // The name may have changed since the failed try: the group takes the new one.
+                    // (The description is written after the channel step, so it is always the current one.)
+                    if title != halfMadeTitle {
+                        try await ChatService.renameGroup(cid: half, title: title)
+                        halfMadeTitle = title
+                    }
                 } else {
                     cid = try await ChatService.createGroup(title: title, memberIds: [], permissions: ["onlyAdminsSend": true],
                                                             createdText: "Channel created")
                     halfMadeCid = cid
+                    halfMadeTitle = title
                 }
                 // The group's write may still be on its way to the server: a few tries.
                 var made = false

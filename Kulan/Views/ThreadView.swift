@@ -134,6 +134,14 @@ struct ThreadView: View {
         var token: String = ""
         /// The post's picture as this phone made it for the quote (the bar's thumbnail, owner 2026-11-06).
         var picture: UIImage? = nil
+        /// How the first try made the post's picture (an older sealed post), so a fresh try after a
+        /// failure sends the same picture instead of none.
+        var makePicture: QuotePictureMaker? = nil
+    }
+    /// A picture maker kept on a draft. Never part of the draft's equality.
+    struct QuotePictureMaker: Equatable {
+        let make: () async -> Data?
+        static func == (a: Self, b: Self) -> Bool { true }
     }
     @HeapState private var quoting: QuoteDraft? = nil
     @State private var photoItem: PhotosPickerItem?
@@ -7546,7 +7554,8 @@ struct ThreadView: View {
         // Only an older SEALED post needs a picture from this phone (one shared copy per post on the
         // server); a plain one is pointed at as it is (2026-11-06 audit).
         let sealed = [m.enc, m.thumbEnc].compactMap { $0 }.contains { !$0.isPlain } || m.album.contains { !$0.enc.isPlain }
-        let token = QuoteStore.shared.start(cid: cid, mid: m.id) { sealed ? await Self.quotePicture(m) : nil }
+        let makePicture: () async -> Data? = { sealed ? await Self.quotePicture(m) : nil }
+        let token = QuoteStore.shared.start(cid: cid, mid: m.id, picture: makePicture)
         var card = QuoteCard(state: .ok)
         card.cid = cid
         card.mid = m.id
@@ -7558,7 +7567,8 @@ struct ThreadView: View {
         if !sealed { card.image = (m.isVideo ? m.thumbUrl : (m.album.first?.imageUrl ?? m.imageUrl ?? m.thumbUrl)) ?? "" }
         if dest.id == cid {
             replyingTo = nil
-            quoting = QuoteDraft(qid: "", card: card, token: token)
+            quoting = QuoteDraft(qid: "", card: card, token: token,
+                                 makePicture: sealed ? QuotePictureMaker(make: makePicture) : nil)
             inputFocused = true
             resolveQuote(token)
             return
@@ -7607,7 +7617,14 @@ struct ThreadView: View {
                     // The failed attempt is dropped; Send again starts a fresh one (2026-11-06 audit:
                     // the same failed token was reused and every retry failed at once).
                     var again = q
-                    again.token = QuoteStore.shared.start(cid: q.card.cid, mid: q.card.mid) { nil }
+                    // The same picture as the first try: a sealed post's own, or the one the bar shows
+                    // (a quote brought from another chat), or none for a plain post.
+                    let maker = q.makePicture?.make
+                    let shown = q.card.image.isEmpty ? q.picture?.jpegData(compressionQuality: 0.85) : nil
+                    again.token = QuoteStore.shared.start(cid: q.card.cid, mid: q.card.mid) {
+                        if let maker { return await maker() }
+                        return shown
+                    }
                     if quoting == nil { quoting = again; resolveQuote(again.token) }
                     if input.isEmpty { input = text }
                     showJumpToast("Couldn't quote this post. Try again.")
@@ -7848,6 +7865,7 @@ struct ThreadView: View {
                             width: m.width ?? 1, height: m.height ?? 1,
                             authorId: me, clientId: clientId, sendState: .sending)
             p.localMediaURL = path; p.text = m.text
+            p.quoteId = m.quoteId   // a quoted channel post rides the retry too, as for photos
             repo.addPending(p)
             handedOff = mediaRetry
             Task {
@@ -7855,7 +7873,8 @@ struct ThreadView: View {
                 do {
                     try await ChatService.sendVideo(cid: cid, video: data, thumbnail: m.localImageData ?? Data(),
                                                     duration: m.duration ?? 0, width: m.width ?? 1, height: m.height ?? 1,
-                                                    caption: m.text, clientId: clientId, group: isGroup ? groupMembers : nil)
+                                                    caption: m.text, clientId: clientId, group: isGroup ? groupMembers : nil,
+                                                    quote: m.quoteId)
                     try? FileManager.default.removeItem(atPath: path)
                 } catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
             }
@@ -7933,7 +7952,8 @@ struct ThreadView: View {
                                                      quote: m.quoteId) }
                 catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
             }
-        } else if !m.text.isEmpty {
+        } else if !m.text.isEmpty || m.quoteId != nil {
+            // A quote with no words is still something to resend; the quote goes with it.
             // 2026-09-24 fix-all #220: the retried bubble keeps its link card; `deliver` takes the
             // mentions and the card to send from the queued entry.
             // The bubble keeps the style it was written with, and the resend carries that same one.
@@ -7943,9 +7963,10 @@ struct ThreadView: View {
                                 replyTo: m.replyTo, sendState: .sending, linkPreview: m.linkPreview)
             again.bubbleStyle = kept.id
             again.bubbleDecor = kept.decor
+            again.quoteId = m.quoteId
             repo.addPending(again)
             if let lp = m.linkPreview { repo.showLocalCard(clientId: clientId, card: lp) }   // 2026-10-23
-            Task { await deliver(text: m.text, reply: m.replyTo, clientId: clientId, style: kept) }
+            Task { await deliver(text: m.text, reply: m.replyTo, clientId: clientId, style: kept, quote: m.quoteId) }
         }
         // (empty text + no payload: nothing to resend — drop the pending rather than recreate a ghost)
     }
@@ -8447,7 +8468,8 @@ struct ThreadView: View {
                          draft: LinkPreviewService.LinkDraft? = nil,
                          lateCard: Task<LinkPreviewService.LinkDraft?, Never>? = nil,
                          tapTs: Double? = nil, turn: ChatService.SendTurn? = nil,
-                         style: BubbleStyles.Snapshot? = nil, bold: [NSRange]? = nil) async {
+                         style: BubbleStyles.Snapshot? = nil, bold: [NSRange]? = nil,
+                         quote: String? = nil) async {
         // owner audit 2026-10-06 chat #24: a place in the send line taken at the tap is given back on
         // EVERY way out of here (the early return below included), or the next send would wait on it.
         defer { turn?.finish() }
@@ -8499,7 +8521,8 @@ struct ThreadView: View {
             // seal, image upload) stands between Send and the write. The card follows below.
             try await ChatService.sendText(cid: cid, text: text, replyTo: reply, clientId: clientId,
                                            group: isGroup ? groupMembers : nil, mentions: mentions,
-                                           preview: nil, tapTs: tapTs, turn: turn, style: style, bold: bold)
+                                           preview: nil, tapTs: tapTs, turn: turn, quote: quote,
+                                           style: style, bold: bold)
             SendQueue.remove(clientId: clientId)   // landed → no re-drive needed
             let members = isGroup ? groupMembers : nil
             let convId = cid
