@@ -21,6 +21,29 @@ struct PostReply: Identifiable, Equatable {
     /// The author's uid: only for moderators (the server leaves it out for everyone else).
     var uid: String?
     var send: Send = .sent
+    /// Reactions as the chat has them (owner 2026-11-07): my emoji ("" = none) and each emoji's
+    /// count, biggest first. `likes` stays the number of people who reacted.
+    var my: String = ""
+    var rx: [Reaction] = []
+    struct Reaction: Equatable, Hashable { var emoji: String; var count: Int }
+
+    static let heart = "❤️"
+
+    /// Mine becomes `emoji` ("" takes mine back): the counts move with it.
+    mutating func setMine(_ emoji: String) {
+        guard emoji != my else { return }
+        if !my.isEmpty, let i = rx.firstIndex(where: { $0.emoji == my }) {
+            rx[i].count -= 1
+            if rx[i].count <= 0 { rx.remove(at: i) }
+        }
+        if !emoji.isEmpty {
+            if let i = rx.firstIndex(where: { $0.emoji == emoji }) { rx[i].count += 1 }
+            else { rx.append(Reaction(emoji: emoji, count: 1)) }
+        }
+        likes = max(0, likes + (my.isEmpty ? 1 : 0) - (emoji.isEmpty ? 1 : 0))
+        my = emoji
+        liked = !emoji.isEmpty
+    }
 
     init?(_ d: [String: Any]) {
         guard let id = d["id"] as? String else { return nil }
@@ -37,6 +60,16 @@ struct PostReply: Identifiable, Equatable {
         liked = d["liked"] as? Bool ?? false
         held = d["held"] as? Bool ?? false
         uid = d["u"] as? String
+        // A server from before emoji reactions sends only `liked` and `lc`: hearts.
+        my = d["my"] as? String ?? (liked ? Self.heart : "")
+        if let m = d["rx"] as? [String: Any] {
+            rx = m.compactMap { k, v in
+                let n = (v as? NSNumber)?.intValue ?? 0
+                return n > 0 ? Reaction(emoji: k, count: n) : nil
+            }.sorted { $0.count != $1.count ? $0.count > $1.count : $0.emoji < $1.emoji }
+        } else if likes > 0 {
+            rx = [Reaction(emoji: Self.heart, count: likes)]
+        }
     }
 
     /// A reply of mine on its way (shown at once, "Sending…", Retry if it fails).
@@ -90,7 +123,7 @@ struct PostReply: Identifiable, Equatable {
     /// The id the list should bring into view next (my own new reply).
     var scrollTarget: String?
 
-    private var pendingLikes: [String: Bool] = [:]      // key -> wanted state, while in flight
+    private var pendingLikes: [String: String] = [:]    // key -> wanted emoji ("" = none), while in flight
     private var likeInFlight: Set<String> = []
     private var deletedIds: Set<String> = []
     private var headListener: ListenerRegistration?
@@ -169,7 +202,7 @@ struct PostReply: Identifiable, Equatable {
     /// A heart still on its way wins over what an earlier answer said.
     private func overlay(_ r: PostReply) -> PostReply {
         var r = r
-        if let want = pendingLikes[r.id], want != r.liked { r.liked = want; r.likes = max(0, r.likes + (want ? 1 : -1)) }
+        if let want = pendingLikes[r.id] { r.setMine(want) }
         return r
     }
 
@@ -347,26 +380,40 @@ struct PostReply: Identifiable, Equatable {
         }
     }
 
-    /// One call in flight per heart; taps meanwhile only change what is wanted, sent when it returns.
+    /// A double tap: a heart, or mine taken back (the chat's quick reaction).
     func toggleLike(_ r: PostReply, thread: String?) {
+        react(r, emoji: r.my.isEmpty ? QuickReaction.current : r.my, thread: thread)
+    }
+
+    /// Mine becomes `emoji` ("" takes it back); the same emoji again takes it back, as in the chat.
+    /// One call in flight per reply; picks meanwhile only change what is wanted, sent when it returns.
+    func react(_ r: PostReply, emoji: String, thread: String?) {
         guard r.send == .sent else { return }
-        let want = !r.liked
-        update(r.id, thread: thread) { $0.liked = want; $0.likes = max(0, $0.likes + (want ? 1 : -1)) }
+        let want = emoji == r.my ? "" : emoji
+        if confirmedMine[r.id] == nil { confirmedMine[r.id] = r.my }
+        update(r.id, thread: thread) { $0.setMine(want) }
         pendingLikes[r.id] = want
-        if want { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+        if !want.isEmpty { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
         guard !likeInFlight.contains(r.id) else { return }
         likeInFlight.insert(r.id)
         Task { await flushLike(r.id, thread: thread) }
     }
 
+    /// What the server last agreed mine was, per reply, so a failed call puts it back.
+    private var confirmedMine: [String: String] = [:]
+
     private func flushLike(_ id: String, thread: String?) async {
         while let want = pendingLikes[id] {
-            var a: [String: Any] = ["on": want]
+            var a: [String: Any] = ["on": !want.isEmpty]
+            if !want.isEmpty { a["emoji"] = want }
             if let t = thread { a["rid"] = t; a["aid"] = id } else { a["rid"] = id }
             let ok = (try? await fn.httpsCallable("likeReply").call(args(a))) != nil
             if pendingLikes[id] == want {
                 pendingLikes[id] = nil
-                if !ok { update(id, thread: thread) { $0.liked = !want; $0.likes = max(0, $0.likes + (want ? -1 : 1)) } }
+                if ok { confirmedMine[id] = nil }
+                else if let back = confirmedMine.removeValue(forKey: id) { update(id, thread: thread) { $0.setMine(back) } }
+            } else if ok {
+                confirmedMine[id] = want
             }
         }
         likeInFlight.remove(id)
@@ -728,6 +775,7 @@ struct PostThreadSheet: View {
     private func actions(_ r: PostReply, thread: String?) -> ReplyRow.Actions {
         ReplyRow.Actions(
             like: { model.toggleLike(r, thread: thread) },
+            react: { e in model.react(r, emoji: e, thread: thread) },
             reply: model.off ? nil : { answering = (thread ?? r.id, r.name) },
             delete: r.canDelete ? { Task { await model.delete(r, thread: thread) } } : nil,
             report: r.mine ? nil : { reporting = (r, thread) },
@@ -805,6 +853,8 @@ struct PostThreadSheet: View {
 private struct ReplyRow: View {
     struct Actions {
         var like: () -> Void
+        /// Mine becomes this emoji, or comes off when it already is (the chat's react bar and pills).
+        var react: (String) -> Void = { _ in }
         var reply: (() -> Void)?
         var delete: (() -> Void)?
         var report: (() -> Void)?
@@ -870,45 +920,74 @@ private struct ReplyRow: View {
             }
             .buttonStyle(.plain)
         case .sent:
-            HStack(spacing: 14) {
+            HStack(spacing: 6) {
                 // ⛔ THE CHAT'S REACTION PILL, NOT A HEART BUTTON (owner 2026-11-07: "make it like how
                 // bubble react works in my app"). No empty outline: a double tap on the bubble reacts,
                 // and once there is a reaction a pill shows the emoji and count; mine is the dark,
                 // filled one, as in the chat; a tap on it takes mine back or adds it.
-                if reply.likes > 0 {
-                    Button(action: actions.like) {
+                ForEach(reply.rx, id: \.emoji) { r in
+                    let mine = r.emoji == reply.my
+                    Button { actions.react(r.emoji) } label: {
                         HStack(spacing: 4) {
-                            Text("❤️").font(.system(size: 14))
-                            Text(reply.likes.formatted())
+                            Text(r.emoji).font(.system(size: 14))
+                            Text(r.count.formatted())
                                 .font(.system(size: 13, weight: .semibold))
                                 .contentTransition(.numericText())
                         }
-                        .foregroundStyle(reply.liked ? Color(.systemBackground) : Color.primary)
+                        .foregroundStyle(mine ? Color(.systemBackground) : Color.primary)
                         .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(reply.liked ? Color(.label) : Color(.tertiarySystemFill), in: Capsule())
+                        .background(mine ? Color(.label) : Color(.tertiarySystemFill), in: Capsule())
                     }
-                    .accessibilityLabel(reply.liked ? "Unlike, \(reply.likes) likes" : "Like, \(reply.likes) likes")
+                    .accessibilityLabel("\(r.emoji) \(r.count)\(mine ? ", yours" : "")")
                     .transition(.scale.combined(with: .opacity))
                 }
                 if let r = actions.reply {
                     Button(action: r) { Text("Reply").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+                        .padding(.leading, reply.rx.isEmpty ? 0 : 8)
                 }
                 if reply.held {
                     Text("Hidden after reports").font(.caption2).foregroundStyle(.secondary)
                 }
             }
             .buttonStyle(.plain)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: reply.likes)
-            .animation(.easeOut(duration: 0.2), value: reply.liked)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: reply.rx)
+            .animation(.easeOut(duration: 0.2), value: reply.my)
         }
     }
 
     @ViewBuilder private var menu: some View {
+        // The chat's react bar on a long press (owner 2026-11-07): the same six, in the same order, as
+        // one row at the menu's top; mine is marked, a tap on it takes it back.
+        if reply.send == .sent {
+            ControlGroup {
+                ForEach(QuickReaction.bar, id: \.self) { e in
+                    Button { actions.react(e) } label: {
+                        Image(uiImage: Self.emojiImage(e)).renderingMode(.original)
+                    }
+                    .accessibilityLabel(e == reply.my ? "\(e), yours" : e)
+                }
+            }
+            .controlGroupStyle(.palette)
+        }
         if let r = actions.reply { Button { r() } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") } }
         Button { UIPasteboard.general.string = reply.text } label: { Label("Copy", systemImage: "doc.on.doc") }
         if let r = actions.report { Button { r() } label: { Label("Report", systemImage: "exclamationmark.bubble") } }
         if let d = actions.delete { Button(role: .destructive) { d() } label: { Label("Delete", systemImage: "trash") } }
         if let b = actions.ban { Button(role: .destructive) { b() } label: { Label("Delete and Ban", systemImage: "nosign") } }
+    }
+
+    /// An emoji drawn as a 30pt picture, for the menu's palette row (a menu row shows images, not text).
+    private static var emojiImages: [String: UIImage] = [:]
+    static func emojiImage(_ e: String) -> UIImage {
+        if let i = emojiImages[e] { return i }
+        let size = CGSize(width: 30, height: 30)
+        let img = UIGraphicsImageRenderer(size: size).image { _ in
+            let s = NSAttributedString(string: e, attributes: [.font: UIFont.systemFont(ofSize: 25)])
+            let b = s.size()
+            s.draw(at: CGPoint(x: (size.width - b.width) / 2, y: (size.height - b.height) / 2))
+        }
+        emojiImages[e] = img
+        return img
     }
 
     /// "now", "5m", "3h", "2d", "6w": the age of a reply, short.
