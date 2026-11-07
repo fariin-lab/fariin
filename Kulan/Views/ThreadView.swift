@@ -2783,8 +2783,30 @@ struct ThreadView: View {
         // ⛔ THE KEYBOARD AFTER THE PUSH, NOT DURING IT (owner 2026-11-06: it slid in from the right
         // with the chat). This chat was just pushed; focusing at once raised the keyboard inside the
         // sliding screen. Once the push has landed it rises from the bottom as usual.
-        // 0.4 s: the push is just landing, so the keyboard follows it without a visible wait.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { inputFocused = true }
+        // ⛔ WAIT FOR THE SLIDE ITSELF, NOT A FIXED TIME (owner 2026-11-07, "still you are not fixed"):
+        // quoting from another channel goes back to the list and pushes this chat, longer than the
+        // 0.4 s that was here, so the keyboard still came in from the right. Now: no navigation
+        // transition running anywhere in the window, checked every 50 ms, at most 2 s.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            for _ in 0..<40 where Self.navigationIsMoving() {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            inputFocused = true
+        }
+    }
+
+    /// Is any navigation controller in the key window mid-push or mid-pop?
+    @MainActor private static func navigationIsMoving() -> Bool {
+        let window = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+        func walk(_ vc: UIViewController?) -> Bool {
+            guard let vc else { return false }
+            if let nav = vc as? UINavigationController, nav.transitionCoordinator != nil { return true }
+            if vc.transitionCoordinator != nil, vc.isBeingPresented { return true }
+            return vc.children.contains(where: walk) || walk(vc.presentedViewController)
+        }
+        return walk(window?.rootViewController)
     }
 
     private func startOwnGroupDoc() {
