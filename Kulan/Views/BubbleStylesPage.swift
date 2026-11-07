@@ -190,7 +190,7 @@ struct BubbleStylesPage: View {
     /// shrink, so the chips and grid jumped). Both sample lines are short enough to stay one line
     /// in every style, the sent bubble's row is as tall as the tallest style's one-line bubble
     /// (art included), and a new style crossfades in place.
-    private static let mineText = "Love my new bubble!"
+    private static let mineText = "My new bubble style!"   // same words, height and fade as Android
     private static let lineH = ceil(BubbleMetrics.bodyFont.lineHeight)
     private static let mineRowH: CGFloat = {
         let plain = lineH + 18
@@ -198,7 +198,7 @@ struct BubbleStylesPage: View {
             let ti = p.textInsets, a = p.art
             return ceil(max(lineH + ti.top + ti.bottom, p.minBubble.height) + a.top + a.bottom)
         }
-        return max(plain, pictures.max() ?? 0)
+        return max(120, plain, pictures.max() ?? 0)   // Android's row is 120
     }()
 
     private var preview: some View {
@@ -233,7 +233,7 @@ struct BubbleStylesPage: View {
             }
             .frame(maxWidth: .infinity, minHeight: Self.mineRowH, maxHeight: Self.mineRowH, alignment: .trailing)
             .padding(.leading, 40)
-            .animation(.easeInOut(duration: 0.2), value: key)
+            .animation(.easeInOut(duration: 0.18), value: key)
         }
         .padding(14)
         .background(Theme.bg(dark), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
