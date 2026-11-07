@@ -341,6 +341,8 @@ final class CMOverlay: UIView {
     /// The keyboard's top in window coordinates while the keys are up (nil when they are down).
     /// `computeFrames` keeps the stack above it when the stack would otherwise reach it.
     var keyboardTop: CGFloat?
+    /// Set once this menu has closed the keyboard because the stack didn't fit above it.
+    private var closedKeyboardForRoom = false
 
     /// The window we made, if we made one. Held until teardown; see `removeFromSuperview`.
     private var hostWindow: UIWindow?
@@ -740,13 +742,27 @@ final class CMOverlay: UIView {
         // passes below lift the preview and bar until the list sits above the keys — the reference
         // app's model (actions limited to the height above the input, the message shifted up).
         if let kt = keyboardTop, s.bottom > kt - pad {
-            content.size.height = max(0, min(content.maxY, kt - pad) - content.minY)
-            // The list was measured against the whole screen. Above the keys it may not fit even
-            // with the preview shrunk, so it is measured again against what is left (bar, two gaps
-            // and a 44pt preview) and its rows scroll inside the card instead of running under the keys.
-            let reserved = (bar != nil ? barSize.height + gapY : 0) + gapY + 44
-            menuSize = card.sizeThatFits(CGSize(width: 250, height: max(88, content.height - reserved)))
-            s = stack(for: preview)
+            // ⛔ NOT ROOM ABOVE THE KEYS: THE KEYBOARD GOES (owner 2026-11-07, his screenshot: a channel
+            // post's long list squeezed above the keys shrank the post to a thumbnail, pushed the react
+            // bar into the status bar and cut the list at Pin, Delete out of reach). When the whole
+            // stack fits above the keys nothing changes and they stay up; when it does not, the
+            // keyboard closes and the menu lays out on the whole screen like any other open.
+            let stackHeight = (bar != nil ? barSize.height + gapY : 0) + min(preview.height, 160) + gapY + menuSize.height
+            let room = max(0, min(content.maxY, kt - pad) - content.minY)
+            if stackHeight > room {
+                if !closedKeyboardForRoom {
+                    closedKeyboardForRoom = true
+                    keyboardTop = nil
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                }
+            } else {
+                content.size.height = room
+                // The list was measured against the whole screen; above the keys it is measured again
+                // against what is left, and its rows scroll inside the card if they still don't fit.
+                let reserved = (bar != nil ? barSize.height + gapY : 0) + gapY + 44
+                menuSize = card.sizeThatFits(CGSize(width: 250, height: max(88, content.height - reserved)))
+                s = stack(for: preview)
+            }
         }
 
         // Shift up if the group runs past the bottom, then down if past the top.
