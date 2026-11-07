@@ -1720,8 +1720,19 @@ enum MessageRowLayout {
                              captionMetaOnOwnLine: false, metaCapsule: nil, duration: nil,
                              playBadge: nil, uploadRing: nil, kind: m.kind)
         var metaRect: CGRect
+        var linkPlan: LinkPreviewPlan?
 
-        if let caption = m.caption, !caption.text.isEmpty {
+        if let card = m.quoteCard {
+            let r = quotedCaption(m.caption, card: card, meta: b.meta, metaAttr: metaAttr, row: b,
+                                  textColor: textColor, accent: accent, bubbleW: bubbleW, top: innerY)
+            plan.caption = r.block
+            plan.captionText = r.text
+            plan.captionAttr = r.attr
+            plan.captionMetaOnOwnLine = true
+            metaRect = r.meta
+            linkPlan = r.link
+            innerY = r.block.maxY
+        } else if let caption = m.caption, !caption.text.isEmpty {
             let r = captionBlock(caption, meta: b.meta, metaAttr: metaAttr, row: b,
                                  textColor: textColor, accent: accent,
                                  bubbleW: bubbleW, top: innerY)
@@ -1811,7 +1822,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: footerColor,
-            tombstoneIcon: nil, mediaPlan: plan, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
+            tombstoneIcon: nil, mediaPlan: plan, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: linkPlan, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             failBadge: nil)
@@ -1918,7 +1929,18 @@ enum MessageRowLayout {
                              captionAttr: nil, captionMetaOnOwnLine: false, metaCapsule: nil)
         let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
         var metaRect: CGRect
-        if let caption = a.caption, !caption.text.isEmpty {
+        var linkPlan: LinkPreviewPlan?
+        if let card = a.quoteCard {
+            let r = quotedCaption(a.caption, card: card, meta: b.meta, metaAttr: metaAttr, row: b,
+                                  textColor: textColor, accent: accent, bubbleW: bubbleW, top: innerY)
+            plan.caption = r.block
+            plan.captionText = r.text
+            plan.captionAttr = r.attr
+            plan.captionMetaOnOwnLine = true
+            metaRect = r.meta
+            linkPlan = r.link
+            innerY = r.block.maxY
+        } else if let caption = a.caption, !caption.text.isEmpty {
             let r = captionBlock(caption, meta: b.meta, metaAttr: metaAttr, row: b,
                                  textColor: textColor, accent: accent,
                                  bubbleW: bubbleW, top: innerY)
@@ -1945,7 +1967,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: footerColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: plan, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: plan, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: linkPlan, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             failBadge: nil)
@@ -2900,6 +2922,44 @@ enum MessageRowLayout {
         return CaptionResult(block: CGRect(x: 0, y: top, width: bubbleW, height: bottom - top),
                              text: CGRect(x: inset, y: textTop, width: avail, height: size.height),
                              attr: built.body, metaOnOwnLine: built.metaOnOwnLine, meta: metaRect)
+    }
+
+    private struct QuotedCaptionResult {
+        var block: CGRect; var text: CGRect?; var attr: NSAttributedString?
+        var meta: CGRect; var link: LinkPreviewPlan
+    }
+
+    /// A picture or a mosaic that quotes a channel post (owner 2026-11-07): the caption words (if
+    /// any), then the quote card, then the time on its own row, all inside one caption block with
+    /// the caption's 12pt insets. The card is the text quote post's (`linkPreview`), 6pt under the
+    /// words as there, so the reaction pills land 10pt under it (`decorations`, `cardLast`).
+    private static func quotedCaption(_ caption: BubbleBody.TextBody?, card: BubbleBody.LinkPreview,
+                                      meta: MetaChrome, metaAttr: NSAttributedString, row b: BubbleRow,
+                                      textColor: UIColor, accent: UIColor,
+                                      bubbleW: CGFloat, top: CGFloat) -> QuotedCaptionResult {
+        let inset: CGFloat = 12
+        let avail = max(1, bubbleW - inset * 2)
+        var y = top + 8
+        var textRect: CGRect?
+        var attr: NSAttributedString?
+        if let caption, !caption.text.isEmpty {
+            let built = BubbleText.build(caption, meta: meta, isMe: b.isMe, textColor: textColor,
+                                         accent: accent, textAvail: avail)
+            let size = BubbleText.size(built.body, width: avail)
+            textRect = CGRect(x: inset, y: y, width: avail, height: size.height)
+            attr = built.body
+            y += size.height + 6
+        }
+        let (size, plan) = linkPreview(card, textColor: textColor, width: avail)
+        var link = plan
+        link.card = CGRect(x: inset, y: y, width: avail, height: size.height)
+        y = link.card.maxY + BubbleMetrics.metaGap
+        let metaSize = BubbleText.lineSize(metaAttr)
+        let metaRect = CGRect(x: inset + avail - metaSize.width, y: y,
+                              width: metaSize.width, height: metaSize.height)
+        y += metaSize.height + BubbleMetrics.vPad
+        return QuotedCaptionResult(block: CGRect(x: 0, y: top, width: bubbleW, height: y - top),
+                                   text: textRect, attr: attr, meta: metaRect, link: link)
     }
 
     /// The footer floating on a picture in its own dark capsule: 7pt padding inside, 7pt in from

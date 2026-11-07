@@ -7309,6 +7309,20 @@ struct ThreadView: View {
         mentionMap = [:]
     }
 
+    /// The open quote leaves with the photo, album or video being sent (owner 2026-11-07), as it does
+    /// with typed words: the bar closes and the media carries the quote's id. nil when there is none,
+    /// or when the server could not make it (a toast says so and the media goes without it).
+    @MainActor private func takeQuoteForMedia() async -> String? {
+        guard let q = quoting, editingMessage == nil, !DemoMode.isDemoConversation(cid) else { return nil }
+        withAnimation(.easeInOut(duration: 0.2)) { quoting = nil }
+        if !q.qid.isEmpty { return q.qid }
+        guard !q.token.isEmpty, let made = try? await QuoteStore.shared.made(q.token) else {
+            showJumpToast("Couldn't quote this post. Try again.")
+            return nil
+        }
+        return made.qid
+    }
+
     private func send() {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         // A quoted channel post may go with no words (owner 2026-11-06); its own short path, which
@@ -7825,15 +7839,18 @@ struct ThreadView: View {
                 catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
             }
         } else if m.isAlbum, !m.localAlbum.isEmpty {
-            repo.addPending(Message(localAlbum: m.localAlbum, caption: m.text,
-                                    authorId: me, clientId: clientId, sendState: .sending))
-            let album = m.localAlbum, text = m.text
+            var again = Message(localAlbum: m.localAlbum, caption: m.text,
+                                authorId: me, clientId: clientId, sendState: .sending)
+            again.quoteId = m.quoteId   // never written, so its quote is still unspent
+            repo.addPending(again)
+            let album = m.localAlbum, text = m.text, quote = m.quoteId
             handedOff = mediaRetry
             Task {
                 defer { if mediaRetry { SendQueue.endSending(clientId) } }
                 await runRegisteredSend(clientId) {
                     try await ChatService.sendAlbum(cid: cid, images: album, caption: text,
-                                                    clientId: clientId, group: isGroup ? groupMembers : nil)
+                                                    clientId: clientId, group: isGroup ? groupMembers : nil,
+                                                    quote: quote)
                 }
             }
         } else if m.isFile, let path = m.localMediaURL,
@@ -7856,6 +7873,7 @@ struct ThreadView: View {
             var p = Message(localImageData: data, width: m.width ?? 1, height: m.height ?? 1,
                             authorId: me, clientId: clientId, sendState: .sending)
             p.text = m.text; p.viewOnce = m.viewOnce; p.replyTo = m.replyTo   // retry keeps the quote too
+            p.quoteId = m.quoteId   // and a quoted channel post (never written, so still unspent)
             repo.addPending(p)
             handedOff = mediaRetry
             Task {
@@ -7864,7 +7882,8 @@ struct ThreadView: View {
                 // a retry sends it as it is instead of shrinking it again.
                 do { try await ChatService.sendImage(cid: cid, data: data, replyTo: m.replyTo, clientId: clientId,
                                                      group: isGroup ? groupMembers : nil,
-                                                     viewOnce: m.viewOnce, caption: m.text, prepared: true) }
+                                                     viewOnce: m.viewOnce, caption: m.text, prepared: true,
+                                                     quote: m.quoteId) }
                 catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
             }
         } else if !m.text.isEmpty {
@@ -7898,26 +7917,30 @@ struct ThreadView: View {
         await takeAttachDraft(caption: caption)
         let datas = images.compactMap { $0.jpegData(compressionQuality: hd ? 0.95 : 0.85) }
         guard !datas.isEmpty else { return }
+        let quote = await takeQuoteForMedia()   // rides the first album, like the caption
         for (i, chunk) in stride(from: 0, to: datas.count, by: Limits.albumMaxItems)
             .map({ Array(datas[$0 ..< min($0 + Limits.albumMaxItems, datas.count)]) })
             .enumerated() {
-            await sendOneAlbum(chunk, caption: i == 0 ? caption : "", quality: PhotoQuality(hd: hd))
+            await sendOneAlbum(chunk, caption: i == 0 ? caption : "", quality: PhotoQuality(hd: hd),
+                               quote: i == 0 ? quote : nil)
         }
     }
 
-    private func sendOneAlbum(_ datas: [Data], caption: String, quality: PhotoQuality) async {
+    private func sendOneAlbum(_ datas: [Data], caption: String, quality: PhotoQuality, quote: String? = nil) async {
         // Demo: as sendPhoto — no local representation for media, so no-op (audit).
         if DemoMode.isDemoConversation(cid) { return }
         let previews = datas.map { ChatService.downscaledJPEG($0) }
         let clientId = UUID().uuidString
         await MainActor.run {
-            repo.addPending(Message(localAlbum: previews, caption: caption, authorId: me,
-                                    clientId: clientId, sendState: .sending))
+            var pending = Message(localAlbum: previews, caption: caption, authorId: me,
+                                  clientId: clientId, sendState: .sending)
+            pending.quoteId = quote
+            repo.addPending(pending)
         }
         await runRegisteredSend(clientId) {
             try await ChatService.sendAlbum(cid: cid, images: datas, caption: caption,
                                             clientId: clientId, group: isGroup ? groupMembers : nil,
-                                            quality: quality)
+                                            quality: quality, quote: quote)
         }
     }
 
@@ -8026,6 +8049,7 @@ struct ThreadView: View {
             }
             return
         }
+        let quote = await takeQuoteForMedia()
 
         // Optimistic grouped bubble: thumbnails in order + which are videos (play badge). Build BOTH
         // arrays in ONE pass so their indices ALWAYS align (a compactMap'd previews vs a map'd flags
@@ -8055,6 +8079,8 @@ struct ThreadView: View {
                                         clientId: clientId, sendState: .sending, localAlbumIsVideo: isVideoFlags))
             }
         }
+
+        if let quote { await MainActor.run { repo.setPendingQuote(clientId: clientId, qid: quote) } }
 
         // Build the send items: images as-is, videos transcoded (HD toggle) to the delivery codec. If
         // ANY item fails to prepare, fail the WHOLE group (don't silently drop an item — the album
@@ -8106,7 +8132,7 @@ struct ThreadView: View {
         }) {
             try await ChatService.sendMixedAlbum(cid: cid, items: items, caption: caption,
                                                  clientId: clientId, group: isGroup ? groupMembers : nil,
-                                                 quality: PhotoQuality(hd: hd))
+                                                 quality: PhotoQuality(hd: hd), quote: quote)
         }
     }
 
@@ -8285,6 +8311,9 @@ struct ThreadView: View {
         // not exist — it would only hang or fail (audit).
         if DemoMode.isDemoConversation(cid) { return }
         await takeAttachDraft(caption: caption)
+        // A view-once photo never carries a quote; the bar stays for the next send.
+        let quote: String?
+        if viewOnce { quote = nil } else { quote = await takeQuoteForMedia() }
         // ONE ENCODE, OFF THE MAIN THREAD (2026-10-23). The bubble's picture and the upload used to
         // be two separate decode-resize-encode passes over the full 12 MP photo, one for each. Now
         // the photo is made once at the send size and the bubble shows those same bytes, so the
@@ -8305,6 +8334,7 @@ struct ThreadView: View {
             pending.viewOnce = viewOnce
             pending.text = caption   // caption rides inside the image bubble
             pending.replyTo = reply
+            pending.quoteId = quote
             repo.addPending(pending)
             withAnimation(.easeInOut(duration: 0.2)) { replyingTo = nil }
         }
@@ -8312,7 +8342,7 @@ struct ThreadView: View {
         // letting it run to completion in the background (audit).
         await runRegisteredSend(clientId) {
             try await ChatService.sendImage(cid: cid, data: preview, replyTo: reply, clientId: clientId, group: isGroup ? groupMembers : nil, viewOnce: viewOnce, caption: caption,
-                                            prepared: true)
+                                            prepared: true, quote: quote)
         }
     }
 
@@ -9123,6 +9153,7 @@ struct ThreadView: View {
             return
         }
         await takeAttachDraft(caption: caption)
+        let quote = await takeQuoteForMedia()
         // THE BUBBLE COMES FIRST, BEFORE THE TRANSCODE. It used to come after: this function awaited
         // `VideoTranscoder.prepare` and only then had a thumbnail to draw with, so tapping send on a
         // video did nothing visible for as long as the compression took — the owner timed it at 3.88
@@ -9142,6 +9173,7 @@ struct ThreadView: View {
                                   width: poster.width, height: poster.height,
                                   authorId: me, clientId: clientId, sendState: .sending)
             pending.text = caption
+            pending.quoteId = quote
             repo.addPending(pending)
         }
 
@@ -9169,7 +9201,7 @@ struct ThreadView: View {
             announcedId = try await ChatService.announceVideo(
                 cid: cid, poster: poster.jpeg, duration: poster.duration,
                 width: poster.width, height: poster.height, caption: caption,
-                clientId: clientId, group: isGroup ? groupMembers : nil)
+                clientId: clientId, group: isGroup ? groupMembers : nil, quote: quote)
         } catch {
             // The announcement itself failing is a dead send: nothing was written, so there is
             // nothing to clean up, and the transcode below would only be wasted work.

@@ -1666,9 +1666,17 @@ final class MessageRowView: UIView {
     }
 
     private func applyLinkPreview(_ b: BubblePlan, model m: MessageRowModel, cid: String) {
-        guard let plan = b.linkPlan,
-              case .bubble(let row) = m.content, case .text(let t) = row.body,
-              let card = t.linkPreview else {
+        // A text bubble's card, or the quote card under a photo, video or album (owner 2026-11-07).
+        let card: BubbleBody.LinkPreview? = {
+            guard case .bubble(let row) = m.content else { return nil }
+            switch row.body {
+            case .text(let t): return t.linkPreview
+            case .media(let x): return x.quoteCard
+            case .album(let a): return a.quoteCard
+            default: return nil
+            }
+        }()
+        guard let plan = b.linkPlan, let card else {
             linkView?.isHidden = true
             linkView?.prepareForReuse()
             return
@@ -1677,6 +1685,10 @@ final class MessageRowView: UIView {
             let v = LinkPreviewBubbleView(); bubbleBox.insertSubview(v, aboveSubview: fill); linkView = v; return v
         }()
         v.isHidden = false
+        // Over the picture's view when there is one, whichever of the two was made first.
+        if let over: UIView = b.mediaPlan != nil ? mediaView : (b.albumPlan != nil ? albumView : nil) {
+            bubbleBox.insertSubview(v, aboveSubview: over)
+        }
         v.frame = CGRect(origin: .zero, size: b.bubble.size)
         v.configure(card, plan: plan, tint: b.textColor, cid: cid, rowId: m.id)
     }

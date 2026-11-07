@@ -232,9 +232,14 @@ enum MessageRowModelBuilder {
         // named here as well — the same footnote the voice branch below carries, for the same reason.
         } else if msg.isImage || msg.isVideo || msg.isGif || msg.isPendingImage
                     || msg.pendingMediaKind == "video" {
-            body = .media(mediaBody(msg, ctx: ctx))
+            var m = mediaBody(msg, ctx: ctx)
+            // A photo or video that quotes a channel post carries the card (owner 2026-11-07).
+            if m.kind == .photo || m.kind == .video { m.quoteCard = msg.quoteId.map(quoteBody) }
+            body = .media(m)
         } else if msg.isAlbum {
-            body = .album(albumBody(msg, ctx: ctx))
+            var a = albumBody(msg, ctx: ctx)
+            a.quoteCard = msg.quoteId.map(quoteBody)
+            body = .album(a)
         } else if msg.isFile {
             body = .file(fileBody(msg))
         } else if let loc = msg.locationCard {
@@ -348,8 +353,8 @@ enum MessageRowModelBuilder {
         let bareMedia: Bool = {
             guard msg.replyTo == nil, !msg.forwarded, !msg.deleted else { return false }
             switch body {
-            case .media(let m): return m.caption == nil
-            case .album(let a): return a.caption == nil
+            case .media(let m): return m.caption == nil && m.quoteCard == nil
+            case .album(let a): return a.caption == nil && a.quoteCard == nil
             default: return false
             }
         }()

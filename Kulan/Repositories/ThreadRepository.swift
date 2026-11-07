@@ -633,6 +633,14 @@ final class ThreadRepository {
 
     func addPending(_ m: Message) { pending.append(m); refreshItems() }
 
+    /// A quoted channel post going with media whose bubble the attach sheet already posted
+    /// (owner 2026-11-07): the pending copy shows the card at once.
+    func setPendingQuote(clientId: String, qid: String) {
+        guard let i = pending.firstIndex(where: { $0.clientId == clientId }) else { return }
+        pending[i].quoteId = qid
+        refreshItems()
+    }
+
     /// 2026-10-23 (owner, build 1014): THE CARD FOLLOWS THE TEXT. A text with a link is written at
     /// once and its card is attached by a second write a moment later. Between the two, my own
     /// bubble shows the card from the local draft: on the pending copy, and as an overlay on the

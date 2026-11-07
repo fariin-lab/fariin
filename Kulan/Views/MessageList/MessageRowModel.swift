@@ -257,6 +257,8 @@ enum BubbleBody: Equatable {
         var blurhash: String?
         var inlineThumbBase64: String?
         var thumbCacheId: String
+        /// A quoted channel post's card, under the caption (owner 2026-11-07). See `MediaBody.quoteCard`.
+        var quoteCard: LinkPreview? = nil
     }
 
     struct FileBody: Equatable {
@@ -325,6 +327,9 @@ enum BubbleBody: Equatable {
         var authorId: String = ""
         /// `.sticker` only: which art (pack + file), so the row can draw the bundled copy.
         var sticker: Sticker? = nil
+        /// A quoted channel post's card (owner 2026-11-07): under the picture and the caption, the
+        /// same card a text quote post draws, and the time under it.
+        var quoteCard: LinkPreview? = nil
     }
 
     /// The OG card that travelled WITH the message. Two shapes, and they are not variations of one

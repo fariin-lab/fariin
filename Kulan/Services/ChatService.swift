@@ -1934,7 +1934,7 @@ enum ChatService {
     /// same bytes in the bubble, and a retry resends those bytes), so it is uploaded as it is rather
     /// than decoded and encoded a second time.
     static func sendImage(cid: String, data rawData: Data, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, viewOnce: Bool = false, caption: String = "", forwarded: Bool = false,
-                          quality: PhotoQuality = .default, prepared: Bool = false) async throws {
+                          quality: PhotoQuality = .default, prepared: Bool = false, quote: String? = nil) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload — order is when send was tapped
         let tap = Date(), trace = UploadTrace()             // PHOTO# timings, 2026-10-17
         let data = prepared ? rawData : sendJPEG(rawData, quality: quality)
@@ -2048,6 +2048,7 @@ enum ChatService {
         }
         if let blurSealed, !blurSealed.isEmpty { imgMsg["blurhash"] = blurSealed }
         if let thumbSealed, !thumbSealed.isEmpty { imgMsg["thumb"] = thumbSealed }
+        if let quote, QuoteStore.isQid(quote) { imgMsg["quote"] = ["qid": quote] }   // a quoted channel post (owner 2026-11-07)
         batch.setData(imgMsg, forDocument: msgRef)
         // A VIEW-ONCE photo publishes NO thumbnail to the conversation doc (audit): lastImageUrl +
         // lastImageEnc are a decryptable copy both sides keep forever.
@@ -2079,7 +2080,7 @@ enum ChatService {
     /// Send 2+ photos as ONE album message (grid + one caption), as standard messengers do. Each photo is
     /// E2EE'd + uploaded separately; a single message doc carries the array of {imageUrl, enc, w, h}.
     static func sendAlbum(cid: String, images: [Data], caption: String, clientId: String? = nil, group: [String]? = nil,
-                          quality: PhotoQuality = .default) async throws {
+                          quality: PhotoQuality = .default, quote: String? = nil) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the uploads
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
@@ -2211,6 +2212,7 @@ enum ChatService {
         // The LAST moment Cancel can win. Without this, a Cancel that lands while the caption is
         // being sealed still commits, and the album he cancelled appears a minute later anyway.
         try Task.checkCancellation()
+        if let quote, QuoteStore.isQid(quote) { msg["quote"] = ["qid": quote] }   // a quoted channel post (owner 2026-11-07)
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
             "lastMessage": items.count == 1 ? "📷 Photo" : "📷 \(items.count) Photos", "lastSender": uid,
@@ -2261,7 +2263,7 @@ enum ChatService {
 
     static func sendMixedAlbum(cid: String, items: [AlbumSendItem], caption: String,
                                clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false,
-                               quality: PhotoQuality = .default) async throws {
+                               quality: PhotoQuality = .default, quote: String? = nil) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the uploads
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
@@ -2426,6 +2428,7 @@ enum ChatService {
         if forwarded { msg["forwarded"] = true }
         // The LAST moment Cancel can win — same line, same reason as sendAlbum's.
         try Task.checkCancellation()
+        if let quote, QuoteStore.isQid(quote) { msg["quote"] = ["qid": quote] }   // a quoted channel post (owner 2026-11-07)
         batch.setData(msg, forDocument: msgRef)
         // Chat-list preview: describe the mix (counts reflect what actually shipped, X'd tiles out).
         let preview: String = {
@@ -2568,7 +2571,7 @@ enum ChatService {
     /// must call `cancelAnnounced`, or the recipient is left with a bubble that never fills.
     static func announceVideo(cid: String, poster: Data, duration: Double, width: Double, height: Double,
                               caption: String = "", clientId: String? = nil, group: [String]? = nil,
-                              forwarded: Bool = false) async throws -> String {
+                              forwarded: Bool = false, quote: String? = nil) async throws -> String {
         let clientTs = Date().timeIntervalSince1970 * 1000   // when SEND was tapped, not when it landed
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
@@ -2625,6 +2628,7 @@ enum ChatService {
         if forwarded { msg["forwarded"] = true }
 
         let batch = db.batch()
+        if let quote, QuoteStore.isQid(quote) { msg["quote"] = ["qid": quote] }   // a quoted channel post (owner 2026-11-07)
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
             "lastMessage": "🎥 Video · " + voiceDurationLabel(duration),
@@ -2690,7 +2694,8 @@ enum ChatService {
     }
 
     static func sendVideo(cid: String, video: Data, thumbnail: Data, duration: Double,
-                          width: Double, height: Double, caption: String = "", clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
+                          width: Double, height: Double, caption: String = "", clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false,
+                          quote: String? = nil) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
@@ -2782,6 +2787,7 @@ enum ChatService {
         }
         if let clientId { msg["clientId"] = clientId }
         if forwarded { msg["forwarded"] = true }
+        if let quote, QuoteStore.isQid(quote) { msg["quote"] = ["qid": quote] }   // a quoted channel post (owner 2026-11-07)
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
             "lastMessage": "🎥 Video · " + voiceDurationLabel(duration),
@@ -3797,7 +3803,8 @@ enum ChatService {
         if type == "sticker" { return StickerSend.label(emoji: d["emoji"] as? String) }
         // A quote with no words of its own says what the send wrote (owner 2026-11-07: a delete
         // re-pointed the list at one and the row went blank).
-        if text.isEmpty, d["quote"] != nil { return "Quoted post" }
+        // A photo or video carrying a quote keeps its media label below.
+        if text.isEmpty, d["quote"] != nil, type == "text" || type.isEmpty { return "Quoted post" }
         // A view-once caption is never shown, and a caption otherwise wins, as at send.
         if !text.isEmpty, !viewOnce || type == "text" || type.isEmpty { return text }
         switch type {
