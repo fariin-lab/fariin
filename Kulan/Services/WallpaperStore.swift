@@ -782,8 +782,17 @@ enum ChatWallpapers {
 // background (so nothing changes for chats without a wallpaper). A photo is dimmed in DARK MODE
 // ONLY, by the reference app's 0.20 — see the overlay below for both numbers and why light mode
 // now gets nothing.
+/// ⛔ HOW DARK THE WALLPAPER IS (owner 2026-11-07: "a feature so the user can make the wallpaper
+/// low brightness"). One amount for every chat's wallpaper on this phone, set from the wallpaper
+/// preview's slider: 0 = as it is, up to `max` = black laid over it at that opacity.
+enum WallpaperDim {
+    static let key = "wallpaperDim.v1"
+    static let max: Double = 0.7
+}
+
 struct ChatWallpaperBackground: View {
     let cid: String
+    @AppStorage(WallpaperDim.key) private var dim: Double = 0
     /// False only when this is being RENDERED TO AN IMAGE as the source for the incoming-bubble
     /// blur (see `WallpaperBlur`): the reference app blurs the undimmed wallpaper and does all its
     /// darkening in the wash, so blurring our photo scrim in first would darken a bubble twice.
@@ -798,7 +807,16 @@ struct ChatWallpaperBackground: View {
     @Environment(\.colorScheme) private var scheme
     private var store: WallpaperStore { .shared }
 
-    @ViewBuilder var body: some View {
+    var body: some View {
+        // The owner's dimness on top of any real wallpaper (not the plain background); never on the
+        // copy rendered for the bubble blur, which is dimmed by the wash instead.
+        let isNone: Bool = { if case .none = store.wallpaper(for: cid) { return true }; return false }()
+        picture
+            .overlay(includesScrim && !isNone && dim > 0
+                     ? Color.black.opacity(min(WallpaperDim.max, dim)) : Color.clear)
+    }
+
+    @ViewBuilder private var picture: some View {
         let dark = scheme == .dark
         let _ = store.version   // observe: re-render when the wallpaper is changed live from the picker
         switch store.wallpaper(for: cid) {
