@@ -47,6 +47,8 @@ struct ChatComposerState: Equatable {
     var channelSilent: Bool? = nil
     /// A channel admin may hold Post to schedule the text for later (2026-10-28).
     var canSchedule = false
+    /// A channel I post in: the selection menu offers Format > Bold (owner 2026-11-07).
+    var canFormat = false
     /// Reply / edit / link cards stacked above the field, in this order. Empty while recording.
     var banners: [ChatComposerBanner] = []
 
@@ -90,6 +92,67 @@ struct ChatComposerState: Equatable {
     var recordingHeld: Bool { holdStarted && !recordLocked }
     /// "The composer is not the composer at the moment" — any recording, held or locked.
     var recordingActive: Bool { holdStarted || recordLocked }
+}
+
+/// Bold spans in the composer's field (owner 2026-11-07). The field writes them on every change;
+/// the chat reads them at send. Each copy is tied to the exact text it belongs to, so spans never
+/// land on other words.
+@MainActor enum ComposerFormat {
+    private static var text = ""
+    private static var bold: [NSRange] = []
+    private static var prefill: (text: String, bold: [NSRange])?
+
+    /// The field's text and its bold spans, as they are now.
+    static func note(text: String, bold: [NSRange]) {
+        self.text = text
+        self.bold = bold
+    }
+
+    /// Bold spans for `raw` (the untrimmed field text), moved onto its trimmed form.
+    static func bold(for raw: String) -> [NSRange] {
+        guard raw == text, !bold.isEmpty else { return [] }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let at = (raw as NSString).range(of: trimmed)
+        guard !trimmed.isEmpty, at.location != NSNotFound else { return [] }
+        let moved = bold.map { NSRange(location: $0.location - at.location, length: $0.length) }
+            .compactMap { r -> NSRange? in
+                // Cut off what fell into the trimmed edges.
+                let start = max(0, r.location), end = min(at.length, NSMaxRange(r))
+                return end > start ? NSRange(location: start, length: end - start) : nil
+            }
+        return TextFormat.normalized(moved, length: at.length)
+    }
+
+    /// The chat is about to put `text` in the field (an edit): give it these bold spans.
+    static func setPrefill(_ text: String, bold: [NSRange]) {
+        prefill = bold.isEmpty ? nil : (text, bold)
+    }
+
+    /// The prefill for `text`, once; nil when it is for other words.
+    static func takePrefill(for text: String) -> [NSRange]? {
+        guard let p = prefill, p.text == text else { return nil }
+        prefill = nil
+        return p.bold
+    }
+
+    /// Keeps spans when the chat rewrites the field (an @mention picked): spans before the change
+    /// stay, spans after it move with the text, spans across it are dropped.
+    static func carry(_ rs: [NSRange], from old: String, to new: String) -> [NSRange] {
+        guard !rs.isEmpty else { return [] }
+        let a = old as NSString, b = new as NSString
+        var head = 0
+        while head < a.length, head < b.length, a.character(at: head) == b.character(at: head) { head += 1 }
+        var tail = 0
+        while tail < a.length - head, tail < b.length - head,
+              a.character(at: a.length - 1 - tail) == b.character(at: b.length - 1 - tail) { tail += 1 }
+        let shift = b.length - a.length
+        let out = rs.compactMap { r -> NSRange? in
+            if NSMaxRange(r) <= head { return r }
+            if r.location >= a.length - tail { return NSRange(location: r.location + shift, length: r.length) }
+            return nil
+        }
+        return TextFormat.normalized(out, length: b.length)
+    }
 }
 
 /// A mutable timestamp with NO SwiftUI invalidation: written from `hitTest` on every composer

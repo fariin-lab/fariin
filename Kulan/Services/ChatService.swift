@@ -1293,7 +1293,8 @@ enum ChatService {
     static func sendText(cid: String, text: String, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, mentions: [String] = [], preview: OutgoingLinkPreview? = nil, forwarded: Bool = false, countsAsUnread: Bool = true,
                          tapTs: Double? = nil, turn: SendTurn? = nil,
                          storyMention: StoryMentionRef? = nil,
-                         quote: String? = nil, style taken: BubbleStyles.Snapshot? = nil) async throws {
+                         quote: String? = nil, style taken: BubbleStyles.Snapshot? = nil,
+                         bold: [NSRange] = []) async throws {
         // owner audit 2026-10-06 chat #24: stamped and queued BEFORE the first await. `clientTs` used
         // to be read after encryption and the server reads, so of two quick sends whichever cleared
         // those awaits first took the earlier stamp, and nothing kept their writes in tap order.
@@ -1316,7 +1317,7 @@ enum ChatService {
         if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
         if let members {
             try await sendGroupText(cid: cid, members: members, text: t, replyTo: replyTo, clientId: clientId, mentions: mentions, preview: preview, forwarded: forwarded,
-                                    clientTs: clientTs, turn: turn, quote: quote, style: style)
+                                    clientTs: clientTs, turn: turn, quote: quote, style: style, bold: bold)
             return
         }
 
@@ -1544,14 +1545,21 @@ enum ChatService {
         _ = sealMembersLock.withLock { sealMembersConfirmed.removeValue(forKey: cid) }
     }
 
+    /// Bold spans for `fmt` (TextFormat), sealed the way the text is; nil when nothing is bold.
+    private static func sealedFormat(_ bold: [NSRange], text t: String, members: [String], cid: String) async throws -> String? {
+        guard let json = TextFormat.json(TextFormat.normalized(bold, length: (t as NSString).length)) else { return nil }
+        return try await Crypto.shared.sealForGroup(json, members: members, cid: cid)
+    }
+
     /// Group text send: encrypt once per member, fan out the unread increment to everyone
     /// but me. The conversation already exists (created by createGroup), so no users write.
     private static func sendGroupText(cid: String, members: [String], text t: String,
                                       replyTo: ReplyRef?, clientId: String?, mentions: [String] = [],
                                       preview: OutgoingLinkPreview? = nil, forwarded: Bool = false,
                                       clientTs: Double, turn: SendTurn, quote: String? = nil,
-                                      style: BubbleStyles.Snapshot) async throws {
+                                      style: BubbleStyles.Snapshot, bold: [NSRange] = []) async throws {
         let cipher = try await Crypto.shared.sealForGroup(t, members: members, cid: cid)
+        let fmt = try await sealedFormat(bold, text: t, members: members, cid: cid)
         let summary = t.isEmpty && quote != nil ? try await Crypto.shared.sealForGroup("Quoted post", members: members, cid: cid) : cipher
         var replyEnc: [String: Any]?
         if let r = replyTo {
@@ -1580,6 +1588,7 @@ enum ChatService {
             msg["bs"] = bs
             if style.decor { msg["bsd"] = true }
         }
+        if let fmt { msg["fmt"] = fmt }   // bold spans (owner 2026-11-07)
         // 2026-09-24 decision D-composer-3: a poll says in the clear only whether it takes one answer
         // or several, so the rules can hold a single-answer vote to one option. The question and the
         // options stay sealed in `text`.
@@ -3556,6 +3565,8 @@ enum ChatService {
                               "quote", "bs", "bsd"] {
                         strip[k] = FieldValue.delete()
                     }
+                    // Bold spans go too; only when present, so rules without `fmt` still pass.
+                    if snap.data()?["fmt"] != nil { strip["fmt"] = FieldValue.delete() }
                     // 2026-09-24 feature-audit: a group admin (the "Delete messages" right) deleting
                     // someone else's message signs it, so the author's bubble does not claim "You
                     // deleted this message". Never written on my own message, so an own delete stays
@@ -3944,7 +3955,8 @@ enum ChatService {
 
     /// Edit a text message in place: re-encrypt the new text and flag it edited.
     /// Server still never sees plaintext (same E2EE path as sendText).
-    static func editMessage(cid: String, messageId: String, newText: String, group: [String]? = nil) async throws {
+    static func editMessage(cid: String, messageId: String, newText: String, group: [String]? = nil,
+                            bold: [NSRange] = []) async throws {
         let t = newText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
         var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
@@ -3975,6 +3987,14 @@ enum ChatService {
         // versions stay off it; the server keeps them for the owner and admins (onChannelPostEdited).
         let isChannel = ConversationsRepository.shared.conversations.first { $0.id == cid }?.isChannel == true
         if size(edits) <= 700_000 && !isChannel { update["edits"] = edits }
+        // Bold spans go with the new text; written only when there are some now or were before.
+        if let members {
+            if let fmt = try await sealedFormat(bold, text: t, members: members, cid: cid) {
+                update["fmt"] = fmt
+            } else if data["fmt"] != nil {
+                update["fmt"] = FieldValue.delete()
+            }
+        }
         try await msgRef.updateData(update)
         // If this WAS the newest message, the chat list still shows the pre-edit text on both
         // phones until something else arrives (audit) — re-point the summary at the new wording.

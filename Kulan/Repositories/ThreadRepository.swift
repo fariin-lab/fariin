@@ -1272,8 +1272,10 @@ final class ThreadRepository {
         // which flips the sender's bubble to "Opened". The url delete moves `media` too, but a
         // sender whose doc never had a url (still uploading) must not miss it.
         let once: Bool = data["consumed"] as? Bool ?? false
+        // Bold spans (`fmt`): an edit may change only them.
+        let fmt: String = data["fmt"] as? String ?? ""
         let parts: [String] = [off, String(replies), String(quotes),
-                               rf.joined(separator: ","), qf.joined(separator: ","), String(once)]
+                               rf.joined(separator: ","), qf.joined(separator: ","), String(once), fmt]
         return parts.joined(separator: "|")
     }
 

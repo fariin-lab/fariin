@@ -2846,7 +2846,7 @@ service cloud.firestore {
                           <= 600 + 320 * convData().users.size())))
             || (request.auth.uid == resource.data.authorId
                 && request.resource.data.diff(resource.data).affectedKeys()
-                     .hasOnly(['text', 'edited', 'edits', 'editedAt'])   // 2026-09-24 feature-audit: + history
+                     .hasOnly(['text', 'edited', 'edits', 'editedAt', 'fmt'])   // + history; fmt = bold spans
                 && textWithinCap()   // 2026-09-24 decision D-composer-3: an edit has the same ceiling
                 && groupTextOk()     // 2026-10-19 groups v2: and plain words only where a send may
                 && editAllowedNow()  // 2026-09-24 feature-audit: tombstone, window, restriction
@@ -2924,7 +2924,7 @@ service cloud.firestore {
                       'duration', 'blurhash', 'thumb', 'linkPreview', 'poll', 'locationCard',
                       'contactCard', 'replyTo', 'reactions', 'videoEnc', 'thumbEnc',
                       'viewOnce', 'mentions', 'forwarded', 'fwdChannel', 'edits', 'editedAt',
-                      'deletedBy', 'quote', 'bs', 'bsd']))   // 2026-09-24 feature-audit: the admin's signature
+                      'deletedBy', 'quote', 'bs', 'bsd', 'fmt']))   // 2026-09-24 feature-audit: the admin's signature
             // LIVE CALL ROW (2026-08-12): a call record is created at ring time ("Ringing") and the
             // SAME doc is finalised later (ongoing / answered / missed, duration, voice→video
             // upgrade). Either participant may update ONLY these call fields — the callee must be

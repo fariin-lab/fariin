@@ -440,6 +440,10 @@ struct Message: Identifiable, Equatable, Codable {
     var bubbleStyle: String? = nil
     /// The sender chose the style's decorations too (`bsd`, owner 2026-11-06, `BubbleDecorSets`).
     var bubbleDecor: Bool = false
+    /// Bold spans in the text, [location, length] in UTF-16 units (`fmt`, channel posts, owner
+    /// 2026-11-07). Nil = plain.
+    var boldSpans: [[Int]]? = nil
+    var boldRanges: [NSRange] { TextFormat.ranges(boldSpans) }
     var pollClosed: Bool = false            // 2026-10-19: the poll's creator tapped Stop Poll
     /// THE MESSAGE EXISTS, THE PICTURE DOES NOT YET.
     ///
@@ -577,6 +581,7 @@ struct Message: Identifiable, Equatable, Codable {
         m.quoteId = nil
         m.bubbleStyle = nil
         m.bubbleDecor = false
+        m.boldSpans = nil
         m.localImageData = nil; m.localAudioData = nil; m.localFile = false; m.localMediaURL = nil
         return m
     }
@@ -804,7 +809,7 @@ struct Message: Identifiable, Equatable, Codable {
         case clientId, replyTo, storyMention, reactions, mentions, viewOnce, album
         case createdAt, width, blurhash, thumb, height
         case callerUid, callOutcome, callVideo, callDuration, callJoinedUids, callRungUids
-        case quoteId, bubbleStyle, bubbleDecor
+        case quoteId, bubbleStyle, bubbleDecor, boldSpans
         case countsStore   // a channel post's views, reactions and quotes (owner 2026-11-06)
         case edited, deleted, deletedBy, forwarded, clientTs, linkPreview, hasServerTime, uploading, albumSizes
         case expiresAt   // owner audit 2026-10-06 chat #21: a cold open must know what has already expired
@@ -909,6 +914,11 @@ struct Message: Identifiable, Equatable, Codable {
         if let q = (data["quote"] as? [String: Any])?["qid"] as? String, QuoteStore.isQid(q) { self.quoteId = q }
         if let bs = data["bs"] as? String, !bs.isEmpty, bs.count <= 32 { self.bubbleStyle = bs }
         self.bubbleDecor = data["bsd"] as? Bool ?? false
+        // Bold spans, opened like the text when sealed; checked against the text's length.
+        if !cid.contains("_"), let raw = data["fmt"] as? String, !raw.isEmpty {
+            let clear = crypto.decrypt(raw, cid: cid, authorId: data["authorId"] as? String ?? "")
+            self.boldSpans = TextFormat.spans(TextFormat.parse(clear, length: (decrypted as NSString).length))
+        }
         self.pollClosed = data["pollClosed"] as? Bool ?? false
         self.uploading = data["uploading"] as? Bool ?? false
         self.albumSizes = (data["albumSizes"] as? [[Double]]) ?? []
@@ -2479,4 +2489,53 @@ extension Message {
 struct ReactionThumb: Hashable {
     let url: String
     let enc: EncMeta?
+}
+
+/// Bold text in channel posts (owner 2026-11-07). On the message, `fmt` is a JSON string
+/// `[[location, length, "b"], ...]` in UTF-16 units of the sent text, sealed like `text` when the
+/// chat seals. A string because Firestore cannot store a list inside a list.
+enum TextFormat {
+    /// Sorted, clamped to `length`, overlaps and neighbours merged, empty spans dropped.
+    static func normalized(_ rs: [NSRange], length: Int) -> [NSRange] {
+        var out: [NSRange] = []
+        for r in rs.sorted(by: { $0.location < $1.location }) {
+            guard r.location != NSNotFound, r.location >= 0, r.length > 0, r.location < length else { continue }
+            let c = NSRange(location: r.location, length: min(r.length, length - r.location))
+            if let last = out.last, c.location <= NSMaxRange(last) {
+                out[out.count - 1].length = max(NSMaxRange(last), NSMaxRange(c)) - last.location
+            } else {
+                out.append(c)
+            }
+        }
+        return out
+    }
+
+    /// The wire form, or nil when nothing is bold.
+    static func json(_ rs: [NSRange]) -> String? {
+        guard !rs.isEmpty else { return nil }
+        let arr: [[Any]] = rs.map { [$0.location, $0.length, "b"] }
+        guard let d = try? JSONSerialization.data(withJSONObject: arr) else { return nil }
+        return String(data: d, encoding: .utf8)
+    }
+
+    /// Reads the wire form; anything malformed or out of range is dropped.
+    static func parse(_ s: String, length: Int) -> [NSRange] {
+        guard s.utf8.count <= 40_000, let d = s.data(using: .utf8),
+              let arr = (try? JSONSerialization.jsonObject(with: d)) as? [Any] else { return [] }
+        var rs: [NSRange] = []
+        for case let e as [Any] in arr.prefix(1000) where e.count >= 3 {
+            guard let l = (e[0] as? NSNumber)?.intValue, let n = (e[1] as? NSNumber)?.intValue,
+                  e[2] as? String == "b", l >= 0, n > 0, l <= length, n <= length else { continue }
+            rs.append(NSRange(location: l, length: n))
+        }
+        return normalized(rs, length: length)
+    }
+
+    static func spans(_ rs: [NSRange]) -> [[Int]]? {
+        rs.isEmpty ? nil : rs.map { [$0.location, $0.length] }
+    }
+
+    static func ranges(_ spans: [[Int]]?) -> [NSRange] {
+        (spans ?? []).compactMap { $0.count == 2 ? NSRange(location: $0[0], length: $0[1]) : nil }
+    }
 }

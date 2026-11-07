@@ -292,6 +292,8 @@ final class ChatComposerView: UIView {
     // Slow mode: the ring on the send button, the countdown's clock, the tip above send.
     private let slowRing = CAShapeLayer()
     private var slowTimer: Timer?
+    /// Format > Bold in the selection menu (channel posts, `ChatComposerState.canFormat`).
+    private var formatAllowed = false
     private let slowTip = UIView()
     private let slowTipLabel = UILabel()
     private let slowTipArrow = CAShapeLayer()
@@ -909,8 +911,17 @@ final class ChatComposerView: UIView {
     }
 
     private func syncText(_ s: ChatComposerState, wasFocused: Bool) {
+        formatAllowed = s.canFormat
         if textView.text != s.text {
+            // Setting `text` drops every attribute: bring the bold spans back (an edit's own, or
+            // the ones the rewrite did not touch).
+            let oldText = textView.text ?? ""
+            let oldBold = currentBold()
+            resetTypingAttributes()
             textView.text = s.text
+            let bold = ComposerFormat.takePrefill(for: s.text)
+                ?? ComposerFormat.carry(oldBold, from: oldText, to: s.text)
+            applyBold(s.canFormat ? bold : [])
             // 2026-09-24 decision D-composer-5: a mention inserted mid-text keeps the caret after it.
             if let c = s.caret, c <= (s.text as NSString).length {
                 textView.selectedRange = NSRange(location: c, length: 0)
@@ -1692,6 +1703,7 @@ extension ChatComposerView: UITextViewDelegate {
 
     func textViewDidChange(_ tv: UITextView) {
         textView.refreshPlaceholder()
+        noteFormat()
         actions.textChanged(tv.text)
         let h = preferredHeight(forWidth: bounds.width)
         if h != lastHeight {
@@ -1891,6 +1903,91 @@ extension ChatComposerView: UITextViewDelegate {
         let at = tv.selectedRange.location
         DispatchQueue.main.async { [weak self] in self?.actions.caretChanged(at) }
     }
+
+    // MARK: Bold (channel posts, owner 2026-11-07)
+
+    /// Format > Bold in the selection menu, only in a channel I post in and only over a selection.
+    func textView(_ tv: UITextView, editMenuForTextIn range: NSRange,
+                  suggestedActions: [UIMenuElement]) -> UIMenu? {
+        guard formatAllowed, range.length > 0 else { return nil }
+        let bold = UIAction(title: "Bold", image: UIImage(systemName: "bold")) { [weak self] _ in
+            self?.toggleBold(range)
+        }
+        let format = UIMenu(title: "Format", image: UIImage(systemName: "textformat"), children: [bold])
+        return UIMenu(children: suggestedActions + [format])
+    }
+
+    /// Bold if any of the range is regular, else regular again.
+    private func toggleBold(_ range: NSRange) {
+        let storage = textView.textStorage
+        guard range.length > 0, NSMaxRange(range) <= storage.length else { return }
+        var allBold = true
+        storage.enumerateAttribute(.composerBold, in: range) { v, _, stop in
+            if v == nil { allBold = false; stop.pointee = true }
+        }
+        let selected = textView.selectedRange
+        storage.beginEditing()
+        if allBold {
+            storage.removeAttribute(.composerBold, range: range)
+            storage.addAttribute(.font, value: baseFont, range: range)
+        } else {
+            storage.addAttribute(.composerBold, value: true, range: range)
+            storage.addAttribute(.font, value: boldFont, range: range)
+        }
+        storage.endEditing()
+        textView.selectedRange = selected
+        resetTypingAttributes()
+        textViewDidChange(textView)   // height and the stored spans
+    }
+
+    private var baseFont: UIFont { textView.font ?? .systemFont(ofSize: 17) }
+    private var boldFont: UIFont { .systemFont(ofSize: baseFont.pointSize, weight: .semibold) }
+
+    /// New typing starts regular.
+    private func resetTypingAttributes() {
+        var ta = textView.typingAttributes
+        ta[.font] = baseFont
+        ta[.composerBold] = nil
+        textView.typingAttributes = ta
+    }
+
+    /// The bold spans in the field now.
+    fileprivate func currentBold() -> [NSRange] {
+        let storage = textView.textStorage
+        var out: [NSRange] = []
+        storage.enumerateAttribute(.composerBold, in: NSRange(location: 0, length: storage.length)) { v, r, _ in
+            if v != nil { out.append(r) }
+        }
+        return TextFormat.normalized(out, length: storage.length)
+    }
+
+    /// Puts `ranges` in bold over freshly set text.
+    fileprivate func applyBold(_ ranges: [NSRange]) {
+        let storage = textView.textStorage
+        let rs = TextFormat.normalized(ranges, length: storage.length)
+        if storage.length > 0 {
+            let whole = NSRange(location: 0, length: storage.length)
+            storage.beginEditing()
+            storage.removeAttribute(.composerBold, range: whole)
+            storage.addAttribute(.font, value: baseFont, range: whole)
+            for r in rs {
+                storage.addAttribute(.composerBold, value: true, range: r)
+                storage.addAttribute(.font, value: boldFont, range: r)
+            }
+            storage.endEditing()
+        }
+        resetTypingAttributes()
+        noteFormat()
+    }
+
+    private func noteFormat() {
+        ComposerFormat.note(text: textView.text ?? "", bold: formatAllowed ? currentBold() : [])
+    }
+}
+
+private extension NSAttributedString.Key {
+    /// Marks bold the person chose in the composer (the font alone cannot tell it from a mention).
+    static let composerBold = NSAttributedString.Key("kulan.composerBold")
 }
 
 extension ChatComposerView: UIGestureRecognizerDelegate {
