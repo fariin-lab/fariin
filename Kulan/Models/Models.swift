@@ -1664,7 +1664,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
         // group circle everywhere the app draws this group.
         if data["type"] as? String == "group", groupMod.locksGroup() { self.avatarUrl = nil }
         self.groupVerified = data["verified"] as? Bool ?? false
-        self.repliesOff = data["repliesOff"] as? Bool ?? false
+        // Off until the owner turns replies on (owner 2026-11-07; the server's replyCtx says the same).
+        self.repliesOff = data["repliesOff"] as? Bool ?? true
         self.bubbleStylesOff = data["bubbleStylesOff"] as? Bool ?? false
         self.groupVerifiedType = (data["verifiedType"] as? String).flatMap(Verification.Kind.init(rawValue:))
         self.groupNoReport = data["noReport"] as? Bool ?? false

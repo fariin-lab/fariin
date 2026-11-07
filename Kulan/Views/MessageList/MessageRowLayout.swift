@@ -1426,7 +1426,7 @@ enum MessageRowLayout {
         // the Quotes page. Last, under the reactions and the time, so none of their arithmetic moves:
         // the bubble only grows downward. Pills hanging off a bare picture move down with the edge.
         if let qb = b.quoteBar {
-            let barH: CGFloat = 40
+            let barH: CGFloat = 46   // taller for the bigger words and faces (owner 2026-11-07)
             var grown = plan.bubble
             let top = grown.height
             grown.size.height += barH
@@ -1441,8 +1441,8 @@ enum MessageRowLayout {
             if qb.count > 0 { parts.append("\(qb.count.formatted()) \(qb.count == 1 ? "Quote" : "Quotes")") }
             plan.quoteBarAttr = NSAttributedString(
                 string: parts.joined(separator: " · "),
-                attributes: [.font: UIFont.systemFont(ofSize: 14, weight: .semibold),
-                             .foregroundColor: UIColor.label])   // no blue (owner 2026-11-06)
+                attributes: [.font: UIFont.systemFont(ofSize: 16, weight: .semibold),
+                             .foregroundColor: UIColor.label])   // no blue (owner 2026-11-06); 16pt (2026-11-07)
             // Replies on: the icon until someone replies, then the repliers' faces (owner 2026-11-07).
             // Replies off: the quoting channels' faces as before.
             if let r = qb.replies {
