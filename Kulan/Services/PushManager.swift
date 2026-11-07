@@ -692,7 +692,10 @@ enum Push {
     /// pushes for an account that isn't signed in here anymore (ghost rings).
     // Async so sign-out can AWAIT the removals — fire-and-forget writes raced signOut
     // and lost auth mid-flight, leaving stale tokens (ghost pushes after logout).
-    static func unregister() async {
+    static func unregister(onlyFor expected: String? = nil) async {
+        // Sign-out passes its own uid: if another account is signed in by now, its topics and
+        // tokens are not ours to drop.
+        if let expected, Auth.auth().currentUser?.uid != expected { return }
         // BEFORE the uid guard. Dropping the tokens is an account-scoped job and rightly gives up
         // without one, but a topic subscription belongs to the handset: it would survive the
         // sign-out and keep announcing to whoever picks the phone up next.
@@ -713,6 +716,7 @@ enum Push {
         // account that never saw this build the doc doesn't exist, and a NOT_FOUND would sink
         // the whole batch, old-field removals included.
         for attempt in 0..<3 {
+            if let expected, Auth.auth().currentUser?.uid != expected { return }
             let batch = db.batch()
             batch.updateData(updates, forDocument: doc)
             // owner, 2026-10-06: the group ring token leaves with the VoIP token. Push doc only:

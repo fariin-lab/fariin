@@ -33,8 +33,19 @@ enum FirestoreHub {
     /// Every attempt gets its own app name: a failed attempt's app may still be deleting.
     @MainActor private static var attempts = 0
     @MainActor private static var authMirror: AuthStateDidChangeListenerHandle?
-    /// A fresh client that also gets stuck is swapped again, at most this many times in one process.
+    /// A fresh client that also gets stuck is swapped again, at most this many times per account.
     private static let maxSwaps = 3
+    /// Swaps made for the account in `swapsUid`. 2026-11-07: the limit used to be per process, so
+    /// after a log out and log in to another account it could already be spent. `generation` still
+    /// counts every swap in the process (services key on it); only the limit follows the account.
+    @MainActor private static var swapsForAccount = 0
+    @MainActor private static var swapsUid: String?
+
+    /// Sign-out: the next account starts with its whole swap limit.
+    @MainActor static func resetSwapLimit() {
+        swapsForAccount = 0
+        swapsUid = nil
+    }
 
     /// The Firestore client to use right now. Read it at the moment of use; never keep it in a
     /// stored property (a kept one stays on the stuck client after a swap).
@@ -74,7 +85,11 @@ enum FirestoreHub {
     /// is spent, the sign-in did not answer in time, or the fresh client is silent too.
     @MainActor @discardableResult
     static func swap(_ why: String) async -> Bool {
-        guard !swapping, generation < maxSwaps,
+        if let uid = Auth.auth().currentUser?.uid, uid != swapsUid {
+            swapsUid = uid
+            swapsForAccount = 0
+        }
+        guard !swapping, swapsForAccount < maxSwaps,
               let user = Auth.auth().currentUser,
               let base = FirebaseApp.app()?.options.copy() as? FirebaseOptions else { return false }
         swapping = true
@@ -116,6 +131,7 @@ enum FirestoreHub {
         freshApp = app
         lock.unlock()
         generation = next
+        swapsForAccount += 1
         mirrorAuth()
         DiagLog.add("  swap \(next) done: listeners attach again on the fresh client")
         NotificationCenter.default.post(name: swapped, object: nil)
@@ -142,6 +158,30 @@ enum FirestoreHub {
         DiagLog.add(answered ? "  fresh client answered the server in \(ms)ms"
                              : "  fresh client did NOT answer the server in 10s")
         return answered
+    }
+
+    /// 2026-11-07 (log out, then log in to another account): after a swap, `mirrorAuth` carries a
+    /// new sign-in to the fresh app's Auth a moment later, and until then the fresh client reads as
+    /// nobody and is refused. Waits, at most `timeout` seconds, for that Auth to hold `uid`. True at
+    /// once when there was no swap; false when it still does not hold `uid` at the deadline.
+    @MainActor static func waitForMirroredAuth(_ uid: String, timeout: Double = 3) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        var nudged = false
+        while true {
+            lock.lock(); let app = freshApp; lock.unlock()
+            guard let app else { return true }
+            let auth = Auth.auth(app: app)
+            if auth.currentUser?.uid == uid { return true }
+            // The mirror's own copy may have failed (it does not retry): ask once more from here.
+            if !nudged, let user = Auth.auth().currentUser, user.uid == uid {
+                nudged = true
+                auth.updateCurrentUser(user) { error in
+                    if let error { print("[FirestoreHub] mirror sign-in retry failed:", error) }
+                }
+            }
+            guard Date() < deadline else { return false }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
     }
 
     /// The fresh app's Auth follows the default app's: signed out there means signed out here, and

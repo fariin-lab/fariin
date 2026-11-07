@@ -569,6 +569,15 @@ struct RootView: View {
         // self-heals accounts that failed to publish on a first launch (otherwise
         // others can never message them: "hasn't set up encryption yet").
         try? await Crypto.shared.ensureReady()
+        // 2026-11-07 (log out, then log in to another account): on a swapped Firestore client the
+        // sign-in reaches the fresh app's Auth a moment later (FirestoreHub.mirrorAuth). Read before
+        // that and the profile read is refused, `me` stays nil, and an existing account was sent to
+        // onboarding. So wait for it, at most 3 s; no swap = no wait.
+        let signedUid = AuthService.shared.uid
+        var authMirrored = true
+        if let signedUid { authMirrored = await FirestoreHub.waitForMirroredAuth(signedUid) }
+        guard seq == routeSeq else { return }
+        if !authMirrored { DiagLog.add("BOOT: fresh client's sign-in not there after 3s, profile read may be refused") }
         await ProfileStore.shared.loadMine()
         // The watchdog may have opened the app while this read hung; a later route() (log out, or
         // another sign-in) owns the screen then and this answer is stale.
@@ -605,7 +614,11 @@ struct RootView: View {
         // Onboarding prefills the handle it already owns, so the way back costs one field.
         let ready = ProfileStore.shared.me?.handle.isEmpty == false
             && ProfileStore.shared.me?.name.trimmingCharacters(in: .whitespaces).isEmpty == false
-        if ready {
+        // No profile, but read before the sign-in reached the fresh client: that nil is a refused
+        // read, not "no account yet". Unknown is not onboarding: open the app and read it again
+        // once the sign-in is there (`refetchAfterMirror`).
+        let unknown = !authMirrored && ProfileStore.shared.me == nil
+        if ready || unknown {
             // "Demo chats" survives a restart like any other setting. Rebuilt HERE rather than
             // inside the repository because building the rows needs the main actor and a uid, and
             // this is the first point in the launch where both are true.
@@ -620,12 +633,33 @@ struct RootView: View {
             startOfficialChannel()
             Task { await SendQueue.drainAll() }   // queued sends from a previous run (see drainAll)
         }
-        if !ready {
+        if !ready && !unknown {
             phase = .onboarding
         } else {
             let explain = await Push.needsExplainer()
             guard seq == routeSeq else { return }
             phase = explain ? .notifications : .main
+            if unknown, let signedUid { refetchAfterMirror(seq, uid: signedUid) }
+        }
+    }
+
+    /// route() opened the app on an unknown profile (the read went out before the sign-in reached
+    /// the fresh client). Read it again once the sign-in is there. Only an answer read WITH the
+    /// sign-in may still send a new account to onboarding.
+    private func refetchAfterMirror(_ seq: Int, uid: String) {
+        Task { @MainActor in
+            guard await FirestoreHub.waitForMirroredAuth(uid, timeout: 30) else {
+                DiagLog.add("BOOT: fresh client's sign-in still not there after 30s, profile left unknown")
+                return
+            }
+            guard seq == routeSeq, AuthService.shared.uid == uid else { return }
+            await ProfileStore.shared.loadMine()
+            guard seq == routeSeq, AuthService.shared.uid == uid else { return }
+            let ready = ProfileStore.shared.me?.handle.isEmpty == false
+                && ProfileStore.shared.me?.name.trimmingCharacters(in: .whitespaces).isEmpty == false
+            if !ready, phase == .main || phase == .notifications {
+                phase = .onboarding
+            }
         }
     }
 

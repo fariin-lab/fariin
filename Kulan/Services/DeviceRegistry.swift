@@ -361,7 +361,10 @@ final class DeviceRegistry: ObservableObject {
 
     /// Normal sign-out on this phone: drop our own record so it does not linger as a ghost
     /// session in the list. Called BEFORE `Auth.signOut()`, while we still have permission.
-    func removeThisDevice() async {
+    /// `onlyFor`: the sign-out's own uid. If another account is signed in by the time this runs (a
+    /// sign-out cleanup that ran past its cap), it does nothing: never the new account's device row.
+    func removeThisDevice(onlyFor expected: String? = nil) async {
+        if let expected, uid != expected { return }
         stopWatching()
         guard let uid, !Self.thisDeviceId.isEmpty else { return }
         // The marker goes with the record. Leaving it behind would make the next sign-in on this

@@ -151,6 +151,7 @@ enum SessionRecovery {
         stallDuringCall = false
         noAnswerSeen.removeAll()
         lastRefusalAt = .distantPast
+        clearWedged()
     }
 
     @MainActor static func noteRefusal(_ error: Error?, _ from: String) {
@@ -352,10 +353,27 @@ enum SessionRecovery {
     /// confirmed, resets "recovered" and changed nothing).
     @MainActor private static var wedged = false
     @MainActor private static var wedgedObserver: NSObjectProtocol?
+    /// The account the wedge was found under. 2026-11-07 (log out, then log in to another account,
+    /// froze): `wedged` and the swap limit lasted the whole process, so a wedge or a spent limit
+    /// from the last account kept the next one from ever getting a fresh client. Both are per
+    /// account now: cleared on sign-out (`reset`) and whenever the signed-in uid is a different one.
+    @MainActor private static var wedgedUid: String?
+
+    /// Forget the last account's wedge: the flag, the armed fresh-process net, and the swap count.
+    @MainActor private static func clearWedged() {
+        wedged = false
+        wedgedUid = nil
+        if let wedgedObserver { NotificationCenter.default.removeObserver(wedgedObserver) }
+        wedgedObserver = nil
+        FirestoreHub.resetSwapLimit()
+    }
 
     @MainActor static func noteWedged(_ why: String) {
-        guard !wedged, Auth.auth().currentUser != nil else { return }
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        if wedged, wedgedUid != uid { clearWedged() }
+        guard !wedged else { return }
         wedged = true
+        wedgedUid = uid
         // 2026-10-20 (owner: "fix it so I never have to refresh"): first, a fresh Firestore client in
         // this same process (FirestoreHub.swap), so he keeps using the app without noticing. Only if
         // that cannot be done (no user, swap limit spent, sign-in on the fresh app silent) does the

@@ -16,8 +16,11 @@ import FirebaseFirestore
 // your audience is "everyone", and otherwise only by somebody you actually have a conversation with.
 // That is the same definition of "contact" the rest of the app uses, and now the SERVER applies it.
 enum PresenceService {
-    static func set(online: Bool) async {
+    /// `onlyFor`: write only while this uid is the one signed in (sign-out passes its own, so a late
+    /// "offline" can never land on the next account).
+    static func set(online: Bool, onlyFor expected: String? = nil) async {
         guard let uid = Auth.auth().currentUser?.uid else { return }
+        if let expected, uid != expected { return }
         // Privacy: audience "No One" (or the legacy toggle off) publishes offline AND never
         // updates lastActive (otherwise the timestamp still leaks "was just online").
         let legacyShare = UserDefaults.standard.object(forKey: "shareLastSeen") as? Bool ?? true

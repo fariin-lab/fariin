@@ -1,5 +1,6 @@
 import Foundation
 import UserNotifications
+import FirebaseAuth
 import FirebaseFirestore
 
 /// Every piece of account-scoped state that lives on this DEVICE, wiped in one place.
@@ -26,20 +27,41 @@ enum SessionWipe {
     /// writes never finish offline, so Log Out sat on "Signing Out..." for ever and the only way out
     /// was to kill the app, still signed in. A tighter limit would drop these on a weak signal; with
     /// no signal they cannot run at all, and the account still leaves this phone.
+    ///
+    /// ⛔ BOUND TO THE LEAVING ACCOUNT (2026-11-07, log out then log in to another account froze):
+    /// when the cap fired the steps kept running, so a late "offline" or device delete could land
+    /// after the next account had signed in, and the step functions read whoever was signed in by
+    /// then. Now the uid is taken once, here; the cap cancels the steps, and each step runs only
+    /// while that same uid is still signed in (the steps check it again themselves via `onlyFor`).
     @MainActor static func cleanUpBeforeSignOut() async {
+        let uid = Auth.auth().currentUser?.uid
         let (finished, done) = AsyncStream.makeStream(of: Void.self)
-        Task { @MainActor in
-            await Push.unregister()
-            await DeviceRegistry.shared.removeThisDevice()
-            await PresenceService.set(online: false)
+        let steps = Task { @MainActor in
+            defer { done.yield(); done.finish() }
+            guard let uid else {
+                // Nobody signed in: only the handset's own jobs (topics, a call still up).
+                OfficialPushTopics.leaveAll()
+                await endCallsBeforeSignOut()
+                return
+            }
+            let stillOurs = { !Task.isCancelled && Auth.auth().currentUser?.uid == uid }
+            guard stillOurs() else { return }
+            await Push.unregister(onlyFor: uid)
+            guard stillOurs() else { DiagLog.add("sign-out cleanup: account changed, stopped"); return }
+            await DeviceRegistry.shared.removeThisDevice(onlyFor: uid)
+            guard stillOurs() else { DiagLog.add("sign-out cleanup: account changed, stopped"); return }
+            await PresenceService.set(online: false, onlyFor: uid)
+            guard stillOurs() else { DiagLog.add("sign-out cleanup: account changed, stopped"); return }
             await endCallsBeforeSignOut()   // audit M-015: before signOut the rules still allow the end write
-            done.yield(); done.finish()
         }
-        Task {
+        let cap = Task {
             try? await Task.sleep(nanoseconds: 20_000_000_000)
+            guard !Task.isCancelled else { return }
+            steps.cancel()
             done.yield(); done.finish()
         }
         for await _ in finished { break }
+        cap.cancel()
     }
 
     /// audit M-015, 2026-10-07: every sign-out path ran `Auth.signOut()` BEFORE the wipe ended the
