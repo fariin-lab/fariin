@@ -1080,6 +1080,41 @@ private struct ReplyRow: View {
     /// The thread line this row draws (owner 2026-11-07, his reference picture).
     var line: ReplyThreadLine = .none
 
+    // ⛔ THE CHAT'S REACTION PILL, NOT A HEART BUTTON (owner 2026-11-07: "make it like how bubble
+    // react works in my app"). A double tap on the bubble reacts; a pill shows each emoji and count,
+    // mine the dark filled one, and a tap on it takes mine back or adds it.
+    @ViewBuilder private var pills: some View {
+        ForEach(Self.shownPills(reply), id: \.emoji) { r in
+            let mine = r.emoji == reply.my
+            Button { actions.react(r.emoji) } label: {
+                HStack(spacing: 4) {
+                    Text(r.emoji).font(.system(size: 14))
+                    Text(r.count.formatted())
+                        .font(.system(size: 13, weight: .semibold))
+                        .contentTransition(.numericText())
+                }
+                .foregroundStyle(mine ? Color(.systemBackground) : Color.primary)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(mine ? Color(.label) : Color(.tertiarySystemFill), in: Capsule())
+            }
+            .accessibilityLabel("\(r.emoji) \(r.count)\(mine ? ", yours" : "")")
+            .transition(.scale.combined(with: .opacity))
+        }
+    }
+
+    @ViewBuilder private func replyButton(lead: CGFloat) -> some View {
+        if let r = actions.reply {
+            Button(action: r) { Text("Reply").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+                .padding(.leading, lead)
+        }
+    }
+
+    @ViewBuilder private var heldNote: some View {
+        if reply.held {
+            Text("Hidden after reports").font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
     /// At most four pills on a reply (owner 2026-11-07), the most used first; mine always stays in
     /// view, taking the fourth place when it is not among the top four.
     static func shownPills(_ r: PostReply) -> [PostReply.Reaction] {
@@ -1111,7 +1146,8 @@ private struct ReplyRow: View {
                 Text(Self.age(reply.at)).font(.footnote).foregroundStyle(.secondary)
             }
             .padding(.leading, side + 10 + 14)
-            HStack(alignment: .center, spacing: 10) {
+            // The photo stays at the top beside the name, even when the words run long (owner 2026-11-07).
+            HStack(alignment: .top, spacing: 10) {
                 AvatarView(name: reply.name, photoUrl: reply.photoUrl.isEmpty ? nil : reply.photoUrl, size: side)
                     .avatarSquircle(reply.creator)   // the channel's photo, shaped as channels are
                     .accessibilityHidden(true)
@@ -1166,33 +1202,17 @@ private struct ReplyRow: View {
             }
             .buttonStyle(.plain)
         case .sent:
-            HStack(spacing: 6) {
-                // ⛔ THE CHAT'S REACTION PILL, NOT A HEART BUTTON (owner 2026-11-07: "make it like how
-                // bubble react works in my app"). No empty outline: a double tap on the bubble reacts,
-                // and once there is a reaction a pill shows the emoji and count; mine is the dark,
-                // filled one, as in the chat; a tap on it takes mine back or adds it.
-                ForEach(Self.shownPills(reply), id: \.emoji) { r in
-                    let mine = r.emoji == reply.my
-                    Button { actions.react(r.emoji) } label: {
-                        HStack(spacing: 4) {
-                            Text(r.emoji).font(.system(size: 14))
-                            Text(r.count.formatted())
-                                .font(.system(size: 13, weight: .semibold))
-                                .contentTransition(.numericText())
-                        }
-                        .foregroundStyle(mine ? Color(.systemBackground) : Color.primary)
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(mine ? Color(.label) : Color(.tertiarySystemFill), in: Capsule())
-                    }
-                    .accessibilityLabel("\(r.emoji) \(r.count)\(mine ? ", yours" : "")")
-                    .transition(.scale.combined(with: .opacity))
+            // Pills and Reply on one line when they fit; with many pills, Reply starts a new line
+            // under them instead of squeezing in at the right (owner 2026-11-07).
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    pills
+                    replyButton(lead: reply.rx.isEmpty ? 0 : 8)
+                    heldNote
                 }
-                if let r = actions.reply {
-                    Button(action: r) { Text("Reply").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
-                        .padding(.leading, reply.rx.isEmpty ? 0 : 8)
-                }
-                if reply.held {
-                    Text("Hidden after reports").font(.caption2).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) { pills }
+                    HStack(spacing: 6) { replyButton(lead: 0); heldNote }
                 }
             }
             .buttonStyle(.plain)
@@ -1288,6 +1308,8 @@ private struct ReplyComposer: View {
                     TextField("Add a reply…", text: $draft, axis: .vertical)
                         .lineLimit(1...5)
                         .focused($focused)
+                        // At most 250 characters, the server's limit too (owner 2026-11-07).
+                        .onChange(of: draft) { _, v in if v.count > 250 { draft = String(v.prefix(250)) } }
                         .padding(.vertical, 12)
                     // The chat's send: a white arrow on the blue pill (owner 2026-11-07), shown once
                     // there is something to send.
