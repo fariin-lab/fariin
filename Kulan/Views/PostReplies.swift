@@ -735,11 +735,25 @@ struct PostThreadSheet: View {
         } else if !model.loaded {
             RepliesSkeleton()
         } else if model.threads.isEmpty {
-            // The owner's comment icon, the one on the Reply bar (2026-11-07).
-            ContentUnavailableView(model.off ? "Replies are off" : "No replies yet",
-                                   image: "ic_reply_comment",
-                                   description: Text(model.off ? "The channel turned off replies for this post."
-                                                               : "Be the first to reply."))
+            // The owner's comment icon, the one on the Reply bar, and smaller words than the system's
+            // empty view (owner 2026-11-07: "this text looks big").
+            VStack(spacing: 6) {
+                Image("ic_reply_comment")
+                    .renderingMode(.template)
+                    .resizable().scaledToFit()
+                    .frame(width: 40, height: 40)
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 6)
+                Text(model.off ? "Replies are off" : "No replies yet")
+                    .font(.system(size: 15, weight: .semibold))
+                Text(model.off ? "The channel turned off replies for this post." : "Be the first to reply.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 32)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityElement(children: .combine)
         }
     }
 
