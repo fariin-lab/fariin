@@ -668,7 +668,9 @@ struct PostThreadSheet: View {
                     }
                 }
             }
-            ReplyComposer(off: model.off, loaded: model.loaded, answering: $answering) { text, thread in
+            // Off as the post already says, from the first frame (owner 2026-11-07: the field showed for
+            // a second, then turned into the off line when the server answered).
+            ReplyComposer(off: model.off || repliesOff, loaded: model.loaded, answering: $answering) { text, thread in
                 let me = ProfileStore.shared.me
                 model.send(text, thread: thread, me: (me?.name ?? "You", me?.photoUrl ?? ""))
             }
