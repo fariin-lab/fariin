@@ -497,6 +497,9 @@ struct PostThreadSheet: View {
         }
         // Opens at 65% of the screen and pulls up to full (owner 2026-11-07).
         .presentationDetents([.fraction(0.65), .large])
+        // A scroll in Replies or Quotes moves the list, not the sheet (owner 2026-11-07); dragging the
+        // top bar still pulls it to full.
+        .presentationContentInteraction(.scrolls)
         .presentationDragIndicator(.visible)
         .onChange(of: tab) { _, t in
             if t == .quotes {
