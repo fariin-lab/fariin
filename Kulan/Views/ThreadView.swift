@@ -4487,7 +4487,7 @@ struct ThreadView: View {
             })
             // Quote a channel post into a chat of mine, with my words (owner 2026-11-06).
             // Not when the channel turned Quotes off, (the server refuses it too).
-            if conversation?.isChannel == true, !live.isSystem, live.pinNotice == nil,   // never a service line ("You pinned …")
+            if conversation?.isChannel == true, !m.isSystem, m.pinNotice == nil,   // never a service line ("You pinned …")
                conversation?.quotesOff != true {   // off means off, for its admins too (owner 2026-11-07)
                 out.append(CMAction(title: "Quote", icon: "ic_quote", badge: "chatMenu.quote") {
                     guard let live = repo.items.first(where: { $0.id == m.id }), canForward(live) else {
@@ -4500,7 +4500,7 @@ struct ThreadView: View {
             }
             // Replies off or on for this post, for the channel's admins (owner 2026-11-06; the server
             // checks the Change info right and refuses otherwise).
-            if conversation?.isChannel == true, mayChangeChannelInfo, !live.isSystem, live.pinNotice == nil {   // not on a service line
+            if conversation?.isChannel == true, mayChangeChannelInfo, !m.isSystem, m.pinNotice == nil {   // not on a service line
                 let off = m.repliesOff(channelDefault: conversation?.repliesOff == true)   // the post's own switch wins
                 out.append(CMAction(title: off ? "Turn On Replies" : "Turn Off Replies", icon: off ? "ic_reply_comment" : "nosign", badge: "chatMenu.replies") {   // the owner's comment icon (2026-11-07)
                     setPostReplies(m.id, off: !off)
