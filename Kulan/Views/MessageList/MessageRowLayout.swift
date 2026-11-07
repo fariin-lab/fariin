@@ -1201,7 +1201,10 @@ enum MessageRowLayout {
                 // further under its words (its inset plus the height it grew to its corners), so
                 // that real gap is what comes back off.
                 let bottomInset = plan.picture?.textBottomInset ?? BubbleMetrics.vPad
-                let gapAbove: CGFloat = 3 - bottomInset
+                // A card (a quoted post) ending the bubble gets 10pt, not 3: the pills touched its
+                // bottom edge (owner 2026-11-07, "tucking quote bubble").
+                let cardLast = (plan.linkPlan?.card.maxY ?? 0) > plan.text.maxY && plan.linkPlan?.join == nil
+                let gapAbove: CGFloat = (cardLast ? 10 : 3) - bottomInset
                 // ⛔ AND A GAP BELOW IT, WHICH THERE WAS NOT — owner, 2026-09-23: "react badge is
                 // touching bubble bottom angle".
                 //
