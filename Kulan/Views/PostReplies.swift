@@ -863,11 +863,11 @@ struct PostThreadSheet: View {
                     }
                     .padding(.top, 4)
                 }
-                // A few replies start at the top, under the tabs (owner 2026-11-07); a long thread still
-                // opens at its newest reply and stays there as new ones land.
+                // Always opens at the top, on the first replies (owner 2026-11-07, twice); the newest are a
+                // scroll away, and new ones arriving below do not pull the list down (the "new" pill does).
                 .defaultScrollAnchor(.top, for: .alignment)
-                .defaultScrollAnchor(.bottom, for: .initialOffset)
-                .defaultScrollAnchor(.bottom, for: .sizeChanges)
+                .defaultScrollAnchor(.top, for: .initialOffset)
+                .defaultScrollAnchor(.top, for: .sizeChanges)
                 .scrollDismissesKeyboard(.interactively)
                 .overlay { repliesOverlay }
                 .overlay(alignment: .bottom) { newPill(proxy) }
