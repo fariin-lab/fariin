@@ -6256,10 +6256,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             return
         }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        // The finger's point, for the flight into the pill if this tap adds my reaction (`ReactionFlight`).
-        if let screen = collectionView.window?.screen {
-            ReactionFlight.note(nil, screenPoint: collectionView.convert(loc, to: screen.coordinateSpace))
-        }
+        // ⛔ NO FLIGHT ON A DOUBLE TAP (owner 2026-11-07: "react badge appearing late" in chats and
+        // groups; channels were already instant). A flight from the finger held the pill hidden until
+        // it landed, ~0.5 s. With no flight noted the pill pops at once with its burst
+        // (`playMyReactionFlair`, from == nil). A pick from the long-press bar still flies.
         onUikitDoubleTap(id)
     }
 
