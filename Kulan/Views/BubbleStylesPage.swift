@@ -150,6 +150,9 @@ struct BubbleStylesPage: View {
                 .padding(.horizontal, 16).padding(.vertical, 8)
             }
         }
+        // The preview's height follows the style (see `mineRowH`): the chips and grid under it
+        // glide with it, in the crossfade's time.
+        .animation(.easeInOut(duration: 0.18), value: selected)
         .background(Color(.systemGroupedBackground))
         .navigationTitle("Bubble Style")
         .navigationBarTitleDisplayMode(.inline)
@@ -251,25 +254,27 @@ struct BubbleStylesPage: View {
 
     // ── preview ──
 
-    /// ⛔ THE PREVIEW NEVER CHANGES SIZE (owner 2026-11-07: switching styles made the card grow and
-    /// shrink, so the chips and grid jumped). Both sample lines are short enough to stay one line
-    /// in every style, the sent bubble's row is as tall as the tallest style's one-line bubble
-    /// (art included), and a new style crossfades in place.
+    /// ⛔ A TIGHT CARD THAT NEVER JUMPS (owner 2026-11-07, second round: about 60pt of empty card
+    /// between the two bubbles and 70 under mine). The sent bubble's row is exactly as tall as the
+    /// chosen style's one-line bubble with its art (`mineRowH`), 6pt under the incoming bubble and
+    /// 14 (the card's padding) above the card's bottom. The styles' art differs by up to 35pt, so a
+    /// fixed height would leave that much empty card under the short ones: the row's height
+    /// animates instead, in the crossfade's 0.18s, so the chips and grid glide rather than jump.
+    /// Both sample lines are short enough to stay one line in every style.
     private static let mineText = "My new bubble style!"   // same words, height and fade as Android
     private static let lineH = ceil(BubbleMetrics.bodyFont.lineHeight)
-    private static let mineRowH: CGFloat = {
-        let plain = lineH + 18
-        let pictures = PictureStyles.all.map { p -> CGFloat in
-            let ti = p.textInsets, a = p.art
-            return ceil(max(lineH + ti.top + ti.bottom, p.minBubble.height) + a.top + a.bottom)
-        }
-        return max(120, plain, pictures.max() ?? 0)   // Android's row is 120
-    }()
+    /// The one-line bubble's height with the art above and under its outline, from the chat's own
+    /// numbers (`PictureBubble` lays out with the same ones).
+    private static func mineRowH(_ s: BubbleStyle?) -> CGFloat {
+        guard let p = s?.picture else { return lineH + 18 }
+        let ti = p.textInsets, a = p.art
+        return ceil(max(lineH + ti.top + ti.bottom, p.minBubble.height) + a.top + a.bottom)
+    }
 
     private var preview: some View {
         let s = BubbleStyles.find(selected)
         let key = (selected ?? "default") + "|" + (colorPick?.stored ?? "auto")
-        return VStack(spacing: 10) {
+        return VStack(spacing: 6) {
             HStack {
                 Text("Looks so cute!")
                     .font(Font(BubbleMetrics.bodyFont as CTFont))
@@ -296,7 +301,9 @@ struct BubbleStylesPage: View {
                 .id(key)
                 .transition(.opacity)
             }
-            .frame(maxWidth: .infinity, minHeight: Self.mineRowH, maxHeight: Self.mineRowH, alignment: .trailing)
+            // A set height, not the content's: during the crossfade both bubbles are in the stack,
+            // and the height must glide to the new one, not wait for the old one to leave.
+            .frame(maxWidth: .infinity, minHeight: Self.mineRowH(s), maxHeight: Self.mineRowH(s), alignment: .trailing)
             .padding(.leading, 40)
             .animation(.easeInOut(duration: 0.18), value: key)
         }
