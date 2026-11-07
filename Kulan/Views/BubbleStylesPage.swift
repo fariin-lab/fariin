@@ -95,8 +95,13 @@ struct BubbleStylesPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button("Cancel") { dismiss() }
+            // The app's round glass X in place of "Cancel" (owner 2026-11-07); same action. On 26
+            // the toolbar's own glass is hidden or the X is drawn as a circle inside a circle.
+            if #available(iOS 26.0, *) {
+                ToolbarItem(placement: .topBarLeading) { CloseXButton { dismiss() }.accessibilityLabel("Cancel") }
+                    .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem(placement: .topBarLeading) { CloseXButton { dismiss() }.accessibilityLabel("Cancel") }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Save") { save() }
