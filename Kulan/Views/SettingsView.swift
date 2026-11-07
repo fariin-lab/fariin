@@ -1316,7 +1316,7 @@ struct AppearanceSettingsView: View {
     private var themeCards: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
-                ForEach(ChatWallpapers.all) { g in
+                ForEach(ChatWallpapers.shown) { g in
                     let themeColor = g.autoColor   // the reference's pairing (see `WallpaperGradient.paired`)
                     // Selected only when BOTH halves of the theme are the active ones: this wallpaper,
                     // and its colour showing (Auto, or the same colour chosen outright).

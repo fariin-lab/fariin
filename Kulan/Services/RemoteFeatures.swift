@@ -61,12 +61,19 @@ final class RemoteFeatures {
                 // Built-in custom emoji the admin panel hid (owner 2026-11-06): left out of the picker.
                 let hidden = Set((snap.data()?["customEmojiHidden"] as? [String]) ?? [])
                 UserDefaults.standard.set(Array(hidden), forKey: "remoteFeatures.customEmojiHidden.v1")
+                // Built-in wallpapers and bubble styles the admin panel hid: left out of the pickers only.
+                let wpHidden = Set((snap.data()?["wallpapersHidden"] as? [String]) ?? [])
+                UserDefaults.standard.set(Array(wpHidden), forKey: "remoteFeatures.wallpapersHidden.v1")
+                let bsHidden = Set((snap.data()?["bubblesHidden"] as? [String]) ?? [])
+                UserDefaults.standard.set(Array(bsHidden), forKey: "remoteFeatures.bubblesHidden.v1")
                 DispatchQueue.main.async {
                     LiveFeatures.shared.values = out
                     LiveFeatures.shared.memberCloud = cloud
                     LiveFeatures.shared.newBadges = badges
                     if LiveFeatures.shared.customEmoji != emoji { LiveFeatures.shared.customEmoji = emoji }
                     if LiveFeatures.shared.customEmojiHidden != hidden { LiveFeatures.shared.customEmojiHidden = hidden }
+                    if LiveFeatures.shared.wallpapersHidden != wpHidden { LiveFeatures.shared.wallpapersHidden = wpHidden }
+                    if LiveFeatures.shared.bubblesHidden != bsHidden { LiveFeatures.shared.bubblesHidden = bsHidden }
                 }
             }
     }
@@ -105,6 +112,10 @@ final class RemoteFeatures {
     var customEmoji: [UploadedEmoji.Item] = UploadedEmoji.parse(UserDefaults.standard.array(forKey: UploadedEmoji.storeKey))
     /// Built-in custom emoji hidden in the admin panel ("ce_N"); the picker leaves them out.
     var customEmojiHidden: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "remoteFeatures.customEmojiHidden.v1") ?? [])
+    /// Built-in wallpaper ids (gradient and animated) hidden in the admin panel; pickers leave them out.
+    var wallpapersHidden: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "remoteFeatures.wallpapersHidden.v1") ?? [])
+    /// Bubble style ids hidden in the admin panel; pickers leave them out.
+    var bubblesHidden: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "remoteFeatures.bubblesHidden.v1") ?? [])
     private init() {}
 }
 
