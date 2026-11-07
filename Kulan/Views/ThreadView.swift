@@ -6269,6 +6269,15 @@ struct ThreadView: View {
                     ToastNotice.show(muted ? "Notifications on for this channel" : "Channel muted")
                 })])
         }
+        // My own channel (owner or admin): Search, top right (owner 2026-11-07: "the right side looks
+        // empty"); followers have the bell there instead.
+        if let conv = conversation, conv.isChannel, conv.users.contains(me) {
+            return .custom([ChatNavigationItem.BarButton(
+                id: "chsearch",
+                image: "ic_search_outline",
+                accessibilityLabel: "Search",
+                action: { activateSearch() })])
+        }
         let state = CallService.shared.state
         let callsEnabled = state == .idle || state == .ended   // their `currentCall == nil`
         if !isGroup && !otherUid.isEmpty {
