@@ -280,9 +280,9 @@ struct StoryStickerSheet: View {
         // not what this row is.
         GlassEffectContainer(spacing: 4) {
             StickerFlowLayout(spacing: 10, lineSpacing: 10) {
-                actionPill("mappin.and.ellipse", "Location", .red) { route.append(.place) }
-                actionPill("link", "Link", .blue) { route.append(.link) }
-                actionPill("clock", "Time", .orange) { close(); onTime() }
+                actionPill("mappin.and.ellipse", "Location", .red) { route.append(.place) }.newBadgeCorner("storyStickers.location")
+                actionPill("link", "Link", .blue) { route.append(.link) }.newBadgeCorner("storyStickers.link")
+                actionPill("clock", "Time", .orange) { close(); onTime() }.newBadgeCorner("storyStickers.time")
             }
         }
         .padding(.horizontal, 16)

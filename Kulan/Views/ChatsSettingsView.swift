@@ -35,7 +35,7 @@ struct ChatsSettingsView: View {
             Section {
                 NavigationLink { ChatPinPage() } label: {
                     HStack {
-                        Text("Chat Key")
+                        Text("Chat Key").newBadge("chats.chatKey")
                         Spacer()
                         // `_ = pinState.version` is the subscription; the value is read below.
                         let _ = pinState.version
@@ -51,7 +51,7 @@ struct ChatsSettingsView: View {
                 // Audit 2026-09-24: the switch only wrote the flag. Photos access was asked for later,
                 // from a background task in the middle of opening some chat, and if it was refused
                 // the switch stayed ON while nothing was ever saved. It is asked here now, on the tap.
-                Toggle("Save to Photos", isOn: Binding(get: { saveToPhotos }, set: { on in
+                Toggle("Save to Photos", badge: "chats.saveToPhotos", isOn: Binding(get: { saveToPhotos }, set: { on in
                     saveToPhotos = on
                     guard on else { return }
                     Task { @MainActor in
@@ -66,7 +66,7 @@ struct ChatsSettingsView: View {
             }
 
             Section {
-                Toggle("Link Previews", isOn: $linkPreviews).tint(.green)
+                Toggle("Link Previews", badge: "chats.linkPreviews", isOn: $linkPreviews).tint(.green)
             } footer: {
                 Text("Show a preview card for links you type or paste. Your phone contacts the site to build it, before the message is sent.")
             }
@@ -76,7 +76,7 @@ struct ChatsSettingsView: View {
             // Key: someone who types it opens a chat straight away. THOSE chats are what this moves
             // (see UnknownChatArchiver.sweep).
             Section {
-                Toggle("Automatically Archive", isOn: $autoArchiveUnknown).tint(.green)
+                Toggle("Automatically Archive", badge: "chats.autoArchive", isOn: $autoArchiveUnknown).tint(.green)
                     // From this moment on: chats already opened with the key stay where they are.
                     .onChange(of: autoArchiveUnknown) { _, on in
                         UserDefaults.standard.set(on ? Date().timeIntervalSince1970 * 1000 : 0,
@@ -91,7 +91,7 @@ struct ChatsSettingsView: View {
             Section {
                 Button(role: .destructive) { confirmClear = true } label: {
                     HStack {
-                        Text("Clear Chat History")
+                        Text("Clear Chat History").newBadge("chats.clearHistory")
                         if clearing { Spacer(); ProgressView() }
                     }
                 }

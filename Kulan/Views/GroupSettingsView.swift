@@ -127,7 +127,7 @@ struct GroupSettingsView: View {
                 // What followers may react with (2026-10-29).
                 NavigationLink { ChannelReactionsSettingsView(cid: cid) } label: {
                     HStack {
-                        Text("Reactions")
+                        Text("Reactions").newBadge("channelSettings.reactions")
                         Spacer()
                         // owner 2026-11-02: custom emojis show here too, not only the plain ones.
                         if conv?.reactMode == "some" {
@@ -145,7 +145,7 @@ struct GroupSettingsView: View {
                 // replies already there stay; no new ones. The Change info right (server-checked).
                 // Shows the new state at once and holds it while the server answers; a refusal puts it
                 // back (2026-11-06 audit: it sprang back, then flipped again when the doc arrived).
-                Toggle("Replies", isOn: Binding(
+                Toggle("Replies", badge: "channelSettings.replies", isOn: Binding(
                     get: { repliesOverride ?? (conv?.repliesOff != true) },
                     set: { on in
                         repliesOverride = on
@@ -267,7 +267,7 @@ struct GroupSettingsView: View {
                 else { actionError = "Only admins can change this." }
             } label: {
                 HStack {
-                    valueRow("timer", "Disappearing Messages",
+                    valueRow("timer", "Disappearing Messages", badge: "groupSettings.disappearing",
                              (conv?.disappearSeconds ?? 0) == 0 ? "Off" : ChatService.disappearLabel(conv?.disappearSeconds ?? 0))
                     Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
                 }
@@ -279,7 +279,7 @@ struct GroupSettingsView: View {
                 NavigationLink {
                     ChatHistoryForNewMembersPage(cid: cid, hidden: (conv?.hideHistoryAt ?? 0) > 0)
                 } label: {
-                    valueRow("ic_gs_chat_history", "Chat History",
+                    valueRow("ic_gs_chat_history", "Chat History", badge: "groupSettings.chatHistory",
                              (conv?.hideHistoryAt ?? 0) > 0 ? "Hidden" : "Visible")
                 }
             }
@@ -287,7 +287,7 @@ struct GroupSettingsView: View {
             // It replaced the History page built from notice lines and the row on the group page.
             if (conv?.isAdmin(me) ?? false) || (conv?.isOwner(me) ?? false) {
                 NavigationLink { GroupRecentActionsView(cid: cid) } label: {
-                    valueRow("clock.arrow.circlepath", "Recent Actions", "")
+                    valueRow("clock.arrow.circlepath", "Recent Actions", badge: "groupSettings.recentActions", "")
                 }
             }
         }
@@ -303,7 +303,7 @@ struct GroupSettingsView: View {
                 // Private / Public and the public link name live on the Group Type page.
                 if ownsType {
                     NavigationLink { GroupTypeView(cid: cid) } label: {
-                        valueRow("ic_gs_group_type", conv?.isChannel == true ? "Channel Type" : "Group Type", isPublicNow ? "Public" : "Private")
+                        valueRow("ic_gs_group_type", conv?.isChannel == true ? "Channel Type" : "Group Type", badge: "groupSettings.type", isPublicNow ? "Public" : "Private")
                     }
                 }
                 if can(.inviteUsers) {   // public groups have invite links too (owner 2026-10-20)
@@ -311,12 +311,12 @@ struct GroupSettingsView: View {
                         InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
                                         initialCode: shareCode ?? conv?.inviteCode ?? "", embedded: true)
                     } label: {
-                        valueRow("link", "Invite Link", inviteValue == "Off" ? "Off" : "On")
+                        valueRow("link", "Invite Link", badge: "groupSettings.inviteLink", inviteValue == "Off" ? "Off" : "On")
                     }
                 }
                 if can(.inviteUsers) {
                     NavigationLink { GroupRequestsView(cid: cid) } label: {
-                        valueRow("ic_gs_join_requests", conv?.isChannel == true ? "Follow Requests" : "Join Requests",
+                        valueRow("ic_gs_join_requests", conv?.isChannel == true ? "Follow Requests" : "Join Requests", badge: "groupSettings.requests",
                                  joinReqs.isEmpty ? "None" : "\(joinReqs.count)")
                     }
                 }
@@ -359,27 +359,27 @@ struct GroupSettingsView: View {
             if conv?.isChannel == true {
                 NavigationLink { ChannelFollowersView(cid: cid, count: conv?.followerCount ?? 0) } label: {
                     // The admins included, as the page header and the list count them (2026-10-29).
-                    valueRow("ic_gs_members", "Followers", "\(conv?.subscriberCount ?? 0)")
+                    valueRow("ic_gs_members", "Followers", badge: "channelSettings.followers", "\(conv?.subscriberCount ?? 0)")
                 }
                 // Moved here off the channel's info page (owner 2026-10-29); hidden with the
                 // feature (`Flags.schedulePosts`).
                 if Flags.schedulePosts {
                     NavigationLink { ScheduledPostsView(cid: cid) } label: {
-                        valueRow("calendar.badge.clock", "Scheduled Posts", "")
+                        valueRow("calendar.badge.clock", "Scheduled Posts", badge: "channelSettings.scheduledPosts", "")
                     }
                 }
             } else {
                 NavigationLink { GroupMembersListView(cid: cid) } label: {
-                    valueRow("ic_gs_members", "Members", "\(conv?.users.count ?? 0)")
+                    valueRow("ic_gs_members", "Members", badge: "groupSettings.members", "\(conv?.users.count ?? 0)")
                 }
             }
             NavigationLink { GroupAdminsView(cid: cid) } label: {
-                valueRow("ic_gs_admins", "Administrators", "\(conv?.admins.count ?? 0)")
+                valueRow("ic_gs_admins", "Administrators", badge: "groupSettings.admins", "\(conv?.admins.count ?? 0)")
             }
             // REMOVED USERS, the people taken out of the group (`bannedUids`).
             if can(.banUsers) {
                 NavigationLink { GroupRemovedUsersView(cid: cid) } label: {
-                    valueRow("ic_gs_banned", "Banned Users", "\(conv?.bannedUids.count ?? 0)")
+                    valueRow("ic_gs_banned", "Banned Users", badge: "groupSettings.banned", "\(conv?.bannedUids.count ?? 0)")
                 }
             }
         }
@@ -398,7 +398,7 @@ struct GroupSettingsView: View {
     private var permissionsSection: some View {
         Section {
             NavigationLink { permissionsPage } label: {
-                valueRow("ic_gs_permissions", "Permissions", "\(permissionCount.on)/\(permissionCount.of)")
+                valueRow("ic_gs_permissions", "Permissions", badge: "groupSettings.permissions", "\(permissionCount.on)/\(permissionCount.of)")
             }
         }
     }
@@ -583,7 +583,7 @@ struct GroupSettingsView: View {
     private var mediaRowSection: some View {
         Section {
             NavigationLink { mediaPage } label: {
-                valueRow("photo.on.rectangle", "Media & content",
+                valueRow("photo.on.rectangle", "Media & content", badge: "groupSettings.media",
                          "\(mediaOnCount) of \(Conversation.SendKind.allCases.count)")
             }
         } footer: {
@@ -653,7 +653,7 @@ struct GroupSettingsView: View {
         Section {
             Toggle(isOn: bool("protect", get: { $0.isRestricted },
                               set: { v in try await ChatService.setGroupRestricted(cid, on: v) })) {
-                Text("Protect Content")
+                Text("Protect Content").newBadge("groupSettings.protectContent")
             }
             .disabled(!canEdit)
         } header: {
@@ -666,7 +666,7 @@ struct GroupSettingsView: View {
     // MARK: Pieces
 
     /// A row in the cards: the outline glyph the group page uses, the title, the value in grey.
-    private func valueRow(_ icon: String, _ title: String, _ value: String) -> some View {
+    private func valueRow(_ icon: String, _ title: String, badge: String? = nil, _ value: String) -> some View {
         HStack(spacing: 14) {
             // "ic_" = the owner's own outline icons (2026-10-21), else an SF Symbol.
             if icon.hasPrefix("ic_") {
@@ -675,7 +675,7 @@ struct GroupSettingsView: View {
                 // 21, not 17 (owner 2026-10-21: beside his 24pt drawings these looked small).
                 Image(systemName: icon).font(.system(size: 21)).frame(width: 26)
             }
-            Text(title)
+            Text(title).newBadge(badge)
             Spacer(minLength: 12)
             Text(value).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
         }

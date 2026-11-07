@@ -65,7 +65,7 @@ struct NotificationsSettingsView: View {
             }
 
             Section {
-                Toggle("Show Notifications", isOn: $pushOn)
+                Toggle("Show Notifications", badge: "notifications.show", isOn: $pushOn)
                     .tint(.green)
                     .onChange(of: pushOn) { _, on in
                         // Kept on the account too, so a log out does not turn it back on.
@@ -88,7 +88,7 @@ struct NotificationsSettingsView: View {
             }
 
             Section {
-                Toggle("Message Preview", isOn: $messagePreview)
+                Toggle("Message Preview", badge: "notifications.preview", isOn: $messagePreview)
                     .tint(.green)
                     .onChange(of: messagePreview) { _, on in
                         // This comment used to say the push server read the preference. It did not.
@@ -101,7 +101,7 @@ struct NotificationsSettingsView: View {
                     }
                 NavigationLink { NotificationSoundView() } label: {
                     HStack {
-                        Text("Sound")
+                        Text("Sound").newBadge("notifications.sound")
                         Spacer()
                         // ⚠️ THE TONE'S NAME, NOT ITS STORED ID CAPITALISED. The two happened to match
                         // while every tone was one of ours; Apple's Note is stored as "tritone" (its
@@ -120,9 +120,9 @@ struct NotificationsSettingsView: View {
             .disabled(!pushOn)
 
             Section {
-                Toggle("In-App Sounds", isOn: $inAppSound).tint(.green)
-                Toggle("In-App Vibrate", isOn: $inAppVibrate).tint(.green)
-                Toggle("In-App Preview", isOn: $inAppPreview).tint(.green)
+                Toggle("In-App Sounds", badge: "notifications.inAppSounds", isOn: $inAppSound).tint(.green)
+                Toggle("In-App Vibrate", badge: "notifications.inAppVibrate", isOn: $inAppVibrate).tint(.green)
+                Toggle("In-App Preview", badge: "notifications.inAppPreview", isOn: $inAppPreview).tint(.green)
             } header: {
                 Text("In-App Notifications")
             } footer: {
@@ -137,7 +137,7 @@ struct NotificationsSettingsView: View {
 
             // Not a notification, so not tied to push (owner 2026-10-29).
             Section {
-                Toggle("Sound When Sent", isOn: $sentSound).tint(.green)
+                Toggle("Sound When Sent", badge: "notifications.sentSound", isOn: $sentSound).tint(.green)
             } footer: {
                 Text("A short sound when your message reaches Fariin. A photo or video makes it when it has finished sending. Silent when your iPhone is on silent.")
             }
@@ -145,7 +145,7 @@ struct NotificationsSettingsView: View {
             Section {
                 Button(role: .destructive) { confirmReset = true } label: {
                     HStack {
-                        Text("Reset All Notifications")
+                        Text("Reset All Notifications").newBadge("notifications.resetAll")
                         if resetting { Spacer(); ProgressView() }
                     }
                 }

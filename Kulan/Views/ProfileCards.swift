@@ -13,6 +13,8 @@ struct ProfileInfoRow: View {
     var value: String? = nil
     var tint: Color = .primary
     var chevron: Bool = true
+    /// A "New" badge spot (`NewBadgeSpots`).
+    var badge: String? = nil
     let action: () -> Void
 
     var body: some View {
@@ -30,7 +32,7 @@ struct ProfileInfoRow: View {
                 }
                 .frame(width: 26)
                 .foregroundStyle(tint)
-                Text(title).foregroundStyle(tint)
+                Text(title).foregroundStyle(tint).newBadge(badge)
                 Spacer()
                 if let value { Text(value).foregroundStyle(.secondary) }
                 if chevron {

@@ -657,13 +657,13 @@ struct GroupInfoView: View {
         // "Could not do that" alert (owner 2026-10-30): nothing went wrong.
         VStack(spacing: 0) {
             ProfileInfoRow(title: "Sounds & Notifications", icon: "ic_notifications",
-                           value: muted ? "Off" : "On") {
+                           value: muted ? "Off" : "On", badge: "groupInfo.sounds") {
                 if followingNow { showSounds = true }
                 else { ToastNotice.show("Follow this channel to change its notifications.") }
             }
             rowDivider
             ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
-                           value: storage.map { Self.bytes($0.total) } ?? "") { showStorage = true }
+                           value: storage.map { Self.bytes($0.total) } ?? "", badge: "groupInfo.storage") { showStorage = true }
         }
         .profileSurface(plain: cardColor)
     }
@@ -1361,17 +1361,17 @@ struct GroupInfoView: View {
         VStack(spacing: 0) {
             // Disappearing Messages lives in Group Settings now (owner 2026-10-20).
             ProfileInfoRow(title: "Sounds & Notifications", icon: "ic_notifications",
-                           value: muted ? "Off" : "On") { showSounds = true }
+                           value: muted ? "Off" : "On", badge: "groupInfo.sounds") { showSounds = true }
             // Storage on the page, under Sounds (owner 2026-10-20), out of the ⋯ menu.
             rowDivider
             ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
-                           value: storage.map { Self.bytes($0.total) } ?? "") { showStorage = true }
+                           value: storage.map { Self.bytes($0.total) } ?? "", badge: "groupInfo.storage") { showStorage = true }
             // ⛔ CHAT BUBBLE (owner 2026-11-07, SPEC section 4): the same picker as Settings >
             // Appearance, a shortcut to my one style. Not on a channel (its posts are never styled).
             if BubbleStyles.shown, !isChannel {
                 rowDivider
                 ProfileInfoRow(title: "Chat Bubble", icon: "bubble.left",
-                               value: BubbleStyles.find(bubbleStyleId)?.name ?? "Default") { showBubbleStyle = true }
+                               value: BubbleStyles.find(bubbleStyleId)?.name ?? "Default", badge: "groupInfo.chatBubble") { showBubbleStyle = true }
                 // ⛔ BUBBLE STYLES SWITCH (owner 2026-11-07, SPEC section 5): the owner, or an admin
                 // with Change group info (not members-can-edit-info). Off draws every message in the
                 // group as the normal bubble, for everyone.
@@ -1390,7 +1390,7 @@ struct GroupInfoView: View {
             // Statistics (owner 2026-10-26): owner/admins of a big enough group, last row.
             if showStatsRow {
                 rowDivider
-                ProfileInfoRow(title: "Statistics", icon: "ic_statistics") { showStats = true }   // his drawing
+                ProfileInfoRow(title: "Statistics", icon: "ic_statistics", badge: "groupInfo.statistics") { showStats = true }   // his drawing
             }
         }
         .profileSurface(plain: cardColor)
@@ -1425,10 +1425,10 @@ struct GroupInfoView: View {
     @ViewBuilder private var groupSettingsRows: some View {
         // A channel's followers, with Add Followers and Invite via Link at the top of that page.
         if isChannel {
-            ProfileInfoRow(title: "Followers", icon: "person.2", value: "\(conv?.subscriberCount ?? 0)") { showFollowers = true }
+            ProfileInfoRow(title: "Followers", icon: "person.2", value: "\(conv?.subscriberCount ?? 0)", badge: "groupInfo.followers") { showFollowers = true }
             rowDivider
         }
-        ProfileInfoRow(title: isChannel ? "Channel Settings" : "Group Settings", icon: "ic_group_settings") { showSettings = true }
+        ProfileInfoRow(title: isChannel ? "Channel Settings" : "Group Settings", icon: "ic_group_settings", badge: "groupInfo.settings") { showSettings = true }
         if can(.inviteUsers) && !joinReqs.isEmpty {
             rowDivider
             joinRequestsRow

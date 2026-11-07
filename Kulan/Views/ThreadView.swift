@@ -4394,7 +4394,7 @@ struct ThreadView: View {
         // MEDIA STILL UPLOADING: not on the server yet — only Save / Cancel Sending / Select.
         if m.sendState == .sending && (m.isImage || m.isVideo || m.isAlbum || m.isGif) {
             if (m.isImage || m.isAlbum) && !m.viewOnce && savingAllowed {   // a one-time photo is never saved, even my own
-                out.append(CMAction(title: "Save Image", icon: "square.and.arrow.down") {
+                out.append(CMAction(title: "Save Image", icon: "square.and.arrow.down", badge: "chatMenu.saveImage") {
                     Task { await saveImageToPhotos(m) }
                 })
             }
@@ -4417,7 +4417,7 @@ struct ThreadView: View {
             let age = Date().timeIntervalSince(m.createdAt)
             let live = (m.callOutcome == "ringing" && age < 120)
                 || (m.callOutcome == "ongoing" && age < 4 * 3600)
-            out.append(CMAction(title: "Reply", icon: "arrowshape.turn.up.left") { beginReply(to: m) })
+            out.append(CMAction(title: "Reply", icon: "arrowshape.turn.up.left", badge: "chatMenu.reply") { beginReply(to: m) })
             if !live {
                 out.append(CMAction(title: m.callVideo ? "Video Call" : "Voice Call",
                                     icon: m.callVideo ? "video" : "phone") {
@@ -4440,7 +4440,7 @@ struct ThreadView: View {
         // Edit and Info already had this guard; Reply, Forward and Pin now share it.
         let delivered = m.sendState == nil
         if delivered, !m.isStoryReaction, mayReplyHere {   // a story react-bar emoji takes no reply
-            out.append(CMAction(title: "Reply", icon: "arrowshape.turn.up.left") { beginReply(to: m) })
+            out.append(CMAction(title: "Reply", icon: "arrowshape.turn.up.left", badge: "chatMenu.reply") { beginReply(to: m) })
         }
         // Both forward paths now ask `canForward` and nothing else — see the note on it. This one
         // used to spell the rule out inline, which is how the two copies drifted apart.
@@ -4454,7 +4454,7 @@ struct ThreadView: View {
         // Theirs rebuilds every item from the database inside a transaction at send time and raises
         // an error when the interaction is gone; this is the same rule with the data we have.
         if canForward(m) {
-            out.append(CMAction(title: "Forward", icon: "arrowshape.turn.up.right") {
+            out.append(CMAction(title: "Forward", icon: "arrowshape.turn.up.right", badge: "chatMenu.forward") {
                 guard let live = repo.items.first(where: { $0.id == m.id }), canForward(live) else {
                     showJumpToast("That message is no longer available")
                     return
@@ -4464,7 +4464,7 @@ struct ThreadView: View {
             })
             // Quote a channel post into a chat of mine, with my words (owner 2026-11-06).
             if conversation?.isChannel == true {
-                out.append(CMAction(title: "Quote", icon: "ic_quote") {
+                out.append(CMAction(title: "Quote", icon: "ic_quote", badge: "chatMenu.quote") {
                     guard let live = repo.items.first(where: { $0.id == m.id }), canForward(live) else {
                         showJumpToast("That message is no longer available")
                         return
@@ -4477,13 +4477,13 @@ struct ThreadView: View {
             // checks the Change info right and refuses otherwise).
             if conversation?.isChannel == true, mayChangeChannelInfo {
                 let off = m.repliesOff(channelDefault: conversation?.repliesOff == true)   // the post's own switch wins
-                out.append(CMAction(title: off ? "Turn On Replies" : "Turn Off Replies", icon: off ? "ic_reply_comment" : "nosign") {   // the owner's comment icon (2026-11-07)
+                out.append(CMAction(title: off ? "Turn On Replies" : "Turn Off Replies", icon: off ? "ic_reply_comment" : "nosign", badge: "chatMenu.replies") {   // the owner's comment icon (2026-11-07)
                     setPostReplies(m.id, off: !off)
                 })
             }
         }
         if !m.text.isEmpty && !m.isFeatureMarker && !m.viewOnce && savingAllowed {
-            out.append(CMAction(title: "Copy", icon: "doc.on.doc") {
+            out.append(CMAction(title: "Copy", icon: "doc.on.doc", badge: "chatMenu.copy") {
                 // The words as they are NOW: an edit or a delete arriving while the menu is open
                 // must not be copied around it. Same for No Saving switched on meanwhile.
                 guard savingAllowed else { return }
@@ -4501,14 +4501,14 @@ struct ThreadView: View {
            !m.isImage, !m.isVideo, !m.isAlbum, !m.isFile, !m.isAudio, !m.isCall, !m.isSystem,
            m.type != "sticker", conversation?.isChannel != true, conversation?.bubbleStylesOff != true,
            !OfficialChannel.isOfficial(cid) {
-            out.append(CMAction(title: "Bubble Style", icon: "paintpalette") { BubbleStylesPage.presentSheet() })
+            out.append(CMAction(title: "Bubble Style", icon: "paintpalette", badge: "chatMenu.bubbleStyle") { BubbleStylesPage.presentSheet() })
         }
         // Edit follows the TEXT, not the type: a photo/album/video caption is sealed in the same
         // `text` field editMessage rewrites, so any of my messages WITH a body is editable within
         // the window. Bare media has no text to edit; view-once never re-opens for editing.
         // 2026-09-24 feature-audit: the rule now lives in `canEdit`, shared with the native menu.
         if canEdit(m) {
-            out.append(CMAction(title: "Edit", icon: "pencil") {
+            out.append(CMAction(title: "Edit", icon: "pencil", badge: "chatMenu.edit") {
                 withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
                 ComposerFormat.setPrefill(m.text, bold: m.boldRanges)   // the post's bold comes with it
                 input = m.text
@@ -4517,10 +4517,10 @@ struct ThreadView: View {
             })
         }
         if m.edited && !m.deleted && canSeeEditHistory {   // 2026-09-24 feature-audit: earlier versions, either side
-            out.append(CMAction(title: "Edit History", icon: "clock.arrow.circlepath") { editHistoryTarget = MessageRef(id: m.id) })
+            out.append(CMAction(title: "Edit History", icon: "clock.arrow.circlepath", badge: "chatMenu.editHistory") { editHistoryTarget = MessageRef(id: m.id) })
         }
         if m.isImage && !m.viewOnce && savingAllowed {
-            out.append(CMAction(title: "Save Image", icon: "square.and.arrow.down") {
+            out.append(CMAction(title: "Save Image", icon: "square.and.arrow.down", badge: "chatMenu.saveImage") {
                 Task { await saveImageToPhotos(m) }
             })
         }
@@ -4540,10 +4540,10 @@ struct ThreadView: View {
         })
         // Not in a channel (owner 2026-11-07: "remove in channel, I don't need it").
         if isGroup && mine && m.sendState == nil && conversation?.isChannel != true {
-            out.append(CMAction(title: "Info", icon: "info.circle") { infoTarget = MessageRef(id: m.id) })
+            out.append(CMAction(title: "Info", icon: "info.circle", badge: "chatMenu.info") { infoTarget = MessageRef(id: m.id) })
         }
         if canPin && delivered && !m.viewOnce {   // no view-once: the pinned bar shows its thumbnail. See `delivered` above — a pin on a clientId can never resolve
-            out.append(CMAction(title: isPinned ? "Unpin" : "Pin", icon: isPinned ? "pin.slash" : "ic_pin_menu") {
+            out.append(CMAction(title: isPinned ? "Unpin" : "Pin", icon: isPinned ? "pin.slash" : "ic_pin_menu", badge: "chatMenu.pin") {
                 togglePin(m)
             })
         }
@@ -4551,7 +4551,7 @@ struct ThreadView: View {
         // anyone who does not run the channel. It reports the channel, as its page does. Channels
         // are not end-to-end encrypted, so the note against Report on a message is about 1:1 chats.
         if let conv = conversation, conv.isChannel, !conv.isOwner(me), !conv.admins.contains(me) {
-            out.append(CMAction(title: "Report", icon: "exclamationmark.octagon") {
+            out.append(CMAction(title: "Report", icon: "exclamationmark.octagon", badge: "chatMenu.report") {
                 confirmChannelReport = true
             })
         }
@@ -6755,14 +6755,14 @@ struct ThreadView: View {
                     // be the grid's first cell is DELETED rather than kept as a second door. It goes
                     // first because it is the only one of the five that makes something new; the
                     // other four go and fetch something that already exists.
-                    attachTile("ic_gif_tile", "GIF") {
+                    attachTile("ic_gif_tile", "GIF", badge: "attach.gif") {
                         if !sendHeldBack(.sendStickers, .gifs) { attachGif = true }
                     }
-                    attachTile("ic_file_tile", "Files") {
+                    attachTile("ic_file_tile", "Files", badge: "attach.files") {
                         if !sendHeldBack(.sendFiles, .files) { attachFiles = true }
                     }
-                    attachTile("ic_location", "Location") { if !sendHeldBack(nil, .location) { attachLocation = true } }
-                    if isGroup { attachTile("ic_poll_tile", "Poll") { if !sendHeldBack(.sendPolls, .polls) { showPollComposer = true } } }
+                    attachTile("ic_location", "Location", badge: "attach.location") { if !sendHeldBack(nil, .location) { attachLocation = true } }
+                    if isGroup { attachTile("ic_poll_tile", "Poll", badge: "attach.poll") { if !sendHeldBack(.sendPolls, .polls) { showPollComposer = true } } }
                 }
                 .padding(.horizontal, 6)
                 .frame(height: Self.attachBarHeight)
@@ -6953,7 +6953,7 @@ struct ThreadView: View {
         sendMarker(Message.locationMarkerText(lat: lat, lon: lon, label: label))
     }
 
-    private func attachTile(_ icon: String, _ label: String, closesSheet: Bool = true,
+    private func attachTile(_ icon: String, _ label: String, closesSheet: Bool = true, badge: String? = nil,
                             _ action: @escaping () -> Void) -> some View {
         Button {
             // A page that lives INSIDE the sheet (Location) opens in place; anything else opens once
@@ -6990,6 +6990,7 @@ struct ThreadView: View {
                     .foregroundStyle(.primary).lineLimit(1)
             }
             .frame(width: attachTileWidth, height: Self.attachBarHeight - 8)
+            .newBadgeCorner(badge)
             .contentShape(Capsule())
         }
         // The app's own press feel, rather than nothing at all — same style the story editor's

@@ -99,7 +99,7 @@ final class RemoteFeatures {
         (UserDefaults.standard.dictionary(forKey: "remoteFeatures.v1") as? [String: Bool]) ?? [:]
     /// The group page's member cloud (not a Bool, so it lives beside `values`).
     var memberCloud = MemberCloudSetting(UserDefaults.standard.dictionary(forKey: MemberCloudSetting.storeKey))
-    /// Settings rows wearing "New", row key -> end time in ms (see `NewBadges`).
+    /// Spots wearing "New", spot id -> end time in ms (see `NewBadges`).
     var newBadges: [String: Double] = NewBadges.parse(UserDefaults.standard.dictionary(forKey: NewBadges.storeKey))
     /// Custom emoji uploaded in the admin panel (see `UploadedEmoji`), in the panel's order.
     var customEmoji: [UploadedEmoji.Item] = UploadedEmoji.parse(UserDefaults.standard.array(forKey: UploadedEmoji.storeKey))
@@ -108,32 +108,34 @@ final class RemoteFeatures {
     private init() {}
 }
 
-/// ⛔ THE "NEW" BADGE ON A SETTINGS ROW — owner 2026-11-06, set from the admin panel:
-/// `config/features.newBadges = { "<row key>": <end time, ms> }`. A row shows the badge while the
+/// ⛔ THE "NEW" BADGE ON A SETTINGS ROW — owner 2026-11-06, set from the admin panel; on any spot in
+/// `NewBadgeSpots` since 2026-11-07: `config/features.newBadges = { "<spot id>": <end time, ms> }`. A row shows the badge while the
 /// end time is still ahead. Opening the row does NOT remove it (owner's word): it leaves only when an
 /// admin removes it or the end time passes. Applies live (LiveFeatures).
 enum NewBadges {
     static let storeKey = "remoteFeatures.newBadges.v1"
 
-    /// The rows the panel offers, key -> the row's title in Settings. Keep in step with the
-    /// panel's list (functions-admin policy NEW_BADGE_ROWS).
+    /// The Settings page's own rows, key -> title: `SettingsRowLabel` (and the settings search)
+    /// finds a row's badge by its title. Every other spot names its id (`.newBadge`, see
+    /// `NewBadgeSpots`, the catalog the panel offers).
     static let rows: [String: String] = [
         "subscriptions": "Subscriptions", "account": "Account", "devices": "Devices",
         "notifications": "Notifications", "appearance": "Appearance", "chats": "Chats",
         "stories": "Stories", "privacy": "Privacy & Security", "storage": "Storage and Data",
         "invite": "Invite Friends", "safety": "Safety", "help": "Help & About",
+        "myProfile": "My Profile",
     ]
     private static let keyByTitle: [String: String] =
         Dictionary(uniqueKeysWithValues: rows.map { ($0.value, $0.key) })
 
     static func key(forTitle title: String) -> String? { keyByTitle[title] }
 
-    /// Anything that is not a positive number is ignored.
+    /// Anything that is not a positive number, or not a spot in the catalog, is ignored.
     static func parse(_ raw: Any?) -> [String: Double] {
         guard let d = raw as? [String: Any] else { return [:] }
         var out: [String: Double] = [:]
         for (k, v) in d {
-            if let n = v as? NSNumber, n.doubleValue > 0, rows[k] != nil { out[k] = n.doubleValue }
+            if let n = v as? NSNumber, n.doubleValue > 0, NewBadgeSpots.all[k] != nil { out[k] = n.doubleValue }
         }
         return out
     }
