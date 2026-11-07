@@ -395,6 +395,9 @@ enum ChatWallpapers {
     @ObservationIgnored private var groupEditing: Set<String> = []
     @ObservationIgnored private var groupLastShown: [String: ChatWallpaper] = [:]
     @ObservationIgnored private var groupFetching: Set<String> = []
+    // Photos this run imported as NEW files and nothing has kept yet. Only these may be taken back
+    // when a picker closes without Apply (a dedup hit returns an older photo that may be in use).
+    @ObservationIgnored private var freshImports: Set<String> = []
 
     // (The brightness slider of build 796 is gone, on his word the same day: "low and high is not
     // working, change it completely". The preview has a dark/light button instead, which saves
@@ -417,7 +420,14 @@ enum ChatWallpapers {
     /// "no wallpaper" would give a chat two different bubble treatments for two things the user
     /// picked from the same screen.
     func hasWallpaper(for cid: String) -> Bool {
-        wallpaper(for: cid) != .none
+        let w = wallpaper(for: cid)
+        // A photo whose file is gone draws as the plain page, so it is no wallpaper here either.
+        if case .photo(let id) = w { return photoExists(id) }
+        return w != .none
+    }
+
+    private func photoExists(_ id: String) -> Bool {
+        imageCache[id] != nil || FileManager.default.fileExists(atPath: Self.libraryURL(id).path)
     }
 
     func wallpaper(for cid: String) -> ChatWallpaper {
@@ -464,6 +474,7 @@ enum ChatWallpapers {
         }
         cache[cid] = w
         UserDefaults.standard.set(w.stored, forKey: Self.key(cid))
+        if case .photo(let id) = w { freshImports.remove(id) }  // kept now
         version &+= 1                                           // observed → live re-render
     }
 
@@ -476,6 +487,12 @@ enum ChatWallpapers {
     /// The picker needs the raw answer, which `wallpaper(for:)` hides behind its fallback.
     func hasOverride(for cid: String) -> Bool {
         groupShared[cid] != nil || UserDefaults.standard.string(forKey: Self.key(cid)) != nil
+    }
+
+    /// This phone's own stored pick only, not the group's shared one. The chat sheet uses it to
+    /// decide what Cancel restores, so it never copies a group's wallpaper into the phone's key.
+    func hasOwnPick(for cid: String) -> Bool {
+        UserDefaults.standard.string(forKey: Self.key(cid)) != nil
     }
 
     /// Remove the per-chat pick so this chat follows the all-chats default again.
@@ -513,6 +530,7 @@ enum ChatWallpapers {
         }
         cache = [:]
         d.set(w.stored, forKey: Self.defaultKey)
+        if case .photo(let id) = w { freshImports.remove(id) }  // kept now
         version &+= 1
     }
 
@@ -570,7 +588,9 @@ enum ChatWallpapers {
             return .photo(id)
         }
         fetchGroupPhoto(link, id: id)
-        return groupLastShown[cid]
+        // Still downloading: show the plain page, not this phone's own pick, so the group's photo
+        // does not replace a different wallpaper a moment later.
+        return groupLastShown[cid] ?? ChatWallpaper.none
     }
 
     /// The picker is open on a group whose wallpaper this person may change: `set` and
@@ -718,6 +738,7 @@ enum ChatWallpapers {
         imageCache[id] = scaled
         hashes[id] = hash
         libraryIds.insert(id, at: 0)                             // newest first (observed → picker updates)
+        freshImports.insert(id)
         persistLibrary()
         return id
     }
@@ -725,12 +746,36 @@ enum ChatWallpapers {
     // Delete a USER-IMPORTED wallpaper from the library (built-ins are not in the library and can
     // never be deleted). Chats still pointing at it fall back gracefully to the default background.
     func deleteFromLibrary(_ id: String) {
+        // Every chat and the default that used this photo go back to no wallpaper, so none keeps
+        // pointing at a missing file. A chat's own pick becomes "none"; the default key is removed.
+        let d = UserDefaults.standard
+        let p = ChatWallpaper.photo(id).stored
+        for (k, v) in d.dictionaryRepresentation() where k.hasPrefix("wallpaper.") && (v as? String) == p {
+            if k == Self.defaultKey { d.removeObject(forKey: k) } else { d.set(ChatWallpaper.none.stored, forKey: k) }
+        }
+        cache = [:]
+        freshImports.remove(id)
         libraryIds.removeAll { $0 == id }
         hashes.removeValue(forKey: id)
         imageCache.removeValue(forKey: id)
         try? FileManager.default.removeItem(at: Self.libraryURL(id))
         persistLibrary()
         version &+= 1
+    }
+
+    /// Is this photo stored anywhere: a chat's own pick, the default, or a group photo this phone sent?
+    func isInUse(_ id: String) -> Bool {
+        let p = ChatWallpaper.photo(id).stored
+        for (k, v) in UserDefaults.standard.dictionaryRepresentation()
+            where k.hasPrefix("wallpaper.") && (v as? String) == p { return true }
+        return groupUrlIds.values.contains(id)
+    }
+
+    /// Take back a photo a picker imported but did not keep: only one this run newly created and
+    /// that nothing stored points at.
+    func discardUnkept(_ id: String) {
+        guard freshImports.contains(id), !isInUse(id) else { return }
+        deleteFromLibrary(id)
     }
 
     /// SIGN-OUT (audit 2026-09-24). Everything here is a plain device-wide key or file, so the next
@@ -748,7 +793,7 @@ enum ChatWallpapers {
         hashes = [:]
         libraryIds = []
         groupShared = [:]; groupUrlIds = [:]; groupPreview = [:]; groupPending = [:]
-        groupEditing = []; groupLastShown = [:]
+        groupEditing = []; groupLastShown = [:]; freshImports = []
         version &+= 1
     }
 
