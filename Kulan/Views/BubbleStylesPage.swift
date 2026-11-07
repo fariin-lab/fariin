@@ -219,7 +219,11 @@ struct BubbleStylesPage: View {
         if let cid {
             if colorTouched { colorStore.set(colorPick, for: cid); onSaveColor?(colorPick) }
             // Default here is the explicit "none", so a style set for all chats stays out of this one.
-            BubbleStyles.setChatOverride(selected ?? BubbleStyles.noneId, for: cid)
+            // Only when the style itself changed: a chat that follows the all-chats style and only
+            // had its decorations toggled keeps following it (writing it here would pin it).
+            if selected != savedStyle {
+                BubbleStyles.setChatOverride(selected ?? BubbleStyles.noneId, for: cid)
+            }
         } else {
             if colorTouched { colorStore.applyToAllChats(colorPick) }
             BubbleStyles.current = selected   // the default only; chats with their own keep it
