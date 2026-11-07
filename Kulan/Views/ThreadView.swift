@@ -5085,11 +5085,11 @@ struct ThreadView: View {
                 if m.viewOnce {
                     // Already spent: a pill drawn before the mark landed must not open it again.
                     guard !ViewedOnce.contains(m.id) else { return }
-                    // ⛔ THE SENDER GETS ONE VIEW TOO — owner, 2026-10-03. Only the LOCAL mark: the
-                    // server burn (`pendingViewOnceConsume`) stays the recipient's, or the sender
-                    // looking at their own photo would destroy the copy the other person has not
-                    // opened yet.
-                    if m.authorId != me { pendingViewOnceConsume = m }
+                    // ⛔ THE SENDER NEVER OPENS THEIR OWN — owner, 2026-11-07, replacing his
+                    // 2026-10-03 "the sender gets one view too". My own view-once photo or voice
+                    // note opens nothing (the builder also draws it untappable).
+                    guard m.authorId != me else { return }
+                    pendingViewOnceConsume = m
                     ViewedOnce.mark(m.id)
                     viewedOnceTick += 1
                 }

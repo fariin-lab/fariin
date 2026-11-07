@@ -644,15 +644,14 @@ enum MessageRowModelBuilder {
     ///
     /// ⚠️ THE TWO SIDES READ DIFFERENT FACTS. The recipient's bubble is spent by their own open
     /// (`ViewedOnce`, this phone) or by the server's burn (`consumed`, another of their phones).
-    /// The SENDER's "Opened" is the other person's open only, never the sender's own look: my own
-    /// view (owner, 2026-10-03, the sender gets one too) only stops the tap; the card keeps saying
-    /// "Not opened yet" until they have opened it.
+    /// The SENDER's "Opened" is the other person's open only. The sender can never open their own
+    /// (owner 2026-11-07, replacing 2026-10-03's one view for the sender), so mine never taps.
     private static func viewOncePill(_ m: Message, ctx: MessageRowContext,
                                      isMe: Bool) -> BubbleBody.PillBody {
         let voice = m.isAudio
         let usedHere = ViewedOnce.contains(m.id)
         let opened = isMe ? m.consumed : (usedHere || m.consumed)
-        let canOpen = !usedHere && !opened
+        let canOpen = !isMe && !usedHere && !opened
         // Fetch the sealed bytes while the bubble is on screen, so opening only decrypts.
         if voice, !isMe, canOpen, m.sendState == nil {
             let id = m.id, url = m.audioUrl
