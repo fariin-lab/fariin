@@ -88,8 +88,8 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
 
     override init(frame: CGRect) {
         let layout = UICollectionViewFlowLayout()
-        layout.minimumInteritemSpacing = 4
-        layout.minimumLineSpacing = 4
+        layout.minimumInteritemSpacing = 2
+        layout.minimumLineSpacing = 2
         grid = UICollectionView(frame: .zero, collectionViewLayout: layout)
         super.init(frame: frame)
         var cfg = UIButton.Configuration.gray()
@@ -485,12 +485,12 @@ final class PanelGifGrid: UIView, UICollectionViewDataSource, UICollectionViewDe
     func collectionView(_ cv: UICollectionView, numberOfItemsInSection s: Int) -> Int { gifs.count }
 
     func collectionView(_ cv: UICollectionView, layout: UICollectionViewLayout, sizeForItemAt ip: IndexPath) -> CGSize {
-        let w = floor((cv.bounds.width - 10 * 2 - 4 * 2) / 3)
+        let w = floor((cv.bounds.width - 2 * 2) / 3)   // edge to edge, 2pt gaps, as the reference panel
         return CGSize(width: w, height: w)
     }
 
     func collectionView(_ cv: UICollectionView, layout: UICollectionViewLayout, insetForSectionAt s: Int) -> UIEdgeInsets {
-        UIEdgeInsets(top: 0, left: 10, bottom: 8, right: 10)
+        UIEdgeInsets(top: 0, left: 0, bottom: 8, right: 0)
     }
 
     func collectionView(_ cv: UICollectionView, cellForItemAt ip: IndexPath) -> UICollectionViewCell {
@@ -576,7 +576,7 @@ private final class GifCell: UICollectionViewCell {
     override init(frame: CGRect) {
         super.init(frame: frame)
         contentView.backgroundColor = UIColor.secondarySystemFill
-        contentView.layer.cornerRadius = 8
+        contentView.layer.cornerRadius = 0
         contentView.layer.masksToBounds = true
         art.contentsGravity = .resizeAspectFill
         contentView.layer.addSublayer(art)
