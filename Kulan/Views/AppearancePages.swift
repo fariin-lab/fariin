@@ -425,6 +425,7 @@ struct WallpaperPreviewScreen: View {
     @State private var blurred = false
     /// The top-right button's pick: nil = the phone's own appearance.
     @State private var previewDark: Bool?
+    @AppStorage(WallpaperDim.key) private var wallpaperDim: Double = 0
     // Pinch-to-zoom / pan on a chosen photo, baked into the saved wallpaper on Apply.
     @State private var zoom: CGFloat = 1
     @State private var baseZoom: CGFloat = 1
@@ -467,6 +468,8 @@ struct WallpaperPreviewScreen: View {
                 }
             }
             .ignoresSafeArea()
+                // The dimness the slider sets, the same amount the chats lay over it.
+                .overlay(Color.black.opacity(min(WallpaperDim.max, wallpaperDim)).ignoresSafeArea().allowsHitTesting(false))
                 .background(
                     GeometryReader { proxy in
                         Color.clear
@@ -521,6 +524,24 @@ struct WallpaperPreviewScreen: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
+
+                // ⛔ BRIGHTNESS, UNDER THE SUN BUTTON (owner 2026-11-07, his drawing): a vertical slider,
+                // up = as the wallpaper is, down = darker. Saved at once for every chat's wallpaper.
+                HStack {
+                    Spacer()
+                    Slider(value: Binding(get: { 1 - wallpaperDim / WallpaperDim.max },
+                                          set: { wallpaperDim = (1 - $0) * WallpaperDim.max }),
+                           in: 0...1)
+                        .tint(.white)
+                        .frame(width: 150)
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 44, height: 150)
+                        .padding(.vertical, 10)
+                        .liquidGlass(Capsule(), interactive: true)
+                        .accessibilityLabel("Wallpaper brightness")
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
 
                 Spacer()
 
