@@ -37,9 +37,19 @@ struct WallpaperPickerSheet: View {
     /// rows more room while the sheet shrinks.
     @State private var showAllChatsRow = false
     private var colorStore: ChatColorStore { .shared }
-    /// The Bubble Styles row (owner 2026-11-07, "also here add Bubble Styles"). The style is ONE
-    /// setting for every chat, so a tap here saves it at once, as Save does on the full page.
-    @AppStorage(BubbleStyles.key) private var bubbleStyleId = ""
+    /// The Bubble Styles row (owner 2026-11-07, "also here add Bubble Styles"). A tap here saves at
+    /// once, as Save does on the full page.
+    /// ⛔ THIS CHAT ONLY (owner 2026-11-07: a style picked in a friend's chat changed every chat).
+    /// The row and its "See all" read and write this chat's own pick (`BubbleStyles.chatKey`);
+    /// `globalStyleId` is the all-chats default it falls back to (Settings > Appearance).
+    @AppStorage(BubbleStyles.key) private var globalStyleId = ""
+    @AppStorage private var chatStyleId: String
+    /// The style in effect in this chat: its own pick, else the default ("none" = Default here).
+    private var bubbleStyleId: String {
+        if globalOnly { return globalStyleId }
+        if chatStyleId.isEmpty { return globalStyleId }
+        return chatStyleId == BubbleStyles.noneId ? "" : chatStyleId
+    }
     @State private var showBubbleStyles = false
     /// ⛔ A COLOUR AND A PICTURE STYLE NEVER BOTH APPLY (owner 2026-11-07: "picking a colour changes
     /// nothing, the bubbles keep the picture style"). A colour circle tapped while a style is on
@@ -68,6 +78,7 @@ struct WallpaperPickerSheet: View {
         self.globalOnly = globalOnly
         self.sharedGroup = sharedGroup && !globalOnly
         self.hadOwnWallpaper = WallpaperStore.shared.hasOverride(for: cid)
+        _chatStyleId = AppStorage(wrappedValue: "", BubbleStyles.chatKey(cid))
         let cur = WallpaperStore.shared.wallpaper(for: cid)
         _selected = State(initialValue: cur)
         _original = State(initialValue: cur)
@@ -84,9 +95,11 @@ struct WallpaperPickerSheet: View {
         selected != original || selectedColor?.stored != originalColor?.stored || clearsStyle
     }
 
-    /// Apply's half for the bubble style: a colour was picked, so my style goes back to Default.
+    /// Apply's half for the bubble style: a colour was picked, so the style goes back to Default.
+    /// In a chat that is this chat's explicit "none"; the all-chats style is left alone.
     private func clearStyleIfColourPicked() {
-        if clearsStyle { bubbleStyleId = "" }
+        guard clearsStyle else { return }
+        if globalOnly { globalStyleId = "" } else { chatStyleId = BubbleStyles.noneId }
     }
 
     // Stable id per selection, for the auto-scroll on open.
@@ -279,7 +292,14 @@ struct WallpaperPickerSheet: View {
             }
         }
         .sheet(isPresented: $showBubbleStyles) {
-            NavigationStack { BubbleStylesPage() }
+            NavigationStack {
+                // This chat's style and colour. A colour saved there is this chat's from then on,
+                // so closing this sheet without Apply keeps it (it becomes the "original").
+                BubbleStylesPage(cid: cid) { spec in
+                    colourTapped = false
+                    selectedColor = spec; originalColor = spec
+                }
+            }
                 .presentationDetents([.fraction(BubbleStylesPage.sheetFraction)])
                 .presentationDragIndicator(.visible)
         }
@@ -370,7 +390,9 @@ struct WallpaperPickerSheet: View {
         return (originalColor != nil && originalColor != blue) || (selectedColor != nil && selectedColor != blue)
     }
     private var canResetWallpaper: Bool { (hadOwnWallpaper && original != .none) || selected != original }
-    private var hasCustom: Bool { canResetColor || canResetWallpaper }
+    /// A picture style is in effect in this chat (its own, or the all-chats one it follows).
+    private var canResetStyle: Bool { !globalOnly && hasActiveStyle }
+    private var hasCustom: Bool { canResetColor || canResetWallpaper || canResetStyle }
 
     private var header: some View {
         ZStack {
@@ -390,9 +412,19 @@ struct WallpaperPickerSheet: View {
                 // wallpaper or chat color is set.
                 // ⛔ TWO RESETS, AS THE REFERENCE HAS — owner, 2026-09-27: "reset this chat's color,
                 // reset this chat's wallpaper". Same Reset capsule; it opens a menu now.
-                if hasCustom {
+                if hasCustom && !sharedGroup && !globalOnly {
+                    // ⛔ ONE RESET IN A CHAT (owner 2026-11-07): the chat goes back to the app's
+                    // default look in one tap, plain wallpaper, no picture style, default colour.
+                    Button { resetChat() } label: {
+                        Text("Reset").font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
+                            .frame(height: 48).padding(.horizontal, 18)
+                            .liquidGlass(Capsule(), interactive: true)
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                } else if hasCustom {
                     Menu {
-                        if canResetColor {
+                        if canResetColor || canResetStyle {
                             Button { resetColorOnly() } label: { Label("Reset Chat Color", systemImage: "paintpalette") }
                         }
                         if canResetWallpaper {
@@ -462,6 +494,7 @@ struct WallpaperPickerSheet: View {
     private func resetColorOnly() {
         committed = true
         colorStore.set(ChatColors.presets.first, for: cid)
+        if !globalOnly { chatStyleId = BubbleStyles.noneId }   // the default bubble, no picture style
         if sharedGroup { store.endGroupEdit(cid) }   // drop the tried wallpaper; the group's stays
         else if hadOwnWallpaper { store.set(original, for: cid) } else { store.clearOverride(for: cid) }
         dismiss()
@@ -479,6 +512,20 @@ struct WallpaperPickerSheet: View {
         if sharedGroup { store.publishGroupWallpaper(.none, for: cid) }   // plain for the whole group
         else { store.set(.none, for: cid) }
         colorStore.set(originalColor, for: cid)
+        dismiss()
+    }
+
+    /// The chat's one Reset (owner 2026-11-07): plain wallpaper, as "Reset Wallpaper", and the
+    /// bubble back to the app's default, no picture style here (even one set for all chats) and the
+    /// chat's colour cleared. The bubble half is `BubbleStyles.resetLook`, the same as the Bubble
+    /// Styles page's Reset. On the plain wallpaper the cleared colour draws the default blue.
+    private func resetChat() {
+        committed = true
+        store.set(.none, for: cid)
+        BubbleStyles.resetLook(for: cid)
+        selected = .none; selectedColor = nil
+        original = .none; originalColor = nil
+        colourTapped = false
         dismiss()
     }
 
@@ -634,12 +681,12 @@ struct WallpaperPickerSheet: View {
                 }
                 .padding(.horizontal, 20).padding(.vertical, 3)
             }
-            Text("Applies to all your chats")
+            Text("Only this chat")
                 .font(.caption).foregroundStyle(.secondary)
                 .padding(.horizontal, 20)
         }
         // A style saved from See all wins over a colour tapped before it.
-        .onChange(of: bubbleStyleId) { _, _ in colourTapped = false }
+        .onChange(of: chatStyleId) { _, _ in colourTapped = false }
     }
 
     private func bubbleThumb(_ s: BubbleStyle) -> some View {
@@ -649,7 +696,7 @@ struct WallpaperPickerSheet: View {
         return Button {
             guard !isOn, BubbleStyles.mayUse(s) else { return }
             colourTapped = false       // the style comes back; Apply leaves it on
-            bubbleStyleId = s.id       // the same key Save writes on the full page
+            chatStyleId = s.id         // this chat's own pick, the key Save writes on the full page
             Haptics.impact(.light)
         } label: {
             Group {

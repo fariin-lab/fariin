@@ -4526,7 +4526,7 @@ struct ThreadView: View {
            !m.isImage, !m.isVideo, !m.isAlbum, !m.isFile, !m.isAudio, !m.isCall, !m.isSystem,
            m.type != "sticker", conversation?.isChannel != true, conversation?.bubbleStylesOff != true,
            !OfficialChannel.isOfficial(cid) {
-            out.append(CMAction(title: "Bubble Style", icon: "paintpalette", badge: "chatMenu.bubbleStyle") { BubbleStylesPage.presentSheet() })
+            out.append(CMAction(title: "Bubble Style", icon: "paintpalette", badge: "chatMenu.bubbleStyle") { BubbleStylesPage.presentSheet(cid: cid) })
         }
         // Edit follows the TEXT, not the type: a photo/album/video caption is sealed in the same
         // `text` field editMessage rewrites, so any of my messages WITH a body is editable within
@@ -7480,7 +7480,7 @@ struct ThreadView: View {
         var outgoing = Message(localText: text, authorId: me, clientId: clientId, replyTo: reply,
                                sendState: .sending, linkPreview: pendingPreview)
         // My style from the first frame (2026-11-06), taken once: the send carries this same one.
-        let style = BubbleStyles.snapshotForSending()
+        let style = BubbleStyles.snapshotForSending(cid: cid)
         outgoing.bubbleStyle = style.id
         outgoing.bubbleDecor = style.decor
         outgoing.boldSpans = TextFormat.spans(bold)
@@ -7636,7 +7636,7 @@ struct ThreadView: View {
         let turn = ChatService.SendTurn.take(cid)
         var bubble = Message(localText: text, authorId: me, clientId: clientId, replyTo: nil, sendState: .sending)
         bubble.quoteId = q.qid
-        let style = BubbleStyles.snapshotForSending()   // taken once, the send carries the same
+        let style = BubbleStyles.snapshotForSending(cid: cid)   // taken once, the send carries the same
         bubble.bubbleStyle = style.id
         bubble.bubbleDecor = style.decor
         repo.addPending(bubble)
@@ -8459,7 +8459,7 @@ struct ThreadView: View {
         let prior = SendQueue.entry(clientId: clientId)
         let mentions = mentions.isEmpty ? (prior?.mentions ?? []) : mentions
         // The bubble style taken when the message was written; a retry keeps the queued one.
-        let now = BubbleStyles.snapshotForSending()
+        let now = BubbleStyles.snapshotForSending(cid: cid)
         let style = style ?? prior?.style ?? now
         let bold = bold ?? TextFormat.ranges(prior?.bold)   // a retry keeps the queued spans
         var storedPreview: (url: String, title: String, desc: String)?

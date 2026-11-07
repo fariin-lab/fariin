@@ -105,6 +105,7 @@ enum SessionWipe {
         // showed in the next account's pickers (2026-09-24 audit).
         WallpaperStore.shared.reset()
         ChatColorStore.shared.reset()
+        BubbleStyles.removeChatOverrides()   // each chat's own bubble style (2026-11-07)
         // Save to Photos and its saved-list are this account's choice, not the phone's.
         UserDefaults.standard.removeObject(forKey: AutoSaveToPhotos.defaultsKey)
         UserDefaults.standard.removeObject(forKey: AutoSaveToPhotos.defaultsKey + ".done")

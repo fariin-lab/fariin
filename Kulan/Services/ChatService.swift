@@ -1304,7 +1304,7 @@ enum ChatService {
         // My bubble style, taken now (after the stamp above) unless the composer already took it
         // when the message was written.
         let style: BubbleStyles.Snapshot
-        if let taken { style = taken } else { style = await BubbleStyles.snapshotForSending() }
+        if let taken { style = taken } else { style = await BubbleStyles.snapshotForSending(cid: cid) }
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // A quoted channel post may go with no words of mine (owner 2026-11-06).
         let quote = quote.flatMap { QuoteStore.isQid($0) ? $0 : nil }

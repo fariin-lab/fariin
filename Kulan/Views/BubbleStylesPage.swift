@@ -12,19 +12,69 @@ import UIKit
 struct BubbleStylesPage: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
-    @State private var selected: String? = BubbleStyles.current
+    /// ⛔ PER CHAT (owner 2026-11-07: a style picked in a friend's chat changed every chat). Opened
+    /// from a chat (its wallpaper sheet's "See all", or the message menu's "Bubble Style") this is
+    /// that chat's id, and the page reads and saves only that chat's style and colour. nil = Settings:
+    /// the all-chats default, which leaves every chat's own pick alone.
+    let cid: String?
+    /// Told the colour Save gave this chat, so the wallpaper sheet underneath keeps it on close.
+    var onSaveColor: ((ChatColorSpec?) -> Void)? = nil
+    @State private var selected: String?
     @State private var plusNote = false
     @State private var decorOn = BubbleStyles.decorations
     /// ⛔ THE "COLOR" CHIP (owner 2026-11-07, his own mockup): the chat colour palette
     /// (`ChatColorStore`, the Bubble Color page's circles) as the first chip. The colour picked,
     /// nil = Auto, is held until Save like a style. `colorTouched`: a circle was tapped since the
     /// last picture style, so Save applies the colour to all chats and puts any picture style away.
-    @State private var colorPick: ChatColorSpec? = ChatColorStore.shared.globalChosenColor
+    @State private var colorPick: ChatColorSpec?
     @State private var colorTouched = false
     @State private var showCustom = false
     /// The chip that is open: the saved picture style's category, else Color.
-    @State private var category: Category = Category.of(BubbleStyles.find(BubbleStyles.current))
-        .flatMap { $0 == .colours ? nil : $0 } ?? .chatColor
+    @State private var category: Category
+
+    init(cid: String? = nil, onSaveColor: ((ChatColorSpec?) -> Void)? = nil) {
+        self.cid = cid
+        self.onSaveColor = onSaveColor
+        let style = BubbleStyles.resolved(for: cid)
+        _selected = State(initialValue: style)
+        _colorPick = State(initialValue: cid.map { ChatColorStore.shared.chosenColor(for: $0) }
+                           ?? ChatColorStore.shared.globalChosenColor)
+        _category = State(initialValue: Category.of(BubbleStyles.find(style))
+            .flatMap { $0 == .colours ? nil : $0 } ?? .chatColor)
+    }
+    /// Bumped by Reset: the saved style lives in UserDefaults, which a view does not observe.
+    @State private var savedTick = 0
+    /// A style or colour saved for this page's scope (the chat, or the all-chats default).
+    private var canReset: Bool {
+        let _ = savedTick
+        let _ = colorStore.version
+        return BubbleStyles.hasLook(for: cid)
+    }
+
+    /// The Reset capsule (owner 2026-11-07), the wallpaper sheet's glass look. Saves at once: the
+    /// same reset as that sheet's Reset, `BubbleStyles.resetLook`.
+    private var resetButton: some View {
+        Button {
+            BubbleStyles.resetLook(for: cid)
+            onSaveColor?(nil)
+            selected = nil
+            colorPick = nil
+            colorTouched = false
+            savedTick &+= 1
+            Haptics.impact(.light)
+        } label: {
+            Text("Reset").font(.footnote.weight(.semibold)).foregroundStyle(.primary)
+                .padding(.horizontal, 12).frame(height: 28)
+                .liquidGlass(Capsule(), interactive: true)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// The style saved for where this page was opened: the chat's, or the all-chats default.
+    private var savedStyle: String? { BubbleStyles.resolved(for: cid) }
+    /// What Auto draws here: the chat's wallpaper colour, or the Settings wallpaper's.
+    private var autoColor: ChatColorSpec? { cid.map { colorStore.autoColor(for: $0) } ?? colorStore.globalAutoColor }
     private var dark: Bool { scheme == .dark }
     /// The open chip, or Color when the admin panel hid every style in it.
     private var openCategory: Category { Category.shown.contains(category) ? category : .chatColor }
@@ -68,9 +118,12 @@ struct BubbleStylesPage: View {
         VStack(spacing: 0) {
             VStack(spacing: 8) {
                 preview
-                Text("Applies to messages you send from now on.")
+                Text(cid == nil ? "Applies to messages you send from now on." : "Only this chat")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    // An overlay, so the line keeps its height and nothing under it moves when it goes.
+                    .overlay(alignment: .trailing) { if canReset { resetButton } }
                 chips
             }
             .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
@@ -117,12 +170,12 @@ struct BubbleStylesPage: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Save") { save() }
                     .fontWeight(.semibold)
-                    .disabled(selected == BubbleStyles.current && decorOn == BubbleStyles.decorations && !colorTouched)
+                    .disabled(selected == savedStyle && decorOn == BubbleStyles.decorations && !colorTouched)
             }
         }
         .sheet(isPresented: $showCustom) {
             // The custom colour joins the library at once, as on the Bubble Color page; Save applies it.
-            CustomColorView(cid: "__default__") { spec in
+            CustomColorView(cid: cid ?? "__default__") { spec in
                 colorStore.addCustom(spec)
                 pickColor(spec)
             }
@@ -139,10 +192,10 @@ struct BubbleStylesPage: View {
 
     /// The message menu's "Bubble Style" (owner 2026-11-07): this page as a sheet over the chat.
     /// Presented from UIKit after the menu has gone, so the chat's long SwiftUI body is untouched.
-    @MainActor static func presentSheet() {
+    @MainActor static func presentSheet(cid: String) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             guard let top = WebLink.topViewController() else { return }
-            let host = UIHostingController(rootView: NavigationStack { BubbleStylesPage() })
+            let host = UIHostingController(rootView: NavigationStack { BubbleStylesPage(cid: cid) })
             host.modalPresentationStyle = .pageSheet
             // 70% with the grabber, as the Replies sheet, so the chat stays in view above it
             // (owner 2026-11-07). The fixed preview and chips stay on top; the grid scrolls.
@@ -157,10 +210,17 @@ struct BubbleStylesPage: View {
 
     private func save() {
         if let s = BubbleStyles.find(selected), !BubbleStyles.mayUse(s) { plusNote = true; return }
-        // A colour tapped: the Bubble Color page's apply (all chats; a chat with its own keeps it).
-        // `pickColor` already set `selected` to nil, so the picture style goes away below.
-        if colorTouched { colorStore.applyToAllChats(colorPick) }
-        BubbleStyles.current = selected
+        // A colour tapped: `pickColor` already set `selected` to nil, so the picture style goes
+        // away below. From a chat, the colour and the style are that chat's alone; from Settings,
+        // the Bubble Color page's apply (all chats; a chat with its own keeps it).
+        if let cid {
+            if colorTouched { colorStore.set(colorPick, for: cid); onSaveColor?(colorPick) }
+            // Default here is the explicit "none", so a style set for all chats stays out of this one.
+            BubbleStyles.setChatOverride(selected ?? BubbleStyles.noneId, for: cid)
+        } else {
+            if colorTouched { colorStore.applyToAllChats(colorPick) }
+            BubbleStyles.current = selected   // the default only; chats with their own keep it
+        }
         BubbleStyles.decorations = decorOn
         Haptics.impact(.light)
         dismiss()
@@ -252,7 +312,7 @@ struct BubbleStylesPage: View {
         let _ = WallpaperStore.shared.version   // Auto follows the Settings wallpaper
         return LazyVGrid(columns: colorCols, spacing: 14) {
             colorCircle(nil) {
-                Circle().fill(colorStore.globalAutoColor.map { $0.fill } ?? AnyShapeStyle(Theme.defaultBubble(dark)))
+                Circle().fill(autoColor.map { $0.fill } ?? AnyShapeStyle(Theme.defaultBubble(dark)))
                     .overlay(Text("Auto").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white))
             }
             ForEach(ChatColors.presets) { p in colorCircle(p) { Circle().fill(p.fill) } }
@@ -369,7 +429,7 @@ struct BubbleStylesPage: View {
             }
         } else {
             // No style: the chat colour, so the preview shows a circle's colour the moment it is tapped.
-            shape.fill((colorPick ?? colorStore.globalAutoColor).map { $0.fill } ?? AnyShapeStyle(Theme.defaultBubble(dark)))
+            shape.fill((colorPick ?? autoColor).map { $0.fill } ?? AnyShapeStyle(Theme.defaultBubble(dark)))
         }
     }
 

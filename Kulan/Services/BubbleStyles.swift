@@ -96,13 +96,73 @@ enum BubbleStyles {
         return byId[id]
     }
 
-    /// The style I send with: UserDefaults, nil = the normal bubble.
+    /// The ALL-CHATS default (Settings > Appearance > Bubble Styles): UserDefaults, nil = the normal
+    /// bubble. A chat with its own pick (`chatOverride`) ignores it.
     static let key = "bubbleStyle.v1"
     static var current: String? {
         get { UserDefaults.standard.string(forKey: key) }
         set {
             if let newValue { UserDefaults.standard.set(newValue, forKey: key) }
             else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+    }
+
+    // ── Per-chat style (owner 2026-11-07: a style picked in one chat changed every chat) ──
+    //
+    // ⛔ TWO LEVELS, AS THE WALLPAPER: the all-chats default above, and a chat's own pick under
+    // `chatKey(cid)`, which wins. The chat's pick may be `noneId`, an explicit "Default" that keeps
+    // a global style out of that one chat. No key = the chat follows the default. On this phone only.
+
+    /// The stored value for "this chat uses the normal bubble, whatever the default is".
+    static let noneId = "none"
+    static let chatKeyPrefix = "bubbleStyle.chat."
+    static func chatKey(_ cid: String) -> String { chatKeyPrefix + cid }
+
+    /// This chat's own pick: nil = follows the default, `noneId` = the normal bubble here.
+    static func chatOverride(_ cid: String) -> String? {
+        let v = UserDefaults.standard.string(forKey: chatKey(cid))
+        return (v?.isEmpty ?? true) ? nil : v
+    }
+
+    /// Set this chat's own pick; nil removes it (the chat follows the default again).
+    static func setChatOverride(_ id: String?, for cid: String) {
+        if let id, !id.isEmpty { UserDefaults.standard.set(id, forKey: chatKey(cid)) }
+        else { UserDefaults.standard.removeObject(forKey: chatKey(cid)) }
+    }
+
+    /// The style in effect in a chat: its own pick, else the default. nil = the normal bubble.
+    /// A hidden style (`listed`) a chat already has stays in effect there.
+    static func resolved(for cid: String?) -> String? {
+        guard let cid, let own = chatOverride(cid) else { return current }
+        return own == noneId ? nil : own
+    }
+
+    /// ⛔ ONE RESET FOR THE BUBBLE LOOK (owner 2026-11-07): the chat wallpaper sheet's Reset and the
+    /// Bubble Styles page's Reset both call this, so they behave the same. With a chat: that chat
+    /// draws the app's default bubble, no picture style (the explicit "none", so a style set for all
+    /// chats stays out of it too) and its own colour cleared. Without: the all-chats default goes
+    /// back to the normal bubble and Auto colour; chats with their own pick keep it.
+    @MainActor static func resetLook(for cid: String?) {
+        if let cid {
+            setChatOverride(noneId, for: cid)
+            ChatColorStore.shared.resetChatColor(for: cid)
+        } else {
+            current = nil
+            ChatColorStore.shared.applyToAllChats(nil)
+        }
+    }
+
+    /// Is a style or a colour in use where `resetLook(for:)` would act? Shows the Reset.
+    @MainActor static func hasLook(for cid: String?) -> Bool {
+        if let cid { return resolved(for: cid) != nil || ChatColorStore.shared.chosenColor(for: cid) != nil }
+        return current != nil || ChatColorStore.shared.globalChosenColor != nil
+    }
+
+    /// Sign-out: the per-chat picks belong to the account, as the per-chat wallpapers do.
+    static func removeChatOverrides() {
+        let d = UserDefaults.standard
+        for k in d.dictionaryRepresentation().keys where k.hasPrefix(chatKeyPrefix) {
+            d.removeObject(forKey: k)
         }
     }
 
@@ -125,8 +185,9 @@ enum BubbleStyles {
 
     /// What goes on a message I send: my style, if I may still use it (a Plus style picked while
     /// on the team is not sent after leaving it).
-    @MainActor static func forSending() -> String? {
-        guard let s = find(current), mayUse(s) else { return nil }
+    /// Resolved for the chat the message goes to, so a style picked in one chat stays there.
+    @MainActor static func forSending(cid: String?) -> String? {
+        guard let s = find(resolved(for: cid)), mayUse(s) else { return nil }
         return s.id
     }
 
@@ -137,8 +198,8 @@ enum BubbleStyles {
         var decor: Bool
     }
 
-    @MainActor static func snapshotForSending() -> Snapshot {
-        let id = forSending()
+    @MainActor static func snapshotForSending(cid: String?) -> Snapshot {
+        let id = forSending(cid: cid)
         return Snapshot(id: id, decor: id != nil && decorations)
     }
 
