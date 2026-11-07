@@ -133,6 +133,8 @@ struct CMAction {
     var destructive: Bool = false
     /// When the message goes: the row counts down to it in a small second line (owner 2026-11-01).
     var countdownTo: Date? = nil
+    /// A "New" badge spot (`NewBadgeSpots`): the pill at the row's end while the panel has one on.
+    var badge: String? = nil
     let handler: () -> Void
 }
 
@@ -997,6 +999,7 @@ private final class CMActionRow: UIView {
     private let highlight = UIView()
     private var countdown: UILabel?
     private var ticker: Timer?
+    private var newPill: UILabel?
     // NO separator lines — the owner rejected them against the reference app's clean glass ("u added lines
     // thats i don't"). The rows read as one sheet; the highlight fill is the only row chrome.
 
@@ -1041,6 +1044,11 @@ private final class CMActionRow: UIView {
         isAccessibilityElement = true
         accessibilityLabel = action.title
         accessibilityTraits = .button
+
+        if let pill = NewBadges.pillLabel(action.badge) {
+            addSubview(pill)
+            newPill = pill
+        }
 
         if action.countdownTo != nil {
             let l = UILabel()
@@ -1117,6 +1125,13 @@ private final class CMActionRow: UIView {
         title.frame = CGRect(x: icon.frame.maxX + iconSpacing, y: 0,
                              width: bounds.width - icon.frame.maxX - iconSpacing - margin,
                              height: bounds.height)
+        if let newPill {
+            // At the row's end; the title gives up that width.
+            let s = newPill.bounds.size
+            newPill.frame = CGRect(x: bounds.width - margin - s.width, y: (bounds.height - s.height) / 2,
+                                   width: s.width, height: s.height)
+            title.frame.size.width = max(0, newPill.frame.minX - 8 - title.frame.minX)
+        }
         if let countdown {
             // The two lines stand as one block, centred in the same row height.
             let titleH = ceil(title.font.lineHeight)

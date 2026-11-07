@@ -1586,22 +1586,22 @@ struct ContactInfoView: View {
     // Verify Encryption. Wallpaper / Share / Clear / Report / Block now live in the "…" menu.
     private var settingsCard: some View {
         VStack(spacing: 0) {
-            infoRow("Disappearing Messages", "ic_disappearing", value: disappearLabel) { showDisappear = true }
+            infoRow("Disappearing Messages", "ic_disappearing", value: disappearLabel, badge: "profile.disappearing") { showDisappear = true }
             rowDivider
             // Restricted chat (owner, 2026-10-03). Beside the timer: both are rules for the chat
             // that bind both people. See `ChatRestrictions`.
             // The owner's own icon (2026-10-04).
-            infoRow("Restricted Chat", "ic_restricted_chat", value: chatRestricted ? "On" : "Off") {
+            infoRow("Restricted Chat", "ic_restricted_chat", value: chatRestricted ? "On" : "Off", badge: "profile.restricted") {
                 showRestricted = true
             }
             rowDivider
             // The same glyph Settings uses for its Notifications row (owner: reuse that one).
-            infoRow("Sounds & Notifications", "ic_notifications", value: muted ? "Muted" : "On") { showSounds = true }
+            infoRow("Sounds & Notifications", "ic_notifications", value: muted ? "Muted" : "On", badge: "profile.sounds") { showSounds = true }
             rowDivider
             // ⛔ CHAT BUBBLE (owner 2026-11-07, SPEC section 4): opens the same picker as Settings >
             // Appearance. A shortcut to my one style, not a style for this chat.
             if BubbleStyles.shown {
-                infoRow("Chat Bubble", "bubble.left", value: BubbleStyles.find(bubbleStyleId)?.name ?? "Default") {
+                infoRow("Chat Bubble", "bubble.left", value: BubbleStyles.find(bubbleStyleId)?.name ?? "Default", badge: "profile.chatBubble") {
                     showBubbleStyle = true
                 }
                 rowDivider
@@ -1612,7 +1612,7 @@ struct ContactInfoView: View {
             // Verifying is not a destructive action and not a link; it is the third setting in a
             // settings card, and it now looks like one. Block and Report keep their red, which says
             // something the others do not.
-            infoRow("Verify Encryption", "ic_verify_encryption") { showVerify = true }
+            infoRow("Verify Encryption", "ic_verify_encryption", badge: "profile.verifyEncryption") { showVerify = true }
         }
         .profileSurface(plain: cardColor)
     }
@@ -1709,9 +1709,9 @@ struct ContactInfoView: View {
     // One tappable row: icon, title, optional trailing value, chevron. `tint` colors icon+title.
     // The row itself is `ProfileInfoRow`, shared with the group info page.
     private func infoRow(_ title: String, _ icon: String, value: String? = nil,
-                         tint: Color = .primary, chevron: Bool = true,
+                         tint: Color = .primary, chevron: Bool = true, badge: String? = nil,
                          action: @escaping () -> Void) -> some View {
-        ProfileInfoRow(title: title, icon: icon, value: value, tint: tint, chevron: chevron, action: action)
+        ProfileInfoRow(title: title, icon: icon, value: value, tint: tint, chevron: chevron, badge: badge, action: action)
     }
 
     /// The line between two rows of one card. The system's own `Divider` is resolved against the

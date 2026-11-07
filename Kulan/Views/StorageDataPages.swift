@@ -46,7 +46,7 @@ struct StorageDataView: View {
     var body: some View {
         List {
             Section {
-                NavigationLink { ManageStoragePage() } label: { Text("Manage storage") }
+                NavigationLink { ManageStoragePage() } label: { Text("Manage storage").newBadge("storage.manage") }
             } header: {
                 Text("Storage")
             }
@@ -80,7 +80,7 @@ struct StorageDataView: View {
             Section {
                 NavigationLink { SentMediaQualityPage() } label: {
                     HStack {
-                        Text("Sent Media Quality")
+                        Text("Sent Media Quality").newBadge("storage.sentMediaQuality")
                         Spacer()
                         Text(quality == "high" ? "High" : "Standard").foregroundStyle(.secondary)
                     }
@@ -94,7 +94,7 @@ struct StorageDataView: View {
             Section {
                 NavigationLink { UseLessDataPage() } label: {
                     HStack {
-                        Text("Use Less Data")
+                        Text("Use Less Data").newBadge("storage.useLessData")
                         Spacer()
                         Text(UseLessDataPage.label(lessData)).foregroundStyle(.secondary)
                     }
@@ -112,7 +112,7 @@ struct StorageDataView: View {
     private func autoRow(_ k: AutoDownloadPrefs.Kind, value: String) -> some View {
         NavigationLink { AutoDownloadPage(kind: k) } label: {
             HStack {
-                Text(k.label)
+                Text(k.label).newBadge("storage.autoDownload." + k.rawValue)
                 Spacer()
                 Text(AutoDownloadPrefs.label(value)).foregroundStyle(.secondary)
             }

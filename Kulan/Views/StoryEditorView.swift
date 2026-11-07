@@ -2677,7 +2677,7 @@ struct StoryEditorView: View {
                 // travel to the export and are composited into the frames there (see
                 // `videoBurnIn`). Removing them would take away something that works.
                 HStack(spacing: barToolSpacing) {
-                    capsuleTool("textformat", active: false) { addTextOverlay() }   // Aa — add text on either
+                    capsuleTool("textformat", active: false) { addTextOverlay() }.newBadgeCorner("storyEditor.text")   // Aa — add text on either
                     if currentIsVideo {
                         // (Sound is NOT here any more — it is beside the ✕ at the top, on his
                         // instruction. Everything left in this capsule opens something; sound was
@@ -2686,12 +2686,13 @@ struct StoryEditorView: View {
                         // video, he can repost it but not cut it"). The reposted clip is the first
                         // item; a video of his own added with + can still be cut.
                         if !(repostOf != nil && index == 0) {
-                            capsuleTool("scissors", active: items[index].isTrimmed) { openTrim() }
+                            capsuleTool("scissors", active: items[index].isTrimmed) { openTrim() }.newBadgeCorner("storyEditor.trim")
                         }
                     } else if Self.cropEnabled {
                         capsuleTool("crop", active: croppedSource != nil) {
                             withAnimation(.easeInOut(duration: 0.3)) { showCrop = true }
                         }
+                        .newBadgeCorner("storyEditor.crop")
                     }
                     // STICKERS — his 2026-08-16 request. One button, one sheet, one callback: the
                     // tray hands back a sticker and the editor places it, so nothing else on this
@@ -2700,12 +2701,14 @@ struct StoryEditorView: View {
                         captionFocused = false
                         showStickers = true
                     }
+                    .newBadgeCorner("storyEditor.stickers")
                     capsuleTool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle", active: isDrawing) {
                         // The pen's ✕ undoes back to here, so the snapshot is taken on the way IN
                         // and nowhere else — see `cancelDrawing`.
                         if isDrawing { closePen(discarding: false) }   // shutting it here KEEPS, like ✓
                         else { drawingAtPenOpen = drawing; isDrawing = true }
                     }
+                    .newBadgeCorner("storyEditor.draw")
                     // NO EXTRA TOOL beyond these. It used to carry a second "add another
                     // picture", kept on the reasoning that two doors to one action beat two doors
                     // to two different ones. He has now seen both and called it: "remove the

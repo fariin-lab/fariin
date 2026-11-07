@@ -48,14 +48,16 @@ struct SettingsRowLabel: View {
 /// `NewBadges`). The timeline wakes once, at the end time, so an open screen loses it on time.
 struct NewBadgePill: View {
     let until: Date
+    /// The corner version for icon tiles (`newBadgeCorner`).
+    var small = false
     var body: some View {
         TimelineView(.explicit([until])) { _ in
             if Date() < until {
                 Text("New")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: small ? 9 : 13, weight: .semibold))
                     .foregroundStyle(Color.green)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
+                    .padding(.horizontal, small ? 5 : 8)
+                    .padding(.vertical, small ? 2 : 3)
                     .background(Color.green.opacity(0.16), in: Capsule())
                     .accessibilityLabel("New")
             }
@@ -640,7 +642,7 @@ struct AccountSettingsView: View {
                 // Both of these change how you get INTO the account, which is why his card puts them
                 // together and why each is a page rather than a row with a value: neither can be
                 // shown here without printing the thing it protects.
-                NavigationLink { ChangeEmailView() } label: { Text("Email address") }
+                NavigationLink { ChangeEmailView() } label: { Text("Email address").newBadge("account.email") }
 
                 // ⚠️ THE ROW IS THE SAME PAGE EITHER WAY. `PasswordView` decides its own shape from
                 // `isFirstPassword` — no Current row and no Forgot for an account that has none — so
@@ -651,7 +653,7 @@ struct AccountSettingsView: View {
                         PasswordView(address: address,
                                      isFirstPassword: !AuthService.shared.isConnected(.email)
                                         || AuthService.shared.passwordIsOnRelay)
-                    } label: { Text("Password") }
+                    } label: { Text("Password").newBadge("account.password") }
                 }
             } header: {
                 Text("Sign-in").textCase(nil)
@@ -668,20 +670,20 @@ struct AccountSettingsView: View {
                 // night, his order. The page: the username, who can reach you by it, and the Chat Key.
                 NavigationLink { MessagesPrivacyPage(usernameMode: true) } label: {
                     HStack {
-                        Text("Username")
+                        Text("Username").newBadge("account.username")
                         Spacer()
                         // A bare "@" for an account with no username yet (bug hunt 2026-09-25).
                         Text(profile.me.map { $0.handle.isEmpty ? "Not set" : "@\($0.handle)" } ?? "")
                             .foregroundStyle(.secondary)
                     }
                 }
-                NavigationLink { PasskeysView() } label: { Text("Passkeys") }
+                NavigationLink { PasskeysView() } label: { Text("Passkeys").newBadge("account.passkeys") }
                 // Hidden while the feature is off (owner, 2026-09-25), except for an account that
                 // already turned it on. See `Flags.twoStepEnabled`.
                 if Flags.twoStepEnabled || hasTwoStep {
-                    NavigationLink { TwoStepVerificationView() } label: { Text("Two-step verification") }
+                    NavigationLink { TwoStepVerificationView() } label: { Text("Two-step verification").newBadge("account.twoStep") }
                 }
-                NavigationLink { SecurityNotificationsView() } label: { Text("Security notifications") }
+                NavigationLink { SecurityNotificationsView() } label: { Text("Security notifications").newBadge("account.securityNotifications") }
             } header: {
                 Text("Security").textCase(nil)
             } footer: {
@@ -706,7 +708,7 @@ struct AccountSettingsView: View {
             Section {
                 Button { Task { await exportData() } } label: {
                     HStack {
-                        Text("Your Account Data").foregroundStyle(.primary)
+                        Text("Your Account Data").foregroundStyle(.primary).newBadge("account.accountData")
                         Spacer()
                         if exporting { ProgressView() }
                     }
@@ -726,7 +728,7 @@ struct AccountSettingsView: View {
                 // and said "make it like that". It is his app and his call; the reasoning is left
                 // here rather than deleted, because it is still the argument if it ever comes up.
                 Button(role: .destructive) { showSignOut = true } label: {
-                    Text("Log out")
+                    Text("Log out").newBadge("account.logOut")
                 }
             } header: {
                 Text("Account").textCase(nil)
@@ -1131,19 +1133,19 @@ struct AppearanceSettingsView: View {
             }
 
             Section {
-                doorRow("Chat Wallpaper") { ChatWallpaperPage() }
-                doorRow("Chat Color", accessory: AnyView(colorDot)) { ChatColorPage() }
+                doorRow("Chat Wallpaper", badge: "appearance.chatWallpaper") { ChatWallpaperPage() }
+                doorRow("Chat Color", badge: "appearance.chatColor", accessory: AnyView(colorDot)) { ChatColorPage() }
                 if BubbleStyles.shown {
-                    doorRow("Bubble Styles",
+                    doorRow("Bubble Styles", badge: "appearance.bubbleStyles",
                             accessory: AnyView(Text(BubbleStyles.find(bubbleStyleId)?.name ?? "Default")
                                 .foregroundStyle(.secondary))) { BubbleStylesPage() }
                 }
-                doorRow("App Icon") { AppIconPage() }
-                doorRow("Quick Reaction", accessory: AnyView(Text(QuickReaction.current))) { QuickReactionPage() }
+                doorRow("App Icon", badge: "appearance.appIcon") { AppIconPage() }
+                doorRow("Quick Reaction", badge: "appearance.quickReaction", accessory: AnyView(Text(QuickReaction.current))) { QuickReactionPage() }
             }
 
             Section {
-                doorRow("Night Mode",
+                doorRow("Night Mode", badge: "appearance.nightMode",
                         accessory: AnyView(Text(AppAppearance(rawValue: appearanceRaw)?.label ?? "System")
                             .foregroundStyle(.secondary))) { NightModePage() }
             }
@@ -1278,12 +1280,13 @@ struct AppearanceSettingsView: View {
     }
 
     private func doorRow<D: View>(_ title: String,
+                                  badge: String? = nil,
                                   accessory: AnyView? = nil,
                                   @ViewBuilder destination: @escaping () -> D) -> some View {
         // A system row: its own height, insets and chevron, like every other Settings page.
         NavigationLink { destination() } label: {
             HStack(spacing: 12) {
-                Text(title).foregroundStyle(.primary)
+                Text(title).foregroundStyle(.primary).newBadge(badge)
                 Spacer()
                 if let accessory { accessory }
             }
@@ -1369,7 +1372,7 @@ struct PrivacySettingsView: View {
                 // when i select everyone or same one i am not seeing").
                 NavigationLink { MessagesPrivacyPage() } label: {
                     HStack {
-                        Text("Messages")
+                        Text("Messages").newBadge("privacy.messages")
                         Spacer()
                         Text((Audience(rawValue: privMessages) ?? .everyone).label(for: "messages")).foregroundStyle(.secondary)
                     }
@@ -1386,7 +1389,7 @@ struct PrivacySettingsView: View {
             Section {
                 NavigationLink { BlockedUsersView() } label: {
                     HStack {
-                        Text("Blocked Users")
+                        Text("Blocked Users").newBadge("privacy.blocked")
                         Spacer()
                         Text("\(blockedCount)").foregroundStyle(.secondary)
                     }
@@ -1396,12 +1399,12 @@ struct PrivacySettingsView: View {
             // 1:1 audit r2 G3 + G4, 2026-10-08. Read by CallService (`calls.alwaysRelay`) and
             // CallKitManager (`calls.showInRecents`).
             Section {
-                Toggle("Always Relay Calls", isOn: $alwaysRelayCalls).tint(.green)
+                Toggle("Always Relay Calls", badge: "privacy.alwaysRelay", isOn: $alwaysRelayCalls).tint(.green)
             } footer: {
                 Text("Send every call through Fariin's server so the people you call can't see your IP address. Call quality may be a little lower.")
             }
             Section {
-                Toggle("Show Calls in Recents", isOn: $showCallsInRecents).tint(.green)
+                Toggle("Show Calls in Recents", badge: "privacy.callsInRecents", isOn: $showCallsInRecents).tint(.green)
             } footer: {
                 Text("Show your Fariin calls in the iPhone Phone app's Recents. Calls with chats locked by a Chat PIN are never shown there.")
             }
@@ -1409,7 +1412,7 @@ struct PrivacySettingsView: View {
             Section {
                 Button { showDefaultDisappear = true } label: {
                     HStack {
-                        Text("Disappearing Messages").foregroundStyle(.primary)
+                        Text("Disappearing Messages").foregroundStyle(.primary).newBadge("privacy.disappearing")
                         Spacer()
                         Text(ChatService.disappearLabel(defaultDisappear)).foregroundStyle(.secondary)
                         Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
@@ -1420,7 +1423,7 @@ struct PrivacySettingsView: View {
             }
 
             Section {
-                NavigationLink { AppLockPage() } label: { Text("App Lock") }
+                NavigationLink { AppLockPage() } label: { Text("App Lock").newBadge("privacy.appLock") }
             } footer: {
                 // Face ID is not the whole answer and this page and the App Lock page disagreed
                 // about it. `RootView` evaluates `.deviceOwnerAuthentication`, which accepts Face
@@ -1435,7 +1438,7 @@ struct PrivacySettingsView: View {
             Section {
                 Button { if let u = URL(string: "https://fariin.com/safety") { WebLink.open(u) } } label: {
                     HStack {
-                        Text("Safety Tips").foregroundStyle(.primary)
+                        Text("Safety Tips").foregroundStyle(.primary).newBadge("privacy.safetyTips")
                         Spacer()
                         Image(systemName: "arrow.up.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
                     }
@@ -1453,7 +1456,7 @@ struct PrivacySettingsView: View {
                 Section {
                     NavigationLink { ProfileLayoutPage() } label: {
                         HStack {
-                            Text("Profile Layout")
+                            Text("Profile Layout").newBadge("privacy.profileLayout")
                             Spacer()
                             Text(profileLayoutStyle.label).foregroundStyle(.secondary)
                         }
@@ -1492,7 +1495,7 @@ struct PrivacySettingsView: View {
     private func audienceRow(_ title: String, key: String, value: String, footerText: String) -> some View {
         NavigationLink { AudiencePage(title: title, key: key, footer: footerText) } label: {
             HStack {
-                Text(title)
+                Text(title).newBadge("privacy." + key)
                 Spacer()
                 // Key-aware: Calls reads its `contacts` (and any old `nobody`) as "Nobody".
                 Text(PrivacyPrefs.normalized(Audience(rawValue: value) ?? PrivacyPrefs.defaultAudience(for: key), for: key)
@@ -1516,10 +1519,10 @@ struct AboutView: View {
     /// Safari or to Mail looked exactly like the Version row, which does nothing. A chevron would be
     /// the wrong fix — that promises another screen inside the app and this is a door out of it.
     /// Owner, 2026-10-13: through `WebLink`, so the page opens in Kulan's browser, not in Safari.
-    private func outLink(_ title: String, _ url: URL) -> some View {
+    private func outLink(_ title: String, _ url: URL, badge: String? = nil) -> some View {
         Button { WebLink.open(url) } label: {
             HStack {
-                Text(title).foregroundStyle(.primary)
+                Text(title).foregroundStyle(.primary).newBadge(badge)
                 Spacer()
                 Image(systemName: "arrow.up.right")
                     .font(.footnote.weight(.semibold))
@@ -1543,7 +1546,7 @@ struct AboutView: View {
                 // ⚠️ NOT the site root, which is the older note here and still true: the root was a
                 // holding page reading "Working on it." for a while, and this link pointed at it.
                 // /support still exists and is still linked from inside /help.
-                outLink("Help Center", URL(string: "https://fariin.com/help")!)
+                outLink("Help Center", URL(string: "https://fariin.com/help")!, badge: "help.helpCenter")
                 // "Report a Problem" (a mailto to support) went on 2026-09-25, owner: a real
                 // in-app reporter comes later. Reporting a PERSON stays on every profile.
             } header: {
@@ -1556,8 +1559,8 @@ struct AboutView: View {
                 // screen somebody else will ask them to read out.
                 LabeledContent("Version", value: appVersion)
                     .textSelection(.enabled)
-                outLink("Privacy Policy", URL(string: "https://fariin.com/privacy")!)
-                outLink("Terms & Conditions", URL(string: "https://fariin.com/terms")!)
+                outLink("Privacy Policy", URL(string: "https://fariin.com/privacy")!, badge: "help.privacyPolicy")
+                outLink("Terms & Conditions", URL(string: "https://fariin.com/terms")!, badge: "help.terms")
             } header: {
                 Text("About")
             } footer: {
@@ -1662,7 +1665,7 @@ struct StorySettingsView: View {
             if !optedOut {
                 Section {
                     // 2026-10-17: through StoryReceiptPrefs, which also saves it on the account.
-                    Toggle("View Receipts", isOn: Binding(get: { viewReceipts },
+                    Toggle("View Receipts", badge: "stories.viewReceipts", isOn: Binding(get: { viewReceipts },
                                                           set: { StoryReceiptPrefs.set($0) }))
                         .tint(.green)
                 } footer: {
