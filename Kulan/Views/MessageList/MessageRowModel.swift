@@ -140,6 +140,17 @@ enum BubbleBody: Equatable {
         var opens: Bool
         /// A spinner in place of the glyph, for a message still being prepared.
         var busy: Bool
+        /// Set for a view-once photo or voice note only, which then draws a dashed ring in place of
+        /// the SF glyph (owner 2026-11-07). `.one` is the big unopened card, `.empty` the small
+        /// "Opened" line. nil: the old capsule (pending media).
+        var onceRing: OnceRing? = nil
+        /// The unopened card's second line ("Tap to view", "Not opened yet").
+        var onceSubtitle: String? = nil
+
+        enum OnceRing: Equatable {
+            case one        // a "1" inside the ring: not opened yet
+            case empty      // the ring alone: opened
+        }
     }
 
     /// ⚠️ NO PLAYBACK STATE IN HERE, for the same reason the poll carries no votes: it changes

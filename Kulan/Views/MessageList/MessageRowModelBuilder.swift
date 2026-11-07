@@ -649,30 +649,35 @@ enum MessageRowModelBuilder {
             inlineThumbBase64: m.thumb, thumbCacheId: m.rowId)
     }
 
-    /// A view-once photo or a one-time voice note. Both are capsules; only the words differ.
+    /// A view-once photo or a one-time voice note, in the owner's two sizes (2026-11-07, with his
+    /// design picture beside the reference app's chat):
+    ///   UNOPENED, the big card: a 40pt dashed ring holding a bold "1", "Photo" / "Voice" over a
+    ///   second line ("Tap to view" / "Tap to play" for theirs, "Not opened yet" for mine).
+    ///   OPENED, the small one-line bubble: an empty 24pt ring and "Opened" in italic.
     ///
-    /// ⚠️ `spent` is what the RECIPIENT has used up, never the sender: my own view-once message is
-    /// not "Viewed" to me just because they opened it.
+    /// ⚠️ THE TWO SIDES READ DIFFERENT FACTS. The recipient's bubble is spent by their own open
+    /// (`ViewedOnce`, this phone) or by the server's burn (`consumed`, another of their phones).
+    /// The SENDER's "Opened" is the other person's open only, never the sender's own look: my own
+    /// view (owner, 2026-10-03, the sender gets one too) only stops the tap; the card keeps saying
+    /// "Not opened yet" until they have opened it.
     private static func viewOncePill(_ m: Message, ctx: MessageRowContext,
                                      isMe: Bool) -> BubbleBody.PillBody {
         let voice = m.isAudio
-        // The sender's own copy is spent by their one view as well (owner, 2026-10-03).
-        let spent = ViewedOnce.contains(m.id)
-        if voice {
-            // Fetch the sealed bytes while the pill is on screen, so opening only decrypts.
-            if !isMe, !spent, m.sendState == nil {
-                let id = m.id, url = m.audioUrl
-                Task { @MainActor in OneTimeVoicePrefetch.start(id: id, audioUrl: url) }
-            }
-            return BubbleBody.PillBody(
-                symbol: spent ? "circle.slash" : "1.circle",
-                label: spent ? "Played" : "Voice message",
-                spent: spent, opens: !spent, busy: false)
+        let usedHere = ViewedOnce.contains(m.id)
+        let opened = isMe ? m.consumed : (usedHere || m.consumed)
+        let canOpen = !usedHere && !opened
+        // Fetch the sealed bytes while the bubble is on screen, so opening only decrypts.
+        if voice, !isMe, canOpen, m.sendState == nil {
+            let id = m.id, url = m.audioUrl
+            Task { @MainActor in OneTimeVoicePrefetch.start(id: id, audioUrl: url) }
         }
-        return BubbleBody.PillBody(
-            symbol: spent ? "circle.slash" : "1.circle",
-            label: spent ? "Viewed" : "Photo",
-            spent: spent, opens: !spent, busy: false)
+        if opened {
+            return BubbleBody.PillBody(symbol: "", label: "Opened", spent: true, opens: false,
+                                       busy: false, onceRing: .empty)
+        }
+        let sub = isMe ? "Not opened yet" : (voice ? "Tap to play" : "Tap to view")
+        return BubbleBody.PillBody(symbol: "", label: voice ? "Voice" : "Photo", spent: false,
+                                   opens: canOpen, busy: false, onceRing: .one, onceSubtitle: sub)
     }
 
     private static func pendingLabel(_ kind: String) -> String {

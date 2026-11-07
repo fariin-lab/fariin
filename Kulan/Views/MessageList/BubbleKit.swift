@@ -204,6 +204,9 @@ enum BubblePalette {
     /// moved to this path. `.primary` is `UIColor.label`, so that is what the SwiftUI rows were
     /// actually drawing and that is what these draw.
     static let accent = UIColor.label
+    /// The ring on an unopened view-once message from someone else: green, the owner's own pick
+    /// (2026-11-07 design picture), the one place a chat bubble shows it.
+    static let viewOnceGreen = UIColor { $0.userInterfaceStyle == .dark ? hex(0x2BC46B) : hex(0x1FAF5A) }
     /// The failed-send badge. The reference app's `ows_accentRed`, 0xF44336 — a warmer red than
     /// `.systemRed`, and the one their (!) is drawn in.
     static let failRed = UIColor(red: 0xF4 / 255, green: 0x43 / 255, blue: 0x36 / 255, alpha: 1)

@@ -339,6 +339,10 @@ struct Message: Identifiable, Equatable, Codable {
     var reactions: [String: String]   // uid -> decrypted emoji
     var mentions: [String] = []       // uids @-mentioned in this message (groups)
     var viewOnce: Bool = false        // view-once photo (standard): recipient can open it exactly once
+    /// A view-once photo or voice note the recipient has opened. Written by the server's
+    /// consumeOnceImage / consumeOnceVoice with the burn (1:1 only); it is how the SENDER's bubble
+    /// learns to say "Opened". Not cached (like `held`): the live snapshot brings it back.
+    var consumed: Bool = false
     /// Sent while the recipient had the author blocked (written by the server's onNewMessage). It was
     /// never delivered, so it keeps ONE tick for good, even after an unblock moves the watermarks.
     var held: Bool = false
@@ -914,6 +918,7 @@ struct Message: Identifiable, Equatable, Codable {
             } ?? [:]
         self.mentions = data["mentions"] as? [String] ?? []
         self.viewOnce = data["viewOnce"] as? Bool ?? false
+        self.consumed = data["consumed"] as? Bool ?? false
         self.held = data["held"] as? Bool ?? false
         self.album = (data["album"] as? [[String: Any]])?.compactMap { d in
             guard let url = d["imageUrl"] as? String,

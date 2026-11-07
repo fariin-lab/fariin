@@ -1257,8 +1257,13 @@ final class ThreadRepository {
         let quotes: Int = (data["quoteCount"] as? NSNumber)?.intValue ?? 0
         let rf: [String] = (data["replyFaces"] as? [String]) ?? []
         let qf: [String] = (data["quoteFaces"] as? [String]) ?? []
-        return [String(off), String(replies), String(quotes), rf.joined(separator: ","), qf.joined(separator: ",")]
-            .joined(separator: "|")
+        // The eighth: a view-once burn (consumeOnceImage / consumeOnceVoice) sets `consumed`,
+        // which flips the sender's bubble to "Opened". The url delete moves `media` too, but a
+        // sender whose doc never had a url (still uploading) must not miss it.
+        let once: Bool = data["consumed"] as? Bool ?? false
+        let parts: [String] = [String(off), String(replies), String(quotes),
+                               rf.joined(separator: ","), qf.joined(separator: ","), String(once)]
+        return parts.joined(separator: "|")
     }
 
     // Build a message, reusing the cached copy unless a mutable field (reactions / edit) changed.

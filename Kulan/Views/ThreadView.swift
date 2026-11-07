@@ -1756,11 +1756,9 @@ struct ThreadView: View {
                     OneTimeVoicePage(message: msg, cid: cid, dark: dark)
                         .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
                 } else if msg.viewOnce {
-                    // View-once opens ALONE (no paging into it, not part of the gallery).
-                    ImageViewerView(message: msg, cid: cid,
-                                    onDeleteForMe: { m in deleteForMe(m) },
-                                    onDeleteForEveryone: { m in deleteForEveryoneFromViewer(m) },
-                                    clipProvider: { MediaOpenRects.clipRect })
+                    // View-once opens ALONE, on its own page (owner 2026-11-07): no gallery, no drag
+                    // close, no menu; X only, zoom allowed, the photo inside the capture shield.
+                    ViewOncePhotoPage(message: msg, cid: cid)
                         .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
                 } else {
                     // A SINGLE PHOTO OPENS ALONE (user spec 2026-07-29: "when i send only one image then
@@ -3966,8 +3964,9 @@ struct ThreadView: View {
                 let ticks = m.authorId == me && !repo.iBlocked && !m.held
                 let read = ticks && readCutoff >= m.createdAt.timeIntervalSince1970 * 1000
                 let delivered = ticks && deliveredCutoff >= m.createdAt.timeIntervalSince1970 * 1000   // chat #84
-                // View-once consumption (audit M2) — the bubble flips to "Viewed" only via reconfigure.
-                let once = m.viewOnce ? String(ViewedOnce.contains(m.id)) : "-"
+                // View-once consumption (audit M2), the bubble flips to "Opened" only via reconfigure.
+                // `consumed` is the other side's open, which is what the sender's bubble shows.
+                let once = m.viewOnce ? "\(ViewedOnce.contains(m.id))\(m.consumed)" : "-"
                 // Search match (audit M3) — matching rows re-render their term highlight per keystroke.
                 let match = term.isEmpty ? "-" : (m.text.localizedCaseInsensitiveContains(term) ? "M\(term.hashValue)" : "-")
                 // Story-reply rows: the card ⇄ "Story unavailable" flip must reconfigure AND

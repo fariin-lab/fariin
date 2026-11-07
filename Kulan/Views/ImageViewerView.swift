@@ -1164,3 +1164,162 @@ final class ZoomableMediaView: UIScrollView {
         setZoomScale(minimumZoomScale, animated: animated)
     }
 }
+
+// MARK: - View-once photo page
+
+/// ⛔ A VIEW-ONCE PHOTO HAS ITS OWN SCREEN, NOT THE GALLERY VIEWER — owner, 2026-11-07, with the
+/// reference app beside ours. The gallery viewer brought its drag-down close (whose flying copy of
+/// the photo is drawn OUTSIDE the capture shield), a header, a "..." menu and a bottom bar. Here:
+/// black, the photo, and an X. Inside, the person may do anything except capture it: pinch to zoom,
+/// pan, double tap (owner, same day). It stays until X; there is no swipe close and no timer.
+/// Leaving the app closes it too, and every way out spends it (ThreadView's cover marks it on
+/// dismiss; the server burn runs here, the moment the picture is in hand).
+///
+/// The photo is the ONLY thing inside `CaptureProtected`; the X and the recording notice sit
+/// outside it on purpose, because the shield hides its whole content while a recording runs and
+/// the way out must not be hidden with it.
+struct ViewOncePhotoPage: View {
+    let message: Message
+    let cid: String
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+
+    @State private var image: UIImage?
+    @State private var failed = false
+    /// True while the screen is being recorded or mirrored (the shield hides the photo then).
+    @State private var capturing = UIScreen.main.isCaptured
+    @State private var scale: CGFloat = 1
+    @State private var baseScale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var baseOffset: CGSize = .zero
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            CaptureProtected { photo }.ignoresSafeArea()
+            if image == nil && !failed && !capturing {
+                ProgressView().tint(.white)
+            }
+            if failed {
+                Text("Could not load this photo.")
+                    .font(.system(size: 15)).foregroundStyle(.white.opacity(0.75))
+            }
+            if capturing {
+                VStack(spacing: 10) {
+                    Image(systemName: "record.circle")
+                        .font(.system(size: 40, weight: .light)).foregroundStyle(.white.opacity(0.9))
+                    Text("Screen recording is on")
+                        .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                    Text("Stop recording or sharing your screen to see this photo.")
+                        .font(.system(size: 14)).foregroundStyle(.white.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, 40)
+            }
+            VStack(spacing: 0) {
+                HStack {
+                    Button { close() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                            .frame(width: 36, height: 36)
+                            .background(.white.opacity(0.12), in: Circle())
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("Close")
+                    Spacer()
+                }
+                .padding(.horizontal, 12).padding(.top, 4)
+                Spacer()
+            }
+        }
+        .preferredColorScheme(.dark)
+        .interactiveDismissDisabled()
+        .onReceive(NotificationCenter.default.publisher(for: UIScreen.capturedDidChangeNotification)) { _ in
+            capturing = UIScreen.main.isCaptured
+        }
+        .onChange(of: scenePhase) { _, phase in if phase == .background { close() } }
+        .task { await load() }
+        .onDisappear {
+            image = nil
+            MediaPresentGate.noteClosed()
+        }
+    }
+
+    @ViewBuilder private var photo: some View {
+        if let image {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .scaleEffect(scale)
+                .offset(offset)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(SimultaneousGesture(magnify, pan))
+                .onTapGesture(count: 2) {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        if scale > 1.01 { resetZoom() } else { scale = 2.5; baseScale = 2.5 }
+                    }
+                }
+                .ignoresSafeArea()
+        } else {
+            Color.clear
+        }
+    }
+
+    private var magnify: some Gesture {
+        MagnifyGesture()
+            .onChanged { v in scale = min(5, max(1, baseScale * v.magnification)) }
+            .onEnded { _ in
+                baseScale = scale
+                if scale <= 1.01 { withAnimation(.easeInOut(duration: 0.2)) { resetZoom() } }
+            }
+    }
+
+    private var pan: some Gesture {
+        DragGesture()
+            .onChanged { v in
+                guard scale > 1.01 else { return }   // at fit there is nothing to pan, and no close
+                offset = CGSize(width: baseOffset.width + v.translation.width,
+                                height: baseOffset.height + v.translation.height)
+            }
+            .onEnded { _ in baseOffset = offset }
+    }
+
+    private func resetZoom() {
+        scale = 1; baseScale = 1; offset = .zero; baseOffset = .zero
+    }
+
+    private func close() {
+        MediaPresentGate.noteDismissed()
+        dismiss()
+    }
+
+    /// Local bytes (my own, still sending), then the caches, then download and decrypt: the same
+    /// chain the gallery viewer's `load` walks. `noteShown` is what tells the cover's dismiss that
+    /// the photo really was seen; a page closed before this point spends nothing.
+    private func load() async {
+        let m = message
+        var img = m.localImageData.flatMap(UIImage.init(data:))
+        if img == nil, let u = m.imageUrl {
+            img = DiskImageCache.shared.memoryImage(u)
+            if img == nil { img = await DiskImageCache.shared.image(for: u) }
+            if img == nil, let url = URL(string: u), let meta = m.enc,
+               let (cipher, _) = try? await MediaSession.shared.data(from: url),
+               let dec = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) {
+                img = UIImage(data: dec)
+            }
+        }
+        guard let img, !Task.isCancelled else {
+            if !Task.isCancelled { failed = true }
+            return
+        }
+        image = img
+        ViewedOnce.noteShown(m.id)
+        // The server burn as the picture lands (owner, 2026-09-30), not when the page closes. The
+        // function refuses the author and groups.
+        if m.authorId != AuthService.shared.uid {
+            ViewedOnce.burnImage(cid: cid, messageId: m.id)
+        }
+    }
+}

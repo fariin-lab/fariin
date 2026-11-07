@@ -958,7 +958,7 @@ struct OneTimeVoicePill: View {
     }
     private var label: String {
         if isMe { return openedByOther ? "Opened" : "Voice message" }
-        if spent { return "Played" }
+        if spent { return "Opened" }   // one word on both sides (owner 2026-11-07)
         return "Voice message · " + durationText
     }
 }
@@ -1004,6 +1004,7 @@ struct OneTimeVoicePage: View {
     let cid: String
     let dark: Bool
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var player: AVAudioPlayer?
     @State private var tmpURL: URL?
@@ -1087,6 +1088,8 @@ struct OneTimeVoicePage: View {
         }
         .task { await load() }
         .onDisappear { teardown() }
+        // Leaving the app is leaving the page (owner 2026-11-07): the cover's dismiss spends it.
+        .onChange(of: scenePhase) { _, phase in if phase == .background { dismiss() } }
     }
 
     /// A recording that starts mid-listen stops the note at once; it does not resume by itself
@@ -1151,9 +1154,10 @@ struct OneTimeVoicePage: View {
 
     private func seek(_ pct: Double) {
         guard let p = player, p.duration > 0 else { return }
-        // Forward only: dragging back would be a second listen (owner, 2026-09-29, "once").
+        // ⛔ BOTH WAYS NOW — owner, 2026-11-07, reversing 09-29's forward-only: "inside the viewer
+        // they may do anything except capture it; leaving is gone forever". Drag back and replay
+        // from any point; the page still closes itself when playback reaches the end.
         let target = p.duration * max(0, min(1, pct))
-        guard target > p.currentTime else { return }
         p.currentTime = target
         progress = p.currentTime / p.duration
     }

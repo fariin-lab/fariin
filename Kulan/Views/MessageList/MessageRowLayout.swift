@@ -149,6 +149,12 @@ struct PillPlan {
     var symbol: String
     var busy: Bool
     var dimmed: Bool
+    /// A view-once message: the dashed ring drawn in `glyph` instead of the SF symbol, in this colour.
+    var onceRing: BubbleBody.PillBody.OnceRing? = nil
+    var ringColor: UIColor? = nil
+    /// The unopened card's second line ("Tap to view"). nil everywhere else.
+    var subLabel: CGRect = .zero
+    var subAttr: NSAttributedString? = nil
 }
 
 /// A voice note. Every rect is fixed; only the waveform's progress and the disc's glyph change as
@@ -642,6 +648,82 @@ enum MessageRowLayout {
                 .foregroundColor: (b.isMe ? UIColor.white.withAlphaComponent(0.72)
                                           : UIColor.secondaryLabel.withAlphaComponent(0.85))])
             bodySize = BubbleText.size(bodyAttr, width: max(1, maxContent - 18))
+        case .pill(let p) where p.onceRing != nil:
+            // ⛔ A VIEW-ONCE MESSAGE, IN THE OWNER'S TWO SIZES (2026-11-07, his design picture beside
+            // the reference app's chat; ours was a cramped capsule he called ugly). Still no media:
+            // the picture is never drawn in the list.
+            //   UNOPENED (ring `.one`): a card, 14 / 18 of padding, at least 190 wide, 22 corners.
+            //   A 40pt dashed ring with a bold "1", then two lines: "Photo" 18 semibold over a
+            //   13pt secondary line, with the time and ticks on that second line's baseline.
+            //   OPENED (ring `.empty`): one line, a 24pt empty ring and "Opened" in italic.
+            let scale = BubbleMetrics.bodyFont.pointSize / 17   // follows the phone's text size
+            let big = p.onceRing == .one
+            let padV: CGFloat = big ? 14 : 9, padH: CGFloat = big ? 18 : 14
+            let ringW = ceil((big ? 40 : 24) * scale)
+            let ringGap: CGFloat = big ? 12 : 10, metaGap: CGFloat = 12
+            let titleFont = big ? UIFont.systemFont(ofSize: 18 * scale, weight: .semibold)
+                                : UIFont.italicSystemFont(ofSize: BubbleMetrics.bodyFont.pointSize)
+            let attr = NSAttributedString(string: p.label, attributes: [
+                .font: titleFont, .foregroundColor: big ? textColor : metaColor])
+            let subFont = UIFont.systemFont(ofSize: 13 * scale)
+            let subAttr: NSAttributedString? = big ? NSAttributedString(string: p.onceSubtitle ?? "", attributes: [
+                .font: subFont, .foregroundColor: metaColor]) : nil
+            let metaAttrO = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
+            let metaSizeO = BubbleText.lineSize(metaAttrO)
+            let textX = padH + ringW + ringGap
+            let textCap = max(1, maxBubble - textX - padH)
+            let titleSize = lineSizeOf(attr, cap: textCap)
+            let subSize = subAttr.map { lineSizeOf($0, cap: max(1, textCap - metaGap - metaSizeO.width)) } ?? .zero
+            let lineGap: CGFloat = 2
+            // The line the footer rides: the subtitle on the card, the word on the small one.
+            let footLineW = big ? subSize.width : titleSize.width
+            let textW = max(big ? titleSize.width : 0, footLineW + metaGap + metaSizeO.width)
+            let bubbleWO = min(maxBubble, max(big ? 190 : 0, textX + textW + padH))
+            let textH = big ? titleSize.height + lineGap + subSize.height : titleSize.height
+            let rowH = max(ringW, textH)
+            let bubbleHO = rowH + padV * 2
+            let titleY = padV + (rowH - textH) / 2
+            let subY = titleY + titleSize.height + lineGap
+            // Baselines meet: the footer's (its first font is the meta font) and its line's.
+            let footY = big ? subY + subFont.ascender : titleY + titleFont.ascender
+            let metaY = footY - BubbleMetrics.metaFont.ascender
+            let xO = b.isMe ? (columnX + columnW - bubbleWO) : columnX
+            let rectO = CGRect(x: xO, y: y, width: bubbleWO, height: bubbleHO)
+            // Unopened: green on theirs, my text colour (white) on mine. Opened: the footer's grey.
+            let ringColor: UIColor = !big ? metaColor : (b.isMe ? textColor : BubblePalette.viewOnceGreen)
+            var outO = BubblePlan(
+                bubble: rectO, radii: .uniform(big ? 22 : bubbleHO / 2), isCapsule: !big,
+                fill: b.fill, rim: b.rim,
+                text: .zero,
+                meta: CGRect(x: bubbleWO - padH - metaSizeO.width, y: metaY,
+                             width: metaSizeO.width, height: metaSizeO.height),
+                metaOnOwnLine: false, quote: nil, quoteInner: nil,
+                bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
+                tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
+                locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil,
+                storyReplyPlan: nil, voicePlan: nil,
+                pillPlan: PillPlan(
+                    glyph: CGRect(x: padH, y: padV + (rowH - ringW) / 2, width: ringW, height: ringW),
+                    label: CGRect(x: textX, y: titleY, width: titleSize.width, height: titleSize.height),
+                    labelAttr: attr, symbol: p.symbol, busy: false, dimmed: p.spent,
+                    onceRing: p.onceRing, ringColor: ringColor,
+                    subLabel: CGRect(x: textX, y: subY, width: subSize.width, height: subSize.height),
+                    subAttr: subAttr),
+                avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
+                forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
+                failBadge: nil)
+            let bottomO = decorations(b, plan: &outO, bubbleRect: rectO, columnX: columnX,
+                                      columnW: columnW, originX: originX, topSpacing: topSpacing,
+                                      senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                                      forwardedSize: forwardedSize, forwardedIconW: forwardedIconW,
+                                      y: rectO.maxY)
+            // Grown by its reactions row, the small one takes card corners instead of a tall capsule
+            // (the same fix the capsule below carries, owner 2026-09-29).
+            if outO.bubble.height > rectO.height + 0.5 {
+                outO.isCapsule = false
+                outO.radii = .uniform(22)
+            }
+            return BubbleResult(plan: outO, totalHeight: bottomO)
         case .pill(let p):
             // The same capsule the tombstone wears: a glyph, a word, and no footer of its own —
             // except this one DOES carry the time, because a view-once photo is still a message.
