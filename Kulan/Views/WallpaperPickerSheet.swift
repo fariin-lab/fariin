@@ -37,6 +37,13 @@ struct WallpaperPickerSheet: View {
     /// rows more room while the sheet shrinks.
     @State private var showAllChatsRow = false
     private var colorStore: ChatColorStore { .shared }
+    /// The Bubble Styles row (owner 2026-11-07, "also here add Bubble Styles"). The style is ONE
+    /// setting for every chat, so a tap here saves it at once, as Save does on the full page.
+    @AppStorage(BubbleStyles.key) private var bubbleStyleId = ""
+    @State private var showBubbleStyles = false
+    private var showsBubbleRow: Bool { !globalOnly && BubbleStyles.shown }
+    /// What the Bubble Styles row adds to the sheet's fixed height.
+    private static let bubbleRowHeight: CGFloat = 100
     // The wallpaper/colour in use when the sheet OPENED — must be @State: the live preview writes to the
     // observed store, which re-creates this struct, and a plain `let` re-captured the PREVIEWED value as
     // "original" (hasPendingChange went false → no Apply button, closes acted like auto-apply).
@@ -149,6 +156,7 @@ struct WallpaperPickerSheet: View {
                 }
             }
             chatColorSection
+            if showsBubbleRow { bubbleStyleSection }
         }
         .frame(maxHeight: .infinity, alignment: .top)
         // ⛔ THE HEADER IS A TOP BAR FOR THE SAME REASON THE BUTTONS ARE A BOTTOM ONE — owner,
@@ -239,7 +247,8 @@ struct WallpaperPickerSheet: View {
         // 2026-09-02 report about the tiles being cut off, and the same arithmetic as the +26 that
         // note records.
         // One height now: the in-chat sheet has no second row under Apply (see the button block).
-        .presentationDetents([.height(355 + Self.bottomInset)])
+        // The Bubble Styles row (in a chat only) adds its own height.
+        .presentationDetents([.height(355 + (showsBubbleRow ? Self.bubbleRowHeight : 0) + Self.bottomInset)])
         .presentationDragIndicator(.visible)
         // ⛔ CLEAR — owner, 2026-09-11: "Chat Wallpaper sheet looks different colors top header and
         // bottom ... that sheet make clear". The system's glass sheet was tinting the two bar bands
@@ -255,6 +264,9 @@ struct WallpaperPickerSheet: View {
                 colorStore.addCustom(spec)   // save into the reusable custom library (deduped)
                 chooseColor(spec)            // live preview, ACTIVE colour not saved until Apply
             }
+        }
+        .sheet(isPresented: $showBubbleStyles) {
+            NavigationStack { BubbleStylesPage() }
         }
         // Selecting a wallpaper OR a colour LIVE-PREVIEWS it on the chat behind, but nothing is SAVED
         // until Apply. Closing without Apply reverts both to the originals.
@@ -576,6 +588,62 @@ struct WallpaperPickerSheet: View {
             Circle().fill(p.fill).frame(width: 52, height: 52)
                 .overlay(Circle().strokeBorder(isSel ? Color.primary : .clear, lineWidth: 3))
         }.buttonStyle(.plain)
+    }
+
+    // ── Bubble Styles row ──
+
+    /// Six picture styles, always in the same order so a tapped one stays where it was. A picture
+    /// in use that is not among the first six takes the last place, so the one in use always shows.
+    private var stripStyles: [BubbleStyle] {
+        var out = Array(BubbleStyles.all.filter { $0.picture != nil }.prefix(6))
+        if let cur = BubbleStyles.find(bubbleStyleId), cur.picture != nil, !out.contains(cur), !out.isEmpty {
+            out[out.count - 1] = cur
+        }
+        return out
+    }
+
+    private var bubbleStyleSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Bubble Styles").font(.subheadline.weight(.semibold))
+                Spacer()
+                Button("See all") { showBubbleStyles = true }
+                    .font(.subheadline)
+            }
+            .padding(.horizontal, 20)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(stripStyles) { bubbleThumb($0) }
+                }
+                .padding(.horizontal, 20).padding(.vertical, 3)
+            }
+            Text("Applies to all your chats")
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.horizontal, 20)
+        }
+    }
+
+    private func bubbleThumb(_ s: BubbleStyle) -> some View {
+        let isOn = bubbleStyleId == s.id
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        return Button {
+            guard !isOn, BubbleStyles.mayUse(s) else { return }
+            bubbleStyleId = s.id       // the same key Save writes on the full page
+            Haptics.impact(.light)
+        } label: {
+            Group {
+                if let p = s.picture { PictureThumb(style: p) }
+            }
+            .frame(width: 62, height: 40)
+            .padding(4)
+            .liquidGlass(shape, interactive: true)
+            .overlay {
+                if isOn { shape.strokeBorder(Theme.accent(dark), lineWidth: 2.5) }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(s.name)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 
     private var addColorButton: some View {

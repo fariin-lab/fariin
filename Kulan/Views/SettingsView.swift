@@ -1132,10 +1132,11 @@ struct AppearanceSettingsView: View {
 
             Section {
                 doorRow("Chat Wallpaper") { ChatWallpaperPage() }
-                doorRow("Chat Color", accessory: AnyView(colorDot)) { ChatColorPage() }
+                // ⛔ NO "CHAT COLOR" ROW (owner 2026-11-07, "remove chat color, move to bubble
+                // styles, make merge"): the chat colour palette lives in Bubble Styles > Colours now.
                 if BubbleStyles.shown {
                     doorRow("Bubble Styles",
-                            accessory: AnyView(Text(BubbleStyles.find(bubbleStyleId)?.name ?? "Default")
+                            accessory: AnyView(Text(bubbleRowLabel)
                                 .foregroundStyle(.secondary))) { BubbleStylesPage() }
                 }
                 doorRow("App Icon") { AppIconPage() }
@@ -1271,10 +1272,12 @@ struct AppearanceSettingsView: View {
         .contentMargins(12, for: .scrollContent)
     }
 
-    private var colorDot: some View {
-        Circle()
-            .fill(defaultColor.map { AnyShapeStyle($0.fill) } ?? AnyShapeStyle(Theme.defaultBubble(dark)))
-            .frame(width: 22, height: 22)
+    /// The Bubble Styles row's label: the style's name; with no style, the chat colour chosen in
+    /// Settings (not Auto); else "Default".
+    private var bubbleRowLabel: String {
+        if let s = BubbleStyles.find(bubbleStyleId) { return s.name }
+        if let c = colorStore.globalChosenColor { return ChatColors.name(c) }
+        return "Default"
     }
 
     private func doorRow<D: View>(_ title: String,

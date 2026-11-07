@@ -91,6 +91,20 @@ enum ChatColors {
         .init(colors: [0x498FD4, 0x2C66A0]),   // Sea
         .init(colors: [0xDB7133, 0x911231]),   // Tangerine
     ]
+
+    /// The palette's names, in `presets` order. The Bubble Styles row in Settings shows one when a
+    /// chat colour is chosen and no style is (owner 2026-11-07, Chat Color merged into Bubble Styles).
+    private static let names = [
+        "Ultramarine", "Crimson", "Vermilion", "Burlap", "Forest", "Wintergreen", "Teal", "Blue",
+        "Indigo", "Violet", "Plum", "Taupe", "Steel", "Ember", "Midnight", "Infrared", "Lagoon",
+        "Fluorescent", "Basil", "Sublime", "Sea", "Tangerine",
+    ]
+
+    /// A colour's name; a colour made in the Custom Color editor is "Custom".
+    static func name(_ spec: ChatColorSpec) -> String {
+        if let i = presets.firstIndex(of: spec), i < names.count { return names[i] }
+        return "Custom"
+    }
 }
 
 // Observable so setting a colour re-renders the open chat instantly (live preview), same pattern as
