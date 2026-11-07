@@ -1948,7 +1948,10 @@ extension ChatComposerView: UITextViewDelegate {
         textViewDidChange(textView)   // height and the stored spans
     }
 
-    private var baseFont: UIFont { textView.font ?? .systemFont(ofSize: 17) }
+    /// Always the REGULAR weight at the field's size. `textView.font` reads the first character's
+    /// font, so with bold words at the start it came back semibold and "removing" bold wrote bold
+    /// again (owner 2026-11-07, twice).
+    private var baseFont: UIFont { .systemFont(ofSize: textView.font?.pointSize ?? 17) }
     /// A run is bold when it carries the mark or a semibold-or-heavier font.
     private static func looksBold(_ a: [NSAttributedString.Key: Any]) -> Bool {
         if a[.composerBold] != nil { return true }
