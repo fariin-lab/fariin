@@ -2364,7 +2364,7 @@ enum MessageRowLayout {
     /// Returns the card's size at `width`, and a plan whose rects are relative to the card's own
     /// origin. The caller places it and offsets.
     private static func linkPreview(_ p: BubbleBody.LinkPreview, textColor: UIColor,
-                                    width: CGFloat) -> (CGSize, LinkPreviewPlan) {
+                                    width: CGFloat, compactQuote: Bool = false) -> (CGSize, LinkPreviewPlan) {
         let pad: CGFloat = 10
         let inner = max(1, width - pad * 2)
         var y: CGFloat = 0
@@ -2402,7 +2402,7 @@ enum MessageRowLayout {
             var hero: CGRect?
             let words: NSAttributedString? = p.desc.isEmpty ? nil : NSAttributedString(string: p.desc, attributes: [
                 .font: UIFont.systemFont(ofSize: 16), .foregroundColor: textColor])   // 16pt, near the post's own 17 (owner 2026-11-07)
-            if p.imageUrl != nil {
+            if p.imageUrl != nil, compactQuote {
                 // ⛔ COMPACT WITH A PICTURE (owner 2026-11-07, his own mockup): the picture on the left,
                 // the words beside it, at most 4 lines then "...", both from the same top line. The
                 // view draws 4 lines too (CardBubbleViews, a quote card with a hero).
@@ -2418,12 +2418,22 @@ enum MessageRowLayout {
                     subtitleAttr = words
                 }
                 y += max(imgH, textH)
-            } else if let words {
-                // Words only: up to 8 lines (the view draws 8 too).
-                let h = cappedHeight(words, width: inner, lines: 8)
-                subtitle = CGRect(x: pad, y: y, width: inner, height: h)
-                subtitleAttr = words
-                y += h
+            } else {
+                // ⛔ ONLY A POST WITH ITS OWN PHOTO GETS THE COMPACT CARD (owner 2026-11-07: "you used it
+                // everywhere"). A text post quoting keeps the first design: the words (up to 8 lines),
+                // then the picture across the card.
+                if let words {
+                    let h = cappedHeight(words, width: inner, lines: 8)
+                    subtitle = CGRect(x: pad, y: y, width: inner, height: h)
+                    subtitleAttr = words
+                    y += h
+                }
+                if p.imageUrl != nil {
+                    if subtitle != nil { y += 8 }
+                    let h = min(220, inner * 0.75)
+                    hero = CGRect(x: pad, y: y, width: inner, height: h)
+                    y += h
+                }
             }
             y += 10
             return (CGSize(width: width, height: y),
@@ -3028,7 +3038,8 @@ enum MessageRowLayout {
             attr = built.body
             y += size.height + 6
         }
-        let (size, plan) = linkPreview(card, textColor: textColor, width: avail)
+        // A photo post's quote: the compact card, picture beside the words.
+        let (size, plan) = linkPreview(card, textColor: textColor, width: avail, compactQuote: true)
         var link = plan
         link.card = CGRect(x: inset, y: y, width: avail, height: size.height)
         y = link.card.maxY + BubbleMetrics.metaGap
