@@ -303,12 +303,18 @@ struct PostReply: Identifiable, Equatable {
         for l in local where !list.contains(where: { $0.id == l.id }) { list.append(l) }
         answers[rid] = list
         answerNext[rid] = d["next"] as? String ?? ""
+        answersLoaded.insert(rid)
     }
+
+    /// Threads whose answers came from the server at least once. A thread can hold my own answer
+    /// (just sent) without the others; "View N replies" then showed only the newest (owner
+    /// 2026-11-07: "show me the first ones"). Opened, it loads from the first answer down.
+    private var answersLoaded: Set<String> = []
 
     func toggleThread(_ rid: String) {
         if openThreads.contains(rid) { openThreads.remove(rid); return }
         openThreads.insert(rid)
-        if answers[rid] == nil { Task { await loadAnswers(rid, more: false) } }
+        if !answersLoaded.contains(rid) { Task { await loadAnswers(rid, more: false) } }
     }
 
     // MARK: Actions

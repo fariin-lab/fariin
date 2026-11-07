@@ -1117,13 +1117,15 @@ struct ThreadView: View {
             // same space with an empty-state line. Ours takes the lock notice, and states what is
             // actually protected (messages AND calls) rather than naming the app that protects it.
             .overlay(alignment: .center) { encryptionNotice }
-            // Brief centered toast (e.g. reply to a deleted original).
-            .overlay(alignment: .center) {
+            // Brief toast (e.g. reply to a deleted original), at the BOTTOM above the composer (owner
+            // 2026-11-07: "make it bottom, not centre"), the same lift the jump arrow uses.
+            .overlay(alignment: .bottom) {
                 if let t = jumpToast {
                     Text(t).font(.system(size: 14, weight: .medium)).foregroundStyle(.white)
                         .padding(.horizontal, 16).padding(.vertical, 10)
                         .background(.black.opacity(0.8), in: Capsule())
-                        .transition(.opacity)
+                        .padding(.bottom, composerLift + 12)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                         .allowsHitTesting(false)
                 }
             }
@@ -4042,7 +4044,7 @@ struct ThreadView: View {
                 }
                 // A quoted channel post draws the server's answer (QuoteStore), so that is its token.
                 if let q = m.quoteId { linkTok += ":Q" + QuoteStore.shared.token(q) }
-                out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)|\(m.views)|\(m.quoteCount)|\(m.quoteFaces.hashValue)|\(m.replyCount)|\(m.replyFaces.hashValue)|\(m.repliesOff)|\(chanRepliesOff)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
+                out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)|\(m.views)|\(m.quoteCount)|\(m.quoteFaces.hashValue)|\(m.replyCount)|\(m.replyFaces.hashValue)|\(m.repliesOff(channelDefault: chanRepliesOff))"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
             }
             sigCache.key = key
             sigCache.base = out
@@ -4470,7 +4472,7 @@ struct ThreadView: View {
             // Replies off or on for this post, for the channel's admins (owner 2026-11-06; the server
             // checks the Change info right and refuses otherwise).
             if conversation?.isChannel == true, mayChangeChannelInfo {
-                let off = m.repliesOff
+                let off = m.repliesOff(channelDefault: conversation?.repliesOff == true)   // the post's own switch wins
                 out.append(CMAction(title: off ? "Turn On Replies" : "Turn Off Replies", icon: off ? "ic_reply_comment" : "nosign") {   // the owner's comment icon (2026-11-07)
                     setPostReplies(m.id, off: !off)
                 })
@@ -4688,7 +4690,7 @@ struct ThreadView: View {
     private func postThreadSheet(_ mid: String) -> PostThreadSheet {
         let post = repo.items.first(where: { $0.id == mid })
         return PostThreadSheet(cid: cid, mid: mid, post: post,
-                        repliesOff: post?.repliesOff == true || conversation?.repliesOff == true,
+                        repliesOff: post?.repliesOff(channelDefault: conversation?.repliesOff == true) ?? (conversation?.repliesOff == true),
                         sourceTitle: conversation?.title ?? "Channel", sourcePhoto: conversation?.avatarUrl,
                         sourceVerified: conversation?.groupVerified == true,
                         picture: { await quotesPicture(mid) },
@@ -5211,7 +5213,7 @@ struct ThreadView: View {
             onTapQuotes: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }) else { return }
                 // A bar showing only quotes (replies off, none written) opens on Quotes (2026-11-06 audit).
-                let repliesOff = m.repliesOff || conversation?.repliesOff == true
+                let repliesOff = m.repliesOff(channelDefault: conversation?.repliesOff == true)
                 quotesStartOnQuotes = repliesOff   // off: only Quotes (owner 2026-11-07)
                 quotesFor = MessageRef(id: m.id)
             },

@@ -445,10 +445,12 @@ struct JoinGroupSheet: View {
         Button(action: action) {
             ZStack {
                 Text(title).opacity(loading ? 0 : 1)
-                if loading { BusyArc.small(.white) }
+                if loading { BusyArc.small(Color.onFariinAction) }
             }
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(enabled || loading ? Color.white : Color.secondary)
+                // The action colour's own text colour: white on black, black on white (owner 2026-11-07,
+                // dark mode drew white words on the white button).
+                .foregroundStyle(enabled || loading ? Color.onFariinAction : Color.secondary)
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
                 .background(Capsule().fill(enabled || loading ? Self.blue : Color(.tertiarySystemFill)))

@@ -412,6 +412,9 @@ struct Message: Identifiable, Equatable, Codable {
     /// Replies under a channel post (server `addReply`), and the post's own "replies off".
     var replyCount: Int { get { counts.replyCount ?? 0 } set { counts.replyCount = newValue > 0 ? newValue : nil } }
     var repliesOff: Bool { get { counts.repliesOff ?? false } set { counts.repliesOff = newValue ? true : nil } }
+    /// Replies off for this post as it stands: the post's own switch when it has one, else the
+    /// channel's default (owner 2026-11-07; the server's replyCtx decides the same way).
+    func repliesOff(channelDefault: Bool) -> Bool { counts.repliesOff ?? channelDefault }
     var replyFaces: [String] { get { counts.replyFaces ?? [] } set { counts.replyFaces = newValue.isEmpty ? nil : newValue } }
     var edited: Bool = false               // text was edited after sending
     /// Deleted for everyone. The document SURVIVES as a tombstone so both sides see that something
@@ -891,7 +894,8 @@ struct Message: Identifiable, Equatable, Codable {
             reactionCounts: ((data["reactionCounts"] as? [String: Any]) ?? [:])
                 .compactMapValues { ($0 as? NSNumber)?.intValue }.filter { $0.value > 0 },
             replyCount: ((data["replyCount"] as? NSNumber)?.intValue).flatMap { $0 > 0 ? $0 : nil },
-            repliesOff: (data["repliesOff"] as? Bool) == true ? true : nil,
+            // Kept as written, false too: a post's own "on" beats the channel's "off" (owner 2026-11-07).
+            repliesOff: data["repliesOff"] as? Bool,
             replyFaces: {
                 let f = Array(((data["replyFaces"] as? [Any]) ?? []).compactMap { $0 as? String }.prefix(3))
                 return f.isEmpty ? nil : f

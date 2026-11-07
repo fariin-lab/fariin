@@ -4000,6 +4000,10 @@ enum ChatService {
     static func setTyping(_ cid: String, _ typing: Bool) async {
         if followedChannelPosts(cid) != nil { return }
         guard pref("typingIndicators") else { return }   // privacy: don't broadcast typing
+        // ⛔ CRASH, BUILD 1114 (owner's .ips 2026-11-07): an empty uid (signed out / account switch
+        // with the chat still open) made the key "" and Firestore ABORTS on an invalid field name
+        // rather than failing the write. Same for an empty chat id.
+        guard !uid.isEmpty, !cid.isEmpty, !cid.contains("/") else { return }
         // ON is a CHANGING string ("text-<seconds>") like recording's, not `true`: receivers
         // self-clear after 15s and only a value that changes the doc produces a snapshot, so a
         // >15s composing burst went silent on the other side (audit). Receivers accept Bool true
@@ -4015,6 +4019,7 @@ enum ChatService {
     /// every 10s — and only a value that actually changes the doc produces a snapshot.
     static func setRecording(_ cid: String, _ on: Bool) async {
         guard pref("typingIndicators") else { return }
+        guard !uid.isEmpty, !cid.isEmpty, !cid.contains("/") else { return }   // see setTyping (crash 1114)
         let v: Any = on ? ("audio-\(Int(Date().timeIntervalSince1970))" as Any) : (false as Any)
         try? await db.collection("conversations").document(cid)
             .setData(["typing": [uid: v]], merge: true)

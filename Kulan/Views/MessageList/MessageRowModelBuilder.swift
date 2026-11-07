@@ -479,7 +479,7 @@ enum MessageRowModelBuilder {
         guard ctx.isChannel, !msg.deleted, msg.sendState == nil else { return nil }
         // Off hides the Reply part entirely (owner 2026-11-07: "in post don't show Reply"); the bar
         // stays only for quotes.
-        let showReplies = !ctx.repliesOff && !msg.repliesOff
+        let showReplies = !msg.repliesOff(channelDefault: ctx.repliesOff)
         guard showReplies || msg.quoteCount > 0 else { return nil }
         return QuoteBarChrome(count: msg.quoteCount, faces: msg.quoteCount > 0 ? msg.quoteFaces : [],
                               replies: showReplies ? msg.replyCount : nil,
