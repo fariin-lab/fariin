@@ -871,15 +871,25 @@ private struct ReplyRow: View {
             .buttonStyle(.plain)
         case .sent:
             HStack(spacing: 14) {
-                Button(action: actions.like) {
-                    HStack(spacing: 4) {
-                        Image(systemName: reply.liked ? "heart.fill" : "heart")
-                            .foregroundStyle(reply.liked ? Color.red : Color.secondary)
-                        if reply.likes > 0 { Text(reply.likes.formatted()).foregroundStyle(.secondary) }
+                // ⛔ THE CHAT'S REACTION PILL, NOT A HEART BUTTON (owner 2026-11-07: "make it like how
+                // bubble react works in my app"). No empty outline: a double tap on the bubble reacts,
+                // and once there is a reaction a pill shows the emoji and count; mine is the dark,
+                // filled one, as in the chat; a tap on it takes mine back or adds it.
+                if reply.likes > 0 {
+                    Button(action: actions.like) {
+                        HStack(spacing: 4) {
+                            Text("❤️").font(.system(size: 14))
+                            Text(reply.likes.formatted())
+                                .font(.system(size: 13, weight: .semibold))
+                                .contentTransition(.numericText())
+                        }
+                        .foregroundStyle(reply.liked ? Color(.systemBackground) : Color.primary)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(reply.liked ? Color(.label) : Color(.tertiarySystemFill), in: Capsule())
                     }
-                    .font(.caption.weight(.semibold))
+                    .accessibilityLabel(reply.liked ? "Unlike, \(reply.likes) likes" : "Like, \(reply.likes) likes")
+                    .transition(.scale.combined(with: .opacity))
                 }
-                .accessibilityLabel(reply.liked ? "Unlike" : "Like")
                 if let r = actions.reply {
                     Button(action: r) { Text("Reply").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
                 }
@@ -888,6 +898,8 @@ private struct ReplyRow: View {
                 }
             }
             .buttonStyle(.plain)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: reply.likes)
+            .animation(.easeOut(duration: 0.2), value: reply.liked)
         }
     }
 
