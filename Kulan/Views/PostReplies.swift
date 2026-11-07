@@ -545,7 +545,7 @@ struct PostThreadSheet: View {
         // ⛔ 65% AND ONLY 65% (owner 2026-11-07, twice: a scroll made it full, then tapping the reply
         // field made it full). With a taller size on offer the system takes it when the keyboard comes
         // up; with one size the sheet stays and the field rides above the keyboard.
-        .presentationDetents([.fraction(0.65)])
+        .presentationDetents([.fraction(0.70)])   // 70% (owner 2026-11-07, was 65)
         .presentationContentInteraction(.scrolls)
         .presentationDragIndicator(.visible)
         .onChange(of: tab) { _, t in
