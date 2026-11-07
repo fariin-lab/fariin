@@ -24,13 +24,33 @@ struct BubbleStyle: Identifiable, Equatable {
     let plus: Bool
     let light: Look
     let dark: Look
+    /// A picture style (owner 2026-11-07, `PictureStyles`); nil for a colour style. Its look is the
+    /// picture's own colour and text colour, the same in light and dark (SPEC section 1).
+    var picture: PictureStyle? = nil
 
     func look(_ dark: Bool) -> Look { dark ? self.dark : light }
+
+    init(id: String, name: String, plus: Bool, light: Look, dark: Look) {
+        self.id = id; self.name = name; self.plus = plus; self.light = light; self.dark = dark
+    }
+
+    /// ⛔ EVERY PICTURE STYLE IS FREE (owner 2026-11-07). The colour styles keep their own flags.
+    init(_ p: PictureStyle) {
+        let look = Look(fill: [p.fill], text: p.textHex)
+        self.init(id: p.id, name: p.name, plus: false, light: look, dark: look)
+        picture = p
+    }
 }
 
 enum BubbleStyles {
-    static let all: [BubbleStyle] = [
-        BubbleStyle(id: "strawberry", name: "Strawberry Pink", plus: false,
+    /// Colour styles first, then the pictures in their groups.
+    static let all: [BubbleStyle] = colours + PictureStyles.all.map(BubbleStyle.init)
+
+    /// ⚠️ "pink" WAS "strawberry" until 2026-11-07: the picture set owns that id now (its file
+    /// name, shared with Android). A message sent with the old colour id draws the strawberry
+    /// picture, which is the same pink.
+    static let colours: [BubbleStyle] = [
+        BubbleStyle(id: "pink", name: "Strawberry Pink", plus: false,
                     light: .init(fill: [0xFFC9D6], text: 0x4A1020),
                     dark: .init(fill: [0x7E2F49], text: 0xFFE3EA)),
         BubbleStyle(id: "lavender", name: "Dreamy Lavender", plus: false,
@@ -56,14 +76,18 @@ enum BubbleStyles {
                     dark: .init(fill: [0x2C2C2E], text: 0xF2F2F7, glass: true)),
     ]
 
-    /// ⛔ HIDDEN UNTIL HE BUILDS IT PROPERLY (owner 2026-11-06: "I will do this feature next year,
-    /// completely hide it"). Off: no Settings row, no search entry, nothing sent with a style, and a
-    /// style on any message (mine or someone else's) draws as the normal bubble. The code stays.
-    static let shown = false
+    /// ⛔ SHOWN AGAIN (owner 2026-11-07, "build and show in app", with the picture styles). It was
+    /// hidden on 2026-11-06 ("I will do this feature next year, completely hide it"). Off: no
+    /// Settings row, no search entry, nothing sent with a style, and every style draws as the
+    /// normal bubble.
+    static let shown = true
 
+    private static let byId: [String: BubbleStyle] = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+
+    /// A colour style or a picture style; nil for an unknown id (an older build, a removed style).
     static func find(_ id: String?) -> BubbleStyle? {
         guard shown, let id, !id.isEmpty else { return nil }
-        return all.first { $0.id == id }
+        return byId[id]
     }
 
     /// The style I send with: UserDefaults, nil = the normal bubble.

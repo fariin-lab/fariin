@@ -33,6 +33,9 @@ struct MessageRowContext {
     var noForwarding: Bool = false
     /// The channel has replies off for every post (`Conversation.repliesOff`).
     var repliesOff: Bool = false
+    /// Draw every bubble plain, whatever style it was sent with: a group with Bubble styles off
+    /// (`Conversation.bubbleStylesOff`) and the official Fariin chat (owner 2026-11-07).
+    var stylesOff: Bool = false
     var channelMine: (String) -> String? = { _ in nil }
     var channelConfirmed: (String) -> String? = { _ in nil }
     /// The counts to draw for a post (mid, the post's own): the server's answer to my pick while the
@@ -295,10 +298,14 @@ enum MessageRowModelBuilder {
         // text colour, on their side and mine alike. Unknown ids and deleted messages draw as before.
         // Text bubbles only (5-angle check): poll, location and contact cards draw their own white
         // details for my side, which a pastel would swallow.
+        // Never in a channel or the official chat, nor in a group whose admins turned styles off
+        // (owner 2026-11-07, SPEC section 5): the `bs` stays on the message, only the drawing is skipped.
         let bubbleStyle: BubbleStyle? = {
-            guard !msg.deleted, case .text = body else { return nil }
+            guard !msg.deleted, !ctx.isChannel, !ctx.stylesOff, case .text = body else { return nil }
             return BubbleStyles.find(msg.bubbleStyle)
         }()
+        // A picture style draws its picture on the LAST bubble of a run only (SPEC section 3).
+        let picture: PictureStyle? = last ? bubbleStyle?.picture : nil
         let fill: BubbleFill = bubbleStyle.map { s -> BubbleFill in
             let look = s.look(ctx.dark)
             // Soft Glass with no wallpaper behind: a blur of the plain page is nearly invisible,
@@ -450,10 +457,12 @@ enum MessageRowModelBuilder {
             // Decorations: the sender chose them, this is a text bubble, and it is the LAST of its run.
             decor: {
                 // Not on a failed send (the red retry mark sits there), and not over a group's avatar.
-                guard let s = bubbleStyle, msg.bubbleDecor, last, case .text = body, msg.sendState != .failed else { return [] }
+                guard let s = bubbleStyle, s.picture == nil, msg.bubbleDecor, last, case .text = body, msg.sendState != .failed else { return [] }
                 return BubbleDecorSets.placed(styleId: s.id, isMe: isMe, dark: ctx.dark, first: first,
                                               besideAvatar: !isMe && ctx.isGroup && !ctx.isChannel)
             }(),
+            picture: picture?.id,
+            pictureRim: picture?.lightText == true && ctx.dark,
             wide: ctx.isChannel && !msg.deleted,
             shareable: ctx.isChannel && !msg.deleted && !ctx.noForwarding,
             quoteBar: postBar(msg, ctx: ctx))

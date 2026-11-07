@@ -1488,6 +1488,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var groupVerified: Bool = false
     /// A channel with replies turned off for every post (`repliesOff`, set by `setReplies`).
     var repliesOff: Bool = false
+    /// A group whose owner or admins turned Bubble styles off (`bubbleStylesOff`, server-written,
+    /// owner 2026-11-07): every message in it draws as the normal bubble. Read only here.
+    var bubbleStylesOff: Bool = false
     /// The badge's type (`verifiedType`, admin panel, owner 2026-10-26): the person list, gold for
     /// Business / Organization. Nil on an older badge or a type this build does not know: plain blue.
     var groupVerifiedType: Verification.Kind?
@@ -1651,6 +1654,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         if data["type"] as? String == "group", groupMod.locksGroup() { self.avatarUrl = nil }
         self.groupVerified = data["verified"] as? Bool ?? false
         self.repliesOff = data["repliesOff"] as? Bool ?? false
+        self.bubbleStylesOff = data["bubbleStylesOff"] as? Bool ?? false
         self.groupVerifiedType = (data["verifiedType"] as? String).flatMap(Verification.Kind.init(rawValue:))
         self.groupNoReport = data["noReport"] as? Bool ?? false
         self.restrictedFlags = stringArrayMap(data["restrictedFlags"])

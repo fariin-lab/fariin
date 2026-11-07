@@ -184,6 +184,8 @@ struct ContactInfoView: View {
     @State private var showAllMedia = false
     @State private var showVerify = false
     @State private var showDisappear = false
+    @State private var showBubbleStyle = false
+    @AppStorage(BubbleStyles.key) private var bubbleStyleId = ""   // the row's value follows a Save
     @State private var showRestricted = false
     /// Restricted chat on, read live from the chat list.
     private var chatRestricted: Bool {
@@ -1280,6 +1282,9 @@ struct ContactInfoView: View {
                     localName = ContactNames.shared.name(for: otherUid)
                 }
             }
+            .sheet(isPresented: $showBubbleStyle) {
+                NavigationStack { BubbleStylesPage() }
+            }
             .sheet(isPresented: $showDisappear) {
                 DisappearingMessagesView(cid: cid, current: disappearSeconds) { s in
                     disappearSeconds = s
@@ -1593,6 +1598,14 @@ struct ContactInfoView: View {
             // The same glyph Settings uses for its Notifications row (owner: reuse that one).
             infoRow("Sounds & Notifications", "ic_notifications", value: muted ? "Muted" : "On") { showSounds = true }
             rowDivider
+            // ⛔ CHAT BUBBLE (owner 2026-11-07, SPEC section 4): opens the same picker as Settings >
+            // Appearance. A shortcut to my one style, not a style for this chat.
+            if BubbleStyles.shown {
+                infoRow("Chat Bubble", "bubble.left", value: BubbleStyles.find(bubbleStyleId)?.name ?? "Default") {
+                    showBubbleStyle = true
+                }
+                rowDivider
+            }
             // ⚠️ THE SAME COLOUR AS THE TWO ROWS ABOVE IT, on his 2026-08-18 instruction. It wore
             // `.accentColor`, so on a profile it was the one blue line in a card of black ones — and
             // the accent is WHITE at night, which is its own trap (see the accent-is-white note).

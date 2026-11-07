@@ -34,7 +34,7 @@ struct PlacedDecor: Equatable {
 enum BubbleDecorSets {
     static func decor(for styleId: String) -> [BubbleDecor] {
         switch styleId {
-        case "strawberry":
+        case "pink":   // the Strawberry Pink colour style (was "strawberry", see `BubbleStyles.colours`)
             return [BubbleDecor(corner: .bottomTrailing, glyph: .strawberry, size: 22, light: 0xE8364F, dark: 0xFF5A72, rotation: 0.25),
                     BubbleDecor(corner: .topLeading, glyph: .symbol("heart.fill"), size: 13, light: 0xFF6F91, dark: 0xFF8FAB, rotation: -0.3)]
         case "lavender":

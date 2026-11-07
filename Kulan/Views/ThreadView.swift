@@ -3931,7 +3931,7 @@ struct ThreadView: View {
         // A channel's reactions (2026-10-29): my picks live apart from the posts, so they key too.
         let chanRx = conversation?.isChannel == true
         let chanTok = chanRx ? "\(ChannelFollows.shared.myReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.pendingReactions[cid]?.hashValue ?? 0):\(ChannelFollows.shared.countOverrides[cid]?.count ?? 0):\(channelReactOn)\(channelCanReact)" : "-"
-        let key = "\(chanTok)|\(CallService.shared.calleeRinging)|\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(groupCardTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)|\(liveRequest ?? "-")|\(conversation?.repliesOff == true)"   // 2026-09-24 feature-audit: edit clock; replies switch 2026-11-06
+        let key = "\(chanTok)|\(CallService.shared.calleeRinging)|\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(groupCardTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)|\(liveRequest ?? "-")|\(conversation?.repliesOff == true)|\(conversation?.bubbleStylesOff == true)"   // 2026-09-24 feature-audit: edit clock; replies switch 2026-11-06
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
@@ -4156,6 +4156,7 @@ struct ThreadView: View {
         add("\(storiesRepo.storiesVersion)"); add("\(storiesRepo.didLoad)"); add("\(hiddenTick)")
         add("\(viewedOnceTick)")
         add("\(conversation?.repliesOff == true)")   // the channel's replies switch moves every post's bar (2026-11-06)
+        add("\(conversation?.bubbleStylesOff == true)")   // the group's Bubble styles switch (2026-11-07)
         add("\(groupCardTick)")   // a group invite card's live answer (`LiveGroupCard`)
         add("\(repo.expiryTick)")
         // An edit waiting for the server draws the sending clock; the chat's timer draws its icon.
@@ -4197,6 +4198,9 @@ struct ThreadView: View {
             channelReactionsOn: channelReactOn, channelCanReact: channelCanReact,
             noForwarding: repo.noForwarding,
             repliesOff: conversation?.repliesOff == true,
+            // Bubble styles (2026-11-07): off in a group whose admins turned them off, and never in
+            // the official Fariin chat. Channels are kept plain by the builder itself.
+            stylesOff: conversation?.bubbleStylesOff == true || OfficialChannel.isOfficial(cid),
             channelMine: { [cid] in ChannelFollows.shared.myReaction(cid, $0) },
             channelConfirmed: { [cid] in ChannelFollows.shared.confirmedReaction(cid, $0) },
             channelCounts: { [cid] in ChannelFollows.shared.displayCounts(cid, $0, post: $1) },

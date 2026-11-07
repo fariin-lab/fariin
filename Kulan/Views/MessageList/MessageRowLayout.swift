@@ -275,6 +275,16 @@ struct BubblePlan {
     var quoteBarIcon = false
     /// The faces are people (round), not channels.
     var quoteBarPeople = false
+    /// A picture style's stretchable picture behind the words (owner 2026-11-07); nil for most bubbles.
+    var picture: PicturePlan? = nil
+}
+
+/// Where a picture style's picture is drawn: BUBBLE coordinates, reaching past the bubble's outline
+/// by the style's art (`PictureStyle.art`) on every side.
+struct PicturePlan: Equatable {
+    var id: String
+    var frame: CGRect
+    var rim: Bool
 }
 
 struct NoticePlan {
@@ -504,8 +514,17 @@ enum MessageRowLayout {
         // A channel post is wider than a chat bubble but leaves a gap on the right (owner 2026-10-29,
         // second look: edge to edge read as a wall). Left-aligned, 44 pt short of the column.
         let maxBubble = b.wide ? max(1, columnW - 44) : min(BubbleMetrics.maxBubbleWidth(in: rowWidth), columnW)
-        let hPad = BubbleMetrics.hPad, vPad = BubbleMetrics.vPad
-        let maxContent = max(1, maxBubble - hPad * 2)
+        // ⛔ A PICTURE STYLE (owner 2026-11-07, `PictureStyles`): text bubbles only. The bubble rect
+        // stays the bubble's own OUTLINE; the picture's art reaches past it by `art` on each side,
+        // so the outline is set in by that much and the words sit inside by `textInsets` (SPEC 6).
+        let pic: PictureStyle? = {
+            guard case .text = b.body, let id = b.picture else { return nil }
+            return PictureStyles.find(id)
+        }()
+        let art = pic?.art ?? .zero
+        let hPad = pic?.textInsets.left ?? BubbleMetrics.hPad, vPad = pic?.textInsets.top ?? BubbleMetrics.vPad
+        let hPadR = pic?.textInsets.right ?? BubbleMetrics.hPad, vPadB = pic?.textInsets.bottom ?? BubbleMetrics.vPad
+        let maxContent = max(1, maxBubble - art.left - art.right - hPad - hPadR)
 
         var y = topSpacing
 
@@ -880,11 +899,24 @@ enum MessageRowLayout {
             innerY += button.height
         }
 
-        let bubbleW = contentW + hPad * 2
-        let bubbleH = innerY + vPad
-        let bubbleX = b.isMe ? (columnX + columnW - bubbleW) : columnX
+        var bubbleW = contentW + hPad + hPadR
+        var bubbleH = innerY + vPadB
+        // A picture cannot shrink below its own corners: the bubble grows to them, the time stays
+        // at the trailing edge, and a lone line of words is centred in the extra height.
+        var picShift = CGPoint.zero
+        if let pic {
+            let minSize = pic.minBubble
+            if bubbleW < minSize.width { picShift.x = ceil(minSize.width) - bubbleW; bubbleW = ceil(minSize.width) }
+            if bubbleH < minSize.height {
+                if quoteRect == nil && linkPlan == nil { picShift.y = floor((ceil(minSize.height) - bubbleH) / 2) }
+                bubbleH = ceil(minSize.height)
+            }
+            metaRect = metaRect.offsetBy(dx: picShift.x, dy: picShift.y)
+            y += ceil(art.top)   // the art above the outline is part of this row, never the one above
+        }
+        let bubbleX = b.isMe ? (columnX + columnW - ceil(art.right) - bubbleW) : columnX + ceil(art.left)
         var bubbleRect = CGRect(x: bubbleX, y: y, width: bubbleW, height: bubbleH)
-        var textRectOut = textRect, metaRectOut = metaRect, bodyAttrOut = bodyAttr
+        var textRectOut = textRect.offsetBy(dx: 0, dy: picShift.y), metaRectOut = metaRect, bodyAttrOut = bodyAttr
 
         // ⛔ A STORY REACTION SITS ON THE CARD'S CORNER — owner 2026-10-13, with a drawing: an emoji
         // sent from the story's react bar is not a message under the card but a mark on it. The
@@ -945,10 +977,20 @@ enum MessageRowLayout {
         // kind, so they are placed in ONE function. A media bubble that grew its own copy would be
         // a second set of numbers to keep in step, and this row already has a history of two paths
         // drifting apart.
+        if let pic { plan.picture = PicturePlan(id: pic.id, frame: .zero, rim: b.pictureRim) }
         y = decorations(b, plan: &plan, bubbleRect: bubbleRect, columnX: columnX, columnW: columnW,
                         originX: originX, topSpacing: topSpacing, senderNameAttr: senderNameAttr,
                         senderNameSize: senderNameSize, forwardedSize: forwardedSize,
                         forwardedIconW: forwardedIconW, y: y)
+        if pic != nil {
+            // Placed once the bubble has its final size (reactions inside it grow it downward).
+            // Bubble coordinates, reaching past the outline by the art and `PictureArt.pad`.
+            let p = PictureArt.pad
+            plan.picture?.frame = CGRect(x: -art.left - p, y: -art.top - p,
+                                         width: plan.bubble.width + art.left + art.right + p * 2,
+                                         height: plan.bubble.height + art.top + art.bottom + p * 2)
+            y = max(y, plan.bubble.maxY + ceil(art.bottom))
+        }
         return BubbleResult(plan: plan, totalHeight: y)
     }
 
@@ -1061,7 +1103,8 @@ enum MessageRowLayout {
                 // pills. Ours started the pills 10pt in under text that starts 15pt in (they stuck out
                 // 5pt to the left), 12pt under the text, and 10pt above the bubble's edge.
                 // A caption's text sits 12 in (`captionBlock`), so its pills and time do too.
-                let padH: CGFloat = captioned ? 12 : BubbleMetrics.hPad
+                // A picture style's words sit further in (clear of its corner art); the pills follow them.
+                let padH: CGFloat = captioned ? 12 : (plan.picture != nil ? plan.text.minX : BubbleMetrics.hPad)
                 // Measured from the old bubble bottom, which already sits `vPad` under the text:
                 // 3 - vPad puts the pills 3pt under the last line.
                 let gapAbove: CGFloat = 3 - BubbleMetrics.vPad
@@ -1370,7 +1413,9 @@ enum MessageRowLayout {
             // the name lines up with the words (or the quote) under it. A fixed-width bubble (photo,
             // poll, voice) does not grow for the name; it truncates to fit instead.
             // A poll's own side inset (owner 2026-10-21 redesign: 16 or 14), so the name sits over the question.
-            let inset: CGFloat = plan.pollPlan?.inset ?? (plan.contactPlan != nil ? 12 : BubbleMetrics.hPad)
+            // A picture style: over its words, clear of the corner art (owner 2026-11-07).
+            let inset: CGFloat = plan.pollPlan?.inset ?? (plan.contactPlan != nil ? 12
+                : (plan.picture != nil ? plan.text.minX : BubbleMetrics.hPad))
             let tick: CGFloat = b.sender?.verified == true ? 4 + BubbleMetrics.verifiedSide : 0
             let nameW = max(0, min(senderNameSize.width, bubbleRect.width - inset * 2 - tick))
             let nameY = bubbleRect.minY + BubbleMetrics.nameTop

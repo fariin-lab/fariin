@@ -54,11 +54,17 @@ targets:
           - "Resources/Stickers/packs/**"
           - "Resources/CustomReactions"
           - "Resources/CustomReactions/**"
+          - "Resources/BubbleArt"
+          - "Resources/BubbleArt/**"
       - path: Kulan/Resources/Stickers/packs
         type: folder
         buildPhase: resources
       # 2026-11-02 animated custom reactions: one folder, looked up by name (`CustomReaction.url`).
       - path: Kulan/Resources/CustomReactions
+        type: folder
+        buildPhase: resources
+      # 2026-11-07 picture bubble styles: one folder of webp pictures, looked up by style id (`PictureStyles.url`).
+      - path: Kulan/Resources/BubbleArt
         type: folder
         buildPhase: resources
       # 2026-10-08 screen share v3: the shared-memory channel with the BroadcastUpload extension.

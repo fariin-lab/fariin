@@ -158,7 +158,7 @@ enum SettingsIndex {
         page("Chat Wallpaper", ap, "wallpaper background photo image presets chat background") { ChatWallpaperPage() }
         page("Wallpaper Color", ap + ["Chat Wallpaper"], "wallpaper color colour solid background") { WallpaperColorPage() }
         page("Chat Color", ap, "chat color colour bubble accent message color") { ChatColorPage() }
-        if BubbleStyles.shown { page("Bubble Styles", ap, "bubble styles cute aesthetic pink lavender peach mint cotton candy heart kawaii glass plus") { BubbleStylesPage() } }
+        if BubbleStyles.shown { page("Bubble Styles", ap, "bubble styles cute aesthetic pink lavender peach mint cotton candy heart kawaii glass plus picture anime gen z cute careers sport everyday") { BubbleStylesPage() } }
         page("App Icon", ap, "app icon home screen icon alternate logo") { AppIconPage() }
         page("Quick Reaction", ap, "quick reaction double tap emoji react heart like") { QuickReactionPage() }
         page("Night Mode", ap, "night mode dark mode light mode theme system appearance") { NightModePage() }

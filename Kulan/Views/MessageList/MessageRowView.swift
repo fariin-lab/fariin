@@ -794,6 +794,10 @@ final class MessageRowView: UIView {
     let bubbleBox = UIView()
     /// A styled bubble's decorations (owner 2026-11-06), reused across rows.
     private var decorViews: [UIImageView] = []
+    /// A picture style's stretchable picture (owner 2026-11-07), under everything in the box, and
+    /// which picture it is waiting for or showing (a reused row must not take a late decode).
+    private let pictureView = UIImageView()
+    private var pictureKey: String?
 
     private let fill = BubbleFillView()
     private let rim = BubbleShapeView()
@@ -914,6 +918,9 @@ final class MessageRowView: UIView {
         // ⚠️ The bubble box does NOT clip. Reaction capsules are its subviews so they ride the reply
         // swipe with it, and they deliberately hang off its bottom corner.
         bubbleBox.clipsToBounds = false
+        pictureView.isUserInteractionEnabled = false
+        pictureView.isHidden = true
+        bubbleBox.addSubview(pictureView)
         bubbleBox.addSubview(fill)
         bodyLabel.numberOfLines = 0
         // ⚠️ A UILabel defaults to `.byTruncatingTail`, and that is not just a truncation setting —
@@ -1275,6 +1282,41 @@ final class MessageRowView: UIView {
         }
     }
 
+    /// A picture style's picture (owner 2026-11-07, `PictureArt`). Until it is decoded the bubble
+    /// shows its plain fill in the style's colour; once it is in, the picture replaces the fill and
+    /// the hairline (both follow the cluster shape, not the picture's own outline).
+    private func showPicture(_ img: UIImage?) {
+        pictureView.image = img
+        pictureView.isHidden = img == nil
+        fill.isHidden = img != nil
+        if img != nil { rim.shape.strokeColor = UIColor.clear.cgColor }
+    }
+
+    private func applyPicture(_ b: BubblePlan) {
+        guard let pp = b.picture, let style = PictureStyles.find(pp.id) else {
+            pictureKey = nil
+            pictureView.image = nil
+            pictureView.isHidden = true
+            fill.isHidden = false
+            return
+        }
+        UIView.performWithoutAnimation { pictureView.frame = pp.frame }
+        bubbleBox.sendSubviewToBack(pictureView)
+        let scale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 3
+        let key = PictureArt.key(style, rim: pp.rim, scale: scale)
+        if let hit = PictureArt.cached(style, rim: pp.rim, scale: scale) {
+            pictureKey = key
+            showPicture(hit)
+            return
+        }
+        if pictureKey != key { showPicture(nil) }
+        pictureKey = key
+        PictureArt.load(style, rim: pp.rim, scale: scale) { [weak self] img in
+            guard let self, self.pictureKey == key else { return }
+            self.showPicture(img)
+        }
+    }
+
     private func applyBubble(_ b: BubblePlan, model m: MessageRowModel, dark: Bool, cid: String) {
         // ⚠️ BOUNDS AND CENTER, NOT FRAME. The reply swipe puts a translation transform on this
         // view, and a view's `frame` is undefined while a transform is applied — writing it there
@@ -1308,6 +1350,7 @@ final class MessageRowView: UIView {
         bubbleBox.bringSubviewToFront(rim)
         bubbleBox.bringSubviewToFront(highlight)
         if case .bubble(let row) = m.content { applyDecor(row.decor, size: b.bubble.size) } else { applyDecor([], size: .zero) }
+        applyPicture(b)
 
         bodyLabel.attributedText = b.bodyAttr
         bodyLabel.frame = b.text
