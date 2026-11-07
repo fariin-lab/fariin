@@ -415,6 +415,8 @@ struct Message: Identifiable, Equatable, Codable {
     /// Replies off for this post as it stands: the post's own switch when it has one, else the
     /// channel's default (owner 2026-11-07; the server's replyCtx decides the same way).
     func repliesOff(channelDefault: Bool) -> Bool { counts.repliesOff ?? channelDefault }
+    /// The post's own switch as the server just set it (true or false, never "unset").
+    mutating func setPostRepliesSwitch(_ off: Bool) { counts.repliesOff = off }
     var replyFaces: [String] { get { counts.replyFaces ?? [] } set { counts.replyFaces = newValue.isEmpty ? nil : newValue } }
     var edited: Bool = false               // text was edited after sending
     /// Deleted for everyone. The document SURVIVES as a tombstone so both sides see that something

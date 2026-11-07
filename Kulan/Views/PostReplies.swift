@@ -469,10 +469,13 @@ struct PostReply: Identifiable, Equatable {
         return true
     }
 
-    func setOff(post: Bool, off newValue: Bool) async {
+    @discardableResult
+    func setOff(post: Bool, off newValue: Bool) async -> Bool {
         var a: [String: Any] = ["cid": cid, "off": newValue]
         if post { a["mid"] = mid }
-        if (try? await fn.httpsCallable("setReplies").call(a)) != nil { await loadFirst() }
+        guard (try? await fn.httpsCallable("setReplies").call(a)) != nil else { return false }
+        await loadFirst()
+        return true
     }
 
     func setAlerts(on: Bool) async {
@@ -498,6 +501,8 @@ struct PostThreadSheet: View {
     var picture: () async -> UIImage?
     var onOpen: (QuotedInItem) -> Void
     var startTab: Tab = .replies
+    /// This post's replies switch changed here: the chat updates the post at once (owner 2026-11-07).
+    var onPostRepliesChanged: (Bool) -> Void = { _ in }
 
     @Environment(\.dismiss) private var dismiss
     @State private var tab: Tab = .replies
@@ -828,7 +833,8 @@ struct PostThreadSheet: View {
         Menu {
             if model.may.settings {
                 Button {
-                    Task { await model.setOff(post: true, off: !model.postOff) }
+                    let want = !model.postOff
+                    Task { if await model.setOff(post: true, off: want) { onPostRepliesChanged(want) } }
                 } label: {
                     if model.postOff {
                         Label("Turn On Replies for This Post", image: "ic_reply_comment")   // owner's icon

@@ -709,6 +709,17 @@ final class ThreadRepository {
         return previous
     }
 
+    /// ⛔ A POST'S REPLIES SWITCH, SHOWN AT ONCE (owner 2026-11-07: "not realtime, always needs a
+    /// refresh"). Only the newest stretch of posts is listened to; an older post loaded by scrolling
+    /// up never hears the server's change. Set here once the server has said yes; inside the live
+    /// window the listener's echo writes the same value over it.
+    func setRepliesOffLocally(_ messageId: String, off: Bool) {
+        guard var m = byId[messageId] else { return }
+        m.setPostRepliesSwitch(off)
+        byId[messageId] = m
+        rebuild()
+    }
+
     /// The server refused my reaction: the row goes back to what it showed before the tap.
     func revertMyReaction(_ messageId: String, uid: String, to previous: String?) {
         setMyReactionLocally(messageId, uid: uid, emoji: previous)

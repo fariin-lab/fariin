@@ -4681,6 +4681,8 @@ struct ThreadView: View {
             let ok = (try? await Functions.functions(region: "me-central1").httpsCallable("setReplies")
                 .call(["cid": cid, "mid": mid, "off": off] as [String: Any])) != nil
             await MainActor.run {
+                // The post changes on screen now, not when (or if) the listener sees it (owner 2026-11-07).
+                if ok { repo.setRepliesOffLocally(mid, off: off) }
                 showJumpToast(ok ? (off ? "Replies turned off for this post" : "Replies turned on for this post")
                                  : "Couldn't change replies")
             }
@@ -4689,7 +4691,7 @@ struct ThreadView: View {
 
     private func postThreadSheet(_ mid: String) -> PostThreadSheet {
         let post = repo.items.first(where: { $0.id == mid })
-        return PostThreadSheet(cid: cid, mid: mid, post: post,
+        var sheet = PostThreadSheet(cid: cid, mid: mid, post: post,
                         repliesOff: post?.repliesOff(channelDefault: conversation?.repliesOff == true) ?? (conversation?.repliesOff == true),
                         sourceTitle: conversation?.title ?? "Channel", sourcePhoto: conversation?.avatarUrl,
                         sourceVerified: conversation?.groupVerified == true,
@@ -4700,6 +4702,9 @@ struct ThreadView: View {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { openQuoteSource(item) }
                         },
                         startTab: quotesStartOnQuotes ? .quotes : .replies)
+        let repo = self.repo
+        sheet.onPostRepliesChanged = { off in repo.setRepliesOffLocally(mid, off: off) }
+        return sheet
     }
 
     /// A reply alert's post (owner 2026-11-06): its Replies open once this channel is on screen.
