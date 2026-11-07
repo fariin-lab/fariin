@@ -1133,10 +1133,12 @@ struct AppearanceSettingsView: View {
             Section {
                 doorRow("Chat Wallpaper") { ChatWallpaperPage() }
                 // ⛔ NO "CHAT COLOR" ROW (owner 2026-11-07, "remove chat color, move to bubble
-                // styles, make merge"): the chat colour palette lives in Bubble Styles > Colours now.
+                // styles, make merge"; his "design 2"): Bubble Styles opens on its Colours chip,
+                // whose colours are sent styles. The private chat colour stays in each chat's
+                // wallpaper sheet; ChatColorStore is unchanged.
                 if BubbleStyles.shown {
                     doorRow("Bubble Styles",
-                            accessory: AnyView(Text(bubbleRowLabel)
+                            accessory: AnyView(Text(BubbleStyles.find(bubbleStyleId)?.name ?? "Default")
                                 .foregroundStyle(.secondary))) { BubbleStylesPage() }
                 }
                 doorRow("App Icon") { AppIconPage() }
@@ -1270,14 +1272,6 @@ struct AppearanceSettingsView: View {
         // `contentMargins`, not `.padding` on the HStack: padding inside a viewAligned scroll view
         // is measured as part of the first and last targets, so the row snaps 12pt off.
         .contentMargins(12, for: .scrollContent)
-    }
-
-    /// The Bubble Styles row's label: the style's name; with no style, the chat colour chosen in
-    /// Settings (not Auto); else "Default".
-    private var bubbleRowLabel: String {
-        if let s = BubbleStyles.find(bubbleStyleId) { return s.name }
-        if let c = colorStore.globalChosenColor { return ChatColors.name(c) }
-        return "Default"
     }
 
     private func doorRow<D: View>(_ title: String,

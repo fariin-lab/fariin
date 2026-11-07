@@ -14,27 +14,17 @@ struct BubbleStylesPage: View {
     @State private var selected: String? = BubbleStyles.current
     @State private var plusNote = false
     @State private var decorOn = BubbleStyles.decorations
-    /// ⛔ CHAT COLOR LIVES HERE NOW (owner 2026-11-07, "remove chat color card, move to bubble
-    /// styles, make merge"). The colour chosen for all chats, nil = Auto (`ChatColorStore`), held
-    /// until Save like the style. It is only my own screen's colour; the styles under "Colours
-    /// others see" travel with my messages.
-    @State private var colorPick: ChatColorSpec? = ChatColorStore.shared.globalChosenColor
-    @State private var showCustom = false
-    /// The chip that is open: the saved style's category; with no style, Colours when a chat colour
-    /// is chosen; else Anime.
-    @State private var category: Category = Category.of(BubbleStyles.find(BubbleStyles.current))
-        ?? (ChatColorStore.shared.globalChosenColor != nil ? Category.colours : Category.pictures(.anime))
+    /// The chip that is open: the saved style's category, else Colours.
+    @State private var category: Category = Category.of(BubbleStyles.find(BubbleStyles.current)) ?? .colours
     private var dark: Bool { scheme == .dark }
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
-    private let colourCols = Array(repeating: GridItem(.flexible(), spacing: 10), count: 6)
-    private var colorStore: ChatColorStore { .shared }
-    private var colorChanged: Bool { colorPick?.stored != colorStore.globalChosenColor?.stored }
 
     enum Category: Hashable {
         case pictures(PictureStyle.Pack)
         case colours
 
-        static let all: [Category] = PictureStyle.Pack.allCases.map { .pictures($0) } + [.colours]
+        /// Colours first (owner 2026-11-07, his "design 2"; Chat Color merged in here).
+        static let all: [Category] = [.colours] + PictureStyle.Pack.allCases.map { .pictures($0) }
         var title: String {
             switch self {
             case .pictures(let p): return p.rawValue
@@ -65,14 +55,6 @@ struct BubbleStylesPage: View {
             .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    if category == .colours {
-                        chatColourGrid
-                        Text("Colours others see")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .textCase(.uppercase)
-                            .padding(.horizontal, 4).padding(.top, 4)
-                    }
                     LazyVGrid(columns: cols, spacing: 10) {
                         tile(nil)
                         ForEach(category.styles) { s in tile(s) }
@@ -106,14 +88,7 @@ struct BubbleStylesPage: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Save") { save() }
                     .fontWeight(.semibold)
-                    .disabled(selected == BubbleStyles.current && decorOn == BubbleStyles.decorations && !colorChanged)
-            }
-        }
-        .sheet(isPresented: $showCustom) {
-            // The custom colour joins the library at once (as on the old page); it is applied on Save.
-            CustomColorView(cid: "__default__") { spec in
-                colorStore.addCustom(spec)
-                pickColour(spec)
+                    .disabled(selected == BubbleStyles.current && decorOn == BubbleStyles.decorations)
             }
         }
         .alert("Fariin Plus", isPresented: $plusNote) {
@@ -136,8 +111,6 @@ struct BubbleStylesPage: View {
 
     private func save() {
         if let s = BubbleStyles.find(selected), !BubbleStyles.mayUse(s) { plusNote = true; return }
-        // Same call the old Chat Color page made: the all-chats colour; a chat with its own keeps it.
-        if colorChanged { colorStore.applyToAllChats(colorPick) }
         BubbleStyles.current = selected
         BubbleStyles.decorations = decorOn
         Haptics.impact(.light)
@@ -197,63 +170,6 @@ struct BubbleStylesPage: View {
         }
         .padding(14)
         .background(Theme.bg(dark), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-    }
-
-    // ── chat colour (was Settings > Appearance > Chat Color) ──
-
-    /// Auto, the palette and the custom library, the same swatches the old Chat Color page had.
-    private var chatColourGrid: some View {
-        let _ = colorStore.version
-        let _ = WallpaperStore.shared.version   // Auto follows the Settings wallpaper
-        return LazyVGrid(columns: colourCols, spacing: 12) {
-            // Auto = no colour chosen: the Settings wallpaper's paired colour, else the app blue.
-            colourCircle(nil) {
-                Circle().fill(colorStore.globalAutoColor.map { AnyShapeStyle($0.fill) }
-                              ?? AnyShapeStyle(Theme.defaultBubble(dark)))
-                    .overlay(Text("Auto").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white))
-            }
-            ForEach(ChatColors.presets) { p in
-                colourCircle(p) { Circle().fill(p.fill) }
-            }
-            ForEach(colorStore.customColors) { p in
-                colourCircle(p) { Circle().fill(p.fill) }
-                    .contextMenu {
-                        Button(role: .destructive) { colorStore.removeCustom(p) } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    }
-            }
-            Button { showCustom = true } label: {
-                Circle().fill(Color(.systemGray5))
-                    .overlay(Image(systemName: "plus").font(.system(size: 17, weight: .medium)).foregroundStyle(.primary))
-                    .frame(width: 44, height: 44)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Custom color")
-        }
-        .padding(14)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    /// Ringed only while no style is picked: a colour and a picture style never show together.
-    private func colourCircle<C: View>(_ spec: ChatColorSpec?, @ViewBuilder content: () -> C) -> some View {
-        let isOn = selected == nil && colorPick?.stored == spec?.stored
-        return Button { pickColour(spec) } label: {
-            content()
-                .frame(width: 44, height: 44)
-                .overlay(Circle().strokeBorder(isOn ? Color.primary : .clear, lineWidth: 2.5).padding(-4))
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(spec.map(ChatColors.name) ?? "Auto")
-        .accessibilityAddTraits(isOn ? .isSelected : [])
-    }
-
-    /// A chat colour puts the sent style back to Default, so the colour is what the bubbles show.
-    private func pickColour(_ spec: ChatColorSpec?) {
-        colorPick = spec
-        selected = nil
-        Haptics.impact(.light)
     }
 
     // ── tiles ──
@@ -316,11 +232,8 @@ struct BubbleStylesPage: View {
             } else {
                 shape.fill(Color(hex: look.fill.first ?? 0x007AFF))
             }
-        } else if let c = colorPick ?? colorStore.globalAutoColor {
-            // No style: the chat colour picked here (or Auto's), so the preview shows it live.
-            shape.fill(c.fill)
         } else {
-            shape.fill(Theme.defaultBubble(dark))
+            shape.fill(Color(hex: dark ? 0x0A84FF : 0x007AFF))
         }
     }
 
