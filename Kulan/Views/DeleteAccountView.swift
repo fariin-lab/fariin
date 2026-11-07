@@ -105,17 +105,20 @@ struct DeleteAccountView: View {
         }
         .navigationTitle("Why are you leaving?")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-        }
+        // One way out (owner rule, same as Android): no corner button in the bar, only the plain
+        // Cancel under the main button. Dragging the sheet down still closes it.
         .safeAreaInset(edge: .bottom) {
-            Button { showConfirm = true } label: {
-                Text("Continue").fontWeight(.semibold)
-                    .frame(maxWidth: .infinity).frame(height: 52)
-                    .foregroundStyle(Color.onFariinAction)
-                    .background(Color.fariinAction, in: Capsule())
+            VStack(spacing: 6) {
+                Button { showConfirm = true } label: {
+                    Text("Continue").fontWeight(.semibold)
+                        .frame(maxWidth: .infinity).frame(height: 52)
+                        .foregroundStyle(Color.onFariinAction)
+                        .background(Color.fariinAction, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                Button("Cancel") { dismiss() }
+                    .frame(maxWidth: .infinity).frame(height: 44)
             }
-            .buttonStyle(.plain)
             .padding(.horizontal, 20)
             .padding(.bottom, 8)
         }
