@@ -1274,8 +1274,11 @@ enum ReplyThreadLine: Equatable {
 
     static let parentX: CGFloat = 36
     static let answerIndent: CGFloat = 46
-    static let color = Color.secondary.opacity(0.35)
-    private static let bend: CGFloat = 12
+    // Solid, not see-through: where two rows' lines meet, a see-through grey showed a darker overlap.
+    static let color = Color(.systemGray3)
+    /// The corner's radius: a wide, round bend into the answer or the toggle, as in the owner's
+    /// reference (2026-11-07: "the line's round doesn't look good").
+    private static let bend: CGFloat = 16
 
     /// In the row's own coordinates (`avatar` is that row's photo).
     static func path(_ kind: ReplyThreadLine, avatar r: CGRect, height: CGFloat) -> Path {
@@ -1289,8 +1292,8 @@ enum ReplyThreadLine: Equatable {
             let x = parentX - answerIndent   // the parent's line, left of this row's own frame
             p.move(to: CGPoint(x: x, y: 0))
             p.addLine(to: CGPoint(x: x, y: height))   // on past this answer to the next
-            p.move(to: CGPoint(x: x, y: max(0, r.midY - bend)))
-            p.addQuadCurve(to: CGPoint(x: x + bend, y: r.midY), control: CGPoint(x: x, y: r.midY))
+            p.move(to: CGPoint(x: x, y: r.midY - bend))
+            p.addArc(tangent1End: CGPoint(x: x, y: r.midY), tangent2End: CGPoint(x: x + bend, y: r.midY), radius: bend)
             p.addLine(to: CGPoint(x: r.minX - 4, y: r.midY))
         }
         return p
@@ -1300,9 +1303,12 @@ enum ReplyThreadLine: Equatable {
     static func toggleElbow(height: CGFloat) -> Path {
         var p = Path()
         let x = parentX - 62, mid = height / 2
-        p.move(to: CGPoint(x: x, y: 0))
-        p.addLine(to: CGPoint(x: x, y: max(0, mid - bend)))
-        p.addQuadCurve(to: CGPoint(x: x + bend, y: mid), control: CGPoint(x: x, y: mid))
+        // The row is short, so the bend may start above it, on the line coming down from the reply:
+        // a full round corner instead of a cramped one.
+        let start = min(0, mid - bend)
+        p.move(to: CGPoint(x: x, y: start))
+        p.addLine(to: CGPoint(x: x, y: mid - bend))
+        p.addArc(tangent1End: CGPoint(x: x, y: mid), tangent2End: CGPoint(x: x + bend, y: mid), radius: bend)
         p.addLine(to: CGPoint(x: 20, y: mid))
         return p
     }
