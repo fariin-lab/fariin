@@ -472,13 +472,10 @@ struct PostThreadSheet: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                header
-                Picker("", selection: $tab) {
-                    Text("Replies").tag(Tab.replies)
-                    Text("Quotes").tag(Tab.quotes)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 16).padding(.bottom, 8)
+                // ⛔ A COMMENTS SHEET'S TOP (owner 2026-11-07, his reference picture): no channel card, no
+                // segmented control, no Done. Two underlined word tabs on the left, a round 40pt X on
+                // the right; the admin's ... sits beside the X.
+                topBar
                 // Both tabs stay built once shown, so switching back does not load them again.
                 ZStack {
                     repliesTab.opacity(tab == .replies ? 1 : 0).allowsHitTesting(tab == .replies)
@@ -489,15 +486,12 @@ struct PostThreadSheet: View {
                     }
                 }
             }
-            .toolbar {
-                if model.may.settings || model.may.del {
-                    ToolbarItem(placement: .topBarLeading) { adminMenu }
-                }
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
-            }
-            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .navigationBar)
             .overlay(alignment: .top) { toastView }
         }
+        // Opens at half height and pulls up to full (owner 2026-11-07).
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
         .onChange(of: tab) { _, t in
             if t == .quotes {
                 quotesShown = true
@@ -550,21 +544,47 @@ struct PostThreadSheet: View {
         }
     }
 
-    /// The channel's photo, the tab's name and the post's opening words in quotes.
-    private var header: some View {
-        HStack(spacing: 10) {
-            AvatarView(name: sourceTitle, photoUrl: sourcePhoto, size: 36)
-                .environment(\.avatarSquircle, true)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(tab == .replies ? "Replies" : "Quotes").font(.headline)
-                if let t = post?.text, !t.isEmpty {
-                    Text("\u{201C}\(t)\u{201D}").font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-                }
-            }
+    /// "Replies  Quotes" with a line under the open one, then the admin's ... and the X.
+    private var topBar: some View {
+        HStack(alignment: .center, spacing: 24) {
+            tabButton("Replies", .replies)
+            tabButton("Quotes", .quotes)
             Spacer(minLength: 0)
+            HStack(spacing: 10) {
+                if model.may.settings || model.may.del {
+                    adminMenu
+                }
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 40, height: 40)
+                        .background(Color(.tertiarySystemFill), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+            }
         }
-        .padding(.horizontal, 16).padding(.vertical, 8)
-        .accessibilityElement(children: .combine)
+        .padding(.leading, 20).padding(.trailing, 16)
+        .padding(.top, 18).padding(.bottom, 6)
+    }
+
+    private func tabButton(_ title: String, _ t: Tab) -> some View {
+        let on = tab == t
+        return Button { tab = t } label: {
+            VStack(spacing: 6) {
+                Text(title)
+                    .font(.system(size: 17, weight: on ? .bold : .regular))
+                    .foregroundStyle(on ? Color.primary : Color.secondary)
+                Capsule()
+                    .fill(on ? Color.primary : Color.clear)
+                    .frame(height: 2.5)
+            }
+            .fixedSize()
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? [.isSelected] : [])
     }
 
     // MARK: Replies
@@ -735,7 +755,12 @@ struct PostThreadSheet: View {
                 }
             }
         } label: {
-            Image(systemName: "ellipsis").accessibilityLabel("Reply settings")
+            Image(systemName: "ellipsis")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 40, height: 40)
+                .background(Color(.tertiarySystemFill), in: Circle())
+                .accessibilityLabel("Reply settings")
         }
     }
 }
@@ -755,36 +780,37 @@ private struct ReplyRow: View {
     let reply: PostReply
     let small: Bool
     let actions: Actions
-    @ScaledMetric(relativeTo: .footnote) private var nameLine: CGFloat = 20
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            AvatarView(name: reply.name, photoUrl: reply.photoUrl.isEmpty ? nil : reply.photoUrl, size: small ? 26 : 34)
-                .padding(.top, nameLine)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 4) {
-                    Text(reply.name).font(.footnote.weight(.semibold)).lineLimit(1)
-                    if reply.verified {
-                        Image(systemName: "checkmark.seal.fill").font(.caption2).foregroundStyle(.blue)
-                    }
-                    Text(Self.age(reply.at)).font(.footnote).foregroundStyle(.secondary)
+        // His reference picture (owner 2026-11-07): name and age over the bubble, the photo beside
+        // the bubble's middle, the heart and Reply under it.
+        let side: CGFloat = small ? 28 : 40
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Text(reply.name).font(.footnote.weight(.semibold)).lineLimit(1)
+                if reply.verified {
+                    Image(systemName: "checkmark.seal.fill").font(.caption2).foregroundStyle(.blue)
                 }
-                .padding(.leading, 4)
+                Text(Self.age(reply.at)).font(.footnote).foregroundStyle(.secondary)
+            }
+            .padding(.leading, side + 10 + 14)
+            HStack(alignment: .center, spacing: 10) {
+                AvatarView(name: reply.name, photoUrl: reply.photoUrl.isEmpty ? nil : reply.photoUrl, size: side)
+                    .accessibilityHidden(true)
                 Text(reply.text)
                     .font(small ? .subheadline : .body)
-                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
                     .background(Color(.secondarySystemBackground),
-                                in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                     .opacity(reply.held || reply.send != .sent ? 0.55 : 1)
                     .onTapGesture(count: 2) { if reply.send == .sent { actions.like() } }
                     .contextMenu { menu }
-                footer
-                    .padding(.leading, 6).padding(.top, 2)
+                Spacer(minLength: 24)
             }
-            Spacer(minLength: 24)
+            footer
+                .padding(.leading, side + 10 + 8).padding(.top, 2)
         }
-        .padding(.horizontal, 16).padding(.vertical, 6)
+        .padding(.horizontal, 16).padding(.vertical, 8)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(reply.name), \(reply.text), \(Self.spokenAge(reply.at))\(reply.likes > 0 ? ", \(reply.likes) likes" : "")")
         .accessibilityActions {
