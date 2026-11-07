@@ -79,12 +79,17 @@ struct PublicGroupSheet: View {
     // and once joined the member's chat in the same place. One ZStack so `load` runs once.
     var body: some View {
         ZStack {
-            if let g = guest, g.joined {
+            // ⛔ ONE SCREEN THROUGH THE FOLLOW (owner 2026-11-07, VE3): a readable group keeps the same
+            // ThreadView, which carries its rows on as the member's (`becameMember`). Swapping in a new
+            // one made every post animate in again and hid the channel card. A locked one had no
+            // rows to keep, so it still opens the member's chat fresh.
+            if let g = guest, g.joined, !g.readable {
                 ThreadView(cid: g.preview.cid, title: g.preview.title, photoUrl: g.preview.photoUrl)
                     .id("member")
             } else if let g = guest {
-                ThreadView(cid: g.preview.cid, title: g.preview.title, photoUrl: g.preview.photoUrl, guest: g)
-                    .id("guest")
+                ThreadView(cid: g.preview.cid, title: g.preview.title, photoUrl: g.preview.photoUrl,
+                           guest: g.joined ? nil : g)
+                    .id(g.readable ? "chat" : "guest")
                     .overlay {
                         if !g.readable {
                             // The reference app's words for a group it cannot show from outside.

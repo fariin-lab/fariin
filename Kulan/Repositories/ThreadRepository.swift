@@ -2124,6 +2124,12 @@ final class ThreadRepository {
         return r
     }
 
+    /// A visitor's repository goes on as the member's after Follow or Join (owner 2026-11-07), so
+    /// the rows on screen stay. Taken only when no other screen already holds a live one.
+    static func adoptAsLive(_ r: ThreadRepository) {
+        if live[r.cid]?.value == nil { live[r.cid] = WeakRef(value: r) }
+    }
+
     /// Screens showing this chat. Two at once only when the same chat is reopened while its old
     /// screen is still leaving; the leaving one must not stop the listeners the new one runs on.
     @ObservationIgnored private var holders = 0

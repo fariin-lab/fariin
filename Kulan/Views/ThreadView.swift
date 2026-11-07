@@ -668,6 +668,8 @@ struct ThreadView: View {
                     if !quiet && !repoOpened { repo.open(); repoOpened = true } else { repo.start() }
                 }
             }
+            // Followed or joined from the visitor's chat: this same screen carries on (see `becameMember`).
+            .onChange(of: guest == nil) { _, member in if member && !preview { becameMember() } }
             .sheet(isPresented: $showSchedulePost) {
                 SchedulePostSheet(text: input) { date in
                     let words = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2648,26 +2650,7 @@ struct ThreadView: View {
             // A preview is a glance, not an open: none of what follows (the call listener, banner
             // suppression, clearing notifications, the unread reset and the read receipt) may happen
             // from it.
-            if !quiet {
-            if isGroup || !cid.contains("_") { startGroupCallListener() }
-            AppRouter.shared.activeChatId = cid          // suppress this chat's own banners
-            // The tapped message is ours now (`openMid`, read in init); spent once.
-            if AppRouter.shared.pendingOpenMid?.cid == cid { AppRouter.shared.pendingOpenMid = nil }
-            keyChanged = !keyChangedUids.isEmpty   // groups included now, one member is enough
-            // A note of THIS chat's that is sitting paused on the bar has nothing to say once you are
-            // in here looking at its bubble — see chatOpened. One that is still playing is left alone.
-            VoiceNotePlayer.shared.chatOpened(cid)
-            NotificationCleaner.clear(cid: cid)          // clear its notifications + fix the badge
-            // The media sheet's first thumbs, before + is tapped. ⛔ AFTER THE OPEN, NOT DURING IT —
-            // 2026-09-27: the first call after launch connects to the Photos service on the main
-            // thread (`PHPhotoLibrary.shared()`), inside the push of the first chat opened.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { RecentsCache.prewarm() }
-            // owner audit 2026-10-06 chat #13: whatever is already presented when the chat appears
-            // (normally nothing) is the baseline; anything above it later is a sheet over the chat.
-            baseCoverDepth = Self.presentationDepth()
-            // Body moved to `openReadPass` (type-check budget of `body`, 2026-10-06).
-            Task { await openReadPass() }
-            }
+            if !quiet { memberOpenPass() }
         }
         .onDisappear {
             // A preview only stops what it started listening to; it never opened anything else.
@@ -2823,6 +2806,44 @@ struct ThreadView: View {
             }
             inputFocused = true
         }
+    }
+
+    /// What a member's open does beyond a visitor's: the call listener, banners, notifications and
+    /// the read pass. Run from `onAppear`, and from `becameMember` when a visitor follows or joins.
+    private func memberOpenPass() {
+        if isGroup || !cid.contains("_") { startGroupCallListener() }
+        AppRouter.shared.activeChatId = cid          // suppress this chat's own banners
+        // The tapped message is ours now (`openMid`, read in init); spent once.
+        if AppRouter.shared.pendingOpenMid?.cid == cid { AppRouter.shared.pendingOpenMid = nil }
+        keyChanged = !keyChangedUids.isEmpty   // groups included now, one member is enough
+        // A note of THIS chat's that is sitting paused on the bar has nothing to say once you are
+        // in here looking at its bubble, see chatOpened. One that is still playing is left alone.
+        VoiceNotePlayer.shared.chatOpened(cid)
+        NotificationCleaner.clear(cid: cid)          // clear its notifications + fix the badge
+        // The media sheet's first thumbs, before + is tapped. ⛔ AFTER THE OPEN, NOT DURING IT:
+        // 2026-09-27: the first call after launch connects to the Photos service on the main
+        // thread (`PHPhotoLibrary.shared()`), inside the push of the first chat opened.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { RecentsCache.prewarm() }
+        // owner audit 2026-10-06 chat #13: whatever is already presented when the chat appears
+        // (normally nothing) is the baseline; anything above it later is a sheet over the chat.
+        baseCoverDepth = Self.presentationDepth()
+        // Body moved to `openReadPass` (type-check budget of `body`, 2026-10-06).
+        Task { await openReadPass() }
+    }
+
+    /// ⛔ FOLLOW KEEPS THE CHAT IN PLACE (owner 2026-11-07, VE3 recording): following swapped in a new
+    /// screen with a new repository, so every post animated in again and the channel card waited
+    /// on paging. The visitor's screen and repository now go on as the member's: the rows stay,
+    /// and only what a visitor may not do starts here.
+    private func becameMember() {
+        repo.previewOnly = false
+        ThreadRepository.adoptAsLive(repo)
+        if let c = openingConversation() { cachedConv = c }
+        startOwnGroupDoc()
+        noteHistoryStart()
+        // start() keeps the rows it holds; it adds the group document listener a visitor had not.
+        if !groupModHidesChat && !repoOpened { repo.open(); repoOpened = true }
+        memberOpenPass()
     }
 
     private func startOwnGroupDoc() {
