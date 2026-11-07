@@ -4486,7 +4486,9 @@ struct ThreadView: View {
                 forwardTarget = live
             })
             // Quote a channel post into a chat of mine, with my words (owner 2026-11-06).
-            if conversation?.isChannel == true {
+            // Not when the channel turned Quotes off, except for its own admins (the server's rule too).
+            if conversation?.isChannel == true,
+               conversation?.quotesOff != true || conversation?.createdBy == me || conversation?.admins.contains(me) == true {
                 out.append(CMAction(title: "Quote", icon: "ic_quote", badge: "chatMenu.quote") {
                     guard let live = repo.items.first(where: { $0.id == m.id }), canForward(live) else {
                         showJumpToast("That message is no longer available")

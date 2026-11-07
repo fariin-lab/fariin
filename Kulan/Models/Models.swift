@@ -1509,6 +1509,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var groupVerified: Bool = false
     /// A channel with replies turned off for every post (`repliesOff`, set by `setReplies`).
     var repliesOff: Bool = false
+    /// A channel whose Quotes switch is off (`quotesOff`, set by `setChannelQuotes`, owner 2026-11-07):
+    /// its posts can't be quoted (the server refuses; the menu hides Quote).
+    var quotesOff: Bool = false
     /// A group whose owner or admins turned Bubble styles off (`bubbleStylesOff`, server-written,
     /// owner 2026-11-07): every message in it draws as the normal bubble. Read only here.
     var bubbleStylesOff: Bool = false
@@ -1676,6 +1679,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.groupVerified = data["verified"] as? Bool ?? false
         // Off until the owner turns replies on (owner 2026-11-07; the server's replyCtx says the same).
         self.repliesOff = data["repliesOff"] as? Bool ?? true
+        self.quotesOff = data["quotesOff"] as? Bool ?? false
         self.bubbleStylesOff = data["bubbleStylesOff"] as? Bool ?? false
         self.groupVerifiedType = (data["verifiedType"] as? String).flatMap(Verification.Kind.init(rawValue:))
         self.groupNoReport = data["noReport"] as? Bool ?? false

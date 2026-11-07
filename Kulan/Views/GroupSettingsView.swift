@@ -120,6 +120,7 @@ struct GroupSettingsView: View {
     // Sign Posts is gone (owner 2026-10-29: "remove this feature"): a post always comes from the
     // channel. What is left here is Reactions.
     @State private var repliesOverride: Bool?
+    @State private var quotesOverride: Bool?
 
     @ViewBuilder private var channelPostsSection: some View {
         if canEdit {
@@ -156,8 +157,21 @@ struct GroupSettingsView: View {
                         }
                     }))
                     .onChange(of: conv?.repliesOff) { _, _ in repliesOverride = nil }
+                // Quotes of this channel's posts (owner 2026-11-07), the same way as Replies. Off: no new
+                // quotes (the server refuses them); quotes already made stay.
+                Toggle("Quotes", badge: "channelSettings.quotes", isOn: Binding(
+                    get: { quotesOverride ?? (conv?.quotesOff != true) },
+                    set: { on in
+                        quotesOverride = on
+                        Task {
+                            let ok = (try? await Functions.functions(region: "me-central1").httpsCallable("setChannelQuotes")
+                                .call(["cid": cid, "off": !on] as [String: Any])) != nil
+                            await MainActor.run { if !ok { quotesOverride = nil } }
+                        }
+                    }))
+                    .onChange(of: conv?.quotesOff) { _, _ in quotesOverride = nil }
             } footer: {
-                Text("When off, followers can read replies already posted but can't add new ones.")
+                Text("Replies off: followers can read replies already posted but can't add new ones. Quotes off: nobody can quote your posts.")
             }
         }
     }

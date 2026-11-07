@@ -1256,7 +1256,7 @@ private struct RepliesSkeleton: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16).padding(.top, 16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)   // against the left edge, like real rows (owner 2026-11-07)
         .opacity(dim ? 0.5 : 1)
         .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: dim)
         .onAppear { dim = true }

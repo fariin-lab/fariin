@@ -73,6 +73,7 @@ enum NewBadgeSpots {
         "help.terms": Spot(title: "Terms & Conditions", place: "Settings > Help & About"),
         "channelSettings.reactions": Spot(title: "Reactions", place: "Channel Settings"),
         "channelSettings.replies": Spot(title: "Replies", place: "Channel Settings"),
+        "channelSettings.quotes": Spot(title: "Quotes", place: "Channel Settings"),
         "channelSettings.followers": Spot(title: "Followers", place: "Channel Settings"),
         "channelSettings.scheduledPosts": Spot(title: "Scheduled Posts", place: "Channel Settings"),
         "groupSettings.disappearing": Spot(title: "Disappearing Messages", place: "Group / Channel Settings"),

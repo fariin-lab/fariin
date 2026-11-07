@@ -969,6 +969,14 @@ struct GroupInfoView: View {
                 .disabled(onSearch == nil)
                 .opacity(onSearch == nil ? 0.45 : 1)
                 .accessibilityLabel("Search")
+            // A channel's link, one tap (owner 2026-11-07: four buttons on the channel page, Share added).
+            if isChannel, let link = inviteLink {
+                Button {
+                    if can(.inviteUsers) { shareGroupText = link } else { showMemberLink = true }
+                } label: { actionIcon("square.and.arrow.up", "Share") }
+                    .tint(.primary)
+                    .accessibilityLabel("Share")
+            }
             Menu { moreMenuItems } label: { actionIcon("ellipsis", "More") }
                 .tint(.primary)
                 .accessibilityLabel("More")
