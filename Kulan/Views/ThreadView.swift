@@ -4181,6 +4181,8 @@ struct ThreadView: View {
         let ctx = MessageRowContext(
             me: me, cid: cid, isGroup: isGroup, isChannel: conversation?.isChannel == true,
             signPosts: false,   // Sign Posts removed (owner 2026-10-29): posts come from the channel
+            channelTitle: conversation?.isChannel == true ? (conversation?.title ?? "") : "",
+            channelVerified: conversation?.groupVerified == true,
             calleeRinging: CallService.shared.calleeRinging,
             channelReactionsOn: channelReactOn, channelCanReact: channelCanReact,
             noForwarding: repo.noForwarding,

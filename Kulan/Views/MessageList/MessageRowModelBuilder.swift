@@ -20,6 +20,9 @@ struct MessageRowContext {
     var isChannel: Bool = false
     /// The channel signs its posts with the admin's name (Sign Posts).
     var signPosts: Bool = false
+    /// The channel's name and tick, written at the top of a post that quotes another (owner 2026-11-07).
+    var channelTitle: String = ""
+    var channelVerified: Bool = false
     /// My 1:1 call: the other phone has said it is ringing (CallService.calleeRinging).
     var calleeRinging: Bool = false
     /// A channel's reactions (2026-10-29): shown at all (not "off"), may I add one (a follower),
@@ -353,6 +356,14 @@ enum MessageRowModelBuilder {
                 verified: VerificationIndex.of(msg.authorId)?.showsBadge == true,
                 role: ctx.roleFor(msg.authorId),
                 roleColor: ctx.roleColorFor(msg.authorId))
+        } else if ctx.isChannel, msg.quoteId != nil, !msg.deleted, !ctx.channelTitle.isEmpty {
+            // ⛔ A QUOTE POST SAYS WHOSE IT IS (owner 2026-11-07, "show my channel name in quote
+            // posts"): the channel's name at the top of the bubble, over its words and the quoted
+            // card, so the card's own channel name is not read as the poster. Quote posts only.
+            sender = SenderChrome(
+                uid: ctx.cid, name: ctx.channelTitle, colorSeed: ctx.cid,
+                showsName: true, showsAvatar: false, startsRun: true,
+                avatarUrl: nil, verified: ctx.channelVerified)
         }
 
         var storyReply: StoryReplyChrome?
