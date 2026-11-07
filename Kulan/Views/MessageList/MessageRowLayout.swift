@@ -1013,9 +1013,11 @@ enum MessageRowLayout {
             let side = pic.sideRoom(top: (nameInBubble(b) ? BubbleMetrics.nameTop : vPad) + shiftY,
                                     bottom: max(bubbleH, minH) - innerY - shiftY, height: max(bubbleH, minH))
             let sideL = min(side.left, hPad), sideR = min(side.right, hPadR)
+            // ⛔ NO MIRRORED ROOM (owner 2026-11-07, his build: short words 40-50pt in from the left on
+            // bunny, sakura, skull). Each side keeps only its own room; a bubble the corners make
+            // wider than the words centres them in the spare width.
             let tight = contentW + sideL + sideR
-            let room = max(tight, maxBubble - art.left - art.right)
-            bubbleW = max(tight, min(room, contentW + max(sideL, sideR) * 2), ceil(pic.minBubble.width))
+            bubbleW = max(tight, ceil(pic.minBubble.width))
             bubbleW = ceil(bubbleW)
             // Whole points, rounded away from the art: the room on each side is a whole number.
             let x = min(max(((bubbleW - contentW) / 2).rounded(), sideL), floor(bubbleW - sideR - contentW))
@@ -1376,11 +1378,11 @@ enum MessageRowLayout {
                 // Where the pills start and where the time ends, in bubble coordinates.
                 var pillX = padH
                 var metaRight: CGFloat?
-                if let cap = picCap, let room = picRoomAt(grown.height) {
+                if picCap != nil, let room = picRoomAt(grown.height) {
                     let blockW = max(plan.text.width, plan.quote?.width ?? 0, widestRow,
                                      lastRowW + (metaJoins ? metaW : 0), metaBelow ? plan.meta.width : 0)
-                    let tight = blockW + room.left + room.right
-                    let want = ceil(max(grown.width, tight, min(max(cap, tight), blockW + max(room.left, room.right) * 2)))
+                    // Each side its own room, no mirrored band (see `layout`).
+                    let want = ceil(max(grown.width, blockW + room.left + room.right))
                     if b.isMe { grown.origin.x -= want - grown.width }
                     grown.size.width = want
                     let x = min(max(((want - blockW) / 2).rounded(), room.left), floor(want - room.right - blockW))

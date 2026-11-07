@@ -73,15 +73,39 @@ struct PictureStyle: Equatable {
 
     /// The words stay 10pt under the top edge and over the bottom one, the tested mocks' number.
     static let edgePad: CGFloat = 10
+    /// Art wholly in a top (or bottom) corner that ends this near the edge (hands resting on it)
+    /// moves the words down (or up) a few points instead of taking room beside them.
+    static let liftMax: CGFloat = 16
     /// And never nearer art inside the outline than this.
     static let artGap: CGFloat = 4
 
     /// A side with no art beside the words: 40 px and at least 11pt (the round corners).
     private var sideBase: CGFloat { max(40 * scale, 11) }
 
-    /// A side with `a` beside the words: past `ins` + 6 px, and 4pt past the art itself.
+    /// ⛔ A side with `a` beside the words: 4pt past the art itself, nothing more (owner 2026-11-07:
+    /// "words at normal bubble margins, corner art takes no room unless it meets the words"). The
+    /// json's `ins` is a whole-height number from before the art was measured, so it is not used.
     private func artClear(_ a: Art) -> CGFloat {
-        max((ins[a.right ? 1 : 3] + 6) * scale, a.reach * scale + Self.artGap)
+        a.reach * scale + Self.artGap
+    }
+
+    /// How far into the outline a piece of art wholly in the top cap reaches from the top edge, or
+    /// one wholly in the bottom cap from the bottom edge, in points; nil for art that stretches.
+    private func edgeReach(_ a: Art) -> (top: Bool, depth: CGFloat)? {
+        let s = scale
+        if a.bottom <= slice[0] { return (true, (a.bottom - bubble[0]) * s) }
+        if a.top >= size.height - slice[2] { return (false, (bubble[2] - a.top) * s) }
+        return nil
+    }
+
+    /// The words' distance from the top and bottom edges: 10pt, or 4pt past shallow art on that edge.
+    private var edgePads: (top: CGFloat, bottom: CGFloat) {
+        var t = Self.edgePad, b = Self.edgePad
+        for a in artIn {
+            guard let e = edgeReach(a), e.depth + Self.artGap <= Self.liftMax else { continue }
+            if e.top { t = max(t, ceil(e.depth + Self.artGap)) } else { b = max(b, ceil(e.depth + Self.artGap)) }
+        }
+        return (t, b)
     }
 
     /// Where picture row `row` lands, from the picture's top, in a picture drawn `drawnH` points
@@ -98,8 +122,8 @@ struct PictureStyle: Equatable {
     /// ticks in security, whose guard sits ABOVE the bubble). The room, from the outline's sides, for
     /// content whose top sits `top` points under the outline's top edge and whose bottom sits
     /// `bottom` points over its bottom edge, in an outline `height` points tall. A piece of art
-    /// costs room only when its rows come within 4pt of the content's rows. The Android app's rule
-    /// (BubbleArt.sideClearance), rounded up to whole points.
+    /// costs room only when its rows come within 4pt of the content's rows (the Android app's rule,
+    /// BubbleArt.sideClearance), rounded up to whole points.
     func sideRoom(top: CGFloat, bottom: CGFloat, height: CGFloat) -> (left: CGFloat, right: CGFloat) {
         let a0 = art, drawnH = height + a0.top + a0.bottom
         let wordsTop = a0.top + top, wordsBottom = a0.top + height - bottom
@@ -112,21 +136,21 @@ struct PictureStyle: Equatable {
         return (ceil(l), ceil(r))
     }
 
-    /// Where the words sit inside the bubble's outline, in points: 10pt above and below, and at the
-    /// sides the most room a side can ever need (every art that can meet the words at some height:
-    /// not paws resting just under the top edge, wholly above the words whatever the bubble's
-    /// size). The layout measures with these and gives back what the real rows do not need.
+    /// Where the words sit inside the bubble's outline, in points: `edgePads` above and below, and
+    /// at the sides the most room a side can ever need (every art that can meet the words at some
+    /// height; not art in a corner that ends before the words begin). The layout measures with
+    /// these and gives back what the real rows do not need.
     var textInsets: UIEdgeInsets {
-        let s = scale, t = slice[0], b = slice[2], bt = bubble[0], below = (size.height - bubble[2]) * s
+        let pads = edgePads
         func canMeet(_ a: Art) -> Bool {
-            !(a.bottom <= t && a.bottom * s <= bt * s + Self.edgePad - Self.artGap)
-                && !(a.top >= size.height - b && (size.height - a.top) * s <= below + Self.edgePad - Self.artGap)
+            guard let e = edgeReach(a) else { return true }
+            return e.depth + Self.artGap > (e.top ? pads.top : pads.bottom)
         }
         var l = sideBase, r = sideBase
         for a in artIn where canMeet(a) {
             if a.right { r = max(r, artClear(a)) } else { l = max(l, artClear(a)) }
         }
-        return UIEdgeInsets(top: Self.edgePad, left: ceil(l), bottom: Self.edgePad, right: ceil(r))
+        return UIEdgeInsets(top: pads.top, left: ceil(l), bottom: pads.bottom, right: ceil(r))
     }
 
     /// The smallest bubble (outline) the nine parts can make: both caps of each axis, less the art
