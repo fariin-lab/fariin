@@ -1329,6 +1329,12 @@ struct GroupInfoView: View {
                     do {
                         _ = try await Functions.functions(region: "me-central1")
                             .httpsCallable("setGroupBubbleStyles").call(["cid": cid, "off": !value])
+                        // Safety net: if the group's own value never arrives, stop holding the
+                        // asked-for state after a few seconds so a later change by another admin shows.
+                        try? await Task.sleep(nanoseconds: 6_000_000_000)
+                        await MainActor.run {
+                            if bubbleStylesOnPending == value { bubbleStylesOnPending = nil }
+                        }
                     } catch {
                         await MainActor.run {
                             bubbleStylesOnPending = nil   // back to what the group says
@@ -1343,6 +1349,10 @@ struct GroupInfoView: View {
             Toggle("Bubble Styles", isOn: on)
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
+        // The group now says what was asked: follow the group again from here on.
+        .onChange(of: conv?.bubbleStylesOff) { _, off in
+            if let want = bubbleStylesOnPending, let off, want == !off { bubbleStylesOnPending = nil }
+        }
     }
 
     /// The mockup's three rows. Each keeps its old gate: a member's tap on what only an admin may

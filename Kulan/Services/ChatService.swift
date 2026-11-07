@@ -1293,13 +1293,17 @@ enum ChatService {
     static func sendText(cid: String, text: String, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, mentions: [String] = [], preview: OutgoingLinkPreview? = nil, forwarded: Bool = false, countsAsUnread: Bool = true,
                          tapTs: Double? = nil, turn: SendTurn? = nil,
                          storyMention: StoryMentionRef? = nil,
-                         quote: String? = nil) async throws {
+                         quote: String? = nil, style taken: BubbleStyles.Snapshot? = nil) async throws {
         // owner audit 2026-10-06 chat #24: stamped and queued BEFORE the first await. `clientTs` used
         // to be read after encryption and the server reads, so of two quick sends whichever cleared
         // those awaits first took the earlier stamp, and nothing kept their writes in tap order.
         let clientTs = tapTs ?? Date().timeIntervalSince1970 * 1000
         let turn = turn ?? SendTurn.take(cid)
         defer { turn.finish() }   // every exit, thrown or returned, lets the next send go
+        // My bubble style, taken now (after the stamp above) unless the composer already took it
+        // when the message was written.
+        let style: BubbleStyles.Snapshot
+        if let taken { style = taken } else { style = await BubbleStyles.snapshotForSending() }
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // A quoted channel post may go with no words of mine (owner 2026-11-06).
         let quote = quote.flatMap { QuoteStore.isQid($0) ? $0 : nil }
@@ -1312,7 +1316,7 @@ enum ChatService {
         if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
         if let members {
             try await sendGroupText(cid: cid, members: members, text: t, replyTo: replyTo, clientId: clientId, mentions: mentions, preview: preview, forwarded: forwarded,
-                                    clientTs: clientTs, turn: turn, quote: quote)
+                                    clientTs: clientTs, turn: turn, quote: quote, style: style)
             return
         }
 
@@ -1447,9 +1451,9 @@ enum ChatService {
         if let storyMention { msg["storyMention"] = ["id": storyMention.id, "thumb": storyMention.thumbUrl] }
         // A quoted channel post: only the server snapshot's id (owner 2026-11-06, `QuoteStore`).
         if let quote { msg["quote"] = ["qid": quote] }
-        if let bs = await BubbleStyles.forSending() {   // my bubble style (owner 2026-11-06)
+        if let bs = style.id {   // my bubble style (owner 2026-11-06), as taken when written
             msg["bs"] = bs
-            if BubbleStyles.decorations { msg["bsd"] = true }
+            if style.decor { msg["bsd"] = true }
         }
         // 2026-09-24 feature-audit: a knock carries no link card. The rules take a request's one
         // message as plain short text and refuse `linkPreview` on it, so the card turned every first
@@ -1545,7 +1549,8 @@ enum ChatService {
     private static func sendGroupText(cid: String, members: [String], text t: String,
                                       replyTo: ReplyRef?, clientId: String?, mentions: [String] = [],
                                       preview: OutgoingLinkPreview? = nil, forwarded: Bool = false,
-                                      clientTs: Double, turn: SendTurn, quote: String? = nil) async throws {
+                                      clientTs: Double, turn: SendTurn, quote: String? = nil,
+                                      style: BubbleStyles.Snapshot) async throws {
         let cipher = try await Crypto.shared.sealForGroup(t, members: members, cid: cid)
         let summary = t.isEmpty && quote != nil ? try await Crypto.shared.sealForGroup("Quoted post", members: members, cid: cid) : cipher
         var replyEnc: [String: Any]?
@@ -1571,9 +1576,9 @@ enum ChatService {
         if !mentions.isEmpty { msg["mentions"] = mentions }
         if forwarded { msg["forwarded"] = true }
         if let quote { msg["quote"] = ["qid": quote] }   // a quoted channel post (owner 2026-11-06)
-        if let bs = await BubbleStyles.forSending() {   // my bubble style (owner 2026-11-06)
+        if let bs = style.id {   // my bubble style (owner 2026-11-06), as taken when written
             msg["bs"] = bs
-            if BubbleStyles.decorations { msg["bsd"] = true }
+            if style.decor { msg["bsd"] = true }
         }
         // 2026-09-24 decision D-composer-3: a poll says in the clear only whether it takes one answer
         // or several, so the rules can hold a single-answer vote to one option. The question and the

@@ -291,6 +291,9 @@ struct PicturePlan: Equatable {
     var id: String
     var frame: CGRect
     var rim: Bool
+    /// How far the bubble's bottom edge sits under its last line of content: the style's own bottom
+    /// inset plus whatever the bubble grew to reach its corners. Reactions inside measure from it.
+    var textBottomInset: CGFloat = BubbleMetrics.vPad
 }
 
 struct NoticePlan {
@@ -1062,7 +1065,10 @@ enum MessageRowLayout {
         // kind, so they are placed in ONE function. A media bubble that grew its own copy would be
         // a second set of numbers to keep in step, and this row already has a history of two paths
         // drifting apart.
-        if let pic { plan.picture = PicturePlan(id: pic.id, frame: .zero, rim: b.pictureRim) }
+        if let pic {
+            plan.picture = PicturePlan(id: pic.id, frame: .zero, rim: b.pictureRim,
+                                       textBottomInset: max(0, bubbleH - innerY - picShift.y))
+        }
         y = decorations(b, plan: &plan, bubbleRect: bubbleRect, columnX: columnX, columnW: columnW,
                         originX: originX, topSpacing: topSpacing, senderNameAttr: senderNameAttr,
                         senderNameSize: senderNameSize, forwardedSize: forwardedSize,
@@ -1191,8 +1197,11 @@ enum MessageRowLayout {
                 // A picture style's words sit further in (clear of its corner art); the pills follow them.
                 let padH: CGFloat = captioned ? 12 : (plan.picture != nil ? plan.text.minX : BubbleMetrics.hPad)
                 // Measured from the old bubble bottom, which already sits `vPad` under the text:
-                // 3 - vPad puts the pills 3pt under the last line.
-                let gapAbove: CGFloat = 3 - BubbleMetrics.vPad
+                // 3 - vPad puts the pills 3pt under the last line. A picture style's bubble may sit
+                // further under its words (its inset plus the height it grew to its corners), so
+                // that real gap is what comes back off.
+                let bottomInset = plan.picture?.textBottomInset ?? BubbleMetrics.vPad
+                let gapAbove: CGFloat = 3 - bottomInset
                 // ⛔ AND A GAP BELOW IT, WHICH THERE WAS NOT — owner, 2026-09-23: "react badge is
                 // touching bubble bottom angle".
                 //
@@ -1291,6 +1300,9 @@ enum MessageRowLayout {
                     plan.albumPlan?.caption?.size.height -= freed
                 }
                 grown.size.height += stripH + metaBelowExtra
+                // A picture bubble that grew to its corners may now pull the pills up into that
+                // extra height; it still never ends shorter than it was.
+                if plan.picture != nil { grown.size.height = max(grown.size.height, plan.bubble.height) }
 
                 // Widen only if it must, and never past the column the bubble was measured against.
                 let need = padH + max(widestRow, lastRowW + (metaJoins ? metaW : 0),

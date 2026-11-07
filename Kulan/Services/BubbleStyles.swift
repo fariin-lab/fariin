@@ -124,6 +124,18 @@ enum BubbleStyles {
         return s.id
     }
 
+    /// My style as it was when a message was written: taken ONCE, so the bubble on my screen and
+    /// the message that lands (or a retry later) wear the same style even if I change it meanwhile.
+    struct Snapshot: Codable, Equatable {
+        var id: String?
+        var decor: Bool
+    }
+
+    @MainActor static func snapshotForSending() -> Snapshot {
+        let id = forSending()
+        return Snapshot(id: id, decor: id != nil && decorations)
+    }
+
     /// The bubble fill for a styled message.
     static func fill(_ look: BubbleStyle.Look) -> BubbleFill {
         if look.glass { return .material }

@@ -7411,8 +7411,10 @@ struct ThreadView: View {
         }
         var outgoing = Message(localText: text, authorId: me, clientId: clientId, replyTo: reply,
                                sendState: .sending, linkPreview: pendingPreview)
-        outgoing.bubbleStyle = BubbleStyles.forSending()   // my style from the first frame (2026-11-06)
-        outgoing.bubbleDecor = outgoing.bubbleStyle != nil && BubbleStyles.decorations
+        // My style from the first frame (2026-11-06), taken once: the send carries this same one.
+        let style = BubbleStyles.snapshotForSending()
+        outgoing.bubbleStyle = style.id
+        outgoing.bubbleDecor = style.decor
         repo.addPending(outgoing)
         // 2026-10-23: the card is attached after the text lands; my bubble keeps it meanwhile.
         if let pendingPreview { repo.showLocalCard(clientId: clientId, card: pendingPreview) }
@@ -7432,7 +7434,7 @@ struct ThreadView: View {
         }
         Task {
             await deliver(text: text, reply: reply, clientId: clientId, mentions: mentions, draft: draft,
-                          lateCard: lateCard, tapTs: tapTs, turn: turn)
+                          lateCard: lateCard, tapTs: tapTs, turn: turn, style: style)
         }
     }
 
@@ -7565,8 +7567,9 @@ struct ThreadView: View {
         let turn = ChatService.SendTurn.take(cid)
         var bubble = Message(localText: text, authorId: me, clientId: clientId, replyTo: nil, sendState: .sending)
         bubble.quoteId = q.qid
-        bubble.bubbleStyle = BubbleStyles.forSending()
-        bubble.bubbleDecor = bubble.bubbleStyle != nil && BubbleStyles.decorations
+        let style = BubbleStyles.snapshotForSending()   // taken once, the send carries the same
+        bubble.bubbleStyle = style.id
+        bubble.bubbleDecor = style.decor
         repo.addPending(bubble)
         broadcastTyping(false)
         typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
@@ -7574,7 +7577,8 @@ struct ThreadView: View {
         Task {
             do {
                 try await ChatService.sendText(cid: cid, text: text, clientId: clientId, group: members,
-                                               mentions: mentions, tapTs: tapTs, turn: turn, quote: q.qid)
+                                               mentions: mentions, tapTs: tapTs, turn: turn, quote: q.qid,
+                                               style: style)
             } catch {
                 await MainActor.run {
                     repo.removePending(clientId: clientId)
@@ -7858,10 +7862,16 @@ struct ThreadView: View {
         } else if !m.text.isEmpty {
             // 2026-09-24 fix-all #220: the retried bubble keeps its link card; `deliver` takes the
             // mentions and the card to send from the queued entry.
-            repo.addPending(Message(localText: m.text, authorId: me, clientId: clientId,
-                                    replyTo: m.replyTo, sendState: .sending, linkPreview: m.linkPreview))
+            // The bubble keeps the style it was written with, and the resend carries that same one.
+            let kept = SendQueue.entry(clientId: clientId)?.style
+                ?? BubbleStyles.Snapshot(id: m.bubbleStyle, decor: m.bubbleDecor)
+            var again = Message(localText: m.text, authorId: me, clientId: clientId,
+                                replyTo: m.replyTo, sendState: .sending, linkPreview: m.linkPreview)
+            again.bubbleStyle = kept.id
+            again.bubbleDecor = kept.decor
+            repo.addPending(again)
             if let lp = m.linkPreview { repo.showLocalCard(clientId: clientId, card: lp) }   // 2026-10-23
-            Task { await deliver(text: m.text, reply: m.replyTo, clientId: clientId) }
+            Task { await deliver(text: m.text, reply: m.replyTo, clientId: clientId, style: kept) }
         }
         // (empty text + no payload: nothing to resend — drop the pending rather than recreate a ghost)
     }
@@ -8351,7 +8361,8 @@ struct ThreadView: View {
     private func deliver(text: String, reply: ReplyRef?, clientId: String, mentions: [String] = [],
                          draft: LinkPreviewService.LinkDraft? = nil,
                          lateCard: Task<LinkPreviewService.LinkDraft?, Never>? = nil,
-                         tapTs: Double? = nil, turn: ChatService.SendTurn? = nil) async {
+                         tapTs: Double? = nil, turn: ChatService.SendTurn? = nil,
+                         style: BubbleStyles.Snapshot? = nil) async {
         // owner audit 2026-10-06 chat #24: a place in the send line taken at the tap is given back on
         // EVERY way out of here (the early return below included), or the next send would wait on it.
         defer { turn?.finish() }
@@ -8362,6 +8373,9 @@ struct ThreadView: View {
         // the reopen drain) takes them from the entry this same send wrote the first time.
         let prior = SendQueue.entry(clientId: clientId)
         let mentions = mentions.isEmpty ? (prior?.mentions ?? []) : mentions
+        // The bubble style taken when the message was written; a retry keeps the queued one.
+        let now = BubbleStyles.snapshotForSending()
+        let style = style ?? prior?.style ?? now
         var storedPreview: (url: String, title: String, desc: String)?
         if let d = draft {
             storedPreview = (url: d.url.absoluteString, title: d.title, desc: d.desc)
@@ -8371,7 +8385,7 @@ struct ThreadView: View {
         var priorPreview: ChatService.OutgoingLinkPreview?
         if draft == nil, let p = prior { priorPreview = await SendQueue.outgoingPreview(for: p) }
         SendQueue.add(clientId: clientId, cid: cid, text: text, mentions: mentions, reply: reply,
-                      ts: Date().timeIntervalSince1970, preview: storedPreview)
+                      ts: Date().timeIntervalSince1970, preview: storedPreview, style: style)
         // Already on its way (an offline send suspends, it does not fail): a Retry tap or a reopen
         // drain must not start a second copy (2026-09-24 audit, see `SendQueue.beginSending`). The
         // bubble stays; the original's echo or failure settles it.
@@ -8398,7 +8412,7 @@ struct ThreadView: View {
             // seal, image upload) stands between Send and the write. The card follows below.
             try await ChatService.sendText(cid: cid, text: text, replyTo: reply, clientId: clientId,
                                            group: isGroup ? groupMembers : nil, mentions: mentions,
-                                           preview: nil, tapTs: tapTs, turn: turn)
+                                           preview: nil, tapTs: tapTs, turn: turn, style: style)
             SendQueue.remove(clientId: clientId)   // landed → no re-drive needed
             let members = isGroup ? groupMembers : nil
             let convId = cid
@@ -8459,9 +8473,14 @@ struct ThreadView: View {
                         Message.LinkPreviewData(url: $0, title: entry.previewTitle ?? "", desc: entry.previewDesc ?? "",
                                                 imageUrl: SendQueue.previewImageKey(entry.clientId), imageEnc: nil)
                     }
-                    repo.addPending(Message(localText: entry.text, authorId: me, clientId: entry.clientId,
-                                            replyTo: reply, sendState: entry.refused == true ? .failed : .sending,
-                                            linkPreview: card))
+                    var redrawn = Message(localText: entry.text, authorId: me, clientId: entry.clientId,
+                                          replyTo: reply, sendState: entry.refused == true ? .failed : .sending,
+                                          linkPreview: card)
+                    if let style = entry.style {   // the style it was written with, as it will land
+                        redrawn.bubbleStyle = style.id
+                        redrawn.bubbleDecor = style.decor
+                    }
+                    repo.addPending(redrawn)
                     if let card { repo.showLocalCard(clientId: entry.clientId, card: card) }   // 2026-10-23
                 }
             }
