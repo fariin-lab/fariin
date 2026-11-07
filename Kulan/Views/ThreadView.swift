@@ -6255,23 +6255,10 @@ struct ThreadView: View {
                               deleteEnabled: true,
                               cancel: { exitSelection() })
         }
-        // A channel I follow: its bell, top right (owner 2026-10-29), instead of a Mute bar below.
-        if let conv = conversation, conv.isChannel, !conv.users.contains(me), ChannelFollows.shared.follows(conv.id) {
-            let muted = ChannelFollows.shared.entry(conv.id)?.isMuted ?? false   // a timed mute that ran out is off
-            let id = conv.id
-            return .custom([ChatNavigationItem.BarButton(
-                id: "chbell",
-                image: muted ? "ic_bell_off_outline" : "ic_bell_outline",
-                accessibilityLabel: muted ? "Unmute channel" : "Mute channel",
-                action: {
-                    Haptics.impact(.light)
-                    ChannelService.setMuted(cid: id, !muted)
-                    ToastNotice.show(muted ? "Notifications on for this channel" : "Channel muted")
-                })])
-        }
-        // My own channel (owner or admin): Search, top right (owner 2026-11-07: "the right side looks
-        // empty"); followers have the bell there instead.
-        if let conv = conversation, conv.isChannel, conv.users.contains(me) {
+        // A channel, mine or one I follow: Search, top right (owner 2026-11-07). A follower's bell
+        // went: the Mute bar at the bottom already does it, so the bell was the same button twice.
+        if let conv = conversation, conv.isChannel,
+           conv.users.contains(me) || ChannelFollows.shared.follows(conv.id) {
             return .custom([ChatNavigationItem.BarButton(
                 id: "chsearch",
                 image: "ic_search_outline",
