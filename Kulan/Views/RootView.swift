@@ -35,6 +35,9 @@ struct RootView: View {
     @State private var showRevokedNotice = false
     /// Unsent messages and drafts the remote sign-out wiped, read before the wipe (nil: none).
     @State private var lostOnSignOut: String?
+    /// owner 2026-11-07: "Deletion scheduled for <date>", shown once on the log in screen right
+    /// after Delete Account (`AccountDeletionNotice`), instead of a page of its own before it.
+    @State private var deletionBanner: String?
     // The session ended because the account was disabled (a suspension from the admin panel), not
     // because another device signed this one out. 2026-10-13.
     @State private var endedBySuspension = false
@@ -273,6 +276,27 @@ struct RootView: View {
             #endif
             // 2026-09-24 decision D4: a profile link opened before sign-in finished.
             if new == .main { openPendingUserLink() }
+            if new == .welcome, let text = AccountDeletionNotice.pending {
+                AccountDeletionNotice.pending = nil
+                withAnimation(.snappy) { deletionBanner = text }
+                Task {
+                    try? await Task.sleep(for: .seconds(5))
+                    withAnimation(.easeOut) { if deletionBanner == text { deletionBanner = nil } }
+                }
+            }
+        }
+        .overlay(alignment: .top) {
+            if let deletionBanner {
+                Label(deletionBanner, systemImage: "calendar.badge.clock")
+                    .font(.subheadline.weight(.medium))
+                    .padding(.horizontal, 16).padding(.vertical, 11)
+                    .background(.regularMaterial, in: Capsule())
+                    .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
+                    .padding(.top, 8)
+                    .padding(.horizontal, 16)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .onTapGesture { withAnimation(.easeOut) { self.deletionBanner = nil } }
+            }
         }
         // …and one opened while already inside the app.
         .onChange(of: AppRouter.shared.pendingUserHandle) { _, handle in
