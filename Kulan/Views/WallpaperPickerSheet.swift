@@ -267,6 +267,8 @@ struct WallpaperPickerSheet: View {
         }
         .sheet(isPresented: $showBubbleStyles) {
             NavigationStack { BubbleStylesPage() }
+                .presentationDetents([.fraction(BubbleStylesPage.sheetFraction)])
+                .presentationDragIndicator(.visible)
         }
         // Selecting a wallpaper OR a colour LIVE-PREVIEWS it on the chat behind, but nothing is SAVED
         // until Apply. Closing without Apply reverts both to the originals.

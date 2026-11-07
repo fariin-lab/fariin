@@ -6,8 +6,8 @@ import UIKit
 ///
 /// ⛔ LAYOUT (owner 2026-11-07, second look): the live preview is pinned at the top and stays in
 /// view while the grid scrolls; one short line under it; then a row of category chips (Colours
-/// last) and only the chosen category's grid, three to a row, Default first in every grid.
-/// Cancel and Save at the top. Nothing changes until Save.
+/// first since the Chat Color merge, same day) and only the chosen category's grid, three to a
+/// row, Default first in every grid. A round X and Save at the top. Nothing changes until Save.
 struct BubbleStylesPage: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
@@ -100,11 +100,21 @@ struct BubbleStylesPage: View {
 
     /// The message menu's "Bubble Style" (owner 2026-11-07): this page as a sheet over the chat.
     /// Presented from UIKit after the menu has gone, so the chat's long SwiftUI body is untouched.
+    /// The sheet's height, the Replies sheet's (`PostReplies`). Settings pushes the page full height.
+    static let sheetFraction: CGFloat = 0.70
+
     @MainActor static func presentSheet() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             guard let top = WebLink.topViewController() else { return }
             let host = UIHostingController(rootView: NavigationStack { BubbleStylesPage() })
             host.modalPresentationStyle = .pageSheet
+            // 70% with the grabber, as the Replies sheet, so the chat stays in view above it
+            // (owner 2026-11-07). The fixed preview and chips stay on top; the grid scrolls.
+            if let sheet = host.sheetPresentationController {
+                let f = sheetFraction
+                sheet.detents = [.custom { ctx in ctx.maximumDetentValue * f }]
+                sheet.prefersGrabberVisible = true
+            }
             top.present(host, animated: true)
         }
     }
