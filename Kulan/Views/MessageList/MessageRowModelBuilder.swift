@@ -412,7 +412,9 @@ enum MessageRowModelBuilder {
             isMe: isMe,
             body: body,
             fill: fill,
-            radii: .cluster(isMe: isMe, first: first, last: last),
+            // A picture-styled bubble stands alone (owner 2026-11-07): no run corners, its own shape
+            // while the picture decodes.
+            radii: picture != nil ? .uniform(BubbleMetrics.bigCorner) : .cluster(isMe: isMe, first: first, last: last),
             // ⛔ CLAMPED TO NOW. A pending message carries THIS phone's clock while everything it is
             // compared against carries the server's, and the repository maintains a whole clock-offset
             // median because the two disagree. Ordering already corrects for it; display did not.

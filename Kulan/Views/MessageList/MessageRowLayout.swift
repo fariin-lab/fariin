@@ -420,6 +420,9 @@ enum MessageRowLayout {
             // 2026-10-21 (owner, "spaces between polls are small"): two big poll cards from the same
             // person read as one block at the 2 pt grouped gap. A poll keeps 10 above it.
             if case .poll = b.body { top = max(top, 10) }
+            // A picture-styled bubble is never merged into a run (owner 2026-11-07): the normal
+            // small gap above it, and its art above the outline comes on top of that (`bubble`).
+            if case .text = b.body, b.picture != nil { top = max(top, 6) }
             var p = bubble(b, originX: contentX, availableWidth: contentW, rowWidth: width,
                            topSpacing: top)
             contentHeight = p.totalHeight
