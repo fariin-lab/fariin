@@ -4531,7 +4531,8 @@ struct ThreadView: View {
         out.append(CMAction(title: "Select", icon: "checkmark.circle") {
             setUIMode(.selection); selectedIds = [m.id]   // their order: mode first, then add the item
         })
-        if isGroup && mine && m.sendState == nil {
+        // Not in a channel (owner 2026-11-07: "remove in channel, I don't need it").
+        if isGroup && mine && m.sendState == nil && conversation?.isChannel != true {
             out.append(CMAction(title: "Info", icon: "info.circle") { infoTarget = MessageRef(id: m.id) })
         }
         if canPin && delivered && !m.viewOnce {   // no view-once: the pinned bar shows its thumbnail. See `delivered` above — a pin on a clientId can never resolve
