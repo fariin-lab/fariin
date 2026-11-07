@@ -23,6 +23,11 @@ struct PostReply: Identifiable, Equatable {
     /// Written by the channel's owner: it shows as the channel, with a "Creator" label (owner 2026-11-07).
     var creator = false
     var send: Send = .sent
+    /// Changed after it was sent (shows "· edited").
+    var edited = false
+    /// The answer this one answers, inside the same thread (shown as "@name " before the text).
+    var toId: String?
+    var toName: String?
     /// Reactions as the chat has them (owner 2026-11-07): my emoji ("" = none) and each emoji's
     /// count, biggest first. `likes` stays the number of people who reacted.
     var my: String = ""
@@ -63,6 +68,11 @@ struct PostReply: Identifiable, Equatable {
         held = d["held"] as? Bool ?? false
         uid = d["u"] as? String
         creator = d["cr"] as? Bool ?? false
+        edited = (d["edited"] as? Bool) ?? (d["ed"] as? Bool) ?? false
+        if let to = d["to"] as? [String: Any], let tid = to["id"] as? String, !tid.isEmpty {
+            toId = tid
+            toName = to["name"] as? String ?? "Someone"
+        }
         // A server from before emoji reactions sends only `liked` and `lc`: hearts.
         my = d["my"] as? String ?? (liked ? Self.heart : "")
         if let m = d["rx"] as? [String: Any] {
@@ -92,6 +102,20 @@ struct PostReply: Identifiable, Equatable {
         uid = nil
         send = .sending
     }
+}
+
+/// Where a send from the field goes: a thread (its answers), and the answer it answers, if any.
+struct ReplyTarget: Equatable {
+    var thread: String
+    var name: String
+    var to: String?
+}
+
+/// A reply of mine being edited in the field.
+struct ReplyEdit: Equatable {
+    var id: String
+    var thread: String?
+    var text: String
 }
 
 /// ⛔ THE REPLIES OF ONE POST, KEPT BY ONE MODEL (owner 2026-11-06, rebuilt after five audits).
@@ -145,15 +169,55 @@ struct PostReply: Identifiable, Equatable {
     /// Is the end of the list on screen? New replies then scroll in instead of counting in the pill.
     var atEnd = true
 
-    /// The last first page per post, for an instant paint when the sheet opens again (this launch).
+    /// Top (the server's best first, shown in its order) or Newest (newest at the top). Top is the
+    /// default. A server from before sorting ignores it and sends newest first.
+    enum Sort: String { case top, new }
+    private(set) var sort: Sort = .top
+    /// Open threads showing all their answers, not just the first three.
+    var expandedAll: Set<String> = []
+    /// The row to bring to the middle of the screen next ("t-id" or "a-id"), and the one flashing.
+    var jump: String?
+    private(set) var flash: String?
+    /// The first page has answered (or failed) at least once in this sheet.
+    private(set) var firstDone = false
+    /// Edits on their way: a refresh that left before they were saved must not put the old text back.
+    private var pendingEdits: [String: String] = [:]
+
+    /// The last first page per post and sort, for an instant paint when the sheet opens again (this launch).
     private static var cache: [String: [PostReply]] = [:]
     private static var pinCache: [String: PostReply] = [:]
+    private var cacheKey: String { "\(mid)|\(sort.rawValue)" }
 
     init(cid: String, mid: String) {
         self.cid = cid
         self.mid = mid
-        if let c = Self.cache[mid] { threads = c; loaded = true }
+        if let c = Self.cache["\(mid)|top"] { threads = c; loaded = true }
         pinned = Self.pinCache[mid]
+    }
+
+    /// Time order for Newest; Top keeps the server's order.
+    private func placed(_ list: [PostReply]) -> [PostReply] {
+        sort == .new ? list.sorted { $0.at < $1.at } : list
+    }
+
+    private func listArgs(_ extra: [String: Any] = [:]) -> [String: Any] {
+        var a = args(extra)
+        a["sort"] = sort.rawValue
+        return a
+    }
+
+    /// A new sort: the list starts again from its first page (pinned stays first).
+    func setSort(_ s: Sort) {
+        guard s != sort else { return }
+        sort = s
+        refreshGen &+= 1
+        let mineSending = threads.filter { $0.send != .sent }
+        threads = placed((Self.cache[cacheKey] ?? []) + mineSending)
+        olderCursor = ""
+        unseenNew = 0
+        atEnd = true
+        loaded = !threads.isEmpty
+        Task { await loadFirst() }
     }
 
     static func reset() { cache.removeAll(); pinCache.removeAll() }
@@ -168,8 +232,7 @@ struct PostReply: Identifiable, Equatable {
     /// A new pin leaves the list; the one it replaces goes back into it, in time order.
     private func setPinned(_ p: PostReply?) {
         if let old = pinned, old.id != p?.id, !threads.contains(where: { $0.id == old.id }), !deletedIds.contains(old.id) {
-            threads.append(old)
-            threads.sort { $0.at < $1.at }
+            threads = placed(threads + [old])
         }
         if let p { threads.removeAll { $0.id == p.id } }
         pinned = p
@@ -233,31 +296,49 @@ struct PostReply: Identifiable, Equatable {
     private func overlay(_ r: PostReply) -> PostReply {
         var r = r
         if let want = pendingLikes[r.id] { r.setMine(want) }
+        if let t = pendingEdits[r.id] { r.text = t; r.edited = true }
         return r
     }
 
     func loadFirst() async {
+        let s = sort
         do {
-            let res = try await fn.httpsCallable("getReplies").call(args())
+            let res = try await fn.httpsCallable("getReplies").call(listArgs())
+            guard s == sort else { return }   // the sort changed meanwhile: that load answers
             let d = res.data as? [String: Any] ?? [:]
             applyFlags(d)
-            let page = Array(rows(d).reversed())
-            let ids = Set(page.map(\.id))
-            if threads.isEmpty || olderCursor.isEmpty { olderCursor = d["next"] as? String ?? "" }
-            // Pages loaded further up stay (a Try Again or a switch flip used to drop them).
-            let firstAt = page.first?.at
-            let kept = threads.filter { r in !ids.contains(r.id) && (r.send != .sent || (firstAt.map { r.at < $0 } ?? true)) }
-            threads = (kept + page).sorted { $0.at < $1.at }
+            let ids: Set<String>
+            if s == .top {
+                // The server's order as it is; only mine still on their way stay below it.
+                let page = rows(d)
+                ids = Set(page.map(\.id))
+                olderCursor = d["next"] as? String ?? ""
+                let now = Date()
+                let kept = threads.filter { r in !ids.contains(r.id)
+                    && (r.send != .sent || recentMine[r.id].map { now.timeIntervalSince($0) < 8 } == true) }
+                threads = page + kept
+                Self.cache[cacheKey] = page
+            } else {
+                let page = Array(rows(d).reversed())
+                ids = Set(page.map(\.id))
+                if threads.isEmpty || olderCursor.isEmpty { olderCursor = d["next"] as? String ?? "" }
+                // Pages loaded further down stay (a Try Again or a switch flip used to drop them).
+                let firstAt = page.first?.at
+                let kept = threads.filter { r in !ids.contains(r.id) && (r.send != .sent || (firstAt.map { r.at < $0 } ?? true)) }
+                threads = (kept + page).sorted { $0.at < $1.at }
+                Self.cache[cacheKey] = page
+            }
             applyPinned(d)
             if lastRev < 0 { lastRev = (d["rev"] as? NSNumber)?.intValue ?? 0 }
             loaded = true
             failed = false
-            Self.cache[mid] = page
             prefetchAnswers()
         } catch {
+            guard s == sort else { return }
             failed = true
             loaded = true
         }
+        firstDone = true
     }
 
     /// ⛔ "VIEW N REPLIES" OPENS AT ONCE (owner 2026-11-07: it opened late). Right after the first page,
@@ -266,7 +347,9 @@ struct PostReply: Identifiable, Equatable {
     private func prefetchAnswers() {
         var todo: [String] = []
         if let p = pinned, p.answers > 0 { todo.append(p.id) }
-        for r in threads.reversed() where r.answers > 0 && todo.count < 5 { todo.append(r.id) }
+        // The first ones on screen: the top of the list for Top, the newest for Newest.
+        let order = sort == .top ? threads : Array(threads.reversed())
+        for r in order where r.answers > 0 && todo.count < 5 { todo.append(r.id) }
         for rid in todo where !answersLoaded.contains(rid) && !answersLoading.contains(rid) {
             Task { await loadAnswers(rid, more: false) }
         }
@@ -279,10 +362,27 @@ struct PostReply: Identifiable, Equatable {
     func refreshNewest() async {
         refreshGen &+= 1
         let gen = refreshGen
-        guard let res = try? await fn.httpsCallable("getReplies").call(args()) else { return }
+        guard let res = try? await fn.httpsCallable("getReplies").call(listArgs()) else { return }
         guard gen == refreshGen else { return }
         let d = res.data as? [String: Any] ?? [:]
         applyFlags(d)
+        if sort == .top {
+            // Merged in place by id: rows keep their spot, new ones go below (the pill counts them).
+            let page = rows(d)
+            var list = threads
+            var added = 0
+            for r in page {
+                if let i = list.firstIndex(where: { $0.id == r.id }) { list[i] = r }
+                else { list.append(r); if !r.mine { added += 1 } }
+            }
+            threads = list
+            applyPinned(d)
+            if added > 0 { if atEnd { scrollTarget = list.last?.id } else { unseenNew += added } }
+            Self.cache[cacheKey] = page
+            dropStaleAnswers(page)
+            await reloadChangedOpen(page)
+            return
+        }
         let page = Array(rows(d).reversed())
         let next = d["next"] as? String ?? ""
         let now = Date()
@@ -317,9 +417,13 @@ struct PostReply: Identifiable, Equatable {
         if added > 0 {
             if atEnd { scrollTarget = list.last?.id } else { unseenNew += added }
         }
-        Self.cache[mid] = page
+        Self.cache[cacheKey] = page
         dropStaleAnswers(page)
-        // Open threads whose answer count moved, together.
+        await reloadChangedOpen(page)
+    }
+
+    /// Open threads whose answer count moved, together.
+    private func reloadChangedOpen(_ page: [PostReply]) async {
         let changed = openThreads.filter { t in
             guard let r = page.first(where: { $0.id == t }) ?? (pinned?.id == t ? pinned : nil) else { return false }
             return r.answers != loadedAnswerCount(t)
@@ -350,11 +454,75 @@ struct PostReply: Identifiable, Equatable {
         guard !olderCursor.isEmpty, !loadingOlder else { return }
         loadingOlder = true
         defer { loadingOlder = false }
-        guard let res = try? await fn.httpsCallable("getReplies").call(args(["cursor": olderCursor])) else { return }
+        let s = sort
+        guard let res = try? await fn.httpsCallable("getReplies").call(listArgs(["cursor": olderCursor])) else { return }
+        guard s == sort else { return }
         let d = res.data as? [String: Any] ?? [:]
-        let page = Array(rows(d).reversed()).filter { r in !threads.contains { $0.id == r.id } && r.id != pinned?.id }
+        let fresh = rows(d).filter { r in !threads.contains { $0.id == r.id } && r.id != pinned?.id }
         olderCursor = d["next"] as? String ?? ""
-        threads.insert(contentsOf: page, at: 0)
+        if s == .top {
+            // Below what is shown, before mine still sending.
+            let at = threads.firstIndex { $0.send != .sent } ?? threads.count
+            threads.insert(contentsOf: fresh, at: at)
+        } else {
+            threads.insert(contentsOf: fresh.reversed(), at: 0)
+        }
+    }
+
+    /// Finds a row (thread, pinned, or an answer) by id.
+    func find(_ id: String, thread: String?) -> PostReply? {
+        if let t = thread { return answers[t]?.first { $0.id == id } }
+        if pinned?.id == id { return pinned }
+        return threads.first { $0.id == id }
+    }
+
+    private func isThread(_ id: String) -> Bool {
+        pinned?.id == id || threads.contains { $0.id == id }
+    }
+
+    /// Brings a row into view and flashes it for about a second. An answer's thread opens, all of it.
+    func reveal(_ id: String, thread: String?) {
+        if let t = thread {
+            openThreads.insert(t)
+            expandedAll.insert(t)
+            jump = "a-\(id)"
+        } else {
+            jump = "t-\(id)"
+        }
+        flash = id
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_100_000_000)
+            if flash == id { flash = nil }
+        }
+    }
+
+    /// A tap on "@name": the answer it answers (or the thread, when it answers the thread itself).
+    func jumpTo(_ id: String, inThread t: String) async {
+        if id == t || isThread(id) { reveal(id, thread: nil); return }
+        if !answersLoaded.contains(t) { await loadAnswers(t, more: false) }
+        var pages = 0
+        while answers[t]?.contains(where: { $0.id == id }) != true, !(answerNext[t] ?? "").isEmpty, pages < 5 {
+            await loadAnswers(t, more: true)
+            pages += 1
+        }
+        if answers[t]?.contains(where: { $0.id == id }) == true { reveal(id, thread: t) } else { reveal(t, thread: nil) }
+    }
+
+    /// A reply alert tapped: that thread (paging down to it if needed), opened, then the answer.
+    func focus(rid: String, aid: String?) async {
+        for _ in 0..<60 where !firstDone { try? await Task.sleep(nanoseconds: 100_000_000) }
+        var pages = 0
+        while !isThread(rid), !olderCursor.isEmpty, pages < 5 {
+            await loadOlder()
+            pages += 1
+        }
+        guard isThread(rid) else { return }   // gone, or too far down: the sheet stays at the top
+        if let aid, !aid.isEmpty, aid != rid {
+            await jumpTo(aid, inThread: rid)
+        } else {
+            if !openThreads.contains(rid) { toggleThread(rid) }
+            reveal(rid, thread: nil)
+        }
     }
 
     func loadAnswers(_ rid: String, more: Bool) async {
@@ -404,7 +572,7 @@ struct PostReply: Identifiable, Equatable {
     private(set) var answersLoading: Set<String> = []
 
     func toggleThread(_ rid: String) {
-        if openThreads.contains(rid) { openThreads.remove(rid); return }
+        if openThreads.contains(rid) { openThreads.remove(rid); expandedAll.remove(rid); return }
         openThreads.insert(rid)
         if !answersLoaded.contains(rid) { Task { await loadAnswers(rid, more: false) } }
     }
@@ -412,10 +580,14 @@ struct PostReply: Identifiable, Equatable {
     // MARK: Actions
 
     /// Sends a reply (`thread` nil) or an answer. Shown at once; on failure it stays with Retry.
-    func send(_ text: String, thread: String?, me: (name: String, photo: String), clientId: String? = nil) {
+    func send(_ text: String, thread: String?, to: (id: String, name: String)? = nil,
+              me: (name: String, photo: String), clientId: String? = nil) {
         let id = clientId ?? UUID().uuidString
-        let row = PostReply(pendingId: id, text: text, name: me.name, photoUrl: me.photo)
+        var row = PostReply(pendingId: id, text: text, name: me.name, photoUrl: me.photo)
+        row.toId = to?.id
+        row.toName = to?.name
         if let t = thread {
+            expandedAll.insert(t)   // my new answer is at the end: the whole thread shows
             // A thread never opened: its other answers load too, or only this one would show and the
             // thread would look fully loaded (2026-11-06 verify pass). loadAnswers keeps this row.
             if answers[t] == nil { Task { await loadAnswers(t, more: false) } }
@@ -430,15 +602,18 @@ struct PostReply: Identifiable, Equatable {
         Task {
             var a: [String: Any] = ["text": text, "clientId": id]
             if let t = thread { a["rid"] = t }
+            if let to, thread != nil { a["to"] = ["id": to.id, "name": to.name] }
             do {
                 let res = try await fn.httpsCallable("addReply").call(args(a))
-                guard let d = (res.data as? [String: Any])?["reply"] as? [String: Any], let saved = PostReply(d) else {
+                guard let d = (res.data as? [String: Any])?["reply"] as? [String: Any], var saved = PostReply(d) else {
                     mark(id, thread: thread, .failed)   // an answer it cannot read: Retry, not a row stuck sending
                     return
                 }
                 // Counted on the first save that worked, so a retried failed send counts too.
                 let firstTime = !counted.contains(id)
                 counted.insert(id)
+                // A server that does not echo `to` yet: keep the one this phone sent.
+                if saved.toId == nil, let to, thread != nil { saved.toId = to.id; saved.toName = to.name }
                 replace(id, with: saved, thread: thread)
                 recentMine[id] = Date()
                 recentMine[saved.id] = Date()
@@ -453,7 +628,20 @@ struct PostReply: Identifiable, Equatable {
     }
 
     func retry(_ r: PostReply, thread: String?) {
-        send(r.text, thread: thread, me: (r.name, r.photoUrl), clientId: r.id)
+        send(r.text, thread: thread, to: r.toId.map { ($0, r.toName ?? "") }, me: (r.name, r.photoUrl), clientId: r.id)
+    }
+
+    /// Changes the text of one of mine. Shown at once; the old text comes back if the server says no.
+    func edit(_ id: String, thread: String?, text: String) async -> Bool {
+        guard let old = find(id, thread: thread) else { return false }
+        pendingEdits[id] = text
+        update(id, thread: thread) { $0.text = text; $0.edited = true }
+        var a: [String: Any] = ["text": text]
+        if let t = thread { a["rid"] = t; a["aid"] = id } else { a["rid"] = id }
+        let ok = (try? await fn.httpsCallable("editReply").call(args(a))) != nil
+        if pendingEdits[id] == text { pendingEdits[id] = nil }
+        if !ok { update(id, thread: thread) { $0.text = old.text; $0.edited = old.edited } }
+        return ok
     }
 
     func discard(_ r: PostReply, thread: String?) {
@@ -552,8 +740,12 @@ struct PostReply: Identifiable, Equatable {
                 answers[t, default: []].append(row)
                 answers[t]?.sort { $0.at < $1.at }
             } else if thread == nil, let row = threadsBefore.first(where: { $0.id == r.id }) {
-                threads.append(row)
-                threads.sort { $0.at < $1.at }
+                // Back in its old place for Top, in time order for Newest.
+                if sort == .top, let i = threadsBefore.firstIndex(where: { $0.id == r.id }) {
+                    threads.insert(row, at: min(i, threads.count))
+                } else {
+                    threads = placed(threads + [row])
+                }
             }
         }
     }
@@ -564,7 +756,7 @@ struct PostReply: Identifiable, Equatable {
         setPinned(r)
         guard (try? await fn.httpsCallable("pinReply").call(args(["rid": r.id]))) != nil else {
             setPinned(before)
-            if !threads.contains(where: { $0.id == r.id }) { threads.append(r); threads.sort { $0.at < $1.at } }
+            if !threads.contains(where: { $0.id == r.id }) { threads = placed(threads + [r]) }
             return false
         }
         return true
@@ -649,7 +841,8 @@ struct PostThreadSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var tab: Tab = .replies
     @State private var model: RepliesModel
-    @State private var answering: (id: String, name: String)?
+    @State private var answering: ReplyTarget?
+    @State private var editing: ReplyEdit?
     @State private var reporting: (PostReply, String?)?
     @State private var banning: (PostReply, String?)?
     @State private var toast: String?
@@ -720,7 +913,17 @@ struct PostThreadSheet: View {
         .onChange(of: offNow) { was, off in
             if off && !quotesOff { tab = .quotes } else if was { tab = .replies }
         }
-        .onAppear { model.start() }
+        .onAppear {
+            model.start()
+            // A reply alert tapped: this post's thread, then the answer it was about.
+            if let t = AppRouter.shared.pendingReplyTarget, t.mid == mid {
+                AppRouter.shared.pendingReplyTarget = nil
+                if Date().timeIntervalSince(t.at) < 60 {
+                    tab = .replies
+                    Task { await model.focus(rid: t.rid, aid: t.aid) }
+                }
+            }
+        }
         .onDisappear { model.stop() }
         // `presenting:` hands each button the item itself (2026-11-06 audit: reading the state in the
         // action could find it already cleared by the dialog closing).
@@ -820,6 +1023,8 @@ struct PostThreadSheet: View {
         case answer(PostReply, String)
         case toggle(String, Int, Bool)
         case moreAnswers(String)
+        /// "View N more replies": the rest of an open thread past its first three.
+        case revealMore(String, Int)
         var id: String {
             switch self {
             case .older: return "older"
@@ -828,6 +1033,7 @@ struct PostThreadSheet: View {
             case .answer(let r, _): return "a-\(r.id)"
             case .toggle(let t, _, _): return "g-\(t)"
             case .moreAnswers(let t): return "m-\(t)"
+            case .revealMore(let t, _): return "r-\(t)"
             }
         }
     }
@@ -837,8 +1043,10 @@ struct PostThreadSheet: View {
         var out: [Item] = []
         // The pinned thread first, under a small "Pinned" line, then the rest (owner 2026-11-07).
         if let p = model.pinned { out.append(.pinnedLabel); appendThread(p, to: &out) }
+        // Top: the server's order. Newest: newest at the top. Either way more load at the bottom.
+        let list = model.sort == .new ? Array(model.threads.reversed()) : model.threads
+        for r in list { appendThread(r, to: &out) }
         if !model.olderCursor.isEmpty { out.append(.older) }
-        for r in model.threads { appendThread(r, to: &out) }
         return out
     }
 
@@ -849,21 +1057,66 @@ struct PostThreadSheet: View {
             guard total > 0 else { return }
             let open = model.openThreads.contains(r.id)
             if open {
-                for a in loaded { out.append(.answer(a, r.id)) }
-                if !(model.answerNext[r.id] ?? "").isEmpty { out.append(.moreAnswers(r.id)) }
+                // The first three, then "View N more replies" for the rest (a long thread stays short).
+                if !model.expandedAll.contains(r.id), loaded.count > Self.firstAnswers {
+                    for a in loaded.prefix(Self.firstAnswers) { out.append(.answer(a, r.id)) }
+                    out.append(.revealMore(r.id, total - Self.firstAnswers))
+                } else {
+                    for a in loaded { out.append(.answer(a, r.id)) }
+                    if !(model.answerNext[r.id] ?? "").isEmpty { out.append(.moreAnswers(r.id)) }
+                }
             }
             out.append(.toggle(r.id, total, open))
     }
 
+    private static let firstAnswers = 3
+
+    /// Where new replies land: the bottom for Top, the top for Newest.
+    private func edgeSeen(top: Bool, seen: Bool) {
+        guard top == (model.sort == .new) else { return }
+        model.atEnd = seen
+        if seen { model.unseenNew = 0 }
+    }
+
+    /// "Top" and "Newest", small, over the list. Hidden until there is something to sort.
+    @ViewBuilder private var sortBar: some View {
+        if model.loaded, !model.threads.isEmpty || model.pinned != nil || model.sort != .top {
+            HStack(spacing: 6) {
+                sortChip("Top", .top)
+                sortChip("Newest", .new)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 2)
+        }
+    }
+
+    private func sortChip(_ title: String, _ s: RepliesModel.Sort) -> some View {
+        let on = model.sort == s
+        return Button { model.setSort(s) } label: {
+            Text(title)
+                .font(.system(size: 13, weight: on ? .semibold : .regular))
+                .foregroundStyle(on ? Color.primary : Color.secondary)
+                .padding(.horizontal, 12).padding(.vertical, 5)
+                .background(on ? Color(.tertiarySystemFill) : Color.clear, in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? [.isSelected] : [])
+    }
+
     private var repliesTab: some View {
         VStack(spacing: 0) {
+            sortBar
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
+                        Color.clear.frame(height: 1).id("start")
+                            .onAppear { edgeSeen(top: true, seen: true) }
+                            .onDisappear { edgeSeen(top: true, seen: false) }
                         ForEach(items) { item in itemView(item).id(item.id) }
                         Color.clear.frame(height: 6).id("end")
-                            .onAppear { model.atEnd = true; model.unseenNew = 0 }
-                            .onDisappear { model.atEnd = false }
+                            .onAppear { edgeSeen(top: false, seen: true) }
+                            .onDisappear { edgeSeen(top: false, seen: false) }
                     }
                     .padding(.top, 4)
                 }
@@ -877,31 +1130,51 @@ struct PostThreadSheet: View {
                 .overlay(alignment: .bottom) { newPill(proxy) }
                 .onChange(of: model.scrollTarget) { _, id in
                     guard let id else { return }
-                    let key = model.threads.contains(where: { $0.id == id }) || model.pinned?.id == id ? "t-\(id)" : "a-\(id)"
+                    let isThread = model.threads.contains(where: { $0.id == id }) || model.pinned?.id == id
+                    let key = isThread ? "t-\(id)" : "a-\(id)"
+                    // A new reply sits at the top for Newest, at the bottom for Top.
+                    let anchor: UnitPoint = isThread && model.sort == .new ? .top : .bottom
                     model.scrollTarget = nil
                     // After the new row is laid out, not in the same pass that added it.
                     Task { @MainActor in
                         await Task.yield()
-                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(key, anchor: .bottom) }
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(key, anchor: anchor) }
                     }
                 }
+                // A tapped "@name" or a reply alert: that row to the middle (it flashes meanwhile).
+                .onChange(of: model.jump) { _, key in
+                    guard let key else { return }
+                    model.jump = nil
+                    Task { @MainActor in
+                        await Task.yield()
+                        withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(key, anchor: .center) }
+                    }
+                }
+                // A new sort opens at the top.
+                .onChange(of: model.sort) { _, _ in proxy.scrollTo("start", anchor: .top) }
             }
             // Off as the post already says, from the first frame (owner 2026-11-07: the field showed for
             // a second, then turned into the off line when the server answered).
-            ReplyComposer(off: offNow, loaded: model.loaded, answering: $answering) { text, thread in
-                let me = ProfileStore.shared.me
-                model.send(text, thread: thread, me: (me?.name ?? "You", me?.photoUrl ?? ""))
-            }
+            ReplyComposer(off: offNow, loaded: model.loaded, answering: $answering, editing: $editing,
+                          onSend: { text, target in
+                              let me = ProfileStore.shared.me
+                              let to = target?.to.map { (id: $0, name: target?.name ?? "") }
+                              model.send(text, thread: target?.thread, to: to, me: (me?.name ?? "You", me?.photoUrl ?? ""))
+                          },
+                          onEdit: { e, text in
+                              Task { if !(await model.edit(e.id, thread: e.thread, text: text)) { show("Couldn't edit the reply.") } }
+                          })
         }
     }
 
     @ViewBuilder private func newPill(_ proxy: ScrollViewProxy) -> some View {
         if model.unseenNew > 0 {
+            let up = model.sort == .new
             Button {
-                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("end", anchor: .bottom) }
+                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(up ? "start" : "end", anchor: up ? .top : .bottom) }
                 model.unseenNew = 0
             } label: {
-                Label("\(model.unseenNew) new \(model.unseenNew == 1 ? "reply" : "replies")", systemImage: "arrow.down")
+                Label("\(model.unseenNew) new \(model.unseenNew == 1 ? "reply" : "replies")", systemImage: up ? "arrow.up" : "arrow.down")
                     .font(.footnote.weight(.semibold))
                     .padding(.horizontal, 14).padding(.vertical, 8)
                     .background(.regularMaterial, in: Capsule())
@@ -915,7 +1188,7 @@ struct PostThreadSheet: View {
         switch item {
         case .older:
             Button { Task { await model.loadOlder() } } label: {
-                Text(model.loadingOlder ? "Loading…" : "Show earlier replies")
+                Text(model.loadingOlder ? "Loading…" : (model.sort == .new ? "Show earlier replies" : "Show more replies"))
                     .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity).padding(.vertical, 10)
             }
@@ -929,9 +1202,23 @@ struct PostThreadSheet: View {
             // A line runs down from the photo when the reply has answers (shown or not yet).
             let hasAnswers = r.answers > 0 || !(model.answers[r.id] ?? []).isEmpty
             ReplyRow(reply: r, small: false, actions: actions(r, thread: nil), line: hasAnswers ? .below : .none)
+                .background(flashFill(r.id))
         case .answer(let r, let t):
             ReplyRow(reply: r, small: true, actions: actions(r, thread: t), line: .answer)
                 .padding(.leading, ReplyThreadLine.answerIndent)
+                .background(flashFill(r.id))
+        case .revealMore(let t, let n):
+            Button { withAnimation(.easeInOut(duration: 0.2)) { _ = model.expandedAll.insert(t) } } label: {
+                Text("View \(n) more \(n == 1 ? "reply" : "replies")")
+                    .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 108).padding(.bottom, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(alignment: .leading) {   // the thread line passes by
+                Rectangle().fill(ReplyThreadLine.color).frame(width: 1.5)
+                    .padding(.leading, ReplyThreadLine.parentX - 0.75)
+            }
         case .toggle(let t, let n, let open):
             Button { withAnimation(.easeInOut(duration: 0.2)) { model.toggleThread(t) } } label: {
                 HStack(spacing: 8) {
@@ -965,11 +1252,33 @@ struct PostThreadSheet: View {
         }
     }
 
+    /// The short background flash on a row brought into view.
+    private func flashFill(_ id: String) -> some View {
+        Color.accentColor.opacity(model.flash == id ? 0.14 : 0)
+            .animation(.easeInOut(duration: 0.3), value: model.flash == id)
+            .allowsHitTesting(false)
+    }
+
+    /// Editing is open for 15 minutes after a reply is sent (the server holds the same limit).
+    private static let editWindow: TimeInterval = 15 * 60
+
     private func actions(_ r: PostReply, thread: String?) -> ReplyRow.Actions {
         ReplyRow.Actions(
             like: { model.toggleLike(r, thread: thread) },
             react: { e in model.react(r, emoji: e, thread: thread) },
-            reply: model.off ? nil : { answering = (thread ?? r.id, r.name) },
+            // On an answer, the send also says which answer it answers ("@name" on the new one).
+            reply: model.off ? nil : {
+                editing = nil
+                answering = ReplyTarget(thread: thread ?? r.id, name: r.name, to: thread == nil ? nil : r.id)
+            },
+            edit: (r.mine && r.send == .sent && !model.off && Date().timeIntervalSince(r.at) < Self.editWindow) ? {
+                guard Date().timeIntervalSince(r.at) < Self.editWindow else { show("Replies can be edited for 15 minutes."); return }
+                answering = nil
+                editing = ReplyEdit(id: r.id, thread: thread, text: r.text)
+            } : nil,
+            mention: (thread != nil && r.toId != nil) ? {
+                if let to = r.toId, let t = thread { Task { await model.jumpTo(to, inThread: t) } }
+            } : nil,
             delete: r.canDelete ? { Task { await model.delete(r, thread: thread) } } : nil,
             report: r.mine ? nil : { reporting = (r, thread) },
             ban: (model.may.ban && !r.mine) ? { banning = (r, thread) } : nil,
@@ -1068,6 +1377,10 @@ private struct ReplyRow: View {
         /// Mine becomes this emoji, or comes off when it already is (the chat's react bar and pills).
         var react: (String) -> Void = { _ in }
         var reply: (() -> Void)?
+        /// Mine, within 15 minutes of sending.
+        var edit: (() -> Void)?
+        /// A tap on the "@name" before the text: the answer it answers.
+        var mention: (() -> Void)?
         var delete: (() -> Void)?
         var report: (() -> Void)?
         var ban: (() -> Void)?
@@ -1149,6 +1462,9 @@ private struct ReplyRow: View {
                         .background(Color(.tertiarySystemFill), in: Capsule())
                 }
                 Text(Self.age(reply.at)).font(.footnote).foregroundStyle(.secondary)
+                if reply.edited {
+                    Text("· edited").font(.footnote).foregroundStyle(.secondary)
+                }
             }
             .padding(.leading, side + 10 + 14)
             // The photo stays at the top beside the name, even when the words run long (owner 2026-11-07).
@@ -1158,8 +1474,13 @@ private struct ReplyRow: View {
                     .accessibilityHidden(true)
                     .onTapGesture { actions.openAuthor?() }
                     .anchorPreference(key: ReplyAvatarBounds.self, value: .bounds) { $0 }
-                Text(reply.text)
+                bodyText
                     .font(small ? .subheadline : .body)
+                    .environment(\.openURL, OpenURLAction { url in
+                        guard url.scheme == Self.mentionScheme else { return .systemAction }
+                        actions.mention?()
+                        return .handled
+                    })
                     .padding(.horizontal, 14).padding(.vertical, 10)
                     .background(Color(.secondarySystemBackground),
                                 in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -1183,16 +1504,29 @@ private struct ReplyRow: View {
             .allowsHitTesting(false)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(reply.name), \(reply.text), \(Self.spokenAge(reply.at))\(reply.likes > 0 ? ", \(reply.likes) likes" : "")")
+        .accessibilityLabel("\(reply.name), \(reply.toName.map { "to \($0), " } ?? "")\(reply.text), \(Self.spokenAge(reply.at))\(reply.edited ? ", edited" : "")\(reply.likes > 0 ? ", \(reply.likes) likes" : "")")
         .accessibilityActions {
             if reply.send == .sent { Button(reply.liked ? "Unlike" : "Like") { actions.like() } }
             if let r = actions.reply { Button("Reply", action: r) }
+            if let m = actions.mention { Button("Go to the Reply It Answers", action: m) }
+            if let e = actions.edit { Button("Edit", action: e) }
             if let o = actions.openAuthor { Button(reply.creator ? "Open Channel" : "Open Profile", action: o) }
             if let p = actions.pin { Button(actions.pinned ? "Unpin" : "Pin", action: p) }
             if let r = actions.retry { Button("Retry", action: r) }
             if let d = actions.delete { Button("Delete", action: d) }
             if let r = actions.report { Button("Report", action: r) }
         }
+    }
+
+    private static let mentionScheme = "fariin-reply-to"
+
+    /// The words, with "@name " first in the accent colour when this answers another answer.
+    private var bodyText: Text {
+        guard let n = reply.toName, !n.isEmpty else { return Text(reply.text) }
+        var at = AttributedString("@\(n) ")
+        at.swiftUI.foregroundColor = Color.accentColor
+        if actions.mention != nil { at.link = URL(string: "\(Self.mentionScheme)://answer") }
+        return Text(at + AttributedString(reply.text))
     }
 
     @ViewBuilder private var footer: some View {
@@ -1243,6 +1577,7 @@ private struct ReplyRow: View {
             .menuActionDismissBehavior(.enabled)
         }
         if let r = actions.reply { Button { r() } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") } }
+        if let e = actions.edit { Button { e() } label: { Label("Edit", systemImage: "pencil") } }
         Button { UIPasteboard.general.string = reply.text } label: { Label("Copy", systemImage: "doc.on.doc") }
         if let p = actions.pin {
             Button { p() } label: { Label(actions.pinned ? "Unpin" : "Pin", systemImage: actions.pinned ? "pin.slash" : "pin") }
@@ -1286,8 +1621,10 @@ private struct ReplyRow: View {
 private struct ReplyComposer: View {
     let off: Bool
     let loaded: Bool
-    @Binding var answering: (id: String, name: String)?
-    let onSend: (String, String?) -> Void
+    @Binding var answering: ReplyTarget?
+    @Binding var editing: ReplyEdit?
+    let onSend: (String, ReplyTarget?) -> Void
+    let onEdit: (ReplyEdit, String) -> Void
     @State private var draft = ""
     @FocusState private var focused: Bool
 
@@ -1298,7 +1635,16 @@ private struct ReplyComposer: View {
                 .frame(maxWidth: .infinity).padding(14)
         } else {
             VStack(spacing: 6) {
-                if let a = answering {
+                if editing != nil {
+                    HStack {
+                        Text("Editing").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button { editing = nil; draft = "" } label: { Image(systemName: "xmark").font(.caption.weight(.semibold)) }
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Cancel editing")
+                    }
+                    .padding(.horizontal, 20)
+                } else if let a = answering {
                     HStack {
                         Text("Replying to \(a.name)").font(.caption).foregroundStyle(.secondary)
                         Spacer()
@@ -1322,9 +1668,14 @@ private struct ReplyComposer: View {
                         Button {
                             let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
                             guard !text.isEmpty else { return }
-                            onSend(text, answering?.id)
+                            if let e = editing {
+                                if text != e.text { onEdit(e, text) }   // the same words: nothing to save
+                                editing = nil
+                            } else {
+                                onSend(text, answering)
+                                answering = nil
+                            }
                             draft = ""
-                            answering = nil
                         } label: {
                             Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold))
                                 .foregroundStyle(.white)
@@ -1346,7 +1697,11 @@ private struct ReplyComposer: View {
                 .padding(.horizontal, 24)   // clear of the sheet's round corners (owner 2026-11-07)
             }
             .padding(.vertical, 8)
-            .onChange(of: answering?.id) { _, id in if id != nil { focused = true } }
+            .onChange(of: answering) { _, a in if a != nil { focused = true } }
+            // Edit: the reply's words go in the field; leaving edit empties it again.
+            .onChange(of: editing) { was, e in
+                if let e { draft = String(e.text.prefix(250)); focused = true } else if was != nil { draft = "" }
+            }
         }
     }
 }

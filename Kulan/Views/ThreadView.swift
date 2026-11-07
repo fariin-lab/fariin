@@ -4793,6 +4793,7 @@ struct ThreadView: View {
         guard Date().timeIntervalSince(p.at) < 30 else { return }   // the alert was long ago
         try? await Task.sleep(nanoseconds: 500_000_000)
         guard !Task.isCancelled else { return }
+        quotesStartOnQuotes = false   // an alert is about a reply: the Replies tab
         quotesFor = MessageRef(id: p.mid)
     }
 

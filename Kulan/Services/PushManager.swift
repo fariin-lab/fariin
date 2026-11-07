@@ -354,21 +354,29 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
            await Self.mayOpenFromPush(cid) {
             // A reply alert (owner 2026-11-06): the channel opens, then that post's Replies.
             let info = response.notification.request.content.userInfo
-            let kind = info["kind"] as? String ?? ""
             let mid = info["mid"] as? String ?? ""
+            let rid = info["rid"] as? String ?? ""
+            // A push with a reply id is a reply alert too, whatever its kind says.
+            let kind = info["kind"] as? String ?? ""
+            let isReply = kind == "postReplies" || kind == "replyAnswer" || !rid.isEmpty
+            // On a reply alert `aid` is the answer, when the alert is about one.
+            let aid = (info["aid"] as? String).flatMap { $0.isEmpty || $0.contains("/") ? nil : $0 }
             await MainActor.run {
                 // Not when that channel is already on screen: it would not re-open, and the Replies
                 // would pop up later by surprise the next time it does (2026-11-06 audit).
-                if kind == "postReplies" || kind == "replyAnswer", !mid.isEmpty, !mid.contains("/"),
+                if isReply, !mid.isEmpty, !mid.contains("/"),
                    AppRouter.shared.activeChatId != cid {
                     AppRouter.shared.pendingRepliesPost = (cid, mid, Date())
+                    // Then that comment, its thread open (an older server sends no rid: the top).
+                    AppRouter.shared.pendingReplyTarget = rid.isEmpty || rid.contains("/") ? nil : (mid, rid, aid, Date())
                 } else {
                     AppRouter.shared.pendingRepliesPost = nil   // any other alert replaces an older one
+                    AppRouter.shared.pendingReplyTarget = nil
                 }
                 // A message alert (owner 2026-11-07): the chat opens on THAT message, the newest, even
                 // when the phone's cached rows do not hold it yet. Not for the chat already on screen,
                 // which follows a live arrival by itself.
-                if kind != "postReplies", kind != "replyAnswer", !mid.isEmpty, !mid.contains("/"),
+                if !isReply, !mid.isEmpty, !mid.contains("/"),
                    AppRouter.shared.activeChatId != cid {
                     AppRouter.shared.pendingOpenMid = (cid, mid, Date())
                 } else {
@@ -455,6 +463,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     /// A reply alert tapped: open this post's Replies once its channel is on screen.
     /// `at` lets a stale one (its channel never opened) be ignored later (2026-11-06 verify pass).
     var pendingRepliesPost: (cid: String, mid: String, at: Date)?
+    /// The comment a reply alert was about (thread `rid`, answer `aid`): once that post's Replies are
+    /// open, the sheet scrolls to it with its thread open and flashes it. Spent by `PostThreadSheet`.
+    var pendingReplyTarget: (mid: String, rid: String, aid: String?, at: Date)?
     /// A message notification tapped (owner 2026-11-07): the message it announced. That chat's
     /// `ThreadView` opens at the newest and waits for this message to arrive, rather than landing on
     /// an unread row worked out from a cache that does not hold it yet. Not `pendingMessageId`,
