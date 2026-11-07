@@ -344,7 +344,7 @@ struct AttachRecentsStrip: View {
         // indicator when the keyboard is down — exactly like a composer.
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if !selectedIds.isEmpty {
-                captionBar.overlay(alignment: .topTrailing) { hdButton }
+                captionBar
             }
         }
         .overlay { if loadingPick { ProgressView().tint(.secondary) } }
@@ -409,22 +409,8 @@ struct AttachRecentsStrip: View {
     // ⛔ THE REFERENCE APP'S NUMBERS (owner 2026-10-21: "sides too small, use exactly theirs"):
     // 28pt each side at rest, 16 with the keyboard up; ONE glass capsule, radius 20, min height 40,
     // the send a 40x34 blue pill INSIDE it, 3pt from its right/top/bottom. Same in half and full sheet.
-    /// HD as its own round button, floating over the grid just above Send (owner 2026-11-07, his
-    /// drawing: not inside the caption field). The same switch as the editor's.
-    private var hdButton: some View {
-        Button { hd.toggle() } label: {
-            Text("HD").font(.system(size: 13, weight: .bold))
-                .foregroundStyle(hd ? Color.fariinAction : .primary)
-                .frame(width: 40, height: 40)
-                .liquidGlass(Circle(), interactive: true)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .photoQualityHint(hd: hd)
-        .accessibilityValue(hd ? "High quality" : "Standard quality")
-        .padding(.trailing, keyboard.height > 0 ? 16 : 28)
-        .offset(y: -48)
-    }
+    // No HD button on the grid (owner 2026-11-07, after trying it): a photo sent from here goes at
+    // the Settings quality; for HD, open the photo and use the editor's HD, as before.
 
     private var captionBar: some View {
         HStack(alignment: .bottom, spacing: 0) {   // send hugs the bottom as the caption grows
