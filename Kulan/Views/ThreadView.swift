@@ -1229,7 +1229,7 @@ struct ThreadView: View {
         // not wait for the rows or the server. An old channel's count may be short of its real
         // history; a full page then takes the card away again, so it never sits between pages.
         if let conv = conversation, conv.isChannel, !preview,
-           (repo.didInitialLoad && (!repo.canLoadOlder || repo.cacheLooksWhole))
+           (repo.didInitialLoad && (!repo.canLoadOlder || repo.cacheLooksWhole || repo.holdsChannelStart))
             || (repo.items.count < 20 && conv.postCount < 20) {
             if conv.admins.contains(me) || conv.isOwner(me) {
                 let key = ["chadm", conv.title, conv.avatarUrl ?? "", conv.groupDescription, "\(conv.followerCount)",

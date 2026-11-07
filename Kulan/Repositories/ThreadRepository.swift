@@ -187,6 +187,12 @@ final class ThreadRepository {
     private var windowTrimmed = false   // oldestDoc cursor no longer matches the kept window → cursor by value
 
     var messages: [Message] = []           // confirmed server messages (ascending)
+    /// The channel's "created" line is among the oldest loaded rows, so nothing older exists. A
+    /// surer sign of the start than a short page: a channel whose deleted posts fill a whole page
+    /// kept `canLoadOlder` on and lost its card (owner 2026-11-07, "sometimes not appearing").
+    var holdsChannelStart: Bool {
+        messages.prefix(4).contains { $0.isSystem && Self.channelNoticeText($0.text) == "Channel created" }
+    }
     // Optimistic, not yet echoed back. Mirrored into ThreadMessageCache on every change so leaving the
     // conversation cannot throw away a send that is still owed — this repository is per-cid and dies when
     // you navigate away, which is why an offline message vanished on reopen.
