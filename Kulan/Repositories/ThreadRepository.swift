@@ -1244,6 +1244,14 @@ final class ThreadRepository {
             + "|" + String(data["pollClosed"] as? Bool ?? false)   // Stop Poll changes nothing else
             // The sixth: the server stamps the timer in a second write after the message lands.
             + "|" + String((data["expiresAt"] as? Timestamp)?.seconds ?? 0)
+            // ⛔ THE SEVENTH (owner 2026-11-07: replies turned off, the post still said "Reply" and
+            // its sheet still opened on Replies until the channel was reopened). Replies and quotes
+            // land on the post later too: the off switch, both counts and both face lists.
+            + "|" + String(data["repliesOff"] as? Bool ?? false)
+            + "|" + String((data["replyCount"] as? NSNumber)?.intValue ?? 0)
+            + "|" + String((data["quoteCount"] as? NSNumber)?.intValue ?? 0)
+            + "|" + ((data["replyFaces"] as? [String]) ?? []).joined(separator: ",")
+            + "|" + ((data["quoteFaces"] as? [String]) ?? []).joined(separator: ",")
     }
 
     // Build a message, reusing the cached copy unless a mutable field (reactions / edit) changed.

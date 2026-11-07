@@ -4055,7 +4055,7 @@ struct ThreadView: View {
                 }
                 // A quoted channel post draws the server's answer (QuoteStore), so that is its token.
                 if let q = m.quoteId { linkTok += ":Q" + QuoteStore.shared.token(q) }
-                out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)|\(m.views)|\(m.quoteCount)|\(m.quoteFaces.hashValue)|\(m.replyCount)|\(m.repliesOff)|\(chanRepliesOff)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
+                out[m.rowId] = "\(timeTok)|\(mediaTok)|\(linkTok)|\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)|\(m.views)|\(m.quoteCount)|\(m.quoteFaces.hashValue)|\(m.replyCount)|\(m.replyFaces.hashValue)|\(m.repliesOff)|\(chanRepliesOff)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
             }
             sigCache.key = key
             sigCache.base = out
@@ -4685,7 +4685,9 @@ struct ThreadView: View {
     }
 
     private func postThreadSheet(_ mid: String) -> PostThreadSheet {
-        PostThreadSheet(cid: cid, mid: mid, post: repo.items.first(where: { $0.id == mid }),
+        let post = repo.items.first(where: { $0.id == mid })
+        return PostThreadSheet(cid: cid, mid: mid, post: post,
+                        repliesOff: post?.repliesOff == true || conversation?.repliesOff == true,
                         sourceTitle: conversation?.title ?? "Channel", sourcePhoto: conversation?.avatarUrl,
                         sourceVerified: conversation?.groupVerified == true,
                         picture: { await quotesPicture(mid) },
@@ -5209,7 +5211,7 @@ struct ThreadView: View {
                 guard let m = repo.items.first(where: { $0.rowId == id }) else { return }
                 // A bar showing only quotes (replies off, none written) opens on Quotes (2026-11-06 audit).
                 let repliesOff = m.repliesOff || conversation?.repliesOff == true
-                quotesStartOnQuotes = m.replyCount == 0 && repliesOff
+                quotesStartOnQuotes = repliesOff   // off: only Quotes (owner 2026-11-07)
                 quotesFor = MessageRef(id: m.id)
             },
             onTapContactCard: { id in

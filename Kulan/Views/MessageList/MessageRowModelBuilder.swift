@@ -464,9 +464,9 @@ enum MessageRowModelBuilder {
     /// the quotes; neither leaves no bar.
     private static func postBar(_ msg: Message, ctx: MessageRowContext) -> QuoteBarChrome? {
         guard ctx.isChannel, !msg.deleted, msg.sendState == nil else { return nil }
-        // Off is READ-ONLY (2026-11-06 audit): replies already there stay reachable from the bar.
-        let repliesOn = !ctx.repliesOff && !msg.repliesOff
-        let showReplies = repliesOn || msg.replyCount > 0
+        // Off hides the Reply part entirely (owner 2026-11-07: "in post don't show Reply"); the bar
+        // stays only for quotes.
+        let showReplies = !ctx.repliesOff && !msg.repliesOff
         guard showReplies || msg.quoteCount > 0 else { return nil }
         return QuoteBarChrome(count: msg.quoteCount, faces: msg.quoteCount > 0 ? msg.quoteFaces : [],
                               replies: showReplies ? msg.replyCount : nil,

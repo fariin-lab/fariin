@@ -437,6 +437,8 @@ struct PostThreadSheet: View {
     let cid: String
     let mid: String
     let post: Message?
+    /// Replies off for this post or the whole channel: the sheet is Quotes only (owner 2026-11-07).
+    var repliesOff: Bool = false
     var sourceTitle: String
     var sourcePhoto: String?
     var sourceVerified: Bool
@@ -453,19 +455,22 @@ struct PostThreadSheet: View {
     @State private var toast: String?
     @State private var quotesShown = false
 
-    init(cid: String, mid: String, post: Message?, sourceTitle: String, sourcePhoto: String?, sourceVerified: Bool,
-         picture: @escaping () async -> UIImage?, onOpen: @escaping (QuotedInItem) -> Void, startTab: Tab = .replies) {
+    init(cid: String, mid: String, post: Message?, repliesOff: Bool = false, sourceTitle: String, sourcePhoto: String?,
+         sourceVerified: Bool, picture: @escaping () async -> UIImage?, onOpen: @escaping (QuotedInItem) -> Void,
+         startTab: Tab = .replies) {
         self.cid = cid
         self.mid = mid
         self.post = post
+        self.repliesOff = repliesOff
+        let first: Tab = repliesOff ? .quotes : startTab
         self.sourceTitle = sourceTitle
         self.sourcePhoto = sourcePhoto
         self.sourceVerified = sourceVerified
         self.picture = picture
         self.onOpen = onOpen
-        self.startTab = startTab
-        _tab = State(initialValue: startTab)
-        _quotesShown = State(initialValue: startTab == .quotes)
+        self.startTab = first
+        _tab = State(initialValue: first)
+        _quotesShown = State(initialValue: first == .quotes)
         _model = State(initialValue: RepliesModel(cid: cid, mid: mid))
     }
 
@@ -500,6 +505,8 @@ struct PostThreadSheet: View {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             }
         }
+        // The server says replies are off while Replies is open: over to Quotes, the only tab left.
+        .onChange(of: model.off) { _, off in if off { tab = .quotes } }
         .onAppear { model.start() }
         .onDisappear { model.stop() }
         // `presenting:` hands each button the item itself (2026-11-06 audit: reading the state in the
@@ -548,7 +555,8 @@ struct PostThreadSheet: View {
     /// "Replies  Quotes" with a line under the open one, then the admin's ... and the X.
     private var topBar: some View {
         HStack(alignment: .center, spacing: 24) {
-            tabButton("Replies", .replies)
+            // Replies off (here or found off by the server): no Replies tab, Quotes alone.
+            if !(repliesOff || model.off) { tabButton("Replies", .replies) }
             tabButton("Quotes", .quotes)
             Spacer(minLength: 0)
             HStack(spacing: 10) {
