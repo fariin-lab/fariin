@@ -4334,7 +4334,7 @@ struct ThreadView: View {
                 forwardTarget = m
             })
             // Quote a channel post into a chat of mine, with my words (owner 2026-11-06).
-            if conversation?.isChannel == true {
+            if conversation?.isChannel == true, !m.isSystem, m.pinNotice == nil {   // never a service line ("You pinned …")
                 items.append(UIAction(title: "Quote", image: UIImage(named: "ic_quote")) { _ in
                     forwardIsQuote = true
                     forwardTarget = m
@@ -4487,7 +4487,7 @@ struct ThreadView: View {
             })
             // Quote a channel post into a chat of mine, with my words (owner 2026-11-06).
             // Not when the channel turned Quotes off, except for its own admins (the server's rule too).
-            if conversation?.isChannel == true,
+            if conversation?.isChannel == true, !live.isSystem, live.pinNotice == nil,   // never a service line ("You pinned …")
                conversation?.quotesOff != true || conversation?.createdBy == me || conversation?.admins.contains(me) == true {
                 out.append(CMAction(title: "Quote", icon: "ic_quote", badge: "chatMenu.quote") {
                     guard let live = repo.items.first(where: { $0.id == m.id }), canForward(live) else {
