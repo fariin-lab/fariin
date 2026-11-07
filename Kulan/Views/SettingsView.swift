@@ -1220,7 +1220,7 @@ struct AppearanceSettingsView: View {
                         // Auto system. The card still shows its paired colour, because Auto on this
                         // wallpaper IS that colour; storing it as a fixed pick instead would stop it
                         // following the next wallpaper change.
-                        wallStore.applyToAllChats(.gradient(g.id))
+                        wallStore.applyToAllChats(.gradient(g.id), clearingChatPicks: true)
                         colorStore.applyToAllChats(nil)
                     } label: {
                         VStack(spacing: 6) {

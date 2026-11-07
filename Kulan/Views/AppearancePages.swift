@@ -696,7 +696,9 @@ struct WallpaperPreviewScreen: View {
                 final = .photo(bakedId)
             }
         }
-        store.applyToAllChats(final)
+        // owner 2026-11-06: from Settings it reaches EVERY chat on this phone, so a chat's old pick
+        // (or a per-chat Reset's stored "none") is cleared. A group's admin-set wallpaper stays.
+        store.applyToAllChats(final, clearingChatPicks: true)
         dismiss()
     }
 
