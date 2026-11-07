@@ -499,6 +499,11 @@ struct ThreadView: View {
     @State private var dividerWaited = false
     /// This chat was opened ON a message (the floating voice bar): captured in `init`, see there.
     @State private var openedOnFocusMessage = false
+    /// The post this chat was opened to (a quote card, the voice bar), kept for the whole open. The
+    /// router's copy is consumed by the paging `.task`; read live, the list's later landing passes
+    /// (the server window settling) found it gone and went to the newest (owner 2026-11-07, video:
+    /// a quote card opened its channel on the post, then the chat jumped to the bottom).
+    @State private var focusMessageId: String? = nil
     /// The saved-row paging (`.task` below the focus-message one) has run: found the row, hit its
     /// page cap, or hit its deadline. With `savedRowNeedsPaging` it holds the list's first land;
     /// never reset, so it can hold once per open and can never hold a chat that already landed.
@@ -617,6 +622,7 @@ struct ThreadView: View {
         // id on its first line, so a later read cannot tell "no focus" from "focus, already taken".
         // `State(initialValue:)` keeps this first init's answer through every init SwiftUI runs after.
         _openedOnFocusMessage = State(initialValue: AppRouter.shared.pendingMessageId != nil)
+        _focusMessageId = State(initialValue: AppRouter.shared.pendingMessageId)
         // A notification tap for THIS chat, from the last half minute (an older one never opened it).
         let tapped = AppRouter.shared.pendingOpenMid
         _openMid = State(initialValue: !preview && tapped?.cid == cid
@@ -5415,7 +5421,7 @@ struct ThreadView: View {
                 // which is the usual case since you were just in this chat. Anything further back is
                 // paged in and scrolled to by the `.task` below instead. Read, not consumed — the task
                 // is the one place that clears it.
-                if let target = AppRouter.shared.pendingMessageId,
+                if let target = focusMessageId ?? AppRouter.shared.pendingMessageId,
                    let row = repo.items.first(where: { $0.id == target })?.rowId {
                     return row
                 }
@@ -5458,14 +5464,14 @@ struct ThreadView: View {
             // the reader had been. A chat has to have both an unread divider and a saved position for
             // it to bite, which is an ordinary Tuesday.
             initialScrollOffset: {
-                if AppRouter.shared.pendingMessageId != nil || openMid != nil { return nil }
+                if focusMessageId != nil || AppRouter.shared.pendingMessageId != nil || openMid != nil { return nil }
                 if unreadOnOpen > 0 { return nil }
                 return ChatScrollStore.shared.position(for: cid)?.offsetFromTop
             }(),
             // The top inset that offset was measured against, so the list can tell whether the bar's
             // inset has arrived before it shows the restored row (owner, 2026-10-07: the reopen jump).
             initialScrollTopInset: {
-                if AppRouter.shared.pendingMessageId != nil || openMid != nil { return nil }
+                if focusMessageId != nil || AppRouter.shared.pendingMessageId != nil || openMid != nil { return nil }
                 if unreadOnOpen > 0 { return nil }
                 return ChatScrollStore.shared.position(for: cid)?.topInset
             }(),
