@@ -505,6 +505,9 @@ struct ThreadView: View {
     /// The divider was held back for the server window (`openAwaitsServer`), so the server's own
     /// unread count may still place it after the reveal (`openReadPass`).
     @State private var dividerWaited = false
+    /// The wait for the server window ran out (`giveUpServerAwait`, ~5 s): offline, or the tapped
+    /// notification's message was deleted. `openAwaitsServer` is false from then on.
+    @State private var openAwaitGaveUp = false
     /// This chat was opened ON a message (the floating voice bar): captured in `init`, see there.
     @State private var openedOnFocusMessage = false
     /// The post this chat was opened to (a quote card, the voice bar), kept for the whole open. The
@@ -970,6 +973,7 @@ struct ThreadView: View {
                 // so the composer / empty state shows.
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 if !revealed { revealAtOpenAnchor(proxy) }
+                await giveUpServerAwait(proxy)
             }
             .onAppear {
                 // Cache-seeded chat: didInitialLoad is already true, so the reveal onChange never fires —
@@ -8938,6 +8942,17 @@ struct ThreadView: View {
         }
     }
 
+    /// The server window may never land (offline), and a tapped notification's message may be gone
+    /// for good (deleted), so `openAwaitsServer` would hold the divider back for the whole visit.
+    /// ~5 s after the open, stop waiting: place the divider from the loaded rows, or none while they
+    /// are still behind the chat (`anchorUnread`). Called from the reveal safety-net `.task`.
+    private func giveUpServerAwait(_ proxy: ScrollViewProxy) async {
+        try? await Task.sleep(nanoseconds: 4_500_000_000)
+        guard !Task.isCancelled, openAwaitsServer else { return }
+        openAwaitGaveUp = true
+        anchorUnread(proxy)
+    }
+
     // Anchor the unread divider above the first unread message and land there on open.
     // Runs once; the last `unreadOnOpen` messages are treated as the unread block.
     private func anchorUnread(_ proxy: ScrollViewProxy) {
@@ -8945,6 +8960,9 @@ struct ThreadView: View {
         // Rows behind the chat would put the divider above messages already read. It waits for the
         // server's window (`.onChange(of: repo.serverWindowSettled)` asks again).
         if openAwaitsServer { dividerWaited = true; return }
+        // Gave up waiting (`giveUpServerAwait`) with rows that are still behind the chat: no divider
+        // for now. A server window that lands later still places it through the onChange above.
+        if openAwaitGaveUp, !repo.serverWindowSettled, rowsBehindChat { return }
         guard let boundary = unreadBoundary() else { return }
         // Just mark WHERE the unread divider goes — do NOT scroll to it. The chat always opens at
         // the BOTTOM (newest), like a standard messenger; the divider is a marker you scroll up to.
@@ -8986,8 +9004,14 @@ struct ThreadView: View {
     /// False once the server's window is in, for a preview, and for a channel follower (whose count
     /// is the post sequence, not a block at the end of these rows).
     private var openAwaitsServer: Bool {
-        guard !quiet, !repo.serverWindowSettled else { return false }
+        guard !quiet, !repo.serverWindowSettled, !openAwaitGaveUp else { return false }
         if let mid = openMid, !repo.items.contains(where: { $0.id == mid }) { return true }
+        return rowsBehindChat
+    }
+
+    /// The second half of `openAwaitsServer`: with unread waiting, the cached rows are older than
+    /// the conversation (or the unread block holds one of mine). Read on its own after the wait gave up.
+    private var rowsBehindChat: Bool {
         guard unreadOnOpen > 0, let conv = cachedConv, !conv.isFollower(me) else { return false }
         // Any row, notices included: a group change writes `updatedAt` and its notice together.
         guard let newest = repo.items.map(\.createdAt).max() else { return false }
