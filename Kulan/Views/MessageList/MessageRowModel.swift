@@ -410,8 +410,8 @@ struct BubbleRow: Equatable {
     var textHex: UInt? = nil
     /// A styled bubble's decorations, placed (`BubbleDecorSets.placed`); empty for most bubbles.
     var decor: [PlacedDecor] = []
-    /// A picture style's id (owner 2026-11-07, `PictureStyles`), on the LAST text bubble of a run
-    /// only; the earlier ones are a plain bubble in the style's colour. nil for most bubbles.
+    /// A picture style's id (owner 2026-11-07, `PictureStyles`), on every text bubble sent with
+    /// one. nil for most bubbles.
     var picture: String? = nil
     /// Dark mode and a dark picture: a thin light rim so it does not vanish on black.
     var pictureRim: Bool = false

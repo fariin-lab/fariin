@@ -23,7 +23,7 @@ struct PictureStyle: Equatable {
     let size: CGSize
     /// `text: light` in the json: white words on a dark picture.
     let lightText: Bool
-    /// The bubble's own colour, for the earlier bubbles of a run (they draw no picture).
+    /// The bubble's own colour, drawn while the picture is still decoding.
     let fill: UInt
 
     enum Pack: String, CaseIterable {

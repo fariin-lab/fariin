@@ -304,8 +304,10 @@ enum MessageRowModelBuilder {
             guard !msg.deleted, !ctx.isChannel, !ctx.stylesOff, case .text = body else { return nil }
             return BubbleStyles.find(msg.bubbleStyle)
         }()
-        // A picture style draws its picture on the LAST bubble of a run only (SPEC section 3).
-        let picture: PictureStyle? = last ? bubbleStyle?.picture : nil
+        // ⛔ EVERY STYLED BUBBLE WEARS ITS PICTURE (owner 2026-11-07, replacing SPEC section 3's
+        // last-of-run rule): with last-only, sending a new message took the art off the one before,
+        // which read as the old style being erased. Colour styles' decorations stay last-of-run.
+        let picture: PictureStyle? = bubbleStyle?.picture
         let fill: BubbleFill = bubbleStyle.map { s -> BubbleFill in
             let look = s.look(ctx.dark)
             // Soft Glass with no wallpaper behind: a blur of the plain page is nearly invisible,
