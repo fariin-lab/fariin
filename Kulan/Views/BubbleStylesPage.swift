@@ -92,6 +92,17 @@ struct BubbleStylesPage: View {
         }
     }
 
+    /// The message menu's "Bubble Style" (owner 2026-11-07): this page as a sheet over the chat.
+    /// Presented from UIKit after the menu has gone, so the chat's long SwiftUI body is untouched.
+    @MainActor static func presentSheet() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            guard let top = WebLink.topViewController() else { return }
+            let host = UIHostingController(rootView: NavigationStack { BubbleStylesPage() })
+            host.modalPresentationStyle = .pageSheet
+            top.present(host, animated: true)
+        }
+    }
+
     private func save() {
         if let s = BubbleStyles.find(selected), !BubbleStyles.mayUse(s) { plusNote = true; return }
         BubbleStyles.current = selected

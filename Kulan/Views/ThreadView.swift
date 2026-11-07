@@ -4489,6 +4489,15 @@ struct ThreadView: View {
                 UIPasteboard.general.string = live.text
             })
         }
+        // ⛔ BUBBLE STYLE (owner 2026-11-07, the reference app's menu): on MY text messages only, it
+        // opens the same picker as Settings, as a sheet. Not where styles are never drawn: a channel,
+        // the official chat, a group with Bubble styles off.
+        if BubbleStyles.shown, mine, !m.deleted, !m.text.isEmpty, !m.isFeatureMarker, !m.viewOnce,
+           !m.isImage, !m.isVideo, !m.isAlbum, !m.isFile, !m.isAudio, !m.isCall, !m.isSystem,
+           m.type != "sticker", conversation?.isChannel != true, conversation?.bubbleStylesOff != true,
+           !OfficialChannel.isOfficial(cid) {
+            out.append(CMAction(title: "Bubble Style", icon: "paintpalette") { BubbleStylesPage.presentSheet() })
+        }
         // Edit follows the TEXT, not the type: a photo/album/video caption is sealed in the same
         // `text` field editMessage rewrites, so any of my messages WITH a body is editable within
         // the window. Bare media has no text to edit; view-once never re-opens for editing.
