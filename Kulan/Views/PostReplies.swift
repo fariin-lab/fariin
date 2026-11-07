@@ -774,8 +774,11 @@ struct PostThreadSheet: View {
                 Button {
                     Task { await model.setOff(post: true, off: !model.postOff) }
                 } label: {
-                    Label(model.postOff ? "Turn On Replies for This Post" : "Turn Off Replies for This Post",
-                          systemImage: model.postOff ? "bubble.left" : "nosign")
+                    if model.postOff {
+                        Label("Turn On Replies for This Post", image: "ic_reply_comment")   // owner's icon
+                    } else {
+                        Label("Turn Off Replies for This Post", systemImage: "nosign")
+                    }
                 }
             }
             // The summaries go to admins who can delete messages; others have nothing to switch.

@@ -4480,7 +4480,7 @@ struct ThreadView: View {
             // checks the Change info right and refuses otherwise).
             if conversation?.isChannel == true, mayChangeChannelInfo {
                 let off = m.repliesOff
-                out.append(CMAction(title: off ? "Turn On Replies" : "Turn Off Replies", icon: off ? "bubble.left" : "nosign") {
+                out.append(CMAction(title: off ? "Turn On Replies" : "Turn Off Replies", icon: off ? "ic_reply_comment" : "nosign") {   // the owner's comment icon (2026-11-07)
                     setPostReplies(m.id, off: !off)
                 })
             }
