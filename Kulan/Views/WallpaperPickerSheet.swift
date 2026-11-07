@@ -61,7 +61,8 @@ struct WallpaperPickerSheet: View {
     @State private var colourTapped = false
     private var hasActiveStyle: Bool { BubbleStyles.find(bubbleStyleId) != nil }
     private var clearsStyle: Bool { colourTapped && hasActiveStyle }
-    private var showsBubbleRow: Bool { !globalOnly && BubbleStyles.shown }
+    /// Not in a group or a channel (owner 2026-11-07): their wallpaper sheet is the shared wallpaper only.
+    private var showsBubbleRow: Bool { !globalOnly && !sharedGroup && !channel && BubbleStyles.shown }
     /// What the Bubble Styles row adds to the sheet's fixed height.
     private static let bubbleRowHeight: CGFloat = 100
     // The wallpaper/colour in use when the sheet OPENED — must be @State: the live preview writes to the
@@ -183,7 +184,11 @@ struct WallpaperPickerSheet: View {
                     withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(tileID(w), anchor: .center) }
                 }
             }
+            // In a group or a channel the colour row shows greyed out and can't be used (owner 2026-11-07).
             chatColorSection
+                .disabled(sharedGroup || channel)
+                .opacity(sharedGroup || channel ? 0.35 : 1)
+                .saturation(sharedGroup || channel ? 0 : 1)
             if showsBubbleRow { bubbleStyleSection }
         }
         .frame(maxHeight: .infinity, alignment: .top)
