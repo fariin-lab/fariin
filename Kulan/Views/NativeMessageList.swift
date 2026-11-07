@@ -7363,6 +7363,8 @@ extension MessageListController: MessageRowCellDelegate {
     }
 
     func rowCell(_ cell: MessageRowCell, didTapSender uid: String) {
+        // A channel quote post's name carries the channel's id, not a person's: nothing to open.
+        guard !Conversation.Right.isChannel(uid) else { return }
         onTapSender(uid)
     }
 

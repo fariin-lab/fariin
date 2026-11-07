@@ -363,7 +363,7 @@ enum MessageRowModelBuilder {
             sender = SenderChrome(
                 uid: ctx.cid, name: ctx.channelTitle, colorSeed: ctx.cid,
                 showsName: true, showsAvatar: false, startsRun: true,
-                avatarUrl: nil, verified: ctx.channelVerified)
+                avatarUrl: nil, verified: ctx.channelVerified, nameOnly: true)
         }
 
         var storyReply: StoryReplyChrome?

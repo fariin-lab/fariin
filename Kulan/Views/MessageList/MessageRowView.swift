@@ -1768,7 +1768,8 @@ final class MessageRowView: UIView {
     }
 
     private func applySender(_ b: BubblePlan, model m: MessageRowModel) {
-        if case .bubble(let row) = m.content { runSender = row.sender } else { runSender = nil }
+        // A name-only sender (a channel's quote post) has no photo (owner 2026-11-07).
+        if case .bubble(let row) = m.content, row.sender?.nameOnly != true { runSender = row.sender } else { runSender = nil }
         runPhotoKey = nil
         if let rect = b.avatar, case .bubble(let row) = m.content, let s = row.sender {
             let v = avatarView ?? {

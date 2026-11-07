@@ -477,7 +477,9 @@ enum MessageRowLayout {
 
         // The avatar column exists for the whole cluster so the bubbles stay aligned; only the last
         // bubble of a run actually draws a face into it.
-        let avatarColumn: CGFloat = b.sender != nil ? BubbleMetrics.avatarSize + BubbleMetrics.avatarGap : 0
+        // A name-only sender (a channel's quote post, owner 2026-11-07) keeps the full width, no photo lane.
+        let avatarColumn: CGFloat = b.sender != nil && b.sender?.nameOnly != true
+            ? BubbleMetrics.avatarSize + BubbleMetrics.avatarGap : 0
         let columnX = originX + (b.isMe ? 0 : avatarColumn)
 
         // ⛔ THE FAILED BADGE'S LANE COMES OFF THE COLUMN, NOT OFF THE CAP — his screenshot,

@@ -55,6 +55,9 @@ struct SenderChrome: Equatable {
     /// The tag's colour name (`GroupRole.colors`, owner 2026-10-28: the chip in chat ignored it and
     /// drew the sender's name colour). nil = the name colour, as before.
     var roleColor: String? = nil
+    /// The name inside the bubble and nothing else: no photo, no photo lane (a channel's quote post,
+    /// owner 2026-11-07).
+    var nameOnly: Bool = false
 }
 
 /// The tinted quote box inside a bubble that is a reply.
