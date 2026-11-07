@@ -1167,7 +1167,7 @@ final class ZoomableMediaView: UIScrollView {
 
 // MARK: - View-once photo page
 
-/// ⛔ A VIEW-ONCE PHOTO HAS ITS OWN SCREEN, NOT THE GALLERY VIEWER — owner, 2026-11-07, with the
+/// ⛔ A VIEW-ONCE PHOTO HAS ITS OWN SCREEN, NOT THE GALLERY VIEWER, owner, 2026-11-07, with the
 /// reference app beside ours. The gallery viewer brought its drag-down close (whose flying copy of
 /// the photo is drawn OUTSIDE the capture shield), a header, a "..." menu and a bottom bar. Here:
 /// black, the photo, and an X. Inside, the person may do anything except capture it: pinch to zoom,

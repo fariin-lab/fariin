@@ -5095,7 +5095,7 @@ struct ThreadView: View {
                 if m.viewOnce {
                     // Already spent: a pill drawn before the mark landed must not open it again.
                     guard !ViewedOnce.contains(m.id) else { return }
-                    // ⛔ THE SENDER NEVER OPENS THEIR OWN — owner, 2026-11-07, replacing his
+                    // ⛔ THE SENDER NEVER OPENS THEIR OWN, owner, 2026-11-07, replacing his
                     // 2026-10-03 "the sender gets one view too". My own view-once photo or voice
                     // note opens nothing (the builder also draws it untappable).
                     guard m.authorId != me else { return }

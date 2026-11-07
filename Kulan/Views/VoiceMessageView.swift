@@ -1154,7 +1154,7 @@ struct OneTimeVoicePage: View {
 
     private func seek(_ pct: Double) {
         guard let p = player, p.duration > 0 else { return }
-        // ⛔ BOTH WAYS NOW — owner, 2026-11-07, reversing 09-29's forward-only: "inside the viewer
+        // ⛔ BOTH WAYS NOW, owner, 2026-11-07, reversing 09-29's forward-only: "inside the viewer
         // they may do anything except capture it; leaving is gone forever". Drag back and replay
         // from any point; the page still closes itself when playback reaches the end.
         let target = p.duration * max(0, min(1, pct))
