@@ -968,6 +968,8 @@ private struct ReplyRow: View {
                 }
             }
             .controlGroupStyle(.palette)
+            // A pick closes the menu, as in the chat (owner 2026-11-07); a palette stays open otherwise.
+            .menuActionDismissBehavior(.enabled)
         }
         if let r = actions.reply { Button { r() } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") } }
         Button { UIPasteboard.general.string = reply.text } label: { Label("Copy", systemImage: "doc.on.doc") }
