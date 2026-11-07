@@ -1927,9 +1927,11 @@ extension ChatComposerView: UITextViewDelegate {
     private func toggleBold(_ range: NSRange) {
         let storage = textView.textStorage
         guard range.length > 0, NSMaxRange(range) <= storage.length else { return }
+        // Bold is what the reader SEES: the span mark or a semibold font. The mark could go missing
+        // under a bold font (owner 2026-11-07: Bold on bold words did nothing, it re-bolded them).
         var allBold = true
-        storage.enumerateAttribute(.composerBold, in: range) { v, _, stop in
-            if v == nil { allBold = false; stop.pointee = true }
+        storage.enumerateAttributes(in: range) { a, _, stop in
+            if !Self.looksBold(a) { allBold = false; stop.pointee = true }
         }
         let selected = textView.selectedRange
         storage.beginEditing()
@@ -1947,6 +1949,14 @@ extension ChatComposerView: UITextViewDelegate {
     }
 
     private var baseFont: UIFont { textView.font ?? .systemFont(ofSize: 17) }
+    /// A run is bold when it carries the mark or a semibold-or-heavier font.
+    private static func looksBold(_ a: [NSAttributedString.Key: Any]) -> Bool {
+        if a[.composerBold] != nil { return true }
+        guard let f = a[.font] as? UIFont,
+              let w = (f.fontDescriptor.object(forKey: .traits) as? [UIFontDescriptor.TraitKey: Any])?[.weight] as? CGFloat
+        else { return false }
+        return w >= UIFont.Weight.semibold.rawValue - 0.01
+    }
     private var boldFont: UIFont { .systemFont(ofSize: baseFont.pointSize, weight: .semibold) }
 
     /// New typing starts regular.
@@ -1961,8 +1971,8 @@ extension ChatComposerView: UITextViewDelegate {
     fileprivate func currentBold() -> [NSRange] {
         let storage = textView.textStorage
         var out: [NSRange] = []
-        storage.enumerateAttribute(.composerBold, in: NSRange(location: 0, length: storage.length)) { v, r, _ in
-            if v != nil { out.append(r) }
+        storage.enumerateAttributes(in: NSRange(location: 0, length: storage.length)) { a, r, _ in
+            if Self.looksBold(a) { out.append(r) }
         }
         return TextFormat.normalized(out, length: storage.length)
     }
