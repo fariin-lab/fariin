@@ -285,8 +285,9 @@ final class LinkPreviewBubbleView: UIView {
 
         if let rect = plan.subtitle, let attr = plan.subtitleAttr {
             subtitle.isHidden = false
-            // A quoted post shows up to 8 lines, then "…" (owner 2026-11-07); the layout measures the same 8.
-            subtitle.numberOfLines = quoteCard ? 8 : 2
+            // A quoted post shows up to 8 lines, then "…"; beside its picture, 4 (owner 2026-11-07). The
+            // layout measures the same.
+            subtitle.numberOfLines = quoteCard ? (plan.hero != nil ? 4 : 8) : 2
             subtitle.frame = rect
             subtitle.attributedText = attr
         } else {

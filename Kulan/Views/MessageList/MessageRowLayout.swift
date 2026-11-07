@@ -2329,22 +2329,32 @@ enum MessageRowLayout {
             let tH = lineSizeOf(titleAttr, cap: titleW).height
             let titleRect = CGRect(x: pad + 26, y: y + (20 - tH) / 2, width: titleW, height: tH)
             y += 28
-            // The post's words first, then its picture (owner 2026-11-07: "make it top").
             var subtitle: CGRect?
             var subtitleAttr: NSAttributedString?
-            if !p.desc.isEmpty {
-                let attr = NSAttributedString(string: p.desc, attributes: [
-                    .font: UIFont.systemFont(ofSize: 16), .foregroundColor: textColor])   // 16pt, near the post's own 17 (owner 2026-11-07)
-                let h = cappedHeight(attr, width: inner, lines: 8)   // the view draws 8 too (owner 2026-11-07)
-                subtitle = CGRect(x: pad, y: y, width: inner, height: h)
-                subtitleAttr = attr
-                y += h
-            }
             var hero: CGRect?
+            let words: NSAttributedString? = p.desc.isEmpty ? nil : NSAttributedString(string: p.desc, attributes: [
+                .font: UIFont.systemFont(ofSize: 16), .foregroundColor: textColor])   // 16pt, near the post's own 17 (owner 2026-11-07)
             if p.imageUrl != nil {
-                if subtitle != nil { y += 8 }
-                let h = min(220, inner * 0.75)
-                hero = CGRect(x: pad, y: y, width: inner, height: h)
+                // ⛔ COMPACT WITH A PICTURE (owner 2026-11-07, his own mockup): the picture on the left,
+                // the words beside it, at most 4 lines then "...", both from the same top line. The
+                // view draws 4 lines too (CardBubbleViews, a quote card with a hero).
+                let imgW = (inner * 0.42).rounded()
+                let imgH = (imgW * 0.72).rounded()
+                hero = CGRect(x: pad, y: y, width: imgW, height: imgH)
+                var textH: CGFloat = 0
+                if let words {
+                    let tx = pad + imgW + 12
+                    let tw = max(1, inner - imgW - 12)
+                    textH = cappedHeight(words, width: tw, lines: 4)
+                    subtitle = CGRect(x: tx, y: y - 2, width: tw, height: textH)
+                    subtitleAttr = words
+                }
+                y += max(imgH, textH)
+            } else if let words {
+                // Words only: up to 8 lines (the view draws 8 too).
+                let h = cappedHeight(words, width: inner, lines: 8)
+                subtitle = CGRect(x: pad, y: y, width: inner, height: h)
+                subtitleAttr = words
                 y += h
             }
             y += 10
