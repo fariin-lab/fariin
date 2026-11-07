@@ -17,6 +17,8 @@ struct RootView: View {
     /// the Chats screen, shown only while iOS has never asked this phone (see Push.needsExplainer).
     enum Phase: Equatable { case loading, welcome, onboarding, main, proveEmail(String), restore(handle: String, due: Date), twoStep, notifications }
     @State private var phase: Phase = .loading
+    /// Which route() call owns the screen (see route()). A newer call makes an older one stale.
+    @State private var routeSeq = 0
     /// When "Agree and continue" was tapped on this install (seconds since 1970), 0 = not yet.
     @AppStorage(FirstRun.termsAgreedAtKey) private var termsAgreedAt: Double = 0
     /// A new account's age question waits until the notifications screen is answered, so two
@@ -455,7 +457,16 @@ struct RootView: View {
     }
 
     private func route() async {
+        // Owner 2026-11-07 (build 1121): logging out and into another account sometimes stayed on the
+        // logo for good. The awaits below include Firestore reads with no limit (the cache read in
+        // `loadCachedMine`, the server read in `loadMine`), and the log out / log in pair closes and
+        // reopens every Firestore stream, which is the moment the client's worker can stop for good
+        // (see FirestoreHub). Each call gets a number so a newer route() supersedes a stuck one, and a
+        // watchdog leaves the logo after `bootWatchdogSeconds` whatever the stuck read is doing.
+        routeSeq &+= 1
+        let seq = routeSeq
         phase = .loading
+        startBootWatchdog(seq)
         await AuthService.shared.bootstrap()   // adopts an existing session, creates nothing
         // Signed out (fresh install, or after sign-out) → the account doors. Existing
         // anonymous testers still have their session, so they never see this screen.
@@ -480,6 +491,7 @@ struct RootView: View {
         // password stops here. Local token read with a short timeout (boot path); `nil` means the
         // token did not arrive in time, and the cached path below asks again in the background.
         let twoStepAnswer = await TwoStepGate.needsPassword()
+        guard seq == routeSeq else { return }   // a newer route() owns the screen now
         if twoStepAnswer == true {
             phase = .twoStep
             return
@@ -490,7 +502,9 @@ struct RootView: View {
         // is Keychain-only now, so the whole fast path is local.
         // 2026-09-24 audit: a cached profile with a handle but NO NAME takes the slow path below, whose
         // `ready` check sends it back to onboarding (see there).
-        if await ProfileStore.shared.loadCachedMine(),
+        let hasCachedProfile = await ProfileStore.shared.loadCachedMine()
+        guard seq == routeSeq else { return }
+        if hasCachedProfile,
            ProfileStore.shared.me?.name.trimmingCharacters(in: .whitespaces).isEmpty == false {
             // ⚠️ THE SERVER CHECK CAME OFF THE BOOT PATH, AND THE TWO LINES ABOVE ARE WHY.
             //
@@ -516,6 +530,7 @@ struct RootView: View {
                 return
             }
             try? await Crypto.shared.ensureReady()
+            guard seq == routeSeq else { return }
             Push.register(); Push.saveVoipToken()
             DeviceRegistry.shared.start()   // record this phone in Settings › Devices, and watch for a remote sign-out
             startOfficialChannel()
@@ -525,7 +540,9 @@ struct RootView: View {
                 ConversationsRepository.shared.refreshForDemo()
             }
             // A local settings read, no network: the explainer only for a phone never asked.
-            phase = await Push.needsExplainer() ? .notifications : .main
+            let explain = await Push.needsExplainer()
+            guard seq == routeSeq else { return }
+            phase = explain ? .notifications : .main
             Task {   // background refresh + key self-heal, off the boot path
                 // 2026-09-24 decision D1: the two-step answer the boot path timed out on. Before the
                 // deletion check, because a locked token cannot read the profile that check reads.
@@ -553,6 +570,9 @@ struct RootView: View {
         // others can never message them: "hasn't set up encryption yet").
         try? await Crypto.shared.ensureReady()
         await ProfileStore.shared.loadMine()
+        // The watchdog may have opened the app while this read hung; a later route() (log out, or
+        // another sign-in) owns the screen then and this answer is stale.
+        guard seq == routeSeq else { return }
         // ⛔ PUBLISHING IS NOT ON THE BOOT PATH — owner, 2026-09-11: "when I create a new account,
         // then open the app, the chat app freezes for seconds, and if I touch anywhere nothing
         // works". Also why the Stories tab had no My Story card and the chat list was blank: on
@@ -603,7 +623,48 @@ struct RootView: View {
         if !ready {
             phase = .onboarding
         } else {
-            phase = await Push.needsExplainer() ? .notifications : .main
+            let explain = await Push.needsExplainer()
+            guard seq == routeSeq else { return }
+            phase = explain ? .notifications : .main
+        }
+    }
+
+    /// How long the logo may stay up once route() has started (auth is known by then: `bootstrap`
+    /// only reads the current user). On a working client every step answers well inside that, so 8 s
+    /// almost always means a read hung.
+    private static let bootWatchdogSeconds: Double = 8
+
+    /// Owner 2026-11-07: the safety net under route(). If the same route() call still holds the logo
+    /// after `bootWatchdogSeconds`, it is waiting on a Firestore client that has stopped. Signed in:
+    /// the client is reported stuck (SessionRecovery swaps in a fresh one, and every listener started
+    /// here re-attaches to it on `FirestoreHub.swapped`), the same services route()'s ready branch
+    /// starts are started, and the app opens. Nobody signed in: the log in screen. The stuck route()
+    /// may still answer later; its answer (onboarding, restore, two-step) then replaces this one.
+    private func startBootWatchdog(_ seq: Int) {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(Self.bootWatchdogSeconds * 1_000_000_000))
+            guard seq == routeSeq, phase == .loading else { return }
+            guard !DemoMode.active, let uid = AuthService.shared.uid else {
+                DiagLog.add("BOOT: logo for \(Int(Self.bootWatchdogSeconds))s with nobody signed in, log in screen")
+                phase = .welcome
+                return
+            }
+            DiagLog.add("BOOT: logo for \(Int(Self.bootWatchdogSeconds))s after sign-in, opening the app anyway")
+            // Probes with a cache read (disk only): silent for 3 s means the client is stuck, and the
+            // probe hands it to SessionRecovery.noteWedged, which swaps in a fresh client. A slow but
+            // working client (offline first launch) answers and is left alone.
+            DiagLog.snapshot("boot stuck on the logo")
+            Push.register(); Push.saveVoipToken()
+            DeviceRegistry.shared.start()
+            startOfficialChannel()
+            phase = .main
+            // The profile read that hung belongs to the stuck client: read it again on the fresh one.
+            Task { @MainActor in
+                for await _ in NotificationCenter.default.notifications(named: FirestoreHub.swapped) { break }
+                guard AuthService.shared.uid == uid else { return }
+                await ProfileStore.shared.loadMine()
+                await SendQueue.drainAll()
+            }
         }
     }
 
