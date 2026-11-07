@@ -4190,7 +4190,7 @@ struct ThreadView: View {
         // viewedOnceTick (the view-once pill), expiryTick (the countdown).
         add("\(storiesRepo.storiesVersion)"); add("\(storiesRepo.didLoad)"); add("\(hiddenTick)")
         add("\(viewedOnceTick)")
-        add("\(conversation?.repliesOff == true)")   // the channel's replies switch moves every post's bar (2026-11-06)
+        add("\(conversation?.repliesOff == true)|\(conversation?.quotesOff == true)")   // the channel's replies switch moves every post's bar (2026-11-06)
         add("\(conversation?.bubbleStylesOff == true)")   // the group's Bubble styles switch (2026-11-07)
         add("\(groupCardTick)")   // a group invite card's live answer (`LiveGroupCard`)
         add("\(repo.expiryTick)")
@@ -4233,6 +4233,7 @@ struct ThreadView: View {
             channelReactionsOn: channelReactOn, channelCanReact: channelCanReact,
             noForwarding: repo.noForwarding,
             repliesOff: conversation?.repliesOff == true,
+            quotesOff: conversation?.quotesOff == true,
             // Bubble styles (2026-11-07): off in a group whose admins turned them off, and never in
             // the official Fariin chat. Channels are kept plain by the builder itself.
             stylesOff: conversation?.bubbleStylesOff == true || OfficialChannel.isOfficial(cid),
@@ -4739,7 +4740,8 @@ struct ThreadView: View {
                             // After the sheet is down, so the push is not lost under it.
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { openQuoteSource(item) }
                         },
-                        startTab: quotesStartOnQuotes ? .quotes : .replies)
+                        startTab: quotesStartOnQuotes ? .quotes : .replies,
+                        quotesOff: conversation?.quotesOff == true)
         let repo = self.repo
         sheet.onPostRepliesChanged = { off in repo.setRepliesOffLocally(mid, off: off) }
         // A reply's photo or name (owner 2026-11-07): the sheet goes down, then the person's profile,

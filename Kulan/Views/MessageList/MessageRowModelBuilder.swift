@@ -33,6 +33,8 @@ struct MessageRowContext {
     var noForwarding: Bool = false
     /// The channel has replies off for every post (`Conversation.repliesOff`).
     var repliesOff: Bool = false
+    /// The channel turned Quotes off: the bar leaves out the quote count (owner 2026-11-07).
+    var quotesOff: Bool = false
     /// Draw every bubble plain, whatever style it was sent with: a group with Bubble styles off
     /// (`Conversation.bubbleStylesOff`) and the official Fariin chat (owner 2026-11-07).
     var stylesOff: Bool = false
@@ -493,8 +495,9 @@ enum MessageRowModelBuilder {
         // Off hides the Reply part entirely (owner 2026-11-07: "in post don't show Reply"); the bar
         // stays only for quotes.
         let showReplies = !msg.repliesOff(channelDefault: ctx.repliesOff)
-        guard showReplies || msg.quoteCount > 0 else { return nil }
-        return QuoteBarChrome(count: msg.quoteCount, faces: msg.quoteCount > 0 ? msg.quoteFaces : [],
+        let quotes = ctx.quotesOff ? 0 : msg.quoteCount
+        guard showReplies || quotes > 0 else { return nil }
+        return QuoteBarChrome(count: quotes, faces: quotes > 0 ? msg.quoteFaces : [],
                               replies: showReplies ? msg.replyCount : nil,
                               replyFaces: showReplies && msg.replyCount > 0 ? msg.replyFaces : [])
     }

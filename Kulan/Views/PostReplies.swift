@@ -637,6 +637,8 @@ struct PostThreadSheet: View {
     var picture: () async -> UIImage?
     var onOpen: (QuotedInItem) -> Void
     var startTab: Tab = .replies
+    /// The channel turned Quotes off: no Quotes tab at all (owner 2026-11-07).
+    var quotesOff: Bool = false
     /// This post's replies switch changed here: the chat updates the post at once (owner 2026-11-07).
     var onPostRepliesChanged: (Bool) -> Void = { _ in }
     /// A tap on a reply's photo or name: that person's profile (uid, name), or the channel's own page
@@ -658,12 +660,13 @@ struct PostThreadSheet: View {
 
     init(cid: String, mid: String, post: Message?, repliesOff: Bool = false, sourceTitle: String, sourcePhoto: String?,
          sourceVerified: Bool, picture: @escaping () async -> UIImage?, onOpen: @escaping (QuotedInItem) -> Void,
-         startTab: Tab = .replies) {
+         startTab: Tab = .replies, quotesOff: Bool = false) {
         self.cid = cid
+        self.quotesOff = quotesOff
         self.mid = mid
         self.post = post
         self.repliesOff = repliesOff
-        let first: Tab = repliesOff ? .quotes : startTab
+        let first: Tab = quotesOff ? .replies : (repliesOff ? .quotes : startTab)
         self.sourceTitle = sourceTitle
         self.sourcePhoto = sourcePhoto
         self.sourceVerified = sourceVerified
@@ -715,7 +718,7 @@ struct PostThreadSheet: View {
         .onChange(of: model.flagsLoaded) { _, l in if l { offNow = model.off } }
         // Off: Quotes is the only tab left. Turned on again: back to Replies, where the field is.
         .onChange(of: offNow) { was, off in
-            if off { tab = .quotes } else if was { tab = .replies }
+            if off && !quotesOff { tab = .quotes } else if was { tab = .replies }
         }
         .onAppear { model.start() }
         .onDisappear { model.stop() }
@@ -767,8 +770,9 @@ struct PostThreadSheet: View {
     private var topBar: some View {
         HStack(alignment: .center, spacing: 24) {
             // Replies off (here or found off by the server): no Replies tab, Quotes alone.
-            if !offNow { tabButton("Replies", .replies) }
-            tabButton("Quotes", .quotes)
+            // With Quotes off too, Replies stays (read-only): something has to be shown.
+            if !offNow || quotesOff { tabButton("Replies", .replies) }
+            if !quotesOff { tabButton("Quotes", .quotes) }
             Spacer(minLength: 0)
             HStack(spacing: 10) {
                 if model.may.settings || model.may.del {
