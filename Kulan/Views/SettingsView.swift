@@ -820,8 +820,16 @@ struct AccountSettingsView: View {
         // Deletion is a PAGE, not a one-tap alert: it names the account, spells out what's lost,
         // and re-verifies you first (an alert can't do the provider re-auth, and skipping it is
         // what used to leave accounts half-deleted).
-        .navigationDestination(isPresented: $showDelete) {
-            DeleteAccountView { dismiss(); onSignOut() }
+        // owner 2026-11-07: a short sheet now. On success the root goes straight to the log in
+        // screen; the sheet is put away without animation in the same moment, so neither it nor
+        // any settings page slides past on the way out.
+        .sheet(isPresented: $showDelete) {
+            DeleteAccountView {
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { showDelete = false }
+                onSignOut()
+            }
         }
         // Removing a login is a page, not an alert, for the same reason deleting the account is:
         // an alert cannot run a provider's re-authentication sheet, and skipping that step is what
