@@ -1020,6 +1020,17 @@ private struct ReplyRow: View {
     /// The thread line this row draws (owner 2026-11-07, his reference picture).
     var line: ReplyThreadLine = .none
 
+    /// At most four pills on a reply (owner 2026-11-07), the most used first; mine always stays in
+    /// view, taking the fourth place when it is not among the top four.
+    static func shownPills(_ r: PostReply) -> [PostReply.Reaction] {
+        var out = Array(r.rx.prefix(4))
+        if !r.my.isEmpty, !out.contains(where: { $0.emoji == r.my }),
+           let mine = r.rx.first(where: { $0.emoji == r.my }), !out.isEmpty {
+            out[out.count - 1] = mine
+        }
+        return out
+    }
+
     var body: some View {
         // His reference picture (owner 2026-11-07): name and age over the bubble, the photo beside
         // the bubble's middle, the heart and Reply under it.
@@ -1100,7 +1111,7 @@ private struct ReplyRow: View {
                 // bubble react works in my app"). No empty outline: a double tap on the bubble reacts,
                 // and once there is a reaction a pill shows the emoji and count; mine is the dark,
                 // filled one, as in the chat; a tap on it takes mine back or adds it.
-                ForEach(reply.rx, id: \.emoji) { r in
+                ForEach(Self.shownPills(reply), id: \.emoji) { r in
                     let mine = r.emoji == reply.my
                     Button { actions.react(r.emoji) } label: {
                         HStack(spacing: 4) {
