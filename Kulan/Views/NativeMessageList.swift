@@ -6580,6 +6580,19 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         overlay.keyboardTop = keysUp
             ? view.convert(CGPoint(x: 0, y: view.bounds.maxY - keyboardOverlap), to: nil).y
             : nil
+        // ⛔ THE KEYBOARD THE MENU CLOSES TAKES THE LIST WITH IT (owner 2026-11-07: after closing, the
+        // post jumped). The list stood still for the keys going down, then paid the whole move after
+        // the bubble had flown home to its old spot. Now it follows the keys at once, hidden under the
+        // blur, and the bubble flies home to where its row is now.
+        overlay.onWillCloseKeyboard = { [weak self] in
+            guard let self else { return }
+            self.contextMenuVisible = false
+        }
+        let source = src.source
+        overlay.liveSourceFrame = { [weak overlay, weak source] in
+            guard let overlay, overlay.closedKeyboard, let source, source.window != nil else { return nil }
+            return source.convert(source.bounds, to: nil)
+        }
         overlay.present(in: window, startAtSqueeze: true)
     }
 

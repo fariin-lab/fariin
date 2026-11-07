@@ -343,6 +343,11 @@ final class CMOverlay: UIView {
     var keyboardTop: CGFloat?
     /// Set once this menu has closed the keyboard because the stack didn't fit above it.
     private var closedKeyboardForRoom = false
+    /// Called just before this menu closes the keyboard, so the screen behind can follow the keys
+    /// down now, under the blur, instead of jumping when the menu closes (owner 2026-11-07).
+    var onWillCloseKeyboard: (() -> Void)?
+    /// True once this menu closed the keyboard (the screen behind may have moved since the press).
+    var closedKeyboard: Bool { closedKeyboardForRoom }
 
     /// The window we made, if we made one. Held until teardown; see `removeFromSuperview`.
     private var hostWindow: UIWindow?
@@ -753,6 +758,7 @@ final class CMOverlay: UIView {
                 if !closedKeyboardForRoom {
                     closedKeyboardForRoom = true
                     keyboardTop = nil
+                    onWillCloseKeyboard?()
                     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                 }
             } else {
