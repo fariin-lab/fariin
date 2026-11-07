@@ -1220,7 +1220,7 @@ struct ChannelReactionsSettingsView: View {
             if list != savedList || mode != savedMode { save() }
         }) {
             // Low enough that the bar stays in sight above it.
-            EmojiMorePicker(title: "Choose Emoji", detents: [.fraction(0.42), .large],
+            EmojiMorePicker(title: "Choose Emoji", detents: [.fraction(0.56), .large],
                             only: EmojiCatalog.channelReactions,
                             showsCustom: CustomReaction.canChoose,
                             multi: $list, maxPicks: Self.maxPicked) { _ in }
