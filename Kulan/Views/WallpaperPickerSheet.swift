@@ -77,7 +77,7 @@ struct WallpaperPickerSheet: View {
         self.cid = cid
         self.globalOnly = globalOnly
         self.sharedGroup = sharedGroup && !globalOnly
-        self.hadOwnWallpaper = WallpaperStore.shared.hasOverride(for: cid)
+        self.hadOwnWallpaper = WallpaperStore.shared.hasOwnPick(for: cid)   // not the group's shared copy
         _chatStyleId = AppStorage(wrappedValue: "", BubbleStyles.chatKey(cid))
         let cur = WallpaperStore.shared.wallpaper(for: cid)
         _selected = State(initialValue: cur)
@@ -370,15 +370,15 @@ struct WallpaperPickerSheet: View {
     // Remove a photo from the library. Only the library entry is deleted — if it was the live
     // selection (or the active wallpaper), fall back cleanly so no chat points at a missing file.
     private func deleteLibraryPhoto(_ pid: String) {
-        if original == .photo(pid) {
-            original = .none
-            store.set(.none, for: cid)     // active wallpaper used this photo → reset the ACTIVE only
-        }
+        // The store clears every chat and the default that used this photo, so an inherited photo
+        // is just gone here and this chat is not pinned to its own "none".
+        store.deleteFromLibrary(pid)
+        if original == .photo(pid) { original = .none }
         if selected == .photo(pid) {
             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { selected = original }
-            store.set(original, for: cid)  // drop the live preview of the deleted photo
+            // Drop the live preview: back to the chat's own pick, or to following the default.
+            if hadOwnWallpaper { store.set(original, for: cid) } else { store.clearOverride(for: cid) }
         }
-        store.deleteFromLibrary(pid)       // history entry + file removed; other photos untouched
     }
 
     // Something of this chat's own is in use or being tried → offer Reset. Each reset in the menu
@@ -476,6 +476,7 @@ struct WallpaperPickerSheet: View {
             // path that still clears chats' own picks — an explicit "reset all", as the reference has.
             store.applyToAllChats(.none, clearingChatPicks: true)
             colorStore.resetAllColors()
+            BubbleStyles.current = nil         // the all-chats bubble style too
         } else {
             store.clearOverride(for: cid)
             colorStore.resetChatColor(for: cid)

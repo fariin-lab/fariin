@@ -166,6 +166,15 @@ enum BubbleStyles {
         }
     }
 
+    /// Sign-out: the all-chats style, the decorations switch and the remembered team flag are the
+    /// account's too, so the next person on this phone does not inherit them.
+    static func removeAccountKeys() {
+        let d = UserDefaults.standard
+        d.removeObject(forKey: key)
+        d.removeObject(forKey: decorKey)
+        d.removeObject(forKey: teamKey)
+    }
+
     /// Send my style's decorations too (owner: "optional decorative elements"). On by default.
     static let decorKey = "bubbleStyle.decor.v1"
     static var decorations: Bool {

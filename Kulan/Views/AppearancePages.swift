@@ -276,8 +276,10 @@ struct ChatWallpaperPage: View {
             // draw it; closing without Apply takes it back out. Applied as is, it is the default
             // now and stays; applied with framing/blur, `apply()` already replaced it with the
             // baked copy, so this id is gone and nothing is touched.
-            if let id = justPickedPhoto, current != .photo(id), store.libraryIds.contains(id) {
-                store.deleteFromLibrary(id)
+            // Only a photo this pick newly added and nothing stored uses: picking a photo already
+            // in the library returns that one, which other chats or the default may still show.
+            if let id = justPickedPhoto, current != .photo(id) {
+                store.discardUnkept(id)
             }
             justPickedPhoto = nil
         }) { w in
@@ -713,7 +715,7 @@ struct WallpaperPreviewScreen: View {
                 : img
             let finalImg = blurred ? (Self.gaussianBlur(cropped, radius: 10) ?? cropped) : cropped
             if let bakedId = store.addToLibrary(finalImg) {
-                if bakedId != id { store.deleteFromLibrary(id) }   // no duplicate tile
+                if bakedId != id { store.discardUnkept(id) }   // no duplicate tile, never one in use
                 final = .photo(bakedId)
             }
         }
