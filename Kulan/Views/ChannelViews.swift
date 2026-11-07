@@ -446,7 +446,7 @@ struct ChannelFollowersView: View {
                     // 2026-10-29 review fix); others see the list without the swipe.
                     .swipeActions(edge: .trailing) {
                         if mayRemove {
-                            Button("Remove", role: .destructive) { confirmBan = false; confirm = (f, false) }
+                            Button("Remove", role: .destructive) { confirmBan = false; confirm = (f, false) }.tint(.red)
                             Button("Ban") { confirmBan = true; confirm = (f, true) }.tint(.orange)
                         }
                     }
