@@ -59,12 +59,18 @@ actor LinkPreviewService {
     /// A composer draft: everything the card needs, still plaintext, still local.
     struct LinkDraft: Equatable {
         let url: URL
-        let title: String
-        let desc: String
+        var title: String
+        var desc: String
         let image: UIImage?
         var host: String { url.host?.replacingOccurrences(of: "www.", with: "") ?? url.absoluteString }
         /// The bytes that travel (re-encoded, bounded) — nil when the page had no usable image.
         var imageJPEG: Data? { image?.jpegData(compressionQuality: 0.75) }
+        /// The page is a video or a reel (og:type/og:video, or a known reel/video address). Read by
+        /// the story card, which draws its own play button. YouTube's cover has one baked in already,
+        /// so its draft leaves this false.
+        var isVideo: Bool = false
+        /// The site's small icon, for the story card's host row. Only the story composer fills it.
+        var icon: UIImage? = nil
     }
 
     private var cache: [String: LinkDraft?] = [:]     // value nil = fetched, no usable preview
@@ -103,6 +109,12 @@ actor LinkPreviewService {
             }
             if let vid = Self.youtubeID(in: url), let yt = await Self.youtubeDraft(url: url, id: vid) {
                 return yt
+            }
+            // TikTok: its page often answers without tags; its public oEmbed then has the title and cover.
+            if Self.isTikTok(url) {
+                let og = await Self.fetch(url)
+                if og?.image != nil { return og }
+                return await Self.tiktokDraft(url: url) ?? og
             }
             return await Self.fetch(url)
         }
@@ -441,6 +453,64 @@ actor LinkPreviewService {
         }
     }
 
+    // MARK: - Reels and short videos
+
+    static func isTikTok(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        return host == "tiktok.com" || host.hasSuffix(".tiktok.com")
+    }
+
+    static func isInstagram(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        return host == "instagram.com" || host.hasSuffix(".instagram.com")
+    }
+
+    /// An address that is a reel or a short video by its shape alone: instagram.com/reel/…,
+    /// /reels/…, /tv/…, a TikTok /video/ page or its vm./vt. short link.
+    static func isVideoLink(_ url: URL) -> Bool {
+        let parts = url.pathComponents.filter { $0 != "/" }.map { $0.lowercased() }
+        if isInstagram(url) { return ["reel", "reels", "tv"].contains(parts.first ?? "") }
+        if isTikTok(url) {
+            let host = url.host?.lowercased() ?? ""
+            return parts.contains("video") || host.hasPrefix("vm.") || host.hasPrefix("vt.")
+        }
+        return false
+    }
+
+    /// TikTok's public oEmbed: title and cover, no sign-in. Nil when it has nothing.
+    private static func tiktokDraft(url: URL) async -> LinkDraft? {
+        guard var c = URLComponents(string: "https://www.tiktok.com/oembed") else { return nil }
+        c.queryItems = [URLQueryItem(name: "url", value: url.absoluteString)]
+        guard let u = c.url,
+              let (data, resp) = try? await URLSession.shared.data(for: URLRequest(url: u, timeoutInterval: 8)),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let title = (j["title"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        var cover: UIImage?
+        if let t = j["thumbnail_url"] as? String, let tu = URL(string: t), tu.scheme == "https", !isPrivateHost(tu) {
+            cover = await fetchImage(tu, pageURL: url)
+        }
+        guard !title.isEmpty || cover != nil else { return nil }
+        return LinkDraft(url: url, title: title, desc: j["author_name"] as? String ?? "", image: cover,
+                         isVideo: true)
+    }
+
+    /// The site's small icon: its apple-touch-icon, else favicon.ico. Nil when neither answers.
+    static func siteIcon(for url: URL) async -> UIImage? {
+        guard let host = url.host, url.scheme == "https", !isPrivateHost(url) else { return nil }
+        for path in ["/apple-touch-icon.png", "/favicon.ico"] {
+            guard let u = URL(string: "https://\(host)\(path)") else { continue }
+            var req = URLRequest(url: u, timeoutInterval: 5)
+            req.setValue(Self.browserUA, forHTTPHeaderField: "User-Agent")
+            guard let (data, resp) = try? await URLSession.shared.data(for: req),
+                  (resp as? HTTPURLResponse)?.statusCode == 200,
+                  data.count <= 512 * 1024,
+                  let img = UIImage(data: data), img.size.width >= 16 else { continue }
+            return img
+        }
+        return nil
+    }
+
     private static func fetch(_ url: URL) async -> LinkDraft? {
         guard url.scheme == "https", !isPrivateHost(url) else { return nil }
         var req = URLRequest(url: url, timeoutInterval: 8)
@@ -490,7 +560,11 @@ actor LinkPreviewService {
            !isPrivateHost(imgUrl) {   // 2026-09-24 decision D-composer-6: a page cannot aim us inward
             image = await fetchImage(imgUrl, pageURL: url)
         }
-        return LinkDraft(url: url, title: decodeEntities(title), desc: decodeEntities(desc), image: image)
+        let ogType = metaContent(html, property: "og:type")?.lowercased() ?? ""
+        let video = ogType.hasPrefix("video") || metaContent(html, property: "og:video") != nil
+            || metaContent(html, property: "og:video:url") != nil || isVideoLink(url)
+        return LinkDraft(url: url, title: decodeEntities(title), desc: decodeEntities(desc), image: image,
+                         isVideo: video)
     }
 
     /// A real Safari UA. The old "KulanBot/1.0" was honest but got us treated as an unknown scraper:
