@@ -693,9 +693,23 @@ struct RootView: View {
             startOfficialChannel()
             phase = .main
             // The profile read that hung belongs to the stuck client: read it again on the fresh one.
+            // Bounded: with no swap inside 30 s the client was slow, not stuck, and this gives up, so a
+            // much later swap (another account, another route) never runs a stale reload.
             Task { @MainActor in
-                for await _ in NotificationCenter.default.notifications(named: FirestoreHub.swapped) { break }
-                guard AuthService.shared.uid == uid else { return }
+                let swapped = await withTaskGroup(of: Bool.self) { group -> Bool in
+                    group.addTask {
+                        for await _ in NotificationCenter.default.notifications(named: FirestoreHub.swapped) { return true }
+                        return false
+                    }
+                    group.addTask {
+                        try? await Task.sleep(nanoseconds: 30_000_000_000)
+                        return false
+                    }
+                    let first = await group.next() ?? false
+                    group.cancelAll()
+                    return first
+                }
+                guard swapped, seq == routeSeq, AuthService.shared.uid == uid else { return }
                 await ProfileStore.shared.loadMine()
                 await SendQueue.drainAll()
             }
