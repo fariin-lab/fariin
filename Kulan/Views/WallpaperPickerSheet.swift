@@ -504,7 +504,9 @@ struct WallpaperPickerSheet: View {
     private func resetColorOnly() {
         committed = true
         colorStore.set(ChatColors.presets.first, for: cid)
-        if !globalOnly { chatStyleId = BubbleStyles.noneId }   // the default bubble, no picture style
+        // The default bubble, no picture style. Not in a shared group: its sheet has no bubble row,
+        // so "Reset Chat Color" there resets the colour only and leaves the chat's style alone.
+        if !globalOnly && !sharedGroup { chatStyleId = BubbleStyles.noneId }
         if sharedGroup { store.endGroupEdit(cid) }   // drop the tried wallpaper; the group's stays
         else if hadOwnWallpaper { store.set(original, for: cid) } else { store.clearOverride(for: cid) }
         dismiss()
