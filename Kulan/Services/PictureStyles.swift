@@ -5,12 +5,18 @@ import ImageIO
 /// small art on its corners, cut into nine parts: the corners keep their size and the middle
 /// stretches. The rules live in Documents/fariin-bubbles/SPEC.md, shared with the Android app.
 ///
-/// The numbers below are the `bubbles/<id>.json` files, copied as a table so nothing is parsed at
-/// launch. All four arrays are in PICTURE PIXELS, ordered [top, right, bottom, left]:
+/// The numbers below are the v2 set's `bubbles_v2/<id>.json` files (corners redrawn round, owner
+/// 2026-11-07: "near-square corners"), copied as a table so nothing is parsed at launch. The four
+/// arrays are in PICTURE PIXELS, ordered [top, right, bottom, left]:
 /// - `slice`: the cap insets (how much of each edge stays fixed).
 /// - `bubble`: where the bubble's own outline is inside the picture. Right and bottom are
 ///   coordinates, not distances: right = 858 on an 860-wide picture is 2 px from the edge.
-/// - `ins`: how far the text must stay clear of corner art that reaches inside the bubble.
+/// - `ins`: the json's side clearance for the whole height (the Android app's number). This app
+///   uses the finer `artIn` boxes instead, see `sideRoom`.
+/// - `radius`: the outline's corner radius, about 18pt at `scale`.
+/// `art` lists every piece of corner art that reaches INSIDE the outline, measured from the v2
+/// pictures by tools/bubble_art_boxes.py: (corner, w, h) in picture px, w from that corner's side,
+/// h from its top or bottom edge. Art above, beside or under the bubble is not in it.
 ///
 /// ⚠️ Ids are file names and stay the same forever (SPEC section 8). Never reuse one for a new look.
 struct PictureStyle: Equatable {
@@ -21,6 +27,10 @@ struct PictureStyle: Equatable {
     let bubble: [CGFloat]
     let ins: [CGFloat]
     let size: CGSize
+    /// The outline's corner radius, in picture px.
+    let radius: CGFloat
+    /// The corner art inside the outline (see above).
+    let artIn: [ArtBox]
     /// `text: light` in the json: white words on a dark picture.
     let lightText: Bool
     /// The bubble's own colour, drawn while the picture is still decoding.
@@ -28,6 +38,16 @@ struct PictureStyle: Equatable {
 
     enum Pack: String, CaseIterable {
         case anime = "Anime", genZ = "Gen Z", cute = "Cute", careers = "Careers", sport = "Sport", everyday = "Everyday"
+    }
+
+    enum Corner { case tl, tr, bl, br }
+
+    /// One piece of art inside the outline: it reaches `w` px in from its corner's side and `h` px
+    /// in from its corner's top or bottom edge.
+    struct ArtBox: Equatable {
+        let corner: Corner
+        let w: CGFloat
+        let h: CGFloat
     }
 
     /// The words' colour: the mock's warm near-black on light pictures, white on dark ones.
@@ -40,6 +60,9 @@ struct PictureStyle: Equatable {
         return min(0.24, 44 / max(inside, 1))
     }
 
+    /// The outline's corner radius in points, for the plain bubble drawn while the picture decodes.
+    var cornerRadius: CGFloat { radius * scale }
+
     /// How far the picture reaches past the bubble's outline on each side, in points: the art
     /// above, beside and under the bubble.
     var art: UIEdgeInsets {
@@ -48,24 +71,52 @@ struct PictureStyle: Equatable {
                             bottom: (size.height - bubble[2]) * s, right: (size.width - bubble[1]) * s)
     }
 
-    /// The styles whose corner art touched the words in testing (SPEC section 6, "fix before ship"),
-    /// in picture px. Lawyer, security and manga: 12 px more on each side that has art reaching in.
-    /// Doctor: 85 px on the red-cross side (right), the number the Android app uses.
-    private var clearance: (left: CGFloat, right: CGFloat) {
-        var l = max(40, ins[3] + 6), r = max(40, ins[1] + 6)
-        if ["lawyer", "security", "manga"].contains(id) {
-            if ins[3] > 0 { l += 12 }
-            if ins[1] > 0 { r += 12 }
+    /// The words never come nearer the outline's side than this (the v2 json's `ins` floor).
+    static let sideMin: CGFloat = 11
+    /// Nor nearer any art inside the outline than this.
+    static let artGap: CGFloat = 4
+
+    /// ⛔ SIDE ROOM PER ROW, NOT PER STYLE (owner 2026-11-07, build 1118: an empty block beside short
+    /// messages in security and doctor). The room the content needs on each side when its top sits
+    /// `top` points under the outline's top edge and its bottom sits `bottom` points above the
+    /// outline's bottom edge. A piece of art costs side room only when it reaches down (or up) into
+    /// those rows; a peeker sitting on the top edge costs nothing beside a line of words under it.
+    func sideRoom(top: CGFloat, bottom: CGFloat) -> (left: CGFloat, right: CGFloat) {
+        let s = scale
+        var l = Self.sideMin, r = Self.sideMin
+        for a in artIn {
+            let fromTop = a.corner == .tl || a.corner == .tr
+            guard a.h * s + Self.artGap > (fromTop ? top : bottom) else { continue }
+            let room = ceil(a.w * s + Self.artGap)
+            if a.corner == .tl || a.corner == .bl { l = max(l, room) } else { r = max(r, room) }
         }
-        if id == "doctor" { r = max(r, 85) }
         return (l, r)
     }
 
-    /// Where the words sit inside the bubble's outline, in points: 40 px from each side (more where
-    /// corner art reaches in), and 10pt above and below, the numbers the tested mocks use.
+    /// Art this shallow (hands resting on the top edge, a small sticker on the bottom one) is
+    /// cleared by moving the words down or up a few points instead of in from the side: a few
+    /// points of height cost far less than a wide empty band beside a short message.
+    static let liftMax: CGFloat = 16
+
+    /// The words' distance from the top (or bottom) edge: 10pt, the number the tested mocks use, or
+    /// more to clear the shallow art on that edge.
+    private func edgePad(top: Bool) -> CGFloat {
+        let s = scale
+        var pad: CGFloat = 10
+        for a in artIn where (a.corner == .tl || a.corner == .tr) == top {
+            let reach = a.h * s + Self.artGap
+            if reach <= Self.liftMax { pad = max(pad, ceil(reach)) }
+        }
+        return pad
+    }
+
+    /// Where the words sit inside the bubble's outline, in points: `edgePad` above and below, and
+    /// at the sides the room a block that far from both edges needs. The layout measures with
+    /// these and then gives back what a bubble grown to its corners does not need.
     var textInsets: UIEdgeInsets {
-        let s = scale, c = clearance
-        return UIEdgeInsets(top: 10, left: c.left * s, bottom: 10, right: c.right * s)
+        let t = edgePad(top: true), b = edgePad(top: false)
+        let side = sideRoom(top: t, bottom: b)
+        return UIEdgeInsets(top: t, left: side.left, bottom: b, right: side.right)
     }
 
     /// The smallest bubble (outline) the nine parts can make: both caps of each axis, less the art
@@ -79,54 +130,92 @@ struct PictureStyle: Equatable {
 
 enum PictureStyles {
     private static func p(_ id: String, _ name: String, _ g: PictureStyle.Pack, slice: [CGFloat], bubble: [CGFloat],
-                          ins: [CGFloat], size: [CGFloat], light: Bool, fill: UInt) -> PictureStyle {
+                          ins: [CGFloat], size: [CGFloat], radius: CGFloat, light: Bool, fill: UInt,
+                          art: [(PictureStyle.Corner, CGFloat, CGFloat)]) -> PictureStyle {
         PictureStyle(id: id, name: name, group: g, slice: slice, bubble: bubble, ins: ins,
-                     size: CGSize(width: size[0], height: size[1]), lightText: light, fill: fill)
+                     size: CGSize(width: size[0], height: size[1]), radius: radius,
+                     artIn: art.map { PictureStyle.ArtBox(corner: $0.0, w: $0.1, h: $0.2) },
+                     lightText: light, fill: fill)
     }
 
     /// The 35 styles, in picker order inside each group (README.md lists the groups).
     static let all: [PictureStyle] = [
         // Anime
-        p("sakura", "Sakura", .anime, slice: [189, 125, 158, 208], bubble: [108, 710, 350, 1], ins: [0, 104, 0, 177], size: [721, 370], light: false, fill: 0xFED1DA),
-        p("blush", "Blush", .anime, slice: [235, 187, 151, 92], bubble: [124, 886, 384, 22], ins: [0, 175, 0, 60], size: [888, 410], light: false, fill: 0xD8ECFE),
-        p("manga", "Manga", .anime, slice: [240, 65, 133, 160], bubble: [127, 845, 395, 1], ins: [0, 12, 0, 149], size: [852, 397], light: false, fill: 0xFFFFFF),
-        p("bunny", "Bunny", .anime, slice: [175, 196, 176, 81], bubble: [102, 886, 436, 1], ins: [0, 160, 0, 70], size: [888, 448], light: false, fill: 0xFECDE2),
-        p("catgirl", "Cat Girl", .anime, slice: [241, 189, 172, 92], bubble: [113, 892, 435, 0], ins: [0, 173, 0, 82], size: [898, 437], light: false, fill: 0xE6D9FD),
-        p("baddie", "Baddie", .anime, slice: [185, 81, 150, 188], bubble: [125, 858, 402, 1], ins: [0, 69, 0, 177], size: [860, 404], light: false, fill: 0xFEC8D6),
+        p("sakura", "Sakura", .anime, slice: [207, 125, 158, 208], bubble: [108, 711, 350, 0], ins: [0, 104, 0, 177], size: [721, 370], radius: 97, light: false, fill: 0xFED1DA,
+          art: [(.tl, 192, 9), (.tl, 96, 12), (.br, 44, 69), (.br, 106, 26)]),
+        p("blush", "Blush", .anime, slice: [235, 187, 151, 121], bubble: [123, 887, 385, 22], ins: [0, 175, 0, 60], size: [888, 410], radius: 97, light: false, fill: 0xD8ECFE,
+          art: [(.tr, 180, 14), (.tr, 88, 21), (.tr, 24, 67), (.tr, 40, 37), (.tr, 32, 45), (.tr, 48, 29), (.bl, 60, 67), (.bl, 63, 63), (.bl, 76, 10), (.bl, 10, 76)]),
+        p("manga", "Manga", .anime, slice: [240, 103, 133, 160], bubble: [127, 850, 396, 0], ins: [0, 55, 0, 149], size: [852, 397], radius: 100, light: false, fill: 0xFFFFFF,
+          art: [(.tl, 151, 13), (.br, 36, 124), (.br, 72, 60), (.br, 95, 35)]),
+        p("bunny", "Bunny", .anime, slice: [218, 196, 176, 117], bubble: [101, 887, 437, 0], ins: [0, 160, 0, 70], size: [888, 448], radius: 115, light: false, fill: 0xFECDE2,
+          art: [(.tr, 165, 52), (.tr, 87, 67), (.bl, 72, 62)]),
+        p("catgirl", "Cat Girl", .anime, slice: [241, 189, 172, 124], bubble: [113, 892, 436, 0], ins: [0, 173, 0, 82], size: [898, 437], radius: 122, light: false, fill: 0xE6D9FD,
+          art: [(.tr, 175, 13)]),
+        p("baddie", "Baddie", .anime, slice: [231, 106, 150, 188], bubble: [125, 859, 403, 0], ins: [0, 69, 0, 177], size: [860, 404], radius: 104, light: false, fill: 0xFEC8D6,
+          art: [(.tl, 177, 21), (.tl, 94, 22), (.br, 71, 49), (.br, 39, 65)]),
         // Gen Z
-        p("skull", "Skull", .genZ, slice: [162, 107, 104, 172], bubble: [86, 925, 433, 0], ins: [0, 80, 0, 162], size: [942, 461], light: true, fill: 0x211F27),
-        p("coolcamel", "Cool Camel", .genZ, slice: [182, 177, 207, 83], bubble: [113, 914, 430, 1], ins: [0, 0, 0, 72], size: [916, 466], light: true, fill: 0x251D30),
-        p("fire", "Fire", .genZ, slice: [175, 83, 96, 226], bubble: [89, 882, 397, 32], ins: [0, 72, 0, 184], size: [883, 399], light: true, fill: 0x1C1B20),
-        p("eyes", "Eyes", .genZ, slice: [155, 69, 158, 200], bubble: [88, 866, 396, 1], ins: [0, 0, 0, 0], size: [868, 397], light: true, fill: 0x0A0A0A),
-        p("hood", "Hood", .genZ, slice: [173, 147, 153, 73], bubble: [101, 800, 430, 1], ins: [0, 0, 0, 0], size: [802, 431], light: true, fill: 0x13161E),
-        p("crown", "Crown", .genZ, slice: [132, 103, 106, 137], bubble: [65, 908, 371, 49], ins: [0, 85, 0, 78], size: [916, 379], light: true, fill: 0x181818),
+        p("skull", "Skull", .genZ, slice: [163, 107, 104, 172], bubble: [86, 925, 434, 0], ins: [0, 80, 0, 162], size: [942, 461], radius: 75, light: true, fill: 0x211F27,
+          art: [(.tl, 172, 14), (.tl, 133, 17), (.br, 55, 66), (.br, 81, 26)]),
+        p("coolcamel", "Cool Camel", .genZ, slice: [234, 177, 207, 121], bubble: [113, 915, 430, 0], ins: [0, 67, 0, 72], size: [916, 466], radius: 119, light: true, fill: 0x251D30,
+          art: [(.tr, 167, 21), (.tr, 168, 7), (.bl, 70, 41)]),
+        p("fire", "Fire", .genZ, slice: [175, 83, 96, 226], bubble: [89, 882, 398, 32], ins: [0, 72, 0, 184], size: [883, 399], radius: 75, light: true, fill: 0x1C1B20,
+          art: [(.br, 77, 92)]),
+        p("eyes", "Eyes", .genZ, slice: [199, 112, 158, 200], bubble: [87, 867, 396, 0], ins: [0, 61, 0, 61], size: [868, 397], radius: 110, light: true, fill: 0x0A0A0A,
+          art: [(.tl, 314, 24), (.br, 71, 43)]),
+        p("hood", "Hood", .genZ, slice: [208, 147, 153, 108], bubble: [100, 801, 430, 0], ins: [0, 59, 0, 59], size: [802, 431], radius: 106, light: true, fill: 0x13161E,
+          art: [(.tr, 131, 7)]),
+        p("crown", "Crown", .genZ, slice: [135, 103, 106, 137], bubble: [58, 915, 378, 42], ins: [0, 85, 0, 78], size: [916, 379], radius: 75, light: true, fill: 0x181818,
+          art: [(.tl, 87, 58), (.br, 90, 71), (.br, 57, 93)]),
         // Cute
-        p("camel", "Camel", .cute, slice: [245, 127, 187, 218], bubble: [125, 912, 454, 0], ins: [0, 115, 0, 193], size: [914, 456], light: false, fill: 0xFDE2B9),
-        p("kitten", "Kitten", .cute, slice: [209, 181, 155, 131], bubble: [101, 853, 387, 0], ins: [0, 170, 0, 121], size: [854, 388], light: false, fill: 0xFEF9ED),
-        p("bear", "Bear", .cute, slice: [167, 98, 107, 171], bubble: [113, 841, 362, 0], ins: [0, 67, 0, 161], size: [862, 383], light: false, fill: 0xFDD782),
-        p("strawberry", "Strawberry", .cute, slice: [122, 122, 168, 101], bubble: [47, 859, 366, 14], ins: [0, 86, 0, 77], size: [885, 387], light: false, fill: 0xFFC3CA),
-        p("glam", "Glam", .cute, slice: [189, 116, 159, 258], bubble: [41, 858, 360, 33], ins: [0, 72, 0, 206], size: [892, 372], light: false, fill: 0xFFFFFF),
+        p("camel", "Camel", .cute, slice: [256, 132, 187, 218], bubble: [124, 913, 455, 0], ins: [0, 115, 0, 193], size: [914, 456], radius: 130, light: false, fill: 0xFDE2B9,
+          art: [(.tl, 212, 27), (.tl, 90, 36), (.br, 130, 126)]),
+        p("kitten", "Kitten", .cute, slice: [210, 181, 155, 131], bubble: [100, 853, 387, 0], ins: [0, 170, 0, 121], size: [854, 388], radius: 108, light: false, fill: 0xFEF9ED,
+          art: [(.tr, 175, 20), (.tr, 77, 23), (.bl, 124, 83)]),
+        p("bear", "Bear", .cute, slice: [190, 98, 107, 171], bubble: [113, 841, 363, 0], ins: [0, 67, 0, 161], size: [862, 383], radius: 75, light: false, fill: 0xFDD782,
+          art: [(.tl, 149, 27), (.tl, 165, 23), (.br, 73, 83)]),
+        p("strawberry", "Strawberry", .cute, slice: [152, 130, 168, 119], bubble: [46, 860, 367, 13], ins: [0, 86, 0, 77], size: [885, 387], radius: 104, light: false, fill: 0xFFC3CA,
+          art: [(.tl, 83, 71), (.br, 93, 50), (.br, 33, 94)]),
+        p("glam", "Glam", .cute, slice: [189, 155, 159, 258], bubble: [41, 859, 361, 33], ins: [0, 72, 0, 206], size: [892, 372], radius: 121, light: false, fill: 0xFFFFFF,
+          art: [(.tl, 215, 51), (.tl, 83, 61), (.bl, 75, 86), (.bl, 44, 119), (.br, 76, 86), (.br, 45, 119)]),
         // Careers
-        p("doctor", "Doctor", .careers, slice: [184, 79, 75, 165], bubble: [111, 884, 443, 0], ins: [0, 0, 0, 155], size: [890, 445], light: false, fill: 0xD0F1EB),
-        p("nurse", "Nurse", .careers, slice: [169, 135, 170, 130], bubble: [97, 886, 426, 1], ins: [0, 123, 0, 0], size: [888, 444], light: false, fill: 0xD4EAFE),
-        p("lawyer", "Lawyer", .careers, slice: [182, 131, 115, 123], bubble: [111, 876, 435, 26], ins: [0, 120, 0, 87], size: [877, 437], light: false, fill: 0xF9EDD5),
-        p("engineer", "Engineer", .careers, slice: [247, 123, 91, 87], bubble: [111, 891, 434, 12], ins: [0, 43, 0, 65], size: [893, 454], light: false, fill: 0xE4E5E9),
-        p("teacher", "Teacher", .careers, slice: [169, 144, 74, 159], bubble: [97, 873, 425, 0], ins: [0, 132, 0, 0], size: [875, 427], light: true, fill: 0x354E41),
-        p("pilot", "Pilot", .careers, slice: [195, 152, 191, 182], bubble: [121, 922, 460, 1], ins: [0, 140, 0, 171], size: [924, 462], light: false, fill: 0xC1E9FE),
-        p("chef", "Chef", .careers, slice: [181, 130, 174, 128], bubble: [119, 847, 404, 0], ins: [0, 106, 0, 69], size: [861, 441], light: false, fill: 0xFEF7EC),
-        p("graduate", "Graduate", .careers, slice: [163, 179, 86, 88], bubble: [108, 827, 362, 6], ins: [0, 0, 0, 72], size: [843, 369], light: true, fill: 0x273973),
-        p("baller", "Baller", .careers, slice: [187, 116, 105, 209], bubble: [127, 906, 401, 5], ins: [0, 100, 0, 0], size: [912, 407], light: true, fill: 0x3B2062),
-        p("security", "Security", .careers, slice: [206, 165, 97, 89], bubble: [133, 913, 467, 0], ins: [0, 154, 0, 79], size: [914, 469], light: true, fill: 0x232834),
+        p("doctor", "Doctor", .careers, slice: [188, 82, 77, 165], bubble: [111, 884, 444, 0], ins: [0, 40, 0, 155], size: [890, 445], radius: 75, light: false, fill: 0xD0F1EB,
+          art: [(.tl, 158, 14), (.tl, 86, 17), (.br, 65, 97)]),
+        p("nurse", "Nurse", .careers, slice: [205, 135, 170, 130], bubble: [97, 887, 426, 0], ins: [0, 123, 0, 59], size: [888, 444], radius: 106, light: false, fill: 0xD4EAFE,
+          art: [(.tl, 127, 11), (.tl, 81, 12), (.br, 128, 22), (.br, 65, 29)]),
+        p("lawyer", "Lawyer", .careers, slice: [192, 131, 115, 123], bubble: [110, 876, 436, 26], ins: [0, 120, 0, 87], size: [877, 437], radius: 80, light: false, fill: 0xF9EDD5,
+          art: [(.tr, 61, 16), (.bl, 91, 107)]),
+        p("engineer", "Engineer", .careers, slice: [247, 123, 115, 109], bubble: [110, 891, 435, 12], ins: [0, 52, 0, 65], size: [893, 454], radius: 95, light: false, fill: 0xE4E5E9,
+          art: [(.tr, 114, 12), (.bl, 36, 145), (.bl, 209, 22)]),
+        p("teacher", "Teacher", .careers, slice: [173, 144, 77, 159], bubble: [96, 873, 426, 0], ins: [0, 132, 0, 40], size: [875, 427], radius: 75, light: true, fill: 0x354E41,
+          art: [(.tl, 151, 12), (.tl, 82, 13), (.br, 79, 64), (.br, 65, 70), (.br, 135, 30)]),
+        p("pilot", "Pilot", .careers, slice: [255, 152, 191, 182], bubble: [120, 923, 461, 0], ins: [0, 140, 0, 171], size: [924, 462], radius: 133, light: false, fill: 0xC1E9FE,
+          art: [(.tr, 144, 13), (.bl, 154, 86), (.bl, 173, 50), (.bl, 63, 114)]),
+        p("chef", "Chef", .careers, slice: [217, 130, 174, 128], bubble: [118, 847, 405, 0], ins: [0, 106, 0, 69], size: [861, 441], radius: 97, light: false, fill: 0xFEF7EC,
+          art: [(.tl, 71, 16), (.br, 110, 40), (.br, 47, 64)]),
+        p("graduate", "Graduate", .careers, slice: [179, 179, 86, 88], bubble: [102, 833, 368, 0], ins: [0, 40, 0, 72], size: [843, 369], radius: 75, light: true, fill: 0x273973,
+          art: [(.tr, 58, 14), (.bl, 66, 68), (.bl, 140, 26), (.bl, 24, 120), (.bl, 32, 76), (.bl, 78, 28)]),
+        p("baller", "Baller", .careers, slice: [199, 116, 105, 209], bubble: [122, 911, 406, 0], ins: [0, 100, 0, 40], size: [912, 407], radius: 75, light: true, fill: 0x3B2062,
+          art: [(.tl, 56, 10), (.br, 107, 95)]),
+        p("security", "Security", .careers, slice: [209, 165, 97, 89], bubble: [132, 913, 468, 0], ins: [0, 154, 0, 79], size: [914, 469], radius: 75, light: true, fill: 0x232834,
+          art: [(.tr, 155, 14), (.tr, 65, 15), (.bl, 79, 87)]),
         // Sport
-        p("football", "Football", .sport, slice: [125, 107, 106, 182], bubble: [67, 853, 331, 0], ins: [0, 79, 0, 172], size: [871, 353], light: false, fill: 0xB2E387),
-        p("basketball", "Basketball", .sport, slice: [117, 117, 160, 110], bubble: [44, 820, 303, 1], ins: [0, 88, 0, 99], size: [839, 346], light: false, fill: 0xFEA34E),
-        p("trophy", "Trophy", .sport, slice: [122, 56, 108, 115], bubble: [70, 845, 307, 6], ins: [0, 44, 0, 85], size: [847, 309], light: false, fill: 0xFFDC8B),
-        p("racing", "Racing", .sport, slice: [239, 154, 162, 138], bubble: [77, 866, 424, 1], ins: [0, 142, 0, 0], size: [868, 425], light: false, fill: 0xDEDAE0),
+        p("football", "Football", .sport, slice: [143, 107, 106, 182], bubble: [66, 853, 331, 0], ins: [0, 79, 0, 172], size: [871, 353], radius: 75, light: false, fill: 0xB2E387,
+          art: [(.tl, 179, 47), (.br, 84, 81), (.br, 96, 70)]),
+        p("basketball", "Basketball", .sport, slice: [129, 117, 160, 110], bubble: [44, 821, 304, 0], ins: [0, 88, 0, 99], size: [839, 346], radius: 83, light: false, fill: 0xFEA34E,
+          art: [(.tr, 94, 68), (.bl, 104, 31)]),
+        p("trophy", "Trophy", .sport, slice: [146, 77, 108, 115], bubble: [69, 846, 308, 5], ins: [0, 44, 0, 85], size: [847, 309], radius: 75, light: false, fill: 0xFFDC8B,
+          art: [(.tl, 90, 47), (.br, 66, 76), (.br, 87, 40)]),
+        p("racing", "Racing", .sport, slice: [239, 154, 162, 138], bubble: [77, 867, 424, 0], ins: [0, 142, 0, 75], size: [868, 425], radius: 132, light: false, fill: 0xDEDAE0,
+          art: [(.br, 200, 82), (.br, 114, 88)]),
         // Everyday
-        p("coffee", "Coffee", .everyday, slice: [100, 126, 165, 90], bubble: [35, 836, 334, 25], ins: [0, 102, 0, 0], size: [850, 347], light: false, fill: 0xECCEB2),
-        p("night", "Night", .everyday, slice: [131, 94, 102, 127], bubble: [28, 846, 357, 26], ins: [0, 74, 0, 91], size: [856, 359], light: true, fill: 0x2B395F),
-        p("leaf", "Leaf", .everyday, slice: [187, 89, 112, 167], bubble: [43, 863, 354, 24], ins: [0, 56, 0, 115], size: [884, 375], light: false, fill: 0xD9E6CF),
-        p("minimal", "Minimal", .everyday, slice: [140, 68, 82, 107], bubble: [23, 780, 280, 51], ins: [0, 38, 0, 0], size: [792, 306], light: false, fill: 0xFFFFFF),
+        p("coffee", "Coffee", .everyday, slice: [151, 141, 165, 142], bubble: [34, 837, 346, 25], ins: [0, 102, 0, 64], size: [850, 347], radius: 115, light: false, fill: 0xECCEB2,
+          art: [(.tr, 108, 82), (.tr, 13, 98), (.bl, 60, 96), (.bl, 81, 18), (.bl, 7, 109)]),
+        p("night", "Night", .everyday, slice: [131, 95, 102, 127], bubble: [27, 846, 358, 25], ins: [0, 74, 0, 91], size: [856, 359], radius: 84, light: true, fill: 0x2B395F,
+          art: [(.tl, 92, 95), (.br, 56, 91), (.br, 75, 52)]),
+        p("leaf", "Leaf", .everyday, slice: [187, 122, 123, 167], bubble: [42, 864, 354, 24], ins: [0, 56, 0, 115], size: [884, 375], radius: 101, light: false, fill: 0xD9E6CF,
+          art: [(.tl, 69, 90), (.tl, 114, 49), (.br, 35, 73), (.br, 52, 39), (.br, 60, 21)]),
+        p("minimal", "Minimal", .everyday, slice: [140, 94, 107, 134], bubble: [23, 780, 281, 51], ins: [0, 44, 0, 44], size: [792, 306], radius: 81, light: false, fill: 0xFFFFFF,
+          art: []),
     ]
 
     private static let byId: [String: PictureStyle] = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })

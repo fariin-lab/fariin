@@ -534,8 +534,12 @@ enum MessageRowLayout {
             return PictureStyles.find(id)
         }()
         let art = pic?.art ?? .zero
-        let hPad = pic?.textInsets.left ?? BubbleMetrics.hPad, vPad = pic?.textInsets.top ?? BubbleMetrics.vPad
-        let hPadR = pic?.textInsets.right ?? BubbleMetrics.hPad, vPadB = pic?.textInsets.bottom ?? BubbleMetrics.vPad
+        // The side room is measured for a block 10pt from both edges (a name inside starts higher),
+        // the most it can need; the bubble gives back what its real rows do not (see `sideRoom`).
+        let picSide = pic.map { $0.sideRoom(top: nameInBubble(b) ? BubbleMetrics.nameTop : $0.textInsets.top,
+                                            bottom: $0.textInsets.bottom) }
+        let hPad = picSide?.left ?? BubbleMetrics.hPad, vPad = pic?.textInsets.top ?? BubbleMetrics.vPad
+        let hPadR = picSide?.right ?? BubbleMetrics.hPad, vPadB = pic?.textInsets.bottom ?? BubbleMetrics.vPad
         let maxContent = max(1, maxBubble - art.left - art.right - hPad - hPadR)
 
         var y = topSpacing
@@ -1001,11 +1005,21 @@ enum MessageRowLayout {
             // centred between the outline's own edges: the bubble widens, room allowing, until the
             // smaller side matches the larger clearance, and the block never enters either side's
             // clearance. A message that fills the width keeps both clearances exactly as before.
-            let room = max(bubbleW, maxBubble - art.left - art.right)
-            bubbleW = max(bubbleW, min(room, contentW + max(hPad, hPadR) * 2), ceil(pic.minBubble.width))
+            // ⛔ AND EACH SIDE CLEARS ONLY THE ART BESIDE ITS OWN ROWS (owner 2026-11-07, build 1118:
+            // an empty block after the ticks in security, whose guard sits ABOVE the bubble). The
+            // block's real distance from the top and bottom edges, once the bubble has grown to its
+            // corners, decides which corner art it shares rows with (`PictureStyle.sideRoom`).
+            let minH = ceil(pic.minBubble.height)
+            let shiftY: CGFloat = bubbleH < minH && quoteRect == nil ? floor((minH - bubbleH) / 2) : 0
+            let side = pic.sideRoom(top: (nameInBubble(b) ? BubbleMetrics.nameTop : vPad) + shiftY,
+                                    bottom: max(bubbleH, minH) - innerY - shiftY)
+            let tight = contentW + side.left + side.right
+            let room = max(tight, maxBubble - art.left - art.right)
+            bubbleW = max(tight, min(room, contentW + max(side.left, side.right) * 2), ceil(pic.minBubble.width))
             bubbleW = ceil(bubbleW)
-            let x = min(max((bubbleW - contentW) / 2, hPad), bubbleW - hPadR - contentW)
-            centreX = (x - hPad).rounded()
+            // Whole points, rounded away from the art: the room on each side is a whole number.
+            let x = min(max(((bubbleW - contentW) / 2).rounded(), side.left), floor(bubbleW - side.right - contentW))
+            centreX = x - hPad
             quoteRect = quoteRect?.offsetBy(dx: centreX, dy: 0)
         }
         if let pic {
@@ -1239,7 +1253,10 @@ enum MessageRowLayout {
                 // ⚠️ `vPad`, NOT A NEW NUMBER. That is the bubble's own vertical text inset, so the
                 // pills now sit the same distance off the bottom edge as the words sit off the top.
                 // The bubble gets its padding back instead of the strip eating it.
-                let gapBelow: CGFloat = 6   // theirs: 6 less a pixel under the row
+                // A picture style keeps its pills as far off the bottom edge as its words (clear of
+                // the shallow art there, `PictureStyle.textInsets`).
+                let gapBelow: CGFloat = plan.picture.flatMap { PictureStyles.find($0.id) }?.textInsets.bottom
+                    ?? 6   // theirs: 6 less a pixel under the row
 
                 // The pills flow left to right and start a new row when the next one would not fit
                 // in the widest the bubble may be. `rowW` is each row's own width.
@@ -1253,7 +1270,27 @@ enum MessageRowLayout {
                 let maxBubble = max(plan.bubble.width,
                                     b.wide ? max(1, columnW - 44)
                                            : min(BubbleMetrics.maxBubbleWidth(in: columnW), columnW))
-                let maxRowW = max(0, ((captioned || bareWithBar) ? plan.bubble.width : maxBubble) - padH * 2)
+                // ⛔ A PICTURE STYLE CENTRES THE WHOLE BLOCK (owner 2026-11-07, build 1118: doctor with
+                // a heart and a face pill, a wide empty band on the left and everything pushed right).
+                // The words, the pills and the time are one block, centred between the outline's
+                // edges the way the words alone are, and each side clears only the corner art beside
+                // the rows it holds: the words' rows, and the pill row `gapBelow` over the bottom edge.
+                // A link card keeps its own layout (as in `layout`).
+                let pic = plan.linkPlan == nil ? plan.picture.flatMap { PictureStyles.find($0.id) } : nil
+                let picCap = pic.map { maxBubble - $0.art.left - $0.art.right }
+                let picRoom: (left: CGFloat, right: CGFloat)? = pic.map { p in
+                    let top = nameInBubble(b) && senderNameAttr != nil ? BubbleMetrics.nameTop
+                        : min(plan.text.minY, plan.quote?.minY ?? plan.text.minY)
+                    let words = p.sideRoom(top: top, bottom: gapBelow + height)
+                    let pills = p.sideRoom(top: .greatestFiniteMagnitude, bottom: gapBelow)
+                    return (left: max(words.left, pills.left), right: max(words.right, pills.right))
+                }
+                let maxRowW: CGFloat
+                if let picRoom, let picCap {
+                    maxRowW = max(0, picCap - picRoom.left - picRoom.right)
+                } else {
+                    maxRowW = max(0, ((captioned || bareWithBar) ? plan.bubble.width : maxBubble) - padH * 2)
+                }
                 var rows: [[Int]] = [[]]
                 var rowW: [CGFloat] = [0]
                 for (i, w) in widths.enumerated() {
@@ -1290,7 +1327,8 @@ enum MessageRowLayout {
                 // row under a time that already had a row to itself. It joins the pills now, against
                 // the picture's own width, because a captioned bubble may not widen past its picture.
                 // The time joins the LAST row of pills when it fits there.
-                let fitsOnRow = padH + lastRowW + metaW + padH <= (captioned ? plan.bubble.width : maxBubble)
+                let fitsOnRow = picRoom.map { $0.left + lastRowW + metaW + $0.right <= (picCap ?? maxBubble) }
+                    ?? (padH + lastRowW + metaW + padH <= (captioned ? plan.bubble.width : maxBubble))
                 // ⛔ A FILE'S TIME ROW IS THE SAME KIND OF ROW — owner, 2026-10-03, a reacted zip: the
                 // time sat alone under the file and the pills hung below it, a whole empty band
                 // between. A file bubble has no text, so it never counted as a text row here; its
@@ -1330,10 +1368,28 @@ enum MessageRowLayout {
                 // extra height; it still never ends shorter than it was.
                 if plan.picture != nil { grown.size.height = max(grown.size.height, plan.bubble.height) }
 
+                // Where the pills start and where the time ends, in bubble coordinates.
+                var pillX = padH
+                var metaRight: CGFloat?
+                if let room = picRoom, let cap = picCap {
+                    let blockW = max(plan.text.width, plan.quote?.width ?? 0, widestRow,
+                                     lastRowW + (metaJoins ? metaW : 0), metaBelow ? plan.meta.width : 0)
+                    let tight = blockW + room.left + room.right
+                    let want = ceil(max(grown.width, tight, min(max(cap, tight), blockW + max(room.left, room.right) * 2)))
+                    if b.isMe { grown.origin.x -= want - grown.width }
+                    grown.size.width = want
+                    let x = min(max(((want - blockW) / 2).rounded(), room.left), floor(want - room.right - blockW))
+                    let dx = x - plan.text.minX
+                    plan.text.origin.x += dx
+                    plan.quote = plan.quote?.offsetBy(dx: dx, dy: 0)
+                    if !(metaJoins || metaBelow) { plan.meta.origin.x += dx }
+                    pillX = x
+                    metaRight = x + blockW
+                }
                 // Widen only if it must, and never past the column the bubble was measured against.
                 let need = padH + max(widestRow, lastRowW + (metaJoins ? metaW : 0),
                                       metaBelow ? plan.meta.width : 0) + padH
-                if need > grown.width {
+                if picRoom == nil, need > grown.width {
                     let want = min(need, max(maxBubble, grown.width))
                     let delta = want - grown.width
                     grown.size.width += delta
@@ -1353,11 +1409,11 @@ enum MessageRowLayout {
                 // Meta is in BUBBLE coordinates; the chips are in ROW coordinates.
                 if metaJoins {
                     plan.metaOnOwnLine = true
-                    plan.meta.origin.x = grown.width - padH - plan.meta.width
+                    plan.meta.origin.x = (metaRight ?? grown.width - padH) - plan.meta.width
                     plan.meta.origin.y = grown.height - gapBelow - height + (height - plan.meta.height) / 2
                 } else if metaBelow {
                     plan.metaOnOwnLine = true
-                    plan.meta.origin.x = grown.width - padH - plan.meta.width
+                    plan.meta.origin.x = (metaRight ?? grown.width - padH) - plan.meta.width
                     plan.meta.origin.y = grown.height - gapBelow - plan.meta.height
                 }
 
@@ -1382,7 +1438,7 @@ enum MessageRowLayout {
                 // sits there; earlier rows stack above it.
                 let lastY = grown.maxY - gapBelow - metaBelowExtra - height
                 for (r, row) in rows.enumerated() {
-                    var cx = grown.minX + padH
+                    var cx = grown.minX + pillX
                     let cy = lastY - CGFloat(rows.count - 1 - r) * (height + rowGap)
                     for i in row {
                         let w = widths[i]
