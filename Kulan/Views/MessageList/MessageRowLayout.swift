@@ -992,6 +992,22 @@ enum MessageRowLayout {
         // A picture cannot shrink below its own corners: the bubble grows to them, the time stays
         // at the trailing edge, and a lone line of words is centred in the extra height.
         var picShift = CGPoint.zero
+        var centreX: CGFloat = 0
+        if let pic, linkPlan == nil {
+            // ⛔ THE WORDS SIT IN THE MIDDLE (owner 2026-11-07, device screenshot of "test" in every
+            // style): the two sides clear different amounts of corner art, so a short message laid
+            // from the left inset left all the spare room on one side (manga, baddie and skull on
+            // the left, bunny and cat girl on the right). Now the block of words and time is
+            // centred between the outline's own edges: the bubble widens, room allowing, until the
+            // smaller side matches the larger clearance, and the block never enters either side's
+            // clearance. A message that fills the width keeps both clearances exactly as before.
+            let room = max(bubbleW, maxBubble - art.left - art.right)
+            bubbleW = max(bubbleW, min(room, contentW + max(hPad, hPadR) * 2), ceil(pic.minBubble.width))
+            bubbleW = ceil(bubbleW)
+            let x = min(max((bubbleW - contentW) / 2, hPad), bubbleW - hPadR - contentW)
+            centreX = (x - hPad).rounded()
+            quoteRect = quoteRect?.offsetBy(dx: centreX, dy: 0)
+        }
         if let pic {
             let minSize = pic.minBubble
             if bubbleW < minSize.width { picShift.x = ceil(minSize.width) - bubbleW; bubbleW = ceil(minSize.width) }
@@ -999,12 +1015,12 @@ enum MessageRowLayout {
                 if quoteRect == nil && linkPlan == nil { picShift.y = floor((ceil(minSize.height) - bubbleH) / 2) }
                 bubbleH = ceil(minSize.height)
             }
-            metaRect = metaRect.offsetBy(dx: picShift.x, dy: picShift.y)
+            metaRect = metaRect.offsetBy(dx: picShift.x + centreX, dy: picShift.y)
             y += ceil(art.top)   // the art above the outline is part of this row, never the one above
         }
         let bubbleX = b.isMe ? (columnX + columnW - ceil(art.right) - bubbleW) : columnX + ceil(art.left)
         var bubbleRect = CGRect(x: bubbleX, y: y, width: bubbleW, height: bubbleH)
-        var textRectOut = textRect.offsetBy(dx: 0, dy: picShift.y), metaRectOut = metaRect, bodyAttrOut = bodyAttr
+        var textRectOut = textRect.offsetBy(dx: centreX, dy: picShift.y), metaRectOut = metaRect, bodyAttrOut = bodyAttr
 
         // ⛔ A STORY REACTION SITS ON THE CARD'S CORNER — owner 2026-10-13, with a drawing: an emoji
         // sent from the story's react bar is not a message under the card but a mark on it. The
