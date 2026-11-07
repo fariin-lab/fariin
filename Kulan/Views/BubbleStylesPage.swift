@@ -55,8 +55,8 @@ struct BubbleStylesPage: View {
         var styles: [BubbleStyle] {
             switch self {
             case .chatColor: return []
-            case .pictures(let p): return BubbleStyles.shown.filter { $0.picture?.group == p }
-            case .colours: return BubbleStyles.shown.filter { $0.picture == nil }
+            case .pictures(let p): return BubbleStyles.listed.filter { $0.picture?.group == p }
+            case .colours: return BubbleStyles.listed.filter { $0.picture == nil }
             }
         }
         /// The chips offered: Color, then each picture group that still has a style the admin

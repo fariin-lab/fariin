@@ -278,7 +278,7 @@ enum ChatWallpapers {
     /// a quiet chat should have one, and it is the only palette here whose corners are neutral.
     /// What the pickers list: `all` minus the ones the admin panel hid. Read from a view, so the
     /// picker redraws when the panel flips one. A chat already using a hidden one keeps it.
-    static var shown: [WallpaperGradient] {
+    static var listed: [WallpaperGradient] {
         let hidden = LiveFeatures.shared.wallpapersHidden
         return all.filter { !hidden.contains($0.id) }
     }

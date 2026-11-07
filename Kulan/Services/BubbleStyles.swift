@@ -45,7 +45,7 @@ struct BubbleStyle: Identifiable, Equatable {
 enum BubbleStyles {
     /// What the pickers list: `all` minus the ones the admin panel hid (redraws live). A message
     /// already sent with a hidden style still draws it.
-    static var shown: [BubbleStyle] {
+    static var listed: [BubbleStyle] {
         let hidden = LiveFeatures.shared.bubblesHidden
         return all.filter { !hidden.contains($0.id) }
     }

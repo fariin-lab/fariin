@@ -211,7 +211,7 @@ struct ChatWallpaperPage: View {
                     }
                     // Moving wallpapers (owner 2026-11-06: "add the animated ones here too"), with the
                     // sparkle mark the chat's own picker gives them. Only the one in use moves.
-                    ForEach(AnimatedWallpapers.shown) { a in
+                    ForEach(AnimatedWallpapers.listed) { a in
                         presetTile(.animated(a.id)) {
                             AnimatedWallpaperView(wallpaper: a, dark: dark, preview: true,
                                                   animates: current == .animated(a.id))
@@ -231,7 +231,7 @@ struct ChatWallpaperPage: View {
                     // gradient was a fallback palette. They are one thing now and rendered by one
                     // view, so the second row would have been these six tiles drawn twice.
                     // `.preset(id)` is still resolved everywhere — chats have it stored.
-                    ForEach(ChatWallpapers.shown) { g in
+                    ForEach(ChatWallpapers.listed) { g in
                         presetTile(.gradient(g.id)) {
                             GradientWallpaperView(g: g, dark: dark)
                         }
@@ -290,8 +290,8 @@ struct ChatWallpaperPage: View {
             } else {
                 WallpaperPreviewScreen(wallpaper: w,
                                        siblings: store.libraryIds.map { ChatWallpaper.photo($0) }
-                                           + AnimatedWallpapers.shown.map { ChatWallpaper.animated($0.id) }
-                                           + ChatWallpapers.shown.map { ChatWallpaper.gradient($0.id) })
+                                           + AnimatedWallpapers.listed.map { ChatWallpaper.animated($0.id) }
+                                           + ChatWallpapers.listed.map { ChatWallpaper.gradient($0.id) })
             }
         }
     }

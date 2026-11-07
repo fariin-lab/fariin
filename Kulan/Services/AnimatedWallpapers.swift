@@ -32,7 +32,7 @@ struct AnimatedWallpaper: Identifiable, Equatable {
 
 enum AnimatedWallpapers {
     /// What the pickers list: `all` minus the ones the admin panel hid (redraws live).
-    static var shown: [AnimatedWallpaper] {
+    static var listed: [AnimatedWallpaper] {
         let hidden = LiveFeatures.shared.wallpapersHidden
         return all.filter { !hidden.contains($0.id) }
     }

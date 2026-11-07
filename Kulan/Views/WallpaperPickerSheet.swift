@@ -126,8 +126,8 @@ struct WallpaperPickerSheet: View {
                         // Moving wallpapers (owner 2026-11-06), playing in their tiles. In a group
                         // too (his word): admins set it (server setGroupWallpaper accepts "a:"),
                         // every member sees it; members on older builds see no wallpaper.
-                        ForEach(AnimatedWallpapers.shown) { a in animatedTile(a).id("a-\(a.id)") }
-                        ForEach(ChatWallpapers.shown) { g in gradientTile(g).id(g.id) }   // built-ins: never deletable
+                        ForEach(AnimatedWallpapers.listed) { a in animatedTile(a).id("a-\(a.id)") }
+                        ForEach(ChatWallpapers.listed) { g in gradientTile(g).id(g.id) }   // built-ins: never deletable
                         // The user's WALLPAPER LIBRARY: every gallery photo ever imported, newest first,
                         // always shown (full history, not just the current one). Long-press → Delete.
                         ForEach(store.libraryIds, id: \.self) { pid in
@@ -612,7 +612,7 @@ struct WallpaperPickerSheet: View {
     /// Six picture styles, always in the same order so a tapped one stays where it was. A picture
     /// in use that is not among the first six takes the last place, so the one in use always shows.
     private var stripStyles: [BubbleStyle] {
-        var out = Array(BubbleStyles.shown.filter { $0.picture != nil }.prefix(6))
+        var out = Array(BubbleStyles.listed.filter { $0.picture != nil }.prefix(6))
         if let cur = BubbleStyles.find(bubbleStyleId), cur.picture != nil, !out.contains(cur), !out.isEmpty {
             out[out.count - 1] = cur
         }
