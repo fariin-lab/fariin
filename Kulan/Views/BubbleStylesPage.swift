@@ -5,9 +5,9 @@ import UIKit
 /// info page (owner 2026-11-07: the same picker, a shortcut, not a per-chat style).
 ///
 /// ⛔ LAYOUT (owner 2026-11-07, second look): the live preview is pinned at the top and stays in
-/// view while the grid scrolls; one short line under it; then a row of category chips (pictures
-/// only, same day: the colours are Settings > Appearance > Bubble Color) and only the chosen
-/// category's grid, three to a row, Default first in every grid. A round X and Save at the top.
+/// view while the grid scrolls; one short line under it; then a row of category chips ("Color"
+/// first, the chat colour circles five to a row; then the picture packs) and only the chosen
+/// category's grid, pictures three to a row with Default first. A round X and Save at the top.
 /// Nothing changes until Save.
 struct BubbleStylesPage: View {
     @Environment(\.dismiss) private var dismiss
@@ -15,21 +15,33 @@ struct BubbleStylesPage: View {
     @State private var selected: String? = BubbleStyles.current
     @State private var plusNote = false
     @State private var decorOn = BubbleStyles.decorations
-    /// The chip that is open: the saved picture style's category, else Anime.
+    /// ⛔ THE "COLOR" CHIP (owner 2026-11-07, his own mockup): the chat colour palette
+    /// (`ChatColorStore`, the Bubble Color page's circles) as the first chip. The colour picked,
+    /// nil = Auto, is held until Save like a style. `colorTouched`: a circle was tapped since the
+    /// last picture style, so Save applies the colour to all chats and puts any picture style away.
+    @State private var colorPick: ChatColorSpec? = ChatColorStore.shared.globalChosenColor
+    @State private var colorTouched = false
+    @State private var showCustom = false
+    /// The chip that is open: the saved picture style's category, else Color.
     @State private var category: Category = Category.of(BubbleStyles.find(BubbleStyles.current))
-        .flatMap { $0 == .colours ? nil : $0 } ?? .pictures(.anime)
+        .flatMap { $0 == .colours ? nil : $0 } ?? .chatColor
     private var dark: Bool { scheme == .dark }
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
+    private let colorCols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 5)
+    private var colorStore: ChatColorStore { .shared }
 
     enum Category: Hashable {
+        /// The chat colour circles (not a sent style).
+        case chatColor
         case pictures(PictureStyle.Pack)
+        /// The sent colour styles. No chip offers them (owner 2026-11-07); they stay in
+        /// `BubbleStyles` so a message sent with one still draws it.
         case colours
 
-        /// ⛔ PICTURES ONLY (owner 2026-11-07): no Colours chip. The colour styles stay in
-        /// `BubbleStyles` so messages sent with one still draw it; `.colours` is kept for that.
-        static let all: [Category] = PictureStyle.Pack.allCases.map { .pictures($0) }
+        static let all: [Category] = [.chatColor] + PictureStyle.Pack.allCases.map { .pictures($0) }
         var title: String {
             switch self {
+            case .chatColor: return "Color"
             case .pictures(let p): return p.rawValue
             case .colours: return "Colours"
             }
@@ -40,6 +52,7 @@ struct BubbleStylesPage: View {
         }
         var styles: [BubbleStyle] {
             switch self {
+            case .chatColor: return []
             case .pictures(let p): return BubbleStyles.all.filter { $0.picture?.group == p }
             case .colours: return BubbleStyles.colours
             }
@@ -58,9 +71,13 @@ struct BubbleStylesPage: View {
             .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    LazyVGrid(columns: cols, spacing: 10) {
-                        tile(nil)
-                        ForEach(category.styles) { s in tile(s) }
+                    if category == .chatColor {
+                        colorGrid
+                    } else {
+                        LazyVGrid(columns: cols, spacing: 10) {
+                            tile(nil)
+                            ForEach(category.styles) { s in tile(s) }
+                        }
                     }
                     if category == .colours {
                         // Optional decorations (owner 2026-11-06): hearts, bows, stars at the corners
@@ -91,7 +108,14 @@ struct BubbleStylesPage: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Save") { save() }
                     .fontWeight(.semibold)
-                    .disabled(selected == BubbleStyles.current && decorOn == BubbleStyles.decorations)
+                    .disabled(selected == BubbleStyles.current && decorOn == BubbleStyles.decorations && !colorTouched)
+            }
+        }
+        .sheet(isPresented: $showCustom) {
+            // The custom colour joins the library at once, as on the Bubble Color page; Save applies it.
+            CustomColorView(cid: "__default__") { spec in
+                colorStore.addCustom(spec)
+                pickColor(spec)
             }
         }
         .alert("Fariin Plus", isPresented: $plusNote) {
@@ -124,6 +148,9 @@ struct BubbleStylesPage: View {
 
     private func save() {
         if let s = BubbleStyles.find(selected), !BubbleStyles.mayUse(s) { plusNote = true; return }
+        // A colour tapped: the Bubble Color page's apply (all chats; a chat with its own keeps it).
+        // `pickColor` already set `selected` to nil, so the picture style goes away below.
+        if colorTouched { colorStore.applyToAllChats(colorPick) }
         BubbleStyles.current = selected
         BubbleStyles.decorations = decorOn
         Haptics.impact(.light)
@@ -185,12 +212,67 @@ struct BubbleStylesPage: View {
         .background(Theme.bg(dark), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
+    // ── the Color chip ──
+
+    /// Auto, the palette in its order, the custom colours, then "+" (the custom colour editor).
+    private var colorGrid: some View {
+        let _ = colorStore.version
+        let _ = WallpaperStore.shared.version   // Auto follows the Settings wallpaper
+        return LazyVGrid(columns: colorCols, spacing: 14) {
+            colorCircle(nil) {
+                Circle().fill(colorStore.globalAutoColor.map { $0.fill } ?? AnyShapeStyle(Theme.defaultBubble(dark)))
+                    .overlay(Text("Auto").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white))
+            }
+            ForEach(ChatColors.presets) { p in colorCircle(p) { Circle().fill(p.fill) } }
+            ForEach(colorStore.customColors) { p in
+                colorCircle(p) { Circle().fill(p.fill) }
+                    .contextMenu {
+                        Button(role: .destructive) { colorStore.removeCustom(p) } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+            }
+            Button { showCustom = true } label: {
+                Circle().fill(Color(.systemGray5))
+                    .overlay(Image(systemName: "plus").font(.system(size: 22, weight: .medium)).foregroundStyle(.primary))
+                    .frame(width: 54, height: 54)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Custom color")
+        }
+        .padding(.vertical, 6)
+    }
+
+    /// Ringed (a ring with a gap) only while no picture style is picked: one or the other applies.
+    private func colorCircle<C: View>(_ spec: ChatColorSpec?, @ViewBuilder content: () -> C) -> some View {
+        let isOn = selected == nil && colorPick?.stored == spec?.stored
+        return Button { pickColor(spec) } label: {
+            content()
+                .frame(width: 54, height: 54)
+                .padding(4)
+                .overlay(Circle().strokeBorder(isOn ? Color.primary : .clear, lineWidth: 2.5))
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(spec == nil ? "Auto" : "Color")
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+    }
+
+    private func pickColor(_ spec: ChatColorSpec?) {
+        colorPick = spec
+        colorTouched = true
+        selected = nil
+        Haptics.impact(.light)
+    }
+
     // ── tiles ──
 
     private func tile(_ s: BubbleStyle?) -> some View {
         let isOn = selected == s?.id
         return Button {
             selected = s?.id
+            if s != nil { colorTouched = false }   // a picture style wins over a colour tapped before
             Haptics.impact(.light)
         } label: {
             VStack(spacing: 5) {
@@ -246,7 +328,8 @@ struct BubbleStylesPage: View {
                 shape.fill(Color(hex: look.fill.first ?? 0x007AFF))
             }
         } else {
-            shape.fill(Color(hex: dark ? 0x0A84FF : 0x007AFF))
+            // No style: the chat colour, so the preview shows a circle's colour the moment it is tapped.
+            shape.fill((colorPick ?? colorStore.globalAutoColor).map { $0.fill } ?? AnyShapeStyle(Theme.defaultBubble(dark)))
         }
     }
 
