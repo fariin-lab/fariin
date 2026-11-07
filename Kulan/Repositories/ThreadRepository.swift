@@ -1237,21 +1237,28 @@ final class ThreadRepository {
         let pc = (data["pollCounts"] as? [String: Any]) ?? [:]
         let polls = pc.keys.sorted().map { "\($0)=\((pc[$0] as? NSNumber)?.intValue ?? 0)" }.joined(separator: ",")
             + ":" + String((data["pollVoters"] as? NSNumber)?.intValue ?? 0)
-        return (data["text"] as? String ?? "") + "|" + String(data["edited"] as? Bool ?? false)
+        let base: String = (data["text"] as? String ?? "") + "|" + String(data["edited"] as? Bool ?? false)
             + "|" + reactions + "|" + albumSig + "|" + deleted + "|" + type + "|" + call
             + "|" + uploading + "|" + media + "|" + stamp + "|" + link
             + "|" + views + "|" + counts + "|" + polls
             + "|" + String(data["pollClosed"] as? Bool ?? false)   // Stop Poll changes nothing else
             // The sixth: the server stamps the timer in a second write after the message lands.
             + "|" + String((data["expiresAt"] as? Timestamp)?.seconds ?? 0)
-            // ⛔ THE SEVENTH (owner 2026-11-07: replies turned off, the post still said "Reply" and
-            // its sheet still opened on Replies until the channel was reopened). Replies and quotes
-            // land on the post later too: the off switch, both counts and both face lists.
-            + "|" + String(data["repliesOff"] as? Bool ?? false)
-            + "|" + String((data["replyCount"] as? NSNumber)?.intValue ?? 0)
-            + "|" + String((data["quoteCount"] as? NSNumber)?.intValue ?? 0)
-            + "|" + ((data["replyFaces"] as? [String]) ?? []).joined(separator: ",")
-            + "|" + ((data["quoteFaces"] as? [String]) ?? []).joined(separator: ",")
+        return base + "|" + Self.postExtrasSig(data)
+    }
+
+    /// ⛔ THE SEVENTH (owner 2026-11-07: replies turned off, the post still said "Reply" and its sheet
+    /// still opened on Replies until the channel was reopened). Replies and quotes land on the post
+    /// later too: the off switch, both counts and both face lists. Its own function: one more `+` in
+    /// `changeSig` was past what the compiler can type-check (TF 42356820367).
+    private static func postExtrasSig(_ data: [String: Any]) -> String {
+        let off: Bool = data["repliesOff"] as? Bool ?? false
+        let replies: Int = (data["replyCount"] as? NSNumber)?.intValue ?? 0
+        let quotes: Int = (data["quoteCount"] as? NSNumber)?.intValue ?? 0
+        let rf: [String] = (data["replyFaces"] as? [String]) ?? []
+        let qf: [String] = (data["quoteFaces"] as? [String]) ?? []
+        return [String(off), String(replies), String(quotes), rf.joined(separator: ","), qf.joined(separator: ",")]
+            .joined(separator: "|")
     }
 
     // Build a message, reusing the cached copy unless a mutable field (reactions / edit) changed.
