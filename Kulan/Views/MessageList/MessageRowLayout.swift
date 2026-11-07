@@ -2312,7 +2312,7 @@ enum MessageRowLayout {
             var subtitleAttr: NSAttributedString?
             if !p.desc.isEmpty {
                 let attr = NSAttributedString(string: p.desc, attributes: [
-                    .font: UIFont.systemFont(ofSize: 14), .foregroundColor: textColor])
+                    .font: UIFont.systemFont(ofSize: 16), .foregroundColor: textColor])   // 16pt, near the post's own 17 (owner 2026-11-07)
                 let h = cappedHeight(attr, width: inner, lines: 8)   // the view draws 8 too (owner 2026-11-07)
                 subtitle = CGRect(x: pad, y: y, width: inner, height: h)
                 subtitleAttr = attr
