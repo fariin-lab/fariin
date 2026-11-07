@@ -645,7 +645,7 @@ struct WallpaperPickerSheet: View {
     private func bubbleThumb(_ s: BubbleStyle) -> some View {
         // A colour picked here shows the row with nothing ringed: Apply will put the style away.
         let isOn = !colourTapped && bubbleStyleId == s.id
-        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
         return Button {
             guard !isOn, BubbleStyles.mayUse(s) else { return }
             colourTapped = false       // the style comes back; Apply leaves it on
@@ -655,8 +655,9 @@ struct WallpaperPickerSheet: View {
             Group {
                 if let p = s.picture { PictureThumb(style: p) }
             }
-            .frame(width: 62, height: 40)
-            .padding(4)
+            // As wide as the wallpaper tiles above (owner 2026-11-07: "cards look small").
+            .frame(width: 92, height: 58)
+            .padding(5)
             .liquidGlass(shape, interactive: true)
             .overlay {
                 if isOn { shape.strokeBorder(Theme.accent(dark), lineWidth: 2.5) }
