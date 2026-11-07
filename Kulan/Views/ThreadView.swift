@@ -2403,7 +2403,7 @@ struct ThreadView: View {
         // posts this notification, so the picker opens here (over the live chat, previewing behind).
         // owner 2026-10-18: in a group the picker sets the GROUP's wallpaper for everyone, and only
         // someone who may change group info gets to open it (GroupInfoView hides the menu row too).
-        .sheet(isPresented: $showWallpaper) { WallpaperPickerSheet(cid: cid, sharedGroup: isGroup) }
+        .sheet(isPresented: $showWallpaper) { WallpaperPickerSheet(cid: cid, sharedGroup: isGroup, channel: conversation?.isChannel == true) }
         .onReceive(NotificationCenter.default.publisher(for: .openChatWallpaper)) { note in
             guard (note.object as? String) == cid else { return }
             if isGroup, let conv = conversation,

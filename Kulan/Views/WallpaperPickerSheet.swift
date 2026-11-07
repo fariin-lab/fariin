@@ -19,6 +19,9 @@ struct WallpaperPickerSheet: View {
     /// The tiles preview on this phone alone; Apply and Reset Wallpaper set the group's wallpaper
     /// for every member (`WallpaperStore.publishGroupWallpaper`). The chat colour stays per phone.
     var sharedGroup: Bool = false
+    /// A channel: posts are drawn plain, so Bubble Styles shows greyed out and can't be picked
+    /// (owner 2026-11-07: "the user must feel it can't be used").
+    var channel: Bool = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
     private var store: WallpaperStore { .shared }
@@ -672,17 +675,23 @@ struct WallpaperPickerSheet: View {
             HStack {
                 Text("Bubble Styles").font(.subheadline.weight(.semibold))
                 Spacer()
-                Button("See all") { showBubbleStyles = true }
-                    .font(.subheadline)
+                if !channel {
+                    Button("See all") { showBubbleStyles = true }
+                        .font(.subheadline)
+                }
             }
             .padding(.horizontal, 20)
+            .opacity(channel ? 0.4 : 1)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
                     ForEach(stripStyles) { bubbleThumb($0) }
                 }
                 .padding(.horizontal, 20).padding(.vertical, 3)
             }
-            Text("Only this chat")
+            .disabled(channel)
+            .opacity(channel ? 0.35 : 1)
+            .saturation(channel ? 0 : 1)
+            Text(channel ? "Bubble styles aren't used in channels" : "Only this chat")
                 .font(.caption).foregroundStyle(.secondary)
                 .padding(.horizontal, 20)
         }
