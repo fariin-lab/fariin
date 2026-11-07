@@ -559,7 +559,7 @@ struct WallpaperPickerSheet: View {
     // LIVE-PREVIEWS on the chat behind but is saved only on Apply (same as wallpaper).
     private var chatColorSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Chat Color").font(.subheadline.weight(.semibold)).padding(.horizontal, 20)
+            Text("Bubble Color").font(.subheadline.weight(.semibold)).padding(.horizontal, 20)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 14) {
                     defaultColorCircle
