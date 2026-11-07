@@ -712,7 +712,15 @@ struct AccountSettingsView: View {
                     }
                 }
                 .disabled(exporting)
+            } header: {
+                Text("Account").textCase(nil)
+            } footer: {
+                // Under the row it describes (owner 2026-11-07: it sat under Log out instead).
+                Text("Saves your profile, devices and privacy settings to a text file you can share or keep. Messages are not included.")
+            }
 
+            // Log out alone in its own group at the bottom, no footer, as big settings apps lay it out.
+            Section {
                 // ⚠️ SIGN OUT IS NOT DESTRUCTIVE AND MUST NOT BE PAINTED AS THOUGH IT WERE. It is
                 // completely reversible — you sign back in and everything is there. Red is the app
                 // promising something cannot be undone, and spending it on a routine action teaches
@@ -728,10 +736,6 @@ struct AccountSettingsView: View {
                 Button(role: .destructive) { showSignOut = true } label: {
                     Text("Log out")
                 }
-            } header: {
-                Text("Account").textCase(nil)
-            } footer: {
-                Text("Saves your profile, devices and privacy settings to a text file you can share or keep. Messages are not included.")
             }
         }
         .listStyle(.insetGrouped)
@@ -802,31 +806,13 @@ struct AccountSettingsView: View {
             Text(exportError ?? "")
         }
         // "Log out", not "Sign out" (owner 2026-10-19: the word Somali users know), as on the row.
-        .alert("Log out?", isPresented: $showSignOut) {
-            Button("Cancel", role: .cancel) {}
-            Button("Log Out", role: .destructive) {
-                // Set BEFORE the Task, so the page locks on this run loop rather than after the
-                // first await. The two cleanups below are network writes: on a weak signal they
-                // took seconds, and this page sat there fully live the whole time. The tap read as
-                // if nothing had happened, Sign Out could be tapped again, and Delete Account was
-                // still reachable with a sign-out already in flight (owner report).
-                working = true
-                Task {
-                    await SessionWipe.cleanUpBeforeSignOut()
-                    // Captured before signOut clears it: whose received media stays on this phone
-                    // for their return (it is the only copy — see `SessionWipe.claimKeptMedia`).
-                    let leaving = Auth.auth().currentUser?.uid
-                    try? Auth.auth().signOut()
-                    SessionWipe.wipeAccountData(keepingMediaFor: leaving)   // this account's on-device state must not leak into the next sign-up
-                    dismiss(); onSignOut()
-                }
-            }
-        } message: {
-            // Queued messages and drafts are wiped with the account: say so before the tap.
-            if let lost = SessionWipe.unsentSummary() {
-                Text("\(lost) on this phone will be lost. You'll need to log in again to use Fariin on this device.")
-            } else {
-                Text("You'll need to log in again to use Fariin on this device.")
+        // A bottom sheet with the account's photo and name (owner 2026-11-07), not a centred alert.
+        .sheet(isPresented: $showSignOut) {
+            LogOutSheet(name: profile.me?.name ?? "",
+                        handle: profile.me?.handle ?? "",
+                        photoUrl: profile.me?.photoUrl,
+                        unsent: SessionWipe.unsentSummary()) {
+                await signOutNow()
             }
         }
         // Deletion is a PAGE, not a one-tap alert: it names the account, spells out what's lost,
@@ -1078,6 +1064,117 @@ struct AccountSettingsView: View {
         } catch {
             exportError = error.localizedDescription
         }
+    }
+
+    /// Logs out THIS account only (the same steps the old alert ran).
+    ///
+    /// `working` is set before the first await so the page under the sheet locks at once. The two
+    /// cleanups are network writes: on a weak connection they took seconds, and the page sat there fully
+    /// live, so Log out could be tapped again and Delete Account was reachable mid sign-out.
+    ///
+    /// No `dismiss()` at the end: popping this page first showed Settings for a moment before the
+    /// root swapped to the login screen (owner 2026-11-07). The root's route replaces the whole tab
+    /// shell, page and sheet included, so the next thing on screen is the login / account picker.
+    private func signOutNow() async {
+        working = true
+        await SessionWipe.cleanUpBeforeSignOut()
+        // Captured before signOut clears it: whose received media stays on this phone for their
+        // return (it is the only copy, see `SessionWipe.claimKeptMedia`).
+        let leaving = Auth.auth().currentUser?.uid
+        try? Auth.auth().signOut()
+        SessionWipe.wipeAccountData(keepingMediaFor: leaving)   // this account's on-device state must not leak into the next sign-up
+        onSignOut()
+    }
+}
+
+/// The log-out confirmation: a bottom sheet as tall as its content, with the account's photo and
+/// name on top so it is clear which account is leaving this phone.
+private struct LogOutSheet: View {
+    let name: String
+    let handle: String
+    let photoUrl: String?
+    /// Queued messages and drafts on this phone that the log-out wipes, if any.
+    let unsent: String?
+    let onConfirm: () async -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var signingOut = false
+    /// First value is a close estimate so the sheet does not open at one height and move.
+    @State private var contentHeight: CGFloat = 330
+
+    private var title: String { handle.isEmpty ? "Log out?" : "Log out of @\(handle)?" }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            AvatarView(name: name, photoUrl: photoUrl, size: 56)
+                .clipShape(Circle())
+                .padding(.top, 28)
+
+            if !name.isEmpty {
+                Text(name)
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.top, 8)
+            }
+
+            Text(title)
+                .font(.title3.weight(.semibold))
+                .multilineTextAlignment(.center)
+                .padding(.top, 14)
+
+            Text("You can log back in any time.")
+                .font(.subheadline).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.top, 6)
+
+            // Queued messages and drafts are wiped with the account: say so before the tap.
+            if let unsent {
+                Text("\(unsent) on this phone will be lost.")
+                    .font(.footnote).foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 6)
+            }
+
+            Button {
+                guard !signingOut else { return }
+                signingOut = true
+                Task { await onConfirm() }
+            } label: {
+                ZStack {
+                    Text("Log Out").opacity(signingOut ? 0 : 1)
+                    if signingOut { ProgressView().tint(.white) }
+                }
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity).frame(height: 50)
+                .background(Color.red, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(signingOut)
+            .padding(.top, 24)
+
+            Button { dismiss() } label: {
+                Text("Cancel")
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity).frame(height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(signingOut)
+            .opacity(signingOut ? 0.4 : 1)
+            .padding(.top, 6)
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity)
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .presentationDetents([.height(contentHeight)])
+        .presentationDragIndicator(.visible)
+        .interactiveDismissDisabled(signingOut)
     }
 }
 
