@@ -89,6 +89,18 @@ enum StoryText {
     /// fraction of the WIDTH, like every other number on this screen, so the composer and the render
     /// describe the same picture — see `fittedSize` for why ratios rather than points.
     static let linkGapRatio: CGFloat = 0.04
+
+    /// The words are nothing but one link. The tall card then shows the link in its own capsule, so
+    /// the words are not drawn a second time under it.
+    static func isBareLink(_ text: String) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, !t.contains(where: \.isWhitespace),
+              let url = StoryTextLinkDetector.firstURL(in: t),
+              let det = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        else { return false }
+        let full = NSRange(t.startIndex..., in: t)
+        return det.matches(in: t, range: full).contains { $0.range == full && $0.url == url }
+    }
 }
 
 /// Which of the two cards a story's link is wearing.
@@ -105,8 +117,28 @@ enum StoryTextLinkStyle: Equatable {
     case compact
     /// The picture across the top with the words beneath it. The original card, smaller than it was.
     case large
+    /// ⛔ THE TALL CARD FOR REELS AND SHORT VIDEOS (owner 2026-11-07, with the reference app's
+    /// screenshot): a white card, a portrait picture with a play button on a video, the title, the
+    /// host with the site's icon, and the link itself in a capsule under the card.
+    case poster
 
-    var other: StoryTextLinkStyle { self == .compact ? .large : .compact }
+    /// A tap on the card moves to the next style.
+    var other: StoryTextLinkStyle {
+        switch self {
+        case .compact: return .large
+        case .large: return .poster
+        case .poster: return .compact
+        }
+    }
+
+    /// The style a fresh link starts in: the tall card for a video or a portrait picture, the row
+    /// for everything else. Our own links keep the row, which carries their Join/Chat button.
+    @MainActor static func preferred(for d: LinkPreviewService.LinkDraft) -> StoryTextLinkStyle {
+        if KulanApp.route(from: d.url) != nil { return .compact }
+        if d.isVideo { return .poster }
+        if let img = d.image, img.size.height > img.size.width * 1.1 { return .poster }
+        return .compact
+    }
 }
 
 /// ⛔ THE LINK IS FOUND IN THE WORDS. THERE IS NO LINK BUTTON ANY MORE — owner, 2026-08-23: "Remove
@@ -456,7 +488,8 @@ struct StoryTextCard: View {
                 // 1.06 of the measured height, and the slack is deliberate: the fit is measured in
                 // UIKit's metrics and drawn in SwiftUI's. Too much room is invisible; too little
                 // clips the last line.
-                let textH = TextStoryStyles.measuredHeight(for: text, boxWidth: g.size.width - 56,
+                let hideWords = link != nil && shownLinkStyle == .poster && StoryText.isBareLink(text)
+                let textH = hideWords ? 0 : TextStoryStyles.measuredHeight(for: text, boxWidth: g.size.width - 56,
                                                            fontIndex: fontIndex, size: fontSize) * 1.06
                 let place = StoryTextLinkLayout.place(textHeight: textH, cardHeight: cardH,
                                                       boxWidth: g.size.width, boxHeight: boxH)
@@ -502,6 +535,8 @@ struct StoryTextCard: View {
                     // card nothing. With no link it keeps the whole box and centres in it, which is
                     // exactly what a text-only status has always done — that case is untouched.
                     .frame(height: link == nil ? nil : place.text)
+                    .opacity(hideWords ? 0 : 1)
+                    .allowsHitTesting(!hideWords)
                 }
                 // ⚠️ STATED, BECAUSE A `GeometryReader` ALIGNS ITS CONTENT TOP-LEADING. Without this
                 // the words would stop being centred in the card the moment they were wrapped in one
@@ -677,17 +712,36 @@ struct StoryTextCard: View {
         linkTask = Task {
             try? await Task.sleep(nanoseconds: 400_000_000)
             if Task.isCancelled { return }
-            let d = await LinkPreviewService.shared.draft(for: found)
+            var d = await LinkPreviewService.shared.draft(for: found)
+            // A reel or video page that would not answer (Instagram often refuses without sign-in)
+            // still gets its card: host only, an empty picture area, nothing made up.
+            if d == nil, LinkPreviewService.isVideoLink(found) {
+                d = LinkPreviewService.LinkDraft(url: found, title: "", desc: "", image: nil, isVideo: true)
+            }
+            if var x = d {
+                // The sign-in page's own title ("Instagram") says nothing about the post.
+                let brand = x.title.lowercased()
+                if (LinkPreviewService.isInstagram(found) && brand == "instagram")
+                    || (LinkPreviewService.isTikTok(found) && (brand == "tiktok" || brand.hasPrefix("tiktok - "))) {
+                    x.title = ""; x.desc = ""
+                }
+                if LinkPreviewService.isVideoLink(found) { x.isVideo = true }
+                x.icon = await LinkPreviewService.siteIcon(for: found)
+                d = x
+            }
             if Task.isCancelled { return }
+            let fetched = d
             await MainActor.run {
                 guard StoryTextLinkDetector.firstURL(in: text) == found else { return }
-                guard let d else {
+                guard let d = fetched else {
                     if link?.url.host != found.host {
                         withAnimation(.smooth(duration: 0.2)) { link = nil }
                     }
                     return
                 }
-                withAnimation(.smooth(duration: 0.2)) { link = StoryTextLink(draft: d) }
+                withAnimation(.smooth(duration: 0.2)) {
+                    link = StoryTextLink(draft: d, style: StoryTextLinkStyle.preferred(for: d))
+                }
             }
         }
     }
@@ -912,7 +966,8 @@ struct RenderedTextStory {
     } ?? 0
     // The words' own height at this size, with the same 1.06 of slack the composer allows for the
     // difference between UIKit's metrics and SwiftUI's.
-    let textH = TextStoryStyles.measuredHeight(for: trimmed, boxWidth: renderW - pad * 2,
+    let hideWords = link?.style == .poster && StoryText.isBareLink(text)
+    let textH = hideWords ? 0 : TextStoryStyles.measuredHeight(for: trimmed, boxWidth: renderW - pad * 2,
                                                fontIndex: fontIndex, size: size) * 1.06
     let place = StoryTextLinkLayout.place(textHeight: textH, cardHeight: cardH,
                                           boxWidth: renderW, boxHeight: renderH)
@@ -931,7 +986,11 @@ struct RenderedTextStory {
         if let link {
             VStack(spacing: renderW * StoryText.linkGapRatio) {
                 StoryTextLinkPreview(draft: link.draft, width: cardW, style: link.style)
-                words.frame(height: place.text)
+                if hideWords {
+                    Color.clear.frame(height: 0)
+                } else {
+                    words.frame(height: place.text)
+                }
             }
         } else {
             // Untouched: with no card there is nothing to make room for, and a text-only status is
@@ -1029,7 +1088,24 @@ struct StoryTextLinkPreview: View {
         switch style {
         case .compact: return textBlockHeight * k
         case .large:   return (hasPicture ? bannerHeight : 0) * k + textBlockHeight * k
+        case .poster:
+            return posterPictureHeight(width: width, draft: draft)
+                + (draft.title.isEmpty ? posterHostOnlyHeight : posterTextHeight) * k
+                + (posterGap + posterCapsuleHeight) * k
         }
+    }
+
+    // The tall card's numbers, at the 300pt reference like the rest.
+    private static let posterTextHeight: CGFloat = 92      // 12 + two 21pt title lines + 6 + 20 + 12
+    private static let posterHostOnlyHeight: CGFloat = 44  // 12 + 20 + 12
+    private static let posterGap: CGFloat = 10
+    private static let posterCapsuleHeight: CGFloat = 30
+
+    /// Portrait, between 4:5 and 2:3, following the picture's own shape. A video with no picture
+    /// keeps a square, plain area for its play button; any other link with no picture has none.
+    private static func posterPictureHeight(width: CGFloat, draft: LinkPreviewService.LinkDraft) -> CGFloat {
+        guard let img = draft.image, img.size.width > 0 else { return draft.isVideo ? width : 0 }
+        return width * min(1.5, max(1.25, img.size.height / img.size.width))
     }
 
     /// The words' side of the card, at the 300pt reference. Title 2 × 18, description 2 × 15, host
@@ -1104,6 +1180,91 @@ struct StoryTextLinkPreview: View {
     }
 
     var body: some View {
+        if style == .poster { poster } else { classic }
+    }
+
+    private var playDisc: some View {
+        ZStack {
+            Circle().fill(Color.black.opacity(0.45))
+            Image(systemName: "play.fill")
+                .font(.system(size: 24 * k, weight: .semibold))
+                .foregroundStyle(.white)
+                .offset(x: 2 * k)
+        }
+        .frame(width: 58 * k, height: 58 * k)
+    }
+
+    /// The tall card and the link capsule under it. See `StoryTextLinkStyle.poster`.
+    private var poster: some View {
+        let picH = Self.posterPictureHeight(width: width, draft: draft)
+        let textH = (draft.title.isEmpty ? Self.posterHostOnlyHeight : Self.posterTextHeight) * k
+        return VStack(spacing: Self.posterGap * k) {
+            VStack(alignment: .leading, spacing: 0) {
+                if picH > 0 {
+                    ZStack {
+                        if let img = draft.image {
+                            Image(uiImage: img)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: width, height: picH)
+                                .clipped()
+                        } else {
+                            Color(white: 0.92)
+                        }
+                        if draft.isVideo { playDisc }
+                    }
+                    .frame(width: width, height: picH)
+                }
+                VStack(alignment: .leading, spacing: 6 * k) {
+                    if !draft.title.isEmpty {
+                        Text(draft.title)
+                            .font(.system(size: 17 * k, weight: .semibold))
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    }
+                    HStack(spacing: 8 * k) {
+                        Text(draft.url.host ?? draft.host)
+                            .font(.system(size: 14 * k))
+                            .foregroundStyle(Color(white: 0.45))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                        if let icon = draft.icon {
+                            Image(uiImage: icon)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 20 * k, height: 20 * k)
+                                .clipShape(RoundedRectangle(cornerRadius: 5 * k, style: .continuous))
+                        } else {
+                            Image(systemName: "link")
+                                .font(.system(size: 14 * k, weight: .semibold))
+                                .foregroundStyle(Color(white: 0.45))
+                                .frame(width: 20 * k, height: 20 * k)
+                        }
+                    }
+                    .frame(height: 20 * k)
+                }
+                .padding(.horizontal, 14 * k)
+                .frame(width: width, height: textH, alignment: .leading)
+            }
+            .frame(width: width, height: picH + textH)
+            .background(Color.white)
+            .foregroundStyle(.black)
+            .clipShape(RoundedRectangle(cornerRadius: 22 * k, style: .continuous))
+
+            Text(StoryText.shortened(draft.url))
+                .font(.system(size: 14 * k, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.8))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.horizontal, 12 * k)
+                .frame(height: Self.posterCapsuleHeight * k)
+                .background(Capsule().fill(Color.white.opacity(0.6)))
+                .frame(maxWidth: width)
+        }
+        .frame(width: width, height: cardHeight, alignment: .top)
+    }
+
+    private var classic: some View {
         Group {
             switch style {
             // ⛔ HIS IMAGE 2, AND THE DEFAULT. A square of the page's own picture on the left with
@@ -1137,6 +1298,8 @@ struct StoryTextLinkPreview: View {
                         actionPill
                     }
                 }
+            case .poster:
+                EmptyView()
             }
         }
         .frame(width: width, height: cardHeight)
