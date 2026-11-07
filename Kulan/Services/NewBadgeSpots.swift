@@ -37,7 +37,7 @@ enum NewBadgeSpots {
         "notifications.sentSound": Spot(title: "Sound When Sent", place: "Settings > Notifications"),
         "notifications.resetAll": Spot(title: "Reset All Notifications", place: "Settings > Notifications"),
         "appearance.chatWallpaper": Spot(title: "Chat Wallpaper", place: "Settings > Appearance"),
-        "appearance.chatColor": Spot(title: "Chat Color", place: "Settings > Appearance"),
+        "appearance.chatColor": Spot(title: "Bubble Color", place: "Settings > Appearance"),
         "appearance.bubbleStyles": Spot(title: "Bubble Styles", place: "Settings > Appearance"),
         "appearance.appIcon": Spot(title: "App Icon", place: "Settings > Appearance"),
         "appearance.quickReaction": Spot(title: "Quick Reaction", place: "Settings > Appearance"),
