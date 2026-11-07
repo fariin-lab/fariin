@@ -276,6 +276,12 @@ enum ChatWallpapers {
     /// rest. Adding a theme is still adding one row here — no asset, no app-size cost, no review.
     /// Graphite deliberately breaks the loudness half and not the flatness half: someone who wants
     /// a quiet chat should have one, and it is the only palette here whose corners are neutral.
+    /// What the pickers list: `all` minus the ones the admin panel hid. Read from a view, so the
+    /// picker redraws when the panel flips one. A chat already using a hidden one keeps it.
+    static var shown: [WallpaperGradient] {
+        let hidden = LiveFeatures.shared.wallpapersHidden
+        return all.filter { !hidden.contains($0.id) }
+    }
     /// ⛔ THE NINE GRADIENTS FIRST, THE SIX PATTERNED ONES AFTER — owner, 2026-09-27: "my new
     /// wallpapers make it first, the old ones make back". Order only; every id is unchanged, so a
     /// chat that already uses one keeps it.

@@ -31,6 +31,11 @@ struct AnimatedWallpaper: Identifiable, Equatable {
 }
 
 enum AnimatedWallpapers {
+    /// What the pickers list: `all` minus the ones the admin panel hid (redraws live).
+    static var shown: [AnimatedWallpaper] {
+        let hidden = LiveFeatures.shared.wallpapersHidden
+        return all.filter { !hidden.contains($0.id) }
+    }
     static let all: [AnimatedWallpaper] = [
         AnimatedWallpaper(id: "liquid-metal", name: "Liquid Metal", look: .liquidMetal, period: 90),
         AnimatedWallpaper(id: "water", name: "Water", look: .water, period: 60),

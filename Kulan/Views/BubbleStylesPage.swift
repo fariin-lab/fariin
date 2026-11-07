@@ -26,6 +26,8 @@ struct BubbleStylesPage: View {
     @State private var category: Category = Category.of(BubbleStyles.find(BubbleStyles.current))
         .flatMap { $0 == .colours ? nil : $0 } ?? .chatColor
     private var dark: Bool { scheme == .dark }
+    /// The open chip, or Color when the admin panel hid every style in it.
+    private var openCategory: Category { Category.shown.contains(category) ? category : .chatColor }
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
     private let colorCols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 5)
     private var colorStore: ChatColorStore { .shared }
@@ -53,10 +55,13 @@ struct BubbleStylesPage: View {
         var styles: [BubbleStyle] {
             switch self {
             case .chatColor: return []
-            case .pictures(let p): return BubbleStyles.all.filter { $0.picture?.group == p }
-            case .colours: return BubbleStyles.colours
+            case .pictures(let p): return BubbleStyles.shown.filter { $0.picture?.group == p }
+            case .colours: return BubbleStyles.shown.filter { $0.picture == nil }
             }
         }
+        /// The chips offered: Color, then each picture group that still has a style the admin
+        /// panel did not hide. Read from a view, so the row redraws when the panel flips one.
+        static var shown: [Category] { all.filter { $0 == .chatColor || !$0.styles.isEmpty } }
     }
 
     var body: some View {
@@ -71,15 +76,15 @@ struct BubbleStylesPage: View {
             .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    if category == .chatColor {
+                    if openCategory == .chatColor {
                         colorGrid
                     } else {
                         LazyVGrid(columns: cols, spacing: 10) {
                             tile(nil)
-                            ForEach(category.styles) { s in tile(s) }
+                            ForEach(openCategory.styles) { s in tile(s) }
                         }
                     }
-                    if category == .colours {
+                    if openCategory == .colours {
                         // Optional decorations (owner 2026-11-06): hearts, bows, stars at the corners
                         // of the last bubble in a run, never on every bubble. Colour styles only; a
                         // picture brings its own art.
@@ -161,8 +166,8 @@ struct BubbleStylesPage: View {
     private var chips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(Category.all, id: \.self) { c in
-                    let on = c == category
+                ForEach(Category.shown, id: \.self) { c in
+                    let on = c == openCategory
                     Button {
                         category = c
                         Haptics.impact(.light)
