@@ -308,6 +308,14 @@ struct NewChannelView: View {
                     return
                 }
                 halfMadeCid = nil
+                // Reactions start ON with the default set picked (owner 2026-11-07), the same switch the
+                // Reactions page shows. Best effort: a channel without it reads as any emoji until changed.
+                let newCid = cid
+                Task {
+                    _ = try? await ChannelService.setReactions(
+                        cid: newCid, mode: "some",
+                        list: Array(ChannelReactionsSettingsView.palette.prefix(ChannelReactionsSettingsView.perRow)))
+                }
                 createdCid = cid
                 // The photo after the channel exists; a failed photo never undoes the channel.
                 if let photo {

@@ -1179,14 +1179,18 @@ struct ChannelReactionsSettingsView: View {
             // ⛔ MINIMAL (owner 2026-10-29: "make this page minimalist"): the three choices, and for
             // Selected one grid whose ticks are the selection. The preview card and the separate
             // "Selected" slot row are gone (they said again what the ticks say).
+            // ⛔ ONE SWITCH (owner 2026-11-07): on by default with a default set picked, which he can
+            // change below; off = no reactions. "Any Emoji" is gone from the page.
             Section {
-                choice("all", "Any Emoji")
-                choice("some", "Selected Emoji")
-                choice("off", "No Reactions")
+                Toggle(isOn: Binding(get: { mode != "off" }, set: { setOn($0) })) {
+                    Text("Reactions")
+                }
+                .tint(.green)
+                .disabled(!loaded)
             } footer: {
-                Text("Nobody sees who reacted, only how many.")
+                Text(mode == "off" ? "Followers can't react to posts." : "Nobody sees who reacted, only how many.")
             }
-            if mode == "some" {
+            if mode != "off" {
                 // ⛔ THE PICKS IN ONE BAR (owner 2026-10-31, his drawing): the chosen emoji in a
                 // rounded bar, "Tap to replace an emoji" under it, a tap opens the emoji sheet for
                 // that one. A "+" fills a free place while fewer than six are chosen.
@@ -1237,6 +1241,26 @@ struct ChannelReactionsSettingsView: View {
         savedList = c.reactList
         if !c.reactList.isEmpty { lastPicks = c.reactList }
         loaded = true
+        // A channel still on the old "any emoji" becomes the switch's ON: the default set, picked and
+        // saved, so what the page shows is what followers get.
+        if mode == "all" {
+            mode = "some"
+            if list.isEmpty { list = Array(Self.palette.prefix(Self.perRow)) }
+            save()
+        }
+    }
+
+    /// The switch: on brings back the earlier picks (or the default set), off turns reactions off.
+    private func setOn(_ on: Bool) {
+        guard loaded, on != (mode != "off") else { return }
+        if on {
+            mode = "some"
+            if list.isEmpty { list = lastPicks.isEmpty ? Array(Self.palette.prefix(Self.perRow)) : lastPicks }
+        } else {
+            mode = "off"
+        }
+        Haptics.impact(.light)
+        save()
     }
 
     /// The chosen emoji in one rounded bar; each one opens the emoji sheet to replace it. Six to a
