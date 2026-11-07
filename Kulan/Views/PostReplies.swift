@@ -495,10 +495,10 @@ struct PostThreadSheet: View {
             .toolbar(.hidden, for: .navigationBar)
             .overlay(alignment: .top) { toastView }
         }
-        // Opens at 65% of the screen and pulls up to full (owner 2026-11-07).
-        .presentationDetents([.fraction(0.65), .large])
-        // A scroll in Replies or Quotes moves the list, not the sheet (owner 2026-11-07); dragging the
-        // top bar still pulls it to full.
+        // ⛔ 65% AND ONLY 65% (owner 2026-11-07, twice: a scroll made it full, then tapping the reply
+        // field made it full). With a taller size on offer the system takes it when the keyboard comes
+        // up; with one size the sheet stays and the field rides above the keyboard.
+        .presentationDetents([.fraction(0.65)])
         .presentationContentInteraction(.scrolls)
         .presentationDragIndicator(.visible)
         .onChange(of: tab) { _, t in
