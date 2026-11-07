@@ -248,9 +248,22 @@ struct PostReply: Identifiable, Equatable {
             loaded = true
             failed = false
             Self.cache[mid] = page
+            prefetchAnswers()
         } catch {
             failed = true
             loaded = true
+        }
+    }
+
+    /// ⛔ "VIEW N REPLIES" OPENS AT ONCE (owner 2026-11-07: it opened late). Right after the first page,
+    /// the answers of the newest few replies that have any are fetched quietly, so the tap shows them
+    /// straight away. At most 5, so a busy post does not cost a call per reply.
+    private func prefetchAnswers() {
+        var todo: [String] = []
+        if let p = pinned, p.answers > 0 { todo.append(p.id) }
+        for r in threads.reversed() where r.answers > 0 && todo.count < 5 { todo.append(r.id) }
+        for rid in todo where !answersLoaded.contains(rid) && !answersLoading.contains(rid) {
+            Task { await loadAnswers(rid, more: false) }
         }
     }
 
@@ -320,6 +333,11 @@ struct PostReply: Identifiable, Equatable {
     }
 
     func loadAnswers(_ rid: String, more: Bool) async {
+        if !more {
+            guard !answersLoading.contains(rid) else { return }   // a prefetch already on its way
+            answersLoading.insert(rid)
+        }
+        defer { if !more { answersLoading.remove(rid) } }
         let cursor = more ? (answerNext[rid] ?? "") : ""
         guard let res = try? await fn.httpsCallable("getReplyAnswers").call(args(["rid": rid, "cursor": cursor])) else { return }
         let d = res.data as? [String: Any] ?? [:]
@@ -337,6 +355,8 @@ struct PostReply: Identifiable, Equatable {
     /// (just sent) without the others; "View N replies" then showed only the newest (owner
     /// 2026-11-07: "show me the first ones"). Opened, it loads from the first answer down.
     private var answersLoaded: Set<String> = []
+    /// Threads whose first answers are being fetched now (the toggle says "Loading..." meanwhile).
+    private(set) var answersLoading: Set<String> = []
 
     func toggleThread(_ rid: String) {
         if openThreads.contains(rid) { openThreads.remove(rid); return }
@@ -851,7 +871,8 @@ struct PostThreadSheet: View {
             Button { withAnimation(.easeInOut(duration: 0.2)) { model.toggleThread(t) } } label: {
                 HStack(spacing: 8) {
                     Color.clear.frame(width: 20, height: 1)
-                    Text(open ? "Hide replies" : "View \(n) \(n == 1 ? "reply" : "replies")")
+                    Text(open ? (model.answersLoading.contains(t) ? "Loading…" : "Hide replies")
+                              : "View \(n) \(n == 1 ? "reply" : "replies")")
                         .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                 }
                 // The thread line ends here, curving in from the parent photo's line.
