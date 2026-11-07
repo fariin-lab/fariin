@@ -145,6 +145,7 @@ struct QuoteCard: Equatable, Codable {
         }
         for t in pending.values { t.cancel() }
         cards.removeAll(); lastUsed.removeAll(); fetchedAt.removeAll(); queued.removeAll()
+        inFlight.removeAll()   // a call from the old account must not block the new one's cards
         pending.removeAll(); done.removeAll()
     }
 
@@ -180,7 +181,12 @@ struct QuoteCard: Equatable, Codable {
         inFlight.formUnion(batch)
         defer { inFlight.subtract(batch) }
         do {
-            let r = try await Functions.functions(region: "me-central1").httpsCallable("getQuotes").call(["qids": batch])
+            // A time limit (owner 2026-11-07: every card stuck on "Loading..."): a call that never
+            // answered, e.g. across an account switch, kept its ids "in flight" for good, and an id in
+            // flight is never asked again.
+            let call = Functions.functions(region: "me-central1").httpsCallable("getQuotes")
+            call.timeoutInterval = 15
+            let r = try await call.call(["qids": batch])
             let got = ((r.data as? [String: Any])?["quotes"] as? [String: Any]) ?? [:]
             var changed = false
             for q in batch {
@@ -193,6 +199,15 @@ struct QuoteCard: Equatable, Codable {
             // Asked again on the next draw after a short pause, not in a loop.
             let retryAt = Date().addingTimeInterval(-fresh + 15)
             for q in batch where fetchedAt[q] == nil || fetchedAt[q]! < retryAt { fetchedAt[q] = retryAt }
+            // And asked again by itself: a card still on "Loading..." may never be drawn again to ask.
+            let missing = batch.filter { cards[$0] == nil }
+            if !missing.isEmpty {
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 15_000_000_000)
+                    guard let self else { return }
+                    for q in missing where self.cards[q] == nil { self.request(q) }
+                }
+            }
         }
         if !queued.isEmpty { await flush() }
     }
