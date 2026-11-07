@@ -20,6 +20,8 @@ struct PostReply: Identifiable, Equatable {
     var held: Bool
     /// The author's uid: only for moderators (the server leaves it out for everyone else).
     var uid: String?
+    /// Written by the channel's owner: it shows as the channel, with a "Creator" label (owner 2026-11-07).
+    var creator = false
     var send: Send = .sent
     /// Reactions as the chat has them (owner 2026-11-07): my emoji ("" = none) and each emoji's
     /// count, biggest first. `likes` stays the number of people who reacted.
@@ -60,6 +62,7 @@ struct PostReply: Identifiable, Equatable {
         liked = d["liked"] as? Bool ?? false
         held = d["held"] as? Bool ?? false
         uid = d["u"] as? String
+        creator = d["cr"] as? Bool ?? false
         // A server from before emoji reactions sends only `liked` and `lc`: hearts.
         my = d["my"] as? String ?? (liked ? Self.heart : "")
         if let m = d["rx"] as? [String: Any] {
@@ -105,6 +108,8 @@ struct PostReply: Identifiable, Equatable {
     let cid: String
     let mid: String
     private(set) var threads: [PostReply] = []           // oldest first
+    /// The one pinned thread (owner 2026-11-07): shown first, never again in `threads`.
+    private(set) var pinned: PostReply?
     private(set) var answers: [String: [PostReply]] = [:]  // thread id -> answers, oldest first
     private(set) var answerNext: [String: String] = [:]
     var openThreads: Set<String> = []
@@ -138,14 +143,34 @@ struct PostReply: Identifiable, Equatable {
 
     /// The last first page per post, for an instant paint when the sheet opens again (this launch).
     private static var cache: [String: [PostReply]] = [:]
+    private static var pinCache: [String: PostReply] = [:]
 
     init(cid: String, mid: String) {
         self.cid = cid
         self.mid = mid
         if let c = Self.cache[mid] { threads = c; loaded = true }
+        pinned = Self.pinCache[mid]
     }
 
-    static func reset() { cache.removeAll() }
+    static func reset() { cache.removeAll(); pinCache.removeAll() }
+
+    /// The first page's `pinned` (absent on a server from before pins: left as it is).
+    private func applyPinned(_ d: [String: Any]) {
+        guard d.keys.contains("pinned") else { return }
+        let p = (d["pinned"] as? [String: Any]).flatMap(PostReply.init).map(overlay)
+        setPinned(p.flatMap { deletedIds.contains($0.id) ? nil : $0 })
+    }
+
+    /// A new pin leaves the list; the one it replaces goes back into it, in time order.
+    private func setPinned(_ p: PostReply?) {
+        if let old = pinned, old.id != p?.id, !threads.contains(where: { $0.id == old.id }), !deletedIds.contains(old.id) {
+            threads.append(old)
+            threads.sort { $0.at < $1.at }
+        }
+        if let p { threads.removeAll { $0.id == p.id } }
+        pinned = p
+        Self.pinCache[mid] = p
+    }
 
     private var fn: Functions { Functions.functions(region: "me-central1") }
     private func args(_ extra: [String: Any] = [:]) -> [String: Any] {
@@ -218,6 +243,7 @@ struct PostReply: Identifiable, Equatable {
             let firstAt = page.first?.at
             let kept = threads.filter { r in !ids.contains(r.id) && (r.send != .sent || (firstAt.map { r.at < $0 } ?? true)) }
             threads = (kept + page).sorted { $0.at < $1.at }
+            applyPinned(d)
             if lastRev < 0 { lastRev = (d["rev"] as? NSNumber)?.intValue ?? 0 }
             loaded = true
             failed = false
@@ -267,13 +293,14 @@ struct PostReply: Identifiable, Equatable {
         }
         list.sort { $0.at < $1.at }
         threads = list
+        applyPinned(d)
         if added > 0 {
             if atEnd { scrollTarget = list.last?.id } else { unseenNew += added }
         }
         Self.cache[mid] = page
         // Open threads whose answer count moved, together.
         let changed = openThreads.filter { t in
-            guard let r = page.first(where: { $0.id == t }) else { return false }
+            guard let r = page.first(where: { $0.id == t }) ?? (pinned?.id == t ? pinned : nil) else { return false }
             return r.answers != (answers[t]?.filter { $0.send == .sent }.count ?? -1)
         }
         await withTaskGroup(of: Void.self) { g in
@@ -287,7 +314,7 @@ struct PostReply: Identifiable, Equatable {
         defer { loadingOlder = false }
         guard let res = try? await fn.httpsCallable("getReplies").call(args(["cursor": olderCursor])) else { return }
         let d = res.data as? [String: Any] ?? [:]
-        let page = Array(rows(d).reversed()).filter { r in !threads.contains { $0.id == r.id } }
+        let page = Array(rows(d).reversed()).filter { r in !threads.contains { $0.id == r.id } && r.id != pinned?.id }
         olderCursor = d["next"] as? String ?? ""
         threads.insert(contentsOf: page, at: 0)
     }
@@ -345,7 +372,7 @@ struct PostReply: Identifiable, Equatable {
                 replace(id, with: saved, thread: thread)
                 recentMine[id] = Date()
                 if firstTime {
-                    if let t = thread, let i = threads.firstIndex(where: { $0.id == t }) { threads[i].answers += 1 }
+                    if let t = thread { update(t, thread: nil) { $0.answers += 1 } }
                     count += 1
                 }
             } catch {
@@ -383,6 +410,8 @@ struct PostReply: Identifiable, Equatable {
             if let i = answers[t]?.firstIndex(where: { $0.id == id }) { change(&answers[t]![i]) }
         } else if let i = threads.firstIndex(where: { $0.id == id }) {
             change(&threads[i])
+        } else if pinned?.id == id {
+            change(&pinned!)
         }
     }
 
@@ -428,12 +457,14 @@ struct PostReply: Identifiable, Equatable {
     func delete(_ r: PostReply, thread: String?) async {
         deletedIds.insert(r.id)
         let threadsBefore = threads, answersBefore = answers[thread ?? ""]
+        let wasPinned = thread == nil && pinned?.id == r.id ? pinned : nil
         if let t = thread {
             answers[t]?.removeAll { $0.id == r.id }
-            if let i = threads.firstIndex(where: { $0.id == t }) { threads[i].answers = max(0, threads[i].answers - 1) }
+            update(t, thread: nil) { $0.answers = max(0, $0.answers - 1) }
         } else {
             threads.removeAll { $0.id == r.id }
             answers[r.id] = nil
+            if wasPinned != nil { pinned = nil; Self.pinCache[mid] = nil }   // the server unpins it too
         }
         var a: [String: Any] = [:]
         if let t = thread { a["rid"] = t; a["aid"] = r.id } else { a["rid"] = r.id }
@@ -443,7 +474,8 @@ struct PostReply: Identifiable, Equatable {
             count = max(0, count - removed)
         } catch {
             deletedIds.remove(r.id)
-            if let t = thread, let i = threads.firstIndex(where: { $0.id == t }) { threads[i].answers += 1 }
+            if let t = thread { update(t, thread: nil) { $0.answers += 1 } }
+            if let p = wasPinned { pinned = p; Self.pinCache[mid] = p; return }
             // Only the one row comes back, never a whole saved list over newer arrivals.
             if let t = thread, let before = answersBefore, let row = before.first(where: { $0.id == r.id }) {
                 answers[t, default: []].append(row)
@@ -453,6 +485,39 @@ struct PostReply: Identifiable, Equatable {
                 threads.sort { $0.at < $1.at }
             }
         }
+    }
+
+    /// Pins a thread at the top (owner, or admins who change channel info). At once; put back on failure.
+    func pin(_ r: PostReply) async -> Bool {
+        let before = pinned
+        setPinned(r)
+        guard (try? await fn.httpsCallable("pinReply").call(args(["rid": r.id]))) != nil else {
+            setPinned(before)
+            if !threads.contains(where: { $0.id == r.id }) { threads.append(r); threads.sort { $0.at < $1.at } }
+            return false
+        }
+        return true
+    }
+
+    func unpin() async -> Bool {
+        guard let before = pinned else { return true }
+        setPinned(nil)
+        guard (try? await fn.httpsCallable("pinReply").call(args(["rid": ""]))) != nil else {
+            setPinned(before)
+            return false
+        }
+        return true
+    }
+
+    /// Who wrote one reply, for a tap on its photo or name. Moderators already have it on the row.
+    /// nil: not found, or a Creator reply (that one opens the channel).
+    func author(_ r: PostReply, thread: String?) async -> String? {
+        if let u = r.uid, !u.isEmpty { return u }
+        var a: [String: Any] = [:]
+        if let t = thread { a["rid"] = t; a["aid"] = r.id } else { a["rid"] = r.id }
+        guard let res = try? await fn.httpsCallable("replyAuthor").call(args(a)),
+              let u = (res.data as? [String: Any])?["uid"] as? String, !u.isEmpty else { return nil }
+        return u
     }
 
     func report(_ r: PostReply, thread: String?, reason: String) async -> Bool {
@@ -503,6 +568,10 @@ struct PostThreadSheet: View {
     var startTab: Tab = .replies
     /// This post's replies switch changed here: the chat updates the post at once (owner 2026-11-07).
     var onPostRepliesChanged: (Bool) -> Void = { _ in }
+    /// A tap on a reply's photo or name: that person's profile (uid, name), or the channel's own page
+    /// for a Creator reply. The chat closes this sheet first, then opens it.
+    var onOpenPerson: (String, String) -> Void = { _, _ in }
+    var onOpenChannel: () -> Void = {}
 
     @Environment(\.dismiss) private var dismiss
     @State private var tab: Tab = .replies
@@ -661,6 +730,7 @@ struct PostThreadSheet: View {
 
     private enum Item: Identifiable {
         case older
+        case pinnedLabel
         case thread(PostReply)
         case answer(PostReply, String)
         case toggle(String, Int, Bool)
@@ -668,6 +738,7 @@ struct PostThreadSheet: View {
         var id: String {
             switch self {
             case .older: return "older"
+            case .pinnedLabel: return "pinned"
             case .thread(let r): return "t-\(r.id)"
             case .answer(let r, _): return "a-\(r.id)"
             case .toggle(let t, _, _): return "g-\(t)"
@@ -679,20 +750,24 @@ struct PostThreadSheet: View {
     /// The list as one flat run of rows (lazy all the way down, a long thread included).
     private var items: [Item] {
         var out: [Item] = []
+        // The pinned thread first, under a small "Pinned" line, then the rest (owner 2026-11-07).
+        if let p = model.pinned { out.append(.pinnedLabel); appendThread(p, to: &out) }
         if !model.olderCursor.isEmpty { out.append(.older) }
-        for r in model.threads {
+        for r in model.threads { appendThread(r, to: &out) }
+        return out
+    }
+
+    private func appendThread(_ r: PostReply, to out: inout [Item]) {
             out.append(.thread(r))
             let loaded = model.answers[r.id] ?? []
             let total = max(r.answers, loaded.count)
-            guard total > 0 else { continue }
+            guard total > 0 else { return }
             let open = model.openThreads.contains(r.id)
             if open {
                 for a in loaded { out.append(.answer(a, r.id)) }
                 if !(model.answerNext[r.id] ?? "").isEmpty { out.append(.moreAnswers(r.id)) }
             }
             out.append(.toggle(r.id, total, open))
-        }
-        return out
     }
 
     private var repliesTab: some View {
@@ -717,7 +792,7 @@ struct PostThreadSheet: View {
                 .overlay(alignment: .bottom) { newPill(proxy) }
                 .onChange(of: model.scrollTarget) { _, id in
                     guard let id else { return }
-                    let key = model.threads.contains(where: { $0.id == id }) ? "t-\(id)" : "a-\(id)"
+                    let key = model.threads.contains(where: { $0.id == id }) || model.pinned?.id == id ? "t-\(id)" : "a-\(id)"
                     model.scrollTarget = nil
                     // After the new row is laid out, not in the same pass that added it.
                     Task { @MainActor in
@@ -760,6 +835,11 @@ struct PostThreadSheet: View {
                     .frame(maxWidth: .infinity).padding(.vertical, 10)
             }
             .buttonStyle(.plain)
+        case .pinnedLabel:
+            Label("Pinned", systemImage: "pin.fill")
+                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                .padding(.leading, 16 + 40 + 10 + 14).padding(.top, 8)
+                .accessibilityLabel("Pinned reply")
         case .thread(let r):
             // A line runs down from the photo when the reply has answers (shown or not yet).
             let hasAnswers = r.answers > 0 || !(model.answers[r.id] ?? []).isEmpty
@@ -808,11 +888,29 @@ struct PostThreadSheet: View {
             report: r.mine ? nil : { reporting = (r, thread) },
             ban: (model.may.ban && !r.mine) ? { banning = (r, thread) } : nil,
             retry: r.send == .failed ? { model.retry(r, thread: thread) } : nil,
-            discard: r.send == .failed ? { model.discard(r, thread: thread) } : nil)
+            discard: r.send == .failed ? { model.discard(r, thread: thread) } : nil,
+            pin: (model.may.settings && thread == nil && r.send == .sent) ? {
+                let on = model.pinned?.id == r.id
+                Task {
+                    let ok = on ? await model.unpin() : await model.pin(r)
+                    show(ok ? (on ? "Reply unpinned." : "Reply pinned.") : "Couldn't do that.")
+                }
+            } : nil,
+            pinned: thread == nil && model.pinned?.id == r.id,
+            openAuthor: r.send == .sent && (!r.mine || r.creator) ? { openAuthor(r, thread: thread) } : nil)
+    }
+
+    /// Photo or name tapped: the chat closes the sheet, then opens the person (or the channel).
+    private func openAuthor(_ r: PostReply, thread: String?) {
+        if r.creator { onOpenChannel(); return }
+        Task {
+            guard let uid = await model.author(r, thread: thread) else { show("Couldn't open this profile."); return }
+            onOpenPerson(uid, r.name)
+        }
     }
 
     @ViewBuilder private var repliesOverlay: some View {
-        if model.failed && model.threads.isEmpty {
+        if model.failed && model.threads.isEmpty && model.pinned == nil {
             ContentUnavailableView {
                 Label("Couldn't load replies", systemImage: "bubble.left.and.bubble.right")
             } description: {
@@ -822,7 +920,7 @@ struct PostThreadSheet: View {
             }
         } else if !model.loaded {
             RepliesSkeleton()
-        } else if model.threads.isEmpty {
+        } else if model.threads.isEmpty && model.pinned == nil {
             // The owner's comment icon, the one on the Reply bar, and smaller words than the system's
             // empty view (owner 2026-11-07: "this text looks big").
             VStack(spacing: 6) {
@@ -889,6 +987,10 @@ private struct ReplyRow: View {
         var ban: (() -> Void)?
         var retry: (() -> Void)?
         var discard: (() -> Void)?
+        /// Pin or unpin (owner and info admins, threads only); `pinned` says which it is now.
+        var pin: (() -> Void)?
+        var pinned = false
+        var openAuthor: (() -> Void)?
     }
 
     let reply: PostReply
@@ -904,15 +1006,24 @@ private struct ReplyRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Text(reply.name).font(.footnote.weight(.semibold)).lineLimit(1)
+                    .onTapGesture { actions.openAuthor?() }
                 if reply.verified {
                     Image(systemName: "checkmark.seal.fill").font(.caption2).foregroundStyle(.blue)
+                }
+                if reply.creator {
+                    Text("Creator")
+                        .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .background(Color(.tertiarySystemFill), in: Capsule())
                 }
                 Text(Self.age(reply.at)).font(.footnote).foregroundStyle(.secondary)
             }
             .padding(.leading, side + 10 + 14)
             HStack(alignment: .center, spacing: 10) {
                 AvatarView(name: reply.name, photoUrl: reply.photoUrl.isEmpty ? nil : reply.photoUrl, size: side)
+                    .avatarSquircle(reply.creator)   // the channel's photo, shaped as channels are
                     .accessibilityHidden(true)
+                    .onTapGesture { actions.openAuthor?() }
                     .anchorPreference(key: ReplyAvatarBounds.self, value: .bounds) { $0 }
                 Text(reply.text)
                     .font(small ? .subheadline : .body)
@@ -943,6 +1054,8 @@ private struct ReplyRow: View {
         .accessibilityActions {
             if reply.send == .sent { Button(reply.liked ? "Unlike" : "Like") { actions.like() } }
             if let r = actions.reply { Button("Reply", action: r) }
+            if let o = actions.openAuthor { Button(reply.creator ? "Open Channel" : "Open Profile", action: o) }
+            if let p = actions.pin { Button(actions.pinned ? "Unpin" : "Pin", action: p) }
             if let r = actions.retry { Button("Retry", action: r) }
             if let d = actions.delete { Button("Delete", action: d) }
             if let r = actions.report { Button("Report", action: r) }
@@ -1014,6 +1127,9 @@ private struct ReplyRow: View {
         }
         if let r = actions.reply { Button { r() } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") } }
         Button { UIPasteboard.general.string = reply.text } label: { Label("Copy", systemImage: "doc.on.doc") }
+        if let p = actions.pin {
+            Button { p() } label: { Label(actions.pinned ? "Unpin" : "Pin", systemImage: actions.pinned ? "pin.slash" : "pin") }
+        }
         if let r = actions.report { Button { r() } label: { Label("Report", systemImage: "exclamationmark.bubble") } }
         if let d = actions.delete { Button(role: .destructive) { d() } label: { Label("Delete", systemImage: "trash") } }
         if let b = actions.ban { Button(role: .destructive) { b() } label: { Label("Delete and Ban", systemImage: "nosign") } }

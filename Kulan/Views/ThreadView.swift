@@ -4709,6 +4709,24 @@ struct ThreadView: View {
                         startTab: quotesStartOnQuotes ? .quotes : .replies)
         let repo = self.repo
         sheet.onPostRepliesChanged = { off in repo.setRepliesOffLocally(mid, off: off) }
+        // A reply's photo or name (owner 2026-11-07): the sheet goes down, then the person's profile,
+        // or this channel's own page for a Creator reply.
+        sheet.onOpenPerson = { uid, name in
+            quotesFor = nil
+            guard uid != me else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                inputFocused = false
+                memberProfile = GroupInfoView.MemberAction(id: uid, name: name, isAdmin: false)
+            }
+        }
+        sheet.onOpenChannel = {
+            quotesFor = nil
+            guard conversation?.fariinLocked != true else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                inputFocused = false
+                showContactInfo = true
+            }
+        }
         return sheet
     }
 
