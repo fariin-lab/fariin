@@ -761,15 +761,26 @@ struct PostThreadSheet: View {
             }
             .buttonStyle(.plain)
         case .thread(let r):
-            ReplyRow(reply: r, small: false, actions: actions(r, thread: nil))
+            // A line runs down from the photo when the reply has answers (shown or not yet).
+            let hasAnswers = r.answers > 0 || !(model.answers[r.id] ?? []).isEmpty
+            ReplyRow(reply: r, small: false, actions: actions(r, thread: nil), line: hasAnswers ? .below : .none)
         case .answer(let r, let t):
-            ReplyRow(reply: r, small: true, actions: actions(r, thread: t)).padding(.leading, 46)
+            ReplyRow(reply: r, small: true, actions: actions(r, thread: t), line: .answer)
+                .padding(.leading, ReplyThreadLine.answerIndent)
         case .toggle(let t, let n, let open):
             Button { withAnimation(.easeInOut(duration: 0.2)) { model.toggleThread(t) } } label: {
                 HStack(spacing: 8) {
-                    Rectangle().fill(Color.secondary.opacity(0.35)).frame(width: 20, height: 1)
+                    Color.clear.frame(width: 20, height: 1)
                     Text(open ? "Hide replies" : "View \(n) \(n == 1 ? "reply" : "replies")")
                         .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                }
+                // The thread line ends here, curving in from the parent photo's line.
+                .background(alignment: .leading) {
+                    GeometryReader { g in
+                        ReplyThreadLine.toggleElbow(height: g.size.height)
+                            .stroke(ReplyThreadLine.color, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                    }
+                    .allowsHitTesting(false)
                 }
             }
             .buttonStyle(.plain)
@@ -780,6 +791,11 @@ struct PostThreadSheet: View {
             }
             .buttonStyle(.plain)
             .padding(.leading, 108).padding(.bottom, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(alignment: .leading) {   // the thread line passes by
+                Rectangle().fill(ReplyThreadLine.color).frame(width: 1.5)
+                    .padding(.leading, ReplyThreadLine.parentX - 0.75)
+            }
         }
     }
 
@@ -878,6 +894,8 @@ private struct ReplyRow: View {
     let reply: PostReply
     let small: Bool
     let actions: Actions
+    /// The thread line this row draws (owner 2026-11-07, his reference picture).
+    var line: ReplyThreadLine = .none
 
     var body: some View {
         // His reference picture (owner 2026-11-07): name and age over the bubble, the photo beside
@@ -895,6 +913,7 @@ private struct ReplyRow: View {
             HStack(alignment: .center, spacing: 10) {
                 AvatarView(name: reply.name, photoUrl: reply.photoUrl.isEmpty ? nil : reply.photoUrl, size: side)
                     .accessibilityHidden(true)
+                    .anchorPreference(key: ReplyAvatarBounds.self, value: .bounds) { $0 }
                 Text(reply.text)
                     .font(small ? .subheadline : .body)
                     .padding(.horizontal, 14).padding(.vertical, 10)
@@ -909,6 +928,16 @@ private struct ReplyRow: View {
                 .padding(.leading, side + 10 + 8).padding(.top, 2)
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
+        // Drawn from where the photo really is, so a reply of several lines still lines up.
+        .overlayPreferenceValue(ReplyAvatarBounds.self) { a in
+            GeometryReader { g in
+                if let a, line != .none {
+                    ReplyThreadLine.path(line, avatar: g[a], height: g.size.height)
+                        .stroke(ReplyThreadLine.color, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+                }
+            }
+            .allowsHitTesting(false)
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(reply.name), \(reply.text), \(Self.spokenAge(reply.at))\(reply.likes > 0 ? ", \(reply.likes) likes" : "")")
         .accessibilityActions {
@@ -1097,4 +1126,52 @@ private struct RepliesSkeleton: View {
         .accessibilityLabel("Loading replies")
     }
     private var fill: Color { Color.primary.opacity(0.08) }
+}
+
+/// ⛔ THREAD LINES UNDER A REPLY (owner 2026-11-07, his reference picture): a thin line down from
+/// the reply's photo, curving into each answer's photo and into "View N replies" / "Hide replies".
+/// Answers sit `answerIndent` in; the parent's photo is 40 wide at 16 from the edge, so its line runs
+/// at x = 36 in list coordinates.
+enum ReplyThreadLine: Equatable {
+    case none, below, answer
+
+    static let parentX: CGFloat = 36
+    static let answerIndent: CGFloat = 46
+    static let color = Color.secondary.opacity(0.35)
+    private static let bend: CGFloat = 12
+
+    /// In the row's own coordinates (`avatar` is that row's photo).
+    static func path(_ kind: ReplyThreadLine, avatar r: CGRect, height: CGFloat) -> Path {
+        var p = Path()
+        switch kind {
+        case .none: break
+        case .below:
+            p.move(to: CGPoint(x: r.midX, y: r.maxY + 4))
+            p.addLine(to: CGPoint(x: r.midX, y: height))
+        case .answer:
+            let x = parentX - answerIndent   // the parent's line, left of this row's own frame
+            p.move(to: CGPoint(x: x, y: 0))
+            p.addLine(to: CGPoint(x: x, y: height))   // on past this answer to the next
+            p.move(to: CGPoint(x: x, y: max(0, r.midY - bend)))
+            p.addQuadCurve(to: CGPoint(x: x + bend, y: r.midY), control: CGPoint(x: x, y: r.midY))
+            p.addLine(to: CGPoint(x: r.minX - 4, y: r.midY))
+        }
+        return p
+    }
+
+    /// The last bend, into the toggle's label (the label starts 62 in, its text 28 further).
+    static func toggleElbow(height: CGFloat) -> Path {
+        var p = Path()
+        let x = parentX - 62, mid = height / 2
+        p.move(to: CGPoint(x: x, y: 0))
+        p.addLine(to: CGPoint(x: x, y: max(0, mid - bend)))
+        p.addQuadCurve(to: CGPoint(x: x + bend, y: mid), control: CGPoint(x: x, y: mid))
+        p.addLine(to: CGPoint(x: 20, y: mid))
+        return p
+    }
+}
+
+private struct ReplyAvatarBounds: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = value ?? nextValue() }
 }
