@@ -191,6 +191,12 @@ final class MessageRowCell: UICollectionViewCell {
         if let p = rowView.plan, case .bubble(let b) = p.body, !b.reactions.isEmpty {
             rect = b.reactions.reduce(rect) { $0.union($1) }
         }
+        // A picture style's art reaches past the bubble's outline (owner 2026-11-07); the lift
+        // takes all of it, not a picture cut at the outline. Its frame is in bubble coordinates.
+        if let p = rowView.plan, case .bubble(let b) = p.body, let pic = b.picture {
+            let box = rowView.liftTarget.frame
+            rect = rect.union(pic.frame.offsetBy(dx: box.minX, dy: box.minY))
+        }
         return rowView.convert(rect, to: nil)
     }
 

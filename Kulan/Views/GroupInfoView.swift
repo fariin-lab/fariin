@@ -118,6 +118,8 @@ struct GroupInfoView: View {
     @State private var confirmClearStorage = false
     @State private var showStorage = false
     @State private var showBubbleStyle = false
+    /// The Bubble styles switch's new value while the server writes it; nil = the group's own.
+    @State private var bubbleStylesOnPending: Bool?
     @AppStorage(BubbleStyles.key) private var bubbleStyleId = ""   // the row's value follows a Save
     @State private var exportFile: ExportFile?
     @State private var exportError: String?
@@ -1315,6 +1317,34 @@ struct GroupInfoView: View {
 
     private var desc: String { conv?.groupDescription ?? "" }
 
+    /// The group's Bubble styles switch, On = styles shown. Written by the server
+    /// (functions-groups setGroupBubbleStyles checks owner/admin), called the way
+    /// `ChatService.setGroupWallpaper` calls its function. A refusal says so and the switch goes back.
+    private var bubbleStylesSwitch: some View {
+        let on = Binding<Bool>(
+            get: { bubbleStylesOnPending ?? !(conv?.bubbleStylesOff ?? false) },
+            set: { value in
+                bubbleStylesOnPending = value
+                Task {
+                    do {
+                        _ = try await Functions.functions(region: "me-central1")
+                            .httpsCallable("setGroupBubbleStyles").call(["cid": cid, "off": !value])
+                    } catch {
+                        await MainActor.run {
+                            bubbleStylesOnPending = nil   // back to what the group says
+                            actionError = error.localizedDescription
+                        }
+                    }
+                }
+            })
+        return HStack(spacing: 14) {
+            Image(systemName: "bubble.left.and.bubble.right").font(.system(size: 17))
+                .frame(width: 26)
+            Toggle("Bubble Styles", isOn: on)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+    }
+
     /// The mockup's three rows. Each keeps its old gate: a member's tap on what only an admin may
     /// change says so instead of doing nothing (owner 2026-10-19).
     private var settingsCard: some View {
@@ -1332,6 +1362,13 @@ struct GroupInfoView: View {
                 rowDivider
                 ProfileInfoRow(title: "Chat Bubble", icon: "bubble.left",
                                value: BubbleStyles.find(bubbleStyleId)?.name ?? "Default") { showBubbleStyle = true }
+                // ⛔ BUBBLE STYLES SWITCH (owner 2026-11-07, SPEC section 5): the owner, or an admin
+                // with Change group info (not members-can-edit-info). Off draws every message in the
+                // group as the normal bubble, for everyone.
+                if can(.changeInfo) {
+                    rowDivider
+                    bubbleStylesSwitch
+                }
             }
             // No invite link row here (owner 2026-10-20: it is in Group Settings, shown twice). The
             // link lives on the Group Settings page, for the admins who manage it.

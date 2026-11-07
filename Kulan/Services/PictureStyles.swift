@@ -48,18 +48,24 @@ struct PictureStyle: Equatable {
                             bottom: (size.height - bubble[2]) * s, right: (size.width - bubble[1]) * s)
     }
 
-    /// The four styles whose corner art touched the words in testing (SPEC section 6, "fix before
-    /// ship"): 12 px more clearance on both sides.
-    private var extraClearance: CGFloat {
-        ["doctor", "lawyer", "security", "manga"].contains(id) ? 12 : 0
+    /// The styles whose corner art touched the words in testing (SPEC section 6, "fix before ship"),
+    /// in picture px. Lawyer, security and manga: 12 px more on each side that has art reaching in.
+    /// Doctor: 85 px on the red-cross side (right), the number the Android app uses.
+    private var clearance: (left: CGFloat, right: CGFloat) {
+        var l = max(40, ins[3] + 6), r = max(40, ins[1] + 6)
+        if ["lawyer", "security", "manga"].contains(id) {
+            if ins[3] > 0 { l += 12 }
+            if ins[1] > 0 { r += 12 }
+        }
+        if id == "doctor" { r = max(r, 85) }
+        return (l, r)
     }
 
     /// Where the words sit inside the bubble's outline, in points: 40 px from each side (more where
     /// corner art reaches in), and 10pt above and below, the numbers the tested mocks use.
     var textInsets: UIEdgeInsets {
-        let s = scale, e = extraClearance
-        return UIEdgeInsets(top: 10, left: max(40, ins[3] + 6) * s + e * s,
-                            bottom: 10, right: max(40, ins[1] + 6) * s + e * s)
+        let s = scale, c = clearance
+        return UIEdgeInsets(top: 10, left: c.left * s, bottom: 10, right: c.right * s)
     }
 
     /// The smallest bubble (outline) the nine parts can make: both caps of each axis, less the art
@@ -87,7 +93,6 @@ enum PictureStyles {
         p("bunny", "Bunny", .anime, slice: [175, 196, 176, 81], bubble: [102, 886, 436, 1], ins: [0, 160, 0, 70], size: [888, 448], light: false, fill: 0xFECDE2),
         p("catgirl", "Cat Girl", .anime, slice: [241, 189, 172, 92], bubble: [113, 892, 435, 0], ins: [0, 173, 0, 82], size: [898, 437], light: false, fill: 0xE6D9FD),
         p("baddie", "Baddie", .anime, slice: [185, 81, 150, 188], bubble: [125, 858, 402, 1], ins: [0, 69, 0, 177], size: [860, 404], light: false, fill: 0xFEC8D6),
-        p("glam", "Glam", .anime, slice: [189, 116, 159, 258], bubble: [41, 858, 360, 33], ins: [0, 72, 0, 206], size: [892, 372], light: false, fill: 0xFFFFFF),
         // Gen Z
         p("skull", "Skull", .genZ, slice: [162, 107, 104, 172], bubble: [86, 925, 433, 0], ins: [0, 80, 0, 162], size: [942, 461], light: true, fill: 0x211F27),
         p("coolcamel", "Cool Camel", .genZ, slice: [182, 177, 207, 83], bubble: [113, 914, 430, 1], ins: [0, 0, 0, 72], size: [916, 466], light: true, fill: 0x251D30),
@@ -100,6 +105,7 @@ enum PictureStyles {
         p("kitten", "Kitten", .cute, slice: [209, 181, 155, 131], bubble: [101, 853, 387, 0], ins: [0, 170, 0, 121], size: [854, 388], light: false, fill: 0xFEF9ED),
         p("bear", "Bear", .cute, slice: [167, 98, 107, 171], bubble: [113, 841, 362, 0], ins: [0, 67, 0, 161], size: [862, 383], light: false, fill: 0xFDD782),
         p("strawberry", "Strawberry", .cute, slice: [122, 122, 168, 101], bubble: [47, 859, 366, 14], ins: [0, 86, 0, 77], size: [885, 387], light: false, fill: 0xFFC3CA),
+        p("glam", "Glam", .cute, slice: [189, 116, 159, 258], bubble: [41, 858, 360, 33], ins: [0, 72, 0, 206], size: [892, 372], light: false, fill: 0xFFFFFF),
         // Careers
         p("doctor", "Doctor", .careers, slice: [184, 79, 75, 165], bubble: [111, 884, 443, 0], ins: [0, 0, 0, 155], size: [890, 445], light: false, fill: 0xD0F1EB),
         p("nurse", "Nurse", .careers, slice: [169, 135, 170, 130], bubble: [97, 886, 426, 1], ins: [0, 123, 0, 0], size: [888, 444], light: false, fill: 0xD4EAFE),
