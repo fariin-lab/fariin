@@ -2403,7 +2403,7 @@ struct ThreadView: View {
         // posts this notification, so the picker opens here (over the live chat, previewing behind).
         // owner 2026-10-18: in a group the picker sets the GROUP's wallpaper for everyone, and only
         // someone who may change group info gets to open it (GroupInfoView hides the menu row too).
-        .sheet(isPresented: $showWallpaper) { WallpaperPickerSheet(cid: cid, sharedGroup: isGroup, channel: conversation?.isChannel == true) }
+        .sheet(isPresented: $showWallpaper) { wallpaperSheet }
         .onReceive(NotificationCenter.default.publisher(for: .openChatWallpaper)) { note in
             guard (note.object as? String) == cid else { return }
             if isGroup, let conv = conversation,
@@ -6318,6 +6318,12 @@ struct ThreadView: View {
                                  oneButton: true)   // one button, Voice / Video menu (owner 2026-10-20)
         }
         return .conversation(audio: nil, video: nil, callsEnabled: true)
+    }
+
+    /// The chat's wallpaper sheet, built outside the body's long modifier chain (it outgrew the
+    /// type checker once the channel flag was added).
+    private var wallpaperSheet: WallpaperPickerSheet {
+        WallpaperPickerSheet(cid: cid, sharedGroup: isGroup, channel: conversation?.isChannel == true)
     }
 
     /// The profile's (or the group info page's) Search button.
