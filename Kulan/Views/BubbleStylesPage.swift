@@ -301,7 +301,13 @@ struct BubbleStylesPage: View {
             .animation(.easeInOut(duration: 0.18), value: key)
         }
         .padding(14)
-        .background(Theme.bg(dark), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        // The user's real chat background (owner 2026-11-07), as the chat draws it, dim included:
+        // this chat's wallpaper (or the all-chats one it follows), or the Settings one. No
+        // wallpaper draws the plain chat background. Same clip and height as before.
+        .background {
+            ChatWallpaperBackground(cid: cid ?? "__default__")
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
     }
 
     // ── the Color chip ──
