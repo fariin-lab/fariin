@@ -1130,7 +1130,13 @@ enum MessageRowLayout {
             // A caption is a strip of text under the picture, so its reactions go inside, under the
             // caption, exactly as a text bubble's do, and the time joins them (see `metaJoins`).
             let captioned = plan.mediaPlan?.caption != nil || plan.albumPlan?.caption != nil
-            let inside = (plan.mediaPlan == nil && plan.albumPlan == nil) || captioned
+            // ⛔ A BARE PICTURE WITH THE REPLY BAR TAKES THEM INSIDE TOO (owner 2026-11-07: the badge
+            // hanging off the picture sat on "Reply" and did not read as his own). The bar gives the
+            // post a bottom, so the pills sit in a strip between the picture and the bar, in the
+            // bubble's colours. The time stays on the picture.
+            let bareWithBar = b.quoteBar != nil && plan.mediaPlan?.caption == nil && plan.albumPlan?.caption == nil
+                && (plan.mediaPlan != nil || plan.albumPlan != nil)
+            let inside = (plan.mediaPlan == nil && plan.albumPlan == nil) || captioned || bareWithBar
 
             // ⛔ EVERY REACTION, NO "+n" (owner 2026-11-03, a channel post with 5 showing 3 and "+2",
             // beside the reference app's post with twelve). Inside a bubble the pills wrap onto as
@@ -1211,7 +1217,7 @@ enum MessageRowLayout {
                 // 5pt to the left), 12pt under the text, and 10pt above the bubble's edge.
                 // A caption's text sits 12 in (`captionBlock`), so its pills and time do too.
                 // A picture style's words sit further in (clear of its corner art); the pills follow them.
-                let padH: CGFloat = captioned ? 12 : (plan.picture != nil ? plan.text.minX : BubbleMetrics.hPad)
+                let padH: CGFloat = (captioned || bareWithBar) ? 12 : (plan.picture != nil ? plan.text.minX : BubbleMetrics.hPad)
                 // Measured from the old bubble bottom, which already sits `vPad` under the text:
                 // 3 - vPad puts the pills 3pt under the last line. A picture style's bubble may sit
                 // further under its words (its inset plus the height it grew to its corners), so
@@ -1220,7 +1226,8 @@ enum MessageRowLayout {
                 // A card (a quoted post) ending the bubble gets 10pt, not 3: the pills touched its
                 // bottom edge (owner 2026-11-07, "tucking quote bubble").
                 let cardLast = (plan.linkPlan?.card.maxY ?? 0) > plan.text.maxY && plan.linkPlan?.join == nil
-                let gapAbove: CGFloat = (cardLast ? 10 : 3) - bottomInset
+                // Under a bare picture there is no text inset to take back: 8pt clear of the picture.
+                let gapAbove: CGFloat = bareWithBar ? 8 : (cardLast ? 10 : 3) - bottomInset
                 // ⛔ AND A GAP BELOW IT, WHICH THERE WAS NOT — owner, 2026-09-23: "react badge is
                 // touching bubble bottom angle".
                 //
@@ -1246,7 +1253,7 @@ enum MessageRowLayout {
                 let maxBubble = max(plan.bubble.width,
                                     b.wide ? max(1, columnW - 44)
                                            : min(BubbleMetrics.maxBubbleWidth(in: columnW), columnW))
-                let maxRowW = max(0, (captioned ? plan.bubble.width : maxBubble) - padH * 2)
+                let maxRowW = max(0, ((captioned || bareWithBar) ? plan.bubble.width : maxBubble) - padH * 2)
                 var rows: [[Int]] = [[]]
                 var rowW: [CGFloat] = [0]
                 for (i, w) in widths.enumerated() {
@@ -1301,7 +1308,7 @@ enum MessageRowLayout {
                 // status line joins the last pill row when there is room and otherwise takes a row of
                 // its own under them; it never climbs back to the text.
                 let textLike = plan.text != .zero || captioned || plan.filePlan != nil
-                let canMove = !hasBottomButton && (!plan.metaOnOwnLine || ownTextRow)
+                let canMove = !hasBottomButton && !bareWithBar && (!plan.metaOnOwnLine || ownTextRow)
                 let metaJoins = fitsOnRow && canMove
                 let metaBelow = !metaJoins && canMove && textLike
                 // Two points under the last pill row, then the time, then the strip's own bottom gap.
