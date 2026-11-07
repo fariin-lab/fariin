@@ -4394,7 +4394,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // happens before the first land — and the first land pins the reader itself.
         let readerIsAtNewest = (lastKnownDistanceFromBottom ?? 0) <= Self.atNewestTolerance
         let want: CGFloat
-        if y > bound + 0.5 {
+        // ⛔ ABOVE THE TOP IS NOT A PLACE EITHER (owner 2026-11-07, his VE3 channel: card, date and
+        // its one post all gone, only wallpaper between header and composer). An offset under
+        // `minContentOffsetY` pushes the content down past its own top. In a chat too short to
+        // scroll the top IS the newest, so the card and posts sat under the composer and keys.
+        // Invariant 2 only fixed that for a reader recorded at the newest, and a distance recorded
+        // while the card or a page landed late could say otherwise, so nothing ever put it back.
+        let top = minContentOffsetY
+        if y < top - 0.5 {
+            want = min(top, bound)                         // invariant 0, for every reader
+        } else if y > bound + 0.5 {
             want = bound                                   // invariant 1, for every reader
         } else if readerIsAtNewest, y < bound - 0.5 {
             want = bound                                   // invariant 2, for a reader at the newest
@@ -4415,6 +4424,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
         }
         lastStableOffset = want
+        // The distance read while the content sat past its top was wrong; the real one replaces it.
+        if y < top - 0.5 {
+            DiagLog.add("LISTTOP# offset \(Int(y)) above top \(Int(top)) put back, bound \(Int(bound))")
+            recordDistanceFromBottom()
+        }
     }
     /// ⛔ THE REFERENCE APP'S `contentOffset(forLastKnownDistanceFromBottom:)`, and the only thing in
     /// this file that speaks for a reader who is NEITHER at the newest message nor beyond it.
