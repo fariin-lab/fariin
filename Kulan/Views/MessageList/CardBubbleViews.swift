@@ -380,6 +380,25 @@ final class PillBubbleView: UIView {
     func configure(_ plan: PillPlan, tint: UIColor) {
         label.frame = plan.label
         label.attributedText = plan.labelAttr
+        if let sub = plan.subAttr {
+            let l = subLabel ?? {
+                let x = UILabel(); x.lineBreakMode = .byTruncatingTail; addSubview(x); subLabel = x; return x
+            }()
+            l.isHidden = false
+            l.frame = plan.subLabel
+            l.attributedText = sub
+        } else {
+            subLabel?.isHidden = true
+        }
+        if let ring = plan.onceRing {
+            spinner?.stopAnimating()
+            spinner?.isHidden = true
+            glyph.isHidden = true
+            drawOnceRing(ring, in: plan.glyph, color: plan.ringColor ?? tint)
+            return
+        }
+        ringLayer?.isHidden = true
+        ringOne?.isHidden = true
         if plan.busy {
             glyph.isHidden = true
             let v = spinner ?? {
@@ -398,6 +417,44 @@ final class PillBubbleView: UIView {
                                   withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold))
             glyph.tintColor = tint.withAlphaComponent(plan.dimmed ? 0.6 : 1)
         }
+    }
+
+    // The view-once mark, the reference app's: a dashed circle, with a "1" in it until opened.
+    private var ringLayer: CAShapeLayer?
+    private var ringOne: UILabel?
+    private var subLabel: UILabel?
+
+    private func drawOnceRing(_ ring: BubbleBody.PillBody.OnceRing, in rect: CGRect, color: UIColor) {
+        let shape = ringLayer ?? {
+            let l = CAShapeLayer()
+            l.fillColor = UIColor.clear.cgColor
+            l.lineCap = .round
+            layer.addSublayer(l)
+            ringLayer = l
+            return l
+        }()
+        let line: CGFloat = rect.width >= 32 ? 2.4 : 1.6   // the big card's ring is drawn heavier
+        let circle = rect.insetBy(dx: line / 2 + 0.5, dy: line / 2 + 0.5)
+        // Twelve even dashes round the circle, so the pattern closes on itself with no odd gap.
+        let step = CGFloat.pi * circle.width / 12
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)   // a reused cell must not animate the old ring away
+        shape.isHidden = false
+        shape.frame = bounds
+        shape.path = UIBezierPath(ovalIn: circle).cgPath
+        shape.lineWidth = line
+        shape.lineDashPattern = [NSNumber(value: Double(step * 0.6)), NSNumber(value: Double(step * 0.4))]
+        shape.strokeColor = color.resolvedColor(with: traitCollection).cgColor
+        CATransaction.commit()
+
+        let one = ringOne ?? {
+            let l = UILabel(); l.textAlignment = .center; addSubview(l); ringOne = l; return l
+        }()
+        one.isHidden = ring != .one
+        one.frame = rect
+        one.font = .systemFont(ofSize: max(9, rect.height * 0.5), weight: .bold)
+        one.textColor = color
+        one.text = "1"
     }
 
     func prepareForReuse() { spinner?.stopAnimating() }

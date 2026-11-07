@@ -1258,7 +1258,11 @@ final class ThreadRepository {
             ((data["replyFaces"] as? [String]) ?? []).joined(separator: ","),
             ((data["quoteFaces"] as? [String]) ?? []).joined(separator: ","),
         ]
-        return (base + replies).joined(separator: "|")
+        // The eighth: a view-once burn (consumeOnceImage / consumeOnceVoice) sets `consumed`,
+        // which flips the sender's bubble to "Opened". The url delete moves `media` too, but a
+        // sender whose doc never had a url (still uploading) must not miss it.
+        let once: [String] = [String(data["consumed"] as? Bool ?? false)]
+        return (base + replies + once).joined(separator: "|")
     }
 
     // Build a message, reusing the cached copy unless a mutable field (reactions / edit) changed.
