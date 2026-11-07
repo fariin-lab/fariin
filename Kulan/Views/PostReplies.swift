@@ -118,6 +118,8 @@ struct PostReply: Identifiable, Equatable {
     private(set) var failed = false
     private(set) var loadingOlder = false
     private(set) var off = false
+    /// The server's switches have been read at least once (`off` before that is only a default).
+    private(set) var flagsLoaded = false
     private(set) var channelOff = false
     private(set) var postOff = false
     private(set) var may = Rights()
@@ -138,6 +140,8 @@ struct PostReply: Identifiable, Equatable {
     private var refreshGen = 0
     /// My replies confirmed lately: a refresh that left before they were saved must not drop them.
     private var recentMine: [String: Date] = [:]
+    /// Sends (by client id) already counted in `count` and the thread's answers.
+    private var counted: Set<String> = []
     /// Is the end of the list on screen? New replies then scroll in instead of counting in the pill.
     var atEnd = true
 
@@ -211,6 +215,7 @@ struct PostReply: Identifiable, Equatable {
     }
 
     private func applyFlags(_ d: [String: Any]) {
+        flagsLoaded = true
         off = d["off"] as? Bool ?? false
         channelOff = d["channelOff"] as? Bool ?? false
         postOff = d["postOff"] as? Bool ?? false
@@ -286,6 +291,8 @@ struct PostReply: Identifiable, Equatable {
         guard let oldestShown = page.first?.at else {
             // Nothing visible on the newest page: only rows newer than what that page covered can go.
             if next.isEmpty { threads.removeAll { !keepMine($0) } }
+            applyPinned(d)   // a pin or unpin still lands when the newest page is empty
+            dropStaleAnswers(page)
             return
         }
         let ids = Set(page.map(\.id))
@@ -311,13 +318,31 @@ struct PostReply: Identifiable, Equatable {
             if atEnd { scrollTarget = list.last?.id } else { unseenNew += added }
         }
         Self.cache[mid] = page
+        dropStaleAnswers(page)
         // Open threads whose answer count moved, together.
         let changed = openThreads.filter { t in
             guard let r = page.first(where: { $0.id == t }) ?? (pinned?.id == t ? pinned : nil) else { return false }
-            return r.answers != (answers[t]?.filter { $0.send == .sent }.count ?? -1)
+            return r.answers != loadedAnswerCount(t)
         }
         await withTaskGroup(of: Void.self) { g in
             for t in changed.prefix(5) { g.addTask { await self.loadAnswers(t, more: false) } }
+        }
+    }
+
+    private func loadedAnswerCount(_ t: String) -> Int {
+        answers[t]?.filter { $0.send == .sent }.count ?? -1
+    }
+
+    /// A closed thread (prefetched, or opened and shut) whose answer count moved forgets its answers,
+    /// so opening it loads them again instead of showing the old ones. My unsent ones stay.
+    private func dropStaleAnswers(_ page: [PostReply]) {
+        let shown = page + [pinned].compactMap { $0 }
+        for r in shown where answersLoaded.contains(r.id) && !openThreads.contains(r.id) {
+            guard r.answers != loadedAnswerCount(r.id) else { continue }
+            answersLoaded.remove(r.id)
+            let local = (answers[r.id] ?? []).filter { $0.send != .sent }
+            answers[r.id] = local.isEmpty ? nil : local
+            answerNext[r.id] = nil
         }
     }
 
@@ -342,12 +367,32 @@ struct PostReply: Identifiable, Equatable {
         guard let res = try? await fn.httpsCallable("getReplyAnswers").call(args(["rid": rid, "cursor": cursor])) else { return }
         let d = res.data as? [String: Any] ?? [:]
         let page = rows(d)
-        let local = (answers[rid] ?? []).filter { $0.send != .sent }
-        var list = more ? (answers[rid] ?? []).filter { $0.send == .sent } : []
-        for r in page where !list.contains(where: { $0.id == r.id }) { list.append(r) }
+        let next = d["next"] as? String ?? ""
+        let had = answers[rid] ?? []
+        // Mine still sending, and mine saved in the last seconds (a page asked for before the save
+        // landed does not hold it yet, and the answer used to vanish).
+        let now = Date()
+        let local = had.filter { $0.send != .sent || recentMine[$0.id].map { now.timeIntervalSince($0) < 8 } == true }
+        var list: [PostReply]
+        var keepCursor = false
+        if more {
+            list = had.filter { $0.send == .sent }
+        } else if !next.isEmpty, let lastAt = page.last?.at,
+                  had.contains(where: { $0.send == .sent && $0.at > lastAt }) {
+            // Pages past the first were loaded with "more": the first page is merged in by id and
+            // those later pages (and their cursor) stay, instead of the list shrinking to one page.
+            list = had.filter { $0.send == .sent && $0.at > lastAt }
+            keepCursor = true
+        } else {
+            list = []
+        }
+        for r in page {
+            if let i = list.firstIndex(where: { $0.id == r.id }) { list[i] = r } else { list.append(r) }
+        }
         for l in local where !list.contains(where: { $0.id == l.id }) { list.append(l) }
+        if keepCursor { list.sort { $0.at < $1.at } }
         answers[rid] = list
-        answerNext[rid] = d["next"] as? String ?? ""
+        if !keepCursor { answerNext[rid] = next }
         answersLoaded.insert(rid)
     }
 
@@ -387,10 +432,16 @@ struct PostReply: Identifiable, Equatable {
             if let t = thread { a["rid"] = t }
             do {
                 let res = try await fn.httpsCallable("addReply").call(args(a))
-                guard let d = (res.data as? [String: Any])?["reply"] as? [String: Any], let saved = PostReply(d) else { return }
-                let firstTime = clientId == nil
+                guard let d = (res.data as? [String: Any])?["reply"] as? [String: Any], let saved = PostReply(d) else {
+                    mark(id, thread: thread, .failed)   // an answer it cannot read: Retry, not a row stuck sending
+                    return
+                }
+                // Counted on the first save that worked, so a retried failed send counts too.
+                let firstTime = !counted.contains(id)
+                counted.insert(id)
                 replace(id, with: saved, thread: thread)
                 recentMine[id] = Date()
+                recentMine[saved.id] = Date()
                 if firstTime {
                     if let t = thread { update(t, thread: nil) { $0.answers += 1 } }
                     count += 1
@@ -601,6 +652,9 @@ struct PostThreadSheet: View {
     @State private var banning: (PostReply, String?)?
     @State private var toast: String?
     @State private var quotesShown = false
+    /// Replies off right now: what the chat said at open, then whatever the server says (a switch
+    /// flipped inside this sheet shows or hides the Replies tab and the field at once).
+    @State private var offNow = false
 
     init(cid: String, mid: String, post: Message?, repliesOff: Bool = false, sourceTitle: String, sourcePhoto: String?,
          sourceVerified: Bool, picture: @escaping () async -> UIImage?, onOpen: @escaping (QuotedInItem) -> Void,
@@ -618,6 +672,7 @@ struct PostThreadSheet: View {
         self.startTab = first
         _tab = State(initialValue: first)
         _quotesShown = State(initialValue: first == .quotes)
+        _offNow = State(initialValue: repliesOff)
         _model = State(initialValue: RepliesModel(cid: cid, mid: mid))
     }
 
@@ -656,7 +711,12 @@ struct PostThreadSheet: View {
             }
         }
         // The server says replies are off while Replies is open: over to Quotes, the only tab left.
-        .onChange(of: model.off) { _, off in if off { tab = .quotes } }
+        .onChange(of: model.off) { _, off in offNow = off }
+        .onChange(of: model.flagsLoaded) { _, l in if l { offNow = model.off } }
+        // Off: Quotes is the only tab left. Turned on again: back to Replies, where the field is.
+        .onChange(of: offNow) { was, off in
+            if off { tab = .quotes } else if was { tab = .replies }
+        }
         .onAppear { model.start() }
         .onDisappear { model.stop() }
         // `presenting:` hands each button the item itself (2026-11-06 audit: reading the state in the
@@ -706,7 +766,7 @@ struct PostThreadSheet: View {
     private var topBar: some View {
         HStack(alignment: .center, spacing: 24) {
             // Replies off (here or found off by the server): no Replies tab, Quotes alone.
-            if !(repliesOff || model.off) { tabButton("Replies", .replies) }
+            if !offNow { tabButton("Replies", .replies) }
             tabButton("Quotes", .quotes)
             Spacer(minLength: 0)
             HStack(spacing: 10) {
@@ -823,7 +883,7 @@ struct PostThreadSheet: View {
             }
             // Off as the post already says, from the first frame (owner 2026-11-07: the field showed for
             // a second, then turned into the off line when the server answered).
-            ReplyComposer(off: model.off || repliesOff, loaded: model.loaded, answering: $answering) { text, thread in
+            ReplyComposer(off: offNow, loaded: model.loaded, answering: $answering) { text, thread in
                 let me = ProfileStore.shared.me
                 model.send(text, thread: thread, me: (me?.name ?? "You", me?.photoUrl ?? ""))
             }
