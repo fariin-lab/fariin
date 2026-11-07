@@ -534,12 +534,10 @@ enum MessageRowLayout {
             return PictureStyles.find(id)
         }()
         let art = pic?.art ?? .zero
-        // The side room is measured for a block 10pt from both edges (a name inside starts higher),
-        // the most it can need; the bubble gives back what its real rows do not (see `sideRoom`).
-        let picSide = pic.map { $0.sideRoom(top: nameInBubble(b) ? BubbleMetrics.nameTop : $0.textInsets.top,
-                                            bottom: $0.textInsets.bottom) }
-        let hPad = picSide?.left ?? BubbleMetrics.hPad, vPad = pic?.textInsets.top ?? BubbleMetrics.vPad
-        let hPadR = picSide?.right ?? BubbleMetrics.hPad, vPadB = pic?.textInsets.bottom ?? BubbleMetrics.vPad
+        // A picture's side insets are the most room a side can need; the bubble gives back what its
+        // real rows do not (see `PictureStyle.sideRoom`).
+        let hPad = pic?.textInsets.left ?? BubbleMetrics.hPad, vPad = pic?.textInsets.top ?? BubbleMetrics.vPad
+        let hPadR = pic?.textInsets.right ?? BubbleMetrics.hPad, vPadB = pic?.textInsets.bottom ?? BubbleMetrics.vPad
         let maxContent = max(1, maxBubble - art.left - art.right - hPad - hPadR)
 
         var y = topSpacing
@@ -1011,14 +1009,16 @@ enum MessageRowLayout {
             // corners, decides which corner art it shares rows with (`PictureStyle.sideRoom`).
             let minH = ceil(pic.minBubble.height)
             let shiftY: CGFloat = bubbleH < minH && quoteRect == nil ? floor((minH - bubbleH) / 2) : 0
+            // Never more than the insets the words were measured in.
             let side = pic.sideRoom(top: (nameInBubble(b) ? BubbleMetrics.nameTop : vPad) + shiftY,
-                                    bottom: max(bubbleH, minH) - innerY - shiftY)
-            let tight = contentW + side.left + side.right
+                                    bottom: max(bubbleH, minH) - innerY - shiftY, height: max(bubbleH, minH))
+            let sideL = min(side.left, hPad), sideR = min(side.right, hPadR)
+            let tight = contentW + sideL + sideR
             let room = max(tight, maxBubble - art.left - art.right)
-            bubbleW = max(tight, min(room, contentW + max(side.left, side.right) * 2), ceil(pic.minBubble.width))
+            bubbleW = max(tight, min(room, contentW + max(sideL, sideR) * 2), ceil(pic.minBubble.width))
             bubbleW = ceil(bubbleW)
             // Whole points, rounded away from the art: the room on each side is a whole number.
-            let x = min(max(((bubbleW - contentW) / 2).rounded(), side.left), floor(bubbleW - side.right - contentW))
+            let x = min(max(((bubbleW - contentW) / 2).rounded(), sideL), floor(bubbleW - sideR - contentW))
             centreX = x - hPad
             quoteRect = quoteRect?.offsetBy(dx: centreX, dy: 0)
         }
@@ -1278,13 +1278,18 @@ enum MessageRowLayout {
                 // A link card keeps its own layout (as in `layout`).
                 let pic = plan.linkPlan == nil ? plan.picture.flatMap { PictureStyles.find($0.id) } : nil
                 let picCap = pic.map { maxBubble - $0.art.left - $0.art.right }
-                let picRoom: (left: CGFloat, right: CGFloat)? = pic.map { p in
-                    let top = nameInBubble(b) && senderNameAttr != nil ? BubbleMetrics.nameTop
-                        : min(plan.text.minY, plan.quote?.minY ?? plan.text.minY)
-                    let words = p.sideRoom(top: top, bottom: gapBelow + height)
-                    let pills = p.sideRoom(top: .greatestFiniteMagnitude, bottom: gapBelow)
+                // The room beside the words' rows and the pill row's, in a bubble `bubbleH` tall.
+                let wordsTop = nameInBubble(b) && senderNameAttr != nil ? BubbleMetrics.nameTop
+                    : min(plan.text.minY, plan.quote?.minY ?? plan.text.minY)
+                func picRoomAt(_ bubbleH: CGFloat) -> (left: CGFloat, right: CGFloat)? {
+                    guard let p = pic else { return nil }
+                    let words = p.sideRoom(top: wordsTop, bottom: gapBelow + height, height: bubbleH)
+                    let pills = p.sideRoom(top: bubbleH - gapBelow - height, bottom: gapBelow, height: bubbleH)
                     return (left: max(words.left, pills.left), right: max(words.right, pills.right))
                 }
+                // Measured first at about the height one row of pills gives the bubble, then again at
+                // its final height to centre the block.
+                let picRoom = picRoomAt(max(plan.bubble.height, plan.text.maxY + 3 + height + gapBelow))
                 let maxRowW: CGFloat
                 if let picRoom, let picCap {
                     maxRowW = max(0, picCap - picRoom.left - picRoom.right)
@@ -1371,7 +1376,7 @@ enum MessageRowLayout {
                 // Where the pills start and where the time ends, in bubble coordinates.
                 var pillX = padH
                 var metaRight: CGFloat?
-                if let room = picRoom, let cap = picCap {
+                if let cap = picCap, let room = picRoomAt(grown.height) {
                     let blockW = max(plan.text.width, plan.quote?.width ?? 0, widestRow,
                                      lastRowW + (metaJoins ? metaW : 0), metaBelow ? plan.meta.width : 0)
                     let tight = blockW + room.left + room.right
