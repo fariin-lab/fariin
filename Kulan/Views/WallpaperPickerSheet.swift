@@ -77,10 +77,11 @@ struct WallpaperPickerSheet: View {
     /// chat that had no override, and losing the difference between "none set" and "set to this"
     /// (audit). Recorded here so the cancel path can restore the real state.
     private let hadOwnWallpaper: Bool
-    init(cid: String, globalOnly: Bool = false, sharedGroup: Bool = false) {
+    init(cid: String, globalOnly: Bool = false, sharedGroup: Bool = false, channel: Bool = false) {
         self.cid = cid
         self.globalOnly = globalOnly
         self.sharedGroup = sharedGroup && !globalOnly
+        self.channel = channel
         self.hadOwnWallpaper = WallpaperStore.shared.hasOwnPick(for: cid)   // not the group's shared copy
         _chatStyleId = AppStorage(wrappedValue: "", BubbleStyles.chatKey(cid))
         let cur = WallpaperStore.shared.wallpaper(for: cid)
