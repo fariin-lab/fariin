@@ -585,16 +585,22 @@ final class ProfileStore {
     /// grace period is allowed, which is how the standard messengers do it.
     /// `reason`: owner 2026-10-18, the optional answer from the delete page (a fixed slug the server
     /// checks against its own list; empty = not answered). Stored by the server with no uid.
-    func scheduleDeletion(reason: String = "") async throws {
+    func scheduleDeletion(reasonCode: String = "", reasonText: String = "") async throws {
         guard Auth.auth().currentUser != nil else { throw AuthFlowError.notSignedIn }
         // 2026-09-24 decision D6: the server sets the date (its own now + 30 days) and `isHidden`;
         // the rules refuse this phone writing `deletionScheduledFor` itself. See
         // `scheduleAccountDeletion` in functions-account.
-        let d = try await AccountCall.run("scheduleAccountDeletion", reason.isEmpty ? [:] : ["reason": reason])
-        if let ms = d["due"] as? Double {
+        // 2026-11-07 contract (same on both phones): `reasonCode` optional, `reasonText` only with
+        // "other" and at most 255 characters; the answer carries `deleteAt` in epoch ms. The server
+        // also sends the confirmation mail itself now, so nothing else is awaited before this.
+        var payload: [String: Any] = [:]
+        if !reasonCode.isEmpty { payload["reasonCode"] = reasonCode }
+        let text = reasonText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if reasonCode == "other", !text.isEmpty { payload["reasonText"] = String(text.prefix(255)) }
+        let d = try await AccountCall.run("scheduleAccountDeletion", payload)
+        let raw = d["deleteAt"] ?? d["due"]
+        if let ms = (raw as? NSNumber)?.doubleValue {
             me?.deletionScheduledFor = Date(timeIntervalSince1970: ms / 1000)
-        } else if let ms = d["due"] as? Int {
-            me?.deletionScheduledFor = Date(timeIntervalSince1970: Double(ms) / 1000)
         } else {
             me?.deletionScheduledFor = Calendar.current.date(byAdding: .day, value: Self.gracePeriodDays, to: Date())
         }
