@@ -3574,7 +3574,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // can append rows too (messages sent while the chat was closed); gliding to them on open was
         // the visible jump. A reader at the newest is put at the new newest in this same turn instead
         // (`holdReaderAfterLand`). My own send still glides whatever the reason it rode in with.
-        let glide = ((wasAtNewest && (newlyNewest == 1 || pureAppend) && updateReason == .live) || ownSendLanded)
+        // owner 2026-11-07: the server's window landing late, once the chat is shown and no longer
+        // held, glides too. It carries the messages a notification tap opened the chat for, and a
+        // reader at the newest has to be taken to them. Inside the hold it is still put there
+        // without animation, in this same turn (`holdReaderAfterLand`).
+        let settleArrival = updateReason == .serverSettle && pureAppend && didReveal && !isLandingHeld
+        let glide = ((wasAtNewest && (newlyNewest == 1 || pureAppend) && (updateReason == .live || settleArrival))
+                     || ownSendLanded)
             && scrollTarget == nil && !isUserScrolling
         if glide { sendAnimating = true }
         // owner audit 2026-10-06 chat #25: my own send that lands under a finger is not dropped. The
@@ -3889,6 +3895,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // the live `initialScrollId` moves on for an unread landing, and the saved offset can be
         // re-saved mid-settle. What landed is what must be put back.
         landedTarget = (initialScrollId, initialScrollOffset)
+        // ⛔ A LANDING THE BOTTOM CLAMPED IS A LANDING AT THE NEWEST (owner 2026-11-07). The row asked
+        // for sat too near the end to reach its place under the bar, so the reader is at the newest
+        // message, and the newest is what must be held: pinned to that row instead, every message
+        // that arrived after the land (the server's window on a notification tap) stayed below the
+        // screen while the pin put the reader back above it.
+        if initialScrollId != nil, collectionView.contentOffset.y >= maxContentOffsetY - 0.5 {
+            reopenLog("LAND clamped at the newest: held as a newest landing")
+            landedTarget = (nil, nil)
+        }
         landedAt = Date()
         armLandingHold()
         // ⛔ REVEAL IN THIS TURN, NOT THE NEXT ONE — his report, 2026-08-27: "it draws in front of
@@ -3912,8 +3927,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // unread row under it, exactly as it put a restored row a bar-height low. Its row is the one
         // landed now: `initialScrollId` for an unread landing is recomputed from the message count on
         // every pass and moves on with each arrival, so the re-pin must not follow it.
-        awaitingInitialRepin = initialScrollId != nil
-        landedUnreadId = initialScrollOffset == nil ? initialScrollId : nil
+        awaitingInitialRepin = landedTarget?.id != nil
+        landedUnreadId = landedTarget?.id != nil && initialScrollOffset == nil ? initialScrollId : nil
         // The unread (or focus) row stays the anchor until the reader moves — see `pinUnreadLanding`.
         // A restored position keeps the timed hold only, and the newest needs neither.
         pinUnreadLanding = landedUnreadId != nil

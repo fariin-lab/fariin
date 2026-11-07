@@ -490,6 +490,13 @@ struct ThreadView: View {
     @State private var firstUnreadId: String?
     @State private var unreadJumpUsed = false   // owner 2026-10-21: the arrow's first-unread stop is spent
     @State private var didAnchorUnread = false
+    /// The message a tapped notification announced (owner 2026-11-07), captured in `init` like
+    /// `openedOnFocusMessage`. While it is missing from the rows, the open waits for the server
+    /// window (`openAwaitsServer`), and the open never restores a saved reading position.
+    @State private var openMid: String?
+    /// The divider was held back for the server window (`openAwaitsServer`), so the server's own
+    /// unread count may still place it after the reveal (`openReadPass`).
+    @State private var dividerWaited = false
     /// This chat was opened ON a message (the floating voice bar): captured in `init`, see there.
     @State private var openedOnFocusMessage = false
     /// The saved-row paging (`.task` below the focus-message one) has run: found the row, hit its
@@ -610,6 +617,10 @@ struct ThreadView: View {
         // id on its first line, so a later read cannot tell "no focus" from "focus, already taken".
         // `State(initialValue:)` keeps this first init's answer through every init SwiftUI runs after.
         _openedOnFocusMessage = State(initialValue: AppRouter.shared.pendingMessageId != nil)
+        // A notification tap for THIS chat, from the last half minute (an older one never opened it).
+        let tapped = AppRouter.shared.pendingOpenMid
+        _openMid = State(initialValue: !preview && tapped?.cid == cid
+                         && (tapped.map { Date().timeIntervalSince($0.at) < 30 } ?? false) ? tapped?.mid : nil)
     }
 
     private var threadScroll: some View {
@@ -1043,6 +1054,8 @@ struct ThreadView: View {
                 if ids.isEmpty { pinBarHeight = 0 }
             }
             .onChange(of: unreadOnOpen) { _, _ in anchorUnread(proxy) }
+            // A divider held back for the server's window (`openAwaitsServer`) is placed when it lands.
+            .onChange(of: repo.serverWindowSettled) { _, _ in anchorUnread(proxy) }
             // A reaction changes no message text, so it arrives as a content-only update — this is the
             // one signal that sees it.
             .onChange(of: repo.itemsVersion) { _, _ in
@@ -2624,6 +2637,8 @@ struct ThreadView: View {
             if !quiet {
             if isGroup || !cid.contains("_") { startGroupCallListener() }
             AppRouter.shared.activeChatId = cid          // suppress this chat's own banners
+            // The tapped message is ours now (`openMid`, read in init); spent once.
+            if AppRouter.shared.pendingOpenMid?.cid == cid { AppRouter.shared.pendingOpenMid = nil }
             keyChanged = !keyChangedUids.isEmpty   // groups included now, one member is enough
             // A note of THIS chat's that is sitting paused on the bar has nothing to say once you are
             // in here looking at its bubble — see chatOpened. One that is still playing is left alone.
@@ -2970,7 +2985,9 @@ struct ThreadView: View {
             // moving it after the chat is on screen took it off one row and put it on another, a
             // visible jump of both. It is placed once, before the reader sees the chat, and stays
             // where it is for the rest of the visit. A server answer that comes later is ignored.
-            guard !revealed else { return }
+            // Except a divider that has not been placed at all because the rows were behind the chat
+            // (`dividerWaited`): nothing on screen moves off a row it never sat on.
+            guard !revealed || (dividerWaited && !didAnchorUnread) else { return }
             if cachedConv == nil {
                 unreadOnOpen = n
             } else if n > 0, n != unreadOnOpen {
@@ -5390,9 +5407,16 @@ struct ThreadView: View {
                 if let id = firstUnreadId, let row = repo.items.first(where: { $0.id == id })?.rowId {
                     return row
                 }
+                // ⛔ THE ROWS ARE BEHIND THE CHAT (owner 2026-11-07: a notification tap opened ABOVE the
+                // new message, on rows he had read). The counter already includes messages the cached
+                // rows do not hold, so counting back from their end names a read row. Open at the
+                // newest instead; the server's window then lands below it and the reader follows.
+                if openAwaitsServer { return nil }
                 if let row = unreadBoundary()?.rowId {
                     return row
                 }
+                // A notification tap goes to the newest, never to where the reader last left off.
+                if openMid != nil { return nil }
                 // ⛔ THIRD, WHERE THIS READER LEFT OFF — theirs, and the tier we did not have.
                 // Their open priority is focus message, then the unread indicator, then the last
                 // visible interaction restored to its own on-screen position. Only if that row is
@@ -5411,14 +5435,14 @@ struct ThreadView: View {
             // the reader had been. A chat has to have both an unread divider and a saved position for
             // it to bite, which is an ordinary Tuesday.
             initialScrollOffset: {
-                if AppRouter.shared.pendingMessageId != nil { return nil }
+                if AppRouter.shared.pendingMessageId != nil || openMid != nil { return nil }
                 if unreadOnOpen > 0 { return nil }
                 return ChatScrollStore.shared.position(for: cid)?.offsetFromTop
             }(),
             // The top inset that offset was measured against, so the list can tell whether the bar's
             // inset has arrived before it shows the restored row (owner, 2026-10-07: the reopen jump).
             initialScrollTopInset: {
-                if AppRouter.shared.pendingMessageId != nil { return nil }
+                if AppRouter.shared.pendingMessageId != nil || openMid != nil { return nil }
                 if unreadOnOpen > 0 { return nil }
                 return ChatScrollStore.shared.position(for: cid)?.topInset
             }(),
@@ -8802,6 +8826,9 @@ struct ThreadView: View {
     // Runs once; the last `unreadOnOpen` messages are treated as the unread block.
     private func anchorUnread(_ proxy: ScrollViewProxy) {
         guard !didAnchorUnread, unreadOnOpen > 0, !DemoMode.storeShots else { return }
+        // Rows behind the chat would put the divider above messages already read. It waits for the
+        // server's window (`.onChange(of: repo.serverWindowSettled)` asks again).
+        if openAwaitsServer { dividerWaited = true; return }
         guard let boundary = unreadBoundary() else { return }
         // Just mark WHERE the unread divider goes — do NOT scroll to it. The chat always opens at
         // the BOTTOM (newest), like a standard messenger; the divider is a marker you scroll up to.
@@ -8828,9 +8855,30 @@ struct ThreadView: View {
     /// never held. A row the paging could not reach leaves this true, which is why the hold is
     /// `&& !savedRowPagingDone` at the call site: the land then goes to the newest, as before.
     private var savedRowNeedsPaging: Bool {
-        guard !quiet, !openedOnFocusMessage, unreadOnOpen == 0, firstUnreadId == nil,
+        guard !quiet, !openedOnFocusMessage, openMid == nil, unreadOnOpen == 0, firstUnreadId == nil,
               let saved = ChatScrollStore.shared.position(for: cid) else { return false }
         return !repo.items.contains(where: { $0.rowId == saved.rowId })
+    }
+
+    /// ⛔ THE ROWS ON SCREEN ARE OLDER THAN THE CHAT (owner 2026-11-07). The rows come from
+    /// `ThreadMessageCache` first; the unread counter comes from the conversation, which already
+    /// counts what arrived while the chat was closed. Until the server's window lands, an unread
+    /// landing or divider worked out from those rows names a message already read. True while:
+    ///   · a tapped notification's message is not in the rows yet, or
+    ///   · with unread waiting, the newest row is older than the conversation's last change, or one
+    ///     of the last `unreadOnOpen` rows is mine (an unread block is only other people's messages).
+    /// False once the server's window is in, for a preview, and for a channel follower (whose count
+    /// is the post sequence, not a block at the end of these rows).
+    private var openAwaitsServer: Bool {
+        guard !quiet, !repo.serverWindowSettled else { return false }
+        if let mid = openMid, !repo.items.contains(where: { $0.id == mid }) { return true }
+        guard unreadOnOpen > 0, let conv = cachedConv, !conv.isFollower(me) else { return false }
+        // Any row, notices included: a group change writes `updatedAt` and its notice together.
+        guard let newest = repo.items.map(\.createdAt).max() else { return false }
+        // 2s of slack: `updatedAt` is the server's clock, a pending row's `createdAt` the phone's.
+        if conv.updatedAtMillis > newest.timeIntervalSince1970 * 1000 + 2000 { return true }
+        let msgs = repo.items.filter { !$0.isSystem && $0.pinNotice == nil }
+        return msgs.suffix(unreadOnOpen).contains { $0.authorId == me }
     }
 
     private func unreadBoundary() -> Message? {

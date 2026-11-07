@@ -365,6 +365,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
                 } else {
                     AppRouter.shared.pendingRepliesPost = nil   // any other alert replaces an older one
                 }
+                // A message alert (owner 2026-11-07): the chat opens on THAT message, the newest, even
+                // when the phone's cached rows do not hold it yet. Not for the chat already on screen,
+                // which follows a live arrival by itself.
+                if kind != "postReplies", kind != "replyAnswer", !mid.isEmpty, !mid.contains("/"),
+                   AppRouter.shared.activeChatId != cid {
+                    AppRouter.shared.pendingOpenMid = (cid, mid, Date())
+                } else {
+                    AppRouter.shared.pendingOpenMid = nil
+                }
                 AppRouter.shared.pendingChatId = cid
             }
         }
@@ -446,6 +455,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     /// A reply alert tapped: open this post's Replies once its channel is on screen.
     /// `at` lets a stale one (its channel never opened) be ignored later (2026-11-06 verify pass).
     var pendingRepliesPost: (cid: String, mid: String, at: Date)?
+    /// A message notification tapped (owner 2026-11-07): the message it announced. That chat's
+    /// `ThreadView` opens at the newest and waits for this message to arrive, rather than landing on
+    /// an unread row worked out from a cache that does not hold it yet. Not `pendingMessageId`,
+    /// which pages back to a message and flashes it. `at` lets a stale one be ignored.
+    var pendingOpenMid: (cid: String, mid: String, at: Date)?
 }
 
 // Clear a chat's delivered notifications + fix the app badge when you read it.
