@@ -167,8 +167,8 @@ struct AttachRecentsStrip: View {
     /// and the loader that hands over the sharper poster, the playable file and our copy (see `pick`).
     var onPickVideo: (UIImage?, String, AttachVideoLoad) -> Void
     var onSendVideos: ([URL], String) -> Void = { _, _ in }     // SELECT + Send → send videos directly
-    var onSendAlbum: ([UIImage], String, Bool) -> Void = { _, _, _ in }   // images, caption, viewOnce
-    var onSendMixed: ([ApprovalMedia], String, String?) -> Void = { _, _, _ in }   // items, caption, clientId of the already-posted bubble
+    var onSendAlbum: ([UIImage], String, Bool, Bool) -> Void = { _, _, _, _ in }   // images, caption, viewOnce, hd
+    var onSendMixed: ([ApprovalMedia], String, String?, Bool) -> Void = { _, _, _, _ in }   // items, caption, clientId of the already-posted bubble, hd
     /// Posted the instant Send is tapped, from the grid's already-decoded thumbnails: grid images,
     /// which are videos, caption, clientId. The real send reuses that clientId.
     var onOptimisticGroup: ([UIImage], [Bool], String, String) -> Void = { _, _, _, _ in }
@@ -232,6 +232,8 @@ struct AttachRecentsStrip: View {
     @State private var selectedAssets: [String: PHAsset] = [:]
     @State private var caption = ""                  // caption for the selected batch
     @State private var viewOnce = false              // "view once" toggle (single photo only)
+    /// HD for this send, as on the editor: starts at Settings > Sent Media Quality, not remembered after.
+    @State private var hd = PhotoQuality.default.isHD
     /// Still local. Nothing outside shows the album's name any more (the header that did is gone),
     /// but the picker still needs to know which album it is in — `load()` reads it and the list
     /// writes it.
@@ -437,8 +439,18 @@ struct AttachRecentsStrip: View {
                     }
                     .buttonStyle(.plain)
                 }
+                // HD: the same switch as the editor's, so a photo picked straight from the grid can go in HD.
+                Button { hd.toggle() } label: {
+                    Text("HD").font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(hd ? Color.fariinAction : Color(.systemGray))
+                        .frame(width: 34, height: 40)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(hd ? "High quality" : "Standard quality")
             }
             .padding(.leading, 16).padding(.trailing, 4).frame(minHeight: 40)
+            .photoQualityHint(hd: hd)
             Button { sendSelected() } label: {
                 // White arrow on the blue pill, as the main composer send.
                 Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold))
@@ -1059,6 +1071,7 @@ struct AttachRecentsStrip: View {
     private func sendSelected() {
         let ids = selectedIds
         let onceWanted = viewOnce && ids.count == 1
+        let wantHD = hd
         let byId = resolveSelected(ids)   // global store, NOT the visible album (cross-album selection)
         let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -1069,7 +1082,7 @@ struct AttachRecentsStrip: View {
         // the send is already optimistic, so the bubbles are the progress indicator. Selection state is
         // cleared and the sheet dismissed on this very tap; the decode continues in a task that is not
         // tied to this view's lifetime, and delivers when it is ready.
-        selectedIds = []; selectedAssets = [:]; caption = ""; viewOnce = false; hasSelection = false
+        selectedIds = []; selectedAssets = [:]; caption = ""; viewOnce = false; hd = PhotoQuality.default.isHD; hasSelection = false
         onClose()
 
         // …but "close first" still left the conversation EMPTY for as long as the resolve took, because
@@ -1121,9 +1134,9 @@ struct AttachRecentsStrip: View {
                 }
                 // A single view-once photo keeps its dedicated view-once send (view-once can't be an album).
                 if onceWanted, ordered.count == 1, case .image(_, let ui) = ordered[0] {
-                    onSendAlbum([ui], cap, true); return
+                    onSendAlbum([ui], cap, true, wantHD); return
                 }
-                onSendMixed(ordered, cap, optimisticId)   // ONE group (grouping handled downstream; single item fast-paths)
+                onSendMixed(ordered, cap, optimisticId, wantHD)   // ONE group (grouping handled downstream; single item fast-paths)
             }
         }
     }

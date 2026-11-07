@@ -6533,7 +6533,7 @@ struct ThreadView: View {
                         for url in urls { await sendVideo(from: url, caption: cap); cap = "" }
                     }
                 },
-                onSendAlbum: { imgs, caption, viewOnce in
+                onSendAlbum: { imgs, caption, viewOnce, hd in
                     // It had no check at all (groups audit review 2026-10-26); an album over the cap
                     // goes as several messages.
                     let parts = (imgs.count + Limits.albumMaxItems - 1) / Limits.albumMaxItems
@@ -6543,13 +6543,13 @@ struct ThreadView: View {
                     // view-once); 2+ → send as one album with the caption (view-once is single-photo only).
                     Task {
                         if imgs.count == 1, let d = imgs[0].jpegData(compressionQuality: 0.9) {
-                            await sendPhoto(d, viewOnce: viewOnce, caption: caption)
+                            await sendPhoto(d, viewOnce: viewOnce, caption: caption, quality: PhotoQuality(hd: hd))
                         } else if imgs.count >= 2 {
-                            await sendAlbum(imgs, caption: caption, hd: PhotoQuality.default.isHD)
+                            await sendAlbum(imgs, caption: caption, hd: hd)
                         }
                     }
                 },
-                onSendMixed: { items, caption, clientId in
+                onSendMixed: { items, caption, clientId, hd in
                     let hasVideo = items.contains { if case .video = $0 { true } else { false } }
                     let hasPhoto = items.contains { if case .image = $0 { true } else { false } }
                     if mediaHeldBackInSheet((hasPhoto ? [.photos] : []) + (hasVideo ? [.videos] : [])) { return }
@@ -6564,7 +6564,7 @@ struct ThreadView: View {
                                 ordered.append(.video(url: url, thumb: thumb ?? UIImage(), duration: dur))
                             }
                         }
-                        await sendMixedGroup(ordered, caption: caption, hd: PhotoQuality.default.isHD, clientId: clientId)
+                        await sendMixedGroup(ordered, caption: caption, hd: hd, clientId: clientId)
                     }
                 },
                 // The bubble the sheet posted on the Send tap, from its own grid thumbnails.
