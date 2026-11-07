@@ -1239,7 +1239,7 @@ struct AppearanceSettingsView: View {
 
             Section {
                 doorRow("Chat Wallpaper", badge: "appearance.chatWallpaper") { ChatWallpaperPage() }
-                doorRow("Bubble Color", badge: "appearance.chatColor", accessory: AnyView(colorDot)) { ChatColorPage() }   // was "Chat Color" (owner 2026-11-07)
+                // No Bubble Color row (owner 2026-11-07): colours live in Bubble Styles and the wallpaper sheet.
                 if BubbleStyles.shown {
                     doorRow("Bubble Styles", badge: "appearance.bubbleStyles",
                             accessory: AnyView(Text(BubbleStyles.find(bubbleStyleId)?.name ?? "Default")
