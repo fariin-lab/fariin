@@ -623,6 +623,8 @@ struct ReplyEdit: Equatable {
                 }
             } catch {
                 mark(id, thread: thread, .failed)
+                // A held thread refuses answers: say so, the server's words.
+                if let m = Self.serverMessage(error) { notice = m }
             }
         }
     }
@@ -638,10 +640,32 @@ struct ReplyEdit: Equatable {
         update(id, thread: thread) { $0.text = text; $0.edited = true }
         var a: [String: Any] = ["text": text]
         if let t = thread { a["rid"] = t; a["aid"] = id } else { a["rid"] = id }
-        let ok = (try? await fn.httpsCallable("editReply").call(args(a))) != nil
-        if pendingEdits[id] == text { pendingEdits[id] = nil }
-        if !ok { update(id, thread: thread) { $0.text = old.text; $0.edited = old.edited } }
-        return ok
+        do {
+            let res = try await fn.httpsCallable("editReply").call(args(a))
+            if pendingEdits[id] == text { pendingEdits[id] = nil }
+            // The server's copy of the row, when it sends one (its text is the one that counts).
+            if let d = (res.data as? [String: Any])?["reply"] as? [String: Any], let saved = PostReply(d) {
+                update(id, thread: thread) { r in r.text = saved.text; r.edited = true }
+            }
+            return true
+        } catch {
+            if pendingEdits[id] == text { pendingEdits[id] = nil }
+            update(id, thread: thread) { $0.text = old.text; $0.edited = old.edited }
+            notice = Self.serverMessage(error) ?? "Couldn't edit the reply."
+            return false
+        }
+    }
+
+    /// A short line for the sheet's toast (the server's own words for a refusal it explains).
+    var notice: String?
+
+    /// The server's message for a refusal it explains ("Too late to edit.", "This reply can't take
+    /// answers."): failed-precondition errors only, everything else gets our own words.
+    static func serverMessage(_ error: Error) -> String? {
+        let ns = error as NSError
+        guard ns.domain == FunctionsErrorDomain, ns.code == FunctionsErrorCode.failedPrecondition.rawValue else { return nil }
+        let m = ns.localizedDescription
+        return m.isEmpty ? nil : m
     }
 
     func discard(_ r: PostReply, thread: String?) {
@@ -925,6 +949,11 @@ struct PostThreadSheet: View {
             }
         }
         .onDisappear { model.stop() }
+        .onChange(of: model.notice) { _, m in
+            guard let m else { return }
+            model.notice = nil
+            show(m)
+        }
         // `presenting:` hands each button the item itself (2026-11-06 audit: reading the state in the
         // action could find it already cleared by the dialog closing).
         // The system alert in the middle of the screen, not a popover over the row (owner 2026-11-07).
@@ -1162,7 +1191,7 @@ struct PostThreadSheet: View {
                               model.send(text, thread: target?.thread, to: to, me: (me?.name ?? "You", me?.photoUrl ?? ""))
                           },
                           onEdit: { e, text in
-                              Task { if !(await model.edit(e.id, thread: e.thread, text: text)) { show("Couldn't edit the reply.") } }
+                              Task { _ = await model.edit(e.id, thread: e.thread, text: text) }   // a refusal shows via notice
                           })
         }
     }
