@@ -957,7 +957,7 @@ private struct ReplyComposer: View {
                 }
                 .padding(.horizontal, 18).padding(.vertical, 12)
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 24)   // clear of the sheet's round corners (owner 2026-11-07)
             }
             .padding(.vertical, 8)
             .onChange(of: answering?.id) { _, id in if id != nil { focused = true } }
