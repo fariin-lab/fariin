@@ -21,9 +21,19 @@ final class QuoteBarView: UIView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func set(_ attr: NSAttributedString, faces urls: [String]) {
+    /// The reply icon (owner's own SVG, 2026-11-07), shown while a post has no replies yet.
+    private let icon: UIImageView = {
+        let v = UIImageView(image: UIImage(named: "ic_reply_comment")?.withRenderingMode(.alwaysTemplate))
+        v.tintColor = .label
+        v.contentMode = .scaleAspectFit
+        return v
+    }()
+
+    func set(_ attr: NSAttributedString, faces urls: [String], icon showIcon: Bool = false, people: Bool = false) {
         label.attributedText = attr
-        faces.set(urls.prefix(3).map { ("Channel", $0.isEmpty ? nil : $0) }, side: 22)
+        if icon.superview == nil { addSubview(icon) }
+        icon.isHidden = !showIcon
+        faces.set(showIcon ? [] : urls.prefix(3).map { (people ? "?" : "Channel", $0.isEmpty ? nil : $0) }, side: 22)
         setNeedsLayout()
     }
 
@@ -32,7 +42,10 @@ final class QuoteBarView: UIView {
         let pad = BubbleMetrics.hPad
         divider.frame = CGRect(x: 0, y: 0, width: bounds.width, height: BubbleMetrics.hairline)
         var x = pad
-        if !faces.isHidden, faces.frame.width > 0 {
+        if !icon.isHidden {
+            icon.frame = CGRect(x: x, y: (bounds.height - 22) / 2, width: 22, height: 22)
+            x += 22 + 8
+        } else if !faces.isHidden, faces.frame.width > 0 {
             faces.frame.origin = CGPoint(x: x, y: (bounds.height - faces.frame.height) / 2)
             x += faces.frame.width + 8
         }

@@ -458,7 +458,8 @@ enum MessageRowModelBuilder {
         let showReplies = repliesOn || msg.replyCount > 0
         guard showReplies || msg.quoteCount > 0 else { return nil }
         return QuoteBarChrome(count: msg.quoteCount, faces: msg.quoteCount > 0 ? msg.quoteFaces : [],
-                              replies: showReplies ? msg.replyCount : nil)
+                              replies: showReplies ? msg.replyCount : nil,
+                              replyFaces: showReplies && msg.replyCount > 0 ? msg.replyFaces : [])
     }
 
     /// ⛔ THE TIMER ICON FROM THE FIRST FRAME — owner, 2026-09-29: messages sent right after the

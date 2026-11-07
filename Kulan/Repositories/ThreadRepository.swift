@@ -1732,20 +1732,29 @@ final class ThreadRepository {
     /// removals, restrictions) is hidden here for everyone; admins have Recent Actions for that.
     static func channelNotice(_ m: Message) -> Message? {
         guard m.isSystem, m.pinNotice == nil, m.disappearSeconds == nil, m.localNoticeSymbol == nil else { return m }
-        let t = m.text
-        let said: String
-        if t == "Channel created" || t.hasSuffix(" created the group") || t.hasSuffix(" created the channel") {
-            said = "Channel created"
-        } else if let r = t.range(of: " renamed the group to ") {
-            said = "Channel name changed to " + t[r.upperBound...]
-        } else if t.hasSuffix(" removed the group photo") {
-            said = "Channel photo removed"
-        } else {
-            return nil
-        }
+        guard let said = channelNoticeText(m.text) else { return nil }
         var out = m
         out.text = said
         return out
+    }
+
+    /// The words a channel shows for one admin notice, or nil when the notice is hidden there.
+    /// Shared with the chat list preview (owner 2026-11-07: followers saw "changed the group
+    /// wallpaper" as the channel's last line).
+    static func channelNoticeText(_ t: String) -> String? {
+        if t == "Channel created" || t.hasSuffix(" created the group") || t.hasSuffix(" created the channel") {
+            return "Channel created"
+        } else if let r = t.range(of: " renamed the group to ") {
+            return "Channel name changed to " + t[r.upperBound...]
+        } else if t.hasSuffix(" removed the group photo") {
+            return "Channel photo removed"
+        }
+        return nil
+    }
+
+    /// An admin's wallpaper line, which a channel never shows (owner 2026-11-07).
+    static func isWallpaperNotice(_ t: String) -> Bool {
+        t.hasSuffix(" changed the group wallpaper") || t.hasSuffix(" removed the group wallpaper")
     }
 
     private func rebuild(reason: MessageListUpdateReason = .live) {

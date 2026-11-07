@@ -243,6 +243,9 @@ struct PostCounts: Codable, Equatable {
     /// cache written before them still decodes.
     var replyCount: Int? = nil
     var repliesOff: Bool? = nil
+    /// Photos of the last three people who replied, newest first ("" = no photo); the Reply bar
+    /// shows them in place of its icon (owner 2026-11-07). Optional for older caches.
+    var replyFaces: [String]? = nil
 }
 
 extension Message {
@@ -405,6 +408,7 @@ struct Message: Identifiable, Equatable, Codable {
     /// Replies under a channel post (server `addReply`), and the post's own "replies off".
     var replyCount: Int { get { counts.replyCount ?? 0 } set { counts.replyCount = newValue > 0 ? newValue : nil } }
     var repliesOff: Bool { get { counts.repliesOff ?? false } set { counts.repliesOff = newValue ? true : nil } }
+    var replyFaces: [String] { get { counts.replyFaces ?? [] } set { counts.replyFaces = newValue.isEmpty ? nil : newValue } }
     var edited: Bool = false               // text was edited after sending
     /// Deleted for everyone. The document SURVIVES as a tombstone so both sides see that something
     /// was here and removed, the way the standard messengers do it, instead of a message silently
@@ -883,7 +887,11 @@ struct Message: Identifiable, Equatable, Codable {
             reactionCounts: ((data["reactionCounts"] as? [String: Any]) ?? [:])
                 .compactMapValues { ($0 as? NSNumber)?.intValue }.filter { $0.value > 0 },
             replyCount: ((data["replyCount"] as? NSNumber)?.intValue).flatMap { $0 > 0 ? $0 : nil },
-            repliesOff: (data["repliesOff"] as? Bool) == true ? true : nil)
+            repliesOff: (data["repliesOff"] as? Bool) == true ? true : nil,
+            replyFaces: {
+                let f = Array(((data["replyFaces"] as? [Any]) ?? []).compactMap { $0 as? String }.prefix(3))
+                return f.isEmpty ? nil : f
+            }())
         self.countsStore = pc == PostCounts() ? nil : pc
         self.deleted = data["deleted"] as? Bool ?? false
         self.deletedBy = data["deletedBy"] as? String   // 2026-09-24 feature-audit

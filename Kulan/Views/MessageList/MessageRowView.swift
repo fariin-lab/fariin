@@ -1349,7 +1349,7 @@ final class MessageRowView: UIView {
         }()
         v.isHidden = false
         v.frame = rect
-        v.set(attr, faces: b.quoteBarFaces)
+        v.set(attr, faces: b.quoteBarFaces, icon: b.quoteBarIcon, people: b.quoteBarPeople)
         bubbleBox.bringSubviewToFront(v)
     }
 

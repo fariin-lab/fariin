@@ -4640,7 +4640,10 @@ struct ChatRow: View, Equatable {
             // 2026-09-26 block rebuild: a member I blocked is hidden in the group itself, so their
             // message is not previewed here either.
             if BlockList.snapshot.hides(author: conv.lastSender, atMillis: conv.updatedAtMillis) { return "" }
-            return Crypto.shared.decryptGroupCached(conv.lastMessageCipher, cid: conv.id, authorId: conv.lastSender)   // memoized
+            let text = Crypto.shared.decryptGroupCached(conv.lastMessageCipher, cid: conv.id, authorId: conv.lastSender)   // memoized
+            // A channel never shows an admin's wallpaper line (owner 2026-11-07); older builds still write one.
+            if conv.isChannel, ThreadRepository.isWallpaperNotice(text) { return "" }
+            return text
         }
         return Crypto.shared.decryptCached(conv.lastMessageCipher, cid: conv.id)   // memoized: no re-decrypt per render
     }

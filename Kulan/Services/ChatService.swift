@@ -612,7 +612,11 @@ enum ChatService {
             .httpsCallable("setGroupWallpaper").call(["cid": cid, "wallpaper": stored])
         let text = stored == "none" ? "\(myName()) removed the group wallpaper"
                                     : "\(myName()) changed the group wallpaper"
-        try? await writeSystemMessage(cid: cid, text: text)
+        // A channel writes no line (owner 2026-11-07: followers saw it in the chat list). The
+        // channel itself hid it already; Recent Actions keeps its own record.
+        if !Conversation.Right.isChannel(cid) {
+            try? await writeSystemMessage(cid: cid, text: text)
+        }
         if let previous, previous.hasPrefix("u:"), previous != stored,
            let old = Storage.storage().safeReference(forURL: String(previous.dropFirst(2))) {
             try? await old.delete()

@@ -271,6 +271,10 @@ struct BubblePlan {
     var quoteBar: CGRect? = nil
     var quoteBarAttr: NSAttributedString? = nil
     var quoteBarFaces: [String] = []
+    /// The reply icon in place of faces (owner 2026-11-07): replies on, none yet (or their faces not in yet).
+    var quoteBarIcon = false
+    /// The faces are people (round), not channels.
+    var quoteBarPeople = false
 }
 
 struct NoticePlan {
@@ -1307,7 +1311,18 @@ enum MessageRowLayout {
                 string: parts.joined(separator: " · "),
                 attributes: [.font: UIFont.systemFont(ofSize: 14, weight: .semibold),
                              .foregroundColor: UIColor.label])   // no blue (owner 2026-11-06)
-            plan.quoteBarFaces = qb.faces
+            // Replies on: the icon until someone replies, then the repliers' faces (owner 2026-11-07).
+            // Replies off: the quoting channels' faces as before.
+            if let r = qb.replies {
+                if r > 0, !qb.replyFaces.isEmpty {
+                    plan.quoteBarFaces = qb.replyFaces
+                    plan.quoteBarPeople = true
+                } else {
+                    plan.quoteBarIcon = true
+                }
+            } else {
+                plan.quoteBarFaces = qb.faces
+            }
             y = max(y, grown.maxY, plan.reactions.map(\.maxY).max() ?? 0)
         }
 
@@ -2138,7 +2153,7 @@ enum MessageRowLayout {
             if !p.desc.isEmpty {
                 let attr = NSAttributedString(string: p.desc, attributes: [
                     .font: UIFont.systemFont(ofSize: 14), .foregroundColor: textColor])
-                let h = cappedHeight(attr, width: inner, lines: 4)
+                let h = cappedHeight(attr, width: inner, lines: 8)   // the view draws 8 too (owner 2026-11-07)
                 subtitle = CGRect(x: pad, y: y, width: inner, height: h)
                 subtitleAttr = attr
                 y += h
@@ -2356,7 +2371,12 @@ enum MessageRowLayout {
     /// paragraph the label will never draw.
     private static func cappedHeight(_ s: NSAttributedString, width: CGFloat, lines: Int) -> CGFloat {
         let full = BubbleText.size(s, width: width).height
-        let one = lineSizeOf(s, cap: width).height
+        // One line from the FONT, not from measuring the string (owner 2026-11-07, a quoted post with
+        // many paragraphs left a big empty card): the unbounded measure still breaks at every newline,
+        // so "one line" of a 20-paragraph post was 20 lines tall.
+        let font = (s.length > 0 ? s.attribute(.font, at: 0, effectiveRange: nil) as? UIFont : nil)
+            ?? UIFont.systemFont(ofSize: 14)
+        let one = ceil(font.lineHeight)
         return min(full, one * CGFloat(lines))
     }
 
