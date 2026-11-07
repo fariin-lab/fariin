@@ -2142,12 +2142,7 @@ enum MessageRowLayout {
             let tH = lineSizeOf(titleAttr, cap: titleW).height
             let titleRect = CGRect(x: pad + 26, y: y + (20 - tH) / 2, width: titleW, height: tH)
             y += 28
-            var hero: CGRect?
-            if p.imageUrl != nil {
-                let h = min(220, inner * 0.75)
-                hero = CGRect(x: pad, y: y, width: inner, height: h)
-                y += h + 8
-            }
+            // The post's words first, then its picture (owner 2026-11-07: "make it top").
             var subtitle: CGRect?
             var subtitleAttr: NSAttributedString?
             if !p.desc.isEmpty {
@@ -2156,6 +2151,13 @@ enum MessageRowLayout {
                 let h = cappedHeight(attr, width: inner, lines: 8)   // the view draws 8 too (owner 2026-11-07)
                 subtitle = CGRect(x: pad, y: y, width: inner, height: h)
                 subtitleAttr = attr
+                y += h
+            }
+            var hero: CGRect?
+            if p.imageUrl != nil {
+                if subtitle != nil { y += 8 }
+                let h = min(220, inner * 0.75)
+                hero = CGRect(x: pad, y: y, width: inner, height: h)
                 y += h
             }
             y += 10
