@@ -117,10 +117,8 @@ struct GroupInfoView: View {
     @State private var storage: ChatMediaStorage.Usage?
     @State private var confirmClearStorage = false
     @State private var showStorage = false
-    @State private var showBubbleStyle = false
     /// The Bubble styles switch's new value while the server writes it; nil = the group's own.
     @State private var bubbleStylesOnPending: Bool?
-    @AppStorage(BubbleStyles.key) private var bubbleStyleId = ""   // the row's value follows a Save
     @State private var exportFile: ExportFile?
     @State private var exportError: String?
     @State private var exporting = false
@@ -375,7 +373,6 @@ struct GroupInfoView: View {
 
     private var core: some View {
         coreMid
-            .navigationDestination(isPresented: $showBubbleStyle) { BubbleStylesPage() }
             .navigationDestination(isPresented: $showStorage) {
                 ChatStorageView(cid: cid, title: title, messages: storageMessages) {
                     Task { await loadMediaFigures() }
@@ -1374,12 +1371,10 @@ struct GroupInfoView: View {
             rowDivider
             ProfileInfoRow(title: "Storage Used", icon: "internaldrive",
                            value: storage.map { Self.bytes($0.total) } ?? "", badge: "groupInfo.storage") { showStorage = true }
-            // ⛔ CHAT BUBBLE (owner 2026-11-07, SPEC section 4): the same picker as Settings >
-            // Appearance, a shortcut to my one style. Not on a channel (its posts are never styled).
+            // No Chat Bubble row (owner 2026-11-07, "remove profile this card"): styles are picked in
+            // Settings > Appearance, the long-press menu and the wallpaper sheet. Not on a channel
+            // (its posts are never styled).
             if BubbleStyles.shown, !isChannel {
-                rowDivider
-                ProfileInfoRow(title: "Chat Bubble", icon: "bubble.left",
-                               value: BubbleStyles.find(bubbleStyleId)?.name ?? "Default", badge: "groupInfo.chatBubble") { showBubbleStyle = true }
                 // ⛔ BUBBLE STYLES SWITCH (owner 2026-11-07, SPEC section 5): the owner, or an admin
                 // with Change group info (not members-can-edit-info). Off draws every message in the
                 // group as the normal bubble, for everyone.

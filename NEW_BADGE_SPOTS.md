@@ -94,14 +94,12 @@ The first 12 ids are the old Settings row keys, kept unchanged.
 | `groupSettings.protectContent` | Protect Content | Group / Channel Settings |
 | `groupInfo.sounds` | Sounds & Notifications | Group / Channel info page |
 | `groupInfo.storage` | Storage Used | Group / Channel info page |
-| `groupInfo.chatBubble` | Chat Bubble | Group / Channel info page |
 | `groupInfo.statistics` | Statistics | Group / Channel info page |
 | `groupInfo.followers` | Followers | Group / Channel info page |
 | `groupInfo.settings` | Group Settings / Channel Settings | Group / Channel info page |
 | `profile.disappearing` | Disappearing Messages | Profile page (a person's info page) |
 | `profile.restricted` | Restricted Chat | Profile page (a person's info page) |
 | `profile.sounds` | Sounds & Notifications | Profile page (a person's info page) |
-| `profile.chatBubble` | Chat Bubble | Profile page (a person's info page) |
 | `profile.verifyEncryption` | Verify Encryption | Profile page (a person's info page) |
 | `attach.gif` | GIF | Chat > attach menu |
 | `attach.files` | Files | Chat > attach menu |
