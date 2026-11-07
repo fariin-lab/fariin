@@ -1295,7 +1295,7 @@ enum ReplyThreadLine: Equatable {
     static let color = Color(.systemGray3)
     /// The corner's radius: a wide, round bend into the answer or the toggle, as in the owner's
     /// reference (2026-11-07: "the line's round doesn't look good").
-    private static let bend: CGFloat = 16
+    private static let bend: CGFloat = 12
 
     /// In the row's own coordinates (`avatar` is that row's photo).
     static func path(_ kind: ReplyThreadLine, avatar r: CGRect, height: CGFloat) -> Path {
@@ -1303,7 +1303,7 @@ enum ReplyThreadLine: Equatable {
         switch kind {
         case .none: break
         case .below:
-            p.move(to: CGPoint(x: r.midX, y: r.maxY + 4))
+            p.move(to: CGPoint(x: r.midX, y: r.maxY + 2))   // right under the photo, no visible gap
             p.addLine(to: CGPoint(x: r.midX, y: height))
         case .answer:
             let x = parentX - answerIndent   // the parent's line, left of this row's own frame
