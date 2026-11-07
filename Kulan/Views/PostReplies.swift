@@ -1212,21 +1212,38 @@ private struct ReplyComposer: View {
                     }
                     .padding(.horizontal, 20)
                 }
-                HStack(spacing: 8) {
+                let hasText = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                HStack(alignment: .bottom, spacing: 8) {
                     TextField("Add a reply…", text: $draft, axis: .vertical)
                         .lineLimit(1...5)
                         .focused($focused)
-                    Button("Send") {
-                        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !text.isEmpty else { return }
-                        onSend(text, answering?.id)
-                        draft = ""
-                        answering = nil
+                        .padding(.vertical, 12)
+                    // The chat's send: a white arrow on the blue pill (owner 2026-11-07), shown once
+                    // there is something to send.
+                    if hasText {
+                        Button {
+                            let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !text.isEmpty else { return }
+                            onSend(text, answering?.id)
+                            draft = ""
+                            answering = nil
+                        } label: {
+                            Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 40, height: 34)
+                                .background(Capsule().fill(Theme.defaultBubble(false)))
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!loaded)
+                        .opacity(loaded ? 1 : 0.5)
+                        .padding(.bottom, 5)
+                        .transition(.scale.combined(with: .opacity))
+                        .accessibilityLabel("Send")
                     }
-                    .font(.body.weight(.semibold))
-                    .disabled(!loaded || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                .padding(.horizontal, 18).padding(.vertical, 12)
+                .animation(.spring(response: 0.25, dampingFraction: 0.8), value: hasText)
+                .padding(.leading, 18).padding(.trailing, hasText ? 5 : 18)
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                 .padding(.horizontal, 24)   // clear of the sheet's round corners (owner 2026-11-07)
             }
