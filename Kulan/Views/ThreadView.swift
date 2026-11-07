@@ -2796,18 +2796,8 @@ struct ThreadView: View {
         }
     }
 
-    /// Is any navigation controller in the key window mid-push or mid-pop?
-    @MainActor private static func navigationIsMoving() -> Bool {
-        let window = UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
-        func walk(_ vc: UIViewController?) -> Bool {
-            guard let vc else { return false }
-            if let nav = vc as? UINavigationController, nav.transitionCoordinator != nil { return true }
-            if vc.transitionCoordinator != nil, vc.isBeingPresented { return true }
-            return vc.children.contains(where: walk) || walk(vc.presentedViewController)
-        }
-        return walk(window?.rootViewController)
-    }
+    // `navigationIsMoving()` is the one in the in-chat search section below (a second copy here
+    // was a redeclaration and failed the compile, 2026-11-07).
 
     private func startOwnGroupDoc() {
         // A channel hides its notices from followers and visitors (owner 2026-11-06); the repository
