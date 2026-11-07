@@ -33,8 +33,8 @@ final class QuoteBarView: UIView {
         label.attributedText = attr
         if icon.superview == nil { addSubview(icon) }
         icon.isHidden = !showIcon
-        // Bigger (owner 2026-11-07: "text and avatar look small"): 26pt faces, 16pt words.
-        faces.set(showIcon ? [] : urls.prefix(3).map { (people ? "?" : "Channel", $0.isEmpty ? nil : $0) }, side: 26)
+        // Bigger (owner 2026-11-07: "text and avatar look small"): a little bigger, not much: 24pt faces, 15pt words.
+        faces.set(showIcon ? [] : urls.prefix(3).map { (people ? "?" : "Channel", $0.isEmpty ? nil : $0) }, side: 24)
         setNeedsLayout()
     }
 
@@ -44,11 +44,11 @@ final class QuoteBarView: UIView {
         divider.frame = CGRect(x: 0, y: 0, width: bounds.width, height: BubbleMetrics.hairline)
         var x = pad
         if !icon.isHidden {
-            icon.frame = CGRect(x: x, y: (bounds.height - 26) / 2, width: 26, height: 26)
-            x += 26 + 10
+            icon.frame = CGRect(x: x, y: (bounds.height - 24) / 2, width: 24, height: 24)
+            x += 24 + 9
         } else if !faces.isHidden, faces.frame.width > 0 {
             faces.frame.origin = CGPoint(x: x, y: (bounds.height - faces.frame.height) / 2)
-            x += faces.frame.width + 10
+            x += faces.frame.width + 9
         }
         let size = label.sizeThatFits(CGSize(width: bounds.width, height: bounds.height))
         label.frame = CGRect(x: x, y: (bounds.height - size.height) / 2,
