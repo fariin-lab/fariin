@@ -522,7 +522,9 @@ enum MessageRowLayout {
         if let s = b.sender, s.showsName {
             let attr = NSAttributedString(string: s.name, attributes: [
                 .font: BubbleMetrics.senderNameFont,
-                .foregroundColor: BubblePalette.senderColor(s.colorSeed)])
+                // A channel's own name wears the bubble's text colour, like the app's other labels,
+                // not a palette colour (owner 2026-11-07).
+                .foregroundColor: s.nameOnly ? textColor : BubblePalette.senderColor(s.colorSeed)])
             senderNameAttr = attr
             // ONE LINE, as it is drawn - owner audit 2026-10-06 chat #80. The label is a plain
             // one-line UILabel that truncates, but a name wider than `maxContent` was measured

@@ -3725,7 +3725,7 @@ struct ThreadView: View {
                     if conversation?.isChannel == true { channelReactTarget = msg } else { reactorsTarget = MessageRef(id: msg.id) }
                 },
                 onTapSender: { uid in
-                    if uid == cid { showContactInfo = true; return }   // the channel's own name (2026-11-07)
+                    if uid == cid { return }   // the channel's own name: nothing (owner 2026-11-07)
                     tappedMember = GroupInfoView.MemberAction(
                         id: uid, name: personName(uid), isAdmin: conversation?.isAdmin(uid) ?? false)
                 },
@@ -5258,9 +5258,9 @@ struct ThreadView: View {
                 if let m = repo.items.first(where: { $0.rowId == id }) { toggleSelect(m.id) }
             },
             onTapSender: { uid in
-                // The channel's name on its own post opens the channel's page, as the header does
-                // (owner 2026-11-07: it opened a blank "User" member sheet).
-                if uid == cid { showContactInfo = true; return }
+                // The channel's name on its own post does nothing (owner 2026-11-07: first it opened a
+                // blank "User" sheet, then he asked for no page at all).
+                if uid == cid { return }
                 tappedMember = GroupInfoView.MemberAction(
                     id: uid, name: personName(uid), isAdmin: conversation?.isAdmin(uid) ?? false)
             },
