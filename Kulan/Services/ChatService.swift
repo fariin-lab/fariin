@@ -3721,8 +3721,17 @@ enum ChatService {
         let group = !convRef.documentID.contains("_")
         let newest = try? await convRef.collection("messages")
             .order(by: "createdAt", descending: true).limit(to: group ? 25 : 1).getDocuments()
+        // A channel also skips an admin's wallpaper line (owner 2026-11-07: deleting the newest post
+        // left that hidden line as the preview, so the chat list showed a blank row).
+        let channel = group && Conversation.Right.isChannel(convRef.documentID)
         let pick = group
-            ? newest?.documents.first(where: { ($0.data()["deleted"] as? Bool) != true })
+            ? newest?.documents.first(where: {
+                let d = $0.data()
+                if (d["deleted"] as? Bool) == true { return false }
+                if channel, (d["type"] as? String) == "system",
+                   ThreadRepository.isWallpaperNotice(d["text"] as? String ?? "") { return false }
+                return true
+            })
             : newest?.documents.first
         guard let doc = pick else {
             // Nothing left at all.
@@ -3770,6 +3779,9 @@ enum ChatService {
         // 2026-10-17 (owner, chat stickers): a sticker's `text` is only the old-build fallback
         // (StickerSend), never a caption, so the label wins.
         if type == "sticker" { return StickerSend.label(emoji: d["emoji"] as? String) }
+        // A quote with no words of its own says what the send wrote (owner 2026-11-07: a delete
+        // re-pointed the list at one and the row went blank).
+        if text.isEmpty, d["quote"] != nil { return "Quoted post" }
         // A view-once caption is never shown, and a caption otherwise wins, as at send.
         if !text.isEmpty, !viewOnce || type == "text" || type.isEmpty { return text }
         switch type {

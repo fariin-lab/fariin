@@ -84,7 +84,10 @@ final class ConversationsRepository {
             }
             // owner 2026-10-26: a group still showing an old "deleted" preview (written before groups
             // dropped that line) is re-pointed at its newest real message, once per group per launch.
-            for c in conversations where c.isGroup && c.lastMessageCipher == "This message was deleted"
+            // Also a channel whose preview is an admin's wallpaper line, which the list hides (owner 2026-11-07).
+            for c in conversations where c.isGroup
+                && (c.lastMessageCipher == "This message was deleted"
+                    || (c.isChannel && ThreadRepository.isWallpaperNotice(c.lastMessageCipher)))
                 && repairedPreviews.insert(c.id).inserted {
                 let cid = c.id
                 Task { await ChatService.repairGroupDeletedPreview(cid: cid) }

@@ -489,8 +489,8 @@ struct PostThreadSheet: View {
             .toolbar(.hidden, for: .navigationBar)
             .overlay(alignment: .top) { toastView }
         }
-        // Opens at half height and pulls up to full (owner 2026-11-07).
-        .presentationDetents([.medium, .large])
+        // Opens at 65% of the screen and pulls up to full (owner 2026-11-07).
+        .presentationDetents([.fraction(0.65), .large])
         .presentationDragIndicator(.visible)
         .onChange(of: tab) { _, t in
             if t == .quotes {
