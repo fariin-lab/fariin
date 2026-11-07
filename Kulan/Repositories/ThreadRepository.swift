@@ -1257,18 +1257,13 @@ final class ThreadRepository {
         let quotes: Int = (data["quoteCount"] as? NSNumber)?.intValue ?? 0
         let rf: [String] = (data["replyFaces"] as? [String]) ?? []
         let qf: [String] = (data["quoteFaces"] as? [String]) ?? []
-<<<<<<< HEAD
         // The eighth: a view-once burn (consumeOnceImage / consumeOnceVoice) sets `consumed`,
         // which flips the sender's bubble to "Opened". The url delete moves `media` too, but a
         // sender whose doc never had a url (still uploading) must not miss it.
         let once: Bool = data["consumed"] as? Bool ?? false
-        let parts: [String] = [String(off), String(replies), String(quotes),
+        let parts: [String] = [off, String(replies), String(quotes),
                                rf.joined(separator: ","), qf.joined(separator: ","), String(once)]
         return parts.joined(separator: "|")
-=======
-        return [off, String(replies), String(quotes), rf.joined(separator: ","), qf.joined(separator: ",")]
-            .joined(separator: "|")
->>>>>>> 3278e982 (Crash fix (typing with an empty uid aborted in Firestore, build 1114); a post's own replies switch wins over the channel's; View N replies loads from the first answer; toast at the bottom; dark-mode link sheet button text)
     }
 
     // Build a message, reusing the cached copy unless a mutable field (reactions / edit) changed.
