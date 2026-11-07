@@ -2,52 +2,74 @@ import SwiftUI
 import UIKit
 
 /// Settings > Appearance > Bubble Styles (owner 2026-11-06), and the "Chat bubble" row on a chat's
-/// info page (owner 2026-11-07: the same picker, a shortcut, not a per-chat style). A live preview
-/// of their bubble and mine at the top, the styles below in sections, Cancel and Save at the top.
-/// Nothing changes until Save.
+/// info page (owner 2026-11-07: the same picker, a shortcut, not a per-chat style).
+///
+/// ⛔ LAYOUT (owner 2026-11-07, second look): the live preview is pinned at the top and stays in
+/// view while the grid scrolls; one short line under it; then a row of category chips (Colours
+/// last) and only the chosen category's grid, three to a row, Default first in every grid.
+/// Cancel and Save at the top. Nothing changes until Save.
 struct BubbleStylesPage: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
     @State private var selected: String? = BubbleStyles.current
     @State private var plusNote = false
     @State private var decorOn = BubbleStyles.decorations
+    /// The chip that is open: the saved style's category, else Anime.
+    @State private var category: Category = Category.of(BubbleStyles.find(BubbleStyles.current)) ?? .pictures(.anime)
     private var dark: Bool { scheme == .dark }
-    private let colourCols = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
-    private let pictureCols = Array(repeating: GridItem(.flexible(), spacing: 12), count: 2)
+    private let cols = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
+
+    enum Category: Hashable {
+        case pictures(PictureStyle.Pack)
+        case colours
+
+        static let all: [Category] = PictureStyle.Pack.allCases.map { .pictures($0) } + [.colours]
+        var title: String {
+            switch self {
+            case .pictures(let p): return p.rawValue
+            case .colours: return "Colours"
+            }
+        }
+        static func of(_ s: BubbleStyle?) -> Category? {
+            guard let s else { return nil }
+            return s.picture.map { .pictures($0.group) } ?? .colours
+        }
+        var styles: [BubbleStyle] {
+            switch self {
+            case .pictures(let p): return BubbleStyles.all.filter { $0.picture?.group == p }
+            case .colours: return BubbleStyles.colours
+            }
+        }
+    }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+        VStack(spacing: 0) {
+            VStack(spacing: 8) {
                 preview
-                section("Default") {
-                    LazyVGrid(columns: colourCols, spacing: 14) { tile(nil) }
-                }
-                section("Colours") {
-                    LazyVGrid(columns: colourCols, spacing: 14) {
-                        ForEach(BubbleStyles.colours) { s in tile(s) }
-                    }
-                    // Optional decorations (owner 2026-11-06): hearts, bows, stars at the corners of
-                    // the last bubble in a run, never on every bubble. Colour styles only; a picture
-                    // brings its own art.
-                    Toggle("Decorations", isOn: $decorOn)
-                        .padding(.horizontal, 14).padding(.vertical, 10)
-                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .disabled(BubbleStyles.find(selected).map { $0.picture != nil } ?? true)
-                        .padding(.top, 4)
-                }
-                ForEach(PictureStyle.Pack.allCases, id: \.self) { pack in
-                    section(pack.rawValue) {
-                        LazyVGrid(columns: pictureCols, spacing: 14) {
-                            ForEach(BubbleStyles.all.filter { $0.picture?.group == pack }) { s in tile(s) }
-                        }
-                    }
-                }
-                Text("Your style only affects messages you send after saving. The people you write to see it too; messages you already sent keep their look.")
+                Text("Applies to messages you send from now on.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 4)
+                chips
             }
-            .padding(16)
+            .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    LazyVGrid(columns: cols, spacing: 10) {
+                        tile(nil)
+                        ForEach(category.styles) { s in tile(s) }
+                    }
+                    if category == .colours {
+                        // Optional decorations (owner 2026-11-06): hearts, bows, stars at the corners
+                        // of the last bubble in a run, never on every bubble. Colour styles only; a
+                        // picture brings its own art.
+                        Toggle("Decorations", isOn: $decorOn)
+                            .padding(.horizontal, 14).padding(.vertical, 10)
+                            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .disabled(BubbleStyles.find(selected).map { $0.picture != nil } ?? true)
+                    }
+                }
+                .padding(.horizontal, 16).padding(.vertical, 8)
+            }
         }
         .background(Color(.systemGroupedBackground))
         .navigationTitle("Bubble Style")
@@ -78,14 +100,26 @@ struct BubbleStylesPage: View {
         dismiss()
     }
 
-    @ViewBuilder private func section<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-                .padding(.horizontal, 4)
-            content()
+    /// The category chips, one row that scrolls sideways.
+    private var chips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Category.all, id: \.self) { c in
+                    let on = c == category
+                    Button {
+                        category = c
+                        Haptics.impact(.light)
+                    } label: {
+                        Text(c.title)
+                            .font(.subheadline.weight(on ? .semibold : .regular))
+                            .foregroundStyle(on ? Color(.systemBackground) : Color(.label))
+                            .padding(.horizontal, 14).padding(.vertical, 7)
+                            .background(Capsule().fill(on ? Color(.label) : Color(.secondarySystemGroupedBackground)))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(on ? .isSelected : [])
+                }
+            }
         }
     }
 
@@ -117,9 +151,8 @@ struct BubbleStylesPage: View {
                 }
             }
         }
-        .padding(16)
+        .padding(14)
         .background(Theme.bg(dark), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .animation(.easeInOut(duration: 0.2), value: selected)
     }
 
     // ── tiles ──
@@ -130,20 +163,21 @@ struct BubbleStylesPage: View {
             selected = s?.id
             Haptics.impact(.light)
         } label: {
-            VStack(spacing: 8) {
+            VStack(spacing: 5) {
                 if let p = s?.picture {
                     PictureThumb(style: p)
-                        .frame(height: 64)
+                        .frame(height: 42)
                 } else {
-                    bubbleFill(s, corner: 14)
-                        .frame(height: 38)
+                    bubbleFill(s, corner: 12)
+                        .frame(height: 30)
                         .overlay(alignment: .leading) {
-                            Capsule().fill(textColor(s).opacity(0.55)).frame(width: 34, height: 5).padding(.leading, 12)
+                            Capsule().fill(textColor(s).opacity(0.55)).frame(width: 26, height: 4).padding(.leading, 10)
                         }
+                        .padding(.vertical, 6)
                 }
                 HStack(spacing: 4) {
                     Text(s?.name ?? "Default")
-                        .font(.caption.weight(.medium))
+                        .font(.caption2.weight(.medium))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
@@ -156,11 +190,11 @@ struct BubbleStylesPage: View {
                     }
                 }
             }
-            .padding(10)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .padding(.horizontal, 6).padding(.vertical, 7)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(isOn ? Color.accentColor : .clear, lineWidth: 2.5)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(isOn ? Color.accentColor : .clear, lineWidth: 2)
             }
         }
         .buttonStyle(.plain)
@@ -281,7 +315,7 @@ private struct PictureThumb: View {
         .frame(maxWidth: .infinity)
         .onAppear {
             let scale = displayScale > 0 ? displayScale : 3
-            PictureArt.thumbnail(style, width: 160, scale: scale) { image = $0 }
+            PictureArt.thumbnail(style, width: 120, scale: scale) { image = $0 }
         }
     }
 }
