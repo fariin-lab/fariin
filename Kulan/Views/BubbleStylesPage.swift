@@ -280,14 +280,13 @@ struct PictureBubble: View {
     @State private var image: UIImage?
 
     var body: some View {
-        let ti = style.textInsets, art = style.art, pad = PictureArt.pad
+        let art = style.art, pad = PictureArt.pad
         let rim = style.lightText && dark
-        Text(text)
-            .font(Font(BubbleMetrics.bodyFont as CTFont))
-            .foregroundStyle(Color(hex: style.textHex))
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(EdgeInsets(top: ti.top, leading: ti.left, bottom: ti.bottom, trailing: ti.right))
-            .frame(minWidth: style.minBubble.width, minHeight: style.minBubble.height)
+        PictureTextLayout(insets: style.textInsets, minSize: style.minBubble) {
+            Text(text)
+                .font(Font(BubbleMetrics.bodyFont as CTFont))
+                .foregroundStyle(Color(hex: style.textHex))
+        }
             .background {
                 ZStack {
                     if let image {
@@ -311,6 +310,41 @@ struct PictureBubble: View {
                 if let hit = PictureArt.cached(style, rim: rim, scale: scale) { image = hit; return }
                 PictureArt.load(style, rim: rim, scale: scale) { image = $0 }
             }
+    }
+}
+
+/// The words inside a picture bubble, placed with the chat's own math (`MessageRowLayout`, the
+/// picture plan, owner 2026-11-07): the bubble widens, room allowing, until the smaller side
+/// clearance matches the larger one, and the words are centred between the outline's edges without
+/// entering either side's clearance. Text that fills the width keeps both insets as before.
+private struct PictureTextLayout: Layout {
+    let insets: UIEdgeInsets
+    let minSize: CGSize
+
+    private struct Plan { var size: CGSize; var origin: CGPoint; var text: CGSize }
+
+    private func plan(_ proposal: ProposedViewSize, _ subviews: Subviews) -> Plan {
+        let l = insets.left, r = insets.right, t = insets.top, b = insets.bottom
+        let room = proposal.width ?? .infinity
+        let textRoom: CGFloat? = room.isFinite ? max(1, room - l - r) : nil
+        let size = subviews.first?.sizeThatFits(ProposedViewSize(width: textRoom, height: nil)) ?? .zero
+        let tw = ceil(size.width), th = ceil(size.height)
+        var w = min(room, tw + max(l, r) * 2)
+        w = ceil(max(w, tw + l + r, ceil(minSize.width)))
+        let x = min(max((w - tw) / 2, l), w - r - tw).rounded()
+        let h = max(th + t + b, ceil(minSize.height))
+        let y = t + floor((h - (th + t + b)) / 2)
+        return Plan(size: CGSize(width: w, height: h), origin: CGPoint(x: x, y: y), text: CGSize(width: tw, height: th))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        plan(proposal, subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let p = plan(proposal, subviews)
+        subviews.first?.place(at: CGPoint(x: bounds.minX + p.origin.x, y: bounds.minY + p.origin.y),
+                              proposal: ProposedViewSize(p.text))
     }
 }
 
