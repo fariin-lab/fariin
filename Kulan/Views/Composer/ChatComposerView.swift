@@ -1914,7 +1914,13 @@ extension ChatComposerView: UITextViewDelegate {
             self?.toggleBold(range)
         }
         let format = UIMenu(title: "Format", image: UIImage(systemName: "textformat"), children: [bold])
-        return UIMenu(children: suggestedActions + [format])
+        // On the menu's first page, where Look Up was (owner 2026-11-07: it only showed after the ">"
+        // arrow): in front of Look Up, else after Cut/Copy/Paste, else first.
+        var items = suggestedActions
+        let lookUp = items.firstIndex { ($0 as? UIMenu)?.identifier == .lookup }
+        let afterEdit = items.firstIndex { ($0 as? UIMenu)?.identifier == .standardEdit }.map { $0 + 1 }
+        items.insert(format, at: min(lookUp ?? afterEdit ?? 0, items.count))
+        return UIMenu(children: items)
     }
 
     /// Bold if any of the range is regular, else regular again.
