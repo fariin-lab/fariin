@@ -41,6 +41,13 @@ struct WallpaperPickerSheet: View {
     /// setting for every chat, so a tap here saves it at once, as Save does on the full page.
     @AppStorage(BubbleStyles.key) private var bubbleStyleId = ""
     @State private var showBubbleStyles = false
+    /// ⛔ A COLOUR AND A PICTURE STYLE NEVER BOTH APPLY (owner 2026-11-07: "picking a colour changes
+    /// nothing, the bubbles keep the picture style"). A colour circle tapped while a style is on
+    /// clears the style on Apply, as Default does in Bubble Styles; a style picked afterwards brings
+    /// it back. Closing without Apply keeps the style.
+    @State private var colourTapped = false
+    private var hasActiveStyle: Bool { BubbleStyles.find(bubbleStyleId) != nil }
+    private var clearsStyle: Bool { colourTapped && hasActiveStyle }
     private var showsBubbleRow: Bool { !globalOnly && BubbleStyles.shown }
     /// What the Bubble Styles row adds to the sheet's fixed height.
     private static let bubbleRowHeight: CGFloat = 100
@@ -74,7 +81,12 @@ struct WallpaperPickerSheet: View {
     private var dark: Bool { scheme == .dark }
     // A pending change if EITHER the wallpaper or the bubble colour differs from what was in use on open.
     private var hasPendingChange: Bool {
-        selected != original || selectedColor?.stored != originalColor?.stored
+        selected != original || selectedColor?.stored != originalColor?.stored || clearsStyle
+    }
+
+    /// Apply's half for the bubble style: a colour was picked, so my style goes back to Default.
+    private func clearStyleIfColourPicked() {
+        if clearsStyle { bubbleStyleId = "" }
     }
 
     // Stable id per selection, for the auto-scroll on open.
@@ -262,6 +274,7 @@ struct WallpaperPickerSheet: View {
         .sheet(isPresented: $showCustomColor) {
             CustomColorView(cid: cid) { spec in
                 colorStore.addCustom(spec)   // save into the reusable custom library (deduped)
+                colourTapped = true
                 chooseColor(spec)            // live preview, ACTIVE colour not saved until Apply
             }
         }
@@ -475,6 +488,7 @@ struct WallpaperPickerSheet: View {
         // chats' own picks are kept (owner, 2026-09-27: a chat's own wallpaper beats the default).
         store.applyToAllChats(selected, alsoFor: cid)
         colorStore.applyToAllChats(selectedColor, alsoFor: cid)
+        clearStyleIfColourPicked()
         dismiss()
     }
 
@@ -509,6 +523,7 @@ struct WallpaperPickerSheet: View {
                         if sharedGroup { if selected != original { store.publishGroupWallpaper(selected, for: cid) } }
                         else { store.set(selected, for: cid) }
                         colorStore.set(selectedColor, for: cid)
+                        clearStyleIfColourPicked()
                         dismiss()
                     } label: {
                         Text(globalOnly ? "Apply For All Chats" : "Apply Wallpaper")
@@ -574,7 +589,7 @@ struct WallpaperPickerSheet: View {
     private var defaultColorCircle: some View {
         let isAuto = selectedColor == nil
         let auto = colorStore.autoColor(for: cid)
-        return Button { chooseColor(nil) } label: {
+        return Button { colourTapped = true; chooseColor(nil) } label: {
             Circle().fill(auto.map { AnyShapeStyle($0.fill) } ?? AnyShapeStyle(Theme.defaultBubble(dark)))
                 .frame(width: 52, height: 52)
                 .overlay(Text("Auto").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white))
@@ -586,7 +601,7 @@ struct WallpaperPickerSheet: View {
 
     private func colorCircle(_ p: ChatColorSpec) -> some View {
         let isSel = selectedColor?.stored == p.stored
-        return Button { chooseColor(p) } label: {
+        return Button { colourTapped = true; chooseColor(p) } label: {
             Circle().fill(p.fill).frame(width: 52, height: 52)
                 .overlay(Circle().strokeBorder(isSel ? Color.primary : .clear, lineWidth: 3))
         }.buttonStyle(.plain)
@@ -623,13 +638,17 @@ struct WallpaperPickerSheet: View {
                 .font(.caption).foregroundStyle(.secondary)
                 .padding(.horizontal, 20)
         }
+        // A style saved from See all wins over a colour tapped before it.
+        .onChange(of: bubbleStyleId) { _, _ in colourTapped = false }
     }
 
     private func bubbleThumb(_ s: BubbleStyle) -> some View {
-        let isOn = bubbleStyleId == s.id
+        // A colour picked here shows the row with nothing ringed: Apply will put the style away.
+        let isOn = !colourTapped && bubbleStyleId == s.id
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
         return Button {
             guard !isOn, BubbleStyles.mayUse(s) else { return }
+            colourTapped = false       // the style comes back; Apply leaves it on
             bubbleStyleId = s.id       // the same key Save writes on the full page
             Haptics.impact(.light)
         } label: {

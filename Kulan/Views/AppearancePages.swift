@@ -796,7 +796,7 @@ struct ChatColorPage: View {
         .sheet(isPresented: $showCustom) {
             CustomColorView(cid: "__default__") { spec in
                 colorStore.addCustom(spec)
-                colorStore.applyToAllChats(spec)
+                pick(spec)
             }
         }
     }
@@ -838,9 +838,17 @@ struct ChatColorPage: View {
                         in: RoundedRectangle(cornerRadius: 17, style: .continuous))
     }
 
+    /// ⛔ A colour puts my picture bubble style away (owner 2026-11-07: "picking a colour changes
+    /// nothing, the bubbles keep the picture style"), as Default does in Bubble Styles. Only one
+    /// applies at a time; picking a style later brings the style back.
+    private func pick(_ spec: ChatColorSpec?) {
+        colorStore.applyToAllChats(spec)
+        BubbleStyles.current = nil
+    }
+
     private func circleButton<C: View>(_ spec: ChatColorSpec?, @ViewBuilder content: () -> C) -> some View {
         let isSel = selected?.stored == spec?.stored
-        return Button { colorStore.applyToAllChats(spec) } label: {
+        return Button { pick(spec) } label: {
             content()
                 .frame(width: 54, height: 54)
                 .overlay(Circle().strokeBorder(isSel ? Color.primary : .clear, lineWidth: 3).padding(-5))
