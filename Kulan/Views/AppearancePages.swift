@@ -216,8 +216,8 @@ struct ChatWallpaperPage: View {
                             AnimatedWallpaperView(wallpaper: a, dark: dark, preview: true,
                                                   animates: current == .animated(a.id))
                                 .overlay(alignment: .topLeading) {
-                                    Image(systemName: "sparkles")
-                                        .font(.system(size: 11, weight: .semibold))
+                                    Image("ic_wallpaper").renderingMode(.template)   // the wallpaper icon, not a sparkle (owner 2026-11-07)
+                                        .resizable().scaledToFit().frame(width: 13, height: 13)
                                         .foregroundStyle(.white)
                                         .padding(5)
                                         .background(Circle().fill(.black.opacity(0.35)))
