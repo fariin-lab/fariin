@@ -485,6 +485,7 @@ struct PostThreadSheet: View {
                             .opacity(tab == .quotes ? 1 : 0).allowsHitTesting(tab == .quotes)
                     }
                 }
+                .clipped()   // nothing of a tab draws over the tab row (owner 2026-11-07)
             }
             .toolbar(.hidden, for: .navigationBar)
             .overlay(alignment: .top) { toastView }
@@ -948,7 +949,7 @@ private struct RepliesSkeleton: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Color(.systemBackground))
+        .background(Color(.systemBackground), ignoresSafeAreaEdges: [])
         .opacity(dim ? 0.45 : 1)
         .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: dim)
         .onAppear { dim = true }

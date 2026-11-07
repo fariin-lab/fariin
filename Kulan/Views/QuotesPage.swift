@@ -279,7 +279,9 @@ private struct QuotesSkeleton: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Color(.systemBackground))
+        // Inside its own frame only (owner 2026-11-07: in the Replies sheet it rose over the tabs;
+        // a plain colour background otherwise stretches past the view's edges).
+        .background(Color(.systemBackground), ignoresSafeAreaEdges: [])
         .opacity(dim ? 0.45 : 1)
         .onAppear {
             withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { dim = true }
