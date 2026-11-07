@@ -735,8 +735,9 @@ struct PostThreadSheet: View {
         } else if !model.loaded {
             RepliesSkeleton()
         } else if model.threads.isEmpty {
+            // The owner's comment icon, the one on the Reply bar (2026-11-07).
             ContentUnavailableView(model.off ? "Replies are off" : "No replies yet",
-                                   systemImage: "bubble.left.and.bubble.right",
+                                   image: "ic_reply_comment",
                                    description: Text(model.off ? "The channel turned off replies for this post."
                                                                : "Be the first to reply."))
         }
