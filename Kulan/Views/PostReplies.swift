@@ -721,13 +721,14 @@ struct PostThreadSheet: View {
         .onDisappear { model.stop() }
         // `presenting:` hands each button the item itself (2026-11-06 audit: reading the state in the
         // action could find it already cleared by the dialog closing).
-        .confirmationDialog("Report this reply?", isPresented: reportingShown, titleVisibility: .visible, presenting: reporting) { item in
+        // The system alert in the middle of the screen, not a popover over the row (owner 2026-11-07).
+        .alert("Report this reply?", isPresented: reportingShown, presenting: reporting) { item in
             ForEach(Self.reasons, id: \.0) { key, label in
                 Button(label) { Task { show(await model.report(item.0, thread: item.1, reason: key) ? "Thanks. We'll take a look." : "Couldn't send the report.") } }
             }
             Button("Cancel", role: .cancel) {}
         }
-        .confirmationDialog("Remove this person?", isPresented: banningShown, titleVisibility: .visible, presenting: banning) { item in
+        .alert("Remove this person?", isPresented: banningShown, presenting: banning) { item in
             Button("Delete and Ban", role: .destructive) { Task { show(await model.ban(item.0, thread: item.1, all: false) ? "Removed and banned." : "Couldn't do that.") } }
             Button("Ban and Delete All Their Replies", role: .destructive) { Task { show(await model.ban(item.0, thread: item.1, all: true) ? "Banned. Their replies are gone." : "Couldn't do that.") } }
             Button("Cancel", role: .cancel) {}
