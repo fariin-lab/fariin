@@ -5,17 +5,19 @@ import UIKit
 /// info page (owner 2026-11-07: the same picker, a shortcut, not a per-chat style).
 ///
 /// ⛔ LAYOUT (owner 2026-11-07, second look): the live preview is pinned at the top and stays in
-/// view while the grid scrolls; one short line under it; then a row of category chips (Colours
-/// last) and only the chosen category's grid, three to a row, Default first in every grid.
-/// Cancel and Save at the top. Nothing changes until Save.
+/// view while the grid scrolls; one short line under it; then a row of category chips (pictures
+/// only, same day: the colours are Settings > Appearance > Bubble Color) and only the chosen
+/// category's grid, three to a row, Default first in every grid. A round X and Save at the top.
+/// Nothing changes until Save.
 struct BubbleStylesPage: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
     @State private var selected: String? = BubbleStyles.current
     @State private var plusNote = false
     @State private var decorOn = BubbleStyles.decorations
-    /// The chip that is open: the saved style's category, else Anime.
-    @State private var category: Category = Category.of(BubbleStyles.find(BubbleStyles.current)) ?? .pictures(.anime)
+    /// The chip that is open: the saved picture style's category, else Anime.
+    @State private var category: Category = Category.of(BubbleStyles.find(BubbleStyles.current))
+        .flatMap { $0 == .colours ? nil : $0 } ?? .pictures(.anime)
     private var dark: Bool { scheme == .dark }
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
 
@@ -23,7 +25,9 @@ struct BubbleStylesPage: View {
         case pictures(PictureStyle.Pack)
         case colours
 
-        static let all: [Category] = PictureStyle.Pack.allCases.map { .pictures($0) } + [.colours]
+        /// ⛔ PICTURES ONLY (owner 2026-11-07): no Colours chip. The colour styles stay in
+        /// `BubbleStyles` so messages sent with one still draw it; `.colours` is kept for that.
+        static let all: [Category] = PictureStyle.Pack.allCases.map { .pictures($0) }
         var title: String {
             switch self {
             case .pictures(let p): return p.rawValue
@@ -76,8 +80,13 @@ struct BubbleStylesPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button("Cancel") { dismiss() }
+            // The app's round glass X in place of "Cancel" (owner 2026-11-07); same action. On 26
+            // the toolbar's own glass is hidden or the X is drawn as a circle inside a circle.
+            if #available(iOS 26.0, *) {
+                ToolbarItem(placement: .topBarLeading) { CloseXButton { dismiss() }.accessibilityLabel("Cancel") }
+                    .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem(placement: .topBarLeading) { CloseXButton { dismiss() }.accessibilityLabel("Cancel") }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Save") { save() }
@@ -92,6 +101,9 @@ struct BubbleStylesPage: View {
         }
     }
 
+    /// The sheet's height, the Replies sheet's (`PostReplies`). Settings pushes the page full height.
+    static let sheetFraction: CGFloat = 0.70
+
     /// The message menu's "Bubble Style" (owner 2026-11-07): this page as a sheet over the chat.
     /// Presented from UIKit after the menu has gone, so the chat's long SwiftUI body is untouched.
     @MainActor static func presentSheet() {
@@ -99,6 +111,13 @@ struct BubbleStylesPage: View {
             guard let top = WebLink.topViewController() else { return }
             let host = UIHostingController(rootView: NavigationStack { BubbleStylesPage() })
             host.modalPresentationStyle = .pageSheet
+            // 70% with the grabber, as the Replies sheet, so the chat stays in view above it
+            // (owner 2026-11-07). The fixed preview and chips stay on top; the grid scrolls.
+            if let sheet = host.sheetPresentationController {
+                let f = sheetFraction
+                sheet.detents = [.custom { ctx in ctx.maximumDetentValue * f }]
+                sheet.prefersGrabberVisible = true
+            }
             top.present(host, animated: true)
         }
     }
@@ -274,14 +293,13 @@ struct PictureBubble: View {
     @State private var image: UIImage?
 
     var body: some View {
-        let ti = style.textInsets, art = style.art, pad = PictureArt.pad
+        let art = style.art, pad = PictureArt.pad
         let rim = style.lightText && dark
-        Text(text)
-            .font(Font(BubbleMetrics.bodyFont as CTFont))
-            .foregroundStyle(Color(hex: style.textHex))
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(EdgeInsets(top: ti.top, leading: ti.left, bottom: ti.bottom, trailing: ti.right))
-            .frame(minWidth: style.minBubble.width, minHeight: style.minBubble.height)
+        PictureTextLayout(insets: style.textInsets, minSize: style.minBubble) {
+            Text(text)
+                .font(Font(BubbleMetrics.bodyFont as CTFont))
+                .foregroundStyle(Color(hex: style.textHex))
+        }
             .background {
                 ZStack {
                     if let image {
@@ -308,8 +326,44 @@ struct PictureBubble: View {
     }
 }
 
+/// The words inside a picture bubble, placed with the chat's own math (`MessageRowLayout`, the
+/// picture plan, owner 2026-11-07): the bubble widens, room allowing, until the smaller side
+/// clearance matches the larger one, and the words are centred between the outline's edges without
+/// entering either side's clearance. Text that fills the width keeps both insets as before.
+private struct PictureTextLayout: Layout {
+    let insets: UIEdgeInsets
+    let minSize: CGSize
+
+    private struct Plan { var size: CGSize; var origin: CGPoint; var text: CGSize }
+
+    private func plan(_ proposal: ProposedViewSize, _ subviews: Subviews) -> Plan {
+        let l = insets.left, r = insets.right, t = insets.top, b = insets.bottom
+        let room = proposal.width ?? .infinity
+        let textRoom: CGFloat? = room.isFinite ? max(1, room - l - r) : nil
+        let size = subviews.first?.sizeThatFits(ProposedViewSize(width: textRoom, height: nil)) ?? .zero
+        let tw = ceil(size.width), th = ceil(size.height)
+        var w = min(room, tw + max(l, r) * 2)
+        w = ceil(max(w, tw + l + r, ceil(minSize.width)))
+        let x = min(max((w - tw) / 2, l), w - r - tw).rounded()
+        let h = max(th + t + b, ceil(minSize.height))
+        let y = t + floor((h - (th + t + b)) / 2)
+        return Plan(size: CGSize(width: w, height: h), origin: CGPoint(x: x, y: y), text: CGSize(width: tw, height: th))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        plan(proposal, subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let p = plan(proposal, subviews)
+        subviews.first?.place(at: CGPoint(x: bounds.minX + p.origin.x, y: bounds.minY + p.origin.y),
+                              proposal: ProposedViewSize(p.text))
+    }
+}
+
 /// A picker tile's picture: the whole picture, not stretched, decoded small (`PictureArt.thumbnail`).
-private struct PictureThumb: View {
+/// Also the Bubble Styles strip in the chat's wallpaper sheet.
+struct PictureThumb: View {
     let style: PictureStyle
     @Environment(\.displayScale) private var displayScale
     @State private var image: UIImage?

@@ -1284,6 +1284,8 @@ struct ContactInfoView: View {
             }
             .sheet(isPresented: $showBubbleStyle) {
                 NavigationStack { BubbleStylesPage() }
+                    .presentationDetents([.fraction(BubbleStylesPage.sheetFraction)])
+                    .presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $showDisappear) {
                 DisappearingMessagesView(cid: cid, current: disappearSeconds) { s in

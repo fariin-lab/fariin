@@ -39,7 +39,7 @@ enum GetStartedCard: String, CaseIterable, Identifiable {
         case .newGroup: "New group"
         case .inviteFriends: "Invite friends"
         case .addPhoto: "Add photo"
-        case .chatColor: "Chat color"
+        case .chatColor: "Bubble color"   // was "Chat color"; it opens Settings' Bubble Color page
         }
     }
 

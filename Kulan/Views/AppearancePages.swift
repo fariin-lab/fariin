@@ -791,7 +791,7 @@ struct ChatColorPage: View {
         }
         .modifier(AppearanceResetMenu(page: .chatColor))   // the resets live in the "⋯" menu (2026-09-27)
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
-        .navigationTitle("Chat Color")
+        .navigationTitle("Bubble Color")   // was "Chat Color" (owner 2026-11-07)
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showCustom) {
             CustomColorView(cid: "__default__") { spec in
