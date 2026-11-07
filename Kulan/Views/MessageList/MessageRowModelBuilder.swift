@@ -371,7 +371,9 @@ enum MessageRowModelBuilder {
                 verified: VerificationIndex.of(msg.authorId)?.showsBadge == true,
                 role: ctx.roleFor(msg.authorId),
                 roleColor: ctx.roleColorFor(msg.authorId))
-        } else if ctx.isChannel, msg.quoteId != nil, !msg.deleted, !ctx.channelTitle.isEmpty {
+        } else if ctx.isChannel, msg.quoteId != nil, !msg.deleted, !ctx.channelTitle.isEmpty,
+                  !{ if case .media = body { return true }; if case .album = body { return true }; return false }() {
+            // Not over a picture, video or album (owner 2026-11-07: the name sat in a band above the photo).
             // ⛔ A QUOTE POST SAYS WHOSE IT IS (owner 2026-11-07, "show my channel name in quote
             // posts"): the channel's name at the top of the bubble, over its words and the quoted
             // card, so the card's own channel name is not read as the poster. Quote posts only.
