@@ -187,8 +187,15 @@ struct GroupSettingsView: View {
             // A channel's own admins manage its admins (2026-10-28), though its members are hidden.
             if conv?.isChannel == true || !(conv?.hideMembers == true && !AdminStore.shared.isAdmin) { peopleSection }
             // A channel: followers have no permissions to set; its posts have Reactions instead.
-            if conv?.isChannel == true { channelPostsSection } else { permissionsSection }
-            chatSection
+            // A channel's Reactions, Replies and Quotes card comes last, under Disappearing Messages
+            // and Recent Actions (owner 2026-11-07, his mockup).
+            if conv?.isChannel == true {
+                chatSection
+                channelPostsSection
+            } else {
+                permissionsSection
+                chatSection
+            }
         }
         .listStyle(.insetGrouped)
         // owner 2026-10-27 ("space between cards is big"): the group page's own card gap (20).
