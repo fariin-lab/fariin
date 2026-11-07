@@ -1060,26 +1060,27 @@ private struct ReplyComposer: View {
 private struct RepliesSkeleton: View {
     @State private var dim = false
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        // Light and plain like the Quotes one (owner 2026-11-07): no solid background, faint shapes
+        // in the reply row's own layout (name over a bubble, the photo beside it).
+        VStack(alignment: .leading, spacing: 20) {
             ForEach(0..<4, id: \.self) { i in
-                HStack(alignment: .top, spacing: 10) {
-                    Circle().fill(fill).frame(width: 34, height: 34).padding(.top, 20)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Capsule().fill(fill).frame(width: 90, height: 10)
-                        RoundedRectangle(cornerRadius: 18, style: .continuous).fill(fill)
-                            .frame(width: CGFloat([220, 160, 250, 130][i]), height: 38)
+                VStack(alignment: .leading, spacing: 6) {
+                    Capsule().fill(fill).frame(width: 80, height: 9).padding(.leading, 54)
+                    HStack(spacing: 10) {
+                        Circle().fill(fill).frame(width: 40, height: 40)
+                        RoundedRectangle(cornerRadius: 20, style: .continuous).fill(fill)
+                            .frame(width: CGFloat([200, 150, 230, 120][i]), height: 40)
                     }
                 }
             }
             Spacer(minLength: 0)
         }
-        .padding(16)
+        .padding(.horizontal, 16).padding(.top, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Color(.systemBackground), ignoresSafeAreaEdges: [])
-        .opacity(dim ? 0.45 : 1)
+        .opacity(dim ? 0.5 : 1)
         .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: dim)
         .onAppear { dim = true }
         .accessibilityLabel("Loading replies")
     }
-    private var fill: Color { Color.secondary.opacity(0.16) }
+    private var fill: Color { Color.primary.opacity(0.08) }
 }

@@ -269,60 +269,33 @@ struct QuotesPage: View {
 private struct QuotesSkeleton: View {
     @State private var dim = false
 
+    // ⛔ MINIMAL AND LIGHT (owner 2026-11-07: "too dark, make it minimalist, clear and simple"). No
+    // solid background (the sheet's glass shows through), no boxed cards, no dividers: four quiet
+    // rows of a channel photo, a name line and one line of words, softly pulsing.
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            bar(width: 180, height: 12).padding(.horizontal, 16).padding(.vertical, 14)
-            ForEach(0..<3, id: \.self) { _ in
-                row
-                Divider().padding(.leading, 16)
+        VStack(alignment: .leading, spacing: 22) {
+            ForEach(0..<4, id: \.self) { i in
+                HStack(alignment: .top, spacing: 12) {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous).fill(fill).frame(width: 36, height: 36)
+                    VStack(alignment: .leading, spacing: 8) {
+                        bar(width: CGFloat([110, 90, 130, 100][i]), height: 10)
+                        bar(width: CGFloat([230, 180, 210, 150][i]), height: 10)
+                    }
+                    .padding(.top, 4)
+                }
             }
             Spacer(minLength: 0)
         }
+        .padding(.horizontal, 20).padding(.top, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // Inside its own frame only (owner 2026-11-07: in the Replies sheet it rose over the tabs;
-        // a plain colour background otherwise stretches past the view's edges).
-        .background(Color(.systemBackground), ignoresSafeAreaEdges: [])
-        .opacity(dim ? 0.45 : 1)
+        .opacity(dim ? 0.5 : 1)
         .onAppear {
             withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { dim = true }
         }
         .accessibilityLabel("Loading quotes")
     }
 
-    private var row: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(fill).frame(width: 40, height: 40)
-                VStack(alignment: .leading, spacing: 6) {
-                    bar(width: 130, height: 12)
-                    bar(width: 80, height: 10)
-                }
-            }
-            bar(width: 220, height: 12)
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous).fill(fill).frame(width: 20, height: 20)
-                    bar(width: 90, height: 10)
-                    Spacer()
-                    bar(width: 44, height: 10)
-                }
-                HStack(alignment: .top, spacing: 10) {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous).fill(fill).frame(width: 56, height: 56)
-                    VStack(alignment: .leading, spacing: 6) {
-                        bar(width: nil, height: 10)
-                        bar(width: 140, height: 10)
-                    }
-                }
-                bar(width: 60, height: 9)
-            }
-            .padding(12)
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1))
-        }
-        .padding(.horizontal, 16).padding(.vertical, 12)
-    }
-
-    private var fill: Color { Color.secondary.opacity(0.16) }
+    private var fill: Color { Color.primary.opacity(0.08) }
 
     private func bar(width: CGFloat?, height: CGFloat) -> some View {
         Capsule().fill(fill).frame(width: width, height: height)
