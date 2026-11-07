@@ -96,6 +96,10 @@ struct BubbleStylesPage: View {
         .navigationTitle("Bubble Style")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
+        // Pushed from Settings, the edge swipe still goes back (owner 2026-11-07); hiding the back
+        // button had turned it off. Like the X, it keeps nothing unsaved. In a sheet the stack has
+        // one page, so the swipe never starts there.
+        .background(RestoreSwipeBack())
         .toolbar {
             // The app's round glass X in place of "Cancel" (owner 2026-11-07); same action. On 26
             // the toolbar's own glass is hidden or the X is drawn as a circle inside a circle.
@@ -182,31 +186,54 @@ struct BubbleStylesPage: View {
 
     // ── preview ──
 
+    /// ⛔ THE PREVIEW NEVER CHANGES SIZE (owner 2026-11-07: switching styles made the card grow and
+    /// shrink, so the chips and grid jumped). Both sample lines are short enough to stay one line
+    /// in every style, the sent bubble's row is as tall as the tallest style's one-line bubble
+    /// (art included), and a new style crossfades in place.
+    private static let mineText = "Love my new bubble!"
+    private static let lineH = ceil(BubbleMetrics.bodyFont.lineHeight)
+    private static let mineRowH: CGFloat = {
+        let plain = lineH + 18
+        let pictures = PictureStyles.all.map { p -> CGFloat in
+            let ti = p.textInsets, a = p.art
+            return ceil(max(lineH + ti.top + ti.bottom, p.minBubble.height) + a.top + a.bottom)
+        }
+        return max(plain, pictures.max() ?? 0)
+    }()
+
     private var preview: some View {
         let s = BubbleStyles.find(selected)
+        let key = (selected ?? "default") + "|" + (colorPick?.stored ?? "auto")
         return VStack(spacing: 10) {
             HStack {
-                Text("Looks so cute! I'm changing mine.")
+                Text("Looks so cute!")
                     .font(Font(BubbleMetrics.bodyFont as CTFont))
                     .foregroundStyle(Color(.label))
+                    .lineLimit(1)
                     .padding(.horizontal, 14).padding(.vertical, 9)
                     .background(Color(.systemGray5), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 Spacer(minLength: 40)
             }
-            HStack {
-                Spacer(minLength: 40)
-                if let p = s?.picture {
-                    PictureBubble(style: p, text: "Did you know you can change your bubble style? So cool!", dark: dark)
-                        .id(p.id)
-                } else {
-                    Text("Did you know you can change your bubble style? So cool!")
-                        .font(Font(BubbleMetrics.bodyFont as CTFont))
-                        .foregroundStyle(textColor(s))
-                        .padding(.horizontal, 14).padding(.vertical, 9)
-                        .background { bubbleFill(s, corner: 18) }
-                        .overlay { decorPreview(s) }
+            ZStack(alignment: .trailing) {
+                Group {
+                    if let p = s?.picture {
+                        PictureBubble(style: p, text: Self.mineText, dark: dark)
+                    } else {
+                        Text(Self.mineText)
+                            .font(Font(BubbleMetrics.bodyFont as CTFont))
+                            .foregroundStyle(textColor(s))
+                            .lineLimit(1)
+                            .padding(.horizontal, 14).padding(.vertical, 9)
+                            .background { bubbleFill(s, corner: 18) }
+                            .overlay { decorPreview(s) }
+                    }
                 }
+                .id(key)
+                .transition(.opacity)
             }
+            .frame(maxWidth: .infinity, minHeight: Self.mineRowH, maxHeight: Self.mineRowH, alignment: .trailing)
+            .padding(.leading, 40)
+            .animation(.easeInOut(duration: 0.2), value: key)
         }
         .padding(14)
         .background(Theme.bg(dark), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -235,23 +262,31 @@ struct BubbleStylesPage: View {
             Button { showCustom = true } label: {
                 Circle().fill(Color(.systemGray5))
                     .overlay(Image(systemName: "plus").font(.system(size: 22, weight: .medium)).foregroundStyle(.primary))
-                    .frame(width: 54, height: 54)
+                    .frame(width: Self.circle, height: Self.circle)
+                    .padding(Self.ringGap)
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Custom color")
         }
-        .padding(.vertical, 6)
+        // One rounded card, the preview card's ground (owner 2026-11-07).
+        .padding(16)
+        .background(Theme.bg(dark), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
+
+    /// Five to a row inside the card: 5 x (48 + 2 x 5) + 4 x 6 = 314, the card's inside on a 393pt
+    /// phone is 329. The ring is 2 wide, so 3 of clear gap shows between it and the circle.
+    private static let circle: CGFloat = 48
+    private static let ringGap: CGFloat = 5
 
     /// Ringed (a ring with a gap) only while no picture style is picked: one or the other applies.
     private func colorCircle<C: View>(_ spec: ChatColorSpec?, @ViewBuilder content: () -> C) -> some View {
         let isOn = selected == nil && colorPick?.stored == spec?.stored
         return Button { pickColor(spec) } label: {
             content()
-                .frame(width: 54, height: 54)
-                .padding(4)
-                .overlay(Circle().strokeBorder(isOn ? Color.primary : .clear, lineWidth: 2.5))
+                .frame(width: Self.circle, height: Self.circle)
+                .padding(Self.ringGap)
+                .overlay(Circle().strokeBorder(isOn ? Color.primary : .clear, lineWidth: 2))
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)

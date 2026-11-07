@@ -1279,7 +1279,8 @@ struct PostedStoryTile: View {
 /// ⚠️ `viewControllers.count > 1` IS THE WHOLE POLICY. Swiping on the root of a stack with nothing
 /// to pop is what freezes a navigation controller mid-transition, and the system's own delegate
 /// exists to say no to exactly that.
-private struct RestoreSwipeBack: UIViewControllerRepresentable {
+/// Also the Bubble Style page (it hides the back button for its round X).
+struct RestoreSwipeBack: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> Holder { Holder() }
     func updateUIViewController(_ vc: Holder, context: Context) {}
 
