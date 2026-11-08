@@ -175,6 +175,10 @@ struct ReplyEdit: Equatable {
     private(set) var sort: Sort = .top
     /// Open threads showing all their answers, not just the first three.
     var expandedAll: Set<String> = []
+    /// ⛔ MY OWN NEW REPLIES AT THE TOP, FOR ME ONLY (owner 2026-11-08, "exactly like TikTok"):
+    /// what I post this visit sits first under the pinned one, newest first, so I see it at once;
+    /// everyone else sees the post's normal order. Both the sending id and the saved id are kept.
+    private(set) var mineOnTop: [String] = []
     /// ⛔ FIVE AT A TIME (owner 2026-11-08: "View 5 replies" shows all five; a thread of 10, 20,
     /// 100 shows 5, then "View more" adds 5 each tap, so one big thread never buries the other
     /// replies). How many answers each open thread shows; missing = `answerStep`.
@@ -391,7 +395,7 @@ struct ReplyEdit: Equatable {
             }
             threads = list
             applyPinned(d)
-            if added > 0 { if atEnd { scrollTarget = list.last?.id } else { unseenNew += added } }
+            if added > 0 { unseenNew += added }   // never a scroll for someone else's reply (below)
             Self.cache[cacheKey] = page
             dropStaleAnswers(page)
             await reloadChangedOpen(page)
@@ -428,9 +432,10 @@ struct ReplyEdit: Equatable {
         list.sort { $0.at < $1.at }
         threads = list
         applyPinned(d)
-        if added > 0 {
-            if atEnd { scrollTarget = list.last?.id } else { unseenNew += added }
-        }
+        // ⛔ SOMEONE ELSE'S NEW REPLY NEVER MOVES MY LIST (owner 2026-11-08, "exactly like TikTok"):
+        // on a post with thousands of replies a scroll per arrival is jumpy and costly. It lands
+        // where it belongs and the "new" pill counts it.
+        if added > 0 { unseenNew += added }
         Self.cache[cacheKey] = page
         dropStaleAnswers(page)
         await reloadChangedOpen(page)
@@ -613,6 +618,7 @@ struct ReplyEdit: Equatable {
             openThreads.insert(t)
         } else {
             if let i = threads.firstIndex(where: { $0.id == id }) { threads[i].send = .sending } else { threads.append(row) }
+            if !mineOnTop.contains(id) { mineOnTop.insert(id, at: 0) }
         }
         scrollTarget = id
         Task {
@@ -631,6 +637,7 @@ struct ReplyEdit: Equatable {
                 // A server that does not echo `to` yet: keep the one this phone sent.
                 if saved.toId == nil, let to, thread != nil { saved.toId = to.id; saved.toName = to.name }
                 replace(id, with: saved, thread: thread)
+                if thread == nil, saved.id != id, let i = mineOnTop.firstIndex(of: id) { mineOnTop.insert(saved.id, at: i) }
                 recentMine[id] = Date()
                 recentMine[saved.id] = Date()
                 if firstTime {
@@ -1125,7 +1132,11 @@ struct PostThreadSheet: View {
         if let p = model.pinned { out.append(.pinnedLabel); appendThread(p, to: &out) }
         // Top: the server's order. Newest: newest at the top. Either way more load at the bottom.
         let list = model.sort == .new ? Array(model.threads.reversed()) : model.threads
-        for r in list { appendThread(r, to: &out) }
+        // Mine from this visit first (newest first), then the rest in their order.
+        let top = model.mineOnTop
+        var shown = Set<String>()
+        for id in top { if let r = list.first(where: { $0.id == id }), shown.insert(r.id).inserted { appendThread(r, to: &out) } }
+        for r in list where !shown.contains(r.id) { appendThread(r, to: &out) }
         if !model.olderCursor.isEmpty { out.append(.older) }
         return out
     }
@@ -1213,7 +1224,8 @@ struct PostThreadSheet: View {
                     let isThread = model.threads.contains(where: { $0.id == id }) || model.pinned?.id == id
                     let key = isThread ? "t-\(id)" : "a-\(id)"
                     // A new reply sits at the top for Newest, at the bottom for Top.
-                    let anchor: UnitPoint = isThread && model.sort == .new ? .top : .bottom
+                    // My new reply sits at the top now (`mineOnTop`), so the list goes up to it.
+                    let anchor: UnitPoint = isThread ? .top : .bottom
                     model.scrollTarget = nil
                     // After the new row is laid out, not in the same pass that added it.
                     Task { @MainActor in
