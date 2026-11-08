@@ -194,6 +194,9 @@ struct StoryReplyPlan {
 struct LinkPreviewPlan {
     var card: CGRect
     var hero: CGRect?                   // an article's 170pt picture
+    /// A quoted album's pictures inside `hero` (2 to 4, card coordinates, 2pt gaps). Empty = the
+    /// hero is one picture.
+    var heroTiles: [CGRect] = []
     var avatar: CGRect?                 // a profile's 44pt round photo
     var title: CGRect
     var titleAttr: NSAttributedString
@@ -2363,6 +2366,35 @@ enum MessageRowLayout {
 
     // ── The OG card inside a text bubble ──
 
+    /// A quoted album's pictures inside the one hero rect (owner 2026-11-08), the way the post's own
+    /// album sits: 2 side by side, 3 = one big left + two stacked right, 4 = 2x2, 2pt gaps. Fewer
+    /// than 2 = no tiles (the single hero).
+    private static func quoteAlbumTiles(in r: CGRect, count: Int) -> [CGRect] {
+        let gap: CGFloat = 2
+        let halfW = ((r.width - gap) / 2).rounded(.down)
+        let halfH = ((r.height - gap) / 2).rounded(.down)
+        let rightX = r.minX + halfW + gap
+        let rightW = r.maxX - rightX
+        let lowY = r.minY + halfH + gap
+        let lowH = r.maxY - lowY
+        switch count {
+        case 2:
+            return [CGRect(x: r.minX, y: r.minY, width: halfW, height: r.height),
+                    CGRect(x: rightX, y: r.minY, width: rightW, height: r.height)]
+        case 3:
+            return [CGRect(x: r.minX, y: r.minY, width: halfW, height: r.height),
+                    CGRect(x: rightX, y: r.minY, width: rightW, height: halfH),
+                    CGRect(x: rightX, y: lowY, width: rightW, height: lowH)]
+        case 4...:
+            return [CGRect(x: r.minX, y: r.minY, width: halfW, height: halfH),
+                    CGRect(x: rightX, y: r.minY, width: rightW, height: halfH),
+                    CGRect(x: r.minX, y: lowY, width: halfW, height: lowH),
+                    CGRect(x: rightX, y: lowY, width: rightW, height: lowH)]
+        default:
+            return []
+        }
+    }
+
     /// Returns the card's size at `width`, and a plan whose rects are relative to the card's own
     /// origin. The caller places it and offsets.
     private static func linkPreview(_ p: BubbleBody.LinkPreview, textColor: UIColor,
@@ -2405,6 +2437,7 @@ enum MessageRowLayout {
             var subtitle: CGRect?
             var subtitleAttr: NSAttributedString?
             var hero: CGRect?
+            var heroTiles: [CGRect] = []
             let words: NSAttributedString? = p.desc.isEmpty ? nil : NSAttributedString(string: p.desc, attributes: [
                 .font: UIFont.systemFont(ofSize: 16), .foregroundColor: textColor])   // 16pt, near the post's own 17 (owner 2026-11-07)
             if p.imageUrl != nil, compactQuote {
@@ -2436,13 +2469,15 @@ enum MessageRowLayout {
                 if p.imageUrl != nil {
                     if subtitle != nil { y += 8 }
                     let h = min(220, inner * 0.75)
-                    hero = CGRect(x: pad, y: y, width: inner, height: h)
+                    let rect = CGRect(x: pad, y: y, width: inner, height: h)
+                    hero = rect
+                    heroTiles = quoteAlbumTiles(in: rect, count: p.imageUrls.count)
                     y += h
                 }
             }
             y += 10
             return (CGSize(width: width, height: y),
-                    LinkPreviewPlan(card: .zero, hero: hero, avatar: avatar,
+                    LinkPreviewPlan(card: .zero, hero: hero, heroTiles: heroTiles, avatar: avatar,
                                     title: titleRect, titleAttr: titleAttr,
                                     subtitle: subtitle, subtitleAttr: subtitleAttr,
                                     host: tagRect, hostAttr: tagAttr,

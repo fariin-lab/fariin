@@ -18,6 +18,9 @@ struct QuoteCard: Equatable, Codable {
     /// "text", "photo", "video" or "album".
     var kind = "text"
     var image = ""
+    /// An album post's pictures, 2 to 4, in order (owner 2026-11-08: a 2 photo post quoted showed
+    /// one). `image` is still the first. Optional so cards saved by older builds still decode.
+    var images: [String]? = nil
     /// Shown because I can see the chat it was posted in, not the private channel it came from
     /// (owner 2026-11-08): the card shows, a tap says the channel is private.
     /// Optional so cards saved by older builds still decode.
@@ -41,6 +44,7 @@ struct QuoteCard: Equatable, Codable {
         text = d["text"] as? String ?? ""
         kind = d["kind"] as? String ?? "text"
         image = d["image"] as? String ?? ""
+        images = d["images"] as? [String]
         locked = d["locked"] as? Bool
     }
 
@@ -174,7 +178,7 @@ struct QuoteCard: Equatable, Codable {
     /// What the row signature carries for this quote.
     func token(_ qid: String) -> String {
         guard let c = cards[qid] else { return "?" }
-        return "\(c.state)\(c.title.hashValue):\(c.text.hashValue):\(c.image.hashValue):\(c.photoUrl.hashValue)"
+        return "\(c.state)\(c.title.hashValue):\(c.text.hashValue):\(c.image.hashValue):\((c.images ?? []).hashValue):\(c.photoUrl.hashValue)"
     }
 
     /// The answer `createQuote` gave the quoting phone: shown at once, no second request.
@@ -290,6 +294,7 @@ struct QuoteCard: Equatable, Codable {
         card.text = d["text"] as? String ?? ""
         card.kind = d["kind"] as? String ?? "text"
         card.image = d["image"] as? String ?? ""
+        card.images = d["images"] as? [String]
         await MainActor.run { shared.seed(qid, card) }
         return (qid, card)
     }

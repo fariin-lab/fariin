@@ -367,6 +367,9 @@ enum BubbleBody: Equatable {
         var imageEnc: EncMeta?
         /// A quoted channel post's card: the channel's own photo beside its name (owner 2026-11-06).
         var avatarUrl: String? = nil
+        /// A quoted ALBUM post's pictures, 2 to 4, first = `imageUrl` (owner 2026-11-08). Empty for
+        /// every other card, which then draws exactly as before.
+        var imageUrls: [String] = []
     }
 
     struct TextBody: Equatable {
