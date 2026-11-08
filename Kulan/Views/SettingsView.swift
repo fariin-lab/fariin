@@ -1156,28 +1156,34 @@ private struct LogOutSheet: View {
                 }
                 .font(.body.weight(.semibold))
                 .foregroundStyle(.white)
+                // ⛔ APPLE'S LARGE BUTTON IN RED LIQUID GLASS (owner 2026-11-08, his mockup): a
+                // 50pt capsule, full width, not a flat 14pt-corner slab.
                 .frame(maxWidth: .infinity).frame(height: 50)
-                .background(Color.red, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .contentShape(Rectangle())
+                .liquidGlass(Capsule(), interactive: true, tint: .red)
+                .contentShape(Capsule())
             }
             .buttonStyle(.plain)
             .disabled(signingOut)
             .padding(.top, 24)
-
+            // No Cancel under it (owner 2026-11-08): the X at the top and the grabber close it.
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 16)
+        // ⛔ AN X AT THE TOP RIGHT (owner 2026-11-08, his mockup), glass, like the app's other X.
+        .overlay(alignment: .topTrailing) {
             Button { dismiss() } label: {
-                Text("Cancel")
-                    .font(.body)
+                Image(systemName: "xmark")
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .frame(maxWidth: .infinity).frame(height: 44)
-                    .contentShape(Rectangle())
+                    .frame(width: 44, height: 44)
+                    .liquidGlass(Circle(), interactive: true)
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .disabled(signingOut)
-            .opacity(signingOut ? 0.4 : 1)
-            .padding(.top, 6)
+            .accessibilityLabel("Close")
+            .padding(.top, 16).padding(.trailing, 16)
         }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 8)
         .frame(maxWidth: .infinity)
         .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
