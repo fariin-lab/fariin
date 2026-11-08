@@ -869,7 +869,9 @@ struct CallView: View {
         guard !call.shareBlocksCamera else { return false }
         switch call.state {
         case .active, .reconnecting: return true
-        case .outgoing:              return call.cameraOn
+        // ⛔ LOCKED WHILE IT RINGS (owner 2026-11-08): the other phone already rings as a VIDEO (or
+        // audio) call; switching the camera before they answer changed the call under them. The
+        // type stays as dialled until the call connects, then the camera is free as before.
         default:                     return false
         }
     }
