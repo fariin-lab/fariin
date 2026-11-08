@@ -1318,12 +1318,13 @@ struct CallView: View {
             shareCircle
             // MY camera — turn it on/off freely (the other side just sees it, no
             // permission). When it can be pressed: see `cameraButtonEnabled` (M-052).
-            callCircle(call.cameraOn ? "video.fill" : "video.slash.fill", active: !call.cameraOn,
-                       label: call.cameraOn ? "Turn camera off" : "Turn camera on") { call.toggleCamera() }
-                // Dimmed while my screen is shared too: the share owns my video until it stops, and
-                // stopping brings the camera back exactly as it was.
+            // Grey while it can't be used (owner 2026-11-08: "just make it grey"): ringing, or my
+            // screen shared (the share owns my video until it stops).
+            callCircle(call.cameraOn ? "video.fill" : "video.slash.fill",
+                       active: cameraButtonEnabled && !call.cameraOn,
+                       label: call.cameraOn ? "Turn camera off" : "Turn camera on",
+                       greyed: !cameraButtonEnabled) { call.toggleCamera() }
                 .disabled(!cameraButtonEnabled)
-                .opacity(cameraButtonEnabled ? 1 : 0.4)
             // No flip here (owner 2026-11-01): the button on my camera's card does it.
             speakerCircle
             // Labels: owner audit 2026-10-06 #19 — icon-only buttons read as "button" or the raw
@@ -1401,7 +1402,8 @@ struct CallView: View {
         }
     }
 
-    private func callCircle(_ icon: String, active: Bool, label: String, _ action: @escaping () -> Void) -> some View {
+    private func callCircle(_ icon: String, active: Bool, label: String, greyed: Bool = false,
+                            _ action: @escaping () -> Void) -> some View {
         Button {
             buzz()   // r2 H9d
             showControls()          // using a button restarts the clock, never cuts it short
@@ -1410,7 +1412,7 @@ struct CallView: View {
             Image(systemName: icon)
                 .font(.system(size: circleSize * 0.38, weight: .semibold))
                 .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))   // mic/speaker/camera slash morphs in (r3 G2)
-                .foregroundStyle(active ? .black : .white)
+                .foregroundStyle(greyed ? Color.gray : (active ? .black : .white))
                 .frame(width: circleSize, height: circleSize)
                 // Idle = real Liquid Glass circle (was a flat white-16% fill); active keeps the
                 // solid white pop, where glass would just mute the contrast.
