@@ -120,8 +120,6 @@ struct GroupInfoView: View {
     @State private var storage: ChatMediaStorage.Usage?
     @State private var confirmClearStorage = false
     @State private var showStorage = false
-    /// The header photo's "Select an action" sheet: photo or story.
-    @State private var showAvatarChoice = false
     @State private var exportFile: ExportFile?
     @State private var exportError: String?
     @State private var exporting = false
@@ -790,15 +788,14 @@ struct GroupInfoView: View {
                     // photo; the filled picture reached past its clip for taps).
                     .frame(width: Self.photoSide, height: Self.photoSide)
                     .contentShape(Circle())
-                    // ⛔ A STORY AND A PHOTO: ASK (owner 2026-11-08: with a story up, a channel's or
-                    // group's photo could not be seen). The same sheet a person's profile shows.
-                    .onTapGesture {
-                        if groupStories != nil { showAvatarChoice = true } else { showGroupPhoto = true }
+                    // ⛔ TAP = STORY, HOLD = PHOTO, NO SHEET (owner 2026-11-08, replacing the same day's
+                    // "Select an action" sheet): a tap opens the story when there is one, else the
+                    // photo; a long press always opens the photo.
+                    .onTapGesture { if !openGroupStory() { showGroupPhoto = true } }
+                    .onLongPressGesture(minimumDuration: 0.4) {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        showGroupPhoto = true
                     }
-                    .bottomActionSheet("Select an action", isPresented: $showAvatarChoice, actions: [
-                        SheetAction("View profile photo") { showGroupPhoto = true },
-                        SheetAction("View story") { _ = openGroupStory() },
-                    ])
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("Group photo")
                     .accessibilityAddTraits(.isButton)

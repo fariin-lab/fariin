@@ -250,7 +250,6 @@ struct ContactInfoView: View {
         StoryDoor.open(g, from: key, onClosed: { refreshStorySeen() })
     }
 
-    @State private var showAvatarChoice = false     // has BOTH a story and a photo → ask which to open
     // Same zoom hero as everywhere else: the viewer grows out of the tapped thumbnail and the
     // drag-down close shrinks back into it.
     // (`mediaNS` is gone with the zoom transition it fed. Both of this screen's story circles
@@ -1918,23 +1917,20 @@ struct ContactInfoView: View {
             .onTapGesture {
                 // What the eye sees, not what the url says — no picture means nothing to open.
                 let hasPhoto = heroHasPhoto
-                // Both a story AND a photo → ASK which one (the reference app's "Select an action"). A single
-                // tap can't serve both, and silently preferring the story is what made the profile
-                // photo unreachable. With only one of them available, go straight there.
-                if publicStory != nil, hasPhoto { showAvatarChoice = true }
-                else if let s = publicStory { openProfileStory(s, from: "profile-story") }
+                // ⛔ TAP = STORY, HOLD = PHOTO, NO SHEET (owner 2026-11-08): the story when there is
+                // one, else the photo. A long press (below) always opens the photo.
+                if let s = publicStory { openProfileStory(s, from: "profile-story") }
                 else if hasPhoto { showProfilePhoto = true; chromeHiddenForPhoto = true }
+            }
+            .onLongPressGesture(minimumDuration: 0.4) {
+                guard heroHasPhoto else { return }
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                showProfilePhoto = true; chromeHiddenForPhoto = true
             }
             // Attached HERE, on the hero, not on the outer chain that already carries three alerts:
             // stacking presentations on one view is what made the Edit Photo sheet never appear.
             // Bottom sheet, not confirmationDialog: on iOS 26 the system dialog anchors itself to the
             // avatar as a little callout bubble, and the user wants a sheet from the bottom.
-            .bottomActionSheet("Select an action", isPresented: $showAvatarChoice, actions: [
-                SheetAction("View profile photo") { showProfilePhoto = true; chromeHiddenForPhoto = true },
-                SheetAction("View story") {
-                    if let s = publicStory { openProfileStory(s, from: "profile-story") }
-                },
-            ])
             // TAPPABLE HERE, and only here. A profile is the one screen where a tap on the mark
             // cannot have meant something else, and it is where somebody goes when they actually
             // want to know who this is. Anybody can type a tick into their display name; a real one
