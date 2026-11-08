@@ -2376,7 +2376,10 @@ enum MessageRowLayout {
             // A QUOTED CHANNEL POST (owner 2026-11-06, his reference): a 20pt channel photo with the
             // channel's name in blue, the post's picture with its own corners, then its words.
             y = 10
-            let avatar = CGRect(x: pad, y: y, width: 20, height: 20)
+            // ⛔ 24pt PHOTO, 16pt NAME (owner 2026-11-08: "channel name looks small"). The name
+            // matches the card's own 16pt words; the header row is the photo's height.
+            let head: CGFloat = 24
+            let avatar = CGRect(x: pad, y: y, width: head, height: head)
             // A short "Quote" tag with its icon at the header's right end (owner 2026-11-06).
             let tagColor = textColor.withAlphaComponent(0.55)
             let tagAttr = NSMutableAttributedString()
@@ -2390,15 +2393,15 @@ enum MessageRowLayout {
             tagAttr.append(NSAttributedString(string: "Quote", attributes: [
                 .font: UIFont.systemFont(ofSize: 12), .foregroundColor: tagColor]))
             let tagSize = lineSizeOf(tagAttr)
-            let tagRect = CGRect(x: pad + inner - tagSize.width, y: y + (20 - tagSize.height) / 2,
+            let tagRect = CGRect(x: pad + inner - tagSize.width, y: y + (head - tagSize.height) / 2,
                                  width: tagSize.width, height: tagSize.height)
-            let titleW = max(1, inner - 26 - tagSize.width - 8)
+            let titleW = max(1, inner - (head + 8) - tagSize.width - 8)
             // The text colour, no blue (owner 2026-11-06: "don't use blue").
             let titleAttr = NSAttributedString(string: p.title, attributes: [
-                .font: UIFont.systemFont(ofSize: 14, weight: .semibold), .foregroundColor: textColor])
+                .font: UIFont.systemFont(ofSize: 16, weight: .semibold), .foregroundColor: textColor])
             let tH = lineSizeOf(titleAttr, cap: titleW).height
-            let titleRect = CGRect(x: pad + 26, y: y + (20 - tH) / 2, width: titleW, height: tH)
-            y += 28
+            let titleRect = CGRect(x: pad + head + 8, y: y + (head - tH) / 2, width: titleW, height: tH)
+            y += head + 8
             var subtitle: CGRect?
             var subtitleAttr: NSAttributedString?
             var hero: CGRect?

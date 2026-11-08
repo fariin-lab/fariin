@@ -88,6 +88,10 @@ struct SystemBarChrome: ViewModifier {
     /// How far the bar sinks BELOW the safe-area line, into the indicator band, at rest.
     static let restDip: CGFloat = 5
 
+    /// The composer's keyboard branch, for a stand-in bar that rides the keys (the in-chat search
+    /// bar): 8pt above them, sides at the system margin. Pass the KEYBOARD'S state, not focus.
+    var keyboardUp: Bool = false
+
     @State private var margin: CGFloat = 16
     @State private var bottomInset: CGFloat = 0
 
@@ -95,9 +99,9 @@ struct SystemBarChrome: ViewModifier {
         content
             // At rest the sides match the resting gap under the bar, so the three gaps read as one.
             // The system margin is the floor, so a home-button phone (inset 0) keeps it.
-            .padding(.horizontal, max(margin, bottomInset - Self.restDip))
+            .padding(.horizontal, keyboardUp ? margin : max(margin, bottomInset - Self.restDip))
             .padding(.top, 6)
-            .padding(.bottom, bottomInset <= 0 ? Self.keyboardGap : -Self.restDip)
+            .padding(.bottom, keyboardUp || bottomInset <= 0 ? Self.keyboardGap : -Self.restDip)
             .background { SystemChromeReader(margin: $margin, bottomInset: $bottomInset) }
     }
 }
@@ -133,7 +137,9 @@ struct SystemBarBottomChrome: ViewModifier {
 
 extension View {
     /// Position this view as edge-attached system chrome, the way the composer positions itself.
-    func systemBarChrome() -> some View { modifier(SystemBarChrome()) }
+    func systemBarChrome(keyboardUp: Bool = false) -> some View {
+        modifier(SystemBarChrome(keyboardUp: keyboardUp))
+    }
 
     /// Take the composer's BOTTOM inset and nothing else — sides, height and corners stay yours.
     func systemBarBottomChrome(keyboardUp: Bool) -> some View {

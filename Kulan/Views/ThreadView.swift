@@ -9571,7 +9571,10 @@ struct ThreadView: View {
                 .liquidGlass(Capsule(), interactive: true)
             }
         }
-        .padding(.horizontal, 16).padding(.bottom, 6)
+        // ⛔ SYSTEM-POSITIONED UI, LIKE THE COMPOSER (owner 2026-11-08: the pills sat on a flat
+        // 16/6 and looked off against the screen's rounded corners). The bar stands in the
+        // composer's slot, so it takes the composer's device-derived sides and bottom.
+        .systemBarChrome(keyboardUp: keyboard.height > 0)
     }
 
     private var searchCountText: String {
