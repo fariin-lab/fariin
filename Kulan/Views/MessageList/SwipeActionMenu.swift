@@ -167,7 +167,8 @@ final class SwipeActionCapsule: UIView {
         addSubview(blur)
         highlight.frame = CGRect(x: 0, y: 0, width: Self.circle, height: Self.circle)
         highlight.layer.cornerRadius = Self.circle / 2
-        highlight.backgroundColor = .fariinAction
+        // A grey circle behind the picked slot (owner 2026-11-08: "black highlight, use grey").
+        highlight.backgroundColor = .systemGray4
         addSubview(highlight)
         let config = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
         for slot in [MultiSwipe.Slot.top, .reply, .bottom] {
@@ -206,7 +207,7 @@ final class SwipeActionCapsule: UIView {
     private func paint() {
         for (slot, v) in icons {
             if slot == selected {
-                v.tintColor = .onFariinAction
+                v.tintColor = .label
                 v.alpha = 1
             } else {
                 v.tintColor = .label
