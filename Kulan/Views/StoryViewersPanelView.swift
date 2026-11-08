@@ -361,10 +361,18 @@ final class StoryViewersPanelView: UIView {
         setNeedsLayout()
     }
 
+    /// NO FADE, NO STALE TEXT (owner's recording 2026-11-07): a `.system` button cross-fades a
+    /// new title, and for those frames its label still holds the OLD words inside a frame already
+    /// sized to the new ones, so the tab read "All...wers", then a bare underline, then the name
+    /// fading in. The title goes in without animation and the label is laid out at once, so the
+    /// `sizeToFit` in `layoutSubviews` measures the words actually on screen.
     private func configureTab(_ b: UIButton, _ title: String, selected: Bool) {
-        b.setTitle(title, for: .normal)
-        b.titleLabel?.font = .systemFont(ofSize: 15, weight: selected ? .semibold : .regular)
-        b.setTitleColor(selected ? .white : UIColor.white.withAlphaComponent(0.5), for: .normal)
+        UIView.performWithoutAnimation {
+            b.setTitle(title, for: .normal)
+            b.titleLabel?.font = .systemFont(ofSize: 15, weight: selected ? .semibold : .regular)
+            b.setTitleColor(selected ? .white : UIColor.white.withAlphaComponent(0.5), for: .normal)
+            b.layoutIfNeeded()
+        }
     }
 
     @objc private func pickAll() { userPickedTab = true; setTab(0) }

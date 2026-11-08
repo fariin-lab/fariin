@@ -224,6 +224,9 @@ final class StoryViewersSheetView: UIView {
         panels[id]?.isLoading = false
         panels[id]?.loadFailed = true
     }
+    /// The host's answer for a story's audience, read when a panel is BUILT so its first tab wears
+    /// the right name from the first frame instead of a placeholder swapped a pass later.
+    var audienceFor: ((String) -> (title: String, bothTabs: Bool))?
     func setAudience(title: String, bothTabs: Bool, for id: String) {
         panels[id]?.audience = (title, bothTabs)
     }
@@ -248,6 +251,7 @@ final class StoryViewersSheetView: UIView {
         }
         let p = StoryViewersPanelView(storyId: id)
         p.slot = slot
+        if let a = audienceFor?(id) { p.audience = a }
         p.onSendMessage = { [weak self] v in self?.onSendMessage?(v) }
         p.onOpenProfile = { [weak self] v in self?.onOpenProfile?(v) }
         p.onBlock = { [weak self] v in self?.onBlock?(v) }
@@ -1411,6 +1415,7 @@ struct StoryViewersSheet: UIViewRepresentable {
         func sync(active: String, prev: String, next: String, slide: Int? = nil) {
             let moved = active != activeId || prev != prevId || next != nextId
             activeId = active; prevId = prev; nextId = next
+            view?.audienceFor = audienceFor
             if moved { view?.setStories(center: active, prev: prev, next: next, slide: slide) }
             // Audience every pass, not only on a move: a story's own audience can be re-read by the
             // host (it comes from the live repository) without the neighbours changing.
