@@ -5575,6 +5575,10 @@ struct ThreadView: View {
             onSwipeReply: { id in
                 if let idx = repo.indexById[id], idx < repo.items.count { beginReply(to: repo.items[idx]) }
             },
+            // Multi-action swipe (2026-11-08): nil outside the gate, so everyone else keeps the
+            // plain reply swipe.
+            swipeMenu: { id in multiSwipeMenu(id) },
+            onSwipeAction: { id, slot in runMultiSwipe(id, slot) },
             // Not while a quote jump is hunting for its original: that pages older history too, but
             // the person is looking at a bubble in the middle of the chat, not at the top of it. See
             // `ThreadRepository.jumpPagingInFlight`.
@@ -6064,6 +6068,83 @@ struct ThreadView: View {
 
     /// Disable Sharing › No Saving: no Copy, no Save, no Share in this chat (owner, 2026-10-03).
     private var savingAllowed: Bool { !repo.noSaving }
+
+    // MARK: Multi-action swipe (2026-11-08, gated to @v, see `MultiSwipe`)
+    //
+    // The swipe's slots follow the long-press menu's own rules (`canForward`, `savingAllowed`,
+    // view-once), and each slot runs the menu's handler for the same action.
+
+    /// The slots one row offers, or nil for the plain reply swipe (outside the gate).
+    private func multiSwipeMenu(_ id: String) -> MultiSwipe.Menu? {
+        guard MultiSwipe.enabled, let idx = repo.indexById[id], idx < repo.items.count else { return nil }
+        let m = repo.items[idx]
+        return MultiSwipe.Menu(canForward: canForward(m), bottom: multiSwipeBottom(m))
+    }
+
+    /// The bottom slot by kind: Copy for text, Save for a photo, video or album, Save to Files for a
+    /// document. Anything else (voice, poll, sticker, GIF, location...) has none.
+    private func multiSwipeBottom(_ m: Message) -> MultiSwipe.Bottom {
+        guard savingAllowed, !m.viewOnce, !m.deleted, !m.isCall, !m.isSystem else { return .none }
+        if m.isAlbum { return .save(count: max(m.album.count, m.localAlbum.count)) }
+        if m.isImage || m.isVideo { return .save(count: 1) }
+        if m.isFile { return .saveToFiles }
+        let plain = m.type == nil || m.type == "text" || m.type?.isEmpty == true
+        if plain, !m.text.isEmpty, !m.isFeatureMarker { return .copy }
+        return .none
+    }
+
+    /// Released on a slot. Re-reads the message first, as the menu's handlers do: a delete or an
+    /// edit may have landed while the finger was down.
+    private func runMultiSwipe(_ id: String, _ slot: MultiSwipe.Slot) {
+        guard let idx = repo.indexById[id], idx < repo.items.count else { return }
+        let live = repo.items[idx]
+        switch slot {
+        case .reply:
+            beginReply(to: live)
+        case .forward:   // the menu's Forward
+            guard canForward(live) else { showJumpToast("That message is no longer available"); return }
+            forwardIsQuote = false
+            forwardTarget = live
+        case .bottom:
+            switch multiSwipeBottom(live) {
+            case .none:
+                return
+            case .copy:   // the menu's Copy, plus a toast: a swipe has no menu closing to say it worked
+                UIPasteboard.general.string = live.text
+                showJumpToast("Copied")
+            case .save:
+                // A photo (or an album still uploading) goes through the menu's Save Image; a
+                // video or a sent album through the Save to Photos savers.
+                if live.isImage || !live.localAlbum.isEmpty {
+                    Task { await saveImageToPhotos(live) }
+                } else {
+                    Task { @MainActor in
+                        switch await AutoSaveToPhotos.saveNow(live, cid: cid) {
+                        case .saved: Haptics.notify(.success); showJumpToast("Saved")
+                        case .denied: photosDenied = true
+                        case .failed: showJumpToast(live.isVideo ? "Couldn't save video" : "Couldn't save")
+                        }
+                    }
+                }
+            case .saveToFiles:
+                saveFileToFiles(live)
+            }
+        }
+    }
+
+    /// A document into Files: the gallery's share copy (its sanitised name, the prefetched bytes
+    /// when there are any), handed to the system's export picker.
+    private func saveFileToFiles(_ m: Message) {
+        let cid = self.cid
+        Task { @MainActor in
+            guard let url = await MediaGalleryView.shareFile(m, cid: cid) else {
+                showJumpToast("Couldn't save the file"); return
+            }
+            guard let top = WebLink.topViewController() else { return }
+            let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
+            top.present(picker, animated: true)
+        }
+    }
 
     /// 2026-09-24 feature-audit: THE ONE EDIT RULE, read by both long-press menus and again at Save.
     /// The native menu used to check only author + window, so it offered Edit on bare media, voice
