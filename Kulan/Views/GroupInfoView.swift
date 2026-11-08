@@ -117,8 +117,6 @@ struct GroupInfoView: View {
     @State private var storage: ChatMediaStorage.Usage?
     @State private var confirmClearStorage = false
     @State private var showStorage = false
-    /// The Bubble styles switch's new value while the server writes it; nil = the group's own.
-    @State private var bubbleStylesOnPending: Bool?
     /// The header photo's "Select an action" sheet: photo or story.
     @State private var showAvatarChoice = false
     @State private var exportFile: ExportFile?
@@ -1340,44 +1338,6 @@ struct GroupInfoView: View {
 
     private var desc: String { conv?.groupDescription ?? "" }
 
-    /// The group's Bubble styles switch, On = styles shown. Written by the server
-    /// (functions-groups setGroupBubbleStyles checks owner/admin), called the way
-    /// `ChatService.setGroupWallpaper` calls its function. A refusal says so and the switch goes back.
-    private var bubbleStylesSwitch: some View {
-        let on = Binding<Bool>(
-            get: { bubbleStylesOnPending ?? !(conv?.bubbleStylesOff ?? false) },
-            set: { value in
-                bubbleStylesOnPending = value
-                Task {
-                    do {
-                        _ = try await Functions.functions(region: "me-central1")
-                            .httpsCallable("setGroupBubbleStyles").call(["cid": cid, "off": !value])
-                        // Safety net: if the group's own value never arrives, stop holding the
-                        // asked-for state after a few seconds so a later change by another admin shows.
-                        try? await Task.sleep(nanoseconds: 6_000_000_000)
-                        await MainActor.run {
-                            if bubbleStylesOnPending == value { bubbleStylesOnPending = nil }
-                        }
-                    } catch {
-                        await MainActor.run {
-                            bubbleStylesOnPending = nil   // back to what the group says
-                            actionError = error.localizedDescription
-                        }
-                    }
-                }
-            })
-        return HStack(spacing: 14) {
-            Image(systemName: "bubble.left.and.bubble.right").font(.system(size: 17))
-                .frame(width: 26)
-            Toggle("Bubble Styles", isOn: on)
-        }
-        .padding(.horizontal, 16).padding(.vertical, 12)
-        // The group now says what was asked: follow the group again from here on.
-        .onChange(of: conv?.bubbleStylesOff) { _, off in
-            if let want = bubbleStylesOnPending, let off, want == !off { bubbleStylesOnPending = nil }
-        }
-    }
-
     /// The mockup's three rows. Each keeps its old gate: a member's tap on what only an admin may
     /// change says so instead of doing nothing (owner 2026-10-19).
     private var settingsCard: some View {
@@ -1393,7 +1353,8 @@ struct GroupInfoView: View {
             // Settings > Appearance, the long-press menu and the wallpaper sheet. Not on a channel
             // (its posts are never styled).
             // ⛔ NO BUBBLE STYLES SWITCH ON THIS PAGE (owner 2026-11-08: "in group remove bubble
-            // styles here"). `bubbleStylesSwitch` is kept for wherever he wants it next.
+            // styles here"), and not in Group Settings either (owner 2026-11-08: "completely
+            // remove"). The server's setGroupBubbleStyles stays; a group already switched off keeps it.
             // No invite link row here (owner 2026-10-20: it is in Group Settings, shown twice). The
             // link lives on the Group Settings page, for the admins who manage it.
             // Group Settings (and Join Requests) in this same card (owner 2026-10-20: one card).
