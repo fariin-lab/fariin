@@ -901,6 +901,15 @@ struct CallsView: View {
                 }
             }
             .tag(linkTag(link))
+            // ⛔ ONE SWIPE TO DELETE (owner 2026-11-08: "a long process to kill the link, make a
+            // shortcut"): swipe left -> Delete, the same confirm as the long-press Delete. For a link
+            // I created it ends the link for everyone; for one shared with me it only leaves my list.
+            .swipeActions(edge: .trailing) {
+                Button(role: .destructive) { linkToDelete = link } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .tint(.red)
+            }
             .contextMenu { linkMenu(link) }
     }
 
