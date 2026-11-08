@@ -315,6 +315,20 @@ struct CallLobbyView: View {
                                               gone: true, full: false, iAmCreator: false)
             return   // no camera for a screen that only says Close
         }
+        // The join token ahead of the tap (owner, 2026-10-07: Join spun for seconds). Only where the
+        // join needs no approval: the server reads a token request on an approval link as a knock.
+        // Owner 2026-11-08 (Join still "a bit long"): asked for BEFORE the camera check below, which
+        // can sit on the system's camera prompt; the pass only needs the link's document.
+        if let d {
+            let approval = (d["restrictions"] as? String) == "adminApproval"
+            // Not when the server's own check already landed and said gone or approval (verifier V4:
+            // the first check can beat this read, and its "drop the pass" would then come too early).
+            let serverSaysNo = peek.map { $0.gone || ($0.approval && !$0.iAmCreator) } ?? false
+            if (creator || !approval), !serverSaysNo {
+                service.prefetchLinkToken(key: lobby.key)
+                passFetchedAt = Date()
+            }
+        }
         // The camera, so the picture is up while the rest loads.
         if await GroupCallService.cameraAllowed() { cameraReady = true } else { cameraDenied = true }
         // The server's answer (`watchLink`) carries the name and the voice mark too. This read
@@ -323,28 +337,21 @@ struct CallLobbyView: View {
         if (peek?.title ?? "").isEmpty,
            let enc = d["encName"] as? String, !enc.isEmpty, let n = k.decryptName(enc), !n.isEmpty { title = n }
         if (d["video"] as? Bool) == false { voiceOnly = true }
-        // The join token ahead of the tap (owner, 2026-10-07: Join spun for seconds). Only where the
-        // join needs no approval: the server reads a token request on an approval link as a knock.
-        let approval = (d["restrictions"] as? String) == "adminApproval"
-        // Not when the server's own check already landed and said gone or approval (verifier V4:
-        // the first check can beat this read, and its "drop the pass" would then come too early).
-        let serverSaysNo = peek.map { $0.gone || ($0.approval && !$0.iAmCreator) } ?? false
-        if (creator || !approval), !serverSaysNo {
-            service.prefetchLinkToken(key: lobby.key)
-            passFetchedAt = Date()
-        }
     }
 
     /// Verifier V2 N3: renews the join pass while the link is healthy and nothing is joining.
-    /// Under 15 s nothing happens; past it the old pass is let go and a fresh one asked for, so
-    /// the pass in hand is never older than its 20 s life when Join is tapped.
+    /// Under 10 s nothing happens; past it a fresh one is asked for, so the pass in hand is never
+    /// older than its 20 s life when Join is tapped.
+    /// Owner 2026-11-08 (Join "a bit long"): the old pass used to be dropped first and the renewal
+    /// started at 15 s on a 5 s check, so a Join tapped in the next second waited for the new pass
+    /// (diag: 0.5-2.9 s), and one tapped past 20 s found none and asked the server itself. Now the
+    /// old pass stays usable until the new one lands, and the renewal starts at 10 s.
     private func renewPass(_ seen: GroupCallService.LobbyPeek) {
         guard !seen.gone, !seen.full, !seen.approval || seen.iAmCreator,
               !starting, service.joinState == .notJoined else { return }
         let now = Date()
-        if let at = passFetchedAt, now.timeIntervalSince(at) < 15 { return }
-        if passFetchedAt != nil { service.dropPrefetchedLinkToken() }
-        service.prefetchLinkToken(key: lobby.key)
+        if let at = passFetchedAt, now.timeIntervalSince(at) < 10 { return }
+        service.prefetchLinkToken(key: lobby.key, renew: passFetchedAt != nil)
         passFetchedAt = now
     }
 
