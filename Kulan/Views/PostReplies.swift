@@ -1196,6 +1196,12 @@ struct PostThreadSheet: View {
                     Task { @MainActor in
                         await Task.yield()
                         withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(key, anchor: anchor) }
+                        // ⛔ AGAIN ONCE THE KEYBOARD IS DOWN (owner 2026-11-08: after Send my reply sat
+                        // behind the field). Send closes the keyboard and the sheet settles back to its
+                        // smaller size; the list keeps its top (`.sizeChanges` anchor), so the row it had
+                        // just shown at the bottom went under the composer.
+                        try? await Task.sleep(nanoseconds: 450_000_000)
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(key, anchor: anchor) }
                     }
                 }
                 // A tapped "@name" or a reply alert: that row to the middle (it flashes meanwhile).
