@@ -808,11 +808,15 @@ enum MessageRowModelBuilder {
                                           desc: "Loading…", host: "Quoted post", imageUrl: nil, imageEnc: nil)
         }
         let image = c.state == .ok && !c.image.isEmpty ? c.image : nil
+        // An album post's pictures (owner 2026-11-08: two photos quoted showed one). Only with a
+        // first picture, and only 2 to 4 of them; anything else is the single-picture card.
+        let album = (c.images ?? []).filter { !$0.isEmpty }
+        let images = image != nil && album.count >= 2 ? Array(album.prefix(4)) : []
         // The card (owner 2026-11-06, his reference): the channel's photo and name, the post's
         // picture, its words; under my own words (MessageRowLayout places it below the text).
         return BubbleBody.LinkPreview(shape: .article, url: "fariin-quote://\(qid)", title: c.heading,
-                                      desc: c.body, host: "", imageUrl: image, imageEnc: nil,
-                                      avatarUrl: c.photoUrl.isEmpty ? nil : c.photoUrl)
+                                      desc: c.body, host: "", imageUrl: images.first ?? image, imageEnc: nil,
+                                      avatarUrl: c.photoUrl.isEmpty ? nil : c.photoUrl, imageUrls: images)
     }
 
     /// owner 2026-10-18: a group link's card. What the sender's phone got from the server travels in

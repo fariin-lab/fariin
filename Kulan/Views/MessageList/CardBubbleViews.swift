@@ -80,6 +80,10 @@ final class LocationBubbleView: UIView {
 final class LinkPreviewBubbleView: UIView {
     private let backing = UIView()
     private let hero = RowImageView(frame: .zero)
+    /// A quoted album's pictures (owner 2026-11-08): the hero's rect and corners, clipped as one,
+    /// with up to 4 tiles inside it (`LinkPreviewPlan.heroTiles`).
+    private let albumBox = UIView()
+    private let albumTiles = (0..<4).map { _ in RowImageView(frame: .zero) }
     private let avatar = RowAvatarView()
     private let title = UILabel()
     private let subtitle = UILabel()
@@ -123,6 +127,16 @@ final class LinkPreviewBubbleView: UIView {
         addSubview(backing)
         hero.contentMode = .scaleAspectFill
         backing.addSubview(hero)
+        albumBox.layer.cornerRadius = 14
+        albumBox.layer.cornerCurve = .continuous
+        albumBox.clipsToBounds = true
+        albumBox.isHidden = true
+        for t in albumTiles {
+            t.contentMode = .scaleAspectFill
+            t.clipsToBounds = true
+            albumBox.addSubview(t)
+        }
+        backing.addSubview(albumBox)
         backing.addSubview(avatar)
         for l in [title, subtitle, host] {
             l.numberOfLines = 2
@@ -221,6 +235,26 @@ final class LinkPreviewBubbleView: UIView {
             if p.imageEnc != nil, p.imageUrl != nil { groupPhotoRect = plan.avatar }
         default: break
         }
+        // A quoted album: its tiles take the single hero's place, in the same rect (owner 2026-11-08).
+        let albumTileRects = (quoteCard && groupPhotoRect == nil && plan.hero != nil
+                              && plan.heroTiles.count == p.imageUrls.count) ? plan.heroTiles : []
+        if let box = plan.hero, !albumTileRects.isEmpty {
+            albumBox.isHidden = false
+            albumBox.frame = box
+            for (i, t) in albumTiles.enumerated() {
+                if i < albumTileRects.count {
+                    t.isHidden = false
+                    t.frame = albumTileRects[i].offsetBy(dx: -box.minX, dy: -box.minY)
+                    t.configure(url: p.imageUrls[i], enc: nil, cid: cid, cornerRadius: 0)
+                } else {
+                    t.isHidden = true
+                    t.reset()
+                }
+            }
+        } else {
+            albumBox.isHidden = true
+            albumTiles.forEach { $0.reset() }
+        }
         if let rect = groupPhotoRect {
             hero.isHidden = false
             hero.frame = rect
@@ -236,7 +270,7 @@ final class LinkPreviewBubbleView: UIView {
                 hero.layer.mask = nil
             }
             backing.insertSubview(hero, aboveSubview: avatar)   // over the fallback, under the words
-        } else if let rect = plan.hero {
+        } else if let rect = plan.hero, albumTileRects.isEmpty {
             hero.isHidden = false
             hero.frame = rect
             hero.layer.mask = nil   // a reused cell may still carry a channel card's squircle
@@ -357,6 +391,7 @@ final class LinkPreviewBubbleView: UIView {
 
     func prepareForReuse() {
         hero.reset()
+        albumTiles.forEach { $0.reset() }
         setFlightKey("")
         hero.alpha = 1
     }
