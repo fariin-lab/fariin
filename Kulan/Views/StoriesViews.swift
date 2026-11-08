@@ -1305,6 +1305,7 @@ struct StoryViewer: View {
     @State private var ownRepostGone = false            // the repost's original was mine and is gone
     @State private var photosDenied = false             // Save refused by Photos -> "open Settings" alert
     @State private var profileSheet: StoryGroup?        // tap the header → profile sheet OVER the story (paused)
+    @State private var reportSheet: ReportTarget?       // "…" → Report: the report sheet (paused, `sheetUp`)
     @State private var myPostedUp = false                // tap MY header → my Posted Stories, over the story
     /// Fariin's header tapped (official stories, owner 2026-10-16): the channel's own info page.
     @State private var officialInfoUp = false
@@ -1809,6 +1810,7 @@ struct StoryViewer: View {
             // seconds). It was not on this list, so the story ran on under it, reached its end and
             // closed the viewer, taking the page with it.
             || groupPage != nil
+            || reportSheet != nil   // the report sheet (2026-11-08)
         // ⛔ `repostLoading` (owner, 2026-10-12: "I tap Repost on a video story and the original
         // keeps playing, I can hear it"). The story was held only once the composer was up, but the
         // clip is copied (or downloaded) and the poster and face fetched BEFORE that, and for those
@@ -2519,12 +2521,14 @@ struct StoryViewer: View {
             guard !currentIsMine, !currentBucketUid.isEmpty else { return nil }
             return (currentBucketUid, groups.first { $0.authorUid == currentBucketUid }?.name ?? "they")
         }))
-        // "…" → Report (friend stories only): files a report doc for review (App Store 1.2).
+        // "…" → Report (friend stories only): the report sheet (owner 2026-11-08), over the paused
+        // story (`sheetUp`). Its own modifier, for the type-checker (see above).
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionReport"))) { _ in
             guard !currentIsMine, let s = currentStory else { return }
-            Task { await StoriesService.shared.reportStory(s) }
-            flashSentToast("Reported")
+            let name = groups.first { $0.authorUid == currentBucketUid }?.name ?? ""
+            reportSheet = ReportTarget(kind: .story, targetId: s.id, personUid: s.authorUid, name: name)
         }
+        .modifier(ReportSheetHost(target: $reportSheet))
         // "…" → Delete Story (only shown on my own story) → same confirm + seamless delete as the trash button.
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionDelete"))) { _ in
             if currentIsAuthor && !isUploadingItem { confirmDelete = true }   // no delete on the uploading item

@@ -536,7 +536,7 @@ struct ThreadView: View {
     @State private var coveredReadPending = false
     @HeapState private var morePickerTarget: Message? = nil // any-emoji picker
     @HeapState private var channelReactTarget: Message? = nil   // a channel post's reactions (2026-10-29)
-    @State private var confirmChannelReport = false   // Report Channel on a post's menu (2026-11-01)
+    @State private var reportSheet: ReportTarget?   // Report on a post or group message (2026-11-08)
     @State private var reactorsTarget: MessageRef?   // "who reacted" sheet (id only)
     @HeapState private var pendingDelete: Message? = nil
     /// owner 2026-10-18: an admin deleting other members' messages in a group (AdminDeleteSheet).
@@ -2150,13 +2150,8 @@ struct ThreadView: View {
         .sheet(item: $morePickerTarget, onDismiss: { CMOverlay.current?.dismiss(animated: true) }) { m in
             EmojiMorePicker { emoji in react(m, emoji) }
         }
-        .alert("Report this channel?", isPresented: $confirmChannelReport) {
-            Button("Report", role: .destructive) {
-                Task { await ChatService.report(reportedUid: "", cid: cid, reason: "channel") }
-                showJumpToast("Thanks. Fariin's moderators will review this channel.")
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { Text("No one in the channel will know about this report.") }
+        // The report sheet (owner 2026-11-08) for a channel post or a group message.
+        .sheet(item: $reportSheet) { ReportSheet(target: $0) }
         .sheet(item: $channelReactTarget, onDismiss: { CMOverlay.current?.dismiss(animated: true) }) { m in
             let live = repo.items.first(where: { $0.id == m.id }) ?? m
             ChannelReactSheet(offered: channelOffered, counts: channelCounts(live), mine: myReaction(live),
@@ -4614,12 +4609,23 @@ struct ThreadView: View {
                 togglePin(m)
             })
         }
-        // ⛔ REPORT CHANNEL ON A POST (owner 2026-11-01): public, private and restricted alike, for
-        // anyone who does not run the channel. It reports the channel, as its page does. Channels
-        // are not end-to-end encrypted, so the note against Report on a message is about 1:1 chats.
+        // ⛔ REPORT ON A POST (owner 2026-11-01): public, private and restricted alike, for anyone
+        // who does not run the channel. Since 2026-11-08 it reports the POST (kind "post"; the server
+        // copies its words, channels are not end-to-end encrypted) through the report sheet.
         if let conv = conversation, conv.isChannel, !conv.isOwner(me), !conv.admins.contains(me) {
-            out.append(CMAction(title: "Report", icon: "exclamationmark.octagon", badge: "chatMenu.report") {
-                confirmChannelReport = true
+            out.append(CMAction(title: "Report", icon: ReportIcon.symbol, badge: "chatMenu.report") {
+                reportSheet = ReportTarget(kind: .post, cid: cid, mid: m.id, name: conv.title)
+            })
+        }
+        // REPORT ON A GROUP MESSAGE (2026-11-08, contract v2.1 #1): someone else's message in a group
+        // I am in. Its words go to the review team only if the reporter leaves "Share this message"
+        // on, and only this one message. 1:1 messages still have no Report (see the note above).
+        if let conv = conversation, conv.isGroup, !conv.isChannel, !conv.groupNoReport,
+           m.authorId != me, !m.authorId.isEmpty, m.type != "system" {
+            let who = conv.names[m.authorId].flatMap { $0.isEmpty ? nil : $0 } ?? ""
+            out.append(CMAction(title: "Report", icon: ReportIcon.symbol, badge: "chatMenu.report") {
+                reportSheet = ReportTarget(kind: .message, cid: cid, mid: m.id, personUid: m.authorId,
+                                           name: who, messageText: m.text.isEmpty ? nil : m.text, muteCid: cid)
             })
         }
         out.append(contentsOf: deleteOrTimerRow(m))

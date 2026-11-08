@@ -199,6 +199,7 @@ struct GroupInfoView: View {
     @State private var following = false   // a Follow from this page on its way
     @State private var deletingChannel = false   // Delete Channel sent, the server not answered yet
     @State private var confirmChannelReport = false
+    @State private var channelReport: ReportTarget?   // the report sheet (2026-11-08)
     @State private var confirmUnfollow = false
     private var pageBackground: Color { Color(uiColor: .systemGroupedBackground) }
     /// The group's photo, only when there is a real one: it decides the big header and the colour.
@@ -718,8 +719,10 @@ struct GroupInfoView: View {
     }
 
     private func reportChannel() {
-        Task { await ChatService.report(reportedUid: "", cid: cid, reason: "channel") }
-        flashNotice("Thanks. Fariin's moderators will review this channel.")
+        let title = conv?.title ?? ""
+        channelReport = ReportTarget(kind: .channel, cid: cid, name: title,
+                                     leaveTitle: ChannelFollows.shared.follows(cid) ? "Leave Channel" : nil,
+                                     onLeave: { unfollowNow(report: false) })
     }
 
     @ViewBuilder private var memberCards: some View {
@@ -1162,7 +1165,7 @@ struct GroupInfoView: View {
                                        tint: Self.exitRed, chevron: false) { confirmUnfollow = true }
                         if conv?.groupNoReport != true {
                             rowDivider
-                            ProfileInfoRow(title: "Report Channel", icon: "exclamationmark.octagon", tint: Self.exitRed, chevron: false) { confirmChannelReport = true }
+                            ProfileInfoRow(title: "Report Channel", icon: ReportIcon.symbol, tint: Self.exitRed, chevron: false) { reportChannel() }
                         }
                     } else {
                         ProfileInfoRow(title: following ? "Following…" : "Follow Channel", icon: "person.badge.plus",
@@ -1178,11 +1181,9 @@ struct GroupInfoView: View {
                 } message: { Text("Are you sure you want to leave “\(conv?.title ?? "this channel")”? You'll stop getting its posts.") }
                 // Apple's centred system alert (owner 2026-10-29: "use the real Apple design"), not a
                 // confirmation dialog, which iOS 26 draws as a bubble pointing at the row.
-                .alert("Report this channel?", isPresented: $confirmChannelReport) {
-                    Button("Report and Leave", role: .destructive) { unfollowNow(report: true) }
-                    Button("Report") { reportChannel() }
-                    Button("Cancel", role: .cancel) {}
-                } message: { Text("No one in the channel will know about this report.") }
+                // The report sheet (owner 2026-11-08); its thanks page offers Leave Channel, which
+                // was the alert's "Report and Leave".
+                .sheet(item: $channelReport) { ReportSheet(target: $0) }
             } else if !iAmMember {
                 // A group I left (owner 2026-10-25, "make leave work like the reference app"): no
                 // Leave, Report, End or Delete for a group I am not in. A public one can be joined
@@ -1205,7 +1206,7 @@ struct GroupInfoView: View {
                 // And not on a group the admin panel marked (owner 2026-10-26: official groups).
                 if !(iAmAdmin || iAmOwner), conv?.groupNoReport != true {
                     rowDivider
-                    ProfileInfoRow(title: "Report Spam", icon: "exclamationmark.octagon", tint: Self.exitRed, chevron: false) { confirmReport = true }
+                    ProfileInfoRow(title: "Report Group", icon: ReportIcon.symbol, tint: Self.exitRed, chevron: false) { confirmReport = true }
                 }
             }
             .profileSurface(plain: cardColor)
@@ -2132,6 +2133,7 @@ private struct GroupInfoExits: ViewModifier {
     /// The owner's "Choose Another Owner" (owner 2026-10-25), and whether it handed the group over.
     @State private var pickOwner = false
     @State private var handedOver = false
+    @State private var reportSheet: ReportTarget?
 
     private var iOwnIt: Bool { conv.map { !$0.createdBy.isEmpty && $0.createdBy == me } ?? false }
 
@@ -2225,24 +2227,18 @@ private struct GroupInfoExits: ViewModifier {
                     }
                 }
             } message: { Text("Nobody will be able to send messages or start calls, and invite links stop working. Messages stay. This can't be undone.") }
-            .alert("Report Spam?", isPresented: $confirmReport) {
-                // Report and Leave also blocks: nobody in the group can add me back (what the old
-                // Block Group row did). Joining again by a link stays my own choice.
-                Button("Report and Leave", role: .destructive) {
-                    let target = reportTarget
-                    // The report lands while I am still a member, then I leave.
-                    run {
-                        await ChatService.report(reportedUid: target, cid: cid, reason: "group")
-                        try await ChatService.blockGroup(cid: cid)
-                    }
-                }
-                Button("Report") {
-                    let target = reportTarget
-                    Task { await ChatService.report(reportedUid: target, cid: cid, reason: "group") }
-                    onReported()
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: { Text("The group will be reported to moderators for review. If you leave too, nobody in it can add you back.") }
+            // The report sheet (owner 2026-11-08) replaced the "Report Spam?" alert. Its thanks page
+            // offers Leave, which is the old "Report and Leave": it also blocks, so nobody in the
+            // group can add me back (ChatService.blockGroup). The report lands while I am a member.
+            .onChange(of: confirmReport) { _, on in
+                guard on else { return }
+                confirmReport = false
+                let title = conv?.displayName(me) ?? "this group"
+                reportSheet = ReportTarget(kind: .group, cid: cid, name: title, muteCid: cid,
+                                           leaveTitle: "Leave \(title)",
+                                           onLeave: { run { try await ChatService.blockGroup(cid: cid) } })
+            }
+            .sheet(item: $reportSheet) { ReportSheet(target: $0) }
             .alert(conv?.isChannel == true ? "Delete Channel?" : "Delete Group?", isPresented: $confirmDelete) {
                 Button("Cancel", role: .cancel) {}
                 Button("Delete for Everyone", role: .destructive) {

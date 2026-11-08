@@ -868,6 +868,7 @@ struct PostThreadSheet: View {
     @State private var answering: ReplyTarget?
     @State private var editing: ReplyEdit?
     @State private var reporting: (PostReply, String?)?
+    @State private var reportSheet: ReportTarget?   // the report sheet (2026-11-08)
     @State private var banning: (PostReply, String?)?
     @State private var toast: String?
     @State private var quotesShown = false
@@ -957,12 +958,9 @@ struct PostThreadSheet: View {
         // `presenting:` hands each button the item itself (2026-11-06 audit: reading the state in the
         // action could find it already cleared by the dialog closing).
         // The system alert in the middle of the screen, not a popover over the row (owner 2026-11-07).
-        .alert("Report this reply?", isPresented: reportingShown, presenting: reporting) { item in
-            ForEach(Self.reasons, id: \.0) { key, label in
-                Button(label) { Task { show(await model.report(item.0, thread: item.1, reason: key) ? "Thanks. We'll take a look." : "Couldn't send the report.") } }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
+        // The report sheet (owner 2026-11-08) replaced the reason alert: `reportContent` kind "reply",
+        // which runs reportReply's own code on the server (one per person, the hold at 3).
+        .sheet(item: $reportSheet) { ReportSheet(target: $0) }
         .alert("Remove this person?", isPresented: banningShown, presenting: banning) { item in
             Button("Delete and Ban", role: .destructive) { Task { show(await model.ban(item.0, thread: item.1, all: false) ? "Removed and banned." : "Couldn't do that.") } }
             Button("Ban and Delete All Their Replies", role: .destructive) { Task { show(await model.ban(item.0, thread: item.1, all: true) ? "Banned. Their replies are gone." : "Couldn't do that.") } }
@@ -978,6 +976,13 @@ struct PostThreadSheet: View {
     ]
 
     private var reportingShown: Binding<Bool> { Binding(get: { reporting != nil }, set: { if !$0 { reporting = nil } }) }
+    /// Opens the report sheet for a reply. A Creator reply is the channel's own voice, so it offers
+    /// no Block.
+    private func openReport(_ r: PostReply, _ thread: String?) {
+        let person = r.creator ? "" : (r.uid ?? "")
+        reportSheet = ReportTarget(kind: .reply, targetId: thread ?? r.id, cid: cid, mid: mid,
+                                   aid: thread == nil ? "" : r.id, personUid: person, name: r.name)
+    }
     private var banningShown: Binding<Bool> { Binding(get: { banning != nil }, set: { if !$0 { banning = nil } }) }
 
     private func show(_ text: String) {
@@ -1309,7 +1314,7 @@ struct PostThreadSheet: View {
                 if let to = r.toId, let t = thread { Task { await model.jumpTo(to, inThread: t) } }
             } : nil,
             delete: r.canDelete ? { Task { await model.delete(r, thread: thread) } } : nil,
-            report: r.mine ? nil : { reporting = (r, thread) },
+            report: r.mine ? nil : { openReport(r, thread) },
             ban: (model.may.ban && !r.mine) ? { banning = (r, thread) } : nil,
             retry: r.send == .failed ? { model.retry(r, thread: thread) } : nil,
             discard: r.send == .failed ? { model.discard(r, thread: thread) } : nil,

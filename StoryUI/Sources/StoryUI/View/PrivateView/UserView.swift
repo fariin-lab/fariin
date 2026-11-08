@@ -206,7 +206,8 @@ struct UserView: View {
                     NotificationCenter.default.post(name: .init("storyActionHide"), object: nil)
                 })
                 if StoryGroupStaffSeam.noReport?(userId) != true {
-                    out.append(.init(title: "Report", systemImage: "exclamationmark.bubble", assetImage: "ic_report",
+                    // The one Report icon (owner 2026-11-08): SF exclamationmark.bubble, no asset.
+                    out.append(.init(title: "Report", systemImage: "exclamationmark.bubble",
                                      destructive: true) {
                         NotificationCenter.default.post(name: .init("storyActionReport"), object: nil)
                     })

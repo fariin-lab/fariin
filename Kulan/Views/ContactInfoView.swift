@@ -158,6 +158,7 @@ struct ContactInfoView: View {
     @State private var chatExportError: String?
     @State private var showBlock = false
     @State private var showReport = false
+    @State private var reportTarget: ReportTarget?   // the report sheet (2026-11-08)
     /// The Delete Chat confirmation on a blocked person's page. Deleting a conversation cannot be
     /// undone from here, so it asks first, the same way the chat list's own delete does.
     @State private var showDeleteChat = false
@@ -627,7 +628,7 @@ struct ContactInfoView: View {
             // blocked". The blocked page is Delete Chat and Unblock and nothing else.
             if !blocked {
                 rowDivider
-                infoRow("Report \(shownName)", "ic_report", tint: .red, chevron: false) { showReport = true }
+                infoRow("Report \(shownName)", ReportIcon.symbol, tint: .red, chevron: false) { openReport() }
             }
         }
         .profileSurface(plain: cardColor)
@@ -1411,29 +1412,9 @@ struct ContactInfoView: View {
                             flashShareToast(Self.reportedNote)
                         },
                        ])
-            // Cut to one sentence alongside the Block dialog above, and for the same reason. The 24
-            // hours went with it: it was a promise about how fast a human answers, made by a screen
-            // that has no way to keep it.
-            .darkAlert("Report \(shownName)?",
-                       message: "Reported accounts are reviewed by our team. They are not told.",
-                       isPresented: $showReport,
-                       actions: [
-                        .cancel(),
-                        .destructive("Report") {
-                            Task { await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user") }
-                            flashShareToast(Self.reportedNote)
-                        },
-                        .destructive("Report and Block") {
-                            blocked = true
-                            Task {
-                                await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user")
-                                if !(await ChatService.setBlocked(cid, true)) {
-                                    await MainActor.run { blocked = false; blockFailed = true }
-                                }
-                            }
-                            flashShareToast(Self.reportedNote)
-                        },
-                       ])
+            // The report sheet (owner 2026-11-08): reasons, a confirm page with Block, and a thanks
+            // page with Mute. It replaced the two-button Report alert.
+            .sheet(item: $reportTarget) { ReportSheet(target: $0) }
             // ⛔ THE PAGE CLOSES AFTER THE DELETE. What he was looking at is a conversation that no
             // longer has a row on his list, so leaving him on it would mean the only way back is a
             // back button into a list that no longer holds the thing he came from.
@@ -1697,6 +1678,14 @@ struct ContactInfoView: View {
 
     // One tappable row: icon, title, optional trailing value, chevron. `tint` colors icon+title.
     // The row itself is `ProfileInfoRow`, shared with the group info page.
+    /// The report sheet for this person. Mute is offered when we have a chat to mute.
+    private func openReport() {
+        let hasChat = ConversationsRepository.shared.conversations.contains { $0.id == cid }
+        reportTarget = ReportTarget(kind: .user, targetId: otherUid, cid: cid, personUid: otherUid,
+                                    name: shownName, muteCid: hasChat ? cid : nil,
+                                    onBlocked: { blocked = true })
+    }
+
     private func infoRow(_ title: String, _ icon: String, value: String? = nil,
                          tint: Color = .primary, chevron: Bool = true, badge: String? = nil,
                          action: @escaping () -> Void) -> some View {

@@ -645,6 +645,7 @@ struct PublicGroupInfoView: View {
     @State private var followError: String?
     @State private var confirmReport = false
     @State private var reported = false
+    @State private var reportSheet: ReportTarget?
     /// "Following <name>  Undo" for 5 s after Follow, as the reference app does.
     @State private var undoShown = false
     @State private var shareText: String?
@@ -910,10 +911,7 @@ struct PublicGroupInfoView: View {
             }
         }
         .tint(.primary)
-        .alert("Report this channel?", isPresented: $confirmReport) {
-            Button("Cancel", role: .cancel) {}
-            Button("Report", role: .destructive) { report() }
-        } message: { Text("Fariin's moderators will review it.") }
+        .sheet(item: $reportSheet) { ReportSheet(target: $0) }
     }
 
     private func channelCard(_ icon: String, _ label: String, tint: Color = .primary) -> some View {
@@ -932,9 +930,9 @@ struct PublicGroupInfoView: View {
     /// and its "Created …" line under it.
     @ViewBuilder private var channelFoot: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ProfileInfoRow(title: reported ? "Reported" : "Report Channel", icon: "exclamationmark.octagon",
+            ProfileInfoRow(title: reported ? "Reported" : "Report Channel", icon: ReportIcon.symbol,
                            tint: reported ? .secondary : GroupInfoView.exitRed, chevron: false) {
-                if !reported { confirmReport = true }
+                if !reported { report() }
             }
             .profileSurface(plain: Color(.secondarySystemGroupedBackground))
             if p.createdAt > 0 {
@@ -993,11 +991,10 @@ struct PublicGroupInfoView: View {
         }
     }
 
+    /// The report sheet (owner 2026-11-08). "Reported" once it has been filed.
     private func report() {
-        reported = true
-        let cid = p.cid
-        Task { await ChatService.report(reportedUid: "", cid: cid, reason: "channel") }
-        ToastNotice.show("Thanks. Fariin's moderators will review this channel.")
+        reportSheet = ReportTarget(kind: .channel, cid: p.cid, name: p.title,
+                                   onReported: { reported = true })
     }
 
     private var actionsRow: some View {

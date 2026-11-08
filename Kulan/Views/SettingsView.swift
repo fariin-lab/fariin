@@ -1499,6 +1499,8 @@ struct PrivacySettingsView: View {
                         Text("\(blockedCount)").foregroundStyle(.secondary)
                     }
                 }
+                // The reports I sent and what came of them (report flow v2, 2026-11-08).
+                NavigationLink { MyReportsView() } label: { Text("My Reports") }
             }
 
             // 1:1 audit r2 G3 + G4, 2026-10-08. Read by CallService (`calls.alwaysRelay`) and
