@@ -2087,6 +2087,10 @@ struct ThreadView: View {
                                 guard case .success = result else { return }
                                 handlePickedFile(result)
                                 attachFiles = false
+                            },
+                            onPickedPhotos: { assets in
+                                attachFiles = false
+                                sendPhotosAsFiles(assets)
                             })
                 .modifier(EdgeSwipeBack { attachReopen = true; attachFiles = false })
                 .presentationDragIndicator(.visible)
@@ -7187,6 +7191,27 @@ struct ThreadView: View {
     private func handlePickedFile(_ result: Result<[URL], Error>) {
         guard case .success(let urls) = result, let url = urls.first else { return }
         Task { await sendDocument(url) }
+    }
+    /// Add files > Photos (owner 2026-11-08): each picked photo goes out as its OWN file message, in
+    /// the order it was ticked, through the same path as Upload files, so size limits, the pending
+    /// bubble, retry and Recent all behave the same. One after another, so the order holds.
+    private func sendPhotosAsFiles(_ assets: [PHAsset]) {
+        guard !assets.isEmpty else { return }
+        Task {
+            var failed = 0
+            for asset in assets {
+                guard let url = await PhotoFileExport.export(asset) else { failed += 1; continue }
+                await sendDocument(url)
+                PhotoFileExport.cleanup(url)
+            }
+            if failed > 0 {
+                let n = failed
+                await MainActor.run {
+                    sendError = n == 1 ? "A photo couldn't be opened. It may still be downloading from iCloud."
+                                       : "\(n) photos couldn't be opened. They may still be downloading from iCloud."
+                }
+            }
+        }
     }
     private func sendDocument(_ url: URL) async {
         // Demo: as sendPhoto — no local representation for media, so no-op (audit).
