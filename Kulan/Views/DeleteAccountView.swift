@@ -112,14 +112,9 @@ struct DeleteAccountView: View {
     private var reasonPage: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
-                Image(systemName: "heart.fill")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 48, height: 48)
-                    .background(Color.accentColor.opacity(0.12), in: Circle())
-                    .padding(.bottom, 6)
-                    .accessibilityHidden(true)
+                // No heart icon above the title (owner 2026-11-08: "remove that icon").
                 Text("We're sorry to see you go").font(.title2.weight(.bold))
+                    .padding(.trailing, 48)   // clear of the X at the top right
                 Text("Tell us what happened so we can do better. Your answer goes only to the Fariin team.")
                     .font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
