@@ -476,6 +476,9 @@ struct Message: Identifiable, Equatable, Codable {
     /// A "<name> asked to turn off Restricted chat" notice (2026-10-03). Tapping it lets the person
     /// it was asked of accept or decline, while the request on the chat is still pending.
     var isRestrictRequest = false
+    /// A channel post's number in its channel (server `postSeq`, 1, 2, 3...: onNewMessage counts every
+    /// post since 2026-10-28). Its share link uses it (`ChannelPostLink`). Nil on older posts.
+    var postSeq: Int? = nil
     /// ⛔ A CHANNEL POST'S NUMBERS TRAVEL WITH THE CACHED MESSAGE (owner 2026-11-06: after a restart a
     /// channel opened with no reactions and views of 1, and they popped in once the server answered).
     /// Kept in ONE optional, so every cache written before this still decodes (synthesized Codable
@@ -908,6 +911,7 @@ struct Message: Identifiable, Equatable, Codable {
         case callerUid, callOutcome, callVideo, callDuration, callJoinedUids, callRungUids
         case quoteId, bubbleStyle, bubbleDecor, boldSpans
         case countsStore   // a channel post's views, reactions and quotes (owner 2026-11-06)
+        case postSeq   // a channel post's number, for its link (owner 2026-11-12)
         case sealUnreadable   // owner 2026-11-10: a cold open must hide old locks on its first frame too
         case edited, deleted, deletedBy, forwarded, forwardSource, clientTs, linkPreview, hasServerTime, uploading, albumSizes
         case expiresAt   // owner audit 2026-10-06 chat #21: a cold open must know what has already expired
@@ -1013,6 +1017,7 @@ struct Message: Identifiable, Equatable, Codable {
                 return f.isEmpty ? nil : f
             }())
         self.countsStore = pc == PostCounts() ? nil : pc
+        self.postSeq = ((data["postSeq"] as? NSNumber)?.intValue).flatMap { $0 > 0 ? $0 : nil }
         self.deleted = data["deleted"] as? Bool ?? false
         self.deletedBy = data["deletedBy"] as? String   // 2026-09-24 feature-audit
         self.forwarded = data["forwarded"] as? Bool ?? false

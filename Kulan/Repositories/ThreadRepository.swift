@@ -1591,8 +1591,10 @@ final class ThreadRepository {
         let once: Bool = data["consumed"] as? Bool ?? false
         // Bold spans (`fmt`): an edit may change only them.
         let fmt: String = data["fmt"] as? String ?? ""
+        // The ninth: a channel post's number lands just after the post (onNewMessage), for its link.
+        let seq: Int = (data["postSeq"] as? NSNumber)?.intValue ?? 0
         let parts: [String] = [off, String(replies), String(quotes),
-                               rf.joined(separator: ","), qf.joined(separator: ","), String(once), fmt]
+                               rf.joined(separator: ","), qf.joined(separator: ","), String(once), fmt, String(seq)]
         return parts.joined(separator: "|")
     }
 

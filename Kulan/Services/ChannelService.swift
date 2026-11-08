@@ -954,3 +954,109 @@ enum ChannelAdminInvites {
         }
     }
 }
+
+// MARK: - A channel post's own link (owner 2026-11-08)
+
+/// ⛔ "COPY LINK" ON A CHANNEL POST (owner 2026-11-08: "when I send a user the post link, show a
+/// preview of the post"). The reference app's two shapes:
+///   https://fariin.com/<name>/<post>     a public channel, by its @name: anyone can open it
+///   https://fariin.com/c/<cid>/<post>    a private one: it opens only for members and followers
+/// <post> is the post's NUMBER in its channel (owner 2026-11-12: fariin.com/vee/1, /vee/2), the
+/// server's `postSeq`. A post from before the numbers (2026-10-28) has none and uses its id; links
+/// made with an id before the numbers keep working. A number is all digits, an id never is.
+/// Opened in the app, it goes to the channel and to the post (`pendingMessageId`, the jump a quote
+/// uses). Sent in a chat, the bubble shows the post itself: the sender's phone quotes it
+/// (`ThreadView.sendPostLink`), so the card is the quote card, checked per reader by the server.
+@MainActor enum ChannelPostLink {
+    struct Target: Equatable { var name: String?; var cid: String?; var mid: String }
+
+    /// The link for one post, or nil when it cannot have one (not a channel, an unsent post).
+    static func link(_ conv: Conversation, post: Message) -> String? {
+        if let n = post.postSeq, n > 0 { return link(conv, ref: String(n)) }
+        return isNumber(post.id) ? nil : link(conv, ref: post.id)
+    }
+
+    private static func link(_ conv: Conversation, ref: String) -> String? {
+        guard conv.isChannel, KulanApp.safeSegment(ref),
+              let m = ref.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return nil }
+        if conv.isPublic, !conv.publicName.isEmpty { return "\(KulanApp.linkHost)/\(conv.publicName)/\(m)" }
+        guard KulanApp.safeSegment(conv.id),
+              let c = conv.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return nil }
+        return "\(KulanApp.linkHost)/c/\(c)/\(m)"
+    }
+
+    static func target(in url: URL) -> Target? {
+        guard case .post(let name, let cid, let mid)? = KulanApp.route(from: url) else { return nil }
+        return Target(name: name, cid: cid, mid: mid)
+    }
+
+    /// The first post link in a message's words, or nil.
+    static func first(in text: String) -> Target? {
+        guard text.range(of: "fariin.com/", options: .caseInsensitive) != nil else { return nil }
+        let edges = CharacterSet(charactersIn: ".,;:!?()[]{}<>\"'")
+        for token in text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }) {
+            var s = String(token).trimmingCharacters(in: edges)
+            guard s.range(of: "fariin.com/", options: .caseInsensitive) != nil else { continue }
+            if s.lowercased().hasPrefix("http://") { s = "https://" + s.dropFirst(7) }
+            if !s.lowercased().hasPrefix("https://") { s = "https://" + s }
+            if let u = URL(string: s), let t = target(in: u) { return t }
+        }
+        return nil
+    }
+
+    /// The channel a link names: its id as written, or its @name looked up.
+    static func cid(for t: Target) async -> String? {
+        if let c = t.cid { return c }
+        guard let n = t.name else { return nil }
+        if case .group(let c) = await GroupDirectory.resolve(n) { return c }
+        return nil
+    }
+
+    /// A post number rather than an id: digits only (ids are never only digits).
+    static func isNumber(_ s: String) -> Bool {
+        s.range(of: "^[0-9]{1,9}$", options: .regularExpression) != nil
+    }
+
+    /// The post's id: as written, or its number looked up in the channel (one read; the read rule
+    /// is the channel's own, so a visitor of a public channel gets it and a stranger to a private
+    /// one does not). `local` is the posts this phone holds, checked first.
+    static func mid(for t: Target, cid: String, local: [Message] = []) async -> String? {
+        guard isNumber(t.mid), let n = Int(t.mid) else { return t.mid }
+        if let m = local.first(where: { $0.postSeq == n }) { return m.id }
+        guard KulanApp.safeSegment(cid) else { return nil }
+        let q = Firestore.firestore().collection("conversations").document(cid).collection("messages")
+            .whereField("postSeq", isEqualTo: n).limit(to: 1)
+        guard let snap = try? await q.getDocuments(), let d = snap.documents.first else { return nil }
+        return d.documentID
+    }
+
+    /// Opens the channel at the post. False when the link names no channel this phone can find.
+    static func open(_ t: Target, push: Bool) async -> Bool {
+        guard let cid = await cid(for: t) else { return false }
+        // A number is turned into the post's id now; one that cannot be found still opens the channel.
+        var t = t
+        if isNumber(t.mid) { t.mid = await mid(for: t, cid: cid) ?? "" }
+        let me = AuthService.shared.uid ?? ""
+        let r = AppRouter.shared
+        // The channel already on screen took the tap itself (ThreadView.openPostLink).
+        if r.activeChatId == cid { return true }
+        r.pendingMessageId = t.mid.isEmpty ? nil : t.mid
+        // Spent by the channel's ThreadView as it opens; one that never opens (refused, private)
+        // must not wait for the next chat.
+        let mid = t.mid
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            if AppRouter.shared.pendingMessageId == mid { AppRouter.shared.pendingMessageId = nil }
+        }
+        let mine = ConversationsRepository.shared.conversations.first { $0.id == cid && ($0.users.contains(me) || $0.isFollower(me)) }
+            ?? ChannelFollows.shared.conversations.first { $0.id == cid }
+        if let mine {
+            GroupDirectory.openChat(cid, title: mine.title, photo: mine.avatarUrl, push: push)
+            return true
+        }
+        // Not mine: the channel's page (a public one shows its posts to visitors), the same door as
+        // its @name link.
+        GroupDirectory.open(cid: cid, name: t.name, push: push)
+        return true
+    }
+}

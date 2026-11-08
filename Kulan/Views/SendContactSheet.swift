@@ -24,6 +24,11 @@ struct SendContactSheet: View {
     /// this sheet too). Re-encrypted for each chat by `ChatService.forwardMessage`, oldest first.
     var forwardMessages: [Message] = []
     var sourceCid: String = ""
+    /// A channel post's share (owner 2026-11-12): starts the post's quote and returns its token
+    /// (`QuoteStore.start`). Each chat picked gets `contactText` (the post's link) carrying the quote,
+    /// so the bubble shows the post: channel photo and name, its words and picture. A quote that
+    /// cannot be made (Quotes off, offline) sends the link with its plain card instead.
+    var postQuote: (() -> String)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var repo = ConversationsRepository.shared
@@ -464,7 +469,10 @@ struct SendContactSheet: View {
         dismiss()
         // The profile card travels with the message, as it does when the same link is typed in a
         // chat (owner, 2026-09-30). Built when the sheet opened, so this is normally a cache read.
-        let preview = await cardPreview()
+        var qid: String? = nil
+        if let postQuote { qid = (try? await QuoteStore.shared.made(postQuote()))?.qid }
+        let quote = qid
+        let preview = quote == nil ? await cardPreview() : nil
         // Every chat at once: the wait is the slowest one, not all of them added together.
         var reached: [String] = []
         await withTaskGroup(of: String?.self) { tasks in
@@ -477,7 +485,7 @@ struct SendContactSheet: View {
                             }
                         } else {
                             try await ChatService.sendText(cid: target.cid, text: text,
-                                                           group: target.group, preview: preview)
+                                                           group: target.group, preview: preview, quote: quote)
                         }
                         return target.cid
                     } catch {
