@@ -597,9 +597,7 @@ struct CallView: View {
             // Once the call is connected; it opens the Add people sheet, which moves the call to a
             // group call (`CallService.moveToGroup`). Before that the space stays empty so the name
             // keeps its centre (Share Screen moved down into the control bar, 2026-10-22).
-            // 2026-11-08: only when the other phone can follow the move (`caps` says "move1"). An
-            // older build or the Android app was left on a dead 1:1 with no mic.
-            if connectedCall, call.peerHasMove1 {
+            if connectedCall {
                 Button { buzz(); showAddPeople = true } label: { topCircle("person.badge.plus") }
                     .buttonStyle(CallControlStyle())
                     .accessibilityLabel("Add people")

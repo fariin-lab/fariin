@@ -221,7 +221,6 @@ struct GroupCallParticipantsSheet: View {
         if service.joinedUids.contains(uid) { return "Left" }
         if service.declinedUids.contains(uid) { return "Declined" }
         if service.busyUids.contains(uid) { return "Busy" }
-        if !service.carriedJoining(at: Date()).filter({ $0.uid == uid }).isEmpty { return "Joining…" }   // 2026-11-08
         return ringing.contains(uid) ? "Ringing…" : "Didn't join"
     }
 
