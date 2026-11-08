@@ -4,7 +4,7 @@ import AuthenticationServices
 
 // Account deletion as a short sheet (owner 2026-11-07, who asked for it simpler than the old long
 // page plus "Deletion Scheduled" page). Two steps in one sheet:
-//   1. "Why are you leaving?": one optional reason, with a short note for "Other reason".
+//   1. "We're sorry to see you go": one required reason, and a required note for "Other reason".
 //   2. "Delete @handle?": three plain lines, a way to take your data first, and the red button.
 // The red button proves it is you (the sign-in door this account uses), schedules the deletion on
 // the server, signs out and lands straight on the log in screen, where a small banner names the
@@ -91,35 +91,47 @@ struct DeleteAccountView: View {
 
     // One way out on both steps (owner rule, same as Android): no corner button, only the plain
     // Cancel under the main button. Dragging the sheet down still closes it.
+    // A reason is required (owner 2026-11-08): Continue stays grey until one is picked, and for
+    // "Other reason" until the note has words in it.
     private var reasonPage: some View {
         VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Why are you leaving?").font(.title2.weight(.bold))
-                Text("Optional. It helps us make Fariin better.")
+            VStack(alignment: .leading, spacing: 6) {
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 48, height: 48)
+                    .background(Color.accentColor.opacity(0.12), in: Circle())
+                    .padding(.bottom, 6)
+                    .accessibilityHidden(true)
+                Text("We're sorry to see you go").font(.title2.weight(.bold))
+                Text("Tell us what happened so we can do better. Your answer goes only to the Fariin team.")
                     .font(.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             VStack(spacing: 0) {
                 ForEach(Array(LeaveReason.allCases.enumerated()), id: \.element) { i, r in
-                    if i > 0 { Divider().padding(.leading, 16) }
+                    if i > 0 { Divider().padding(.leading, 52) }
                     Button {
-                        withAnimation(.snappy) { reason = (reason == r) ? nil : r }   // a second tap clears it
+                        withAnimation(.snappy(duration: 0.22)) { reason = r }
                     } label: {
-                        HStack {
+                        // The radio sits at the leading edge on every row, so the text column is
+                        // the same width picked or not and never re-wraps.
+                        HStack(spacing: 14) {
+                            RadioMark(on: reason == r)
                             Text(r.label).foregroundStyle(.primary).multilineTextAlignment(.leading)
-                            Spacer(minLength: 8)
-                            if reason == r {
-                                Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(Color.accentColor)
-                            }
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .padding(.horizontal, 16).frame(minHeight: 48)
+                        .padding(.horizontal, 16).padding(.vertical, 12).frame(minHeight: 48)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityAddTraits(reason == r ? [.isSelected] : [])
                 }
                 if reason == .other {
                     Divider().padding(.leading, 16)
-                    TextField("Tell us more (optional)", text: $otherText, axis: .vertical)
+                    TextField("Tell us more", text: $otherText, axis: .vertical)
                         .lineLimit(2...5)
                         .padding(.horizontal, 16).padding(.vertical, 12)
                         .onChange(of: otherText) { _, v in
@@ -130,18 +142,35 @@ struct DeleteAccountView: View {
             .background(Color(uiColor: .secondarySystemGroupedBackground),
                         in: RoundedRectangle(cornerRadius: 18, style: .continuous))
 
+            if reason == .abusive {
+                Text("You can also report someone from their profile, or block them, without leaving.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 4)
+                    .transition(.opacity)
+            }
+
             VStack(spacing: 6) {
                 Button { withAnimation(.snappy) { showConfirm = true } } label: {
                     Text("Continue").fontWeight(.semibold)
                         .frame(maxWidth: .infinity).frame(height: 52)
                         .foregroundStyle(Color.onFariinAction)
                         .background(Color.fariinAction, in: Capsule())
+                        .opacity(canContinue ? 1 : 0.35)
                 }
                 .buttonStyle(.plain)
+                .disabled(!canContinue)
                 Button("Cancel") { dismiss() }
                     .frame(maxWidth: .infinity).frame(height: 44)
             }
         }
+    }
+
+    private var trimmedOther: String { otherText.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private var canContinue: Bool {
+        guard let reason else { return false }
+        return reason != .other || !trimmedOther.isEmpty
     }
 
     // MARK: - Step 2: confirm
@@ -229,7 +258,7 @@ struct DeleteAccountView: View {
         do {
             try await verify()
             try await profile.scheduleDeletion(reasonCode: reason?.rawValue ?? "",
-                                               reasonText: reason == .other ? otherText : "")
+                                               reasonText: reason == .other ? String(trimmedOther.prefix(Self.otherLimit)) : "")
             let due = profile.me?.deletionScheduledFor
                 ?? Calendar.current.date(byAdding: .day, value: ProfileStore.gracePeriodDays, to: Date())
                 ?? Date()
@@ -281,6 +310,24 @@ struct DeleteAccountView: View {
         defer { exporting = false }
         do { exportFile = ExportFile(url: try await DataExport.accountReport()) }
         catch { self.error = error.localizedDescription }
+    }
+}
+
+/// Leading radio for the leave reasons: an empty ring, or the accent ring with a dot inside.
+/// Always the same 22pt box, so picking a row never shifts its text.
+private struct RadioMark: View {
+    var on: Bool
+    var body: some View {
+        ZStack {
+            Circle()
+                .strokeBorder(on ? Color.accentColor : Color(uiColor: .tertiaryLabel), lineWidth: on ? 2 : 1.5)
+            Circle()
+                .fill(Color.accentColor)
+                .frame(width: 11, height: 11)
+                .scaleEffect(on ? 1 : 0.01)
+                .opacity(on ? 1 : 0)
+        }
+        .frame(width: 22, height: 22)
     }
 }
 
