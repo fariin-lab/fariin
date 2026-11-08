@@ -514,7 +514,30 @@ final class CallService: NSObject {
         didSet {
             guard remoteScreenSharing != oldValue else { return }
             remoteScreenSharingSince = remoteScreenSharing ? Date() : nil
+            armRemoteShareProbe()
         }
+    }
+
+    /// ⛔ THEIR SHARE TAKES THE SCREEN ON ITS FIRST REAL FRAME (owner 2026-11-08: "sometimes the
+    /// screen becomes black", mid-call, with the full-screen share's exit button showing). The
+    /// `screen` signal says a share is on; it does not say a picture has reached this phone. A share
+    /// that failed to start, or ended without clearing its flag, put an empty stage over their photo
+    /// for the rest of the call. The same rule as their camera (`remoteFrameArrived`). Main only.
+    private(set) var remoteShareFrameArrived = false
+    private let remoteShareProbe = RemoteFrameProbe()
+    private var remoteShareProbeTrack: RTCVideoTrack?
+
+    /// Re-aimed whenever the share starts or stops, or the track carrying it changes.
+    private func armRemoteShareProbe() {
+        let track = remoteScreenSharing ? remoteShareTrack : nil
+        if track !== remoteShareProbeTrack {
+            remoteShareProbeTrack?.remove(remoteShareProbe)
+            track?.add(remoteShareProbe)
+            remoteShareProbeTrack = track
+        }
+        remoteShareFrameArrived = false
+        guard track != nil else { return }
+        remoteShareProbe.arm { [weak self] in self?.remoteShareFrameArrived = true }
     }
     /// When their share started (nil while they are not sharing), so the "is sharing" label can fade.
     private(set) var remoteScreenSharingSince: Date?
@@ -780,6 +803,8 @@ final class CallService: NSObject {
             oldValue?.remove(remoteFrameProbe)
             remoteVideoTrack?.add(remoteFrameProbe)
             waitForRemoteFrame()
+            // A fallback share rides on this track: its probe follows it.
+            if remoteScreenSharing, remoteScreenMode != "track" { armRemoteShareProbe() }
         }
     }
     /// ⛔ THEIR VIDEO TAKES THE BIG VIEW ON ITS FIRST REAL FRAME — owner 2026-11-01, frame by frame
@@ -810,10 +835,14 @@ final class CallService: NSObject {
     private(set) var peerHasScreen2 = false
     /// THEIR screen in dual mode (the second video transceiver's receiver). Their camera stays on
     /// `remoteVideoTrack`.
-    private(set) var remoteScreenTrack: RTCVideoTrack?
+    private(set) var remoteScreenTrack: RTCVideoTrack? {
+        didSet { if remoteScreenTrack !== oldValue, remoteScreenSharing { armRemoteShareProbe() } }
+    }
     /// How THEIR share is carried, from `screenMode.<them>`: "track" (dual mode, on
     /// `remoteScreenTrack`) or "camera" (fallback, on `remoteVideoTrack`). Old builds never write it.
-    private(set) var remoteScreenMode: String = "camera"
+    private(set) var remoteScreenMode: String = "camera" {
+        didSet { if remoteScreenMode != oldValue, remoteScreenSharing { armRemoteShareProbe() } }
+    }
     /// The track showing THEIR shared screen, whichever way it is carried.
     var remoteShareTrack: RTCVideoTrack? { remoteScreenMode == "track" ? remoteScreenTrack : remoteVideoTrack }
     /// MY current (or pending) share runs in dual mode. Decided when the share is asked for.

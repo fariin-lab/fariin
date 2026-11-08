@@ -403,6 +403,9 @@ struct CallView: View {
     /// when the share rides on it (fallback).
     private var stageShown: Bool {
         !showLocalFull && call.remoteScreenSharing && call.remoteShareTrack != nil
+            // Not before a picture of it has arrived: until then their photo stays (owner
+            // 2026-11-08, the black screen). See `CallService.remoteShareFrameArrived`.
+            && call.remoteShareFrameArrived
     }
     /// Fallback share: my screen replaced my camera on my one video track, so my local feed IS the
     /// screen. In dual mode (`canUseCameraWhileSharing`) my camera track stays my camera.
