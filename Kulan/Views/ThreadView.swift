@@ -508,6 +508,9 @@ struct ThreadView: View {
     /// The wait for the server window ran out (`giveUpServerAwait`, ~5 s): offline, or the tapped
     /// notification's message was deleted. `openAwaitsServer` is false from then on.
     @State private var openAwaitGaveUp = false
+    /// The first land's 1.5 s wait for the server window on a chat whose cache is behind
+    /// (`openCacheBehind`) has run out: the land goes ahead on the cached rows.
+    @State private var behindHoldSpent = false
     /// This chat was opened ON a message (the floating voice bar): captured in `init`, see there.
     @State private var openedOnFocusMessage = false
     /// The post this chat was opened to (a quote card, the voice bar), kept for the whole open. The
@@ -971,6 +974,11 @@ struct ThreadView: View {
             .task {
                 // Safety net: if didInitialLoad is slow (or the chat is genuinely empty), still reveal
                 // so the composer / empty state shows.
+                // The behind-cache hold on the first land lasts 1.5 s at most (`openCacheBehind`).
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    behindHoldSpent = true
+                }
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 if !revealed { revealAtOpenAnchor(proxy) }
                 await giveUpServerAwait(proxy)
@@ -5479,6 +5487,10 @@ struct ThreadView: View {
                 // rows do not hold, so counting back from their end names a read row. Open at the
                 // newest instead; the server's window then lands below it and the reader follows.
                 if openAwaitsServer { return nil }
+                // The same for a chat with nothing unread whose cache is behind (another of my
+                // devices read or sent): the 1.5 s hold ran out, so land at the newest, never on a
+                // saved row the server's window is about to bury.
+                if openCacheBehind { return nil }
                 if let row = unreadBoundary()?.rowId {
                     return row
                 }
@@ -5502,20 +5514,24 @@ struct ThreadView: View {
             // the reader had been. A chat has to have both an unread divider and a saved position for
             // it to bite, which is an ordinary Tuesday.
             initialScrollOffset: {
-                if focusMessageId != nil || AppRouter.shared.pendingMessageId != nil || openMid != nil { return nil }
+                if focusMessageId != nil || AppRouter.shared.pendingMessageId != nil || openMid != nil || openCacheBehind { return nil }
                 if unreadOnOpen > 0 { return nil }
                 return ChatScrollStore.shared.position(for: cid)?.offsetFromTop
             }(),
             // The top inset that offset was measured against, so the list can tell whether the bar's
             // inset has arrived before it shows the restored row (owner, 2026-10-07: the reopen jump).
             initialScrollTopInset: {
-                if focusMessageId != nil || AppRouter.shared.pendingMessageId != nil || openMid != nil { return nil }
+                if focusMessageId != nil || AppRouter.shared.pendingMessageId != nil || openMid != nil || openCacheBehind { return nil }
                 if unreadOnOpen > 0 { return nil }
                 return ChatScrollStore.shared.position(for: cid)?.topInset
             }(),
             // ⛔ THE SAVED ROW IS NOT LOADED YET: hold the first land while the `.task` pages it in,
             // so the saved tier above can win when the land finally happens. See `savedRowNeedsPaging`.
-            holdFirstLand: savedRowNeedsPaging && !savedRowPagingDone,
+            // ⛔ AND WHILE THE CACHE IS BEHIND THE CHAT, up to 1.5 s (owner 2026-11-07: a chat opened
+            // from the list drew its old rows, then the message from a quarter of an hour ago popped
+            // in). The server's window usually lands inside that, and the open then draws once, with
+            // it. See `openCacheBehind`.
+            holdFirstLand: (savedRowNeedsPaging && !savedRowPagingDone) || (openCacheBehind && !behindHoldSpent),
             // The landing hold lasts until the server's window is in (capped in the list), because a
             // cold open's window lands after a fixed second would have run out (owner, 2026-10-07).
             liveWindowSettled: repo.serverWindowSettled,
@@ -8990,7 +9006,7 @@ struct ThreadView: View {
     /// never held. A row the paging could not reach leaves this true, which is why the hold is
     /// `&& !savedRowPagingDone` at the call site: the land then goes to the newest, as before.
     private var savedRowNeedsPaging: Bool {
-        guard !quiet, !openedOnFocusMessage, openMid == nil, unreadOnOpen == 0, firstUnreadId == nil,
+        guard !quiet, !openedOnFocusMessage, openMid == nil, unreadOnOpen == 0, firstUnreadId == nil, !openCacheBehind,
               let saved = ChatScrollStore.shared.position(for: cid) else { return false }
         return !repo.items.contains(where: { $0.rowId == saved.rowId })
     }
@@ -9008,6 +9024,23 @@ struct ThreadView: View {
         guard !quiet, !repo.serverWindowSettled, !openAwaitGaveUp else { return false }
         if let mid = openMid, !repo.items.contains(where: { $0.id == mid }) { return true }
         return rowsBehindChat
+    }
+
+    /// ⛔ THE CACHED ROWS ARE OLDER THAN THE CHAT, unread or not, on every open path (owner
+    /// 2026-11-07: opened from the chat list, the message from a quarter of an hour ago was missing
+    /// and popped in a moment later). `ChatHistoryPreloader` keeps the cache current before the tap;
+    /// this is the net for what it has not reached (a channel, a chat below the top 20, a tap inside
+    /// the debounce). While true and the server's window is out, the first land is held up to 1.5 s
+    /// (`behindHoldSpent`), then goes to the newest; the window then glides in below. False with no
+    /// cached rows at all (a cold open has its own reveal) and once the server's window is in.
+    private var openCacheBehind: Bool {
+        guard !quiet, !repo.serverWindowSettled, focusMessageId == nil, !openedOnFocusMessage,
+              let conv = cachedConv, let newest = repo.items.map(\.createdAt).max() else { return false }
+        // 2s of slack: `updatedAt` is the server's clock, a pending row's `createdAt` the phone's.
+        guard conv.displayUpdatedAt(me) > newest.timeIntervalSince1970 * 1000 + 2000 else { return false }
+        // A background warm-up already found nothing newer for this `updatedAt` (a settings write):
+        // no hold, the saved position stands.
+        return !ChatHistoryPreloader.shared.knownCurrent(conv, me: me)
     }
 
     /// The second half of `openAwaitsServer`: with unread waiting, the cached rows are older than

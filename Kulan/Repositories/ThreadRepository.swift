@@ -177,7 +177,11 @@ final class ThreadRepository {
     /// bite than anybody else takes: on a fast flick the reader clears a page before the next one
     /// lands, and the wall you hit is the gap between pages rather than the network being slow.
     /// Bigger bites, fewer gaps, and the round trips per screen actually go DOWN.
-    private let pageSize = 60
+    private let pageSize: Int
+    /// A background warm-up for `ChatHistoryPreloader` (owner 2026-11-07), not a chat on screen: the
+    /// newest 30 only, merged by id into the rows the cache already holds, and none of the header's
+    /// listeners (the other person's profile and presence).
+    let warmOnly: Bool
     // The standard approach caps the in-memory window (~500) and LRU-drops the oldest — an unbounded
     // window is a memory + main-thread cost that feeds watchdog kills on huge chats. We trim on live
     // commits above a high-water mark (paging older may exceed the cap briefly; the next live commit
@@ -385,8 +389,10 @@ final class ThreadRepository {
         syncPinnedPreviews()
     }
 
-    init(cid: String) {
+    init(cid: String, warmOnly: Bool = false) {
         self.cid = cid
+        self.warmOnly = warmOnly
+        self.pageSize = warmOnly ? 30 : 60
         // ⛔ WHO THE OTHER PERSON IS, BEFORE THE FIRST SEED — owner, 2026-09-29: "You blocked / You
         // unblocked this person" vanished on coming back to a chat and returned when he reacted.
         // A warm reopen seeds from memory right here, and `blockNotices` answers nothing without
@@ -1041,7 +1047,7 @@ final class ThreadRepository {
         // A denied presence read is a normal outcome here, not an error: it is what somebody who has
         // hidden their last seen from non-contacts looks like. The snapshot simply never arrives and
         // the header shows nothing, which is exactly right.
-        if isOneToOne, !other.isEmpty {
+        if isOneToOne, !other.isEmpty, !warmOnly {
             userListener?.remove()   // same re-entry rule as the message listener above
         userListener = db.collection("users").document(other)
                 .addSnapshotListener { [weak self] snap, error in
@@ -1324,7 +1330,7 @@ final class ThreadRepository {
     // stopping, and `listenerRetries` resets to 0 the moment a live snapshot actually lands.
     private var listenerRetries = 0
     /// The message listener ended in an error and no snapshot has arrived since.
-    private var listenerFailed = false
+    private(set) var listenerFailed = false
     /// The load failed and there is nothing to show. The chat says so with a Try Again button
     /// instead of looking like an empty new chat. Rows from the cache, if any, win.
     var loadFailed: Bool { listenerFailed && messages.isEmpty && !moderationLocked && !previewOnly && !lockedGuest }
