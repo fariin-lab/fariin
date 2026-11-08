@@ -74,7 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: CHATS OPEN ON THE NEWEST MESSAGE, BUBBLE ART, REPLIES.
+            THIS BUILD: NEW REPORT FLOW, MY REPORTS, DELETE ACCOUNT SHEET.
+            Report: one sheet everywhere (profiles, groups, channels, posts, stories, replies, and someone's message in a group). Pick a reason, then a detail, then Submit. Block or Leave right there.
+            My Reports: Settings > Privacy & Security shows each report and what happened to it.
+            Block and Report: blocks, then asks why.
+            Delete account: a reason is now required, with round choices that don't move the text.
+            Story viewers sheet: the title no longer flickers.
+            PLEASE TEST: report a story and a group message; open My Reports; Block and Report someone; start Delete Account and pick each reason (then Cancel).
+
+            EARLIER: CHATS OPEN ON THE NEWEST MESSAGE, BUBBLE ART, REPLIES.
             Chats: opening a chat from the list shows the newest message straight away, no late pop-in.
             Bubble styles: the art above the bubble shows whole while a message is sending, no jump when it is delivered.
             Replies: sort by Top or Newest, answer an answer with @name, edit your reply for 15 minutes, a reply alert opens on that reply.
