@@ -3704,8 +3704,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // message back at it; a reader further up is not touched by it.
             if scrollTarget == nil, !glide { self.restoreReaderPosition() }
             // Post-land auto-load re-check, async so it is never re-entrant inside the land: a short page
-            // can leave the reader still within the load threshold.
-            DispatchQueue.main.async { [weak self] in self?.autoLoadMoreIfNeeded() }
+            // can leave the reader still within the load threshold. Past the throttle (owner 2026-11-08):
+            // a page landing inside 0.3 s of the ask that brought it lost this re-check, and the next
+            // page was never asked for. The repository still runs one fetch at a time.
+            DispatchQueue.main.async { [weak self] in self?.autoLoadMoreIfNeeded(afterLand: true) }
         }
         startGlide()   // same frame as the landed row — the completion above is only the net
         if scrollTarget == nil, !glide, !parkOwnSendForLift {
@@ -6999,7 +7001,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // Page history in when the reader gets within three screens of the OLDEST loaded row, the top of the
     // content. Throttled; there is no zone-entry debounce, a short page leaves the reader inside the zone
     // and the time throttle alone lets the chain continue until content outruns the threshold.
-    private func autoLoadMoreIfNeeded() {
+    private func autoLoadMoreIfNeeded(afterLand: Bool = false) {
         guard didReveal else { return }
         let threshold = max(72, collectionView.bounds.height * 3)
         guard collectionView.contentOffset.y - minContentOffsetY <= threshold,
@@ -7012,7 +7014,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
               // It only has to swallow a burst of identical asks in the same instant. The repository
               // already refuses a second `loadOlder` while one is in flight, so serialising was never
               // this timer's job.
-              Date().timeIntervalSince(lastLoadOlderAt) > 0.3 else { return }
+              afterLand || Date().timeIntervalSince(lastLoadOlderAt) > 0.3 else { return }
         lastLoadOlderAt = Date()
         coordinator.parent.onReachedTop()
     }
