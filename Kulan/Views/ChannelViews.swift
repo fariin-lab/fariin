@@ -370,7 +370,12 @@ struct ChannelFollowersView: View {
         _count = State(initialValue: count)
     }
 
-    struct Follower: Identifiable, Equatable { let uid: String; let name: String; let photoUrl: String?; var id: String { uid } }
+    struct Follower: Identifiable, Equatable {
+        let uid: String; let name: String; let photoUrl: String?
+        /// The @username under the name (owner 2026-11-08); empty when they have none.
+        var username: String = ""
+        var id: String { uid }
+    }
 
     /// May I remove and ban followers: the owner, or an admin holding `banUsers` (the server's test).
     private var mayRemove: Bool {
@@ -442,7 +447,12 @@ struct ChannelFollowersView: View {
                 ForEach(followerRows) { f in
                     HStack(spacing: 12) {
                         AvatarView(name: f.name, photoUrl: f.photoUrl, size: 40)
-                        Text(f.name).lineLimit(1)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(f.name).lineLimit(1)
+                            if !f.username.isEmpty {
+                                Text("@" + f.username).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
                         Spacer(minLength: 0)
                     }
                     // Only an admin who may remove people (the server now asks for `banUsers`,

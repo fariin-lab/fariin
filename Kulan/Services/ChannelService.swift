@@ -236,7 +236,8 @@ enum ChannelService {
         let rows = (d["followers"] as? [[String: Any]] ?? []).compactMap { f -> ChannelFollowersView.Follower? in
             guard let uid = f["uid"] as? String, !uid.isEmpty else { return nil }
             let p = f["photoUrl"] as? String ?? ""
-            return .init(uid: uid, name: f["name"] as? String ?? "Fariin user", photoUrl: p.isEmpty ? nil : p)
+            return .init(uid: uid, name: f["name"] as? String ?? "Fariin user", photoUrl: p.isEmpty ? nil : p,
+                         username: f["username"] as? String ?? "")
         }
         return (rows, d["more"] as? Bool ?? false)
     }
