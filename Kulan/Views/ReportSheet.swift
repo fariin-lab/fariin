@@ -169,12 +169,16 @@ struct ReportSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     private enum Page: Hashable {
+        case reasons
         case subs(String)                 // a category's sub-reasons
         case confirm(String, String?)     // category, sub
         case done(String, String?)
     }
 
-    @State private var path: [Page] = []
+    /// The pages walked so far; the last one is on screen. Never empty.
+    @State private var stack: [Page] = [.reasons]
+    /// Which way the next page change slides: forward = the new page comes in from the trailing edge.
+    @State private var forward = true
     @State private var note = ""
     @State private var block = false
     @State private var shareText = true
@@ -184,19 +188,64 @@ struct ReportSheet: View {
     @State private var blockBusy = false
     @State private var mutedNow = false
     @State private var left = false
-    /// Each page's measured height, by its depth in the stack (0 = the reasons).
-    @State private var fits: [Int: CGFloat] = [:]
+    /// Each page's natural height (its rows and padding, no header), by page.
+    @State private var fits: [Page: CGFloat] = [:]
+    /// The sheet's height inside its safe area, as last laid out.
+    @State private var shownHeight: CGFloat = 0
+    @State private var safeBottom: CGFloat = 0
+    /// Points the system keeps back from our detent height (see calibrate()). Normally 0.
+    @State private var slack: CGFloat = 0
+    @State private var calibration: Task<Void, Never>?
+    @FocusState private var noteFocused: Bool
+    @Environment(\.displayScale) private var displayScale
+
     /// The rows' fill on the solid sheet: light grey in light mode, dark grey in dark.
     private static let rowFill = Color(.secondarySystemBackground)
+    /// ⛔ ONE MOTION (owner 2026-11-08: "move like the reference app"). The page slide and the
+    /// sheet's height change run in the same spring, so the sheet grows or shrinks while the page
+    /// moves, never after it. The reference sheet uses one ~0.45 s spring for both.
+    private static let motion = Animation.spring(response: 0.42, dampingFraction: 0.9)
+    /// Our own header: 12 top, the 44 pt round button, 8 under it.
+    private static let headerHeight: CGFloat = 64
+    private static let groupRadius: CGFloat = 22
 
-    /// ⛔ THE SHEET FITS ITS PAGE (owner 2026-11-08: the sexual-content page sat in a big sheet with
-    /// an empty white half under four rows). It was a fixed 82% for every page. Now each page's
-    /// list reports its own height (content + bars) and the sheet takes that, up to the large one.
-    private var fitHeight: CGFloat? {
-        fits[path.count].map { min($0 + 8, UIScreen.main.bounds.height * 0.92) }
+    private var page: Page { stack.last ?? .reasons }
+    private var isDone: Bool { if case .done = page { return true }; return false }
+    private var showsBack: Bool { stack.count > 1 && !isDone }
+    private var cap: CGFloat { UIScreen.main.bounds.height * 0.92 }
+
+    /// The most a page may take before it scrolls: the cap, or with the keyboard up (the note on
+    /// "Something else", sheet large) whatever is left above it.
+    private var bodyCap: CGFloat {
+        if noteFocused, shownHeight > 0 { return max(shownHeight - Self.headerHeight, 120) }
+        return cap - Self.headerHeight
     }
 
-    private func depth(_ page: Page) -> Int { (path.firstIndex(of: page) ?? path.count - 1) + 1 }
+    /// ⛔ THE SHEET FITS ITS PAGE (owner 2026-11-08: empty band of 60-90 pt under the last row, and
+    /// a blank, clipped bottom while the height changed). The old List pages counted their bars and
+    /// the bottom safe area into the height, and the system then added the safe area again: that was
+    /// the band. Now a page is a plain VStack whose height is exact; the detent is header + page,
+    /// and the system adds the home-indicator area under it.
+    private var sheetHeight: CGFloat? {
+        fits[page].map { min(Self.headerHeight + $0 + slack, cap) }
+    }
+
+    private var detents: Set<PresentationDetent> {
+        guard let h = sheetHeight else { return [.fraction(0.82)] }
+        return noteFocused ? [.height(h), .large] : [.height(h)]
+    }
+
+    /// Large while typing the note; the page's own height otherwise. Dragging down from large
+    /// closes the keyboard.
+    private var detentChoice: Binding<PresentationDetent> {
+        Binding(
+            get: {
+                guard let h = sheetHeight else { return .fraction(0.82) }
+                return noteFocused ? .large : .height(h)
+            },
+            set: { new in if new != .large, noteFocused { noteFocused = false } }
+        )
+    }
 
     private var shownName: String { target.name.isEmpty ? "They" : target.name }
     private var canBlock: Bool {
@@ -205,20 +254,36 @@ struct ReportSheet: View {
     private var alreadyBlocked: Bool { target.preBlocked || BlockList.shared.contains(target.personUid) }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            reasonsPage
-                .modifier(ReportPageFit(depth: 0, fits: $fits))
-                .navigationDestination(for: Page.self) { page in
-                    switch page {
-                    case .subs(let cat): subsPage(cat).modifier(ReportPageFit(depth: depth(page), fits: $fits))
-                    case .confirm(let cat, let sub): confirmPage(cat, sub).modifier(ReportPageFit(depth: depth(page), fits: $fits))
-                    case .done(let cat, let sub): donePage(cat, sub).modifier(ReportPageFit(depth: depth(page), fits: $fits))
-                    }
-                }
+        VStack(spacing: 0) {
+            header
+            // ⛔ NO NAVIGATIONSTACK (owner 2026-11-08: the height change clipped the list and left
+            // the bottom blank, then snapped). One container, the page on screen inside it, pages
+            // swapped with a push slide. Pages keep their own height and sit at the top, so while
+            // the sheet's frame animates nothing is re-laid out to the new size: a shrinking sheet
+            // slides over the old page instead of cutting it off.
+            ZStack(alignment: .top) {
+                pageView(page)
+                    .id(page)
+                    .zIndex(Double(stack.count))
+                    .transition(forward ? Self.pushTransition : Self.popTransition)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            // Swipe from the leading edge goes back, like a pushed screen.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 24).onEnded { v in
+                    if v.startLocation.x < 40, v.translation.width > 70,
+                       abs(v.translation.height) < abs(v.translation.width) { back() }
+                },
+                including: showsBack ? .all : .subviews
+            )
         }
-        // The first page has an X (owner 2026-11-08); the grabber closes it too.
-        .presentationDetents(fitHeight.map { [.height($0), .large] } ?? [.fraction(0.82), .large])
-        .animation(.snappy(duration: 0.25), value: fitHeight)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+            shownHeight = h
+            calibrate()
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { safeBottom = $0 }
+        .presentationDetents(detents, selection: detentChoice)
         .presentationDragIndicator(.visible)
         // ⛔ SOLID, NOT GLASS (owner 2026-11-08: "white in light mode, black in dark, now it looks
         // like a mirror"). The system sheet is see-through glass on iOS 26; this one is the plain
@@ -227,41 +292,189 @@ struct ReportSheet: View {
         .interactiveDismissDisabled(sending)
     }
 
+    // MARK: Moving between pages
+
+    /// Forward: the new page slides in over the old one from the trailing edge; the old one drifts
+    /// a little to the leading side and fades. Back is the same in reverse.
+    private static let pushTransition = AnyTransition.asymmetric(
+        insertion: .move(edge: .trailing),
+        removal: .offset(x: -90).combined(with: .opacity))
+    private static let popTransition = AnyTransition.asymmetric(
+        insertion: .offset(x: -90).combined(with: .opacity),
+        removal: .move(edge: .trailing))
+
+    /// A view that leaves uses the transition it was last drawn with, so a change of direction is
+    /// drawn first and the page change runs on the next turn of the main loop.
+    private func go(forward fwd: Bool, _ change: @escaping () -> Void) {
+        noteFocused = false
+        if forward != fwd {
+            forward = fwd
+            DispatchQueue.main.async { withAnimation(Self.motion) { change() } }
+        } else {
+            withAnimation(Self.motion) { change() }
+        }
+    }
+
+    private func push(_ p: Page) {
+        guard !sending, page != p else { return }
+        go(forward: true) { stack.append(p) }
+    }
+
+    private func back() {
+        guard showsBack, !sending else { return }
+        go(forward: false) { if stack.count > 1 { stack.removeLast() } }
+    }
+
+    /// A page measured itself. The page on screen moves the sheet in the same spring as the slide
+    /// (its first measure lands one frame after the push, inside the slide).
+    private func setFit(_ p: Page, _ h: CGFloat) {
+        guard h > 0, abs((fits[p] ?? 0) - h) > 0.5 else { return }
+        if p == page { withAnimation(Self.motion) { fits[p] = h } } else { fits[p] = h }
+    }
+
+    /// The system is meant to put the home-indicator area UNDER a `.height` detent. If a build of
+    /// iOS counts it inside instead, the page would come out short by that much; after the sheet
+    /// settles, the laid-out height is compared with header + page and the difference is added.
+    private func calibrate() {
+        calibration?.cancel()
+        calibration = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(650))
+            guard !Task.isCancelled, !noteFocused, let fit = fits[page] else { return }
+            guard Self.headerHeight + fit + slack < cap else { return }
+            let gap = (Self.headerHeight + fit) - shownHeight
+            if gap > 1, gap < 60 {
+                withAnimation(Self.motion) { slack += gap }
+            } else if gap < -1, slack > 0 {
+                withAnimation(Self.motion) { slack = max(0, slack + gap) }
+            }
+        }
+    }
+
+    // MARK: Header and page frame
+
+    /// ⛔ AN X ON THE FIRST PAGE (owner 2026-11-08: "add x button"); a back chevron on the pages
+    /// after it; X again on the thanks page. "Report" centred. Drawn by us, it stays put while the
+    /// pages slide under it.
+    private var header: some View {
+        ZStack {
+            Text("Report").font(.headline)
+            HStack {
+                Button {
+                    if showsBack { back() } else { dismiss() }
+                } label: {
+                    Image(systemName: showsBack ? "chevron.backward" : "xmark")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .contentTransition(.symbolEffect(.replace))
+                        .frame(width: 44, height: 44)
+                        .background(Self.rowFill, in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(showsBack ? "Back" : "Close")
+                .disabled(sending)
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .frame(height: Self.headerHeight)
+    }
+
+    /// One page: its content at its natural height, scrolling only when that is over the cap.
+    private func pageView(_ p: Page) -> some View {
+        ScrollView {
+            pageContent(p)
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                // The last row rests just above the home indicator (the system adds that area
+                // under the detent); a phone without one gets a normal margin.
+                .padding(.bottom, safeBottom > 0 ? 8 : 20)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { setFit(p, $0) }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollDismissesKeyboard(.interactively)
+        .frame(height: fits[p].map { min($0, bodyCap) })
+        .background(Color(.systemBackground))
+    }
+
+    @ViewBuilder private func pageContent(_ p: Page) -> some View {
+        switch p {
+        case .reasons: reasonsPage
+        case .subs(let cat): subsPage(cat)
+        case .confirm(let cat, let sub): confirmPage(cat, sub)
+        case .done(let cat, let sub): donePage(cat, sub)
+        }
+    }
+
+    // MARK: Grouped rows (our own, so a page's height is exact)
+
+    private func heading(_ title: String, _ subtitle: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.title3.weight(.semibold)).foregroundStyle(.primary)
+            if let subtitle {
+                Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+        .multilineTextAlignment(.leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 4)
+        .padding(.bottom, 12)
+    }
+
+    private func group<C: View>(@ViewBuilder _ rows: () -> C) -> some View {
+        VStack(spacing: 0) { rows() }
+            .background(Self.rowFill)
+            .clipShape(RoundedRectangle(cornerRadius: Self.groupRadius, style: .continuous))
+    }
+
+    private func separator(inset: CGFloat = 16) -> some View {
+        Rectangle()
+            .fill(Color(.separator))
+            .frame(height: 1 / displayScale)
+            .padding(.leading, inset)
+    }
+
+    private func footnote(_ text: String, color: Color = .secondary) -> some View {
+        Text(text).font(.footnote).foregroundStyle(color)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16).padding(.top, 6)
+    }
+
+    /// Rows that each open the next page, chevron on the trailing side.
+    private func navRows<T: Identifiable>(_ items: [T], title: @escaping (T) -> String,
+                                          tap: @escaping (T) -> Void) -> some View {
+        group {
+            ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
+                Button { tap(item) } label: {
+                    HStack(spacing: 8) {
+                        Text(title(item))
+                            .foregroundStyle(.primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .frame(minHeight: 50)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(ReportRowStyle())
+                if i < items.count - 1 { separator() }
+            }
+        }
+    }
+
     // MARK: Page 1, the reasons
 
     private var reasonsPage: some View {
-        List {
-            Group {
-            Section {
-                ForEach(ReportReason.all) { r in
-                    NavigationLink(value: r.subs.isEmpty ? Page.confirm(r.id, nil) : Page.subs(r.id)) {
-                        Text(r.title)
-                    }
-                }
-            } header: {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Why are you reporting this \(target.kind.noun)?")
-                        .font(.title3.weight(.semibold)).foregroundStyle(.primary)
-                    Text("Reports are private. \(shownName) won't know it was you.")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                }
-                .textCase(nil)
-                .padding(.bottom, 8)
-            }
-            }
-            .listRowBackground(Self.rowFill)   // rows a step off the sheet (a row's own clear wins)
-        }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .navigationTitle("Report")
-        .navigationBarTitleDisplayMode(.inline)
-        // ⛔ AN X ON THE FIRST PAGE (owner 2026-11-08: "add x button"). Overrides the earlier
-        // grabber-only rule for this sheet; the pages after it keep their back button.
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: { Image(systemName: "xmark") }
-                    .accessibilityLabel("Close")
-                    .disabled(sending)
+        VStack(spacing: 0) {
+            heading("Why are you reporting this \(target.kind.noun)?",
+                    "Reports are private. \(shownName) won't know it was you.")
+            navRows(ReportReason.all, title: { $0.title }) { r in
+                push(r.subs.isEmpty ? .confirm(r.id, nil) : .subs(r.id))
             }
         }
     }
@@ -270,24 +483,10 @@ struct ReportSheet: View {
 
     private func subsPage(_ cat: String) -> some View {
         let r = ReportReason.find(cat)
-        return List {
-            Group {
-            Section {
-                ForEach(r?.subs ?? []) { s in
-                    NavigationLink(value: Page.confirm(cat, s.id)) { Text(s.title) }
-                }
-            } header: {
-                Text(r?.subTitle ?? "")
-                    .font(.title3.weight(.semibold)).foregroundStyle(.primary)
-                    .textCase(nil).padding(.bottom, 8)
-            }
-            }
-            .listRowBackground(Self.rowFill)   // rows a step off the sheet (a row's own clear wins)
+        return VStack(spacing: 0) {
+            heading(r?.subTitle ?? "")
+            navRows(r?.subs ?? [], title: { $0.title }) { s in push(.confirm(cat, s.id)) }
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .navigationTitle("Report")
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     // MARK: Page 2, confirm
@@ -305,60 +504,59 @@ struct ReportSheet: View {
     }
 
     private func confirmPage(_ cat: String, _ sub: String?) -> some View {
-        List {
-            Group {
-            Section {
+        VStack(spacing: 0) {
+            heading("Report this \(target.kind.noun)?")
+            group {
                 Text(reasonLine(cat, sub))
-            } header: {
-                Text("Report this \(target.kind.noun)?")
-                    .font(.title3.weight(.semibold)).foregroundStyle(.primary)
-                    .textCase(nil).padding(.bottom, 8)
+                    .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
+                    .padding(.horizontal, 16).padding(.vertical, 12)
             }
             if cat == "other" {
-                Section {
+                group {
                     TextField("Tell us what's wrong", text: $note, axis: .vertical)
                         .lineLimit(4...8)
+                        .focused($noteFocused)
                         .onChange(of: note) { _, v in if v.count > 500 { note = String(v.prefix(500)) } }
-                } footer: {
-                    HStack { Spacer(); Text("\(note.count)/500").monospacedDigit() }
+                        .padding(.horizontal, 16).padding(.vertical, 12)
                 }
+                .padding(.top, 20)
+                HStack {
+                    Spacer()
+                    Text("\(note.count)/500").monospacedDigit()
+                }
+                .font(.footnote).foregroundStyle(.secondary)
+                .padding(.horizontal, 16).padding(.top, 6)
             }
             if target.kind == .message, let words = target.messageText, !words.isEmpty {
-                Section {
+                group {
                     Toggle("Share this message with Fariin's review team", isOn: $shareText).tint(.green)
-                } footer: {
-                    Text("Only this one message is shared. Your chat stays private.")
+                        .padding(.horizontal, 16).padding(.vertical, 10)
                 }
+                .padding(.top, 20)
+                footnote("Only this one message is shared. Your chat stays private.")
             }
             if canBlock, !alreadyBlocked {
-                Section {
+                group {
                     Toggle("Block \(shownName)", isOn: $block).tint(.green)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
                 }
+                .padding(.top, 20)
             }
-            Section {
-                Button { submit(cat, sub) } label: {
-                    HStack(spacing: 8) {
-                        if sending { ProgressView().tint(.white) }
-                        Text("Submit report").font(.body.weight(.semibold))
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 50)
-                    .foregroundStyle(.white)
-                    .background(Color.red, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            Button { submit(cat, sub) } label: {
+                HStack(spacing: 8) {
+                    if sending { ProgressView().tint(.white) }
+                    Text("Submit report").font(.body.weight(.semibold))
                 }
-                .buttonStyle(.plain)
-                .disabled(sending)
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
-            } footer: {
-                if let failure { Text(failure).foregroundStyle(.red) }
+                .frame(maxWidth: .infinity, minHeight: 50)
+                .foregroundStyle(.white)
+                .background(Color.red, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .contentShape(Rectangle())
             }
-            }
-            .listRowBackground(Self.rowFill)   // rows a step off the sheet (a row's own clear wins)
+            .buttonStyle(.plain)
+            .disabled(sending)
+            .padding(.top, 24)
+            if let failure { footnote(failure, color: .red) }
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .navigationTitle("Report")
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     private func submit(_ cat: String, _ sub: String?) {
@@ -375,7 +573,7 @@ struct ReportSheet: View {
                 if wantsBlock { await doBlock() }
                 sending = false
                 target.onReported?()
-                path.append(.done(category, sub))
+                push(.done(category, sub))
             } catch {
                 sending = false
                 failure = Self.words(error)
@@ -404,30 +602,31 @@ struct ReportSheet: View {
     // MARK: Page 3, thanks
 
     private func donePage(_ cat: String, _ sub: String?) -> some View {
-        List {
-            Group {
-            Section {
-                VStack(spacing: 12) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 56)).foregroundStyle(.green)
-                    Text("Thanks for letting us know").font(.title3.weight(.semibold))
-                    Text("We'll review it. If it breaks our rules, we'll take it down. You can see what happened in Settings > Privacy > My reports.")
-                        .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .listRowBackground(Color.clear)
+        let showBlock = canBlock && (!alreadyBlocked || blockedNow)
+        let showLeave = target.leaveTitle != nil && target.onLeave != nil
+        return VStack(spacing: 0) {
+            VStack(spacing: 12) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 56)).foregroundStyle(.green)
+                Text("Thanks for letting us know").font(.title3.weight(.semibold))
+                Text("We'll review it. If it breaks our rules, we'll take it down. You can see what happened in Settings > Privacy > My reports.")
+                    .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
             if let box = safetyNote(cat, sub) {
-                Section {
+                group {
                     Label { Text(box).font(.subheadline) } icon: {
                         Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16).padding(.vertical, 12)
                 }
+                .padding(.top, 20)
             }
             if hasActions {
-                Section {
-                    if canBlock, !alreadyBlocked || blockedNow {
+                group {
+                    if showBlock {
                         Button {
                             guard !blockedNow, !blockBusy else { return }
                             blockBusy = true
@@ -435,45 +634,42 @@ struct ReportSheet: View {
                         } label: {
                             actionRow(blockedNow ? "Blocked" : "Block \(shownName)", "hand.raised", red: true)
                         }
+                        .buttonStyle(ReportRowStyle())
                         .disabled(blockedNow || blockBusy)
                     }
                     if let title = target.leaveTitle, target.onLeave != nil {
+                        if showBlock { separator(inset: 56) }
                         Button {
                             left = true
                             dismiss()
                             // After the sheet is gone: a leave closes the screen under it.
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { target.onLeave?() }
                         } label: { actionRow(title, "rectangle.portrait.and.arrow.right", red: true) }
+                        .buttonStyle(ReportRowStyle())
                         .disabled(left)
                     }
                     if let m = target.muteCid {
+                        if showBlock || showLeave { separator(inset: 56) }
                         Button {
                             mutedNow = true
                             Task { await ChatService.setMuted(m, true) }
                         } label: { actionRow(mutedNow ? "Muted" : "Mute \(shownName)", "bell.slash", red: false) }
+                        .buttonStyle(ReportRowStyle())
                         .disabled(mutedNow)
                     }
                 }
+                .padding(.top, 20)
             }
-            Section {
-                Button { dismiss() } label: {
-                    Text("Done").font(.body.weight(.semibold))
-                        .frame(maxWidth: .infinity, minHeight: 50)
-                        .foregroundStyle(.white)
-                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
+            Button { dismiss() } label: {
+                Text("Done").font(.body.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .foregroundStyle(.white)
+                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .contentShape(Rectangle())
             }
-            }
-            .listRowBackground(Self.rowFill)   // rows a step off the sheet (a row's own clear wins)
+            .buttonStyle(.plain)
+            .padding(.top, 24)
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .navigationTitle("Report")
-        .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
     }
 
     private var hasActions: Bool {
@@ -487,6 +683,9 @@ struct ReportSheet: View {
             Spacer()
         }
         .foregroundStyle(red ? Color.red : Color.primary)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(minHeight: 50)
         .contentShape(Rectangle())
     }
 
@@ -514,17 +713,10 @@ enum ReportIcon {
     static let symbol = "exclamationmark.bubble"
 }
 
-/// A page of the Report sheet saying how tall it is: its list's content plus the bars above and
-/// below it (the scroll view's insets), so the sheet can fit it with no empty space.
-private struct ReportPageFit: ViewModifier {
-    let depth: Int
-    @Binding var fits: [Int: CGFloat]
-
-    func body(content: Content) -> some View {
-        content.onScrollGeometryChange(for: CGFloat.self) { g in
-            g.contentSize.height + g.contentInsets.top + g.contentInsets.bottom
-        } action: { _, h in
-            if h > 0, abs((fits[depth] ?? 0) - h) > 1 { fits[depth] = h }
-        }
+/// A row of the Report sheet: the group's own fill, a grey wash while pressed.
+private struct ReportRowStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(configuration.isPressed ? Color(.systemGray4) : Color.clear)
     }
 }
