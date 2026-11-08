@@ -236,7 +236,7 @@ final class ChatHistoryPreloader {
             // ThreadRepository writes ThreadMessageCache every time its message set settles; the
             // work here is only to know WHEN to let go. A local copy that already holds the new rows
             // counts too: Firestore raises no second event when the server has nothing to add.
-            func current() -> Bool {
+            @MainActor func current() -> Bool {
                 repo.serverWindowSettled || Self.cacheIsBehind(conv, me: me) == false
             }
             while !current(), Date() < deadline, AppRouter.shared.activeChatId != cid {
