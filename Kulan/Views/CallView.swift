@@ -597,7 +597,10 @@ struct CallView: View {
             // Once the call is connected; it opens the Add people sheet, which moves the call to a
             // group call (`CallService.moveToGroup`). Before that the space stays empty so the name
             // keeps its centre (Share Screen moved down into the control bar, 2026-10-22).
-            if connectedCall {
+            // ⛔ HIDDEN (owner 2026-11-08): moving a 1:1 into a group call had serious bugs on real
+            // phones and left the 1:1 call broken afterwards. Off until it is fixed and tested on two
+            // iPhones; flip `addPeopleInCall` to bring it back.
+            if Self.addPeopleInCall, connectedCall {
                 Button { buzz(); showAddPeople = true } label: { topCircle("person.badge.plus") }
                     .buttonStyle(CallControlStyle())
                     .accessibilityLabel("Add people")
@@ -645,6 +648,9 @@ struct CallView: View {
            let p = ProfilePalette.now(shown, url: url) { peerPalette = p; return }
         peerPalette = await ProfilePalette.resolve(url: url)
     }
+
+    /// Add people during a 1:1 (moves the call to a group call). Off: see the header button.
+    static let addPeopleInCall = false
 
     private func topCircle(_ icon: String) -> some View {
         topCircle(image: Image(systemName: icon))
