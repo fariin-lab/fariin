@@ -57,12 +57,23 @@ final class ChromeProbeView: UIView {
         report()
     }
 
+    /// ⛔ THE LAST NUMBERS READ, FOR THE NEXT BAR'S FIRST FRAME (owner 2026-11-08: the channel's
+    /// Follow bar jumped when following finished). A new bar's state started at 16 / 0, which is
+    /// the home-button phone's geometry (sides at 16, 8 above the edge), and moved to the real
+    /// one only after its probe reported, so every swap between bars (Follow, the spinner, Mute)
+    /// showed one frame or more in the wrong place. The device's numbers never change, so a new
+    /// bar starts from them.
+    nonisolated(unsafe) static var lastMargin: CGFloat = 16
+    nonisolated(unsafe) static var lastBottom: CGFloat = 0
+
     private func report() {
         guard let window else { return }
         // The ROOT controller's minimums, not our own hosting view's margins: SwiftUI hosts set
         // their own layoutMargins and would hand back whatever we last influenced. The root's
         // systemMinimumLayoutMargins is the untouched per-device value the system bars align to.
         let margin = window.rootViewController?.systemMinimumLayoutMargins.leading ?? 16
+        Self.lastMargin = margin
+        Self.lastBottom = window.safeAreaInsets.bottom
         onRead?(margin, window.safeAreaInsets.bottom)
     }
 }
@@ -92,8 +103,8 @@ struct SystemBarChrome: ViewModifier {
     /// bar): 8pt above them, sides at the system margin. Pass the KEYBOARD'S state, not focus.
     var keyboardUp: Bool = false
 
-    @State private var margin: CGFloat = 16
-    @State private var bottomInset: CGFloat = 0
+    @State private var margin: CGFloat = ChromeProbeView.lastMargin
+    @State private var bottomInset: CGFloat = ChromeProbeView.lastBottom
 
     func body(content: Content) -> some View {
         content
@@ -124,8 +135,8 @@ struct SystemBarChrome: ViewModifier {
 struct SystemBarBottomChrome: ViewModifier {
     var keyboardUp: Bool
 
-    @State private var margin: CGFloat = 16
-    @State private var bottomInset: CGFloat = 0
+    @State private var margin: CGFloat = ChromeProbeView.lastMargin
+    @State private var bottomInset: CGFloat = ChromeProbeView.lastBottom
 
     func body(content: Content) -> some View {
         content

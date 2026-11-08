@@ -115,12 +115,14 @@ struct ChannelFollowerBar: View {
         }
         .animation(.spring(duration: 0.3, bounce: 0), value: text)
         .clipped()
-        .foregroundStyle(blue ? Color.onFariinAction : Color.primary)
+        // ⛔ PLAIN LIQUID GLASS, NO FILL (owner 2026-11-08: "follow button make it liquid glass").
+        // Follow and Mute are the same clear glass now; only the words change.
+        .foregroundStyle(Color.primary)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 18)
         .frame(height: 50)
         .liquidGlass(RoundedRectangle(cornerRadius: 25, style: .continuous),
-                     interactive: true, tint: blue ? Color.fariinAction : nil)
+                     interactive: true, tint: nil)
         .contentShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
     }
 
