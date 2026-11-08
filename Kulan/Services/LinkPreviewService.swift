@@ -104,6 +104,13 @@ actor LinkPreviewService {
             if case .name(let n)? = KulanApp.route(from: url) {
                 return await Self.publicGroupDraft(url: url, name: n)
             }
+            // A channel post's link (2026-11-08). The send turns it into the post's own card (a
+            // quote, `ThreadView.sendPostLink`); this is the card it falls back on, the channel's.
+            // A private channel's /c/ link is never fetched from the site: it has nothing to show.
+            if case .post(let n, _, _)? = KulanApp.route(from: url) {
+                guard let n else { return nil }
+                return await Self.publicGroupDraft(url: url, name: n)
+            }
             if let link = Self.storyLink(in: url) {
                 return await Self.storyDraft(url: url, id: link.id, handle: link.handle)
             }

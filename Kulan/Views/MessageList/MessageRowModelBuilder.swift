@@ -751,6 +751,16 @@ enum MessageRowModelBuilder {
             || s.range(of: "fariin.com/call", options: .caseInsensitive) != nil
     }
 
+    /// The @name in a public name link (fariin.com/<name>) or a public channel post's link
+    /// (fariin.com/<name>/<id>), or nil.
+    private static func publicNameInLink(_ u: URL) -> String? {
+        switch KulanApp.route(from: u) {
+        case .name(let n)?: return n
+        case .post(let n?, _, _)?: return n
+        default: return nil
+        }
+    }
+
     private static func linkPreviewBody(_ p: Message.LinkPreviewData) -> BubbleBody.LinkPreview {
         // The handle is read from the URL rather than stored, so every message ever sent — including
         // ones from before profile cards existed — answers the same way with no migration.
@@ -761,7 +771,9 @@ enum MessageRowModelBuilder {
         // A PUBLIC GROUP'S NAME LINK, fariin.com/<name> (owner 2026-10-21: "no Join button"): its
         // card was sent from `publicGroupDraft` ("N members"), so it gets the group card's button.
         // The tap goes through `openGroupLink`, which opens the group page in the app.
-        if let u = URL(string: p.url), case .name(let name)? = KulanApp.route(from: u),
+        // A channel post's link that went without its post (the sender could not quote it) gets
+        // its channel's card; the tap opens the post (2026-11-08).
+        if let u = URL(string: p.url), let name = Self.publicNameInLink(u),
            p.desc.range(of: #"^[0-9.,KM]+ (members?|followers?)$"#, options: .regularExpression) != nil {
             // Looked up now so the tap opens at once, and today's count wins over the one the
             // sender's phone saw (owner 2026-10-23: the card said 8 members, Juni has 11).
