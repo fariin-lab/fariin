@@ -694,7 +694,13 @@ struct GroupInfoView: View {
     }
 
     private func unfollowNow() {
+        // ⛔ GONE AT THE TAP (owner 2026-11-08: "Leaving..." sat on the row while the server
+        // answered). The channel closes and leaves the list at once; the server unfollows behind.
+        // If it refuses, the channel comes back to the list and a toast says so.
         unfollowing = true
+        LeaveGroupUndo.shared.closeChat(cid)
+        if fromStory { dismiss() }
+        let cid = cid
         Task {
             do {
                 try await ChannelService.unfollow(cid: cid)
@@ -709,10 +715,12 @@ struct GroupInfoView: View {
                 // then the chat list, two steps"). `closeChat` makes ThreadView dismiss itself, and
                 // that pops this page with it in one animation; dismissing here first was the extra
                 // step. Opened from a story there is no chat under this page, so it closes itself.
-                LeaveGroupUndo.shared.closeChat(cid)
-                if fromStory { dismiss() }
+                // (Both now happen at the tap, above.)
             }
-            catch { actionError = error.localizedDescription }
+            catch {
+                LeaveGroupUndo.shared.reopen(cid)
+                ToastNotice.show("Couldn't leave the channel. Check your connection and try again.")
+            }
             unfollowing = false
         }
     }
@@ -1374,15 +1382,8 @@ struct GroupInfoView: View {
             // No Chat Bubble row (owner 2026-11-07, "remove profile this card"): styles are picked in
             // Settings > Appearance, the long-press menu and the wallpaper sheet. Not on a channel
             // (its posts are never styled).
-            if BubbleStyles.shown, !isChannel {
-                // ⛔ BUBBLE STYLES SWITCH (owner 2026-11-07, SPEC section 5): the owner, or an admin
-                // with Change group info (not members-can-edit-info). Off draws every message in the
-                // group as the normal bubble, for everyone.
-                if can(.changeInfo) {
-                    rowDivider
-                    bubbleStylesSwitch
-                }
-            }
+            // ⛔ NO BUBBLE STYLES SWITCH ON THIS PAGE (owner 2026-11-08: "in group remove bubble
+            // styles here"). `bubbleStylesSwitch` is kept for wherever he wants it next.
             // No invite link row here (owner 2026-10-20: it is in Group Settings, shown twice). The
             // link lives on the Group Settings page, for the admins who manage it.
             // Group Settings (and Join Requests) in this same card (owner 2026-10-20: one card).
@@ -2145,7 +2146,16 @@ private struct GroupInfoExits: ViewModifier {
 
     private func leaveNow() {
         LeaveGroupUndo.shared.start(cid: cid, title: conv?.displayName(me) ?? "the group")
-        onGone()
+        Self.closeAfterShellPop(onGone)
+    }
+
+    /// ⛔ ONE MOVE TO THE CHAT LIST (owner 2026-11-08: after Leave Group he saw a white empty page,
+    /// then the chat list). `start` hides the group, and MainShell empties the whole stack in one
+    /// pop. Dismissing this page at the same moment popped it FIRST, onto the chat that had just
+    /// gone blank, and the shell's pop came after: two pages. So this page no longer dismisses
+    /// itself; only if it is still up after the shell's pop (opened outside the chat stack) does it.
+    static func closeAfterShellPop(_ onGone: @escaping () -> Void) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { onGone() }
     }
 
     /// The owner leaving hands the group on (`ChatService.leaveGroup`: the longest-serving admin who
@@ -2245,7 +2255,7 @@ private struct GroupInfoExits: ViewModifier {
                     // too, not only this page (owner 2026-10-29).
                     LeaveGroupUndo.shared.start(cid: cid, title: conv?.displayName(me) ?? "the group",
                                                 kind: conv?.isChannel == true ? .deleteChannel : .deleteGroup)
-                    onGone()
+                    Self.closeAfterShellPop(onGone)
                 }
             } message: {
                 Text(conv?.isChannel == true

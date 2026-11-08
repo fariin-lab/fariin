@@ -1782,7 +1782,28 @@ enum ReplyThreadLine: Equatable {
     static let color = Color(.systemGray3)
     /// The corner's radius: a wide, round bend into the answer or the toggle, as in the owner's
     /// reference (2026-11-07: "the line's round doesn't look good").
-    private static let bend: CGFloat = 12
+    /// The corner's radius, as iOS's own `.continuous` rounded rectangles use it.
+    private static let radius: CGFloat = 12
+    /// How far the bend reaches along each line: a continuous corner starts 1.53 radii out.
+    private static let bend: CGFloat = radius * 1.52866483
+
+    /// ⛔ APPLE'S CONTINUOUS CORNER, NOT A CIRCLE (owner 2026-11-08: "still that line is not smooth,
+    /// use Apple rounded design"). A circular arc meets the straight line with a jump in curvature,
+    /// which reads as a kink. These are the three curves of iOS's continuous rounded-rectangle
+    /// corner, so the line eases into the bend and out of it. From the vertical line at `x`, `bend`
+    /// above `y`, to `bend` right of `x` on `y`.
+    private static func addContinuousBend(_ p: inout Path, x: CGFloat, y: CGFloat) {
+        let r = radius
+        p.addCurve(to: CGPoint(x: x + 0.07491100 * r, y: y - 0.63149399 * r),
+                   control1: CGPoint(x: x, y: y - 1.08849323 * r),
+                   control2: CGPoint(x: x + 0.02229519 * r, y: y - 0.86840689 * r))
+        p.addCurve(to: CGPoint(x: x + 0.63149399 * r, y: y - 0.07491100 * r),
+                   control1: CGPoint(x: x + 0.16905899 * r, y: y - 0.37282392 * r),
+                   control2: CGPoint(x: x + 0.37282392 * r, y: y - 0.16905899 * r))
+        p.addCurve(to: CGPoint(x: x + bend, y: y),
+                   control1: CGPoint(x: x + 0.86840689 * r, y: y - 0.02229519 * r),
+                   control2: CGPoint(x: x + 1.08849323 * r, y: y))
+    }
 
     /// In the row's own coordinates (`avatar` is that row's photo).
     static func path(_ kind: ReplyThreadLine, avatar r: CGRect, height: CGFloat) -> Path {
@@ -1797,7 +1818,7 @@ enum ReplyThreadLine: Equatable {
             p.move(to: CGPoint(x: x, y: 0))
             p.addLine(to: CGPoint(x: x, y: height))   // on past this answer to the next
             p.move(to: CGPoint(x: x, y: r.midY - bend))
-            p.addArc(tangent1End: CGPoint(x: x, y: r.midY), tangent2End: CGPoint(x: x + bend, y: r.midY), radius: bend)
+            addContinuousBend(&p, x: x, y: r.midY)
             p.addLine(to: CGPoint(x: r.minX - 4, y: r.midY))
         }
         return p
@@ -1812,7 +1833,7 @@ enum ReplyThreadLine: Equatable {
         let start = min(0, mid - bend)
         p.move(to: CGPoint(x: x, y: start))
         p.addLine(to: CGPoint(x: x, y: mid - bend))
-        p.addArc(tangent1End: CGPoint(x: x, y: mid), tangent2End: CGPoint(x: x + bend, y: mid), radius: bend)
+        addContinuousBend(&p, x: x, y: mid)
         p.addLine(to: CGPoint(x: 20, y: mid))
         return p
     }
