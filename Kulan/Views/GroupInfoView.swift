@@ -354,8 +354,9 @@ struct GroupInfoView: View {
                 Button("Clear", role: .destructive) { clearAllMessages() }
             } message: {
                 Text(isChannel
-                     ? "Every post in this channel is deleted for you and all followers. You can't undo this."
-                     : "Every message in this group is deleted for you and all members. You can't undo this.")
+                     // Owner 2026-11-08: "for you and all followers" read as if followers were deleted.
+                     ? "All posts in this channel will be deleted for everyone. Your followers stay. You can't undo this."
+                     : "All messages in this group will be deleted for everyone. Members stay in the group. You can't undo this.")
             }
             // A full page, pushed (owner 2026-10-18), not a half sheet.
             .sheet(item: Binding(get: { shareGroupText.map { ShareText(id: $0) } },
