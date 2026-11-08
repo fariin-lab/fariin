@@ -139,10 +139,10 @@ struct AttachFilesPage: View {
                 uploadCard
                     .padding(.top, 8)
                 photosCard
-                    .padding(.top, 12)
+                    .padding(.top, 8)
                 Text("Recent")
                     .font(.system(size: 20, weight: .semibold))
-                    .padding(.top, 28)
+                    .padding(.top, 22)
                     .padding(.bottom, 8)
                 if recents.isEmpty {
                     Text("Files you send will appear here.")
@@ -193,24 +193,25 @@ struct AttachFilesPage: View {
 
     private var photosCard: some View {
         Button { choosingPhotos = true } label: {
-            HStack(spacing: 16) {
+            HStack(spacing: 12) {
                 Image(systemName: "photo.on.rectangle")
-                    .font(.system(size: 24, weight: .semibold))
+                    .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .frame(width: 64, height: 64)
-                    .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Photos").font(.system(size: 20, weight: .semibold)).foregroundStyle(.primary)
-                    Text("Send photos as files, in their original quality")
-                        .font(.system(size: 15)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .multilineTextAlignment(.leading)
+                    .frame(width: 44, height: 44)
+                    .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Photos").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
+                    Text("Original quality, sent as files")
+                        .font(.system(size: 14)).foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
                 Spacer(minLength: 0)
             }
-            .padding(18)
-            .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            // Smaller (owner 2026-11-08: "these cards make small, now looks big"): 44pt icon, 17pt title,
+            // one-line subtitle, 12pt padding.
+            .padding(12)
+            .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -247,26 +248,27 @@ struct AttachFilesPage: View {
 
     private var uploadCard: some View {
         Button { importing = true } label: {
-            HStack(spacing: 16) {
-                VStack(spacing: 4) {
-                    Image(systemName: "arrow.up").font(.system(size: 22, weight: .semibold))
-                    RoundedRectangle(cornerRadius: 1.5).frame(width: 24, height: 3)
+            HStack(spacing: 12) {
+                VStack(spacing: 3) {
+                    Image(systemName: "arrow.up").font(.system(size: 16, weight: .semibold))
+                    RoundedRectangle(cornerRadius: 1.5).frame(width: 17, height: 2.5)
                 }
                 .foregroundStyle(.primary)
-                .frame(width: 64, height: 64)
-                .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Upload files").font(.system(size: 20, weight: .semibold)).foregroundStyle(.primary)
-                    Text("Choose a new file from your device or iCloud Drive")
-                        .font(.system(size: 15)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .multilineTextAlignment(.leading)
+                .frame(width: 44, height: 44)
+                .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Upload files").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
+                    Text("From your device or iCloud Drive")
+                        .font(.system(size: 14)).foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
                 Spacer(minLength: 0)
             }
-            .padding(18)
-            .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            // Smaller (owner 2026-11-08: "these cards make small, now looks big"): 44pt icon, 17pt title,
+            // one-line subtitle, 12pt padding.
+            .padding(12)
+            .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
         .buttonStyle(.plain)
     }
