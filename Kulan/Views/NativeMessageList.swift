@@ -6162,11 +6162,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 let next = MultiSwipe.slot(for: dy, current: cap.selected, menu: menu)
                 if next != cap.selected {
                     cap.select(next, animated: true)
-                    // Two slots, upward only: a firmer tick on reaching the top action, a light
-                    // one on dropping back to Reply.
-                    UIImpactFeedbackGenerator(style: next == .top ? .medium : .light).impactOccurred()
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 }
-                swipeArrow?.alpha = 0   // the capsule's reply slot draws the reply arrow now
+                swipeArrow?.alpha = 0   // the capsule's middle slot draws the reply arrow now
             }
         case .ended, .cancelled, .failed:
             layout.frozen = false
@@ -6203,8 +6201,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         swipeArrow = img
     }
 
-    /// The multi-action capsule, its reply circle on the reply arrow (`center` is the layer's anchor,
-    /// which the capsule puts on that circle) and its top slot above. It lives on the collection view, not in
+    /// The multi-action capsule, centred on the reply arrow. It lives on the collection view, not in
     /// the cell, so the rows above and below cannot draw over it or clip it; the list cannot scroll
     /// during the swipe (its pan is off), so it stays put beside the arrow.
     private func openSwipeCapsule() {

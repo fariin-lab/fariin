@@ -15,9 +15,10 @@ struct ChatsSettingsView: View {
     /// your address and the time. Theirs has exactly this setting for exactly this reason. Default
     /// on, as theirs is.
     @AppStorage("linkPreviewsEnabled") private var linkPreviews = true
-    /// Multi-action swipe (owner 2026-11-08): off by default, and its top action. See `MultiSwipe`.
+    /// Multi-action swipe (owner 2026-11-08): off by default, and its up / down actions. See `MultiSwipe`.
     @AppStorage(MultiSwipe.onKey) private var swipeActions = false
-    @AppStorage(MultiSwipe.choiceKey) private var swipeChoice = MultiSwipe.Choice.copy.rawValue
+    @AppStorage(MultiSwipe.upKey) private var swipeUp = MultiSwipe.Choice.upDefault.rawValue
+    @AppStorage(MultiSwipe.downKey) private var swipeDown = MultiSwipe.Choice.downDefault.rawValue
     @State private var confirmClear = false
     @State private var clearing = false
     @State private var photosDenied = false
@@ -79,14 +80,17 @@ struct ChatsSettingsView: View {
             Section {
                 Toggle("Swipe Actions", isOn: $swipeActions).tint(.green)
                 if swipeActions {
-                    Picker("Slide Up For", selection: $swipeChoice) {
+                    Picker("Slide Up For", selection: $swipeUp) {
+                        ForEach(MultiSwipe.Choice.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
+                    Picker("Slide Down For", selection: $swipeDown) {
                         ForEach(MultiSwipe.Choice.allCases) { Text($0.title).tag($0.rawValue) }
                     }
                 }
             } footer: {
                 Text(swipeActions
-                     ? "Swipe a message left to reply. Keep holding and slide up for \(MultiSwipe.Choice(rawValue: swipeChoice)?.title ?? "Copy"). Photos and videos save instead of copying, and Quote works in channels only."
-                     : "Swipe a message left to reply, then slide up for one more action.")
+                     ? "Swipe a message left to reply. Keep holding and slide up or down for the actions above. Photos and videos save instead of copying, and Quote works in channels only."
+                     : "Swipe a message left to reply, then slide up or down for more actions.")
             }
             }
 

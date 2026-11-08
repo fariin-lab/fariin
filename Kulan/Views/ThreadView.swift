@@ -6119,14 +6119,16 @@ struct ThreadView: View {
     private func multiSwipeMenu(_ id: String) -> MultiSwipe.Menu? {
         guard MultiSwipe.enabled, let idx = repo.indexById[id], idx < repo.items.count else { return nil }
         let m = repo.items[idx]
-        return MultiSwipe.Menu(top: multiSwipeTop(m))
+        return MultiSwipe.Menu(top: multiSwipeAction(MultiSwipe.Choice.up, m),
+                               bottom: multiSwipeAction(MultiSwipe.Choice.down, m))
     }
 
-    /// The top slot: the action picked in Settings when it applies to this message, else the kind's
-    /// own (`multiSwipeKindDefault`), which is also what Copy means for media (owner 2026-11-08: a
-    /// photo's top slot is Save).
-    private func multiSwipeTop(_ m: Message) -> MultiSwipe.Top {
-        switch MultiSwipe.Choice.current {
+    /// One outer slot: the action picked in Settings when it applies to this message, else the
+    /// kind's own (`multiSwipeKindDefault`), which is also what Copy means for media (owner
+    /// 2026-11-08: a photo's slot is Save). None hides the slot (dimmed, cannot be picked).
+    private func multiSwipeAction(_ choice: MultiSwipe.Choice, _ m: Message) -> MultiSwipe.Action {
+        switch choice {
+        case .none: return .none
         case .copy: break
         case .forward: if canForward(m) { return .forward }
         case .share: if multiSwipeCanShare(m) { return .share }
@@ -6153,7 +6155,7 @@ struct ThreadView: View {
 
     /// The fallback by kind: Copy for text, Save for a photo, video or album, Save to Files for a
     /// document. Anything else (voice, poll, sticker, GIF, location...) has none: the slot dims.
-    private func multiSwipeKindDefault(_ m: Message) -> MultiSwipe.Top {
+    private func multiSwipeKindDefault(_ m: Message) -> MultiSwipe.Action {
         guard savingAllowed, !m.viewOnce, !m.deleted, !m.isCall, !m.isSystem else { return .none }
         if m.isAlbum { return .save(count: max(m.album.count, m.localAlbum.count)) }
         if m.isImage || m.isVideo { return .save(count: 1) }
@@ -6171,8 +6173,9 @@ struct ThreadView: View {
         switch slot {
         case .reply:
             beginReply(to: live)
-        case .top:
-            switch multiSwipeTop(live) {
+        case .top, .bottom:
+            let choice = slot == .top ? MultiSwipe.Choice.up : MultiSwipe.Choice.down
+            switch multiSwipeAction(choice, live) {
             case .none:
                 return
             case .forward:   // the menu's Forward
