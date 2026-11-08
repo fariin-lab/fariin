@@ -6216,7 +6216,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             collectionView.addSubview(cap)
             swipeCapsule = cap
         }
-        cap.center = host.convert(arrow.center, to: collectionView)
+        var c = host.convert(arrow.center, to: collectionView)
+        // ⛔ NEVER UNDER THE COMPOSER OR THE HEADER (owner 2026-11-08: on the last messages the capsule
+        // went under the record button). Kept inside the list's visible band, 8pt clear of both
+        // bars; the pick follows the finger, not the capsule's place, so a shift changes nothing else.
+        let half = cap.bounds.height / 2
+        let top = collectionView.contentOffset.y + collectionView.adjustedContentInset.top + 8 + half
+        let bottom = collectionView.contentOffset.y + collectionView.bounds.height
+            - collectionView.adjustedContentInset.bottom - 8 - half
+        if bottom > top { c.y = min(max(c.y, top), bottom) }
+        cap.center = c
         cap.select(.reply, animated: false)
         cap.setOpen(true, animated: true)
     }
