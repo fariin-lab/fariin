@@ -1024,7 +1024,8 @@ struct PostThreadSheet: View {
         HStack(alignment: .center, spacing: 24) {
             // Replies off (here or found off by the server): no Replies tab, Quotes alone.
             // With Quotes off too, Replies stays (read-only): something has to be shown.
-            if !offNow || quotesOff { tabButton("Replies", .replies) }
+            // With the count (owner 2026-11-08: "show count comments"), as the post's own row says it.
+            if !offNow || quotesOff { tabButton(repliesTitle, .replies) }
             if !quotesOff { tabButton("Quotes", .quotes) }
             Spacer(minLength: 0)
             HStack(spacing: 10) {
@@ -1044,6 +1045,12 @@ struct PostThreadSheet: View {
         }
         .padding(.leading, 20).padding(.trailing, 16)
         .padding(.top, 18).padding(.bottom, 6)
+    }
+
+    private var repliesTitle: String {
+        let n = model.count
+        if n <= 0 { return "Replies" }
+        return n == 1 ? "1 Reply" : "\(n.formatted()) Replies"
     }
 
     private func tabButton(_ title: String, _ t: Tab) -> some View {
