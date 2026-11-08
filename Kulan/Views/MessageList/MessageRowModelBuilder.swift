@@ -466,7 +466,9 @@ enum MessageRowModelBuilder {
             // Theirs only, and only on a wallpaper — the reference guards it `hasWallpaper,
             // isIncoming`, and an outgoing bubble never wears one.
             rim: (!isMe && ctx.onWallpaper) || bubbleStyle?.look(ctx.dark).glass == true,
-            canSwipeToReply: msg.sendState == nil && !msg.deleted && !msg.isStoryReaction,
+            // A story react-bar emoji can be swiped to reply too (owner 2026-11-08); it still takes
+            // no long press and no reaction of its own.
+            canSwipeToReply: msg.sendState == nil && !msg.deleted,
             // Media whose single tap opens something. Deliberately NOT gifs: a gif plays where it
             // sits and opens nothing, so there is no tap for the recogniser to hold up — which is
             // why it keeps the double-tap shortcut and the others give it away.

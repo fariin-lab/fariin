@@ -5611,7 +5611,7 @@ struct ThreadView: View {
                 // ⛔ NOT ON A STORY REACTION (owner 2026-10-13: "swipe reply still works"). The row
                 // model's `canSwipeToReply` said no, but the swipe pan asks THIS closure and never read
                 // the model, so the earlier fix had nothing listening to it.
-                guest == nil && mayReplyHere && (repo.indexById[id].map { repo.items[$0].sendState == nil && !repo.items[$0].isStoryReaction } ?? false)
+                guest == nil && mayReplyHere && (repo.indexById[id].map { repo.items[$0].sendState == nil } ?? false)   // story react-bar emoji too (2026-11-08)
             },
             onSwipeReply: { id in
                 if let idx = repo.indexById[id], idx < repo.items.count { beginReply(to: repo.items[idx]) }
