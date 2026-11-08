@@ -9067,6 +9067,13 @@ struct ThreadView: View {
     private var openCacheBehind: Bool {
         guard !quiet, !repo.serverWindowSettled, focusMessageId == nil, !openedOnFocusMessage,
               let conv = cachedConv, let newest = repo.items.map(\.createdAt).max() else { return false }
+        // ⛔ NOT FOR A CHANNEL I ONLY FOLLOW (owner 2026-11-08: a followed channel opened on an empty
+        // wallpaper for 1.2 s, its cached posts then popped in). A channel's `updatedAt` moves on
+        // writes a follower never sees as a row: its notices are hidden from followers
+        // (`hidesChannelNotices`) and settings writes carry no message. `ChatHistoryPreloader` never
+        // warms a channel, so `knownCurrent` never answers for one either, and every such open was
+        // held here until the server's window settled. A new post glides in after the land instead.
+        if conv.isChannel, !conv.users.contains(me) { return false }
         // 2s of slack: `updatedAt` is the server's clock, a pending row's `createdAt` the phone's.
         guard conv.displayUpdatedAt(me) > newest.timeIntervalSince1970 * 1000 + 2000 else { return false }
         // A background warm-up already found nothing newer for this `updatedAt` (a settings write):
