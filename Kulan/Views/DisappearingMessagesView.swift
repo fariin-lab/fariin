@@ -63,7 +63,10 @@ struct DisappearingMessagesView: View {
                     // `createdAt`, so the clock starts when a message is SENT and runs whether
                     // anybody opened the chat or not. Telling people it waits for a read would have
                     // them expect a message to sit there safely until it was seen.
-                    Text(Conversation.Right.isChannel(cid)
+                    // cid "" = Settings > Privacy: the default timer for new chats, not one chat.
+                    Text(cid.isEmpty
+                         ? "New chats you start get this timer: their messages disappear once the chosen time has passed since they were sent."
+                         : Conversation.Right.isChannel(cid)
                          ? "New posts in this channel disappear for every follower once the chosen time has passed since they were posted."
                          : "New messages in this chat disappear once the chosen time has passed since they were sent, whether or not they have been read.")
                         .font(.subheadline).foregroundStyle(.secondary)
