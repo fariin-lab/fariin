@@ -543,6 +543,14 @@ struct StoryLibraryPicker: View {
     var flyScope: MediaOpenRects.Scope? = nil
     /// The one action on a tile's long-press platter in single-pick mode.
     var pickLabel: String = "Add to Story"
+    /// ⛔ PHOTOS SENT AS FILES — owner 2026-11-08: the chat's Add files page opens THIS picker, and
+    /// what is ticked goes out as file messages carrying the original bytes. When set, the button
+    /// reads "Send N" and hands back the raw assets in tap order without resolving them to images
+    /// (the host exports each original itself). Nil for every story door, which is unchanged.
+    var onSendAssets: (([PHAsset]) -> Void)? = nil
+    /// The ceiling for a door that is not a story (the story's own is `storyLimit`).
+    var maxPicks: Int? = nil
+    private var fileMode: Bool { onSendAssets != nil }
     @Environment(\.dismiss) private var dismiss
     @StateObject private var store = PhotoGridStore()
     @State private var tab = 0                 // 0 = Photos, 1 = Albums
@@ -568,7 +576,7 @@ struct StoryLibraryPicker: View {
     /// How many ticks this session may hold: the ceiling less whatever is in the post that cannot be
     /// shown here (a camera capture). Everything else in the post is already ticked, so it counts
     /// itself.
-    private var limit: Int { max(0, Self.storyLimit - reservedCount - unresolvedCount) }
+    private var limit: Int { max(0, (maxPicks ?? Self.storyLimit) - reservedCount - unresolvedCount) }
     /// Ids the post holds that the library will no longer resolve — the photo was deleted since it
     /// was picked. They cannot be ticked, and they are still in the post, so they spend budget the
     /// same way a camera capture does. Without this the ceiling would quietly hand back a free slot
@@ -603,7 +611,7 @@ struct StoryLibraryPicker: View {
         // Recents for seconds, then goes to the folder"). Waiting for the album list meant waiting
         // for `load` and then `loadAlbums`, which counts every album on the phone. PhotoKit finds one
         // album by its id at once, so the picker lands in it on its first frame.
-        guard allowsMultiple, !reopenedAlbum, !lastAlbumID.isEmpty,
+        guard allowsMultiple, !fileMode, !reopenedAlbum, !lastAlbumID.isEmpty,
               let album = (store.pinned + store.albums).first(where: { $0.id == lastAlbumID })
                 ?? store.album(id: lastAlbumID) else { return }
         reopenedAlbum = true
@@ -717,7 +725,9 @@ struct StoryLibraryPicker: View {
                 // The old wording — "add these first, then tap + again for more" — described the bug
                 // it was written under: the ceiling reset on every +, so it really was per batch.
                 // It is the post's ceiling now, and the way past it is to take something off.
-                Text("A story can hold \(Self.storyLimit) photos and videos. Take one off to add another.")
+                Text(fileMode
+                     ? "You can send up to \(maxPicks ?? Self.storyLimit) photos at once."
+                     : "A story can hold \(Self.storyLimit) photos and videos. Take one off to add another.")
             }
             .alert("Couldn't add everything", isPresented: $someFailed) {
                 Button("OK", role: .cancel) {
@@ -814,7 +824,8 @@ struct StoryLibraryPicker: View {
     private var photosAccessOff: some View {
         VStack(spacing: 12) {
             Text("Photos access is off").font(.headline)
-            Text("Allow Photos access in Settings to add photos and videos to your story.")
+            Text(fileMode ? "Allow Photos access in Settings to send photos as files."
+                          : "Allow Photos access in Settings to add photos and videos to your story.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -878,7 +889,7 @@ struct StoryLibraryPicker: View {
                     // ticked from the start, "Add 5" over five pictures that are already in the
                     // story would be a lie — and the same button is now also the way OUT of a
                     // change that only took something off, which is what "Done" says.
-                    Text(freshPicks.isEmpty ? "Done" : "Add \(freshPicks.count)")
+                    Text(freshPicks.isEmpty ? "Done" : "\(fileMode ? "Send" : "Add") \(freshPicks.count)")
                         .font(.callout.weight(.semibold))
                         .foregroundStyle(Color.onFariinAction)
                         .padding(.horizontal, 18).padding(.vertical, 10)
@@ -946,6 +957,12 @@ struct StoryLibraryPicker: View {
         // only change is what was taken off (or nothing at all, and the post is left as it is).
         guard !chosen.isEmpty else {
             onApply?(Array(removed), [])
+            dismiss()
+            return
+        }
+        // Files door: the host exports each original itself, so nothing is resolved here.
+        if let onSendAssets {
+            onSendAssets(chosen)
             dismiss()
             return
         }
@@ -1184,7 +1201,8 @@ struct StoryLibraryPicker: View {
     /// the multi-select tick all live here and are answered the same way whichever door was used.
     private func pick(_ asset: PHAsset) {
         // Where this pick came from, for the next + to reopen — see `reopenLastAlbum`.
-        lastAlbumID = openAlbum?.id ?? ""
+        // The files door keeps out of the story's "last folder" memory.
+        if !fileMode { lastAlbumID = openAlbum?.id ?? "" }
         // In multi mode a tap only ticks. Nothing is resolved, nothing is handed over and
         // the sheet does not move until Add.
         if allowsMultiple { toggle(asset); return }

@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import ImageIO
+import Photos
 
 // ⛔ "ADD FILES" INSIDE THE ATTACH SHEET — owner 2026-10-15, with a picture: tapping Files opens this
 // page in the sheet (as Location and GIF do): ✕ / "Add files" / •••, an "Upload files" card that opens
@@ -63,15 +64,72 @@ enum FileRecents {
     }
 }
 
+/// A library photo turned into a FILE on disk with its original bytes (owner 2026-11-08: Add files >
+/// Photos). The asset's own resource is copied out as it is: no decode, no re-encode, no resize, no
+/// HEIC to JPEG, so EXIF and every other bit of metadata go along. iCloud originals are downloaded.
+enum PhotoFileExport {
+    /// How many photos one Send may carry. Each one is its own file message, sent one after another.
+    static let maxPicks = 20
+
+    /// Writes the photo to `tmp/photo-files/<uuid>/<original file name>`, so the file-send path,
+    /// which names the message after the file, keeps the name the photo had on the phone.
+    /// Returns nil when there is no photo resource or the copy fails (an iCloud download refused).
+    static func export(_ asset: PHAsset) async -> URL? {
+        let resources = PHAssetResource.assetResources(for: asset)
+        // The CURRENT version: an edited photo's rendered full-size file when there is one (what the
+        // Photos app shows), otherwise the untouched original.
+        let original = resources.first { $0.type == .photo }
+        guard let resource = resources.first(where: { $0.type == .fullSizePhoto }) ?? original else { return nil }
+        let name = fileName(resource: resource, original: original)
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("photo-files/\(UUID().uuidString)", isDirectory: true)
+        do { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) } catch { return nil }
+        let out = dir.appendingPathComponent(name)
+        let opts = PHAssetResourceRequestOptions()
+        opts.isNetworkAccessAllowed = true
+        let ok: Bool = await withCheckedContinuation { cont in
+            PHAssetResourceManager.default().writeData(for: resource, toFile: out, options: opts) { error in
+                cont.resume(returning: error == nil)
+            }
+        }
+        guard ok else { cleanup(out); return nil }
+        return out
+    }
+
+    /// The name the photo had on the phone (IMG_1234.HEIC). An edited render is named
+    /// "FullSizeRender.jpg" by PhotoKit, so it takes the original's base name with its own extension.
+    private static func fileName(resource: PHAssetResource, original: PHAssetResource?) -> String {
+        var name = resource.originalFilename
+        if resource.type == .fullSizePhoto, let original {
+            let base = (original.originalFilename as NSString).deletingPathExtension
+            let ext = (resource.originalFilename as NSString).pathExtension
+            if !base.isEmpty { name = ext.isEmpty ? base : "\(base).\(ext)" }
+        }
+        // A slash in a name would make a folder of it; the send path names the message after the file.
+        name = name.replacingOccurrences(of: "/", with: "_")
+        return name.isEmpty ? "Photo.jpg" : name
+    }
+
+    /// Removes the exported copy and its folder once the send path has taken its own copy.
+    static func cleanup(_ url: URL) {
+        try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+    }
+}
+
 struct AttachFilesPage: View {
     var onBack: () -> Void
     /// A recent file to send again (a local copy).
     var onSendRecent: (URL) -> Void
     /// What the system file picker returned.
     var onImported: (Result<[URL], Error>) -> Void
+    /// Photos ticked in the app's own library picker, in tap order, to go out as FILES (owner
+    /// 2026-11-08). Called once that picker has gone, so the host can close this page cleanly.
+    var onPickedPhotos: ([PHAsset]) -> Void = { _ in }
 
     @State private var recents: [RecentFile] = FileRecents.all()
     @State private var importing = false
+    @State private var choosingPhotos = false
+    @State private var pickedPhotos: [PHAsset] = []
     /// Grid or List for Recent (owner 2026-10-15: the ••• menu chooses it; "Clear Recent" is gone).
     @AppStorage("files.recentLayout") private var layout = "list"
 
@@ -80,6 +138,8 @@ struct AttachFilesPage: View {
             VStack(alignment: .leading, spacing: 0) {
                 uploadCard
                     .padding(.top, 8)
+                photosCard
+                    .padding(.top, 12)
                 Text("Recent")
                     .font(.system(size: 20, weight: .semibold))
                     .padding(.top, 28)
@@ -115,6 +175,44 @@ struct AttachFilesPage: View {
         .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
             onImported(result)
         }
+        // THE APP'S OWN PICKER, the one the story composer uses (never Apple's), photos only, tick
+        // several, "Send N". The hand-off waits for this sheet to finish going so the host is not
+        // closing two sheets in the same frame.
+        .sheet(isPresented: $choosingPhotos, onDismiss: {
+            let picked = pickedPhotos
+            pickedPhotos = []
+            if !picked.isEmpty { onPickedPhotos(picked) }
+        }) {
+            StoryLibraryPicker(onImage: { _, _ in }, onVideo: { _, _ in },
+                               allowsMultiple: true,
+                               photosOnly: true,
+                               onSendAssets: { pickedPhotos = $0 },
+                               maxPicks: PhotoFileExport.maxPicks)
+        }
+    }
+
+    private var photosCard: some View {
+        Button { choosingPhotos = true } label: {
+            HStack(spacing: 16) {
+                Image(systemName: "photo.on.rectangle")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 64, height: 64)
+                    .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Photos").font(.system(size: 20, weight: .semibold)).foregroundStyle(.primary)
+                    Text("Send photos as files, in their original quality")
+                        .font(.system(size: 15)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(18)
+            .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 
     private var header: some View {
