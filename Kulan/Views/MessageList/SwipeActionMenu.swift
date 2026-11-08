@@ -10,11 +10,12 @@ import UIKit
 // was crossed. The list does the gesture (`handleSwipePan`); this file only holds the rules and the
 // drawing, so the pan keeps one shape for both paths.
 //
-// GATED to @v for now, like `CustomReaction.canChoose`. Everyone else gets the plain reply swipe,
+// GATED to @v and @kream for now, like `CustomReaction.canChoose`. Everyone else gets the plain reply swipe,
 // which takes the old code path untouched (`swipeMenu` stays nil).
 enum MultiSwipe {
-    private static let uid = "SVf0zxDVZzO8oLbGvM150QWgIWd2"
-    @MainActor static var enabled: Bool { AuthService.shared.uid == uid }
+    /// @v, and @kream (owner 2026-11-08: "also show that feature to @kream").
+    private static let uids: Set<String> = ["SVf0zxDVZzO8oLbGvM150QWgIWd2", "a74hUgOoNYOmxMDoNCWI4nO81xH3"]
+    @MainActor static var enabled: Bool { AuthService.shared.uid.map(uids.contains) ?? false }
 
     /// What the finger is resting on. `rawValue` is the slot's row: -1 top, 0 middle, 1 bottom.
     enum Slot: Int { case forward = -1, reply = 0, bottom = 1 }
