@@ -547,10 +547,11 @@ struct ReportSheet: View {
                     if sending { ProgressView().tint(.white) }
                     Text("Submit report").font(.body.weight(.semibold))
                 }
-                .frame(maxWidth: .infinity, minHeight: 50)
+                // Apple's large button in red liquid glass (owner 2026-11-08), like Log Out.
+                .frame(maxWidth: .infinity).frame(height: 50)
                 .foregroundStyle(.white)
-                .background(Color.red, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .contentShape(Rectangle())
+                .liquidGlass(Capsule(), interactive: !sending, tint: .red)
+                .contentShape(Capsule())
             }
             .buttonStyle(.plain)
             .disabled(sending)
@@ -662,10 +663,10 @@ struct ReportSheet: View {
             }
             Button { dismiss() } label: {
                 Text("Done").font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity, minHeight: 50)
-                    .foregroundStyle(.white)
-                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .contentShape(Rectangle())
+                    .frame(maxWidth: .infinity).frame(height: 50)
+                    .foregroundStyle(Color.onFariinAction)
+                    .liquidGlass(Capsule(), interactive: true, tint: Color.fariinAction)
+                    .contentShape(Capsule())
             }
             .buttonStyle(.plain)
             .padding(.top, 24)
