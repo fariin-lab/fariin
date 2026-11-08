@@ -236,11 +236,11 @@ enum MessageRowModelBuilder {
                     || msg.pendingMediaKind == "video" {
             var m = mediaBody(msg, ctx: ctx)
             // A photo or video that quotes a channel post carries the card (owner 2026-11-07).
-            if m.kind == .photo || m.kind == .video { m.quoteCard = msg.quoteId.map(quoteBody) }
+            if m.kind == .photo || m.kind == .video { m.quoteCard = msg.quoteId.map { quoteBody($0, cid: ctx.cid, mid: msg.id) } }
             body = .media(m)
         } else if msg.isAlbum {
             var a = albumBody(msg, ctx: ctx)
-            a.quoteCard = msg.quoteId.map(quoteBody)
+            a.quoteCard = msg.quoteId.map { quoteBody($0, cid: ctx.cid, mid: msg.id) }
             body = .album(a)
         } else if msg.isFile {
             body = .file(fileBody(msg))
@@ -289,7 +289,7 @@ enum MessageRowModelBuilder {
                 // A call link takes the call card whatever preview travelled with it: the web page
                 // behind the link knows nothing about the call, and older messages carry none.
                 // A quoted channel post takes the card's place (owner 2026-11-06, `quoteBody`).
-                linkPreview: msg.quoteId.map(quoteBody) ?? callLinkPreview(text) ?? msg.linkPreview.map(linkPreviewBody),
+                linkPreview: msg.quoteId.map { quoteBody($0, cid: ctx.cid, mid: msg.id) } ?? callLinkPreview(text) ?? msg.linkPreview.map(linkPreviewBody),
                 bold: text == msg.text ? msg.boldRanges : []))
         }
 
@@ -799,7 +799,10 @@ enum MessageRowModelBuilder {
     /// answer for this reader (`QuoteStore`): the channel's name, the post's text as quoted, its first
     /// picture, "Quoted post" under them. Post deleted / This channel is private when that is the
     /// answer, with no picture. "Loading…" until the first answer lands.
-    private static func quoteBody(_ qid: String) -> BubbleBody.LinkPreview {
+    private static func quoteBody(_ qid: String, cid: String, mid: String) -> BubbleBody.LinkPreview {
+        // Where this card sits, so a reader of THIS chat sees a quote of a private channel's post
+        // (owner 2026-11-08). The server checks the quote really was sent in this message.
+        QuoteStore.shared.noteHost(qid, cid: cid, mid: mid)
         guard let c = QuoteStore.shared.card(qid) else {
             return BubbleBody.LinkPreview(shape: .article, url: "fariin-quote://\(qid)", title: "Channel post",
                                           desc: "Loading…", host: "Quoted post", imageUrl: nil, imageEnc: nil)

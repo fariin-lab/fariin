@@ -4847,6 +4847,8 @@ struct ThreadView: View {
 
     private func openQuote(_ qid: String) {
         guard let c = QuoteStore.shared.card(qid) else { return }
+        // A private channel's post I see only through this chat: no way into the channel.
+        if c.locked == true { showJumpToast("This channel is private"); return }
         switch c.state {
         case .ok where c.cid == cid:
             // The quoted post is in THIS chat (owner 2026-11-06: his own post quoted in his own

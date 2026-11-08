@@ -18,6 +18,10 @@ struct QuoteCard: Equatable, Codable {
     /// "text", "photo", "video" or "album".
     var kind = "text"
     var image = ""
+    /// Shown because I can see the chat it was posted in, not the private channel it came from
+    /// (owner 2026-11-08): the card shows, a tap says the channel is private.
+    /// Optional so cards saved by older builds still decode.
+    var locked: Bool? = nil
 
     init(state: State) { self.state = state }
 
@@ -37,6 +41,7 @@ struct QuoteCard: Equatable, Codable {
         text = d["text"] as? String ?? ""
         kind = d["kind"] as? String ?? "text"
         image = d["image"] as? String ?? ""
+        locked = d["locked"] as? Bool
     }
 
     /// The card's lines, as the bubble draws them.
@@ -83,6 +88,22 @@ struct QuoteCard: Equatable, Codable {
     private var fetchedAt: [String: Date] = [:]
     private var queued = Set<String>()
     private var inFlight = Set<String>()
+    /// qid -> "cid/mid" of the message the quote card sits in (`noteHost`), sent with `getQuotes`.
+    private var hosts: [String: String] = [:]
+
+    /// ⛔ A QUOTE IS SEEN BY WHOEVER SEES THE CHAT IT WAS POSTED IN (owner 2026-11-08: a private
+    /// channel's post quoted into his public channel read "This channel is private" to its
+    /// followers). The server shows the snapshot to a reader of the hosting chat when the quote was
+    /// really sent in that message and the source channel still allows sharing.
+    func noteHost(_ qid: String, cid: String, mid: String) {
+        guard Self.isQid(qid), !cid.isEmpty, !mid.isEmpty else { return }
+        let h = cid + "/" + mid
+        guard hosts[qid] != h else { return }
+        let first = hosts[qid] == nil
+        hosts[qid] = h
+        // A card already answered "private" before its host was known: ask again with it.
+        if !first || cards[qid]?.state == .hidden { fetchedAt[qid] = nil }
+    }
     private var flushScheduled = false
     /// How long an answer is trusted before the server is asked again (access can change).
     private let fresh: TimeInterval = 120
@@ -145,6 +166,7 @@ struct QuoteCard: Equatable, Codable {
         }
         for t in pending.values { t.cancel() }
         cards.removeAll(); lastUsed.removeAll(); fetchedAt.removeAll(); queued.removeAll()
+        hosts.removeAll()
         inFlight.removeAll()   // a call from the old account must not block the new one's cards
         pending.removeAll(); done.removeAll()
     }
@@ -186,7 +208,9 @@ struct QuoteCard: Equatable, Codable {
             // flight is never asked again.
             let call = Functions.functions(region: "me-central1").httpsCallable("getQuotes")
             call.timeoutInterval = 15
-            let r = try await call.call(["qids": batch])
+            var hostsFor: [String: String] = [:]
+            for q in batch { if let h = hosts[q] { hostsFor[q] = h } }
+            let r = try await call.call(["qids": batch, "hosts": hostsFor])
             let got = ((r.data as? [String: Any])?["quotes"] as? [String: Any]) ?? [:]
             var changed = false
             for q in batch {
