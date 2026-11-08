@@ -166,7 +166,7 @@ struct CallLinkKey: Hashable {
 
 /// Outside the service on purpose: the service is main-actor, and the row models read these.
 enum CallLinkDefaults {
-    static let name = "Kulan Call"
+    static let name = "Fariin Call"
     static let maxNameLength = 32
     /// The server rules cap a stored name at 64 code points (`name.size() <= 64`), which counts
     /// unicode scalars, not the grapheme clusters `String.count` and `prefix` use.

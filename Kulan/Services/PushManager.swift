@@ -174,7 +174,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // from this phone's own copy by uid (an older server's `callerName` only as a fallback),
         // then "Kulan"; CallService corrects it from the profile while it rings.
         let pushedName = (d["callerName"] as? String).flatMap { $0.isEmpty || $0 == "Call" ? nil : $0 }
-        let name = CallService.cachedCallerName(uid) ?? pushedName ?? "Kulan"
+        let name = CallService.cachedCallerName(uid) ?? pushedName ?? "Fariin"
         let photo = (d["photo"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         let video = (d["type"] as? String) == "video"   // M1: show the right CallKit UI for a video call
         // iOS 13+: MUST report to CallKit before completion or the app is terminated.

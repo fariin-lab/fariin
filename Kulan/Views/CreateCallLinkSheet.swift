@@ -484,7 +484,7 @@ struct CallLinkShareRows: View {
         } else {
             CallLinkGroup {
                 Button(action: sendInKulan) {
-                    CallLinkRow(icon: "arrowshape.turn.up.right", title: "Share Link via Kulan")
+                    CallLinkRow(icon: "arrowshape.turn.up.right", title: "Share Link via Fariin")
                 }
                 .buttonStyle(.plain)
                 CallLinkDivider()

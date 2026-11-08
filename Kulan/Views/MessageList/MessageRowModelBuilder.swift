@@ -736,7 +736,7 @@ enum MessageRowModelBuilder {
             guard let url = URL(string: s), case .call(let key)? = KulanApp.route(from: url) else { continue }
             return BubbleBody.LinkPreview(
                 shape: .call(key: key), url: url.absoluteString,
-                title: "Kulan Call", desc: "Use this link to join a Kulan call",
+                title: "Fariin Call", desc: "Use this link to join a Fariin call",
                 host: url.host ?? "fariin.com",
                 imageUrl: nil, imageEnc: nil)
         }

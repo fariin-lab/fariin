@@ -858,7 +858,7 @@ struct CallsView: View {
         let links = linkService.links
         return q.isEmpty ? links : links.filter { linkTitle($0).lowercased().contains(q) }
     }
-    private func linkTitle(_ l: SavedCallLink) -> String { l.name.isEmpty ? "Kulan Call" : l.name }
+    private func linkTitle(_ l: SavedCallLink) -> String { l.name.isEmpty ? "Fariin Call" : l.name }
 
     /// A link's id in the shared List selection. Prefixed so it can never collide with a call id.
     private func linkTag(_ l: SavedCallLink) -> String { "link:" + l.roomId }

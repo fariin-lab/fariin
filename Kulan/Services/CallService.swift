@@ -4887,7 +4887,7 @@ final class CallService: NSObject {
                     // r3 A6, 2026-10-08: "Try again" cannot help when their phone has no key yet.
                     GroupCallService.presentOverTop(keyOk == .noKey
                         ? GroupCallService.Notice(title: "Can't call right now.",
-                                                  message: "Their app hasn't finished setting up. Ask them to open Kulan.")
+                                                  message: "Their app hasn't finished setting up. Ask them to open Fariin.")
                         : GroupCallService.Notice(title: "Can't call right now.", message: "Try again."))
                     return
                 }
@@ -5168,8 +5168,8 @@ final class CallService: NSObject {
             }
             let alert = UIAlertController(
                 title: camera ? "Camera Access Is Off" : "Microphone Access Is Off",
-                message: camera ? "Allow Kulan to use the camera in Settings to make video calls."
-                                : "Allow Kulan to use the microphone in Settings to make calls.",
+                message: camera ? "Allow Fariin to use the camera in Settings to make video calls."
+                                : "Allow Fariin to use the microphone in Settings to make calls.",
                 preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
             if let voiceInstead {

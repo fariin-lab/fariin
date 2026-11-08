@@ -327,8 +327,8 @@ struct GroupCallView: View {
         accessOff == .camera ? "Camera Access Is Off" : "Microphone Access Is Off"
     }
     private var accessOffMessage: String {
-        accessOff == .camera ? "Allow Kulan to use the camera in Settings so others can see you."
-                             : "Allow Kulan to use the microphone in Settings so others can hear you."
+        accessOff == .camera ? "Allow Fariin to use the camera in Settings so others can see you."
+                             : "Allow Fariin to use the microphone in Settings so others can hear you."
     }
 
     // MARK: - Alerts, sheets, lifetime
@@ -680,8 +680,13 @@ struct GroupCallView: View {
     @State private var chromeVisible = true
     @State private var hideTask: DispatchWorkItem?
     private static let autoHideAfter: TimeInterval = 5
+    private static let chromeMayHide = false
 
     private var autoHideEnabled: Bool {
+        // ⛔ NEVER HIDDEN (owner 2026-11-08, his screenshot of a link call with a camera on): the
+        // header and the controls stay, cameras or not, and a tap on empty space does nothing.
+        // Replaces the 2026-10-06 "hide like a 1:1 video call" rule below, kept for reference.
+        if !Self.chromeMayHide { return false }
         guard service.joinState == .joined, remoteCount >= 1 else { return false }
         if UIAccessibility.isVoiceOverRunning { return false }
         if duoPair != nil && !duoHasVideo { return false }

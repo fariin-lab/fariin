@@ -22,7 +22,7 @@ struct CallLobbyView: View {
 
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var service = GroupCallService.shared
-    @State private var title = "Kulan Call"
+    @State private var title = "Fariin Call"
     @State private var voiceOnly = false
     @State private var cameraOn = true
     /// Off to begin with, as in the owner's screenshot of the reference screen: you choose to be

@@ -2789,7 +2789,7 @@ final class GroupCallService: ObservableObject {
         connecting = true; isVideo = video
         cameraOn = video   // round 2 (V2 N8): the camera button shows the call's wish while joining
         micOn = mic   // audit M-002: a Mute tapped while joining toggles from the lobby's choice
-        callTitle = "Kulan Call"
+        callTitle = "Fariin Call"
         isLinkCreator = false
         let gen = joinGeneration   // owner audit 2026-10-06 #4
         // The name is sealed with the link's key; only someone holding the link can read it.
@@ -2967,12 +2967,12 @@ final class GroupCallService: ObservableObject {
     /// link without the extras and Join works as it always has.
     func peekLink(key: String) async -> LinkPeek? {
         guard let k = CallLinkKey(text: key) else {
-            return LinkPeek(title: "Kulan Call", count: 0, names: [], approval: false, video: true,
+            return LinkPeek(title: "Fariin Call", count: 0, names: [], approval: false, video: true,
                             gone: true, full: false, iAmCreator: false)
         }
         guard let res = try? await functions.httpsCallable("peekCallLink").call(["roomId": k.roomId]),
               let d = res.data as? [String: Any] else { return nil }
-        var title = "Kulan Call"
+        var title = "Fariin Call"
         if let enc = d["encName"] as? String, !enc.isEmpty, let name = k.decryptName(enc), !name.isEmpty {
             title = name
         }
