@@ -260,8 +260,12 @@ final class CallKitManager: NSObject {
     /// transient call and ends it at once (`reportAndDiscard`); the listener keeps the silent return.
     func reportIncoming(callId: String, name: String, video: Bool = false,
                         callerUid: String? = nil, fromPush: Bool = false, completion: (() -> Void)? = nil) {
-        if activeCallId == callId, activeUUID != nil {
-            if fromPush { reportAndDiscard { completion?() } } else { completion?() }
+        if activeCallId == callId, let ringing = activeUUID {
+            // Owner, 2026-11-08 ("the call ends, but another incoming call keeps appearing"): the
+            // push for a call the listener already rang was reported under a NEW UUID, so iOS put a
+            // second "Call" screen over the real ring. Reported under the ringing call's own UUID
+            // now: iOS answers "already exists", which counts as the report, and shows nothing.
+            if fromPush { reportGroupDiscard(uuid: ringing) { completion?() } } else { completion?() }
             return
         }
         applyRingtone(callerUid: callerUid)
@@ -290,6 +294,7 @@ final class CallKitManager: NSObject {
         let uuid = UUID()
         activeUUID = uuid
         activeCallId = callId
+        rememberUUID(uuid, for: callId)   // 2026-11-08: a late push for this call reuses it
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: name)
         update.hasVideo = video
@@ -366,8 +371,12 @@ final class CallKitManager: NSObject {
     /// in the Phone app's Recents, often right after the person had taken part in the call. This one
     /// is reported with Recents off and ended as answered elsewhere; the next real report puts the
     /// configuration back (`applyConfig`), and so does its own completion.
-    func reportGroupDiscard(completion: @escaping () -> Void) {
-        let uuid = UUID()
+    ///
+    /// `uuid` (owner, 2026-11-08): a push for a 1:1 call CallKit has, or had, is reported under that
+    /// call's own UUID. iOS then refuses it as "already exists" (still a report, as PushKit needs) and
+    /// draws no second screen. Only a report iOS accepted as a NEW call is ended here; the ringing
+    /// call itself is never ended by this.
+    func reportGroupDiscard(uuid: UUID = UUID(), completion: @escaping () -> Void) {
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: "Call")
         Self.limitControls(update)
@@ -381,15 +390,63 @@ final class CallKitManager: NSObject {
         if !oneToOneLive, current.includesCallsInRecents {
             provider.configuration = Self.makeConfig(ringtone: ringtone, inRecents: false)
         }
-        provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] _ in
+        provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
+            DiagLog.add("VOIP# discard err=\((error as NSError?)?.code ?? -1)")
             guard let self else { completion(); return }
-            self.provider.reportCall(with: uuid, endedAt: nil, reason: .answeredElsewhere)
+            if error == nil, self.activeUUID != uuid {
+                self.provider.reportCall(with: uuid, endedAt: nil, reason: .answeredElsewhere)
+            }
             // A 1:1 call reported meanwhile set its own configuration; it is left alone too.
             if !oneToOneLive, self.activeUUID == nil {
                 self.applyConfig(ringtone: ringtone, peerUid: nil)
             }
             completion()
         }
+    }
+
+    // MARK: - One call id, one system call (owner, 2026-11-08)
+
+    /// The UUID CallKit was given for each 1:1 call id lately, kept 5 minutes. Main queue only
+    /// (PushKit's and CallKit's queue here). A ring push, a repeat or a cancel push for the same
+    /// call id is reported under it, so one call never puts up a second system screen.
+    private var reportedUUIDs: [String: (uuid: UUID, at: Date)] = [:]
+
+    private func rememberUUID(_ uuid: UUID, for callId: String) {
+        let now = Date()
+        reportedUUIDs = reportedUUIDs.filter { now.timeIntervalSince($0.value.at) < 300 }
+        reportedUUIDs[callId] = (uuid, now)
+    }
+
+    /// The ringing call's UUID for this id, else the one it had while it rang here lately.
+    private func knownUUID(for callId: String) -> UUID? {
+        if activeCallId == callId, let ringing = activeUUID { return ringing }
+        guard let e = reportedUUIDs[callId], Date().timeIntervalSince(e.at) < 300 else { return nil }
+        return e.uuid
+    }
+
+    /// A 1:1 push that must not ring (a cancel, a ring the caller already cancelled, a signed-out
+    /// phone): reported under the call's own UUID when this phone has one for it, so iOS shows
+    /// nothing new. A call id seen here for the first time gets a fresh UUID, remembered, so the
+    /// ring push that trails its cancel lands on the same one and shows nothing either.
+    func discardPush(callId: String, completion: @escaping () -> Void) {
+        let uuid: UUID
+        if let known = knownUUID(for: callId) {
+            uuid = known
+        } else {
+            uuid = UUID()
+            rememberUUID(uuid, for: callId)
+        }
+        reportGroupDiscard(uuid: uuid, completion: completion)
+    }
+
+    /// A ring push for a call that already rang here and is over (the listener rang it, then it
+    /// ended, then APNs delivered the push). True when it was reported under that call's old UUID;
+    /// false when this phone never reported the call, and the caller rings it as before.
+    func discardLateRing(callId: String, completion: @escaping () -> Void) -> Bool {
+        guard activeCallId != callId, let old = reportedUUIDs[callId],
+              Date().timeIntervalSince(old.at) < 300 else { return false }
+        reportGroupDiscard(uuid: old.uuid, completion: completion)
+        return true
     }
 
     /// Audit M-004, 2026-10-07: the caller hung up before an answer and the server sent a cancel
