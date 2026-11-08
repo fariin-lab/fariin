@@ -6119,12 +6119,41 @@ struct ThreadView: View {
     private func multiSwipeMenu(_ id: String) -> MultiSwipe.Menu? {
         guard MultiSwipe.enabled, let idx = repo.indexById[id], idx < repo.items.count else { return nil }
         let m = repo.items[idx]
-        return MultiSwipe.Menu(canForward: canForward(m), bottom: multiSwipeBottom(m))
+        return MultiSwipe.Menu(top: multiSwipeTop(m))
     }
 
-    /// The bottom slot by kind: Copy for text, Save for a photo, video or album, Save to Files for a
-    /// document. Anything else (voice, poll, sticker, GIF, location...) has none.
-    private func multiSwipeBottom(_ m: Message) -> MultiSwipe.Bottom {
+    /// The top slot: the action picked in Settings when it applies to this message, else the kind's
+    /// own (`multiSwipeKindDefault`), which is also what Copy means for media (owner 2026-11-08: a
+    /// photo's top slot is Save).
+    private func multiSwipeTop(_ m: Message) -> MultiSwipe.Top {
+        switch MultiSwipe.Choice.current {
+        case .copy: break
+        case .forward: if canForward(m) { return .forward }
+        case .share: if multiSwipeCanShare(m) { return .share }
+        case .quote: if multiSwipeCanQuote(m) { return .quote }
+        }
+        return multiSwipeKindDefault(m)
+    }
+
+    /// The long-press menu's Quote rule: a channel post, not a service line, Quotes not off.
+    private func multiSwipeCanQuote(_ m: Message) -> Bool {
+        conversation?.isChannel == true && !m.isSystem && m.pinNotice == nil
+            && conversation?.quotesOff != true && canForward(m)
+    }
+
+    /// Share = the system share sheet with the message, the gallery's `shareItem` per kind. Not
+    /// under No Saving, not view-once, and not an album (one album shares as Save N Items instead).
+    private func multiSwipeCanShare(_ m: Message) -> Bool {
+        guard savingAllowed, m.sendState == nil, !m.viewOnce, !m.deleted, !m.isCall, !m.isSystem,
+              !m.isAlbum else { return false }
+        if m.isAudio || m.isVideo || m.isFile || m.isGif || m.isImage { return true }
+        let plain = m.type == nil || m.type == "text" || m.type?.isEmpty == true
+        return plain && !m.text.isEmpty && !m.isFeatureMarker
+    }
+
+    /// The fallback by kind: Copy for text, Save for a photo, video or album, Save to Files for a
+    /// document. Anything else (voice, poll, sticker, GIF, location...) has none: the slot dims.
+    private func multiSwipeKindDefault(_ m: Message) -> MultiSwipe.Top {
         guard savingAllowed, !m.viewOnce, !m.deleted, !m.isCall, !m.isSystem else { return .none }
         if m.isAlbum { return .save(count: max(m.album.count, m.localAlbum.count)) }
         if m.isImage || m.isVideo { return .save(count: 1) }
@@ -6142,14 +6171,18 @@ struct ThreadView: View {
         switch slot {
         case .reply:
             beginReply(to: live)
-        case .forward:   // the menu's Forward
-            guard canForward(live) else { showJumpToast("That message is no longer available"); return }
-            forwardIsQuote = false
-            forwardTarget = live
-        case .bottom:
-            switch multiSwipeBottom(live) {
+        case .top:
+            switch multiSwipeTop(live) {
             case .none:
                 return
+            case .forward:   // the menu's Forward
+                forwardIsQuote = false
+                forwardTarget = live
+            case .quote:     // the menu's Quote
+                forwardIsQuote = true
+                forwardTarget = live
+            case .share:
+                multiSwipeShare(live)
             case .copy:   // the menu's Copy, plus a toast: a swipe has no menu closing to say it worked
                 UIPasteboard.general.string = live.text
                 showJumpToast("Copied")
@@ -6170,6 +6203,24 @@ struct ThreadView: View {
             case .saveToFiles:
                 saveFileToFiles(live)
             }
+        }
+    }
+
+    /// The system share sheet with one message: the gallery's shareable form of it (text, the
+    /// picture, or the decrypted file), presented on the top-most screen as the gallery does.
+    private func multiSwipeShare(_ m: Message) {
+        let cid = self.cid
+        Task { @MainActor in
+            guard let item = await MediaGalleryView.shareItem(m, cid: cid, index: 0) else {
+                showJumpToast("Couldn't share"); return
+            }
+            guard let top = WebLink.topViewController() else { return }
+            let vc = UIActivityViewController(activityItems: [item], applicationActivities: nil)
+            if let pop = vc.popoverPresentationController {   // iPad: anchor it somewhere sensible
+                pop.sourceView = top.view
+                pop.sourceRect = CGRect(x: top.view.bounds.midX, y: top.view.bounds.maxY - 80, width: 1, height: 1)
+            }
+            top.present(vc, animated: true)
         }
     }
 

@@ -1232,7 +1232,7 @@ struct MediaGalleryView: View {
     /// The shareable form of one message, by kind: a link as its URL, a voice note / video / file /
     /// GIF as a file, a photo as the picture, plain text as text. nil only when it truly cannot be
     /// had (gone from the server, no network).
-    private static func shareItem(_ m: Message, cid: String, index: Int) async -> Any? {
+    static func shareItem(_ m: Message, cid: String, index: Int) async -> Any? {
         if m.isAudio { return await shareAudio(m, cid: cid, index: index) }
         if m.type == "video" { return await shareVideo(m, cid: cid) }
         if m.isFile { return await shareFile(m, cid: cid) }
