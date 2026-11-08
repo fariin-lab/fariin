@@ -50,6 +50,14 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Sign package downloads in (GitHub times out anonymous release downloads)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf 'machine github.com' > ~/.netrc
+          printf ' login x-access-token password %s' "$GH_TOKEN" >> ~/.netrc
+          chmod 600 ~/.netrc
+
       - name: Resolve Swift packages (retry, clearing corrupt binary-framework artifacts)
         run: |
           for i in 1 2 3 4; do

@@ -38,14 +38,13 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Diagnose package downloads
+      - name: Sign package downloads in (GitHub times out anonymous release downloads)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          df -h ~ /tmp | cat
-          ls -la ~/Library/Caches/org.swift.swiftpm 2>&1 | head -5 || true
-          for u in https://github.com/stasel/WebRTC/releases/download/120.0.0/WebRTC-M120.xcframework.zip https://github.com/akaffenberger/firebase-ios-sdk-xcframeworks/releases/download/11.15.0/_FBLPromises.xcframework.zip; do
-            curl -sSL -o /tmp/probe.zip -w "%{http_code} %{size_download} bytes in %{time_total}s  $u" "$u"; echo || echo "curl failed: $u"
-          done
-          swift --version | head -1
+          printf 'machine github.com' > ~/.netrc
+          printf ' login x-access-token password %s' "$GH_TOKEN" >> ~/.netrc
+          chmod 600 ~/.netrc
 
       - name: Resolve Swift packages (retry, clearing corrupt binary-framework artifacts)
         run: |
