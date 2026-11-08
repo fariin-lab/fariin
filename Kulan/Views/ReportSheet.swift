@@ -177,6 +177,17 @@ struct ReportSheet: View {
     @State private var blockBusy = false
     @State private var mutedNow = false
     @State private var left = false
+    /// Each page's measured height, by its depth in the stack (0 = the reasons).
+    @State private var fits: [Int: CGFloat] = [:]
+
+    /// ⛔ THE SHEET FITS ITS PAGE (owner 2026-11-08: the sexual-content page sat in a big sheet with
+    /// an empty white half under four rows). It was a fixed 82% for every page. Now each page's
+    /// list reports its own height (content + bars) and the sheet takes that, up to the large one.
+    private var fitHeight: CGFloat? {
+        fits[path.count].map { min($0 + 8, UIScreen.main.bounds.height * 0.92) }
+    }
+
+    private func depth(_ page: Page) -> Int { (path.firstIndex(of: page) ?? path.count - 1) + 1 }
 
     private var shownName: String { target.name.isEmpty ? "They" : target.name }
     private var canBlock: Bool {
@@ -187,16 +198,18 @@ struct ReportSheet: View {
     var body: some View {
         NavigationStack(path: $path) {
             reasonsPage
+                .modifier(ReportPageFit(depth: 0, fits: $fits))
                 .navigationDestination(for: Page.self) { page in
                     switch page {
-                    case .subs(let cat): subsPage(cat)
-                    case .confirm(let cat, let sub): confirmPage(cat, sub)
-                    case .done(let cat, let sub): donePage(cat, sub)
+                    case .subs(let cat): subsPage(cat).modifier(ReportPageFit(depth: depth(page), fits: $fits))
+                    case .confirm(let cat, let sub): confirmPage(cat, sub).modifier(ReportPageFit(depth: depth(page), fits: $fits))
+                    case .done(let cat, let sub): donePage(cat, sub).modifier(ReportPageFit(depth: depth(page), fits: $fits))
                     }
                 }
         }
-        // Owner rule: no corner X on a sheet; the grabber closes it.
-        .presentationDetents([.fraction(0.82), .large])
+        // The first page has an X (owner 2026-11-08); the grabber closes it too.
+        .presentationDetents(fitHeight.map { [.height($0), .large] } ?? [.fraction(0.82), .large])
+        .animation(.snappy(duration: 0.25), value: fitHeight)
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(sending)
     }
@@ -225,6 +238,15 @@ struct ReportSheet: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Report")
         .navigationBarTitleDisplayMode(.inline)
+        // ⛔ AN X ON THE FIRST PAGE (owner 2026-11-08: "add x button"). Overrides the earlier
+        // grabber-only rule for this sheet; the pages after it keep their back button.
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { dismiss() } label: { Image(systemName: "xmark") }
+                    .accessibilityLabel("Close")
+                    .disabled(sending)
+            }
+        }
     }
 
     // MARK: Page 1b, the sub-reasons
@@ -461,4 +483,19 @@ struct ReportSheetHost: ViewModifier {
 /// The menu icon every Report entry uses (owner 2026-11-08: one outline icon, not a flag).
 enum ReportIcon {
     static let symbol = "exclamationmark.bubble"
+}
+
+/// A page of the Report sheet saying how tall it is: its list's content plus the bars above and
+/// below it (the scroll view's insets), so the sheet can fit it with no empty space.
+private struct ReportPageFit: ViewModifier {
+    let depth: Int
+    @Binding var fits: [Int: CGFloat]
+
+    func body(content: Content) -> some View {
+        content.onScrollGeometryChange(for: CGFloat.self) { g in
+            g.contentSize.height + g.contentInsets.top + g.contentInsets.bottom
+        } action: { _, h in
+            if h > 0, abs((fits[depth] ?? 0) - h) > 1 { fits[depth] = h }
+        }
+    }
 }
