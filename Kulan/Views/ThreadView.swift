@@ -9156,7 +9156,11 @@ struct ThreadView: View {
         // (`hidesChannelNotices`) and settings writes carry no message. `ChatHistoryPreloader` never
         // warms a channel, so `knownCurrent` never answers for one either, and every such open was
         // held here until the server's window settled. A new post glides in after the land instead.
-        if conv.isChannel, !conv.users.contains(me) { return false }
+        // ⛔ AND NOT FOR A CHANNEL I RUN EITHER (owner 2026-11-08, second video: his own channel VE3
+        // opened empty for half a second). The same false alarm: a settings change ("turned off
+        // Restricted"), an edit or a deleted post moves `updatedAt` with no new row, and the
+        // preloader skips every channel, so nothing ever cleared it. A real new post glides in.
+        if conv.isChannel { return false }
         // 2s of slack: `updatedAt` is the server's clock, a pending row's `createdAt` the phone's.
         guard conv.displayUpdatedAt(me) > newest.timeIntervalSince1970 * 1000 + 2000 else { return false }
         // A background warm-up already found nothing newer for this `updatedAt` (a settings write):
