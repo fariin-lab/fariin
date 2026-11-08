@@ -237,10 +237,17 @@ final class GroupCallStage: ObservableObject {
         }?.id
     }
 
+    /// A live camera or a shared screen on this tile.
+    static func hasPicture(_ t: CallTile?) -> Bool { t.map { $0.hasVideo || $0.isScreenShare } ?? false }
+
     func togglePin(_ tileId: String) {
         // My own tile is the self pip; focusing it (my own camera, or my own shared screen, a hall
         // of mirrors) would push everyone else off the stage.
         guard let p = participants[tileId], !(p is LocalParticipant) else { return }
+        // ⛔ ONLY SOMEONE WITH A PICTURE (owner 2026-11-08): a tap makes a person large only while
+        // their camera or a shared screen is on; a tap on a photo tile does nothing. Unpinning
+        // (a second tap on the large one) always works. Mine alone: nobody else's stage changes.
+        if pinnedId != tileId, !Self.hasPicture(tiles.first { $0.id == tileId }) { return }
         pinnedId = (pinnedId == tileId) ? nil : tileId
     }
 
@@ -496,6 +503,8 @@ final class GroupCallStage: ObservableObject {
         // CallTile's == ignores speech: a speaking flag alone publishes nothing (spec §12).
         if built != tiles { tiles = built }
         if let pin = pinnedId, !present.contains(pin) { pinnedId = nil }   // didSet updates mode
+        // The large person turned their camera off (and shares nothing): back to the grid as before.
+        if let pin = pinnedId, !Self.hasPicture(built.first { $0.id == pin }) { pinnedId = nil }
         // A share that just started takes the stage over an older pin (the latest thing wins).
         if newShare, pinnedId != nil { pinnedId = nil }
         // The person behind an open "Remove?" question left by themselves: nothing left to confirm.
