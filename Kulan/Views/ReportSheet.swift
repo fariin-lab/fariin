@@ -179,6 +179,8 @@ struct ReportSheet: View {
     @State private var left = false
     /// Each page's measured height, by its depth in the stack (0 = the reasons).
     @State private var fits: [Int: CGFloat] = [:]
+    /// The rows' fill on the solid sheet: light grey in light mode, dark grey in dark.
+    private static let rowFill = Color(.secondarySystemBackground)
 
     /// ⛔ THE SHEET FITS ITS PAGE (owner 2026-11-08: the sexual-content page sat in a big sheet with
     /// an empty white half under four rows). It was a fixed 82% for every page. Now each page's
@@ -211,6 +213,10 @@ struct ReportSheet: View {
         .presentationDetents(fitHeight.map { [.height($0), .large] } ?? [.fraction(0.82), .large])
         .animation(.snappy(duration: 0.25), value: fitHeight)
         .presentationDragIndicator(.visible)
+        // ⛔ SOLID, NOT GLASS (owner 2026-11-08: "white in light mode, black in dark, now it looks
+        // like a mirror"). The system sheet is see-through glass on iOS 26; this one is the plain
+        // background, its rows one step off it.
+        .presentationBackground(Color(.systemBackground))
         .interactiveDismissDisabled(sending)
     }
 
@@ -218,6 +224,7 @@ struct ReportSheet: View {
 
     private var reasonsPage: some View {
         List {
+            Group {
             Section {
                 ForEach(ReportReason.all) { r in
                     NavigationLink(value: r.subs.isEmpty ? Page.confirm(r.id, nil) : Page.subs(r.id)) {
@@ -234,8 +241,11 @@ struct ReportSheet: View {
                 .textCase(nil)
                 .padding(.bottom, 8)
             }
+            }
+            .listRowBackground(Self.rowFill)   // rows a step off the sheet (a row's own clear wins)
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
         .navigationTitle("Report")
         .navigationBarTitleDisplayMode(.inline)
         // ⛔ AN X ON THE FIRST PAGE (owner 2026-11-08: "add x button"). Overrides the earlier
@@ -254,6 +264,7 @@ struct ReportSheet: View {
     private func subsPage(_ cat: String) -> some View {
         let r = ReportReason.find(cat)
         return List {
+            Group {
             Section {
                 ForEach(r?.subs ?? []) { s in
                     NavigationLink(value: Page.confirm(cat, s.id)) { Text(s.title) }
@@ -263,8 +274,11 @@ struct ReportSheet: View {
                     .font(.title3.weight(.semibold)).foregroundStyle(.primary)
                     .textCase(nil).padding(.bottom, 8)
             }
+            }
+            .listRowBackground(Self.rowFill)   // rows a step off the sheet (a row's own clear wins)
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
         .navigationTitle("Report")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -285,6 +299,7 @@ struct ReportSheet: View {
 
     private func confirmPage(_ cat: String, _ sub: String?) -> some View {
         List {
+            Group {
             Section {
                 Text(reasonLine(cat, sub))
             } header: {
@@ -330,8 +345,11 @@ struct ReportSheet: View {
             } footer: {
                 if let failure { Text(failure).foregroundStyle(.red) }
             }
+            }
+            .listRowBackground(Self.rowFill)   // rows a step off the sheet (a row's own clear wins)
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
         .navigationTitle("Report")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -380,6 +398,7 @@ struct ReportSheet: View {
 
     private func donePage(_ cat: String, _ sub: String?) -> some View {
         List {
+            Group {
             Section {
                 VStack(spacing: 12) {
                     Image(systemName: "checkmark.circle.fill")
@@ -440,8 +459,11 @@ struct ReportSheet: View {
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
             }
+            }
+            .listRowBackground(Self.rowFill)   // rows a step off the sheet (a row's own clear wins)
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
         .navigationTitle("Report")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
