@@ -1547,6 +1547,15 @@ private struct ReplyRow: View {
                         .padding(.horizontal, 6).padding(.vertical, 1)
                         .background(Color(.tertiarySystemFill), in: Capsule())
                 }
+                // ⛔ "JAYZ ▸ SALMO" (owner 2026-11-08, his reference): an answer to another answer
+                // names who it answers in the name line, not as "@name" in the words. A tap goes to
+                // that answer, as the "@name" did.
+                if let to = reply.toName, !to.isEmpty {
+                    Image(systemName: "arrowtriangle.right.fill")
+                        .font(.system(size: 7)).foregroundStyle(.secondary)
+                    Text(to).font(.footnote.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
+                        .onTapGesture { actions.mention?() }
+                }
                 Text(Self.age(reply.at)).font(.footnote).foregroundStyle(.secondary)
                 if reply.edited {
                     Text("· edited").font(.footnote).foregroundStyle(.secondary)
@@ -1606,14 +1615,8 @@ private struct ReplyRow: View {
 
     private static let mentionScheme = "fariin-reply-to"
 
-    /// The words, with "@name " first in the accent colour when this answers another answer.
-    private var bodyText: Text {
-        guard let n = reply.toName, !n.isEmpty else { return Text(reply.text) }
-        var at = AttributedString("@\(n) ")
-        at.swiftUI.foregroundColor = Color.accentColor
-        if actions.mention != nil { at.link = URL(string: "\(Self.mentionScheme)://answer") }
-        return Text(at + AttributedString(reply.text))
-    }
+    /// The words alone: who an answer answers is in the name line now ("Jayz ▸ Salmo", 2026-11-08).
+    private var bodyText: Text { Text(reply.text) }
 
     @ViewBuilder private var footer: some View {
         switch reply.send {
