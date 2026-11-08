@@ -216,7 +216,7 @@ struct CallLinkDraft: Identifiable, Hashable, CallLinkRef {
     let key: String
     var name: String               // "" = unnamed
     var approval: Bool             // "Require Admin Approval"
-    var video: Bool = true         // Call Type: Video, or Voice (owner, 2026-10-06)
+    var video: Bool = false        // Call Type: Voice by default (owner 2026-11-08), or Video
     var id: String { roomId }
 
     var title: String { name.isEmpty ? CallLinkDefaults.name : name }
@@ -343,9 +343,10 @@ final class CallLinkService {
                     "roomId": key.roomId,
                     "encName": "",
                     "restrictions": "adminApproval",
-                    "video": true,
+                    // A new link is a VOICE call (owner 2026-11-08); Call Type switches it to video.
+                    "video": false,
                 ])
-                return CallLinkDraft(roomId: key.roomId, key: key.text, name: "", approval: true)
+                return CallLinkDraft(roomId: key.roomId, key: key.text, name: "", approval: true, video: false)
             } catch {
                 lastError = error
                 let ns = error as NSError

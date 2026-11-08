@@ -25,9 +25,9 @@ struct CallLobbyView: View {
     @State private var title = "Fariin Call"
     @State private var voiceOnly = false
     @State private var cameraOn = true
-    /// Off to begin with, as in the owner's screenshot of the reference screen: you choose to be
-    /// heard before you walk in.
-    @State private var micOn = false
+    /// ON to begin with (owner 2026-11-08: everyone walked into a link call muted). The button is
+    /// still there to go in muted.
+    @State private var micOn = true
     @State private var cameraDenied = false
     /// Camera access answered yes. The preview waits for it.
     @State private var cameraReady = false
