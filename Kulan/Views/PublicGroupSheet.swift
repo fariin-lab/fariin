@@ -427,18 +427,18 @@ struct PublicJoinBar: View {
                 // Joining keeps the blue and spins, like the sheets' button (owner 2026-10-24).
                 ZStack {
                     Text(title).opacity(joining ? 0 : 1)
-                    if joining { BusyArc.small(p.isChannel ? .primary : .onFariinAction) }
+                    if joining { BusyArc.small(p.isChannel ? Color(.systemBackground) : .onFariinAction) }
                 }
                     .font(.system(size: 17, weight: .semibold))
                     // A channel's Follow is plain liquid glass, like the follower's bar (owner
                     // 2026-11-08); a group's Join keeps the blue.
-                    .foregroundStyle(p.isChannel ? (enabled || joining ? Color.primary : Color.secondary)
+                    .foregroundStyle(p.isChannel ? (enabled || joining ? Color(.systemBackground) : Color.secondary)
                                      : (enabled || joining ? Color.onFariinAction : Color.secondary))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity)
                     .frame(height: Self.barHeight)
                     .liquidGlass(Capsule(), interactive: true,
-                                 tint: !p.isChannel && (enabled || joining) ? PublicGroupSheet.blue : nil)
+                                 tint: enabled || joining ? (p.isChannel ? Color.primary : PublicGroupSheet.blue) : nil)
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)
