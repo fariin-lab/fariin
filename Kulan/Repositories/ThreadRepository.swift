@@ -204,9 +204,51 @@ final class ThreadRepository {
         didSet { ThreadMessageCache.shared.storePending(cid, pending) }
     }
     var canLoadOlder = true {
-        // The oldest message at the moment the whole history was known, for the next open's seed.
-        didSet { if !canLoadOlder, let first = messages.first?.id { Self.wholeFrom[cid] = first } }
+        // Only the flag here. The oldest message for the next open's seed is taken in `rebuild`,
+        // once the page that ended the history is in `messages` (this flips before that page is).
+        didSet { if canLoadOlder != oldValue { refreshHistoryStart(record: false) } }
     }
+    /// ⛔ THE START OF THE HISTORY IS ON THE PHONE (owner 2026-11-08, channel VE3: 125 of its 126
+    /// docs are deleted posts or notices, its one live post sits ~95 back, and the card at the top
+    /// came and went). True when nothing older can exist:
+    /// - the server sent a short page (`canLoadOlder` off);
+    /// - the oldest doc held was written within 5 s of the conversation itself (`createdAt` on the
+    ///   conversation doc), which holds even when the "Channel created" line was deleted;
+    /// - the "Channel created" line is among the oldest rows (`holdsChannelStart`);
+    /// - the window holds the oldest message a past visit saw at the start (`cacheLooksWhole`).
+    /// Read by ThreadView's `groupHistoryCard`; also ends the thin-history top-up below.
+    private(set) var historyStartReached = false
+    /// The conversation doc's own `createdAt`, from the chat's listener on it.
+    @ObservationIgnored private var convBornFromDoc: Date?
+    private var convBorn: Date? {
+        if let d = convBornFromDoc { return d }
+        let conv = ConversationsRepository.shared.conversations.first { $0.id == cid }
+            ?? ChannelFollows.shared.conversations.first { $0.id == cid }
+        return conv?.createdAt
+    }
+    /// The oldest doc held was written with the conversation (groups and channels only).
+    private var holdsConversationBirth: Bool {
+        guard !cid.contains("_"), !windowTrimmed, let born = convBorn,
+              let oldest = byId.values.lazy.map(\.createdAt).min() else { return false }
+        return abs(oldest.timeIntervalSince(born)) <= 5
+    }
+    /// `record`: also save the oldest message for the next open. Only from `rebuild`, where
+    /// `messages` holds every page loaded so far, and never on the saved copy's word alone.
+    private func refreshHistoryStart(record: Bool) {
+        let proven = !canLoadOlder || holdsChannelStart || holdsConversationBirth
+            || (cacheLooksWhole && sawServerWindow)
+        let reached = proven || cacheLooksWhole
+        if historyStartReached != reached { historyStartReached = reached }
+        if record, proven, let first = messages.first?.id { Self.saveWholeFrom(cid, first) }
+    }
+    /// The thin-history top-up is paging (`topUpIfThin`). The chat shows its loading state while
+    /// this is on and nothing is visible yet, instead of an empty chat.
+    private(set) var historyTopUpRunning = false
+    /// Pages the top-up asked for in this open (cap `topUpCap`).
+    @ObservationIgnored private var topUpPages = 0
+    private let topUpCap = 10
+    /// Fewer visible rows than this after a page, and the top-up asks for the next one.
+    private let topUpMinRows = 20
     /// ⛔ A REOPEN REMEMBERS THE HISTORY WAS WHOLE (owner 2026-10-30, his recording: scrolled to a
     /// channel's first post, back, open again, and the chat jumped). The repository is made fresh on
     /// every open and starts at `canLoadOlder = true`, so the card at the start of the history
@@ -214,11 +256,36 @@ final class ThreadRepository {
     /// sitting at the top. Per chat: the oldest message id when nothing older was left. A seed that
     /// still starts at that message holds the whole history.
     nonisolated(unsafe) private static var wholeFrom: [String: String] = [:]   // main thread only, as the repository
+    /// Kept across launches too (owner 2026-11-08), per account and chat: a cold start's first open
+    /// then knows the start is here as well.
+    private static func wholeFromKey(_ cid: String) -> String? {
+        guard let uid = Auth.auth().currentUser?.uid else { return nil }
+        return "thread.wholeFrom.\(uid).\(cid)"
+    }
+    private static func savedWholeFrom(_ cid: String) -> String? {
+        if let id = wholeFrom[cid] { return id }
+        guard let key = wholeFromKey(cid), let id = UserDefaults.standard.string(forKey: key) else { return nil }
+        wholeFrom[cid] = id
+        return id
+    }
+    private static func saveWholeFrom(_ cid: String, _ id: String) {
+        guard wholeFrom[cid] != id else { return }
+        wholeFrom[cid] = id
+        if let key = wholeFromKey(cid) { UserDefaults.standard.set(id, forKey: key) }
+    }
+    /// This window holds the oldest message a past visit saw when the history was whole.
+    private func holdsSavedStart(_ docs: [QueryDocumentSnapshot]) -> Bool {
+        guard let id = Self.savedWholeFrom(cid) else { return false }
+        return docs.contains { $0.documentID == id }
+    }
     /// The phone's saved copy opened with less than a page and the server has not answered yet: the
     /// whole history is almost certainly here already. The group's welcome card (ThreadView
     /// `groupHistoryCard`) shows on that instead of waiting for the server (owner 2026-10-28: "the
-    /// card appears late"). The server's first window decides from then on (`canLoadOlder`).
-    var cacheLooksWhole = false
+    /// card appears late"). The server's first window decides from then on (`canLoadOlder`), except
+    /// that a window holding the saved start (`wholeFrom`) keeps it on: nothing older exists.
+    var cacheLooksWhole = false {
+        didSet { if cacheLooksWhole != oldValue { refreshHistoryStart(record: false) } }
+    }
     var loadingOlder = false
     /// Owner audit 2026-10-06 chat #1: completions of `loadOlder` calls made while a page was in
     /// flight. They run when that page lands, never before.
@@ -444,7 +511,7 @@ final class ThreadRepository {
         // armed for whatever is still counting down.
         let now = Date()
         messages = cached.filter { m in m.expiresAt.map { now < $0 } ?? true }
-        if let first = messages.first?.id, Self.wholeFrom[cid] == first { cacheLooksWhole = true }
+        if let first = messages.first?.id, Self.savedWholeFrom(cid) == first { cacheLooksWhole = true }
         didInitialLoad = true
         refreshItems(reason: .initial)
         scheduleNextBurn()
@@ -799,6 +866,7 @@ final class ThreadRepository {
             return
         }
         skeletonArmed = false
+        topUpPages = 0   // the thin-history top-up's budget is per open
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self, !self.didInitialLoad else { return }   // cache already answered
             self.skeletonArmed = true
@@ -920,7 +988,9 @@ final class ThreadRepository {
                 forName: .networkCameBack, object: nil, queue: .main) { [weak self] _ in
                     self?.resumeHeld = false   // #69: the resume read may try the server again
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                        guard let self, self.olderNeedsRetry, self.readerAwayFromBottom,
+                        // A thin history (the top-up stopped on the failed page) asks again too.
+                        guard let self, self.olderNeedsRetry,
+                              self.readerAwayFromBottom || self.items.count < self.topUpMinRows,
                               self.listener != nil, !self.loadingOlder else { return }
                         self.loadOlder()
                     }
@@ -948,6 +1018,11 @@ final class ThreadRepository {
                 }
                 self.convLoaded = true
                 let d = snap?.data()
+                // The conversation's birth, for `historyStartReached` (read once; it never changes).
+                if self.convBornFromDoc == nil, let born = (d?["createdAt"] as? Timestamp)?.dateValue() {
+                    self.convBornFromDoc = born
+                    self.refreshHistoryStart(record: true)
+                }
                 // Typing + lastRead are hot fields (fire on every keystroke / incoming
                 // message) but never change which messages are visible — update directly,
                 // skip the O(N log N) rebuild.
@@ -1544,9 +1619,14 @@ final class ThreadRepository {
             oldestDocFromCacheWindow = fromCache
         }
         if !didInitialLoad { didInitialLoad = true }
-        if fromCache && !sawServerWindow { cacheLooksWhole = docs.count < pageSize }
+        // ⛔ A FULL CACHE WINDOW THAT STILL HOLDS THE SAVED START STAYS WHOLE (owner 2026-11-08): a
+        // channel whose 60 newest docs are mostly deleted posts reaches its start inside one full
+        // window, and this used to clear the seed's `cacheLooksWhole` on the first cache snapshot.
+        if fromCache && !sawServerWindow { cacheLooksWhole = docs.count < pageSize || holdsSavedStart(docs) }
         if !fromCache && !sawServerWindow {
-            cacheLooksWhole = false   // the server's window decides from here (`canLoadOlder`)
+            // The server's window decides from here (`canLoadOlder`); one that holds the oldest
+            // message of a past whole visit is whole too.
+            cacheLooksWhole = holdsSavedStart(docs)
             sawServerWindow = true
             serverWindowSettled = true   // published with the rebuild below, in the same update
             NSLog("[REOPEN] repo first SERVER window docs=%ld", docs.count)
@@ -1578,6 +1658,7 @@ final class ThreadRepository {
         }
         if echoedPending.count > 50 { echoedPending.removeAll() }
         pending.removeAll { p in p.clientId.map(echoed.contains) ?? false }
+        topUpIfThin(lastPageAddedRows: true)
     }
     private var echoedPending: [String: Message] = [:]
 
@@ -1692,6 +1773,7 @@ final class ThreadRepository {
         // #69: the oldest rows are gone, cache-only pages first among them; paging restarts from
         // the oldest row kept, so an older resume point would jump over what was just dropped.
         resumeOlderQuery = nil
+        cacheLooksWhole = false   // the start is no longer in the window
         canLoadOlder = true   // the dropped history can page back in on scroll
     }
 
@@ -1881,8 +1963,9 @@ final class ThreadRepository {
         // result identical to what was on screen. The reference app lands a load only when its
         // render state actually differs. Every other input to `items` (pending sends, hidden
         // messages) publishes through its own call to `refreshItems`, so skipping here loses nothing.
-        guard sorted != messages else { scheduleNextBurn(); return }
+        guard sorted != messages else { refreshHistoryStart(record: true); scheduleNextBurn(); return }
         messages = sorted
+        refreshHistoryStart(record: true)   // before the publish, so the card comes with the rows
         ThreadMessageCache.shared.store(cid, messages)   // keep the warm cache fresh for the next open (instant render)
         refreshItems(reason: reason)
         // The message set just changed, so the next expiry may have too. Cheap: one timer.
@@ -2034,13 +2117,17 @@ final class ThreadRepository {
                 }
                 let finish = {
                     self.loadingOlder = false
+                    let rowsBefore = self.items.count
                     self.rebuild(reason: .olderPage)
+                    let addedRows = self.items.count > rowsBefore
                     completion()
                     // #1: everyone who asked while this page was in flight. Swapped out first, so a
                     // waiter that starts the next page queues on a fresh list.
                     let waiters = self.olderWaiters
                     self.olderWaiters = []
                     waiters.forEach { $0() }
+                    // Not tied to the list landing anything: a page of deleted posts lands nothing.
+                    self.topUpIfThin(lastPageAddedRows: addedRows)
                 }
                 guard !needBuild.isEmpty else { finish(); return }
                 // Owner audit 2026-10-06 chat #70: what each entry looked like when this page was
@@ -2065,6 +2152,30 @@ final class ThreadRepository {
                     }
                 }
             }
+    }
+
+    /// ⛔ A THIN HISTORY PAGES ITSELF IN (owner 2026-11-08, channel VE3). A page is 60 raw docs and
+    /// the filters run after it (deleted posts always go in a group; a follower does not see a
+    /// channel's notices), so a page can come back with nothing to show. Older pages were asked for
+    /// only by the list, on a scroll or after a page landed rows, so a chat whose newest pages were
+    /// all deleted posts stopped there: no posts and no card. Here the repository asks by itself,
+    /// after the server's window and after every older page, while fewer than `topUpMinRows` rows are
+    /// visible, or the page just read showed nothing new. Never during a jump or a focus hunt (they
+    /// page on their own), never twice at once, at most `topUpCap` pages per open. Groups and
+    /// channels only. The scroll-driven paging is unchanged.
+    private func topUpIfThin(lastPageAddedRows: Bool) {
+        guard !warmOnly, !cid.contains("_"), sawServerWindow, canLoadOlder, !historyStartReached,
+              !loadingOlder, !jumpPagingInFlight, !olderNeedsRetry, topUpPages < topUpCap,
+              items.count < topUpMinRows || !lastPageAddedRows,
+              oldestDoc != nil || windowTrimmed else {
+            if historyTopUpRunning, !loadingOlder { historyTopUpRunning = false }
+            return
+        }
+        topUpPages += 1
+        historyTopUpRunning = true
+        loadOlder()
+        // No cursor to page from: `loadOlder` answered at once and no page is coming.
+        if !loadingOlder { historyTopUpRunning = false }
     }
 
     // Page older history until `messageId` is loaded (so in-chat search can scroll to a match that's

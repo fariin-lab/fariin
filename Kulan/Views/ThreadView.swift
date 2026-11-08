@@ -1129,7 +1129,10 @@ struct ThreadView: View {
             // Skeleton placeholder bubbles until the first page is ready (cold load only;
             // a cached chat flips didInitialLoad instantly, so this never flashes).
             .overlay {
-                if !repo.didInitialLoad, repo.skeletonArmed {
+                // Also while a thin history pages itself in with nothing to show yet (owner
+                // 2026-11-08, a channel whose newest pages are all deleted posts): loading, not an
+                // empty chat.
+                if (!repo.didInitialLoad && repo.skeletonArmed) || (repo.historyTopUpRunning && repo.items.isEmpty) {
                     // ⛔ IT MUST NOT RUN UP UNDER THE HEADER — his report, 2026-09-16: "skeleton
                     // messages is looks wrong, entering inside the top", with the first placeholder
                     // bubble sitting behind the avatar and name.
@@ -1256,7 +1259,7 @@ struct ThreadView: View {
         // not wait for the rows or the server. An old channel's count may be short of its real
         // history; a full page then takes the card away again, so it never sits between pages.
         if let conv = conversation, conv.isChannel, !preview,
-           (repo.didInitialLoad && (!repo.canLoadOlder || repo.cacheLooksWhole || repo.holdsChannelStart))
+           (repo.didInitialLoad && repo.historyStartReached)
             || (repo.items.count < 20 && conv.postCount < 20) {
             if conv.admins.contains(me) || conv.isOwner(me) {
                 let key = ["chadm", conv.title, conv.avatarUrl ?? "", conv.groupDescription, "\(conv.followerCount)",
@@ -1269,7 +1272,7 @@ struct ThreadView: View {
             return (AnyView(ChannelFollowerCard(conv: conv).padding(.vertical, 14)), key)
         }
         // `cacheLooksWhole` (owner 2026-10-28): from the saved copy, before the server has answered.
-        guard repo.didInitialLoad, isGroup, !notAMember, !preview, !repo.canLoadOlder || repo.cacheLooksWhole,
+        guard repo.didInitialLoad, isGroup, !notAMember, !preview, repo.historyStartReached,
               let conv = conversation, !repo.items.isEmpty else { return nil }
         let key = [conv.id, conv.title, conv.avatarUrl ?? "", "\(conv.users.count)", "\(conv.admins.count)",
                    conv.createdBy, "\(dark)", "\(conv.hashValue)"].joined(separator: "|")
@@ -1293,7 +1296,7 @@ struct ThreadView: View {
             }
             .modifier(EmptyChatNotice())
         } else if repo.didInitialLoad, isGroup, !notAMember, !preview, let conv = conversation,
-           repo.items.isEmpty, !conv.isChannel {
+           repo.items.isEmpty, !conv.isChannel, !repo.historyTopUpRunning {
             GroupWelcomeCard(conv: conv, me: me, dark: dark)
         } else if repo.didInitialLoad, repo.items.isEmpty, !notAMember, !isGroup {
             // Groups are NOT end-to-end encrypted (owner 2026-10-19 / 2026-10-23), so a group never
