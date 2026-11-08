@@ -3501,8 +3501,13 @@ final class CallService: NSObject {
     }
 
     private func checkPeerLiveness() {
-        guard state == .reconnecting, let last = lastPeerBeatAt else { return }
-        guard Date().timeIntervalSince(last) > 15 else { return }
+        // ⛔ ALSO WHILE CONNECTED (owner 2026-11-08: "if my phone dies, the other side's timer keeps
+        // running and the call never ends"). A phone that dies mid-call often leaves the other side's
+        // connection looking up (through the relay), so the call never went to Reconnecting and this
+        // check never ran. Every phone writes `hb` every 5-10 s (Android every 10 s); 30 s of their
+        // silence while my own beats get through means they are gone: the call ends here.
+        guard state == .reconnecting || state == .active, let last = lastPeerBeatAt else { return }
+        guard Date().timeIntervalSince(last) > (state == .active ? 30 : 15) else { return }
         // Audit M-040, 2026-10-07: their silence only counts while MY beats are getting through.
         // When it was our own network that dropped, their beats cannot reach us either, and the
         // check ended a call that was about to recover, 15-20s in, well inside the 30s reconnect cap.
