@@ -1231,7 +1231,10 @@ struct PostThreadSheet: View {
                 .onChange(of: model.scrollTarget) { _, id in
                     guard let id else { return }
                     let isThread = model.threads.contains(where: { $0.id == id }) || model.pinned?.id == id
-                    let key = isThread ? "t-\(id)" : "a-\(id)"
+                    // ⛔ MY NEW REPLY: TO THE TOP OF THE LIST, PINNED INCLUDED (owner 2026-11-08: "when I
+                    // send a comment the pinned one disappears"). It sits just under the pinned reply
+                    // (`mineOnTop`); scrolling the reply itself to the top edge hid the pin above it.
+                    let key = isThread ? "start" : "a-\(id)"
                     // A new reply sits at the top for Newest, at the bottom for Top.
                     // My new reply sits at the top now (`mineOnTop`), so the list goes up to it.
                     let anchor: UnitPoint = isThread ? .top : .bottom
