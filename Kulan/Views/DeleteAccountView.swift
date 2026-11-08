@@ -75,8 +75,24 @@ struct DeleteAccountView: View {
         }
         .padding(.horizontal, 20)
         .padding(.top, 26)
-        .padding(.bottom, 8)
+        .padding(.bottom, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // ⛔ AN X AT THE TOP RIGHT, NO CANCEL (owner 2026-11-08, same as the Log Out sheet): glass,
+        // 44pt, on both steps. The grabber still closes the sheet too.
+        .overlay(alignment: .topTrailing) {
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .liquidGlass(Circle(), interactive: true)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(deleting)
+            .accessibilityLabel("Close")
+            .padding(.top, 16).padding(.trailing, 16)
+        }
         .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         .frame(maxHeight: .infinity, alignment: .top)
@@ -89,8 +105,8 @@ struct DeleteAccountView: View {
 
     // MARK: - Step 1: why
 
-    // One way out on both steps (owner rule, same as Android): no corner button, only the plain
-    // Cancel under the main button. Dragging the sheet down still closes it.
+    // The way out on both steps is the X at the top right (owner 2026-11-08; there used to be a
+    // Cancel under the main button). Dragging the sheet down still closes it.
     // A reason is required (owner 2026-11-08): Continue stays grey until one is picked, and for
     // "Other reason" until the note has words in it.
     private var reasonPage: some View {
@@ -153,15 +169,15 @@ struct DeleteAccountView: View {
             VStack(spacing: 6) {
                 Button { withAnimation(.snappy) { showConfirm = true } } label: {
                     Text("Continue").fontWeight(.semibold)
-                        .frame(maxWidth: .infinity).frame(height: 52)
-                        .foregroundStyle(Color.onFariinAction)
-                        .background(Color.fariinAction, in: Capsule())
-                        .opacity(canContinue ? 1 : 0.35)
+                        .frame(maxWidth: .infinity).frame(height: 50)
+                        .foregroundStyle(canContinue ? Color.onFariinAction : Color.secondary)
+                        // Liquid glass (owner 2026-11-08): tinted once a reason is picked, clear before.
+                        .liquidGlass(Capsule(), interactive: canContinue,
+                                     tint: canContinue ? Color.fariinAction : nil)
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .disabled(!canContinue)
-                Button("Cancel") { dismiss() }
-                    .frame(maxWidth: .infinity).frame(height: 44)
             }
         }
     }
@@ -220,16 +236,15 @@ struct DeleteAccountView: View {
                         }
                     }
                     .fontWeight(.semibold)
-                    .frame(maxWidth: .infinity).frame(height: 52)
+                    .frame(maxWidth: .infinity).frame(height: 50)
                     .foregroundStyle(.white)
-                    .background(Color.red.opacity(deleteEnabled || deleting ? 1 : 0.4), in: Capsule())
+                    // Red liquid glass, like Log Out (owner 2026-11-08).
+                    .liquidGlass(Capsule(), interactive: deleteEnabled,
+                                 tint: Color.red.opacity(deleteEnabled || deleting ? 1 : 0.4))
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .disabled(!deleteEnabled)
-
-                Button("Cancel") { dismiss() }
-                    .frame(maxWidth: .infinity).frame(height: 44)
-                    .disabled(deleting)
             }
             .padding(.top, 6)
         }
