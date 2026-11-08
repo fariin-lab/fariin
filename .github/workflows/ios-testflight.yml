@@ -83,7 +83,16 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: NEW REPORT FLOW, MY REPORTS, DELETE ACCOUNT SHEET.
+            THIS BUILD: NEW CALL PICKER, CHANNEL AND REPLIES FIXES, SHEETS.
+            New Call: pick several people with the round ticks; picked faces sit at the top and slide as you add or remove; voice or video calls all of them. Call a group from the Groups list. Create a call link at the top.
+            Calls: Add people button at the top right once connected.
+            Channels you run or follow open on cached posts at once. Private channels: Quotes off by default.
+            Replies: the tab shows the count, the keyboard closes after Send.
+            Report, Log Out and Delete Account sheets restyled. Reports now tell us which app sent them.
+            Add files: Photos sends library photos as original files.
+            PLEASE TEST: New Call with 4+ people (add, remove, swipe the row), then start a voice call; open a channel you follow; report a reply; open Delete Account and Cancel.
+
+            EARLIER: NEW REPORT FLOW, MY REPORTS, DELETE ACCOUNT SHEET.
             Report: one sheet everywhere (profiles, groups, channels, posts, stories, replies, and someone's message in a group). Pick a reason, then a detail, then Submit. Block or Leave right there.
             My Reports: Settings > Privacy & Security shows each report and what happened to it.
             Block and Report: blocks, then asks why.
