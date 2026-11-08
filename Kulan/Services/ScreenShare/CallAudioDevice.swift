@@ -222,8 +222,27 @@ final class CallAudioDevice: NSObject, RTCAudioDevice, RTCAudioSessionDelegate {
     }
 
     private func makeUnit() -> AudioUnit? {
+        // ⛔ WRONG PITCH ON BOTH SIDES (owner 2026-11-08, two iPhones: one heard the other high and
+        // fast, the other heard deep and slow; a force-quit cured it). The factory and this device
+        // live for the whole process, so WebRTC read our rate once, early. A unit built later at
+        // another rate (the session left at another rate by an earlier group call, or a kick) took
+        // the new rate silently: WebRTC kept encoding and playing at the old one. Every rate change
+        // is now told to WebRTC, as the route-change path already did.
         let r = session.sampleRate
+        let old = rate
         if r > 0 { rate = r }
+        let changed = abs(rate - old) > 1
+        if changed {
+            readPos = -1
+            // Off this queue: WebRTC may call back into the device while it re-reads the rates.
+            if let d = delegate {
+                DispatchQueue.global(qos: .userInitiated).async {
+                    d.notifyAudioInputParametersChange()
+                    d.notifyAudioOutputParametersChange()
+                }
+            }
+        }
+        DiagLog.add("CALLRATE# unit rate=\(Int(rate)) was=\(Int(old)) told=\(changed ? 1 : 0) session=\(Int(session.sampleRate)) preferred=\(Int(session.preferredSampleRate)) io=\(Int(session.ioBufferDuration * 1000))ms mode=\(session.mode.rawValue)")
         var desc = AudioComponentDescription(componentType: kAudioUnitType_Output,
                                              componentSubType: kAudioUnitSubType_VoiceProcessingIO,
                                              componentManufacturer: kAudioUnitManufacturer_Apple,
