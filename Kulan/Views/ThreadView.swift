@@ -6122,6 +6122,9 @@ struct ThreadView: View {
     private func multiSwipeMenu(_ id: String) -> MultiSwipe.Menu? {
         guard MultiSwipe.enabled, let idx = repo.indexById[id], idx < repo.items.count else { return nil }
         let m = repo.items[idx]
+        // ⛔ PLAIN REPLY FOR STORY REPLIES AND PHOTOS (owner 2026-11-08: "story slide reply or image
+        // slide reply, hide this bar"): no capsule, the swipe just replies, as before the feature.
+        if m.replyTo?.isStatus == true || m.isImage || m.isAlbum || m.isVideo { return nil }
         return MultiSwipe.Menu(top: multiSwipeAction(MultiSwipe.Choice.up, m),
                                bottom: multiSwipeAction(MultiSwipe.Choice.down, m))
     }
