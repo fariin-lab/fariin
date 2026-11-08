@@ -59,6 +59,16 @@ enum EmojiCatalog {
         """.split(separator: " ").map { Item(char: String($0), name: names[bare(String($0))] ?? "") }
     }()
 
+    /// The channel set, led by any of `picks` it does not hold (custom reactions aside: they have
+    /// their own tab), so a pick from outside the set can still be unticked.
+    static func channelOffer(including picks: [String]) -> [Item] {
+        let known = Set(channelReactions.map { bare($0.char) })
+        let names = Dictionary(all.map { (bare($0.char), $0.name) }, uniquingKeysWith: { first, _ in first })
+        let extras = picks.filter { !known.contains(bare($0)) && !CustomReaction.isCustom($0) }
+            .map { Item(char: $0, name: names[bare($0)] ?? "") }
+        return extras + channelReactions
+    }
+
     private static func bare(_ emoji: String) -> String {
         String(String.UnicodeScalarView(emoji.unicodeScalars.filter { $0.value != 0xFE0F }))
     }

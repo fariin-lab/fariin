@@ -1223,7 +1223,11 @@ struct ChannelReactionsSettingsView: View {
         }) {
             // Low enough that the bar stays in sight above it.
             EmojiMorePicker(title: "Choose Emoji", detents: [.fraction(0.56), .large],
-                            only: EmojiCatalog.channelReactions,
+                            // ⛔ EVERY PICK CAN BE UNTICKED (owner 2026-11-08: 😂 and 😮 sat in the
+                            // bar and could not be removed). The default set (`palette`) holds emoji
+                            // the catalog does not, so they were never in this grid. Picks outside
+                            // the catalog now lead it.
+                            only: EmojiCatalog.channelOffer(including: list),
                             showsCustom: CustomReaction.canChoose,
                             multi: $list, maxPicks: Self.maxPicked) { _ in }
         }
