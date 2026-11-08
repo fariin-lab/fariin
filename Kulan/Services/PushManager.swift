@@ -142,6 +142,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // 2026-09-24 audit: no call id means no call document to ring for (an empty id is not a
         // valid Firestore path). Still reported to CallKit, as iOS requires, then ended at once.
         guard !callId.isEmpty else { CallKitManager.shared.reportGroupDiscard(completion: completion); return }
+        // 2026-11-08: which 1:1 pushes reach this phone, for the diag upload (call id head only).
+        DiagLog.add("VOIP# \((d["kind"] as? String) ?? "ring") \(callId.prefix(6)) cancel=\(Self.isCancelPush(d))")
         // Audit M-004, 2026-10-07: the caller hung up before an answer (server cancel push). The
         // ring for that call stops here; a late ring push for it is not rung at all. PushKit still
         // gets its report, like every other push.
@@ -150,7 +152,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
             Self.noteCancelled(callId)
             // Recents off, ended as answered elsewhere (audit 05 F1): the plain discard added a
             // "Call" row to the Phone app's Recents for every ring the caller gave up on.
-            CallKitManager.shared.reportGroupDiscard(completion: completion)
+            // Owner, 2026-11-08 ("the call ends, but another incoming call keeps appearing"): the
+            // cancel was reported as a NEW "Call" ring, a second screen right as the real ring
+            // stopped. Reported under the call's own UUID now (`discardPush`), so iOS shows nothing.
+            CallKitManager.shared.discardPush(callId: callId, completion: completion)
             // Round 2 (V3 N2): the server's reason, so a ring settled on my other phone is not
             // reported to iOS as missed.
             CallKitManager.shared.endCancelledRing(callId: callId, endReason: d["endReason"] as? String)
@@ -166,9 +171,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // land). The ghost-call guard reads the call doc, which a signed-out phone cannot do, so it
         // rang anyway. Reported, as iOS requires, and ended at once.
         guard Auth.auth().currentUser != nil, !Self.wasCancelled(callId) else {
-            CallKitManager.shared.reportGroupDiscard(completion: completion)
+            CallKitManager.shared.discardPush(callId: callId, completion: completion)   // 2026-11-08: same UUID as its cancel
             return
         }
+        // Owner, 2026-11-08: a ring push for a call that already rang here and is over (the
+        // listener rang it and it ended before APNs delivered the push) rang a second time under a
+        // new UUID. Reported under that call's old UUID instead: no new screen. A call this phone
+        // never reported goes on below exactly as before.
+        if CallKitManager.shared.discardLateRing(callId: callId, completion: completion) { return }
         let uid = d["callerUid"] as? String ?? ""
         // 1:1 audit r2 G5, 2026-10-08: the push no longer carries a name or photo. The name comes
         // from this phone's own copy by uid (an older server's `callerName` only as a fallback),
