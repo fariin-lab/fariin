@@ -119,6 +119,8 @@ struct GroupInfoView: View {
     @State private var showStorage = false
     /// The Bubble styles switch's new value while the server writes it; nil = the group's own.
     @State private var bubbleStylesOnPending: Bool?
+    /// The header photo's "Select an action" sheet: photo or story.
+    @State private var showAvatarChoice = false
     @State private var exportFile: ExportFile?
     @State private var exportError: String?
     @State private var exporting = false
@@ -779,7 +781,15 @@ struct GroupInfoView: View {
                     // photo; the filled picture reached past its clip for taps).
                     .frame(width: Self.photoSide, height: Self.photoSide)
                     .contentShape(Circle())
-                    .onTapGesture { if !openGroupStory() { showGroupPhoto = true } }
+                    // ⛔ A STORY AND A PHOTO: ASK (owner 2026-11-08: with a story up, a channel's or
+                    // group's photo could not be seen). The same sheet a person's profile shows.
+                    .onTapGesture {
+                        if groupStories != nil { showAvatarChoice = true } else { showGroupPhoto = true }
+                    }
+                    .bottomActionSheet("Select an action", isPresented: $showAvatarChoice, actions: [
+                        SheetAction("View profile photo") { showGroupPhoto = true },
+                        SheetAction("View story") { _ = openGroupStory() },
+                    ])
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("Group photo")
                     .accessibilityAddTraits(.isButton)
