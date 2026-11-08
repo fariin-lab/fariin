@@ -168,8 +168,29 @@ final class MessageRowCell: UICollectionViewCell {
     /// when the fill does not render into a picture (a glass material), so only the picture flies.
     func bubbleForFlight(in view: UIView) -> (picture: UIView, frame: CGRect, color: UIColor?)? {
         let box = rowView.liftTarget
-        guard box.bounds.width > 1, box.bounds.height > 1,
-              let picture = box.snapshotView(afterScreenUpdates: true) else { return nil }
+        guard box.bounds.width > 1, box.bounds.height > 1 else { return nil }
+        // ⛔ THE PICTURE STYLE'S ART FLIES WITH THE BUBBLE (owner 2026-11-07, his 60 fps recording:
+        // while sending, the goal above a "football" bubble was cut at the outline, then popped in
+        // whole as the flight ended). A view's snapshot is cut at its own bounds, and the art above,
+        // beside and below the outline lies outside the bubble box. So the snapshot is taken from the
+        // ROW, over the box plus the picture's frame, and rides in a box-sized holder at the same
+        // offset: the flight's geometry (which places a bubble-sized picture) is unchanged.
+        let picture: UIView
+        if let p = rowView.plan, case .bubble(let b) = p.body, let pic = b.picture {
+            let inRow = box.convert(box.bounds.union(pic.frame), to: rowView).intersection(rowView.bounds)
+            guard !inRow.isNull, inRow.width > 1, inRow.height > 1,
+                  let snap = rowView.resizableSnapshotView(from: inRow, afterScreenUpdates: true,
+                                                           withCapInsets: .zero) else { return nil }
+            let boxInRow = box.convert(box.bounds, to: rowView)
+            let holder = UIView(frame: CGRect(origin: .zero, size: box.bounds.size))
+            holder.clipsToBounds = false
+            snap.frame = inRow.offsetBy(dx: -boxInRow.minX, dy: -boxInRow.minY)
+            holder.addSubview(snap)
+            picture = holder
+        } else {
+            guard let snap = box.snapshotView(afterScreenUpdates: true) else { return nil }
+            picture = snap
+        }
         var px = [UInt8](repeating: 0, count: 4)
         var color: UIColor?
         if let ctx = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
