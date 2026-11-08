@@ -412,6 +412,54 @@ final class GroupCallRinging {
         return true
     }
 
+    // MARK: - Add people from a 1:1 (2026-11-08)
+
+    /// "Add people" moved a 1:1 into an ad-hoc room (either side). The 1:1's system call is gone, and
+    /// a group call has none, so iOS took the audio away and the moved person's mic failed in the
+    /// background. CallKitManager has started a system call for the room (`startMovedGroupCall`);
+    /// from here it is kept exactly like an answered ring's: joining, then in the call, ended with
+    /// the room. `roomId` nil: the mover's room is not made yet (`movedRoomKnown`).
+    func beginMovedCall(uuid: UUID, roomId: String?, video: Bool) {
+        if let old = ring, old.uuid != uuid {
+            // A ring still up here cannot outlive a call this phone is moving into.
+            stopWatchingRoom()
+            CallKitManager.shared.endGroupCall(uuid: old.uuid, reason: .answeredElsewhere)
+        }
+        ring = Ring(roomKind: "adhoc", roomId: roomId ?? "", callTitle: "", video: video, uuid: uuid)
+        phase = .joining
+        if let roomId { remember(roomId) }
+        watchService()
+        GCLog.event("ck_move", room: roomId, ["step": "start"])
+    }
+
+    /// The mover's room now has its id.
+    func movedRoomKnown(uuid: UUID, roomId: String) {
+        guard let r = ring, r.uuid == uuid else { return }
+        ring = Ring(roomKind: "adhoc", roomId: roomId, callTitle: "", video: r.video, uuid: uuid)
+        remember(roomId)
+    }
+
+    /// iOS refused the system call: the room carries on as an in-app call, as before 2026-11-08.
+    func movedCallRefused(uuid: UUID) {
+        guard let r = ring, r.uuid == uuid else { return }
+        GCLog.event("ck_move", room: r.roomId, ["step": "refused"])
+        ring = nil
+        phase = .ringing
+        watch.removeAll()
+    }
+
+    /// The move's join returned. Not in the room (it failed, or ended meanwhile): the system call
+    /// goes, as for a CallKit answer whose join never became a call.
+    func movedJoinFinished(uuid: UUID) {
+        guard let r = ring, r.uuid == uuid, phase == .joining else { return }
+        if !r.roomId.isEmpty, GroupCallService.shared.activeCid == r.roomId {
+            callJoined()
+        } else {
+            GCLog.failure("ck_move", room: r.roomId.isEmpty ? nil : r.roomId, ["result": "no_call"])
+            endCallKitCall(.failed)
+        }
+    }
+
     /// End tapped in CallKit: a decline while it rings, a hang-up once answered. CallKitManager
     /// has already let go of the CallKit call and its audio.
     func endedFromCallKit(uuid: UUID) {
@@ -556,6 +604,7 @@ final class GroupCallRinging {
         guard phase == .joining else { return }
         phase = .inCall
         CallKitManager.shared.updateGroupVideo(GroupCallService.shared.cameraOn, uuid: r.uuid)
+        CallKitManager.shared.reportMovedGroupConnected(uuid: r.uuid)   // 2026-11-08: only a moved call
         // Audit M-083, 2026-10-07: a Mute tapped on the system screen while joining. When the
         // join honoured it (`consumeMuteOnJoin`) the two already agree; when it did not, the system
         // screen is put back to what the mic really is instead of saying muted over an open mic.
