@@ -200,7 +200,10 @@ struct ReportSheet: View {
     @Environment(\.displayScale) private var displayScale
 
     /// The rows' fill on the solid sheet: light grey in light mode, dark grey in dark.
-    private static let rowFill = Color(.secondarySystemBackground)
+    /// ⛔ THE SYSTEM'S GROUPED COLOURS (owner 2026-11-08, his reference picture): a light grey sheet
+    /// with WHITE cards in light mode, a black sheet with dark grey cards in dark mode.
+    private static let rowFill = Color(.secondarySystemGroupedBackground)
+    private static let sheetFill = Color(.systemGroupedBackground)
     /// ⛔ ONE MOTION (owner 2026-11-08: "move like the reference app"). The page slide and the
     /// sheet's height change run in the same spring, so the sheet grows or shrinks while the page
     /// moves, never after it. The reference sheet uses one ~0.45 s spring for both.
@@ -288,7 +291,7 @@ struct ReportSheet: View {
         // ⛔ SOLID, NOT GLASS (owner 2026-11-08: "white in light mode, black in dark, now it looks
         // like a mirror"). The system sheet is see-through glass on iOS 26; this one is the plain
         // background, its rows one step off it.
-        .presentationBackground(Color(.systemBackground))
+        .presentationBackground(Self.sheetFill)
         .interactiveDismissDisabled(sending)
     }
 
@@ -396,7 +399,7 @@ struct ReportSheet: View {
         .scrollBounceBehavior(.basedOnSize)
         .scrollDismissesKeyboard(.interactively)
         .frame(height: fits[p].map { min($0, bodyCap) })
-        .background(Color(.systemBackground))
+        .background(Self.sheetFill)
     }
 
     @ViewBuilder private func pageContent(_ p: Page) -> some View {
