@@ -1275,7 +1275,17 @@ struct CallsView: View {
             }
             .navigationDestination(item: $linkTarget) { l in CallLinkDetailsView(link: l) }
             .createCallLinkFlow(isPresented: $showCreateLink)
-            .sheet(isPresented: $showNew) { NewCallView() }
+            // New Call's group buttons and its call-link row close the sheet first: a cover asked
+            // for while a sheet is still going down is dropped by UIKit.
+            .sheet(isPresented: $showNew) {
+                NewCallView(onCallGroup: { g, title, video in
+                    showNew = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { callGroupAgain(g, title: title, video: video) }
+                }, onCreateLink: {
+                    showNew = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { showCreateLink = true }
+                })
+            }
             // Same native confirm the thread view uses — never dial on a stray tap.
             .alert(pendingCall?.video == true ? "Video call" : "Voice call",
                    isPresented: Binding(get: { pendingCall != nil }, set: { if !$0 { pendingCall = nil } }),
@@ -1502,123 +1512,6 @@ struct CallHistoryRow: View {
             return d.formatted(.dateTime.weekday(.wide))
         }
         return d.formatted(.dateTime.month(.abbreviated).day())
-    }
-}
-
-// "New call" picker: A–Z grouped contacts, each with REAL voice + video call buttons + a side
-// index. (No "Create Call Link" / phone-number search — those aren't real Fariin features.)
-struct NewCallView: View {
-    @Environment(\.dismiss) private var dismiss
-    @State private var repo = ConversationsRepository.shared
-    @State private var query = ""
-    @State private var pendingCall: PendingCall?   // confirm before dialing (thread-view parity)
-    private var me: String { AuthService.shared.uid ?? "" }
-
-    private var sections: [(letter: String, convs: [Conversation])] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        let all = repo.conversations.filter { !$0.otherUid(me).isEmpty && !$0.isGroup }
-        let filtered = q.isEmpty ? all : all.filter { $0.displayName(me).lowercased().contains(q) }
-        let grouped = Dictionary(grouping: filtered) { c -> String in
-            let n = c.displayName(me).trimmingCharacters(in: .whitespaces).uppercased()
-            guard let f = n.first, f.isLetter else { return "#" }
-            return String(f)
-        }
-        return grouped
-            .map { ($0.key, $0.value.sorted { $0.displayName(me).lowercased() < $1.displayName(me).lowercased() }) }
-            .sorted { $0.letter == "#" ? false : ($1.letter == "#" ? true : $0.letter < $1.letter) }
-    }
-    private var indexLetters: [String] { sections.map(\.letter) }
-
-    var body: some View {
-        NavigationStack {
-            ScrollViewReader { proxy in
-                List {
-                    if sections.isEmpty {
-                        ContentUnavailableView("No contacts", systemImage: "phone",
-                                               description: Text("Start a chat first, then you can call them."))
-                    } else {
-                        ForEach(sections, id: \.letter) { section in
-                            Section(section.letter) {
-                                ForEach(section.convs) { c in callRow(c) }
-                            }
-                            .id(section.letter)
-                        }
-                    }
-                }
-                .listStyle(.insetGrouped)   // grouped cards (matches the reference)
-                .listSectionSpacing(.compact)              // owner 2026-10-04: "spaces look big"
-                .environment(\.defaultMinListRowHeight, 44)
-                .overlay(alignment: .trailing) {
-                    if query.isEmpty && indexLetters.count > 1 {
-                        VStack(spacing: 1) {
-                            ForEach(indexLetters, id: \.self) { l in
-                                Text(l).font(.system(size: 11, weight: .semibold)).foregroundStyle(.tint)
-                                    .frame(width: 16).contentShape(Rectangle())
-                                    .onTapGesture { withAnimation { proxy.scrollTo(l, anchor: .top) } }
-                            }
-                        }
-                        .padding(.trailing, 1)
-                    }
-                }
-            }
-            .navigationTitle("New call")
-            .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $query, prompt: "Search name or username")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button { dismiss() } label: { Image(systemName: "xmark") }.tint(.primary) }
-            }
-            // Same native confirm the thread view uses — never dial on a stray tap.
-            .alert(pendingCall?.video == true ? "Video call" : "Voice call",
-                   isPresented: Binding(get: { pendingCall != nil }, set: { if !$0 { pendingCall = nil } }),
-                   presenting: pendingCall) { c in
-                Button("Cancel", role: .cancel) { }
-                Button("Call") {
-                    CallService.shared.startCall(to: c.uid, name: c.name, photo: c.photo, video: c.video)
-                    dismiss()
-                }
-                .disabled(!callsEnabled)   // 2026-09-24 audit: already on a call
-            } message: { c in
-                Text("\(c.video ? "Video call" : "Call") \(c.name)?")
-            }
-        }
-    }
-
-    /// ⛔ TIGHTER — owner, 2026-10-04: "spaces look big". 36pt avatar, rows 6pt top and bottom
-    /// (about 50pt, the system contact-row height), the two call glyphs side by side with their
-    /// 40pt hit areas touching, regular-weight name.
-    private func callRow(_ c: Conversation) -> some View {
-        HStack(spacing: 12) {
-            AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 40)   // the Glowers list size (owner, 2026-10-07)
-                .avatarSquircle(c.isChannel)
-            Text(c.displayName(me)).font(.system(size: 17)).lineLimit(1)
-            Spacer(minLength: 8)
-            HStack(spacing: 0) {
-                Button { call(c, video: false) } label: {
-                    Image(systemName: "phone").font(.system(size: 18)).foregroundStyle(.primary)
-                }
-                .buttonStyle(.plain).frame(width: 40, height: 40).contentShape(Rectangle())
-                .disabled(!callsEnabled)
-                Button { call(c, video: true) } label: {
-                    Image(systemName: "video").font(.system(size: 18)).foregroundStyle(.primary)
-                }
-                .buttonStyle(.plain).frame(width: 40, height: 40).contentShape(Rectangle())
-                .disabled(!callsEnabled)
-            }
-        }
-        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 8))
-    }
-
-    /// 2026-09-24 audit: same gate as the chat header (ThreadView). `startCall` refuses silently
-    /// while a call is up, so these glyphs were dead taps behind a confirm that lied.
-    private var callsEnabled: Bool {
-        let s = CallService.shared.state
-        return s == .idle || s == .ended
-    }
-
-    private func call(_ c: Conversation, video: Bool) {
-        // Ask first; the alert's Call button dials + dismisses.
-        pendingCall = PendingCall(uid: c.otherUid(me), name: c.displayName(me),
-                                  photo: c.displayPhoto(me), video: video)
     }
 }
 
