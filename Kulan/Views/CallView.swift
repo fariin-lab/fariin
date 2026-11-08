@@ -88,7 +88,6 @@ struct CallView: View {
     // the screen again the moment someone closes their camera.
     @State private var controlsVisible = true
     @State private var hideTask: DispatchWorkItem?
-    @State private var showAddPeople = false   // "…" › Add people
     private static let autoHideAfter: TimeInterval = 5
 
     // Owner audit 2026-10-06 #19: never under VoiceOver. Hidden controls are taken out of the
@@ -112,10 +111,6 @@ struct CallView: View {
             if !controlsVisible { withAnimation(.easeInOut(duration: 0.2)) { controlsVisible = true } }
             return
         }
-        // Owner audit 2026-10-06 #40: no clock while the Add people sheet is up. It used to run on
-        // under the sheet, so dismissing it landed on a screen whose buttons had already gone. The
-        // sheet's dismissal restarts it (`.onChange(of: showAddPeople)`).
-        guard !showAddPeople else { return }
         let work = DispatchWorkItem {
             withAnimation(.easeInOut(duration: 0.28)) { controlsVisible = false }
         }
@@ -355,15 +350,6 @@ struct CallView: View {
             // top-left chevron-down button (so a stray swipe can never minimize/break the call).
         }
         .ignoresSafeArea()
-        .sheet(isPresented: $showAddPeople) {
-            AddPeopleSheet(alreadyIn: [AuthService.shared.uid ?? "", call.otherUid]) { people in
-                // The sheet closes itself first; the move tears this screen down, so let the sheet
-                // finish leaving before the cover under it goes too.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    CallService.shared.moveToGroup(adding: people)
-                }
-            }
-        }
         .onDisappear {
             // Tear down native PiP only when the call is actually OVER — minimize must keep it available.
             if call.state == .idle || call.state == .ended { CallPiPController.shared.teardown() }
@@ -593,24 +579,10 @@ struct CallView: View {
             .accessibilityHidden(!controlsVisible)
             Spacer()
 
-            // ⛔ ADD PEOPLE, TOP RIGHT (owner 2026-11-08: "add people button when we are in call").
-            // Once the call is connected; it opens the Add people sheet, which moves the call to a
-            // group call (`CallService.moveToGroup`). Before that the space stays empty so the name
-            // keeps its centre (Share Screen moved down into the control bar, 2026-10-22).
-            // ⛔ HIDDEN (owner 2026-11-08): moving a 1:1 into a group call had serious bugs on real
-            // phones and left the 1:1 call broken afterwards. Off until it is fixed and tested on two
-            // iPhones; flip `addPeopleInCall` to bring it back.
-            if Self.addPeopleInCall, connectedCall {
-                Button { buzz(); showAddPeople = true } label: { topCircle("person.badge.plus") }
-                    .buttonStyle(CallControlStyle())
-                    .accessibilityLabel("Add people")
-                    .opacity(controlsVisible ? 1 : 0)
-                    .allowsHitTesting(controlsVisible)
-                    .accessibilityHidden(!controlsVisible)
-            } else {
-                Color.clear.frame(width: 48, height: 48)
-                    .accessibilityHidden(true)
-            }
+            // No Add people here any more (owner 2026-11-08: it broke calls on real phones and is
+            // deleted). The space keeps the name centred (Share Screen moved into the control bar).
+            Color.clear.frame(width: 48, height: 48)
+                .accessibilityHidden(true)
         }
         .padding(.horizontal, 16)
         .padding(.top, safeTop + 14)   // clear the iOS status-bar call indicator (green pill)
@@ -648,9 +620,6 @@ struct CallView: View {
            let p = ProfilePalette.now(shown, url: url) { peerPalette = p; return }
         peerPalette = await ProfilePalette.resolve(url: url)
     }
-
-    /// Add people during a 1:1 (moves the call to a group call). Off: see the header button.
-    static let addPeopleInCall = false
 
     private func topCircle(_ icon: String) -> some View {
         topCircle(image: Image(systemName: icon))
@@ -2405,11 +2374,7 @@ extension CallView {
             }
                 .onChange(of: call.screenShareNotice) { _, notice in showShareNotice(notice) }
                 .onAppear { showShareNotice(call.screenShareNotice) }
-            // #40: the sheet pauses the clock (see armAutoHide); closing it brings the controls
-            // back and starts it again. #19: VoiceOver turned on mid-call brings hidden controls back.
-                .onChange(of: showAddPeople) { _, up in
-                if up { hideTask?.cancel() } else { showControls() }
-            }
+            // #19: VoiceOver turned on mid-call brings hidden controls back.
                 .onReceive(NotificationCenter.default.publisher(for: UIAccessibility.voiceOverStatusDidChangeNotification)) { _ in
                 showControls()
             }

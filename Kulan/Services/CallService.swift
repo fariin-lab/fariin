@@ -5672,33 +5672,6 @@ final class CallService: NSObject {
         }
     }
 
-    /// The ad-hoc room I am in, when the person calling is one of its members (audit M-091,
-    /// 2026-10-07). Such a caller is somebody who dropped out of this very call and is trying to
-    /// get back to me; "busy" left them outside with no sign on my screen. Main thread only.
-    /// ONLY SOMEONE WHO WAS IN THE ROOM (audit round 2, V1 on M-091, 2026-10-07). `members` is
-    /// everyone invited, so an invitee who declined or never answered and then rang me 1:1 was put
-    /// live into the group call, mic on, without being asked. `joinedUids` is everyone who ever
-    /// connected to this room; anyone else is answered busy as before.
-    private func adhocRoomIncluding(_ caller: String) -> (roomId: String, name: String)? {
-        guard Thread.isMainThread, !caller.isEmpty else { return nil }
-        return MainActor.assumeIsolated { () -> (roomId: String, name: String)? in
-            let group = GroupCallService.shared
-            guard case .adhoc(let roomId)? = group.activeRoom, roomId.hasPrefix("adhoc_"),
-                  group.joinedUids.contains(caller),
-                  let member = group.members.first(where: { $0.uid == caller }) else { return nil }
-            return (roomId, Self.displayName(for: caller, fallback: member.name))
-        }
-    }
-
-    /// Send a caller who belongs to my ad-hoc room back into it (audit M-091, 2026-10-07): the same
-    /// `moveTo` + `ended` write "Add people" uses, which the calling phone already follows, and a
-    /// note on my screen. No busy, no row: nobody missed anything.
-    private func sendBackToRoom(docId: String, roomId: String, name: String) {
-        db.collection("calls").document(docId)
-            .updateData(["moveTo": roomId, "status": "ended", "endReason": EndReason.hangup.rawValue])
-        MainActor.assumeIsolated { GroupCallService.shared.showToast("\(name) is rejoining the call") }
-    }
-
     /// Settle a ringing doc against whatever call this phone is already in. Returns true when the doc
     /// has been dealt with (it IS the current call, it was busied, or glare decided it); false when
     /// this phone is free to ring it. Shared by the listener and by its gate's completion, so a call
@@ -5763,11 +5736,6 @@ final class CallService: NSObject {
                 return true
             }
             standDownForGlare(rearmListener: true)
-            return true
-        }
-        // In a multi-person call with this caller in it: send them back in, not "busy" (M-091).
-        if !inLiveCall, let back = adhocRoomIncluding(caller) {
-            sendBackToRoom(docId: docId, roomId: back.roomId, name: back.name)
             return true
         }
         // Transactional, like decline and timeout (audit 05 F2): a blind write queued offline ended
@@ -6177,10 +6145,6 @@ final class CallService: NSObject {
                         self.endRingIfUnclaimed(callId, fields: ["status": "ended",
                                                                  "endReason": EndReason.declined.rawValue,
                                                                  "refused": true])
-                        return
-                    }
-                    if self.state == .idle || self.state == .ended, let back = self.adhocRoomIncluding(uid) {
-                        self.sendBackToRoom(docId: callId, roomId: back.roomId, name: back.name)
                         return
                     }
                     self.endRingIfUnclaimed(callId, fields: ["status": "ended", "endReason": EndReason.busy.rawValue])
@@ -7055,14 +7019,9 @@ final class CallService: NSObject {
             }
             guard let d = snap?.data() else { return }
 
-            // MOVED ONTO A MULTI-PERSON CALL ("Add people" on the other side). Read before the
-            // "ended" branch below: the same write carries `status: ended`, and taken as an end it
-            // would play the tone and show "Call ended" over a call that is carrying on elsewhere.
-            if let roomId = d["moveTo"] as? String, roomId.hasPrefix("adhoc_"),
-               self.state != .ended, self.state != .idle {
-                self.followMove(to: roomId)
-                return
-            }
+            // ⛔ "ADD PEOPLE" IS GONE (owner 2026-11-08, after it broke calls on real phones). A move
+            // written by an old build (`moveTo`) is no longer followed into a group room: its
+            // `status: ended` ends this 1:1 like any hang-up, below.
 
             // Remote ended (hang up / decline / unreachable) — play the matching tone,
             // then tear down. Do this first and bail.
@@ -7491,111 +7450,6 @@ final class CallService: NSObject {
             return
         }
         remoteEnded(reason: .missed)
-    }
-
-    // MARK: - Move to a multi-person call
-
-    /// "Add people" on a connected 1:1 call: both of us move onto a new ad-hoc multi-person call
-    /// with the people picked, and the 1:1 closes quietly on both sides (no tone, no "ended" label).
-    ///
-    /// ⚠️ THE ORDER IS FORCED. `GroupCallService.startAdhoc` refuses while this service is not idle
-    /// (decision D25), so the 1:1 has to be torn down locally FIRST, with what we still need kept in
-    /// locals. The teardown must not write `status: ended` itself (`updateRemote: false`): the peer
-    /// would see a plain hang-up before the room exists. `moveTo` and `status` go in ONE write once
-    /// the room is up, so the peer's listener reads the move before it can read the end.
-    /// The chat row is still written as an answered call by `finishCall`, as for any connected call.
-    func moveToGroup(adding people: [CallMember]) {
-        guard state == .active, connectedDate != nil, let oldId = callId, !otherUid.isEmpty else {
-            // "Done" used to do nothing at all while the call dipped to reconnecting (audit M-122,
-            // 2026-10-07). Say so; the person can try again once the call is back.
-            if state == .reconnecting || (state == .active && connectedDate == nil) {
-                MainActor.assumeIsolated {
-                    GroupCallService.presentOverTop(GroupCallService.Notice(
-                        title: "Can't Add People Yet",
-                        message: "The call is reconnecting. Try again in a moment."))
-                }
-            }
-            return
-        }
-        let myUid = me
-        let peerUid = otherUid
-        let peerShownName = otherName          // my label for them: for my own screen only
-        let peerRawName = otherRawName.isEmpty ? otherName : otherRawName
-        let peerPhoto = otherPhotoUrl
-        let video = cameraOn   // my camera carries over into the new call
-        finishCall(updateRemote: false, clearCallKit: true, localUser: true)
-        let ref = db.collection("calls").document(oldId)
-        Task { @MainActor in
-            // THEIR PUBLISHED NAME, NOT MY NICKNAME (audit M-151, 2026-10-07). The members list is in
-            // the shared room doc, read by everyone invited, and `otherName` is what I filed them
-            // under. The profile this phone last saw (local), else the server's copy, else the name
-            // the call itself carried.
-            var profile = await ProfileStore.shared.cachedPeer(peerUid)
-            if profile == nil { profile = await ProfileStore.shared.fetch(peerUid) }
-            let other = CallMember(uid: peerUid, name: profile?.name ?? peerRawName, photoUrl: peerPhoto)
-            // startAdhoc adds me itself; everyone else, de-duplicated, with the peer first.
-            var seen: Set<String> = [myUid, other.uid]
-            let invited = [other] + people.filter { seen.insert($0.uid).inserted }
-            guard let roomId = await GroupCallService.shared.startAdhoc(with: invited, video: video) else {
-                // The room could not be made. The 1:1 is already gone here, so end it for the peer
-                // the ordinary way rather than leave them talking to nobody.
-                await Self.writeWithRetry(ref, ["status": "ended", "endReason": EndReason.hangup.rawValue])
-                // And say so, with the way back (audit M-029 round 1, 2026-10-07): the call ended
-                // with no word at all, and calling them again meant finding them from scratch.
-                Self.offerCallBack(uid: peerUid, name: peerShownName, photo: peerPhoto, video: video)
-                return
-            }
-            await Self.writeWithRetry(ref, ["moveTo": roomId, "status": "ended", "endReason": EndReason.hangup.rawValue])
-        }
-    }
-
-    /// "Add people" failed after the 1:1 was already down (audit M-029 round 1, 2026-10-07). A UIKit
-    /// alert on whatever is on top, the same way `offerUnblock` asks. Never stacks on another alert:
-    /// if the group side already put up its own notice, that one stands.
-    @MainActor
-    private static func offerCallBack(uid: String, name: String, photo: String?, video: Bool, tries: Int = 4) {
-        guard let top = WebLink.topViewController(), !(top is UIAlertController) else { return }
-        if top.isBeingPresented || top.isBeingDismissed {
-            guard tries > 0 else { return }
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                offerCallBack(uid: uid, name: name, photo: photo, video: video, tries: tries - 1)
-            }
-            return
-        }
-        let who = name.isEmpty ? "them" : name
-        let alert = UIAlertController(title: "Couldn't Add People",
-                                      message: "The new call could not start, so your call with \(who) ended.",
-                                      preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "OK", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Call Back", style: .default) { _ in
-            CallService.shared.startCall(to: uid, name: name, photo: photo, video: video)
-        })
-        top.present(alert, animated: true)
-    }
-
-    /// Owner audit 2026-10-06 #45: the `moveTo` write was `try?`, so one failure left the peer on a
-    /// 1:1 this side had already torn down, talking to nobody until ICE gave up (~30s). Three tries,
-    /// a second apart, like `writeCandidate`. Nothing else is waiting on it, so failing quietly after
-    /// that is no worse than before.
-    private static func writeWithRetry(_ ref: DocumentReference, _ data: [String: Any]) async {
-        for attempt in 1...3 {
-            do { try await ref.updateData(data); return } catch {
-                print("call: moveToGroup write failed (try \(attempt)):", error)
-                if attempt < 3 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
-            }
-        }
-    }
-
-    /// The peer's half of `moveToGroup`: close the 1:1 the same quiet way and join the room.
-    /// Only an ad-hoc id is followed; anything else in `moveTo` is ignored and the normal end runs.
-    private func followMove(to roomId: String) {
-        let video = cameraOn
-        // A dial that was sent back into a room I belong to (audit M-091, 2026-10-07: the person I
-        // rang is in that call and answered with `moveTo` instead of busy) was never a missed call.
-        if state == .outgoing { recordWritten = true }
-        finishCall(updateRemote: false, clearCallKit: true, localUser: true)
-        Task { @MainActor in await GroupCallService.shared.joinAdhoc(roomId: roomId, video: video) }
     }
 
     private func finishCall(updateRemote: Bool, clearCallKit: Bool, localUser: Bool) {
