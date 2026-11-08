@@ -123,6 +123,11 @@ struct ThreadView: View {
     @State private var pollResultsFor: MessageRef?
     /// A channel post whose Quotes page is open (owner 2026-11-06).
     @State private var quotesFor: MessageRef?
+    /// ⛔ THE REPLIES SHEET IS STILL LEAVING (owner 2026-11-08: "sometimes Replies doesn't open").
+    /// SwiftUI drops a sheet asked for while the last one is still closing; a tap then is held here
+    /// and opened by the sheet's onDismiss (`openReplies`).
+    @State private var repliesClosing = false
+    @State private var repliesQueued: MessageRef?
     @State private var quotesStartOnQuotes = false
     struct MessageRef: Identifiable { let id: String }
     @HeapState private var replyingTo: Message? = nil
@@ -2458,7 +2463,7 @@ struct ThreadView: View {
             // jumps. #10: superseded by a newer jump or the down arrow.
             goToMessageJump(p.messageId)
         }
-        .sheet(item: $quotesFor) { t in
+        .sheet(item: repliesBinding, onDismiss: repliesDismissed) { t in
             postThreadSheet(t.id)   // a function: body's chain is at the type-checker's limit
         }
         .sheet(item: $pollResultsFor) { t in
@@ -4771,6 +4776,42 @@ struct ThreadView: View {
         }
     }
 
+    /// The sheet's binding: a swipe down marks it as leaving until onDismiss.
+    private var repliesBinding: Binding<MessageRef?> {
+        Binding(get: { quotesFor }, set: { v in
+            if v == nil, quotesFor != nil { markRepliesClosing() }
+            quotesFor = v
+        })
+    }
+
+    private func markRepliesClosing() {
+        repliesClosing = true
+        // Belt: a dismissal that never reports must not hold the next tap for ever.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { if repliesClosing { repliesDismissed() } }
+    }
+
+    private func closeReplies() {
+        guard quotesFor != nil else { return }
+        markRepliesClosing()
+        quotesFor = nil
+    }
+
+    private func repliesDismissed() {
+        repliesClosing = false
+        guard let q = repliesQueued else { return }
+        repliesQueued = nil
+        DispatchQueue.main.async { quotesFor = q }
+    }
+
+    private func openReplies(_ ref: MessageRef) {
+        if repliesClosing || quotesFor != nil {
+            repliesQueued = ref
+            if quotesFor != nil { closeReplies() }
+        } else {
+            quotesFor = ref
+        }
+    }
+
     private func postThreadSheet(_ mid: String) -> PostThreadSheet {
         let post = repo.items.first(where: { $0.id == mid })
         var sheet = PostThreadSheet(cid: cid, mid: mid, post: post,
@@ -4779,7 +4820,7 @@ struct ThreadView: View {
                         sourceVerified: conversation?.groupVerified == true,
                         picture: { await quotesPicture(mid) },
                         onOpen: { item in
-                            quotesFor = nil
+                            closeReplies()
                             // After the sheet is down, so the push is not lost under it.
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { openQuoteSource(item) }
                         },
@@ -4790,7 +4831,7 @@ struct ThreadView: View {
         // A reply's photo or name (owner 2026-11-07): the sheet goes down, then the person's profile,
         // or this channel's own page for a Creator reply.
         sheet.onOpenPerson = { uid, name in
-            quotesFor = nil
+            closeReplies()
             guard uid != me else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                 inputFocused = false
@@ -4798,7 +4839,7 @@ struct ThreadView: View {
             }
         }
         sheet.onOpenChannel = {
-            quotesFor = nil
+            closeReplies()
             guard conversation?.fariinLocked != true else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                 inputFocused = false
@@ -4816,7 +4857,7 @@ struct ThreadView: View {
         try? await Task.sleep(nanoseconds: 500_000_000)
         guard !Task.isCancelled else { return }
         quotesStartOnQuotes = false   // an alert is about a reply: the Replies tab
-        quotesFor = MessageRef(id: p.mid)
+        openReplies(MessageRef(id: p.mid))
     }
 
     /// The post's picture for the Quotes page's cards, the same one a quote of it carries.
@@ -5324,7 +5365,7 @@ struct ThreadView: View {
                 // A bar showing only quotes (replies off, none written) opens on Quotes (2026-11-06 audit).
                 let repliesOff = m.repliesOff(channelDefault: conversation?.repliesOff == true)
                 quotesStartOnQuotes = repliesOff   // off: only Quotes (owner 2026-11-07)
-                quotesFor = MessageRef(id: m.id)
+                openReplies(MessageRef(id: m.id))
             },
             onTapContactCard: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }), let card = m.contactCard else { return }
