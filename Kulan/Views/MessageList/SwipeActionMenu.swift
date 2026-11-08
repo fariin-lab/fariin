@@ -1,19 +1,22 @@
 import UIKit
 
 // ⛔ MULTI-ACTION SWIPE (owner 2026-11-08). The reply swipe, extended: past the reply threshold a
-// vertical capsule of TWO slots grows UPWARD out of the reply arrow. Reply is the bottom slot and
-// the default; the slot above it is the person's own pick in Settings > Chats > Swipe Actions:
-// Copy (default), Forward, Share or Quote. Reply sits below so a plain swipe, or a finger that
-// drifts down, always replies; only a deliberate slide UP picks the other action (owner: "if Reply
-// is first and the other below, people slide down by mistake").
+// vertical capsule of three slots grows around the reply arrow, as in build 1129. Reply is the
+// middle slot and the default (it sits where the threshold was crossed); the slot above and the
+// slot below are the person's own picks in Settings > Chats > Swipe Actions: "Slide Up For"
+// (Forward by default) and "Slide Down For" (Copy by default), each one of Copy, Forward, Share,
+// Quote or None. Owner: "make it work exactly like before, 3 slots, but the user can still control
+// and change it."
 //
-// The top slot falls back by kind when the pick does not apply to a message (ThreadView
-// `multiSwipeTop`): Copy on a photo, video or album is Save, on a document Save to Files; Forward,
-// Share or Quote where they are not possible fall back the same way. When nothing applies (voice
-// notes, polls, stickers...) the slot is dimmed and cannot be picked.
+// Each pick falls back by kind when it does not apply to a message (ThreadView `multiSwipeAction`):
+// Copy on a photo, video or album is Save, on a document Save to Files; Forward, Share or Quote
+// where they are not possible fall back the same way. When nothing applies (voice notes, polls,
+// stickers...), or the pick is None, the slot is dimmed and cannot be picked. Both picks may be
+// the same action; that is harmless.
 //
-// The list does the gesture (`handleSwipePan`); this file only holds the rules and the drawing, so
-// the pan keeps one shape for both paths.
+// Moving the finger up or down while it stays down picks a slot, counted from where the threshold
+// was crossed. The list does the gesture (`handleSwipePan`); this file only holds the rules and the
+// drawing, so the pan keeps one shape for both paths.
 //
 // GATED: the Settings switch (off by default), and on top of it the @v / @kream uid list, like
 // `CustomReaction.canChoose`. Everyone else gets the plain reply swipe, which takes the old code path
@@ -28,11 +31,12 @@ enum MultiSwipe {
 
     /// Account-scoped like the other chat prefs: wiped at sign-out (SessionWipe.wipeAccountPrefs).
     static let onKey = "swipeActions.on"
-    static let choiceKey = "swipeActions.top"
+    static let upKey = "swipeActions.up"
+    static let downKey = "swipeActions.down"
 
-    /// What the person picked for the top slot in Settings.
+    /// What the person picked for one slot in Settings.
     enum Choice: String, CaseIterable, Identifiable {
-        case copy, forward, share, quote
+        case copy, forward, share, quote, none
         var id: String { rawValue }
         var title: String {
             switch self {
@@ -40,18 +44,25 @@ enum MultiSwipe {
             case .forward: return "Forward"
             case .share: return "Share"
             case .quote: return "Quote"
+            case .none: return "None"
             }
         }
-        static var current: Choice {
-            UserDefaults.standard.string(forKey: choiceKey).flatMap(Choice.init(rawValue:)) ?? .copy
+        static let upDefault: Choice = .forward
+        static let downDefault: Choice = .copy
+        /// The pick for the slot above Reply.
+        static var up: Choice { stored(upKey) ?? upDefault }
+        /// The pick for the slot below Reply.
+        static var down: Choice { stored(downKey) ?? downDefault }
+        private static func stored(_ key: String) -> Choice? {
+            UserDefaults.standard.string(forKey: key).flatMap(Choice.init(rawValue:))
         }
     }
 
-    /// What the finger is resting on. `rawValue` is the slot's row: -1 top, 0 the reply circle.
-    enum Slot: Int { case top = -1, reply = 0 }
+    /// What the finger is resting on. `rawValue` is the slot's row: -1 top, 0 middle, 1 bottom.
+    enum Slot: Int { case top = -1, reply = 0, bottom = 1 }
 
-    /// The top slot for one message, after the fallbacks.
-    enum Top: Equatable {
+    /// One outer slot for one message, after the fallbacks.
+    enum Action: Equatable {
         case none
         case copy
         case save(count: Int)   // a single photo or video is 1; an album says "Save N Items"
@@ -62,7 +73,7 @@ enum MultiSwipe {
 
         var title: String {
             switch self {
-            case .none: return ""
+            case .none: return "Unavailable"
             case .copy: return "Copy"
             case .save(let n): return n > 1 ? "Save \(n) Items" : "Save"
             case .saveToFiles: return "Save to Files"
@@ -88,43 +99,56 @@ enum MultiSwipe {
 
     /// The menu one row offers. Built by ThreadView from the same rules as the long-press menu.
     struct Menu {
-        var top: Top
+        var top: Action
+        var bottom: Action
+
+        func action(_ s: Slot) -> Action? {
+            switch s {
+            case .reply: return nil
+            case .top: return top
+            case .bottom: return bottom
+            }
+        }
 
         func allows(_ s: Slot) -> Bool {
             switch s {
             case .reply: return true
             case .top: return top != .none
+            case .bottom: return bottom != .none
             }
         }
     }
 
     /// Numbers for the slot pick. A plain reply must stay a reply when the finger wobbles, hence the
-    /// dead zone; the hysteresis stops a finger resting on the boundary from flickering.
+    /// dead zone; the hysteresis stops a finger resting on a boundary from flickering between two.
     static let deadZone: CGFloat = 12
     static let slotStep: CGFloat = 44
     static let hysteresis: CGFloat = 6
     static let animation: TimeInterval = 0.3
 
     /// The slot for a vertical offset `dy` (points, down positive) from where the threshold was
-    /// crossed, given the slot currently picked. UPWARD ONLY: any downward movement stays on Reply.
-    /// A slot the menu does not allow is never returned.
+    /// crossed, given the slot currently picked. Slots the menu does not allow are never returned.
     static func slot(for dy: CGFloat, current: Slot, menu: Menu) -> Slot {
-        guard menu.allows(.top) else { return .reply }
-        let up = max(0, -dy - deadZone) / slotStep   // in slot rows, upward
-        let margin = hysteresis / slotStep
-        switch current {
-        case .reply: return up > 0.5 + margin ? .top : .reply
-        case .top: return up < 0.5 - margin ? .reply : .top
+        let mag = max(0, abs(dy) - deadZone)
+        let pos = (dy < 0 ? -mag : mag) / slotStep            // in slot rows
+        let nearest = Int(max(-1, min(1, pos.rounded())))
+        guard nearest != current.rawValue else { return current }
+        // Leave the current slot only once the boundary is passed by the hysteresis margin.
+        let margin = 0.5 + hysteresis / slotStep
+        guard abs(pos - CGFloat(current.rawValue)) > margin else { return current }
+        guard let s = Slot(rawValue: nearest), menu.allows(s) else {
+            // A dimmed slot is skipped: the pick falls back to Reply, never to "nothing".
+            return .reply
         }
+        return s
     }
 }
 
-/// The capsule drawn above the reply arrow. Two icons in a column, a filled circle behind the
-/// picked one. The reply circle sits on the arrow; the capsule grows upward out of it and shrinks
-/// back into it (the layer's anchor is the reply circle, so `center` places that circle).
+/// The capsule drawn around the reply arrow. Three icons in a column, a filled circle behind the
+/// picked one. Grows out of the arrow and shrinks back into it.
 final class SwipeActionCapsule: UIView {
     static let width: CGFloat = 44
-    static var height: CGFloat { MultiSwipe.slotStep * 2 }
+    static var height: CGFloat { MultiSwipe.slotStep * 3 }
     private static let circle: CGFloat = 36
 
     /// Liquid glass (owner 2026-11-08: "make it liquid glass"), the composer's own material.
@@ -137,8 +161,6 @@ final class SwipeActionCapsule: UIView {
     init(menu: MultiSwipe.Menu) {
         self.menu = menu
         super.init(frame: CGRect(x: 0, y: 0, width: Self.width, height: Self.height))
-        // The reply circle is the anchor: it stays on the arrow while the capsule scales open.
-        layer.anchorPoint = CGPoint(x: 0.5, y: Self.replyY / Self.height)
         isUserInteractionEnabled = false
         blur.frame = bounds
         blur.cornerConfiguration = .capsule()
@@ -148,19 +170,20 @@ final class SwipeActionCapsule: UIView {
         highlight.backgroundColor = .fariinAction
         addSubview(highlight)
         let config = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
-        let topImage: UIImage? = menu.top.isAsset
-            ? UIImage(named: menu.top.icon)?.withRenderingMode(.alwaysTemplate)
-            : UIImage(systemName: menu.top.icon, withConfiguration: config)
-        let images: [(MultiSwipe.Slot, UIImage?)] = [
-            (.top, topImage),
-            (.reply, UIImage(systemName: "arrowshape.turn.up.left.fill", withConfiguration: config)),
-        ]
-        for (slot, image) in images {
-            let v = UIImageView(image: image)
-            v.contentMode = slot == .top && menu.top.isAsset ? .scaleAspectFit : .center
-            v.frame = slot == .top && menu.top.isAsset
-                ? CGRect(x: 0, y: 0, width: 18, height: 18)
-                : CGRect(x: 0, y: 0, width: Self.circle, height: Self.circle)
+        for slot in [MultiSwipe.Slot.top, .reply, .bottom] {
+            let action = menu.action(slot)
+            let v: UIImageView
+            if let action, action.isAsset {
+                // The app's own icon (Quote): drawn at the symbols' size, tinted like them.
+                v = UIImageView(image: UIImage(named: action.icon)?.withRenderingMode(.alwaysTemplate))
+                v.contentMode = .scaleAspectFit
+                v.frame = CGRect(x: 0, y: 0, width: 18, height: 18)
+            } else {
+                let name = action?.icon ?? "arrowshape.turn.up.left.fill"
+                v = UIImageView(image: UIImage(systemName: name, withConfiguration: config))
+                v.contentMode = .center
+                v.frame = CGRect(x: 0, y: 0, width: Self.circle, height: Self.circle)
+            }
             v.center = center(of: slot)
             v.accessibilityLabel = Self.label(slot, menu: menu)
             addSubview(v)
@@ -172,18 +195,12 @@ final class SwipeActionCapsule: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    /// The reply circle's height inside the capsule: the lower slot.
-    private static var replyY: CGFloat { MultiSwipe.slotStep * 1.5 }
-
     private func center(of slot: MultiSwipe.Slot) -> CGPoint {
-        CGPoint(x: Self.width / 2, y: Self.replyY + CGFloat(slot.rawValue) * MultiSwipe.slotStep)
+        CGPoint(x: Self.width / 2, y: Self.height / 2 + CGFloat(slot.rawValue) * MultiSwipe.slotStep)
     }
 
     static func label(_ slot: MultiSwipe.Slot, menu: MultiSwipe.Menu) -> String {
-        switch slot {
-        case .top: return menu.top.title
-        case .reply: return "Reply"
-        }
+        menu.action(slot)?.title ?? "Reply"
     }
 
     private func paint() {
@@ -211,11 +228,11 @@ final class SwipeActionCapsule: UIView {
         }
     }
 
-    /// Open (grown up out of the arrow) or folded back into it.
+    /// Open (grown out of the arrow) or folded back into it.
     func setOpen(_ open: Bool, animated: Bool) {
         let apply = {
             self.alpha = open ? 1 : 0
-            self.transform = open ? .identity : CGAffineTransform(scaleX: 0.6, y: 0.3)
+            self.transform = open ? .identity : CGAffineTransform(scaleX: 0.5, y: 0.3)
         }
         if animated {
             UIView.animate(withDuration: MultiSwipe.animation, delay: 0,

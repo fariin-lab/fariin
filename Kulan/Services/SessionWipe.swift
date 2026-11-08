@@ -326,8 +326,8 @@ enum SessionWipe {
             "seenStoryItems.at", "likedStories.at", "oneTimeUsed.at",
             // misc account-scoped state
             "defaultDisappearSeconds", "callsSeenAt", "callsSeenIds",
-            // the multi-action swipe switch and its top action (2026-11-08)
-            MultiSwipe.onKey, MultiSwipe.choiceKey,
+            // the multi-action swipe switch and its up / down actions (2026-11-08)
+            MultiSwipe.onKey, MultiSwipe.upKey, MultiSwipe.downKey,
         ]
         for k in exact { d.removeObject(forKey: k) }
         HiddenMessages.clear()   // stored key + its in-memory mirror
