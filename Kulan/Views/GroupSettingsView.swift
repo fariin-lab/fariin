@@ -150,10 +150,11 @@ struct GroupSettingsView: View {
                     get: { repliesOverride ?? (conv?.repliesOff != true) },
                     set: { on in
                         repliesOverride = on
+                        patchChannel { $0.repliesOff = !on }
                         Task {
                             let ok = (try? await Functions.functions(region: "me-central1").httpsCallable("setReplies")
                                 .call(["cid": cid, "off": !on] as [String: Any])) != nil
-                            await MainActor.run { if !ok { repliesOverride = nil } }
+                            await MainActor.run { if !ok { repliesOverride = nil; patchChannel { $0.repliesOff = on } } }
                         }
                     }))
                     .onChange(of: conv?.repliesOff) { _, _ in repliesOverride = nil }
@@ -163,10 +164,11 @@ struct GroupSettingsView: View {
                     get: { quotesOverride ?? (conv?.quotesOff != true) },
                     set: { on in
                         quotesOverride = on
+                        patchChannel { $0.quotesOff = !on }
                         Task {
                             let ok = (try? await Functions.functions(region: "me-central1").httpsCallable("setChannelQuotes")
                                 .call(["cid": cid, "off": !on] as [String: Any])) != nil
-                            await MainActor.run { if !ok { quotesOverride = nil } }
+                            await MainActor.run { if !ok { quotesOverride = nil; patchChannel { $0.quotesOff = on } } }
                         }
                     }))
                     .onChange(of: conv?.quotesOff) { _, _ in quotesOverride = nil }
@@ -174,6 +176,18 @@ struct GroupSettingsView: View {
                 Text("Replies off: followers can read replies already posted but can't add new ones. Quotes off: nobody can quote your posts.")
             }
         }
+    }
+
+    /// ⛔ THE CHANNEL CHANGES AT THE TAP (owner 2026-11-08: Replies / Quotes on and off were "not
+    /// realtime"; the long-press Quote came only after the server's write came back through the
+    /// listener, seconds later on a cold function). The chat list's copy is patched at once, so the
+    /// open channel, its post bars and its menus follow now; the listener's copy confirms it.
+    private func patchChannel(_ change: (inout Conversation) -> Void) {
+        let repo = ConversationsRepository.shared
+        guard let i = repo.conversations.firstIndex(where: { $0.id == cid }) else { return }
+        var c = repo.conversations[i]
+        change(&c)
+        repo.conversations[i] = c
     }
 
     var body: some View {
