@@ -74,7 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: EMOJI KEY AGAIN, ALL REACTIONS, CHANNEL STORY CLOSE, CHANNEL WALLPAPER.
+            THIS BUILD: CHATS OPEN ON THE NEWEST MESSAGE, BUBBLE ART, REPLIES.
+            Chats: opening a chat from the list shows the newest message straight away, no late pop-in.
+            Bubble styles: the art above the bubble shows whole while a message is sending, no jump when it is delivered.
+            Replies: sort by Top or Newest, answer an answer with @name, edit your reply for 15 minutes, a reply alert opens on that reply.
+            Small fixes: the Unread line no longer waits forever offline; a group's colour reset leaves bubble styles alone.
+            PLEASE TEST: get a message while the chat is closed, wait, then open it from the list; send with the Football or Security style; reply to a reply in a channel and edit it.
+
+            EARLIER: EMOJI KEY AGAIN, ALL REACTIONS, CHANNEL STORY CLOSE, CHANNEL WALLPAPER.
             Story caption: the editor no longer redraws itself on every keyboard size change (the emoji key froze it). If it still freezes, open the app again so the log is sent.
             Channel posts: every reaction shows, wrapping onto more lines; no "+2".
             Channel profile: closing a story lands on the squircle photo with no black blocks.
