@@ -2912,11 +2912,14 @@ final class GroupCallService: ObservableObject {
         prefetchedLinkToken = nil
         prefetchingLinkToken = nil   // a request still out no longer stores its answer
     }
-    func prefetchLinkToken(key: String) {
+    /// `renew`: the lobby's refresh. The pass in hand stays usable (it still has its own 20 s life,
+    /// checked in `connect`) until the new one lands and takes its place, so a Join tapped while
+    /// the renewal is out goes straight in instead of waiting for it (owner 2026-11-08).
+    func prefetchLinkToken(key: String, renew: Bool = false) {
         guard let k = CallLinkKey(text: key) else { return }
         let roomId = k.roomId
         let uid = myUid
-        if let p = prefetchedLinkToken, p.roomId == roomId, p.uid == uid,
+        if !renew, let p = prefetchedLinkToken, p.roomId == roomId, p.uid == uid,
            Date().timeIntervalSince(p.at) < Self.prefetchedTokenLife { return }
         if let p = prefetchingLinkToken, p.roomId == roomId, p.uid == uid { return }
         let callable = functions.httpsCallable("groupCallToken")
@@ -3036,6 +3039,7 @@ final class GroupCallService: ObservableObject {
         // back with read-diag.js. token = our server's pass, room = the media server's connect.
         let t0 = Date()
         var tokenSource = "server"
+        var passAge = -1   // ms the prefetched pass had been held; -1 = not prefetched
         do {
             var d: [String: Any]?
             var haveAnswer = false
@@ -3044,9 +3048,13 @@ final class GroupCallService: ObservableObject {
                 if let p = prefetchedLinkToken, p.roomId == roomId, p.uid == uid,
                    Date().timeIntervalSince(p.at) < Self.prefetchedTokenLife {
                     prefetchedLinkToken = nil
+                    // A renewal still out must not store its answer for a later join (M-062): this
+                    // join takes the pass in hand, and nothing is kept past it.
+                    prefetchingLinkToken = nil
                     d = p.data   // fetched while the pre-join screen was up; see prefetchLinkToken
                     haveAnswer = true
                     tokenSource = "prefetched"
+                    passAge = Int(Date().timeIntervalSince(p.at) * 1000)
                 } else if let p = prefetchingLinkToken, p.roomId == roomId, p.uid == uid {
                     // Audit M-062: taken out of the registry BEFORE the wait, so the prefetch's own
                     // landing cannot store this token again for a later join.
@@ -3084,8 +3092,20 @@ final class GroupCallService: ObservableObject {
             // the moment they see me arrive, which can be before this line returns.
             GroupCallSocial.shared.attach(room: room, myUid: myUid, myName: ProfileStore.shared.me?.name ?? "")
             let t1 = Date()
-            try await room.connect(url: serverURL(d), token: token)
+            let mediaURL = serverURL(d)
+            try await room.connect(url: mediaURL, token: token)
             DiagLog.add("JOIN# \(isLinkRoom ? "link" : "group") token=\(tokenSource) \(Int(t1.timeIntervalSince(t0) * 1000))ms room=\(Int(Date().timeIntervalSince(t1) * 1000))ms")
+            // Owner 2026-11-08: the same split as a GC# line, with which media server and how old
+            // the prefetched pass was, so the next "Join is slow" report shows where it went.
+            GCLog.event("join_time", room: joiningRoomId, [
+                "kind": isLinkRoom ? "link" : "group",
+                "src": tokenSource,
+                "age": String(passAge),
+                "token": String(Int(t1.timeIntervalSince(t0) * 1000)),
+                "connect": String(Int(Date().timeIntervalSince(t1) * 1000)),
+                "total": String(Int(Date().timeIntervalSince(t0) * 1000)),
+                "srv": mediaURL.contains("rtc.fariin.com") ? "own" : "cloud",
+            ])
             DiagLog.flagForUpload()
             // owner audit 2026-10-06 #4: hung up while this was connecting. Before this the room came
             // up anyway, mic on, with no screen and no card, and every other call was refused.
