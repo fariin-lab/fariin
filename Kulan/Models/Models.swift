@@ -1679,7 +1679,10 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.groupVerified = data["verified"] as? Bool ?? false
         // Off until the owner turns replies on (owner 2026-11-07; the server's replyCtx says the same).
         self.repliesOff = data["repliesOff"] as? Bool ?? true
-        self.quotesOff = data["quotesOff"] as? Bool ?? false
+        // ⛔ A PRIVATE CHANNEL STARTS WITH QUOTES OFF (owner 2026-11-08): no stored choice reads as
+        // off for a private channel, on for a public one. The switch writes an explicit value, so
+        // turning it on in Channel Settings sticks. The server (createQuote) reads it the same way.
+        self.quotesOff = data["quotesOff"] as? Bool ?? (self.isChannel && !self.isPublic)
         self.bubbleStylesOff = data["bubbleStylesOff"] as? Bool ?? false
         self.groupVerifiedType = (data["verifiedType"] as? String).flatMap(Verification.Kind.init(rawValue:))
         self.groupNoReport = data["noReport"] as? Bool ?? false
