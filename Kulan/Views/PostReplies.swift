@@ -175,6 +175,20 @@ struct ReplyEdit: Equatable {
     private(set) var sort: Sort = .top
     /// Open threads showing all their answers, not just the first three.
     var expandedAll: Set<String> = []
+    /// ⛔ FIVE AT A TIME (owner 2026-11-08: "View 5 replies" shows all five; a thread of 10, 20,
+    /// 100 shows 5, then "View more" adds 5 each tap, so one big thread never buries the other
+    /// replies). How many answers each open thread shows; missing = `answerStep`.
+    var shownAnswers: [String: Int] = [:]
+    static let answerStep = 5
+
+    /// "View N more replies": five more, fetching the next page when the loaded ones run out.
+    func revealMoreAnswers(_ rid: String) {
+        let next = (shownAnswers[rid] ?? Self.answerStep) + Self.answerStep
+        shownAnswers[rid] = next
+        if (answers[rid]?.count ?? 0) < next, !(answerNext[rid] ?? "").isEmpty {
+            Task { await loadAnswers(rid, more: true) }
+        }
+    }
     /// The row to bring to the middle of the screen next ("t-id" or "a-id"), and the one flashing.
     var jump: String?
     private(set) var flash: String?
@@ -572,7 +586,9 @@ struct ReplyEdit: Equatable {
     private(set) var answersLoading: Set<String> = []
 
     func toggleThread(_ rid: String) {
-        if openThreads.contains(rid) { openThreads.remove(rid); expandedAll.remove(rid); return }
+        if openThreads.contains(rid) {
+            openThreads.remove(rid); expandedAll.remove(rid); shownAnswers[rid] = nil; return
+        }
         openThreads.insert(rid)
         if !answersLoaded.contains(rid) { Task { await loadAnswers(rid, more: false) } }
     }
@@ -1091,10 +1107,12 @@ struct PostThreadSheet: View {
             guard total > 0 else { return }
             let open = model.openThreads.contains(r.id)
             if open {
-                // The first three, then "View N more replies" for the rest (a long thread stays short).
-                if !model.expandedAll.contains(r.id), loaded.count > Self.firstAnswers {
-                    for a in loaded.prefix(Self.firstAnswers) { out.append(.answer(a, r.id)) }
-                    out.append(.revealMore(r.id, total - Self.firstAnswers))
+                // Five, then "View N more replies" adds five more each tap (a long thread stays short).
+                let cap = model.expandedAll.contains(r.id)
+                    ? Int.max : (model.shownAnswers[r.id] ?? RepliesModel.answerStep)
+                if total > cap {
+                    for a in loaded.prefix(cap) { out.append(.answer(a, r.id)) }
+                    out.append(.revealMore(r.id, total - min(cap, loaded.count)))
                 } else {
                     for a in loaded { out.append(.answer(a, r.id)) }
                     if !(model.answerNext[r.id] ?? "").isEmpty { out.append(.moreAnswers(r.id)) }
@@ -1102,8 +1120,6 @@ struct PostThreadSheet: View {
             }
             out.append(.toggle(r.id, total, open))
     }
-
-    private static let firstAnswers = 3
 
     /// Where new replies land: the bottom for Top, the top for Newest.
     private func edgeSeen(top: Bool, seen: Bool) {
@@ -1242,7 +1258,7 @@ struct PostThreadSheet: View {
                 .padding(.leading, ReplyThreadLine.answerIndent)
                 .background(flashFill(r.id))
         case .revealMore(let t, let n):
-            Button { withAnimation(.easeInOut(duration: 0.2)) { _ = model.expandedAll.insert(t) } } label: {
+            Button { withAnimation(.easeInOut(duration: 0.2)) { model.revealMoreAnswers(t) } } label: {
                 Text("View \(n) more \(n == 1 ? "reply" : "replies")")
                     .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
             }
