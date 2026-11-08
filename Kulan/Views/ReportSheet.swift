@@ -140,7 +140,14 @@ enum ReportService {
     /// no app-side counter bump on this path). Throws the server's own message on refusal.
     static func submit(_ t: ReportTarget, category: String, sub: String?, note: String,
                        block: Bool, shareText: Bool) async throws {
-        var data: [String: Any] = ["kind": t.kind.rawValue, "category": category, "block": block]
+        var data: [String: Any] = ["kind": t.kind.rawValue, "category": category, "block": block,
+                                   "platform": "ios"]
+        // Which build sent it, for the admin panel: "1.4 (57)".
+        let info = Bundle.main.infoDictionary
+        if let v = info?["CFBundleShortVersionString"] as? String, !v.isEmpty {
+            let b = info?["CFBundleVersion"] as? String ?? ""
+            data["appVersion"] = String((b.isEmpty ? v : "\(v) (\(b))").prefix(40))
+        }
         if let sub, !sub.isEmpty { data["sub"] = sub }
         let n = note.trimmingCharacters(in: .whitespacesAndNewlines)
         if !n.isEmpty { data["note"] = String(n.prefix(500)) }
