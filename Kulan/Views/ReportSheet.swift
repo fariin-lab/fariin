@@ -126,6 +126,9 @@ struct ReportTarget: Identifiable {
     var onLeave: (() -> Void)? = nil
     /// After a successful Block (the sheet blocks through BlockList), so the screen can update.
     var onBlocked: (() -> Void)? = nil
+    /// Opened from a Block dialog's "Block and Report": the person is already blocked, so the
+    /// Block toggle is ON and hidden, and the report records `block: true`.
+    var preBlocked: Bool = false
     /// After the report has been filed.
     var onReported: (() -> Void)? = nil
 }
@@ -179,7 +182,7 @@ struct ReportSheet: View {
     private var canBlock: Bool {
         target.kind.hasPerson && !target.personUid.isEmpty && target.personUid != ChatService.uid
     }
-    private var alreadyBlocked: Bool { BlockList.shared.contains(target.personUid) }
+    private var alreadyBlocked: Bool { target.preBlocked || BlockList.shared.contains(target.personUid) }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -320,7 +323,8 @@ struct ReportSheet: View {
         Task { @MainActor in
             do {
                 try await ReportService.submit(target, category: category, sub: sub,
-                                               note: cat == "other" ? note : "", block: wantsBlock, shareText: shareText)
+                                               note: cat == "other" ? note : "", block: wantsBlock || target.preBlocked,
+                                               shareText: shareText)
                 if wantsBlock { await doBlock() }
                 sending = false
                 target.onReported?()

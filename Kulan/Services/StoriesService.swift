@@ -3140,20 +3140,6 @@ final class StoriesService {
         return true
     }
 
-    /// Flag a story for review (App Store 1.2 — abuse reporting).
-    func reportStory(_ story: Story) async {
-        guard !uid.isEmpty else { return }
-        let filed = try? await db.collection("reports").addDocument(data: [
-            "type": "story",
-            "storyId": story.id,
-            "authorUid": story.authorUid,
-            "reporterUid": uid,   // the rule requires reporterUid (was "reporter" → create denied)
-            "createdAt": FieldValue.serverTimestamp(),
-        ])
-        // 2026-09-24 fix-all: counted for the rules' daily report limit, only once it has landed.
-        if filed != nil { await MessageRequests.countDaily("reports") }
-    }
-
     /// Delete EVERY story I've posted. Called on account deletion so nothing I shared
     /// stays visible after I'm gone (App Store 5.1.1(v) — deletion must remove my data).
     /// Removes the Storage image first (while the doc still exists, so the rules' author

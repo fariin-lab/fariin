@@ -693,10 +693,9 @@ struct GroupInfoView: View {
         }
     }
 
-    private func unfollowNow(report: Bool) {
+    private func unfollowNow() {
         unfollowing = true
         Task {
-            if report { await ChatService.report(reportedUid: "", cid: cid, reason: "channel") }
             do {
                 try await ChannelService.unfollow(cid: cid)
                 // The channel closes and leaves the list too (owner 2026-10-29: left open, it turned
@@ -722,7 +721,7 @@ struct GroupInfoView: View {
         let title = conv?.title ?? ""
         channelReport = ReportTarget(kind: .channel, cid: cid, name: title,
                                      leaveTitle: ChannelFollows.shared.follows(cid) ? "Leave Channel" : nil,
-                                     onLeave: { unfollowNow(report: false) })
+                                     onLeave: { unfollowNow() })
     }
 
     @ViewBuilder private var memberCards: some View {
@@ -1176,7 +1175,7 @@ struct GroupInfoView: View {
                 // One word for one action (owner 2026-10-29 audit U9): the circle says Leave, so the
                 // row, the alert and its button say it too.
                 .alert("Leave Channel?", isPresented: $confirmUnfollow) {
-                    Button("Leave Channel", role: .destructive) { unfollowNow(report: false) }
+                    Button("Leave Channel", role: .destructive) { unfollowNow() }
                     Button("Cancel", role: .cancel) {}
                 } message: { Text("Are you sure you want to leave “\(conv?.title ?? "this channel")”? You'll stop getting its posts.") }
                 // Apple's centred system alert (owner 2026-10-29: "use the real Apple design"), not a
@@ -2486,10 +2485,6 @@ struct GroupMemberSheet: View {
 
     @State private var busy = false
     @State private var actionError: String?
-    // 2026-09-24 fix-all #124
-    @State private var showBlock = false
-    @State private var showReport = false
-    @State private var memberBlocked = false
     @State private var showProfileHere = false
     // ⛔ ONE PAGE (owner 2026-10-19): Member | Admin, the rights and the tag are edited here and
     // written together by Done, instead of on their own pushed pages.
@@ -2795,27 +2790,6 @@ struct GroupMemberSheet: View {
                                                               set: { if !$0 { actionError = nil } })) {
                 Button("OK", role: .cancel) {}
             } message: { Text(actionError ?? "") }
-            // 2026-09-24 fix-all #124: ContactInfoView's two confirms, word for word.
-            .darkAlert("Block \(member.name)?",
-                       message: "Blocked users will not be able to call you or send you messages.",
-                       isPresented: $showBlock,
-                       actions: [
-                        .cancel(),
-                        .destructive("Block") { blockMember(report: false) },
-                        .destructive("Block and Report") { blockMember(report: true) },
-                       ])
-            .darkAlert("Report \(member.name)?",
-                       message: "Reported accounts are reviewed by our team. They are not told.",
-                       isPresented: $showReport,
-                       actions: [
-                        .cancel(),
-                        .destructive("Report") {
-                            let other = member.id, group = cid
-                            Task { await ChatService.report(reportedUid: other, cid: group, reason: "user") }
-                        },
-                        .destructive("Report and Block") { blockMember(report: true) },
-                       ])
-            .onAppear { memberBlocked = BlockList.shared.contains(member.id) }
         }
         .presentationDetents([.height(cardHeight)])
         .presentationBackground(Color(uiColor: .systemGroupedBackground))
@@ -3171,16 +3145,6 @@ struct GroupMemberSheet: View {
             onInfo(uid)
         } else {
             showProfileHere = true   // its own sheet over the card (see `body`)
-        }
-    }
-
-    /// 2026-09-24 fix-all #124: flipped first, as on the profile, so an offline tap does not read dead.
-    private func blockMember(report: Bool) {
-        memberBlocked = true
-        let other = member.id, group = cid, mine = me
-        Task {
-            await ChatService.setBlocked(ChatService.convId(mine, other), true)
-            if report { await ChatService.report(reportedUid: other, cid: group, reason: "user") }
         }
     }
 }

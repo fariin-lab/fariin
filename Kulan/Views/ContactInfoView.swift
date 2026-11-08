@@ -1401,15 +1401,15 @@ struct ContactInfoView: View {
                         // through first — you stop somebody reaching you, and only then think about
                         // telling anyone. Without this that thought costs finding a second screen.
                         .destructive("Block and Report") {
+                            // Block as above, then the report sheet so a reason is chosen. Closing
+                            // the sheet without sending leaves the block in place.
                             blocked = true
                             Task {
-                                let ok = await ChatService.setBlocked(cid, true)
-                                await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user")
-                                if !ok {
+                                if !(await ChatService.setBlocked(cid, true)) {
                                     await MainActor.run { blocked = false; blockFailed = true }
                                 }
                             }
-                            flashShareToast(Self.reportedNote)
+                            DispatchQueue.main.async { openReport(preBlocked: true) }
                         },
                        ])
             // The report sheet (owner 2026-11-08): reasons, a confirm page with Block, and a thanks
@@ -1679,11 +1679,12 @@ struct ContactInfoView: View {
     // One tappable row: icon, title, optional trailing value, chevron. `tint` colors icon+title.
     // The row itself is `ProfileInfoRow`, shared with the group info page.
     /// The report sheet for this person. Mute is offered when we have a chat to mute.
-    private func openReport() {
+    /// `preBlocked`: opened from "Block and Report", the block is already done.
+    private func openReport(preBlocked: Bool = false) {
         let hasChat = ConversationsRepository.shared.conversations.contains { $0.id == cid }
         reportTarget = ReportTarget(kind: .user, targetId: otherUid, cid: cid, personUid: otherUid,
                                     name: shownName, muteCid: hasChat ? cid : nil,
-                                    onBlocked: { blocked = true })
+                                    onBlocked: { blocked = true }, preBlocked: preBlocked)
     }
 
     private func infoRow(_ title: String, _ icon: String, value: String? = nil,
@@ -1776,8 +1777,6 @@ struct ContactInfoView: View {
     /// through the database.
     /// Raise the confirmation, then take it away. Deliberately the same 1.5s and the same pair of
     /// curves the story viewer's `flashSentToast` uses, so the app has one way of saying "done".
-    /// Said after any Report on this page (owner 2026-10-19: reporting was silent).
-    static let reportedNote = "Thanks for reporting. We'll take a look."
 
     private func flashShareToast(_ text: String) {
         shareToast = text
