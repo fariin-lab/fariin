@@ -15,6 +15,9 @@ struct ChatsSettingsView: View {
     /// your address and the time. Theirs has exactly this setting for exactly this reason. Default
     /// on, as theirs is.
     @AppStorage("linkPreviewsEnabled") private var linkPreviews = true
+    /// Multi-action swipe (owner 2026-11-08): off by default, and its top action. See `MultiSwipe`.
+    @AppStorage(MultiSwipe.onKey) private var swipeActions = false
+    @AppStorage(MultiSwipe.choiceKey) private var swipeChoice = MultiSwipe.Choice.copy.rawValue
     @State private var confirmClear = false
     @State private var clearing = false
     @State private var photosDenied = false
@@ -69,6 +72,22 @@ struct ChatsSettingsView: View {
                 Toggle("Link Previews", badge: "chats.linkPreviews", isOn: $linkPreviews).tint(.green)
             } footer: {
                 Text("Show a preview card for links you type or paste. Your phone contacts the site to build it, before the message is sent.")
+            }
+
+            // Multi-action swipe: only for the accounts in its gate for now (owner 2026-11-08).
+            if MultiSwipe.allowed {
+            Section {
+                Toggle("Swipe Actions", isOn: $swipeActions).tint(.green)
+                if swipeActions {
+                    Picker("Slide Up For", selection: $swipeChoice) {
+                        ForEach(MultiSwipe.Choice.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
+                }
+            } footer: {
+                Text(swipeActions
+                     ? "Swipe a message left to reply. Keep holding and slide up for \(MultiSwipe.Choice(rawValue: swipeChoice)?.title ?? "Copy"). Photos and videos save instead of copying, and Quote works in channels only."
+                     : "Swipe a message left to reply, then slide up for one more action.")
+            }
             }
 
             // ⛔ 2026-10-18, owner: a stranger's first message is a Message Request now, so "people
