@@ -89,7 +89,8 @@ final class SwipeActionCapsule: UIView {
     static var height: CGFloat { MultiSwipe.slotStep * 3 }
     private static let circle: CGFloat = 36
 
-    private let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial))
+    /// Liquid glass (owner 2026-11-08: "make it liquid glass"), the composer's own material.
+    private let blur = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
     private let highlight = UIView()
     private var icons: [MultiSwipe.Slot: UIImageView] = [:]
     private(set) var selected: MultiSwipe.Slot = .reply
@@ -100,9 +101,7 @@ final class SwipeActionCapsule: UIView {
         super.init(frame: CGRect(x: 0, y: 0, width: Self.width, height: Self.height))
         isUserInteractionEnabled = false
         blur.frame = bounds
-        blur.layer.cornerRadius = Self.width / 2
-        blur.layer.cornerCurve = .continuous
-        blur.clipsToBounds = true
+        blur.cornerConfiguration = .capsule()
         addSubview(blur)
         highlight.frame = CGRect(x: 0, y: 0, width: Self.circle, height: Self.circle)
         highlight.layer.cornerRadius = Self.circle / 2
