@@ -75,6 +75,42 @@ struct VideoPlayerScreen: View {
 
     private var zoomed: Bool { max(1, zoom * pinch) > 1.01 }
 
+    /// ⛔ A ZOOMED VIDEO PANS INSIDE ITS OWN EDGES (owner 2026-11-08: zoomed in, a drag down took the
+    /// video off the bottom of the screen). The pan had no limit. Now, like a scroll view and the
+    /// reference app's gallery: the clip's edge stops at the screen's edge, a drag past it stretches
+    /// (rubber band) and springs back on release.
+    private func panLimit(_ scale: CGFloat) -> CGSize {
+        let bounds = UIScreen.main.bounds
+        var size = bounds.size
+        if let w = message.width, let h = message.height, w > 0, h > 0 { size = CGSize(width: w, height: h) }
+        let fit = mediaFitRect(size, in: bounds).size
+        return CGSize(width: max(0, (fit.width * scale - bounds.width) / 2),
+                      height: max(0, (fit.height * scale - bounds.height) / 2))
+    }
+
+    private static func clamp(_ v: CGSize, _ lim: CGSize) -> CGSize {
+        CGSize(width: min(lim.width, max(-lim.width, v.width)),
+               height: min(lim.height, max(-lim.height, v.height)))
+    }
+
+    /// Past the edge the content follows the finger less and less (UIScrollView's 0.55 constant).
+    private static func rubber(_ v: CGSize, _ lim: CGSize) -> CGSize {
+        func one(_ x: CGFloat, _ l: CGFloat) -> CGFloat {
+            let over = abs(x) - l
+            guard over > 0 else { return x }
+            let d: CGFloat = 400
+            let r = (1 - 1 / (over * 0.55 / d + 1)) * d
+            return x < 0 ? -(l + r) : (l + r)
+        }
+        return CGSize(width: one(v.width, lim.width), height: one(v.height, lim.height))
+    }
+
+    /// Where the clip is drawn: the settled pan plus the live drag, stretched past the edges.
+    private var shownPan: CGSize {
+        let raw = CGSize(width: pan.width + panDrag.width, height: pan.height + panDrag.height)
+        return Self.rubber(raw, panLimit(max(1, zoom * pinch)))
+    }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -109,7 +145,12 @@ struct VideoPlayerScreen: View {
             DragGesture(minimumDistance: 8)
                 .updating($panDrag) { v, s, _ in if zoomed { s = v.translation } }
                 .onEnded { g in
-                    if zoomed { pan.width += g.translation.width; pan.height += g.translation.height }
+                    guard zoomed else { return }
+                    let raw = CGSize(width: pan.width + g.translation.width, height: pan.height + g.translation.height)
+                    pan = Self.rubber(raw, panLimit(zoom))   // where it was drawn, so no jump
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) {
+                        pan = Self.clamp(raw, panLimit(zoom))
+                    }
                 }
         )
         // The interactive dismiss — the SAME code path as the image viewer
@@ -272,13 +313,19 @@ struct VideoPlayerScreen: View {
         if let player {
             PlayerLayerView(player: player, onFirstFrame: { firstFrameShown = true })
                 .scaleEffect(max(1, zoom * pinch))
-                .offset(x: pan.width + panDrag.width, y: pan.height + panDrag.height)
+                .offset(x: shownPan.width, y: shownPan.height)
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
                 .gesture(
                     MagnificationGesture()
                         .updating($pinch) { v, s, _ in s = v }
-                        .onEnded { v in zoom = min(4, max(1, zoom * v)); if zoom <= 1 { pan = .zero } }
+                        .onEnded { v in
+                            zoom = min(4, max(1, zoom * v))
+                            // Zooming out pulls the clip back inside its new, smaller edges.
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) {
+                                pan = zoom <= 1 ? .zero : Self.clamp(pan, panLimit(zoom))
+                            }
+                        }
                 )
                 .onTapGesture { toggleChrome() }
             // His screenshot: chrome up and the clip paused, and nothing mid-screen — the row's own
