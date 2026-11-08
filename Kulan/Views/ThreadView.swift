@@ -3717,7 +3717,7 @@ struct ThreadView: View {
                     let key = MediaOpenRects.key(.chat, m.id)
                     MediaOpen.flyOrPresent(
                         imageUrl: m.imageUrl, rectKey: key, clip: MediaOpenRects.clipRect,
-                        present: { MediaPresentGate.present { viewerImage = m } })
+                        present: { openChatPhoto(m) })
                 },
                 // ALBUM IMAGES FLY TOO — this was the last media kind opening with no transition at all
                 // (user: "make it sure image video multiple swipe swipe images"). It was never a broken
@@ -5182,7 +5182,7 @@ struct ThreadView: View {
                     // Scoped key (.chat): All Media and the profile strip register the SAME ids.
                     MediaOpen.flyOrPresent(
                         imageUrl: m.imageUrl, rectKey: key, clip: MediaOpenRects.clipRect,
-                        present: { MediaPresentGate.present { viewerImage = m } })
+                        present: { openChatPhoto(m) })
                 }
             },
             // ALBUM TILES FLY TOO. A tile's rect is registered under "<messageId>-<index>", which is
@@ -9575,6 +9575,43 @@ struct ThreadView: View {
         // 16/6 and looked off against the screen's rounded corners). The bar stands in the
         // composer's slot, so it takes the composer's device-derived sides and bottom.
         .systemBarChrome(keyboardUp: keyboard.height > 0)
+    }
+
+    /// ⛔ A GROUP'S OR CHANNEL'S PHOTOS SWIPE (owner 2026-11-08: "if user open one photo, swipe
+    /// shows the other photo, swipe again the next, until all the photos in the group or channel are
+    /// done"). Reverses the 2026-07-29 "a single photo opens alone" for groups and channels only: a
+    /// photo there opens in a pager over every photo the chat has loaded, oldest to newest, album
+    /// photos in their place. A 1:1 chat keeps the single photo. View-once, GIFs, unsent and
+    /// deleted messages are never in the pager.
+    private func openChatPhoto(_ m: Message) {
+        if !m.viewOnce, let conv = conversation, conv.isGroup || conv.isChannel {
+            let gallery = chatPhotoGallery()
+            if gallery.count > 1, gallery.contains(where: { $0.id == m.id }) {
+                MediaPresentGate.present { albumViewer = AlbumViewerWrap(gallery: gallery, startId: m.id) }
+                return
+            }
+        }
+        MediaPresentGate.present { viewerImage = m }
+    }
+
+    /// Every delivered photo in the loaded chat, oldest first. An album's photos become the same
+    /// synthetic messages its own pager uses ("<id>-<index>"), so their tiles' rects still match.
+    private func chatPhotoGallery() -> [Message] {
+        var items = repo.items
+        if let f = items.first, let l = items.last, f.createdAt > l.createdAt { items.reverse() }
+        var out: [Message] = []
+        for m in items where !m.deleted && !m.viewOnce && m.sendState == nil {
+            if !m.album.isEmpty {
+                for (idx, im) in m.album.enumerated() where !im.isVideo {
+                    let data: [String: Any] = ["type": "image", "imageUrl": im.imageUrl, "enc": im.enc.asDict,
+                                               "authorId": m.authorId, "width": im.width, "height": im.height]
+                    out.append(Message(id: "\(m.id)-\(idx)", data: data, cid: cid, crypto: Crypto.shared))
+                }
+            } else if m.isImage, !m.isGif {
+                out.append(m)
+            }
+        }
+        return out
     }
 
     private var searchCountText: String {
