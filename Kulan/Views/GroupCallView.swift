@@ -77,9 +77,17 @@ struct GroupCallView: View {
     @ViewBuilder
     private func ringingLayer(at now: Date, myVideo: Bool) -> some View {
         let rung = service.ringingMembers(at: now)
+        // 2026-11-08: the person a 1:1 "Add people" brought along is never rung; they are on
+        // their way in, and no ringing sound plays for them.
+        let carried = service.carriedJoining(at: now)
         if !rung.isEmpty {
             GroupCallRingingView(people: rung.map { .init(name: $0.name, photoUrl: $0.photoUrl) },
                                  overVideo: myVideo)
+                .transition(.opacity)
+        } else if !carried.isEmpty {
+            GroupCallRingingView(people: carried.map { .init(name: $0.name, photoUrl: $0.photoUrl) },
+                                 overVideo: myVideo,
+                                 subtitle: "Joining…")
                 .transition(.opacity)
         }
     }

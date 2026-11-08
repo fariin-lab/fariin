@@ -390,6 +390,12 @@ final class GroupCallService: ObservableObject {
     @Published var members: [CallMember] = []        // ad-hoc: everyone invited, live from the doc
     @Published var joinedUids: Set<String> = []      // ad-hoc: everyone who ever connected
     @Published var roomStartedAt: Date?              // ad-hoc: drives "Ringing…" vs "Didn't join"
+    /// 2026-11-08: the 1:1 peer "Add people" carried into this ad-hoc room. Never rung, so never
+    /// "Ringing…" and no ringback for them: "Joining…" until they are in (`carriedJoining`).
+    @Published private(set) var carriedUids: Set<String> = []
+    /// How long a carried person reads "Joining…" (and holds the alone-end off) before they count as
+    /// not coming.
+    static let carriedJoinWindow: TimeInterval = 30
     @Published var waitingForApproval = false {      // link joiner, parked until the creator answers
         didSet { syncJoinState() }
     }
@@ -1024,6 +1030,7 @@ final class GroupCallService: ObservableObject {
             someoneJoined = true
             everHereUids.formUnion(room.remoteParticipants.values.compactMap { $0.identity?.stringValue })
         }
+        armAdhocAloneEnd()   // 2026-11-08
         // ⛔ A SOUND WHEN SOMEONE COMES OR GOES — owner 2026-10-28: people joining and leaving a
         // running call happened in silence ("give the user an experience"). The joined tone for
         // someone arriving, the left tone for someone leaving; not in the first 1.5 s after I
@@ -1039,6 +1046,42 @@ final class GroupCallService: ObservableObject {
             playPresenceTone(RingbackTone.groupLeftData())
         }
     }
+    /// 2026-11-08 (Add people): a multi-person call left with only me in it stayed open, and the
+    /// others still read "Ringing" for someone long gone. Alone in a connected ad-hoc room for
+    /// `adhocAloneGrace`, with nobody still being rung and no carried 1:1 peer still joining, the call
+    /// ends here. Checked again every grace period while someone is still rung or joining, so a ring
+    /// minute that runs out with nobody coming ends it too.
+    private var aloneEndTask: Task<Void, Never>?
+    static let adhocAloneGrace: TimeInterval = 10
+    private func armAdhocAloneEnd() {
+        guard isAdhoc, isActive, !leaving, room.connectionState == .connected,
+              room.remoteParticipants.isEmpty else {
+            aloneEndTask?.cancel(); aloneEndTask = nil
+            return
+        }
+        guard aloneEndTask == nil else { return }
+        let gen = joinGeneration
+        aloneEndTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.adhocAloneGrace * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            self.aloneEndTask = nil
+            guard gen == self.joinGeneration else { return }
+            self.endAdhocIfAlone()
+        }
+    }
+    private func endAdhocIfAlone() {
+        guard isAdhoc, isActive, !leaving, !rejoining, room.connectionState == .connected,
+              room.remoteParticipants.isEmpty,
+              let since = aloneSince, Date().timeIntervalSince(since) >= Self.adhocAloneGrace - 0.5 else { return }
+        let now = Date()
+        if !ringingMembers(at: now).isEmpty || !carriedJoining(at: now).isEmpty {
+            armAdhocAloneEnd()
+            return
+        }
+        GCLog.event("alone_end", room: logRoom, ["anyone": someoneJoined ? "1" : "0"])
+        end()
+    }
+
     /// Who was here at the last `noteRoomPeople`, for the come-and-go sounds.
     private var lastRemoteUids: Set<String> = []
     /// The chat record of the group conversation call I am in (`recordId` on its doc): written by me
@@ -1228,6 +1271,8 @@ final class GroupCallService: ObservableObject {
         micChain = Task { @MainActor [weak self] in
             guard let self else { return }
             var tries = 0
+            // 2026-11-08: SDK errors retried here, apart from `tries` (which caps taps overtaking).
+            var failures = 0
             // What this chain itself last put on the publication (nil until its first SDK call).
             var applied: Bool?
             // Audit M-085: never past the call it was started for. `leaving` is set first thing by
@@ -1251,10 +1296,24 @@ final class GroupCallService: ObservableObject {
                     applied = want
                 } catch {
                     guard gen == self.joinGeneration, !self.leaving else { break }
+                    GCLog.failure("mic_fail", room: self.logRoom, ["want": want ? "on" : "off", "code": Telemetry.code(error),
+                                                                   "try": "\(failures + 1)"])
+                    // 2026-11-08 (Add people, the moved person had no mic): one SDK error used to end
+                    // the chain for good. Right after a move, or in the background, the audio session
+                    // is often not ready yet, and a second later it is. Three more tries, 0.5 s, 1 s
+                    // and 2 s apart; a permission refusal fails all of them and lands below as before.
+                    if failures < 3 {
+                        failures += 1
+                        tries -= 1   // an error is not a tap overtaking the chain
+                        try? await Task.sleep(nanoseconds: UInt64(500_000_000) << UInt64(failures - 1))
+                        continue
+                    }
                     // Audit M-084: a refused microphone (permission off) used to fail silently with
                     // the button on. The button now shows what is really published, and says so.
                     let live = self.room.localParticipant.isMicrophoneEnabled()
-                    GCLog.failure("mic_fail", room: self.logRoom, ["want": want ? "on" : "off", "code": Telemetry.code(error)])
+                    // Wanted on and still off: tried again when the audio comes back
+                    // (`retryMicAfterWake`: interruption over, route change, app in front, CallKit).
+                    if want, !live { self.micRetryOnWake = true }
                     if self.micOn != live {
                         self.micOn = live
                         self.showToast(want ? "Couldn't turn the microphone on. Try again." : "Couldn't turn the microphone off. Try again.")
@@ -1275,6 +1334,21 @@ final class GroupCallService: ObservableObject {
             if self.micChainID == id { self.micChain = nil }
             self.micChangesInFlight -= 1
         }
+    }
+
+    /// 2026-11-08: my mic was wanted on and every try in `syncMic` failed (the audio session was not
+    /// mine yet: a move from a 1:1, the app in the background). The next sign that the audio is back
+    /// tries once more.
+    private var micRetryOnWake = false
+
+    /// The audio may be usable again (`why` names the sign, for the GC# line). Only after a failed
+    /// mic, never against a lock or a mute from an owner, and only while the call is up.
+    func retryMicAfterWake(_ why: String) {
+        guard micRetryOnWake, isActive, !leaving, !rejoining, !micLockedByAdmin, !serverMutedMe else { return }
+        micRetryOnWake = false
+        GCLog.event("mic_retry", room: logRoom, ["why": why])
+        if !micOn { micOn = true }
+        syncMic()
     }
 
     /// My microphone publication is there, with its track, and muted.
@@ -1352,6 +1426,7 @@ final class GroupCallService: ObservableObject {
     }
 
     private func appCameBack() {
+        retryMicAfterWake("foreground")   // 2026-11-08
         guard cameraPausedByBackground else { return }
         cameraPausedByBackground = false
         GCLog.event("camera_pause", room: logRoom, ["why": "foreground"])
@@ -1394,6 +1469,11 @@ final class GroupCallService: ObservableObject {
             center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { _ in
                 MainActor.assumeIsolated { GroupCallService.shared.restartAudioIfNeeded(reset: true) }
             },
+            // 2026-11-08: a new route (headphones, Bluetooth, the session coming back) is a moment
+            // a failed mic may work again.
+            center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { GroupCallService.shared.retryMicAfterWake("route") }
+            },
         ]
     }
 
@@ -1407,6 +1487,7 @@ final class GroupCallService: ObservableObject {
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard gen == joinGeneration else { return }
             restartAudioIfNeeded(reset: false)
+            retryMicAfterWake("interruption")   // 2026-11-08
         }
     }
 
@@ -1866,7 +1947,7 @@ final class GroupCallService: ObservableObject {
         guard isAdhoc, isActive else { return [] }
         let me = myUid
         return members
-            .filter { $0.uid != me && !joinedUids.contains($0.uid)
+            .filter { $0.uid != me && !joinedUids.contains($0.uid) && !carriedUids.contains($0.uid)
                 && !declinedUids.contains($0.uid) && !busyUids.contains($0.uid)
                 && inviteStart(for: $0.uid).map { start in now.timeIntervalSince(start) < Self.ringWindow } == true }
     }
@@ -1887,6 +1968,14 @@ final class GroupCallService: ObservableObject {
     /// The people still inside their ring minute, also after somebody came (the header's
     /// ", 2 ringing", owner 2026-10-27). `ringingMembers` stops at the first answer on purpose: the
     /// caller's ringing sound and the ringing screen hang on it.
+    /// 2026-11-08: the carried 1:1 peer, not in the room yet and inside `carriedJoinWindow`.
+    func carriedJoining(at now: Date) -> [CallMember] {
+        guard isAdhoc, isActive, !carriedUids.isEmpty,
+              let start = roomStartedAt, now.timeIntervalSince(start) < Self.carriedJoinWindow else { return [] }
+        let here = Set(room.remoteParticipants.values.compactMap { $0.identity?.stringValue })
+        return members.filter { carriedUids.contains($0.uid) && !joinedUids.contains($0.uid) && !here.contains($0.uid) }
+    }
+
     func stillRinging(at now: Date) -> [CallMember] {
         if case .group? = activeRoom { return groupRingingMembers(at: now, afterAnswer: true) }
         return ringingMembers(at: now)
@@ -2078,6 +2167,12 @@ final class GroupCallService: ObservableObject {
         hangingUp = true
         myRequestListener?.remove(); myRequestListener = nil
         linkDocListener?.remove(); linkDocListener = nil
+        // 2026-11-08: I ended a multi-person call on purpose (a drop never comes through here). A 1:1
+        // I place to someone in it says so (`afterLeave`), so their phone rings it as a new call
+        // instead of putting me straight back into the room I just left.
+        if isAdhoc {
+            CallService.noteLeftOnPurpose(Set(members.map(\.uid)).union(joinedUids).subtracting([myUid]))
+        }
         Task { await disconnect() }
     }
     /// True from `end()` until its `disconnect()` has finished. An approval that arrives in
@@ -2378,6 +2473,26 @@ final class GroupCallService: ObservableObject {
         if cameraChain != nil { cameraChain = nil; cameraChainID &+= 1 }
     }
 
+    /// 2026-11-08: the next 1:1 call after a group call started with a silent mic ("no sound sent in
+    /// 5s" and the 1:1's rebuild). The SDK's audio engine (and its voice-processing unit) could
+    /// outlive the room and hold the microphone against the 1:1's own. Once the room is closed, and
+    /// after the prepared-recording release queued by `resetRoomState`, the engine is let go and
+    /// allowed again: it stops now and only starts for the next room's tracks. Only for a call the
+    /// SDK configured itself (a CallKit one is put back by `GroupCallKitAudio.restoreDefaults`), and
+    /// never once a 1:1 or another room has started.
+    private func releaseCallAudio() {
+        let pending = recordingPreparedChange
+        Task { @MainActor [weak self] in
+            await pending?.value
+            guard let self, !self.isActive, !self.connecting, CallService.shared.state == .idle
+                    || CallService.shared.state == .ended,
+                  AudioManager.shared.audioSession.isAutomaticConfigurationEnabled else { return }
+            try? AudioManager.shared.setEngineAvailability(.none)
+            try? AudioManager.shared.setEngineAvailability(.default)
+            GCLog.event("audio_release", room: nil, ["running": AudioManager.shared.isEngineRunning ? "1" : "0"])
+        }
+    }
+
     private func runDisconnect() async {
         leaving = true
         defer { leaving = false; hangingUp = false }
@@ -2430,6 +2545,7 @@ final class GroupCallService: ObservableObject {
         connecting = false
         groupRecordId = nil; aloneSince = nil; someoneJoined = false; everHereUids = []; lastRemoteUids = []
         resetRoomState()
+        releaseCallAudio()   // 2026-11-08
         presentsRoomScreen = false
         reevaluateInvites()
         // The network part, after the phone is free. Audit M-099: with background time, so ending
@@ -2601,7 +2717,12 @@ final class GroupCallService: ObservableObject {
     /// Starts a multi-person call with `people` (I am added automatically). Writes the room's doc first,
     /// because the token function checks membership against it, then joins. Returns the room id, or
     /// nil with `notice` set when it did not start.
-    func startAdhoc(with people: [CallMember], video: Bool) async -> String? {
+    /// `carried`: the person a 1:1 "Add people" is bringing along (CallService.moveToGroup). They
+    /// are not rung (the server skips them), so they show "Joining…" and get no ringback.
+    /// `onRoomCreated`: run once the doc is written, BEFORE this phone connects (2026-11-08: the move
+    /// was written only after my token, connect and join, about 12 s of dead air for the other side).
+    func startAdhoc(with people: [CallMember], video: Bool, carried: String? = nil,
+                    onRoomCreated: (@MainActor (String) -> Void)? = nil) async -> String? {
         // Audit M-029, 2026-10-07: every way this returns nil now says why. "Add people" has already
         // closed the 1:1 by the time it gets here, so a silent nil left both people with nothing.
         // Already in (or waiting for) another call: no call screen is up for a notice, so an alert.
@@ -2629,6 +2750,7 @@ final class GroupCallService: ObservableObject {
         // Every way out clears it through `resetRoomState`.
         joiningRoomId = roomId
         members = everyone; joinedUids = []; roomStartedAt = Date()
+        if let carried, others.contains(where: { $0.uid == carried }) { carriedUids = [carried] }
         callTitle = Self.title(for: others.map(\.name))
         var names: [String: String] = [:]
         var photos: [String: String] = [:]
@@ -2670,6 +2792,7 @@ final class GroupCallService: ObservableObject {
         }
         declinedInvites.insert(roomId)
         listenRoom(roomId)
+        onRoomCreated?(roomId)
         guard await connect(payload: ["roomId": roomId], room: .adhoc(id: roomId), video: video, gen: gen) else {
             // owner audit 2026-10-06 #4: hung up before the room was up. The doc written above is
             // already ringing the others; stop it, or they answer into an empty call.
@@ -2683,7 +2806,9 @@ final class GroupCallService: ObservableObject {
     }
 
     /// Joins a multi-person call I am a member of (an answered invite, or the 1:1 handover).
-    func joinAdhoc(roomId: String, video: Bool) async {
+    /// `carried`: the 1:1 peer who moved me here (CallService.followMove). Both phones join at once
+    /// now, so I may be in first; they show "Joining…", never "Ringing" with a ringback.
+    func joinAdhoc(roomId: String, video: Bool, carried: String? = nil) async {
         guard activeCid == nil, !connecting, !waitingForApproval else { return }
         notice = nil
         closeLobbyForAnotherJoin()
@@ -2717,6 +2842,7 @@ final class GroupCallService: ObservableObject {
             return
         }
         apply(roomData: d)
+        if let carried, !carried.isEmpty { carriedUids = [carried] }
         listenRoom(roomId)
         if await connect(payload: ["roomId": roomId], room: .adhoc(id: roomId), video: video, gen: gen) {
             declinedInvites.insert(roomId)   // never ring again for a room I answered
@@ -3236,7 +3362,8 @@ final class GroupCallService: ObservableObject {
         waitingLink = nil
         waitingForApproval = false
         activeRoom = nil
-        members = []; joinedUids = []; roomStartedAt = nil
+        members = []; joinedUids = []; roomStartedAt = nil; carriedUids = []
+        aloneEndTask?.cancel(); aloneEndTask = nil   // 2026-11-08
         pendingRequests = []; isLinkCreator = false
         myRole = .participant
         endingForAll = false

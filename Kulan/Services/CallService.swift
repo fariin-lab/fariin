@@ -226,6 +226,7 @@ final class CallService: NSObject {
                 ScreenShareAudioMixer.shared.isMixing = false
                 shareUsesTrack = false; screenSource = nil; screenTrack = nil
                 remoteScreenTrack = nil; remoteScreenMode = "camera"; peerHasScreen2 = false
+                peerHasMove1 = false   // 2026-11-08
                 screenUpgradeOfferAt = nil; screenUpgradeAttempts = 0
                 screenUpgradeInFlightVersion = nil; cameraPausedForShareTier = false
                 videoSource = nil
@@ -833,6 +834,11 @@ final class CallService: NSObject {
     private static let screenCap = "screen2"
     /// The other phone wrote `caps.<them>` with screen2.
     private(set) var peerHasScreen2 = false
+    /// 2026-11-08: "Add people" capability. A build that writes it rings an ad-hoc room (`adhoccall`)
+    /// and follows `moveTo` into one. The call screen offers Add people only when the other phone
+    /// says so: an older build or the Android app left the moved person on a dead 1:1.
+    private static let moveCap = "move1"
+    private(set) var peerHasMove1 = false
     /// THEIR screen in dual mode (the second video transceiver's receiver). Their camera stays on
     /// `remoteVideoTrack`.
     private(set) var remoteScreenTrack: RTCVideoTrack? {
@@ -3219,6 +3225,8 @@ final class CallService: NSObject {
         if let caps = d["caps"] as? [String: Any], let theirs = caps[otherUid] as? [String] {
             let v3 = theirs.contains(Self.screenCap)
             if v3 != peerHasScreen2 { peerHasScreen2 = v3 }
+            let mv = theirs.contains(Self.moveCap)
+            if mv != peerHasMove1 { peerHasMove1 = mv }
         }
         if let modes = d["screenMode"] as? [String: String], let mode = modes[otherUid],
            mode != remoteScreenMode {
@@ -4943,12 +4951,14 @@ final class CallService: NSObject {
                         "type": self.cameraOn ? "video" : "voice",
                         "status": "ringing",
                         "cams": [self.me: self.cameraOn],   // seed my camera state (per-side)
-                        "caps": [self.me: [Self.screenCap, Self.earlyCap]],   // screen share v3; early answer (2026-10-26)
+                        "caps": [self.me: [Self.screenCap, Self.earlyCap, Self.moveCap]],   // screen share v3; early answer (2026-10-26); Add people (2026-11-08)
                         "createdAt": FieldValue.serverTimestamp(),
                     ]
                     // Muted during "Calling..." (audit M-051, 2026-10-07): say so from the first doc,
                     // so the callee's muted icon is right from the first frame of the call.
                     if self.isMuted || self.isHeld { data["muted"] = [self.me: true] }
+                    // 2026-11-08: I left a multi-person call with them on purpose; ring as a new call.
+                    if Self.leftOnPurpose(with: uid) { data["afterLeave"] = true }
                     // Owner audit 2026-10-06 #27: the offer goes out sealed, and that decides the
                     // whole call (see `sealSignalling`). Keys come from memory or disk only (warmed
                     // at dial), so this never waits on the network. No key for the callee yet = the
@@ -5690,6 +5700,27 @@ final class CallService: NSObject {
         }
     }
 
+    // MARK: Deliberate leave (2026-11-08)
+    //
+    // Calling back after leaving a multi-person call on purpose used to put the caller straight back
+    // into the room (`sendBackToRoom`): someone who pressed End was pulled back in. The leaver's
+    // phone knows the leave was deliberate (GroupCallService.end; a drop never goes through it), so
+    // it marks its next 1:1 to anyone from that room `afterLeave`, and the room's phone answers that
+    // as an ordinary call. A drop carries no mark and is sent back in as before. Main thread.
+    private nonisolated(unsafe) static var leftWith: (uids: Set<String>, at: Date)?
+    /// How long a deliberate leave keeps marking calls: long past any room still running for them.
+    private static let leftOnPurposeWindow: TimeInterval = 4 * 60 * 60
+
+    static func noteLeftOnPurpose(_ uids: Set<String>) {
+        guard !uids.isEmpty else { return }
+        leftWith = (uids, Date())
+    }
+
+    private static func leftOnPurpose(with uid: String) -> Bool {
+        guard let l = leftWith, Date().timeIntervalSince(l.at) < leftOnPurposeWindow else { return false }
+        return l.uids.contains(uid)
+    }
+
     /// Send a caller who belongs to my ad-hoc room back into it (audit M-091, 2026-10-07): the same
     /// `moveTo` + `ended` write "Add people" uses, which the calling phone already follows, and a
     /// note on my screen. No busy, no row: nobody missed anything.
@@ -5766,7 +5797,9 @@ final class CallService: NSObject {
             return true
         }
         // In a multi-person call with this caller in it: send them back in, not "busy" (M-091).
-        if !inLiveCall, let back = adhocRoomIncluding(caller) {
+        // 2026-11-08: only someone who dropped out. A caller who left on purpose (`afterLeave`) is
+        // answered like any other call.
+        if !inLiveCall, (d["afterLeave"] as? Bool) != true, let back = adhocRoomIncluding(caller) {
             sendBackToRoom(docId: docId, roomId: back.roomId, name: back.name)
             return true
         }
@@ -6180,7 +6213,15 @@ final class CallService: NSObject {
                         return
                     }
                     if self.state == .idle || self.state == .ended, let back = self.adhocRoomIncluding(uid) {
-                        self.sendBackToRoom(docId: callId, roomId: back.roomId, name: back.name)
+                        // 2026-11-08: the push does not say whether they left on purpose; the doc does.
+                        ref.getDocument { [weak self] snap, _ in
+                            guard let self else { return }
+                            if snap?.data()?["afterLeave"] as? Bool == true {
+                                self.endRingIfUnclaimed(callId, fields: ["status": "ended", "endReason": EndReason.busy.rawValue])
+                            } else {
+                                self.sendBackToRoom(docId: callId, roomId: back.roomId, name: back.name)
+                            }
+                        }
                         return
                     }
                     self.endRingIfUnclaimed(callId, fields: ["status": "ended", "endReason": EndReason.busy.rawValue])
@@ -6785,7 +6826,7 @@ final class CallService: NSObject {
                             guard stillOurs() else { return }
                             var data: [String: Any] = ["answerEnc": enc]
                             data["cams.\(self.me)"] = self.camsSignal   // my camera state (per-side); r3 D2: what really goes out
-                            data["caps.\(self.me)"] = [Self.screenCap]   // screen share v3 capability
+                            data["caps.\(self.me)"] = [Self.screenCap, Self.moveCap]   // screen share v3; Add people (2026-11-08)
                             guard self.wasAccepted else {
                                 self.heldPreAnswer = data
                                 self.publishEarlyAnswerIfAllowed()
@@ -7501,8 +7542,14 @@ final class CallService: NSObject {
     /// ⚠️ THE ORDER IS FORCED. `GroupCallService.startAdhoc` refuses while this service is not idle
     /// (decision D25), so the 1:1 has to be torn down locally FIRST, with what we still need kept in
     /// locals. The teardown must not write `status: ended` itself (`updateRemote: false`): the peer
-    /// would see a plain hang-up before the room exists. `moveTo` and `status` go in ONE write once
-    /// the room is up, so the peer's listener reads the move before it can read the end.
+    /// would see a plain hang-up before the room exists. `moveTo` and `status` go in ONE write, so
+    /// the peer's listener reads the move before it can read the end.
+    /// 2026-11-08: that write goes the moment the room's doc exists, not after my own token, connect
+    /// and join (~12 s of dead air for the peer, who heard nothing and saw "Ringing" for themselves).
+    /// Both phones now join at the same time, and the peer is "Joining…" here, never rung.
+    /// And the audio: the 1:1's system call ends, and an in-app group call has none, so iOS took the
+    /// audio away (the peer's mic failed in the background). A system call is started for the room
+    /// on both sides (`CallKitManager.startMovedGroupCall`).
     /// The chat row is still written as an answered call by `finishCall`, as for any connected call.
     func moveToGroup(adding people: [CallMember]) {
         guard state == .active, connectedDate != nil, let oldId = callId, !otherUid.isEmpty else {
@@ -7525,7 +7572,10 @@ final class CallService: NSObject {
         let video = cameraOn   // my camera carries over into the new call
         finishCall(updateRemote: false, clearCallKit: true, localUser: true)
         let ref = db.collection("calls").document(oldId)
+        let kitName = ([peerShownName] + people.map(\.name)).filter { !$0.isEmpty }.joined(separator: ", ")
+        let kitUUID = CallKitManager.shared.startMovedGroupCall(name: kitName, video: video)
         Task { @MainActor in
+            GroupCallRinging.shared.beginMovedCall(uuid: kitUUID, roomId: nil, video: video)
             // THEIR PUBLISHED NAME, NOT MY NICKNAME (audit M-151, 2026-10-07). The members list is in
             // the shared room doc, read by everyone invited, and `otherName` is what I filed them
             // under. The profile this phone last saw (local), else the server's copy, else the name
@@ -7536,7 +7586,17 @@ final class CallService: NSObject {
             // startAdhoc adds me itself; everyone else, de-duplicated, with the peer first.
             var seen: Set<String> = [myUid, other.uid]
             let invited = [other] + people.filter { seen.insert($0.uid).inserted }
-            guard let roomId = await GroupCallService.shared.startAdhoc(with: invited, video: video) else {
+            var moveWritten = false
+            let roomId = await GroupCallService.shared.startAdhoc(with: invited, video: video, carried: other.uid) { roomId in
+                moveWritten = true
+                GroupCallRinging.shared.movedRoomKnown(uuid: kitUUID, roomId: roomId)
+                Task { await Self.writeWithRetry(ref, ["moveTo": roomId, "status": "ended", "endReason": EndReason.hangup.rawValue]) }
+            }
+            GroupCallRinging.shared.movedJoinFinished(uuid: kitUUID)
+            guard let roomId else {
+                // The room was made and the peer sent to it, but my own join failed: the group
+                // side has already said so, and the peer's room ends with nobody in it.
+                if moveWritten { return }
                 // The room could not be made. The 1:1 is already gone here, so end it for the peer
                 // the ordinary way rather than leave them talking to nobody.
                 await Self.writeWithRetry(ref, ["status": "ended", "endReason": EndReason.hangup.rawValue])
@@ -7545,7 +7605,8 @@ final class CallService: NSObject {
                 Self.offerCallBack(uid: peerUid, name: peerShownName, photo: peerPhoto, video: video)
                 return
             }
-            await Self.writeWithRetry(ref, ["moveTo": roomId, "status": "ended", "endReason": EndReason.hangup.rawValue])
+            // The move was written as soon as the room's doc existed (`onRoomCreated`).
+            _ = roomId
         }
     }
 
@@ -7594,8 +7655,16 @@ final class CallService: NSObject {
         // A dial that was sent back into a room I belong to (audit M-091, 2026-10-07: the person I
         // rang is in that call and answered with `moveTo` instead of busy) was never a missed call.
         if state == .outgoing { recordWritten = true }
+        let kitName = otherName
+        let mover = otherUid
         finishCall(updateRemote: false, clearCallKit: true, localUser: true)
-        Task { @MainActor in await GroupCallService.shared.joinAdhoc(roomId: roomId, video: video) }
+        // 2026-11-08: a system call for the room, so the audio stays ours (see `moveToGroup`).
+        let kitUUID = CallKitManager.shared.startMovedGroupCall(name: kitName, video: video)
+        Task { @MainActor in
+            GroupCallRinging.shared.beginMovedCall(uuid: kitUUID, roomId: roomId, video: video)
+            await GroupCallService.shared.joinAdhoc(roomId: roomId, video: video, carried: mover)
+            GroupCallRinging.shared.movedJoinFinished(uuid: kitUUID)
+        }
     }
 
     private func finishCall(updateRemote: Bool, clearCallKit: Bool, localUser: Bool) {

@@ -467,12 +467,72 @@ final class CallKitManager: NSObject {
     func endGroupCall(uuid: UUID, reason: CXCallEndedReason) {
         RingVibration.stop()   // owner 2026-10-24
         provider.reportCall(with: uuid, endedAt: nil, reason: reason)
+        if movedGroupUUID == uuid { movedGroupUUID = nil }
         if groupUUID == uuid { groupUUID = nil; endGroupAudio() }
+    }
+
+    // MARK: - Add people from a 1:1 (2026-11-08)
+
+    /// The system call this phone started for a room a 1:1 moved into (`startMovedGroupCall`). An
+    /// outgoing call: told "connected" once the room is up, unlike an answered ring.
+    private var movedGroupUUID: UUID?
+
+    /// "Add people" (either side of the 1:1): the 1:1's system call has just been ended, and a group
+    /// call joined inside the app has no system call, so iOS took the audio away and the moved
+    /// person's mic failed in the background (`mic_fail` on their phone). This starts a system call
+    /// for the room and puts its audio under CallKit the way an answered group ring does
+    /// (`GroupCallKitAudio`). Called right AFTER the 1:1's end is requested, so the two transactions
+    /// run in that order and the 1:1 is never put on hold. Main thread.
+    @discardableResult
+    func startMovedGroupCall(name: String, video: Bool) -> UUID {
+        if let old = groupUUID { provider.reportCall(with: old, endedAt: nil, reason: .answeredElsewhere) }
+        let uuid = UUID()
+        groupUUID = uuid
+        movedGroupUUID = uuid
+        resetGroupMuteEchoes()
+        groupAudioUnderCallKit = true
+        groupAudioSessionLive = false
+        GroupCallKitAudio.prepare()
+        let action = CXStartCallAction(call: uuid, handle: CXHandle(type: .generic, value: name.isEmpty ? "Group call" : name))
+        action.isVideo = video
+        controller.request(CXTransaction(action: action)) { error in
+            guard let error else { return }
+            DispatchQueue.main.async {
+                let me = CallKitManager.shared
+                guard me.groupUUID == uuid else { return }
+                GCLog.event("ck_move", room: nil, ["step": "refused", "code": Telemetry.code(error)])
+                // Back to the SDK's own audio: the room carries on as an in-app call.
+                me.groupUUID = nil
+                me.movedGroupUUID = nil
+                me.endGroupAudio()
+                MainActor.assumeIsolated { GroupCallRinging.shared.movedCallRefused(uuid: uuid) }
+            }
+        }
+        return uuid
+    }
+
+    /// The moved call's room is up: the system call stops saying "connecting".
+    func reportMovedGroupConnected(uuid: UUID) {
+        guard movedGroupUUID == uuid, groupUUID == uuid else { return }
+        provider.reportOutgoingCall(with: uuid, connectedAt: nil)
+    }
+
+    /// The session may still be live from the 1:1 (iOS did not deactivate it between the two calls,
+    /// so no didActivate comes for the new one). After a moment with no activation, a session that
+    /// is still up is taken for the group call.
+    private func adoptLiveSessionForMovedCall(_ uuid: UUID) {
+        guard groupUUID == uuid, movedGroupUUID == uuid, groupAudioUnderCallKit, !groupAudioSessionLive,
+              RTCAudioSession.sharedInstance().isActive else { return }
+        GCLog.event("ck_audio", room: nil, ["to": "on", "why": "kept"])
+        groupAudioSessionLive = true
+        GroupCallKitAudio.activated(AVAudioSession.sharedInstance(), speaker: groupSpeaker)
+        onMain { GroupCallService.shared.retryMicAfterWake("ck_kept") }
     }
 
     /// Puts the SDK's audio defaults back, once, when a CallKit-answered group call ends.
     private func endGroupAudio() {
         resetGroupMuteEchoes()   // 1-A1: nothing more comes back for a call that is over
+        movedGroupUUID = nil     // 2026-11-08
         guard groupAudioUnderCallKit else { return }
         groupAudioUnderCallKit = false
         GroupCallKitAudio.restoreDefaults()
@@ -603,6 +663,20 @@ extension CallKitManager: CXProviderDelegate {
     }
 
     func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
+        // 2026-11-08: the system call for a room a 1:1 moved into. Its audio is the group's
+        // (`GroupCallKitAudio`, on didActivate); the 1:1 audio setup below is not touched.
+        if let moved = movedGroupUUID, moved == action.callUUID {
+            action.fulfill()
+            provider.reportOutgoingCall(with: moved, startedConnectingAt: nil)
+            let update = CXCallUpdate()
+            update.supportsHolding = false
+            Self.limitControls(update)
+            provider.reportCall(with: moved, updated: update)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.adoptLiveSessionForMovedCall(moved)
+            }
+            return
+        }
         configureAudio()
         action.fulfill()
         provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
@@ -765,6 +839,8 @@ extension CallKitManager: CXProviderDelegate {
             // Audit M-082, 2026-10-07: the copy kept by `noteGroupSpeaker`, on whatever thread
             // CallKit calls from (group calls start on the speaker; see GroupCallRinging).
             GroupCallKitAudio.activated(audioSession, speaker: groupSpeaker)
+            // 2026-11-08: a mic that failed while the audio was not ours yet tries again now.
+            onMain { GroupCallService.shared.retryMicAfterWake("ck_activate") }
             return
         }
         groupAudioSessionLive = false
