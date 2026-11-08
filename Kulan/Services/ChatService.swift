@@ -965,6 +965,23 @@ enum ChatService {
         _ = try await Functions.functions(region: "me-central1").httpsCallable("endGroup").call(["cid": cid])
     }
 
+    /// Clear Messages (owner 2026-11-08): the OWNER deletes every message or post of this group or
+    /// channel for everyone, on the server (groups:clearGroupMessages). A big chat takes more than
+    /// one call: the server answers `more` with its cut-off, and the next call carries it, so a
+    /// message sent meanwhile is kept. Then this phone's copies go (ThreadRepository.clearedOnServer).
+    static func clearGroupMessages(cid: String) async throws {
+        let call = Functions.functions(region: "me-central1").httpsCallable("clearGroupMessages")
+        call.timeoutInterval = 540
+        var data: [String: Any] = ["cid": cid]
+        for _ in 0..<12 {
+            let res = try await call.call(data)
+            let d = res.data as? [String: Any] ?? [:]
+            guard (d["more"] as? Bool) == true else { break }
+            if let before = d["before"] { data["before"] = before }
+        }
+        await MainActor.run { ThreadRepository.clearedOnServer(cid) }
+    }
+
     /// Block Group (owner 2026-10-20): nobody in it can add me back (the server reads this list when
     /// someone adds me), then I leave. Joining again by a link stays my own choice.
     static func blockGroup(cid: String) async throws {

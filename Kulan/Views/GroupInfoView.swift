@@ -66,6 +66,9 @@ struct GroupInfoView: View {
     @State private var confirmReport = false
     @State private var confirmDelete = false
     @State private var showChannelDelete = false
+    /// Clear Messages (owner 2026-11-08): the owner's "delete every message for everyone".
+    @State private var confirmClearAll = false
+    @State private var clearingAll = false
     /// A refused Leave / Delete Group. Both used to close the page on `try?` whatever happened.
     @State private var actionError: String?
     /// The members in page order, re-sorted only when `membersKey` changes (see `memberIds`).
@@ -347,6 +350,14 @@ struct GroupInfoView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Every post goes for all its followers. This can't be undone.")
+            }
+            .alert("Clear all messages?", isPresented: $confirmClearAll) {
+                Button("Cancel", role: .cancel) {}
+                Button("Clear", role: .destructive) { clearAllMessages() }
+            } message: {
+                Text(isChannel
+                     ? "Every post in this channel is deleted for you and all followers. You can't undo this."
+                     : "Every message in this group is deleted for you and all members. You can't undo this.")
             }
             // A full page, pushed (owner 2026-10-18), not a half sheet.
             .sheet(item: Binding(get: { shareGroupText.map { ShareText(id: $0) } },
@@ -1061,6 +1072,27 @@ struct GroupInfoView: View {
 
     /// The bell reads the group document, which drops a refused write by itself; the refusal is
     /// also said (2026-10-19 fix round), so a mute that did not take is not left unexplained.
+
+    /// Clear Messages: the server deletes them all (ChatService.clearGroupMessages, which also empties
+    /// the open chat on this phone). The row says "Clearing…" until it answers; a refusal is said.
+    private func clearAllMessages() {
+        guard iAmOwner, !clearingAll else { return }
+        clearingAll = true
+        let channel = isChannel
+        Task {
+            do {
+                try await ChatService.clearGroupMessages(cid: cid)
+                await MainActor.run {
+                    clearingAll = false
+                    ToastNotice.show(channel ? "All posts were cleared." : "All messages were cleared.")
+                }
+            } catch {
+                let msg = error.localizedDescription
+                await MainActor.run { clearingAll = false; actionError = msg }
+            }
+        }
+    }
+
     /// The action sheet's Delete Channel: the server deletes it for everyone; the chat closes and
     /// leaves the list, as on leaving. A refusal is said on this page.
     /// ⛔ GONE AT THE TAP (owner 2026-10-31: "Deleting…" sat on the row, slow and ugly). The chat
@@ -1233,6 +1265,14 @@ struct GroupInfoView: View {
                         ProfileInfoRow(title: "End Group", icon: "xmark.circle", tint: Self.exitRed, chevron: false) { confirmEnd = true }
                         rowDivider
                     }
+                    // Clear Messages (owner 2026-11-08): the owner only, not other admins. Every
+                    // message or post goes for everyone; the group or channel itself stays.
+                    ProfileInfoRow(title: clearingAll ? "Clearing…" : "Clear Messages",
+                                   icon: "eraser", tint: Self.exitRed, chevron: false) {
+                        if !clearingAll { confirmClearAll = true }
+                    }
+                    .disabled(clearingAll)
+                    rowDivider
                     // Only the owner can permanently delete the whole group (for everyone).
                     ProfileInfoRow(title: isChannel ? "Delete Channel" : "Delete Group",
                                    icon: "trash", tint: Self.exitRed, chevron: false) {

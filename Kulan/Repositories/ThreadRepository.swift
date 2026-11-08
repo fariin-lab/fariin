@@ -2136,6 +2136,31 @@ final class ThreadRepository {
         if live[r.cid]?.value == nil { live[r.cid] = WeakRef(value: r) }
     }
 
+    /// Clear Messages (owner 2026-11-08): the server deleted every message of `cid`. The open chat
+    /// shows it empty at once (the listener only covers the newest window, and a page loaded by
+    /// scrolling up would stay), and this phone's cached and decrypted copies go too.
+    @MainActor
+    static func clearedOnServer(_ cid: String) {
+        if let r = live[cid]?.value { r.clearAllLocally() }
+        for m in ThreadMessageCache.shared.memoryMessages(for: cid) ?? [] {
+            ChatService.forgetLocalCopies(of: m, cid: cid)
+        }
+        ThreadMessageCache.shared.store(cid, [])
+        ThreadMessageCache.shared.store("pins-" + cid, [])
+    }
+
+    @MainActor
+    private func clearAllLocally() {
+        for m in byId.values { ChatService.forgetLocalCopies(of: m, cid: cid) }
+        byId.removeAll()
+        rawReactions.removeAll()
+        locallyDeleted.removeAll()
+        lastDocs = []   // or a key arriving later re-decrypts the old window back onto the screen
+        pinnedMessageIds = []
+        pinnedPreviews = [:]
+        rebuild()
+    }
+
     /// Screens showing this chat. Two at once only when the same chat is reopened while its old
     /// screen is still leaving; the leaving one must not stop the listeners the new one runs on.
     @ObservationIgnored private var holders = 0
