@@ -835,7 +835,13 @@ extension CallKitManager: CXProviderDelegate {
         try? s.setCategory(.playAndRecord,
                            mode: CallService.shared.isSpeaker ? .videoChat : .voiceChat,
                            options: [.allowBluetooth, .allowBluetoothA2DP])
+        // 2026-11-08 wrong pitch: the 1:1 call sets its own rate and buffer every time, the values
+        // WebRTC's own device asks for, so nothing an earlier group call or recording left behind
+        // carries into this call. A Bluetooth headset that cannot do 48 kHz simply keeps its own.
+        try? s.setPreferredSampleRate(48_000)
+        try? s.setPreferredIOBufferDuration(0.01)
         s.audioSessionDidActivate(audioSession)
+        DiagLog.add("CALLRATE# activate session=\(Int(audioSession.sampleRate)) preferred=\(Int(audioSession.preferredSampleRate)) io=\(Int(audioSession.ioBufferDuration * 1000))ms mode=\(audioSession.mode.rawValue) out=\(audioSession.currentRoute.outputs.first?.portType.rawValue ?? "-")")
         // 1:1 audit #26 (owner, 2026-10-08): the WebRTC audio unit (and the mic indicator) stays
         // off while the caller's call only rings; CallService turns it on at the accept. The
         // callee and every re-activation turn it on here as before.

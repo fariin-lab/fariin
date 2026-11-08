@@ -2414,6 +2414,13 @@ final class GroupCallService: ObservableObject {
         // screen and "busy" for seconds, the M-060 symptom again.
         await waitForMediaChains(upTo: 1)
         releaseMediaChains()
+        // 2026-11-08 wrong pitch / silent mic on the next 1:1 call: the room is closed, so the SDK's
+        // audio engine is stopped outright (off, then allowed again for the next group call), the
+        // same cycle as the in-call reset. Its voice-processing unit no longer lingers beside the
+        // 1:1 call's own.
+        try? AudioManager.shared.setEngineAvailability(.none)
+        try? AudioManager.shared.setEngineAvailability(.default)
+        GCLog.event("engine_release", room: nil, ["running": AudioManager.shared.isEngineRunning ? "1" : "0"])
         // Audit M-060, 2026-10-07: the local state goes first. It used to wait for the end writes
         // below, so on a slow network the phone stayed "busy" and the dead call screen kept working
         // buttons for seconds.
