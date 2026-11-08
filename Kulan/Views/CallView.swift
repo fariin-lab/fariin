@@ -593,10 +593,21 @@ struct CallView: View {
             .accessibilityHidden(!controlsVisible)
             Spacer()
 
-            // Share Screen moved down into the control bar (Kasim 2026-10-22, see `shareCircle`).
-            // The same space stays here so the name keeps its centre.
-            Color.clear.frame(width: 48, height: 48)
-                .accessibilityHidden(true)
+            // ⛔ ADD PEOPLE, TOP RIGHT (owner 2026-11-08: "add people button when we are in call").
+            // Once the call is connected; it opens the Add people sheet, which moves the call to a
+            // group call (`CallService.moveToGroup`). Before that the space stays empty so the name
+            // keeps its centre (Share Screen moved down into the control bar, 2026-10-22).
+            if connectedCall {
+                Button { buzz(); showAddPeople = true } label: { topCircle("person.badge.plus") }
+                    .buttonStyle(CallControlStyle())
+                    .accessibilityLabel("Add people")
+                    .opacity(controlsVisible ? 1 : 0)
+                    .allowsHitTesting(controlsVisible)
+                    .accessibilityHidden(!controlsVisible)
+            } else {
+                Color.clear.frame(width: 48, height: 48)
+                    .accessibilityHidden(true)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.top, safeTop + 14)   // clear the iOS status-bar call indicator (green pill)
