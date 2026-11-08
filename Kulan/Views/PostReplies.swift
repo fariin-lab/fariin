@@ -1733,6 +1733,9 @@ private struct ReplyComposer: View {
                                 answering = nil
                             }
                             draft = ""
+                            // The keyboard goes down once it is sent (owner 2026-11-08), so the
+                            // new reply can be seen.
+                            focused = false
                         } label: {
                             Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold))
                                 .foregroundStyle(.white)
