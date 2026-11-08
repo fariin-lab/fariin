@@ -102,6 +102,8 @@ struct GroupInfoView: View {
     @State private var showEdit = false
     @State private var editAtDescription = false   // Edit Group opened from "Add group description..."
     @State private var showGroupPhoto = false    // tap the photo → the same morph a person's photo uses
+    /// Add Story tapped below the story minimum: the explaining alert (owner 2026-11-08).
+    @State private var storyTooSmall = false
     @State private var photoCloseTick = 0        // toolbar X → viewer close (see ProfilePhotoViewer.closeSignal)
     /// Where the header's photo is drawn, for the viewer's flight. A plain box, not observed: the
     /// header reports it while scrolling and a re-render per frame is the scroll lag of 2026-10-18.
@@ -348,6 +350,16 @@ struct GroupInfoView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Every post goes for all its followers. This can't be undone.")
+            }
+            .alert(isChannel ? "Channel stories aren't open yet" : "Group stories aren't open yet",
+                   isPresented: $storyTooSmall) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                let need = AppLimits.shared.groupStoryMinMembers
+                let have = conv.map(GroupStoryRights.size) ?? 0
+                Text(isChannel
+                     ? "Stories open when this channel reaches \(need) followers. It has \(have) now."
+                     : "Stories open when this group reaches \(need) members. It has \(have) now.")
             }
             .alert("Clear all messages?", isPresented: $confirmClearAll) {
                 Button("Cancel", role: .cancel) {}
@@ -1707,10 +1719,15 @@ struct GroupInfoView: View {
         } else {
             // ADD GROUP STORY, top right (owner 2026-10-23): the owner, and admins while the owner
             // allows it. The normal camera and editor; the last sheet posts to this group.
-            if let c = conv, GroupStoryRights.canPost(c, me) {
+            // ⛔ SHOWN TO EVERYONE WHO MAY POST, WHATEVER THE SIZE (owner 2026-11-08): below the
+            // minimum the tap explains when stories open instead of opening the camera.
+            if let c = conv, GroupStoryRights.hasRight(c, me) {
                 ToolbarItem(placement: .topBarTrailing) {
                     // The Stories tab's new-story mark, not a bare plus (owner 2026-10-26).
-                    Button { GroupStoryCompose.open(GroupStoryTarget(c)) } label: {
+                    Button {
+                        if GroupStoryRights.bigEnough(c) { GroupStoryCompose.open(GroupStoryTarget(c)) }
+                        else { storyTooSmall = true }
+                    } label: {
                         Image("ic_new_story").renderingMode(.template).resizable().scaledToFit()
                             .frame(width: 26, height: 26)
                     }

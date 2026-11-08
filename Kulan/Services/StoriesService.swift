@@ -373,16 +373,26 @@ extension GroupStoryRights {
 /// the owner always, an admin who holds the Add story right (owner 2026-10-25), nobody else.
 enum GroupStoryRights {
     static func canPost(_ c: Conversation, _ uid: String) -> Bool {
+        hasRight(c, uid) && bigEnough(c)
+    }
+
+    /// The person may post stories here at all: the owner, or an admin with the Add story right.
+    /// The Add Story button shows on this alone (owner 2026-11-08); `bigEnough` decides what it does.
+    static func hasRight(_ c: Conversation, _ uid: String) -> Bool {
         guard c.isGroup, !uid.isEmpty, c.users.contains(uid), !c.fariinLocked else { return false }
-        // owner 2026-10-23: only a group of 50 or more (panel-set) has stories, except for app
-        // admins (like @v), who may post to any group they run.
-        // A channel's users[] is only its admins, so a channel counts its followers (owner 2026-10-29).
-        let size = c.isChannel ? c.followerCount : c.users.count
-        guard size >= AppLimits.shared.groupStoryMinMembers || AdminStore.shared.isAdmin
-                || ProfileStore.shared.me?.groupStoryOpen == true else { return false }
         if c.isOwner(uid) { return true }
         return c.adminCan(uid, .postStories)
     }
+
+    /// owner 2026-10-23: only a group of 50 or more (panel-set) has stories, except for app admins
+    /// (like @v), who may post to any group they run.
+    /// A channel's users[] is only its admins, so a channel counts its followers (owner 2026-10-29).
+    static func bigEnough(_ c: Conversation) -> Bool {
+        size(c) >= AppLimits.shared.groupStoryMinMembers || AdminStore.shared.isAdmin
+            || ProfileStore.shared.me?.groupStoryOpen == true
+    }
+
+    static func size(_ c: Conversation) -> Int { c.isChannel ? c.followerCount : c.users.count }
     /// The groups the New Group Story list offers, from the live chat list.
     @MainActor static func eligibleGroups() -> [Conversation] {
         let me = AuthService.shared.uid ?? ""
