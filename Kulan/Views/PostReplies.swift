@@ -885,6 +885,7 @@ struct PostThreadSheet: View {
     @State private var editing: ReplyEdit?
     @State private var reporting: (PostReply, String?)?
     @State private var reportSheet: ReportTarget?   // the report sheet (2026-11-08)
+    @State private var quickReport: ReportTarget?   // a reply's one-step report (2026-11-08)
     @State private var banning: (PostReply, String?)?
     @State private var toast: String?
     @State private var quotesShown = false
@@ -977,6 +978,14 @@ struct PostThreadSheet: View {
         // The report sheet (owner 2026-11-08) replaced the reason alert: `reportContent` kind "reply",
         // which runs reportReply's own code on the server (one per person, the hold at 3).
         .sheet(item: $reportSheet) { ReportSheet(target: $0) }
+        .alert("Report this reply?", isPresented: Binding(get: { quickReport != nil },
+                                                          set: { if !$0 { quickReport = nil } })) {
+            Button("Cancel", role: .cancel) { quickReport = nil }
+            Button("Report", role: .destructive) {
+                if let t = quickReport { sendQuickReport(t) }
+                quickReport = nil
+            }
+        }
         .alert("Remove this person?", isPresented: banningShown, presenting: banning) { item in
             Button("Delete and Ban", role: .destructive) { Task { show(await model.ban(item.0, thread: item.1, all: false) ? "Removed and banned." : "Couldn't do that.") } }
             Button("Ban and Delete All Their Replies", role: .destructive) { Task { show(await model.ban(item.0, thread: item.1, all: true) ? "Banned. Their replies are gone." : "Couldn't do that.") } }
@@ -994,10 +1003,24 @@ struct PostThreadSheet: View {
     private var reportingShown: Binding<Bool> { Binding(get: { reporting != nil }, set: { if !$0 { reporting = nil } }) }
     /// Opens the report sheet for a reply. A Creator reply is the channel's own voice, so it offers
     /// no Block.
+    /// ⛔ A REPLY IS REPORTED IN ONE STEP (owner 2026-11-08: "it's a text comment, I don't need
+    /// those options"): no reasons list, one "Report this reply?" and it is sent, filed as
+    /// "other", the moderators read the words themselves. The full sheet stays for everything else.
     private func openReport(_ r: PostReply, _ thread: String?) {
         let person = r.creator ? "" : (r.uid ?? "")
-        reportSheet = ReportTarget(kind: .reply, targetId: thread ?? r.id, cid: cid, mid: mid,
+        quickReport = ReportTarget(kind: .reply, targetId: thread ?? r.id, cid: cid, mid: mid,
                                    aid: thread == nil ? "" : r.id, personUid: person, name: r.name)
+    }
+
+    private func sendQuickReport(_ t: ReportTarget) {
+        Task { @MainActor in
+            do {
+                try await ReportService.submit(t, category: "other", sub: nil, note: "", block: false, shareText: false)
+                show("Reported. Thanks for letting us know.")
+            } catch {
+                show(error.localizedDescription)
+            }
+        }
     }
     private var banningShown: Binding<Bool> { Binding(get: { banning != nil }, set: { if !$0 { banning = nil } }) }
 
