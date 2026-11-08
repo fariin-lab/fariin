@@ -102,29 +102,46 @@ enum AutoSaveToPhotos {
         }
     }
 
+    // MARK: - A Save the person asked for (multi-action swipe, 2026-11-08)
+
+    enum ManualResult { case saved, denied, failed }
+
+    /// One photo, video or album into the library, through the same three savers the automatic
+    /// pass uses. No incoming-only rule and no ledger: the person asked for this one. View-once and
+    /// No Saving are the caller's checks (the same ones the long-press Save makes).
+    static func saveNow(_ m: Message, cid: String) async -> ManualResult {
+        guard m.isImage || m.isVideo || m.isAlbum else { return .failed }
+        guard await authorized() else { return .denied }
+        let saved: Bool
+        if m.isAlbum      { saved = await saveAlbum(m, cid: cid, manual: true) }
+        else if m.isVideo { saved = await saveVideo(m, cid: cid, manual: true) }
+        else              { saved = await saveImage(m, cid: cid, manual: true) }
+        return saved ? .saved : .failed
+    }
+
     // MARK: - The three shapes media arrives in
 
-    private static func saveImage(_ m: Message, cid: String) async -> Bool {
-        guard let photo = await image(m.imageUrl, enc: m.enc, cid: cid) else { return false }
+    private static func saveImage(_ m: Message, cid: String, manual: Bool = false) async -> Bool {
+        guard let photo = await image(m.imageUrl, enc: m.enc, cid: cid, manual: manual) else { return false }
         return await write { _ = PHAssetChangeRequest.creationRequestForAsset(from: photo) }
     }
 
-    private static func saveVideo(_ m: Message, cid: String) async -> Bool {
-        guard let file = await videoFile(m.videoUrl, enc: m.enc, cid: cid, cacheAs: m.id) else { return false }
+    private static func saveVideo(_ m: Message, cid: String, manual: Bool = false) async -> Bool {
+        guard let file = await videoFile(m.videoUrl, enc: m.enc, cid: cid, cacheAs: m.id, manual: manual) else { return false }
         return await write { _ = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: file) }
     }
 
     /// An album is ONE message holding several items, so it is one authorization pass and one
     /// change block — the roll gets the whole set together instead of a burst of separate writes.
-    private static func saveAlbum(_ m: Message, cid: String) async -> Bool {
+    private static func saveAlbum(_ m: Message, cid: String, manual: Bool = false) async -> Bool {
         var images: [UIImage] = []
         var videos: [URL] = []
         for (i, item) in m.album.enumerated() {
             if item.isVideo {
                 // Album items have no message id of their own; key the cache off the parent + index.
                 if let f = await videoFile(item.videoUrl, enc: item.videoEnc, cid: cid,
-                                           cacheAs: "\(m.id)-\(i)") { videos.append(f) }
-            } else if let img = await image(item.imageUrl, enc: item.enc, cid: cid) {
+                                           cacheAs: "\(m.id)-\(i)", manual: manual) { videos.append(f) }
+            } else if let img = await image(item.imageUrl, enc: item.enc, cid: cid, manual: manual) {
                 images.append(img)
             }
         }
@@ -139,14 +156,15 @@ enum AutoSaveToPhotos {
 
     /// Cache first, network second — the same order the viewer uses, so an already-seen photo
     /// costs nothing to save.
-    private static func image(_ url: String?, enc: EncMeta?, cid: String) async -> UIImage? {
+    private static func image(_ url: String?, enc: EncMeta?, cid: String, manual: Bool = false) async -> UIImage? {
         guard let s = url, !s.isEmpty else { return nil }
         if let cached = await DiskImageCache.shared.image(for: s) { return cached }
         // 2026-09-24 audit: THE NETWORK HALF OBEYS Storage and Data > Photos, like every other
         // automatic download. It did not, so Save to Photos pulled every incoming photo over mobile
         // data with Photos set to Wi-Fi Only or Never. A refusal returns nil, the caller releases the
         // id, and the next sweep on an allowed network (or after the photo is viewed) saves it.
-        guard AutoDownloadPrefs.allowedNow(.photos) else { return nil }
+        // A Save the person asked for (`saveNow`) is not an automatic download: no network rule.
+        guard manual || AutoDownloadPrefs.allowedNow(.photos) else { return nil }
         // The shared job (2026-09-26): the bubble is usually fetching this same photo right now, and
         // saving it used to download it a second time beside that. Joined, stored once, read back.
         guard await MediaDownloads.shared.download(s, priority: .auto,
@@ -157,9 +175,10 @@ enum AutoSaveToPhotos {
 
     /// Photos needs a FILE for a video, so the decrypted bytes go through VideoCache — which is
     /// where the player wants them anyway, so the download is not wasted if the save then fails.
-    private static func videoFile(_ url: String?, enc: EncMeta?, cid: String, cacheAs id: String) async -> URL? {
+    private static func videoFile(_ url: String?, enc: EncMeta?, cid: String, cacheAs id: String,
+                                  manual: Bool = false) async -> URL? {
         if let have = VideoCache.url(for: id) { return have }
-        guard AutoDownloadPrefs.allowedNow(.videos) else { return nil }   // 2026-09-24 audit, as for photos
+        guard manual || AutoDownloadPrefs.allowedNow(.videos) else { return nil }   // 2026-09-24 audit, as for photos
         guard let s = url, !s.isEmpty else { return nil }
         // Joined with the sweep's and the bubble's job for the same clip rather than fetched again.
         _ = await MediaDownloads.shared.download(

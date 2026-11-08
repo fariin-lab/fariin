@@ -1255,7 +1255,8 @@ struct MediaGalleryView: View {
 
     /// A document as a file with its own (sanitised) name: the copy the Documents auto-download
     /// already holds, else downloaded and decrypted the way opening it does.
-    private static func shareFile(_ m: Message, cid: String) async -> URL? {
+    /// Not private: the chat's multi-action swipe saves a document to Files through it (2026-11-08).
+    static func shareFile(_ m: Message, cid: String) async -> URL? {
         let safe = DocumentPrefetch.safeName(m.fileName)
         if let local = DocumentPrefetch.cached(id: m.id, fileName: m.fileName) {
             return copyForShare(local, name: safe, id: m.id)

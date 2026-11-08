@@ -161,6 +161,10 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onViewportRows: ([String]) -> Void = { _ in }
     var canSwipeReply: (String) -> Bool = { _ in false }   // is this rowId reply-eligible (on the server)?
     var onSwipeReply: (String) -> Void = { _ in }          // swipe past threshold released â†’ reply to this rowId
+    /// Multi-action swipe (2026-11-08, gated): the slots this row offers, nil = the plain reply swipe.
+    var swipeMenu: (String) -> MultiSwipe.Menu? = { _ in nil }
+    /// Released on Forward or the bottom slot (Reply still goes through `onSwipeReply`).
+    var onSwipeAction: (String, MultiSwipe.Slot) -> Void = { _, _ in }
     var loadingOlder: Bool = false             // show the top spinner while older messages page in
     // Composer bar height (SwiftUI-measured). Extra clearance at the VISUAL BOTTOM so the newest message
     // clears the bar: the list is full-bleed UNDER the composer, so the composer's own safe-area inset is
@@ -353,6 +357,8 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.setLiveWindowSettled(liveWindowSettled)   // before the apply that carries the server window
         vc.canSwipeReply = canSwipeReply
         vc.onSwipeReply = onSwipeReply
+        vc.swipeMenu = swipeMenu
+        vc.onSwipeAction = onSwipeAction
         vc.dayLabelFor = dayLabelFor
         vc.onTopInset = onTopInset
         vc.setLoadingOlder(loadingOlder)
@@ -932,6 +938,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // jittered). Callbacks are fed from SwiftUI.
     var canSwipeReply: (String) -> Bool = { _ in false }
     var onSwipeReply: (String) -> Void = { _ in }
+    var swipeMenu: (String) -> MultiSwipe.Menu? = { _ in nil }
+    var onSwipeAction: (String, MultiSwipe.Slot) -> Void = { _, _ in }
     var rowModels: [String: MessageRowModel] = [:]   // frozen routing snapshot (set before every apply)
     /// The plans behind those models. One per (row, width), so the height pass and the cell's own
     /// layout are literally the same value object — see RowPlanStore.
@@ -1033,6 +1041,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var swipingId: String?
     private var swipeArrow: UIImageView?
     private var swipeTriggered = false         // crossed the reply threshold this drag (haptic + fire on release)
+    // Multi-action swipe (gated, see `MultiSwipe`). All nil / zero on the plain reply path.
+    private var swipeActionMenu: MultiSwipe.Menu?
+    private var swipeCapsule: SwipeActionCapsule?
+    private var swipeAnchorY: CGFloat = 0         // the pan's y when the threshold was crossed
     /// Their `swipeActionOffsetThreshold`, verbatim. Ours was 50.
     private static let swipeThreshold: CGFloat = 55
 
@@ -6093,6 +6105,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             collectionView.panGestureRecognizer.isEnabled = false
             layout.frozen = true   // freeze frames for the swipe; a horizontal transform never reflows
             addSwipeArrow(for: cell)
+            // Multi-action swipe: nil for everyone outside the gate, which keeps the plain path.
+            swipeActionMenu = swipeMenu(id)
         case .changed:
             guard let cell = swipingCell else { return }
             if VoiceScrubState.active { resetSwipe(animated: false); return }   // waveform took over mid-drag
@@ -6129,14 +6143,38 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             if raw >= Self.swipeThreshold, !swipeTriggered {
                 swipeTriggered = true
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                // Multi-action swipe: the slots grow out of the arrow, and the finger's height
+                // from HERE picks one.
+                if swipeActionMenu != nil {
+                    swipeAnchorY = g.translation(in: collectionView).y
+                    openSwipeCapsule()
+                }
             } else if raw < Self.swipeThreshold {
+                // Back under the threshold: the slots fold away, and a release now cancels.
+                if swipeTriggered, let cap = swipeCapsule {
+                    cap.select(.reply, animated: false)
+                    cap.setOpen(false, animated: true)
+                }
                 swipeTriggered = false
+            }
+            if swipeTriggered, let menu = swipeActionMenu, let cap = swipeCapsule {
+                let dy = g.translation(in: collectionView).y - swipeAnchorY
+                let next = MultiSwipe.slot(for: dy, current: cap.selected, menu: menu)
+                if next != cap.selected {
+                    cap.select(next, animated: true)
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                }
+                swipeArrow?.alpha = 0   // the capsule's middle slot draws the reply arrow now
             }
         case .ended, .cancelled, .failed:
             layout.frozen = false
             let fire = swipeTriggered ? swipingId : nil
+            // Reply unless the multi-action capsule says otherwise (it is nil outside the gate).
+            let slot = swipeCapsule?.selected ?? .reply
             resetSwipe(animated: true, velocity: g.velocity(in: collectionView).x)
-            if let id = fire { onSwipeReply(id) }
+            if let id = fire {
+                if slot == .reply { onSwipeReply(id) } else { onSwipeAction(id, slot) }
+            }
             settleFlush()   // land anything that was deferred while the swipe owned the cell
         default:
             break
@@ -6163,10 +6201,32 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         swipeArrow = img
     }
 
+    /// The multi-action capsule, centred on the reply arrow. It lives on the collection view, not in
+    /// the cell, so the rows above and below cannot draw over it or clip it; the list cannot scroll
+    /// during the swipe (its pan is off), so it stays put beside the arrow.
+    private func openSwipeCapsule() {
+        guard let menu = swipeActionMenu, let arrow = swipeArrow, let host = arrow.superview else { return }
+        let cap: SwipeActionCapsule
+        if let existing = swipeCapsule {
+            cap = existing
+        } else {
+            cap = SwipeActionCapsule(menu: menu)
+            cap.layer.zPosition = 1000
+            cap.setOpen(false, animated: false)
+            collectionView.addSubview(cap)
+            swipeCapsule = cap
+        }
+        cap.center = host.convert(arrow.center, to: collectionView)
+        cap.select(.reply, animated: false)
+        cap.setOpen(true, animated: true)
+    }
+
     private func resetSwipe(animated: Bool, velocity: CGFloat = 0) {
         layout.frozen = false   // choke point for EVERY teardown path (VoiceScrub abort, recycle, normal end)
         let cell = swipingCell
         let arrow = swipeArrow
+        let capsule = swipeCapsule
+        swipeCapsule = nil; swipeActionMenu = nil
         swipingCell = nil; swipingId = nil; swipeArrow = nil; swipeTriggered = false
         // Restore the scroll pan HERE, at the single choke point, so a swipe can never leave the thread
         // unscrollable.
@@ -6187,8 +6247,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // LEFT swipe's message-detail transition, never for the reply snap-back.
             UIView.animate(withDuration: 0.2, delay: 0, options: [.allowUserInteraction],
                            animations: reset) { _ in arrow?.removeFromSuperview() }
+            if let capsule {
+                UIView.animate(withDuration: 0.2, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState],
+                               animations: { capsule.alpha = 0 }) { _ in capsule.removeFromSuperview() }
+            }
         } else {
             reset(); arrow?.removeFromSuperview()
+            capsule?.removeFromSuperview()
         }
     }
 
