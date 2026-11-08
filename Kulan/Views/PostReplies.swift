@@ -1132,9 +1132,12 @@ struct PostThreadSheet: View {
         if let p = model.pinned { out.append(.pinnedLabel); appendThread(p, to: &out) }
         // Top: the server's order. Newest: newest at the top. Either way more load at the bottom.
         let list = model.sort == .new ? Array(model.threads.reversed()) : model.threads
-        // Mine from this visit first (newest first), then the rest in their order.
+        // Mine from this visit first (newest first), then the rest in their order. ⛔ NEVER ABOVE OR
+        // IN PLACE OF THE PINNED REPLY (owner 2026-11-08): the pinned one is drawn above all of this,
+        // untouched, and is never repeated here even when it is one of mine.
         let top = model.mineOnTop
         var shown = Set<String>()
+        if let p = model.pinned { shown.insert(p.id) }
         for id in top { if let r = list.first(where: { $0.id == id }), shown.insert(r.id).inserted { appendThread(r, to: &out) } }
         for r in list where !shown.contains(r.id) { appendThread(r, to: &out) }
         if !model.olderCursor.isEmpty { out.append(.older) }
