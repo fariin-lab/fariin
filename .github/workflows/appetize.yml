@@ -29,6 +29,7 @@ jobs:
       - name: Resolve Swift packages (retry, clearing corrupt binary-framework artifacts)
         run: |
           for i in 1 2 3 4; do
+            rm -rf ~/Library/Caches/org.swift.swiftpm ~/Library/org.swift.swiftpm ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
             if xcodebuild -resolvePackageDependencies -project Kulan.xcodeproj -scheme Kulan; then
               echo "package resolution succeeded on attempt $i"; break
             fi
