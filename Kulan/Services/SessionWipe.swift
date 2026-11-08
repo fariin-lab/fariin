@@ -332,6 +332,9 @@ enum SessionWipe {
         for k in exact { d.removeObject(forKey: k) }
         HiddenMessages.clear()   // stored key + its in-memory mirror
         // Per-chat sounds are keyed by cid, so they have to be swept by prefix.
+        // Where each chat's history starts (ThreadRepository, 2026-11-08), per account.
+        for k in d.dictionaryRepresentation().keys where k.hasPrefix("thread.wholeFrom.") { d.removeObject(forKey: k) }
+        ThreadRepository.forgetWholeFrom()
         for k in d.dictionaryRepresentation().keys where k.hasPrefix("sound_") {
             d.removeObject(forKey: k)
         }

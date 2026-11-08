@@ -226,6 +226,14 @@ final class ThreadRepository {
             ?? ChannelFollows.shared.conversations.first { $0.id == cid }
         return conv?.createdAt
     }
+    /// ⛔ HISTORY HIDDEN FROM NEW MEMBERS (verify pass 2, 2026-11-08): the rows start at my join
+    /// (`cuts.start`), so once a doc older than that is held there is nothing more to page for, and
+    /// the top-up stopped short instead of reading 10 empty pages on every open.
+    private var holdsJoinCut: Bool {
+        guard let start = Self.cuts(cid).start,
+              let oldest = byId.values.lazy.map(\.createdAt).min() else { return false }
+        return oldest < start.addingTimeInterval(-2)
+    }
     /// The oldest doc held was written with the conversation (groups and channels only).
     private var holdsConversationBirth: Bool {
         guard !cid.contains("_"), !windowTrimmed, let born = convBorn,
@@ -235,7 +243,7 @@ final class ThreadRepository {
     /// `record`: also save the oldest message for the next open. Only from `rebuild`, where
     /// `messages` holds every page loaded so far, and never on the saved copy's word alone.
     private func refreshHistoryStart(record: Bool) {
-        let proven = !canLoadOlder || holdsChannelStart || holdsConversationBirth
+        let proven = !canLoadOlder || holdsChannelStart || holdsConversationBirth || holdsJoinCut
             || (cacheLooksWhole && sawServerWindow)
         let reached = proven || cacheLooksWhole
         if historyStartReached != reached { historyStartReached = reached }
@@ -247,6 +255,9 @@ final class ThreadRepository {
     /// Pages the top-up asked for in this open (cap `topUpCap`).
     @ObservationIgnored private var topUpPages = 0
     private let topUpCap = 10
+    /// With NOTHING visible yet the top-up may go further, so a follower never ends on a blank
+    /// screen at the cap (verify pass 1, 2026-11-08). Still bounded: 30 x 60 docs per open.
+    private let topUpCapWhenEmpty = 30
     /// Fewer visible rows than this after a page, and the top-up asks for the next one.
     private let topUpMinRows = 20
     /// ⛔ A REOPEN REMEMBERS THE HISTORY WAS WHOLE (owner 2026-10-30, his recording: scrolled to a
@@ -256,6 +267,8 @@ final class ThreadRepository {
     /// sitting at the top. Per chat: the oldest message id when nothing older was left. A seed that
     /// still starts at that message holds the whole history.
     nonisolated(unsafe) private static var wholeFrom: [String: String] = [:]   // main thread only, as the repository
+    /// Sign-out (SessionWipe): the memory copy goes with the account (the disk keys are wiped there).
+    static func forgetWholeFrom() { wholeFrom.removeAll() }
     /// Kept across launches too (owner 2026-11-08), per account and chat: a cold start's first open
     /// then knows the start is here as well.
     private static func wholeFromKey(_ cid: String) -> String? {
@@ -276,7 +289,10 @@ final class ThreadRepository {
     /// This window holds the oldest message a past visit saw when the history was whole.
     private func holdsSavedStart(_ docs: [QueryDocumentSnapshot]) -> Bool {
         guard let id = Self.savedWholeFrom(cid) else { return false }
-        return docs.contains { $0.documentID == id }
+        // Also when the rows already held (a reopen from the 200-row memory copy) begin at the saved
+        // start: the 60-doc window alone never reaches it, and the card blinked off until the last
+        // page came back (verify pass 1, 2026-11-08).
+        return docs.contains { $0.documentID == id } || messages.first?.id == id
     }
     /// The phone's saved copy opened with less than a page and the server has not answered yet: the
     /// whole history is almost certainly here already. The group's welcome card (ThreadView
@@ -866,7 +882,6 @@ final class ThreadRepository {
             return
         }
         skeletonArmed = false
-        topUpPages = 0   // the thin-history top-up's budget is per open
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self, !self.didInitialLoad else { return }   // cache already answered
             self.skeletonArmed = true
@@ -990,7 +1005,7 @@ final class ThreadRepository {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                         // A thin history (the top-up stopped on the failed page) asks again too.
                         guard let self, self.olderNeedsRetry,
-                              self.readerAwayFromBottom || self.items.count < self.topUpMinRows,
+                              self.readerAwayFromBottom || (!self.cid.contains("_") && self.items.count < self.topUpMinRows),
                               self.listener != nil, !self.loadingOlder else { return }
                         self.loadOlder()
                     }
@@ -2164,8 +2179,11 @@ final class ThreadRepository {
     /// page on their own), never twice at once, at most `topUpCap` pages per open. Groups and
     /// channels only. The scroll-driven paging is unchanged.
     private func topUpIfThin(lastPageAddedRows: Bool) {
-        guard !warmOnly, !cid.contains("_"), sawServerWindow, canLoadOlder, !historyStartReached,
-              !loadingOlder, !jumpPagingInFlight, !olderNeedsRetry, topUpPages < topUpCap,
+        // `listener != nil`: never on a chat that was closed (or an account switched away) while a
+        // page was out (verify pass 3, 2026-11-08).
+        guard listener != nil, !warmOnly, !cid.contains("_"), sawServerWindow, canLoadOlder, !historyStartReached,
+              !loadingOlder, !jumpPagingInFlight, !olderNeedsRetry,
+              topUpPages < (items.isEmpty ? topUpCapWhenEmpty : topUpCap),
               items.count < topUpMinRows || !lastPageAddedRows,
               oldestDoc != nil || windowTrimmed else {
             if historyTopUpRunning, !loadingOlder { historyTopUpRunning = false }
@@ -2279,6 +2297,9 @@ final class ThreadRepository {
     /// A screen starts showing this chat.
     func open() {
         holders += 1
+        // The thin-history top-up's budget is per OPEN, not per re-attach: `start()` also runs on
+        // every retry and network recovery, which gave a flapping network a fresh 10 pages each time.
+        if holders == 1 { topUpPages = 0 }
         start()
         // A group's old sealed items: release the keys this phone holds (2026-10-23; groups only).
         GroupKeyRelease.chatOpened(cid)
