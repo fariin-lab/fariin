@@ -230,7 +230,13 @@ struct ReplyEdit: Equatable {
         sort = s
         refreshGen &+= 1
         let mineSending = threads.filter { $0.send != .sent }
-        threads = placed((Self.cache[cacheKey] ?? []) + mineSending)
+        // ⛔ NO EMPTY LIST ON A SORT SWITCH (owner 2026-11-08: tapping Newest blanked the sheet, hid the
+        // Top / Newest chips and drew the loading shapes over the pinned reply). With no saved page for
+        // the new order yet, the rows already here stand in, in time order (Newest draws them
+        // reversed), until the server's page replaces them.
+        let saved = Self.cache[cacheKey] ?? []
+        let standIn = saved.isEmpty ? threads.sorted { $0.at < $1.at } : saved + mineSending
+        threads = placed(standIn)
         olderCursor = ""
         unseenNew = 0
         atEnd = true
@@ -1174,7 +1180,7 @@ struct PostThreadSheet: View {
 
     /// "Top" and "Newest", small, over the list. Hidden until there is something to sort.
     @ViewBuilder private var sortBar: some View {
-        if model.loaded, !model.threads.isEmpty || model.pinned != nil || model.sort != .top {
+        if model.loaded || model.sort != .top, !model.threads.isEmpty || model.pinned != nil || model.sort != .top {
             HStack(spacing: 6) {
                 sortChip("Top", .top)
                 sortChip("Newest", .new)
@@ -1414,7 +1420,8 @@ struct PostThreadSheet: View {
             } actions: {
                 Button("Try Again") { Task { await model.loadFirst() } }
             }
-        } else if !model.loaded {
+        } else if !model.loaded && model.threads.isEmpty && model.pinned == nil {
+            // The loading shapes only over an empty sheet, never over replies already drawn.
             RepliesSkeleton()
         } else if model.threads.isEmpty && model.pinned == nil {
             // The owner's comment icon, the one on the Reply bar, and smaller words than the system's
