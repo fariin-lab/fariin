@@ -1369,7 +1369,8 @@ struct PostThreadSheet: View {
         // The reply being answered stays shaded grey while the field is open (owner 2026-11-09).
         let answered = answering.map { ($0.to ?? $0.thread) == id } ?? false
         return ZStack {
-            Color(.secondarySystemFill).opacity(answered ? 1 : 0)
+            // A light shade (owner 2026-11-09: "our grey looks bigger" than the reference's).
+            Color.primary.opacity(answered ? 0.045 : 0)
                 .animation(.easeInOut(duration: 0.2), value: answered)
             Color.accentColor.opacity(model.flash == id ? 0.14 : 0)
                 .animation(.easeInOut(duration: 0.3), value: model.flash == id)
