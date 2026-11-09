@@ -355,6 +355,23 @@ struct DevicesView: View {
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 4, trailing: 16))
             }
 
+            // Security Checkup as a row (owner 2026-11-09), not the big button it was.
+            Section {
+                Button { openCheckup() } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Security Checkup").foregroundStyle(.primary)
+                            Text("Review your account").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+
             Section {
                 if let this = sessions.first(where: { $0.isThisDevice }) {
                     Button { detail = this } label: { row(this) }
@@ -372,15 +389,11 @@ struct DevicesView: View {
                 if others.isEmpty {
                     if loaded {
                         // A reassuring empty state, not a bare strip of grey text (user feedback).
-                        HStack(spacing: 12) {
-                            Image(systemName: "checkmark.shield.fill")
-                                .font(.system(size: 22))
-                                .foregroundStyle(.blue)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("No other devices").font(.subheadline.weight(.semibold))
-                                Text("Only this device is signed in to your account.")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
+                        // Text only (owner 2026-11-09): the scene above already says "safe".
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("No other devices").font(.subheadline.weight(.semibold))
+                            Text("Only this device is signed in to your account.")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 4)
                     } else {
@@ -990,30 +1003,104 @@ private struct BlockPickerView: View {
 /// ⛔ THE SHIELD, THE LINE AND THE CHECKUP BUTTON — owner, 2026-10-14, with a drawn mock: a line-art
 /// shield over "Review your account security and check active devices" and a wide blue Security
 /// Checkup button. Replaces the 2026-10-11 illustration.
+/// ⛔ 2026-11-09, owner (approved on the Pixel first): the line-art scene that locks itself replaces
+/// the shield icon, and Security Checkup moved from this big button to a row of its own below.
 private struct DevicesHeader: View {
     let onCheckup: () -> Void
 
     var body: some View {
-        VStack(spacing: 18) {
-            SecurityShieldIcon()
-                .frame(width: 112, height: 112)
-                .accessibilityHidden(true)
+        VStack(spacing: 16) {
+            SecurityLockArt()
+                .frame(height: 170)
+                .frame(maxWidth: .infinity)
             (Text("Review your ") + Text("account security").foregroundColor(Color.fariinAction)
                 + Text(" and check active devices"))
                 .font(.body)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .onTapGesture { onCheckup() }
-            Button(action: onCheckup) {
-                Text("Security Checkup")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(Color.onFariinAction)
-                    .frame(maxWidth: .infinity, minHeight: 52)
-                    .background(Color.fariinAction, in: Capsule())
-            }
-            .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+/// The Devices page's scene (owner 2026-11-09): a woman, cut at the hips, taps her phone; a blue
+/// ring glows on its screen, the padlock beside her clicks shut with a light haptic and a small
+/// pulse, and a blue tick pops in. Once per appearance; with Reduce Motion it is simply closed.
+///
+/// One line drawing in five template layers (SecurityArt-*), so the ink follows the label colour
+/// in light and dark. `lockfill` is the lock body painted in the PAGE colour over the shackle, so
+/// the shackle's legs disappear into the body as it slides down. The numbers are fractions of the
+/// picture measured from the layers (fariin-art/security2-meta.json); Android uses the same.
+struct SecurityLockArt: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var ring: CGFloat = 0          // 0 → 1: the tap ring grows and fades
+    @State private var ringOn = false
+    @State private var closed = false
+    @State private var pulse = false
+    @State private var checkOn = false
+
+    private static let aspect: CGFloat = 1289.0 / 1010.0
+    private static let travel: CGFloat = 0.0614
+    private static let lockCentre = UnitPoint(x: 0.2382, y: 0.6485)
+    private static let checkCentre = UnitPoint(x: 0.4077, y: 0.8183)
+    private static let tap = CGPoint(x: 0.633, y: 0.5485)
+    private static let blue = Color(VerifiedMark.blue)
+
+    var body: some View {
+        GeometryReader { g in
+            // The picture's own box inside the frame (fit), so every fraction lands on the drawing.
+            let w = min(g.size.width, g.size.height * Self.aspect)
+            let h = w / Self.aspect
+            ZStack(alignment: .topLeading) {
+                layer("SecurityArt-woman", .primary)
+                ZStack(alignment: .topLeading) {
+                    layer("SecurityArt-shackle", .primary)
+                        .offset(y: closed ? h * Self.travel : 0)
+                    layer("SecurityArt-lockfill", Color(.systemGroupedBackground))
+                    layer("SecurityArt-lock", .primary)
+                    layer("SecurityArt-check", Self.blue)
+                        .scaleEffect(checkOn ? 1 : 0.6, anchor: Self.checkCentre)
+                        .opacity(checkOn ? 1 : 0)
+                }
+                .scaleEffect(pulse ? 1.04 : 1, anchor: Self.lockCentre)
+                if ringOn {
+                    Circle()
+                        .stroke(Self.blue, lineWidth: 2)
+                        .frame(width: 2 * ring * 0.05 * w, height: 2 * ring * 0.05 * w)
+                        .opacity(Double(1 - ring))
+                        .position(x: Self.tap.x * w, y: Self.tap.y * h)
+                }
+            }
+            .frame(width: w, height: h)
+            .position(x: g.size.width / 2, y: g.size.height / 2)
+        }
+        .accessibilityHidden(true)
+        .task { await play() }
+    }
+
+    private func layer(_ name: String, _ tint: Color) -> some View {
+        Image(name).renderingMode(.template).resizable().scaledToFit().foregroundStyle(tint)
+    }
+
+    @MainActor private func play() async {
+        guard !closed else { return }
+        if reduceMotion { closed = true; checkOn = true; return }
+        try? await Task.sleep(for: .milliseconds(350))
+        // She taps: the ring on her phone.
+        ring = 0; ringOn = true
+        withAnimation(.easeOut(duration: 0.28)) { ring = 1 }
+        try? await Task.sleep(for: .milliseconds(130))
+        // The lock clicks shut on a spring with a little overshoot.
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.55)) { closed = true }
+        try? await Task.sleep(for: .milliseconds(220))
+        UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+        withAnimation(.easeOut(duration: 0.1)) { pulse = true }
+        try? await Task.sleep(for: .milliseconds(100))
+        withAnimation(.easeIn(duration: 0.1)) { pulse = false }
+        ringOn = false
+        try? await Task.sleep(for: .milliseconds(20))
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { checkOn = true }
     }
 }
 
