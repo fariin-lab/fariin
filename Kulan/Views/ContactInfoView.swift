@@ -2036,7 +2036,12 @@ struct ContactInfoView: View {
     /// classic hero: the @handle line is always reserved, so the async profile fetch fills it in
     /// without pushing the buttons down.
     private func posterCaption(_ text: Color) -> some View {
-        VStack(spacing: 3) {
+        // ⛔ A HALO IN THE PAGE'S OWN COLOUR (owner 2026-11-09, a black-and-white photo: the name,
+        // @handle and bio crossed white and black parts of the picture and could not be read). The
+        // words keep their colour; a soft glow of the colour the photo fades into sits behind each
+        // line, so they stand on any photo. On the plain page it is invisible.
+        let halo = posterFadeInto
+        return VStack(spacing: 3) {
             // The poster header draws the same name as the classic hero, so it carries the same
             // mark. Two headers with one of them missing a badge is how a verified account looks
             // unverified to half the people who open it.
@@ -2057,6 +2062,9 @@ struct ContactInfoView: View {
             }
             ProfileLinkChips(links: links, tint: linkTint)
         }
+        .shadow(color: halo.opacity(0.95), radius: 2)
+        .shadow(color: halo.opacity(0.85), radius: 7)
+        .shadow(color: halo.opacity(0.6), radius: 14)
         .frame(maxWidth: .infinity)
         .animation(.easeOut(duration: 0.22), value: gatedAbout)
     }
