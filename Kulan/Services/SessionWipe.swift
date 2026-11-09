@@ -242,6 +242,13 @@ enum SessionWipe {
         AppRouter.shared.pendingInviteCode = nil
         AppRouter.shared.pendingUserHandle = nil   // 2026-09-24 decision D4: same as the invite code
         AppRouter.shared.pendingPublicGroup = nil  // 2026-10-19 groups v2: a public group's join page
+        // Audit X14: the reply, quote and message intents too. `pendingQuote` has no time limit, so the
+        // next account could open that chat with the old account's quote above its composer.
+        AppRouter.shared.pendingRepliesPost = nil
+        AppRouter.shared.pendingReplyTarget = nil
+        AppRouter.shared.pendingOpenMid = nil
+        AppRouter.shared.pendingMessageId = nil
+        AppRouter.shared.pendingQuote = nil
         Task { @MainActor in LiveGroupCalls.shared.stopAll() }   // 2026-10-20 live calls on the Calls tab
         ThreadRepository.clearCuts()   // 2026-10-20 chat history cut-offs, per account
         // 2026-09-24 audit: the signed-out account's notifications and badge. Left behind, the icon
