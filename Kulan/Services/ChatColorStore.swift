@@ -211,6 +211,9 @@ enum ChatColors {
             if let c = walls.wallpaper(for: cid).pairedColor { return c }
             return globalChosenColor
         }
+        // A group or channel does not take the Settings wallpaper (owner 2026-11-09), so not its
+        // paired colour either; a colour chosen in Settings is this person's own and still applies.
+        guard WallpaperStore.followsSettings(cid) else { return globalChosenColor }
         return globalColor
     }
 

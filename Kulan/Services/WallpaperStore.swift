@@ -446,8 +446,11 @@ enum ChatWallpapers {
         if let c = cache[cid] { return c }
         // No per-chat pick → fall back to the all-chats default ("Apply For All Chats").
         // An explicit per-chat "none" is stored as the string "none", so it does NOT fall through.
+        // ⛔ THE SETTINGS WALLPAPER IS FOR ONE-TO-ONE CHATS ONLY (owner 2026-11-09): a group or a
+        // channel has many people in it, so its wallpaper is set from inside it and nowhere else.
+        // Without its own pick (or the group's shared one above) it is the plain page.
         let raw = UserDefaults.standard.string(forKey: Self.key(cid))
-            ?? UserDefaults.standard.string(forKey: Self.defaultKey)
+            ?? (Self.followsSettings(cid) ? UserDefaults.standard.string(forKey: Self.defaultKey) : nil)
         var w = ChatWallpaper(stored: raw)
         // MIGRATION: legacy per-chat photo → import into the library, rewrite the stored value.
         if case .photo(ChatWallpaper.legacyMarker) = w {
@@ -478,7 +481,10 @@ enum ChatWallpapers {
         version &+= 1                                           // observed → live re-render
     }
 
-    /// The Settings wallpaper every chat without its own falls back to.
+    /// Only a one-to-one chat (its id joins two uids with "_") follows the Settings wallpaper.
+    static func followsSettings(_ cid: String) -> Bool { cid.contains("_") }
+
+    /// The Settings wallpaper every one-to-one chat without its own falls back to.
     var defaultWallpaper: ChatWallpaper {
         ChatWallpaper(stored: UserDefaults.standard.string(forKey: Self.defaultKey))
     }
