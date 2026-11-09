@@ -470,7 +470,10 @@ struct ReplyEdit: Equatable {
             loaded = true
             // The server refused for a reason it explains (the post was deleted, the channel can't be
             // seen): that, not "check your connection". A dropped line leaves it nil.
-            goneMessage = Self.serverMessage(error, codes: [.failedPrecondition, .notFound, .permissionDenied])
+            // getReplies refuses a deleted post with failed-precondition ("can't take replies"):
+            // say plainly what happened (2026-11-09 audit X1).
+            goneMessage = Self.isCode(error, .failedPrecondition) ? "This post was deleted."
+                : Self.serverMessage(error, codes: [.notFound, .permissionDenied])
         }
         firstDone = true
     }
