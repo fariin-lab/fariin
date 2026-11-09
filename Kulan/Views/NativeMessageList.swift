@@ -4423,6 +4423,19 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
               !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil,
               // Never on a spiked safe area: the bound is garbage for exactly that frame.
               collectionView.safeAreaInsets.bottom <= restSafeBottom + 0.5 else { return }
+        // ⛔ A SHORT CHAT'S TOP INSET IS WRITTEN AGAIN WHEN ITS CONTENT CHANGES (owner 2026-11-09,
+        // VE3 blank: posts showed only while the keyboard was up). A chat too short to scroll sits
+        // at the bottom only through its top inset (`bottomAlignShortfall`), read from the content
+        // height. Only `updateInsets` writes it, and a page landing, a row or the card changing
+        // height never called it, so the inset kept the old content's height. Since 11-08 a thin
+        // channel pages up to 30 pages in by itself at open, one after another: each one left the
+        // inset a page behind and the rows sat under the composer, and the bounds below were
+        // computed from that stale top. The keyboard's own inset pass was the only thing that put
+        // it right. The inset is now checked here, on every settled pass, before the bounds are read.
+        let wantTop = topOverlayHeight + bottomAlignShortfall(bottomClearance: bottomClearance)
+        if abs(collectionView.contentInset.top - wantTop) > 0.5 {
+            updateInsets()
+        }
         let bound = maxContentOffsetY
         let y = collectionView.contentOffset.y
         // The RECORDED place, deliberately, not the live offset: a first-unread landing records its
@@ -4871,6 +4884,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard UIApplication.shared.applicationState == .active else { return }
         guard (composerBar as? ChatComposerView)?.holdsKeyboardForGifSearch != true else { return }   // GIF search, see above
         settleKeyboardAtRest()
+        // The keys are gone and the list is at rest: one settled pass, so a short chat is put back on
+        // the composer even when no later layout pass comes (owner 2026-11-09, VE3 blank after close).
+        DispatchQueue.main.async { [weak self] in self?.restoreReaderPosition() }
     }
 
     /// ⛔ THE SHOW'S TWIN OF `keyboardDidHideNote` — owner 2026-10-21 (screenshot: the composer ~200pt
