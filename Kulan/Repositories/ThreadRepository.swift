@@ -254,6 +254,7 @@ final class ThreadRepository {
     private(set) var historyTopUpRunning = false
     /// Pages the top-up asked for in this open (cap `topUpCap`).
     @ObservationIgnored private var topUpPages = 0
+    @ObservationIgnored private var windowLogs = 0
     private let topUpCap = 10
     /// With NOTHING visible yet the top-up may go further, so a follower never ends on a blank
     /// screen at the cap (verify pass 1, 2026-11-08). Still bounded: 30 x 60 docs per open.
@@ -1649,7 +1650,17 @@ final class ThreadRepository {
         }
         trimWindowIfNeeded()
         noteSentSound()
+        let rowsBefore = items.count
         rebuild(reason: reason)
+        // ⚠️ DIAGNOSTIC (owner 2026-11-09, VE3: after a return from the background the server's
+        // window landed 10 s late and the one post on screen went, content 568 -> 179 pt). What the
+        // window held and what it left on screen, for groups and channels, a few per open.
+        if !cid.contains("_"), windowLogs < 8, rowsBefore != items.count || !fromCache {
+            windowLogs += 1
+            let deleted = docs.filter { ($0.get("deleted") as? Bool) == true }.count
+            let kinds = Dictionary(grouping: docs.prefix(60).map { ($0.get("type") as? String) ?? "text" }, by: { $0 }).map { "\($0.key)\($0.value.count)" }.sorted().joined(separator: ",")
+            DiagLog.add("WINDOW# cid=\(cid.suffix(5)) cache=\(fromCache) docs=\(docs.count) deleted=\(deleted) rows \(rowsBefore)->\(items.count) msgs=\(messages.count) canOlder=\(canLoadOlder) start=\(historyStartReached) kinds=\(kinds)")
+        }
         // ⚠️ `!$0.uploading` — THE SECOND PLACE THAT DROPS A PENDING, and it has to agree with the
         // one in `refreshItems`.
         //
@@ -2308,7 +2319,7 @@ final class ThreadRepository {
         holders += 1
         // The thin-history top-up's budget is per OPEN, not per re-attach: `start()` also runs on
         // every retry and network recovery, which gave a flapping network a fresh 10 pages each time.
-        if holders == 1 { topUpPages = 0 }
+        if holders == 1 { topUpPages = 0; windowLogs = 0 }
         start()
         // ⛔ THE NET UNDER THE TOP-UP (owner 2026-11-09, VE3 again: one open showed only the newest
         // post for 5 s and more, LISTGEO# rows=1 throughout, while the next open paged "Hello Guys"
