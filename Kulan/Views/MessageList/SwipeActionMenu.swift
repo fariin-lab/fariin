@@ -18,14 +18,13 @@ import UIKit
 // was crossed. The list does the gesture (`handleSwipePan`); this file only holds the rules and the
 // drawing, so the pan keeps one shape for both paths.
 //
-// GATED: the Settings switch (off by default), and on top of it the @v / @kream uid list, like
-// `CustomReaction.canChoose`. Everyone else gets the plain reply swipe, which takes the old code path
-// untouched (`swipeMenu` stays nil).
+// GATED by the Settings switch only (off by default; open to everyone since 2026-11-09). With it
+// off, the plain reply swipe takes the old code path untouched (`swipeMenu` stays nil).
 enum MultiSwipe {
-    /// @v, and @kream (owner 2026-11-08: "also show that feature to @kream").
-    private static let uids: Set<String> = ["SVf0zxDVZzO8oLbGvM150QWgIWd2", "a74hUgOoNYOmxMDoNCWI4nO81xH3"]
-    /// Whether this account may see the feature at all (the Settings rows show only then).
-    @MainActor static var allowed: Bool { AuthService.shared.uid.map(uids.contains) ?? false }
+    /// Everyone now (owner 2026-11-09: Swipe Actions goes to all users on both apps). It was
+    /// @v and @kream only; the Settings switch still ships OFF, so nothing changes until a person
+    /// turns it on.
+    @MainActor static var allowed: Bool { true }
     /// Whether the swipe runs: allowed AND switched on in Settings.
     @MainActor static var enabled: Bool { allowed && UserDefaults.standard.bool(forKey: onKey) }
 
