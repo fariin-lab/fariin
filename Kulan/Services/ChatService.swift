@@ -293,6 +293,24 @@ enum ChatService {
         }
 
         return try await withStagedFile(bytes) { tmp in
+            // ⛔ WRITE DOWN WHAT THIS UPLOAD IS FOR, background engine or not (owner 2026-11-09).
+            // The message is already out; if the app dies between "bytes landed" and the attach
+            // write, the next launch finishes it from this record (`resumePendingUploads`). The
+            // background engine writes its own record, so only the ordinary path does it here.
+            // A kill skips the `defer`, which is exactly when the record has to stay.
+            var foregroundJob: String?
+            if let attach, !UploadEngine.backgroundEnabled,
+               let bucket = FirebaseApp.app()?.options.storageBucket {
+                let id = UUID().uuidString
+                PendingUploadStore.add(PendingUpload(id: id, uploadURL: URL(string: "about:blank")!,
+                                                     bucket: bucket, storagePath: path,
+                                                     filePath: tmp.path, cid: attach.cid,
+                                                     messageId: attach.messageId,
+                                                     urlField: attach.urlField, enc: attach.enc,
+                                                     startedAt: Date(), foreground: true))
+                foregroundJob = id
+            }
+            defer { if let foregroundJob { PendingUploadStore.remove(foregroundJob) } }
             var attempt = 0
             while true {
                 do {
@@ -479,7 +497,21 @@ enum ChatService {
                 continue
             }
             do {
-                let url = try await BackgroundUploader.shared.finish(job)
+                let url: String
+                if job.foreground == true {
+                    // The ordinary upload's record: no resumable address. If our bytes already
+                    // landed (the case that stranded Roodo's video), just take their URL;
+                    // otherwise send the staged file again.
+                    let bytes = try Data(contentsOf: URL(fileURLWithPath: job.filePath))
+                    let ref = Storage.storage().reference().child(job.storagePath)
+                    if let landed = await alreadyUploaded(ref, bytes: bytes) {
+                        url = landed
+                    } else {
+                        url = try await uploadEncrypted(bytes, to: job.storagePath)
+                    }
+                } else {
+                    url = try await BackgroundUploader.shared.finish(job)
+                }
                 var fields: [String: Any] = [job.urlField: url]
                 if let enc = job.enc { fields["enc"] = enc.asDict }
                 let msgRef = db.collection("conversations").document(job.cid)

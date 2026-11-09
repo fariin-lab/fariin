@@ -81,13 +81,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
             // line below. The SERVER still holds every byte it received; the resume asks it how many
             // and sends the rest. Cancelling the orphaned task just stops us paying to finish a
             // transfer whose result nobody in this process is waiting for.
-            Task { await ChatService.resumePendingUploads() }
         }
 
         // REAL on-disk offline persistence (the win the JS SDK couldn't do in Hermes).
         let settings = FirestoreSettings()
         settings.cacheSettings = PersistentCacheSettings()
         FirestoreHub.db.settings = settings
+        // Finish uploads a killed app left half done. Runs whether or not the background engine is
+        // on (owner 2026-11-09): the ordinary upload now writes its record too, so a video whose
+        // bytes landed just before the app died still gets its `videoUrl`. After the settings line
+        // on purpose: the attach is a Firestore write, and the settings must be set before first use.
+        Task { await ChatService.resumePendingUploads() }
 
         Messaging.messaging().delegate = self
         UNUserNotificationCenter.current().delegate = self

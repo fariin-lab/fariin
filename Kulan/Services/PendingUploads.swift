@@ -39,6 +39,14 @@ struct PendingUpload: Codable, Equatable {
     /// separately from its poster, so `enc` cannot be in the first message write.
     let enc: EncMeta?
     let startedAt: Date
+    /// True for a job written by the ORDINARY upload (background engine off, the default). It has no
+    /// resumable address (`uploadURL` is a placeholder); a launch finishes it by asking whether the
+    /// object already landed (same MD5) and uploading the staged file again if not.
+    ///
+    /// Owner 2026-11-09: Roodo's 7 s video reached Storage two seconds after the message, but the
+    /// app was gone before it wrote `videoUrl`, and with the engine off nothing had been written down,
+    /// so kream's bubble spun for good while Roodo's own looked sent.
+    var foreground: Bool? = nil
 }
 
 /// One JSON file in Application Support. Small, rarely written, and read once at launch.
