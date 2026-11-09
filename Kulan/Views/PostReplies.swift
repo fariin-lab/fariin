@@ -1819,9 +1819,13 @@ private struct ReplyComposer: View {
                     // picture). Drawn, not typed: the sent reply already names who it answers
                     // ("A ▸ B"), so it is never sent as text. Cancel above takes it away.
                     if editing == nil, let a = answering, !a.mine {
+                        // ⛔ ONLY AS WIDE AS THE NAME (owner 2026-11-09, screenshot: a wide empty gap
+                        // between "Funder" and the cursor). The cap goes on first and the fixed size
+                        // after it, so a short name takes its own width and a long one stops at 160
+                        // with "…"; the other order made the frame always take the full 160.
                         Text(a.name).foregroundStyle(Color(.systemBlue)).lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
                             .frame(maxWidth: 160, alignment: .leading)
+                            .fixedSize(horizontal: true, vertical: false)
                             .padding(.vertical, 12)
                             .transition(.opacity)
                     }
