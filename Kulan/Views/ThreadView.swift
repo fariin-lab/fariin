@@ -128,6 +128,9 @@ struct ThreadView: View {
     /// and opened by the sheet's onDismiss (`openReplies`).
     @State private var repliesClosing = false
     @State private var repliesQueued: MessageRef?
+    /// What a tap inside the Replies sheet asked for (a profile, the channel page), run once the
+    /// sheet is really down instead of after a guessed delay (R-15).
+    @State private var afterRepliesClose: (() -> Void)?
     @State private var quotesStartOnQuotes = false
     struct MessageRef: Identifiable { let id: String }
     @HeapState private var replyingTo: Message? = nil
@@ -2390,6 +2393,7 @@ struct ThreadView: View {
         // Here, not in `body` (2026-11-06): one more modifier on body's chain made the compiler give
         // up type-checking it ("unable to type-check this expression in reasonable time").
         .onReceive(NotificationCenter.default.publisher(for: .groupCardsChanged)) { _ in groupCardTick += 1 }
+        .onReceive(NotificationCenter.default.publisher(for: .openPendingReplies)) { _ in pendingRepliesArrived() }
         .toolbar(searchActive ? .hidden : .automatic, for: .navigationBar)
     }
 
@@ -4378,10 +4382,12 @@ struct ThreadView: View {
         // their empty text), so this changes nothing — it just stops the next guard added to
         // canForward from missing this copy, which is how the view-once hole opened in the first place.
         if canForward(m) {
-            items.append(UIAction(title: "Forward", image: UIImage(systemName: "arrowshape.turn.up.right")) { _ in
-                forwardIsQuote = false
-                forwardTarget = m
-            })
+            if canForwardCopy(m) {
+                items.append(UIAction(title: "Forward", image: UIImage(systemName: "arrowshape.turn.up.right")) { _ in
+                    forwardIsQuote = false
+                    forwardTarget = m
+                })
+            }
             // Quote a channel post into a chat of mine, with my words (owner 2026-11-06).
             if conversation?.isChannel == true, !m.isSystem, m.pinNotice == nil, conversation?.quotesOff != true {   // never a service line ("You pinned …")
                 items.append(UIAction(title: "Quote", image: UIImage(named: "ic_quote")) { _ in
@@ -4526,14 +4532,16 @@ struct ThreadView: View {
         // Theirs rebuilds every item from the database inside a transaction at send time and raises
         // an error when the interaction is gone; this is the same rule with the data we have.
         if canForward(m) {
-            out.append(CMAction(title: "Forward", icon: "arrowshape.turn.up.right", badge: "chatMenu.forward") {
-                guard let live = repo.items.first(where: { $0.id == m.id }), canForward(live) else {
-                    showJumpToast("That message is no longer available")
-                    return
-                }
-                forwardIsQuote = false
-                forwardTarget = live
-            })
+            if canForwardCopy(m) {
+                out.append(CMAction(title: "Forward", icon: "arrowshape.turn.up.right", badge: "chatMenu.forward") {
+                    guard let live = repo.items.first(where: { $0.id == m.id }), canForwardCopy(live) else {
+                        showJumpToast("That message is no longer available")
+                        return
+                    }
+                    forwardIsQuote = false
+                    forwardTarget = live
+                })
+            }
             // Quote a channel post into a chat of mine, with my words (owner 2026-11-06).
             // Not when the channel turned Quotes off, (the server refuses it too).
             if conversation?.isChannel == true, !m.isSystem, m.pinNotice == nil,   // never a service line ("You pinned …")
@@ -4799,8 +4807,19 @@ struct ThreadView: View {
         quotesFor = nil
     }
 
+    /// Closes the Replies sheet, then runs `work` once it is down (R-15). No sheet up: at once.
+    private func closeRepliesThen(_ work: @escaping () -> Void) {
+        guard quotesFor != nil else { work(); return }
+        afterRepliesClose = work
+        closeReplies()
+    }
+
     private func repliesDismissed() {
         repliesClosing = false
+        if let run = afterRepliesClose {
+            afterRepliesClose = nil
+            DispatchQueue.main.async { run() }
+        }
         guard let q = repliesQueued else { return }
         repliesQueued = nil
         DispatchQueue.main.async { quotesFor = q }
@@ -4831,20 +4850,21 @@ struct ThreadView: View {
                         quotesOff: conversation?.quotesOff == true)
         let repo = self.repo
         sheet.onPostRepliesChanged = { off in repo.setRepliesOffLocally(mid, off: off) }
+        // The count the sheet saw, on the post's bar at once when it closes (R-02).
+        sheet.onCountChanged = { n in repo.setReplyCountLocally(mid, n) }
         // A reply's photo or name (owner 2026-11-07): the sheet goes down, then the person's profile,
         // or this channel's own page for a Creator reply.
         sheet.onOpenPerson = { uid, name in
-            closeReplies()
-            guard uid != me else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            guard uid != me else { closeReplies(); return }
+            closeRepliesThen {
                 inputFocused = false
                 memberProfile = GroupInfoView.MemberAction(id: uid, name: name, isAdmin: false)
             }
         }
         sheet.onOpenChannel = {
-            closeReplies()
+            // A locked channel has no page to show: the sheet stays (R-15).
             guard conversation?.fariinLocked != true else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            closeRepliesThen {
                 inputFocused = false
                 showContactInfo = true
             }
@@ -4859,8 +4879,17 @@ struct ThreadView: View {
         guard Date().timeIntervalSince(p.at) < 30 else { return }   // the alert was long ago
         try? await Task.sleep(nanoseconds: 500_000_000)
         guard !Task.isCancelled else { return }
-        quotesStartOnQuotes = false   // an alert is about a reply: the Replies tab
+        // A quote alert opens the Quotes tab, every other one the Replies tab (audit X6).
+        quotesStartOnQuotes = p.quotes
         openReplies(MessageRef(id: p.mid))
+    }
+
+    /// A reply alert tapped while this channel is already on screen (audit X5): `.task(id: cid)`
+    /// will not run again, so the intent is spent here. A Replies sheet already open is closed
+    /// first by `openReplies`.
+    private func pendingRepliesArrived() {
+        guard AppRouter.shared.pendingRepliesPost?.cid == cid else { return }
+        Task { @MainActor in await openPendingReplies() }
     }
 
     /// The post's picture for the Quotes page's cards, the same one a quote of it carries.
@@ -6110,6 +6139,13 @@ struct ThreadView: View {
             && !repo.noForwarding   // Disable Sharing (2026-10-03), from this chat's own listener
     }
 
+    /// Forward itself: also not a message that carries a quote (audit Q3). Its quote id is spent and
+    /// tied to this message, so the copy lost the quote, and a quote with no words went as nothing,
+    /// silently. Quote (of a channel post) still follows `canForward`.
+    private func canForwardCopy(_ m: Message) -> Bool {
+        canForward(m) && m.quoteId == nil
+    }
+
     /// Disable Sharing › No Saving: no Copy, no Save, no Share in this chat (owner, 2026-10-03).
     private var savingAllowed: Bool { !repo.noSaving }
 
@@ -6136,7 +6172,7 @@ struct ThreadView: View {
         switch choice {
         case .none: return .none
         case .copy: break
-        case .forward: if canForward(m) { return .forward }
+        case .forward: if canForwardCopy(m) { return .forward }
         case .share: if multiSwipeCanShare(m) { return .share }
         case .quote: if multiSwipeCanQuote(m) { return .quote }
         }
@@ -6286,7 +6322,7 @@ struct ThreadView: View {
         // to what the send path will carry. Ours had no cap at all, so ticking a hundred messages
         // left the button live and handed the whole lot to the picker.
         guard picked.count <= Limits.maxForwardSelection else { return false }
-        return picked.allSatisfy(canForward)
+        return picked.allSatisfy(canForwardCopy)
     }
 
     /// Their `selectionCanBeDeleted`. Empty is false, and then every item has to be something that
@@ -6341,7 +6377,7 @@ struct ThreadView: View {
 
     private func bulkForwardStart() {
         // Belt and braces: the button is already off unless every pick passes canForward.
-        let msgs = repo.items.filter { selectedIds.contains($0.id) && canForward($0) }
+        let msgs = repo.items.filter { selectedIds.contains($0.id) && canForwardCopy($0) }
             .sorted { $0.createdAt < $1.createdAt }
         guard !msgs.isEmpty else { return }
         bulkForward = msgs
@@ -7819,7 +7855,12 @@ struct ThreadView: View {
         // Only an older SEALED post needs a picture from this phone (one shared copy per post on the
         // server); a plain one is pointed at as it is (2026-11-06 audit).
         let sealed = [m.enc, m.thumbEnc].compactMap { $0 }.contains { !$0.isPlain } || m.album.contains { !$0.enc.isPlain }
-        let makePicture: () async -> Data? = { sealed ? await Self.quotePicture(m) : nil }
+        // Only the post's author or the channel's admins may supply it (the server drops anyone
+        // else's): a plain follower uploads nothing (audit Q8, the same rule as Android's
+        // `QuoteRules.sendsPicture`).
+        let mayPicture = m.authorId == me || conversation.map { $0.isOwner(me) || $0.admins.contains(me) } == true
+        let sendsPicture = sealed && mayPicture
+        let makePicture: () async -> Data? = { sendsPicture ? await Self.quotePicture(m) : nil }
         let token = QuoteStore.shared.start(cid: cid, mid: m.id, picture: makePicture)
         var card = QuoteCard(state: .ok)
         card.cid = cid
@@ -7833,7 +7874,7 @@ struct ThreadView: View {
         if dest.id == cid {
             replyingTo = nil
             quoting = QuoteDraft(qid: "", card: card, token: token,
-                                 makePicture: sealed ? QuotePictureMaker(make: makePicture) : nil)
+                                 makePicture: sendsPicture ? QuotePictureMaker(make: makePicture) : nil)
             inputFocused = true
             resolveQuote(token)
             return
@@ -8749,6 +8790,8 @@ struct ThreadView: View {
         let now = BubbleStyles.snapshotForSending(cid: cid)
         let style = style ?? prior?.style ?? now
         let bold = bold ?? TextFormat.ranges(prior?.bold)   // a retry keeps the queued spans
+        // The quote too (audit Q10): the reopen drain passes none, and must not send it bare.
+        let quote = quote ?? prior?.quote
         var storedPreview: (url: String, title: String, desc: String)?
         if let d = draft {
             storedPreview = (url: d.url.absoluteString, title: d.title, desc: d.desc)
@@ -8759,7 +8802,7 @@ struct ThreadView: View {
         if draft == nil, let p = prior { priorPreview = await SendQueue.outgoingPreview(for: p) }
         SendQueue.add(clientId: clientId, cid: cid, text: text, mentions: mentions, reply: reply,
                       ts: Date().timeIntervalSince1970, preview: storedPreview, style: style,
-                      bold: TextFormat.spans(bold))
+                      bold: TextFormat.spans(bold), quote: quote)
         // Already on its way (an offline send suspends, it does not fail): a Retry tap or a reopen
         // drain must not start a second copy (2026-09-24 audit, see `SendQueue.beginSending`). The
         // bubble stays; the original's echo or failure settles it.
@@ -8856,6 +8899,7 @@ struct ThreadView: View {
                         redrawn.bubbleDecor = style.decor
                     }
                     redrawn.boldSpans = entry.bold
+                    redrawn.quoteId = entry.quote   // the quote card it was sent with (audit Q10)
                     repo.addPending(redrawn)
                     if let card { repo.showLocalCard(clientId: entry.clientId, card: card) }   // 2026-10-23
                 }

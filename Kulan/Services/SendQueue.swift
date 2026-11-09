@@ -52,6 +52,9 @@ enum SendQueue {
         var style: BubbleStyles.Snapshot? = nil
         /// Bold spans of `text`, [location, length] (channel posts); nil = plain.
         var bold: [[Int]]? = nil
+        /// The quoted channel post's id (audit Q10: a resend killed mid-way came back without its
+        /// quote, and a quote with no words as nothing). nil on entries from older builds.
+        var quote: String? = nil
     }
 
     /// Where the composer parks a link card's image for this send (see `Entry.previewUrl`).
@@ -186,7 +189,7 @@ enum SendQueue {
 
     static func add(clientId: String, cid: String, text: String, mentions: [String], reply: ReplyRef?, ts: Double,
                     preview: (url: String, title: String, desc: String)? = nil,
-                    style: BubbleStyles.Snapshot? = nil, bold: [[Int]]? = nil) {
+                    style: BubbleStyles.Snapshot? = nil, bold: [[Int]]? = nil, quote: String? = nil) {
         lock.lock(); defer { lock.unlock() }
         var map = load()
         var e = Entry(clientId: clientId, cid: cid, text: text, mentions: mentions,
@@ -196,6 +199,7 @@ enum SendQueue {
         e.previewUrl = preview?.url; e.previewTitle = preview?.title; e.previewDesc = preview?.desc
         e.style = style
         e.bold = bold
+        e.quote = quote
         map[clientId] = e
         save(map)
     }
@@ -306,8 +310,8 @@ enum SendQueue {
                     // 2026-09-24 fix-all #220: with its link card, not bare text.
                     try await ChatService.sendText(cid: e.cid, text: e.text, replyTo: reply,
                                                    clientId: e.clientId, group: nil, mentions: e.mentions,
-                                                   preview: await outgoingPreview(for: e), style: e.style,
-                                                   bold: TextFormat.ranges(e.bold))
+                                                   preview: await outgoingPreview(for: e), quote: e.quote,
+                                                   style: e.style, bold: TextFormat.ranges(e.bold))
                 }
                 remove(clientId: e.clientId)
             } catch {
