@@ -46,7 +46,7 @@ final class ThreadMessageCache {
                                                object: nil, queue: nil) { [weak self] _ in
             guard let self else { return }
             for (cid, msgs) in self.byCid where msgs.count > self.backgroundCap {
-                self.byCid[cid] = Array(msgs.suffix(self.backgroundCap))
+                self.byCid[cid] = Self.keepVisible(msgs, self.backgroundCap)
             }
         }
     }
@@ -56,6 +56,21 @@ final class ThreadMessageCache {
     private var generation = 0
     private let cap = 200            // bound memory — the recent window is all the first screen needs
     private let backgroundCap = 60   // ~2 screens; enough for an instant reopen after backgrounding
+
+    /// ⛔ THE NEWEST `n` MESSAGES THAT SHOW, NOT THE NEWEST `n` DOCS (owner 2026-11-09, his channel
+    /// VE3: its 95 newest docs were deleted posts, so a 60-doc cut kept only tombstones and the one
+    /// live post, "Hello Guys", was never in the saved copy; every open after a background showed a
+    /// blank or one-row channel until the server answered, up to 10 s later). The cut counts only
+    /// messages that are not deleted and keeps the tombstones between them, never past 300 docs.
+    static func keepVisible(_ msgs: [Message], _ n: Int) -> [Message] {
+        var shown = 0, start = msgs.count
+        for i in stride(from: msgs.count - 1, through: 0, by: -1) {
+            if msgs.count - i > 300 { break }
+            start = i
+            if !msgs[i].deleted { shown += 1; if shown >= n { break } }
+        }
+        return Array(msgs[start...])
+    }
 
     private var lastExpirySweep: Date?
 
@@ -309,7 +324,7 @@ final class ThreadMessageCache {
     }
 
     private func persist(_ cid: String, _ messages: [Message]) {
-        let slice = messages.suffix(diskCap).map { $0 }
+        let slice = Self.keepVisible(messages, diskCap)
         // Identity for "is this the same screen as last time".
         // ⛔ EVERY MESSAGE'S MUTABLE FIELDS, NOT JUST THE LAST ONE'S — owner, 2026-09-27, reactions
         // missing after coming back to a chat. The old stamp was the count, the last id and the last

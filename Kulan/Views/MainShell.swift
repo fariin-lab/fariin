@@ -4976,6 +4976,7 @@ struct ChatRow: View, Equatable {
                             SecureImageView(imageUrl: t.url, enc: t.enc, cid: conv.id)
                                 .frame(width: 20, height: 20)
                                 .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                .allowsHitTesting(false)   // the row opens, see below
                                 .padding(1)
                                 .background(Color.white, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                                 .offset(x: CGFloat(stack.count - 1 - i) * 8)
@@ -4986,6 +4987,10 @@ struct ChatRow: View, Equatable {
                     SecureImageView(imageUrl: conv.lastImageUrl ?? "", enc: conv.lastImageEnc, cid: conv.id)
                         .frame(width: 20, height: 20)
                         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        // ⛔ THE ROW'S TAP, NEVER THE THUMBNAIL'S (owner 2026-11-09: tapping VE3
+                        // sometimes did nothing). A thumbnail that failed to load (a deleted post's
+                        // picture, "⚠") turns on its own tap-to-retry and swallowed the row's tap.
+                        .allowsHitTesting(false)
                 }
                 senderStyled(lastSenderPrefix + photoPreviewLabel, tint: .secondary).font(.subheadline).lineLimit(1)
             }

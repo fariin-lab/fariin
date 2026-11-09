@@ -2333,7 +2333,15 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             host?.parent.onOpenActivity()
             return
         }
-        guard let c = conversation(at: indexPath) else { return }
+        // ⛔ A TAP OPENS THE ROW ON SCREEN (owner 2026-11-09: "click channel, sometimes not opening").
+        // `apply` can hold a new snapshot back while the list moves and keep drawing the old rows;
+        // the live lookup then missed a row that had left the newest arrays and the tap returned
+        // with nothing. The row's own drawn content is the same chat: it opens that.
+        guard let id = rowId(at: indexPath),
+              let c = conversation(at: indexPath) ?? configured[id]?.conv else {
+            DiagLog.add("TAPMISS# row=\(indexPath.section).\(indexPath.row) id=\(rowId(at: indexPath).map { String($0.suffix(5)) } ?? "nil")")
+            return
+        }
         host?.parent.onOpen(c)
     }
 
