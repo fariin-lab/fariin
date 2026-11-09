@@ -3959,6 +3959,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         Self.opensThisRun[cid] = openNumber
         reopenLog("LAND open#\(openNumber) of this chat this run, rows=\(rowCount) seededHeights=\(seeded) estimated=\(estimatedIds.count) pagedHold=\(firstLandWasHeld) liveSettled=\(liveWindowSettled) id=\(initId) offset=\(initTop) savedTop=\(initialScrollTopInset.map { String(format: "%.1f", $0) } ?? "nil") top=\(String(format: "%.1f", collectionView.adjustedContentInset.top)) bottom=\(String(format: "%.1f", collectionView.adjustedContentInset.bottom)) y=\(String(format: "%.1f", collectionView.contentOffset.y)) appeared=\(isViewCompletelyAppeared)")
         revealWhenLandingIsFinal()
+        geoLogs = 0
+        logGeometry("land")
+        for delay in [0.6, 2.0, 5.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.logGeometry("settle\(delay)") }
+        }
         // owner audit 2026-10-06 chat #91: a jump that arrived before the land goes now, through the
         // same gate and retry every parked jump uses. It outranks the landing, so no re-pin after it.
         if let target = pendingScrollTarget {
@@ -4126,6 +4131,24 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// says which row it carried, where it sat against the live cell, and which pass ran before it.
     private var strayCellSweepQueued = false
     private var strayCellLogs = 0
+
+    /// ⚠️ DIAGNOSTIC (owner 2026-11-09, VE3: channel opens blank, posts show only while the keyboard
+    /// is up). One line of the list's whole geometry, so the next device run says WHERE the rows sit
+    /// when the screen is empty: offset against both bounds, insets, content height, header card,
+    /// visible and hidden cells, the topmost cell in view coordinates. Capped per open.
+    private var geoLogs = 0
+    private func logGeometry(_ why: String) {
+        guard isViewLoaded, geoLogs < 24 else { return }
+        geoLogs += 1
+        let cv = collectionView!
+        let cells = cv.visibleCells
+        let shown = cells.filter { !$0.isHidden && $0.alpha > 0.01 && $0.contentView.alpha > 0.01 }
+        let inView = shown.filter { $0.frame.intersects(cv.bounds) }
+        let firstY = inView.map { view.convert($0.frame, from: cv).minY }.min().map { "\(Int($0))" } ?? "none"
+        let lastY = inView.map { view.convert($0.frame, from: cv).maxY }.max().map { "\(Int($0))" } ?? "none"
+        let hdr = historyHeaderHost.map { "\(Int(layout.headerHeight))a\(String(format: "%.1f", $0.view.alpha))y\(Int(view.convert($0.view.frame, from: cv).minY))" } ?? "no"
+        DiagLog.add("LISTGEO# \(why) cid=\(cid.suffix(5)) rows=\(currentIds.count) y=\(Int(cv.contentOffset.y)) min=\(Int(minContentOffsetY)) max=\(Int(maxContentOffsetY)) inTop=\(Int(cv.adjustedContentInset.top)) inBot=\(Int(cv.adjustedContentInset.bottom)) layH=\(Int(safeContentHeight)) cvH=\(Int(cv.contentSize.height)) bH=\(Int(cv.bounds.height)) safeB=\(Int(cv.safeAreaInsets.bottom)) kb=\(Int(keyboardOverlap)) alpha=\(String(format: "%.1f", cv.alpha)) rev=\(didReveal) land=\(didFirstLand) hold=\(holdFirstLand) cells=\(cells.count)/\(shown.count)/\(inView.count) first=\(firstY) last=\(lastY) hdr=\(hdr) dist=\(lastKnownDistanceFromBottom.map { "\(Int($0))" } ?? "nil")")
+    }
     private func scheduleStrayCellSweep(_ caller: String) {
         guard !strayCellSweepQueued else { return }
         strayCellSweepQueued = true
@@ -4839,6 +4862,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// `didHide` is posted only once the keys are really off screen, so unlike the will-hide it is safe
     /// to believe in any app state. It puts the bar back at rest, the way an ordinary dismissal ends.
     @objc private func keyboardDidHideNote(_ note: Notification) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.logGeometry("kbDown") }
         guard isViewLoaded, view.window != nil, !isDisappearing, keyboardIsUp || dockedBand > 0 else { return }
         // ⚠️ ONLY WHILE THE APP IS ACTIVE. Switching apps also hides the keys, and iOS puts them straight
         // back on return with no show notification (see `rideKeyboard`); lowering here would re-open
@@ -4856,6 +4880,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// handing the keys back), it takes the true height. Never while GIF search holds the keys, never
     /// while the view is shifted, and logged as KB# so the source of the wrong value can be read.
     @objc private func keyboardDidShowNote(_ note: Notification) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.logGeometry("kbUp") }
         guard isViewLoaded, let win = view.window, !isDisappearing,
               UIApplication.shared.applicationState == .active,
               let end = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
