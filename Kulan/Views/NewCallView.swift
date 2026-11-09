@@ -260,8 +260,12 @@ struct NewCallView: View {
 struct PickedCallStrip: View {
     let picks: [NewCallPick]
     let onRemove: (NewCallPick) -> Void
-    let onVoice: () -> Void
-    let onVideo: () -> Void
+    var onVoice: () -> Void = {}
+    var onVideo: () -> Void = {}
+    /// New Group's Select Members uses the same strip without the call buttons, on its list row's
+    /// colour (owner 2026-11-09: its picks ran off the right edge; make it behave like New Call).
+    var callButtons = true
+    var fill = Color(.systemGroupedBackground)
 
     private enum Phase { case hidden, shown, leaving }
 
@@ -300,17 +304,19 @@ struct PickedCallStrip: View {
             .contentShape(Rectangle())
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .simultaneousGesture(drag)
-            HStack(spacing: 10) {
-                callButton("ic_call_video", picks.count > 1 ? "Video call with \(picks.count) people" : "Video call", onVideo)
-                callButton("ic_call_voice", picks.count > 1 ? "Voice call with \(picks.count) people" : "Voice call", onVoice)
+            if callButtons {
+                HStack(spacing: 10) {
+                    callButton("ic_call_video", picks.count > 1 ? "Video call with \(picks.count) people" : "Video call", onVideo)
+                    callButton("ic_call_voice", picks.count > 1 ? "Voice call with \(picks.count) people" : "Voice call", onVoice)
+                }
+                .padding(.top, 12)
             }
-            .padding(.top, 12)
         }
         .padding(.leading, 4)
-        .padding(.trailing, 12)
+        .padding(.trailing, callButtons ? 12 : 0)
         .padding(.top, 4)
         .padding(.bottom, 6)
-        .background(Color(.systemGroupedBackground))
+        .background(fill)
         .onAppear { sync(picks) }
         .onChange(of: picks) { _, now in sync(now) }
     }
@@ -326,7 +332,7 @@ struct PickedCallStrip: View {
                             .font(.system(size: 18))
                             .symbolRenderingMode(.palette)
                             .foregroundStyle(.white, .gray)
-                            .background(Circle().fill(Color(.systemGroupedBackground)).padding(-2))
+                            .background(Circle().fill(fill).padding(-2))
                             .offset(x: 2, y: -2)
                     }
                 Text(firstName(p.shown))

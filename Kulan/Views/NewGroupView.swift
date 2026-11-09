@@ -133,28 +133,16 @@ struct NewGroupView: View {
                 Section(selected.count >= Self.maxOthersAtCreate
                         ? "Members · \(selected.count + 1) max"
                         : "Members · \(selected.count + 1)") {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 14) {
-                            ForEach(picked) { p in
-                                Button { toggle(p) } label: {
-                                    VStack(spacing: 4) {
-                                        ZStack(alignment: .topTrailing) {
-                                            AvatarView(name: p.name, photoUrl: p.photo, size: 52)
-                                            Image(systemName: "xmark.circle.fill")
-                                                .font(.system(size: 18))
-                                                .symbolRenderingMode(.palette)
-                                                .foregroundStyle(.white, .gray)
-                                                .offset(x: 4, y: -4)
-                                        }
-                                        Text(p.name).font(.caption2).lineLimit(1).frame(width: 56)
-                                            .foregroundStyle(.primary)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
+                    // owner 2026-11-09: the picks ran off the right edge. The New Call strip: anchored
+                    // at the end once full (newest at the right, older slide off the left, a swipe
+                    // brings them back), slide-then-grow on a pick, shrink-and-close on the x.
+                    PickedCallStrip(
+                        picks: picked.map { NewCallPick(member: CallMember(uid: $0.id, name: $0.name, photoUrl: $0.photo),
+                                                        shown: $0.name) },
+                        onRemove: { pick in if let p = selected[pick.id] { toggle(p) } },
+                        callButtons: false,
+                        fill: Color(.secondarySystemGroupedBackground))
+                    .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
                 }
             }
 
