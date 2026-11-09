@@ -1433,7 +1433,19 @@ struct PostThreadSheet: View {
                 }
             } : nil,
             pinned: thread == nil && model.pinned?.id == r.id,
-            openAuthor: r.send == .sent && (!r.mine || r.creator) ? { openAuthor(r, thread: thread) } : nil)
+            openAuthor: r.send == .sent && (!r.mine || r.creator) ? { openAuthor(r, thread: thread) } : nil,
+            openHandle: { h in openHandle(h) })
+    }
+
+    /// "@handle" tapped in a reply's words: the person with that username, else a short note.
+    private func openHandle(_ handle: String) {
+        Task {
+            guard let u = await ChatService.findByHandle(handle, allowSelf: true) else { show("No one uses @\(handle)."); return }
+            // My own @handle (owner 2026-11-09): a short note, nothing opens.
+            if u.id == AuthService.shared.uid { show("@\(u.handle.isEmpty ? handle : u.handle) is your username."); return }
+            // Someone else: the sheet closes and their profile opens (`onOpenPerson` does both).
+            onOpenPerson(u.id, u.name)
+        }
     }
 
     /// Photo or name tapped: the chat closes the sheet, then opens the person (or the channel).
@@ -1546,6 +1558,8 @@ private struct ReplyRow: View {
         var pin: (() -> Void)?
         var pinned = false
         var openAuthor: (() -> Void)?
+        /// A tap on an "@handle" in the words (owner 2026-11-09): that person's profile.
+        var openHandle: ((String) -> Void)?
     }
 
     let reply: PostReply
@@ -1648,6 +1662,10 @@ private struct ReplyRow: View {
                 bodyText
                     .font(small ? .subheadline : .body)
                     .environment(\.openURL, OpenURLAction { url in
+                        if url.scheme == Self.handleScheme, let h = url.host, !h.isEmpty {
+                            actions.openHandle?(h)
+                            return .handled
+                        }
                         guard url.scheme == Self.mentionScheme else { return .systemAction }
                         actions.mention?()
                         return .handled
@@ -1693,7 +1711,25 @@ private struct ReplyRow: View {
     private static let mentionScheme = "fariin-reply-to"
 
     /// The words alone: who an answer answers is in the name line now ("Jayz ▸ Salmo", 2026-11-08).
-    private var bodyText: Text { Text(reply.text) }
+    /// ⛔ "@HANDLE" IS A MENTION (owner 2026-11-09, screenshot "@kream ..."): drawn in the app's blue
+    /// and a tap opens that person. A handle is letters, digits, "_" and inner dots, as usernames are.
+    private var bodyText: Text { Text(Self.mentionMarked(reply.text)) }
+
+    static let handleScheme = "fariin-mention"
+    static func mentionMarked(_ text: String) -> AttributedString {
+        var out = AttributedString(text)
+        guard text.contains("@"), let re = try? NSRegularExpression(pattern: "(?<![A-Za-z0-9_.])@([A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*)") else { return out }
+        let ns = text as NSString
+        for m in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            guard let whole = Range(m.range, in: text), let hr = Range(m.range(at: 1), in: text),
+                  let lo = AttributedString.Index(whole.lowerBound, within: out),
+                  let hi = AttributedString.Index(whole.upperBound, within: out) else { continue }
+            let handle = String(text[hr])
+            out[lo..<hi].foregroundColor = Color(.systemBlue)
+            out[lo..<hi].link = URL(string: "\(handleScheme)://\(handle.lowercased())")
+        }
+        return out
+    }
 
     @ViewBuilder private var footer: some View {
         switch reply.send {
@@ -1793,6 +1829,20 @@ private struct ReplyComposer: View {
     let onEdit: (ReplyEdit, String) -> Void
     @State private var draft = ""
     @FocusState private var focused: Bool
+    /// People offered while an "@..." is being typed (owner 2026-11-09).
+    @State private var mentionHits: [UserProfile] = []
+
+    /// The "@word" being typed at the end of the field, without the "@"; nil when there is none.
+    private var mentionToken: String? {
+        guard let at = draft.lastIndex(of: "@") else { return nil }
+        if at > draft.startIndex {
+            let before = draft[draft.index(before: at)]
+            guard before == " " || before == "\n" else { return nil }
+        }
+        let word = draft[draft.index(after: at)...]
+        guard !word.contains(where: { $0 == " " || $0 == "\n" }), word.count <= 32 else { return nil }
+        return String(word)
+    }
 
     var body: some View {
         if off {
@@ -1827,6 +1877,34 @@ private struct ReplyComposer: View {
                     }
                     .padding(.horizontal, 20)
                 }
+                // ⛔ "@" OFFERS PEOPLE (owner 2026-11-09): up to five matches for the word being typed;
+                // a tap puts "@handle " in its place.
+                if let token = mentionToken, !token.isEmpty, !mentionHits.isEmpty {
+                    VStack(spacing: 0) {
+                        ForEach(mentionHits.prefix(5), id: \.id) { u in
+                            Button {
+                                if let at = draft.lastIndex(of: "@") { draft = String(draft[..<at]) + "@" + u.handle + " " }
+                                mentionHits = []
+                            } label: {
+                                HStack(spacing: 10) {
+                                    AvatarView(name: u.name, photoUrl: u.photoUrl, size: 30)
+                                    VStack(alignment: .leading, spacing: 0) {
+                                        Text(u.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary).lineLimit(1)
+                                        Text("@" + u.handle).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, 16).padding(.vertical, 6)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .padding(.horizontal, 12)
+                    .transition(.opacity)
+                }
                 let hasText = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 HStack(alignment: .bottom, spacing: 8) {
                     // Their name, blue, at the start of the field (owner 2026-11-09, his reference
@@ -1846,6 +1924,15 @@ private struct ReplyComposer: View {
                     TextField(answering == nil ? "Add a reply…" : "", text: $draft, axis: .vertical)
                         .lineLimit(1...5)
                         .focused($focused)
+                        // The "@..." being typed asks for people, a quarter second after the last key.
+                        .task(id: mentionToken ?? "") {
+                            guard let token = mentionToken, !token.isEmpty else { mentionHits = []; return }
+                            try? await Task.sleep(nanoseconds: 250_000_000)
+                            guard !Task.isCancelled else { return }
+                            let hits = await ChatService.searchUsers(prefix: token)
+                            guard !Task.isCancelled else { return }
+                            mentionHits = hits.filter { !$0.handle.isEmpty }
+                        }
                         // At most 250 characters, the server's limit too (owner 2026-11-07).
                         .onChange(of: draft) { _, v in if v.count > 250 { draft = String(v.prefix(250)) } }
                         .padding(.vertical, 12)
