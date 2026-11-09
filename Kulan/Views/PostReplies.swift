@@ -208,9 +208,12 @@ struct ReplyEdit: Equatable {
     private static var pinCache: [String: PostReply] = [:]
     private var cacheKey: String { "\(mid)|\(sort.rawValue)" }
 
-    init(cid: String, mid: String) {
+    /// `seedCount`: the count the post under it already shows (owner 2026-11-09: the tab's
+    /// "18 Replies" came in late, after the server's first answer). The server's answer replaces it.
+    init(cid: String, mid: String, seedCount: Int = 0) {
         self.cid = cid
         self.mid = mid
+        count = max(0, seedCount)
         if let c = Self.cache["\(mid)|top"] { threads = c; loaded = true }
         pinned = Self.pinCache[mid]
     }
@@ -926,7 +929,7 @@ struct PostThreadSheet: View {
         _tab = State(initialValue: first)
         _quotesShown = State(initialValue: first == .quotes)
         _offNow = State(initialValue: repliesOff)
-        _model = State(initialValue: RepliesModel(cid: cid, mid: mid))
+        _model = State(initialValue: RepliesModel(cid: cid, mid: mid, seedCount: post?.replyCount ?? 0))
     }
 
     var body: some View {
