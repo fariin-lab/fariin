@@ -878,8 +878,15 @@ struct ReplyEdit: Equatable {
                     return
                 }
                 mark(id, thread: thread, .failed)
-                // A held thread refuses answers: say so, the server's words.
+                // A refusal says why, in the server's words: a held thread, a deleted one, a blocked
+                // author, too fast (2026-11-09 audit R-09).
                 if let m = Self.serverMessage(error) { notice = m }
+                // The thread or the answer it answered is gone: read the list again, so a deleted
+                // thread leaves the screen (with this failed answer) instead of hiding it.
+                if let t = thread, Self.isCode(error, .notFound) {
+                    await refreshNewest()
+                    if isThread(t) { _ = await loadAnswers(t, more: false) }
+                }
             }
         }
     }
@@ -1040,6 +1047,10 @@ struct ReplyEdit: Equatable {
         }
         deletedIds.insert(r.id)
         let threadsBefore = threads, answersBefore = answers[thread ?? ""]
+        // A thread's own answers, put back with it if the delete fails (2026-11-09 audit R-11: they
+        // came back empty, and `answersLoaded` kept a reload from fixing it).
+        let ownAnswers = thread == nil ? answers[r.id] : nil
+        let ownNext = thread == nil ? answerNext[r.id] : nil
         let wasPinned = thread == nil && pinned?.id == r.id ? pinned : nil
         if let t = thread {
             answers[t]?.removeAll { $0.id == r.id }
@@ -1058,6 +1069,14 @@ struct ReplyEdit: Equatable {
         } catch {
             deletedIds.remove(r.id)
             if let t = thread { update(t, thread: nil) { $0.answers += 1 } }
+            if thread == nil {
+                if let own = ownAnswers, answers[r.id] == nil {
+                    answers[r.id] = own
+                    answerNext[r.id] = ownNext
+                } else if answers[r.id] == nil {
+                    answersLoaded.remove(r.id)   // never held: the next open reads them
+                }
+            }
             if let p = wasPinned { pinned = p; Self.pinCache[mid] = p; return }
             // Only the one row comes back, never a whole saved list over newer arrivals.
             if let t = thread, let before = answersBefore, let row = before.first(where: { $0.id == r.id }) {
@@ -1590,7 +1609,7 @@ struct PostThreadSheet: View {
             }
             // Off as the post already says, from the first frame (owner 2026-11-07: the field showed for
             // a second, then turned into the off line when the server answered).
-            ReplyComposer(off: offNow, loaded: model.loaded, answering: $answering, editing: $editing,
+            ReplyComposer(off: offNow, loaded: model.loaded, focusTick: focusTick, answering: $answering, editing: $editing,
                           onSend: { text, target in
                               let me = ProfileStore.shared.me
                               let to = target?.to.map { (id: $0, name: target?.name ?? "") }
@@ -1670,25 +1689,25 @@ struct PostThreadSheet: View {
                     .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .padding(.leading, 108).padding(.bottom, 8)
+            .padding(.leading, Self.answerTextEdge).padding(.bottom, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
         case .toggle(let t, let n, let open):
             Button { withAnimation(.easeInOut(duration: 0.2)) { model.toggleThread(t) } } label: {
-                HStack(spacing: 8) {
-                    Color.clear.frame(width: 20, height: 1)
-                    Text(open ? (model.answersLoading.contains(t) ? "Loading…" : "Hide replies")
-                              : "View \(n) \(n == 1 ? "reply" : "replies")")
-                        .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-                }
+                Text(open ? (model.answersLoading.contains(t) ? "Loading…" : "Hide replies")
+                          : "View \(n) \(n == 1 ? "reply" : "replies")")
+                    .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .padding(.leading, 62).padding(.bottom, 10)
+            // ⛔ ONE EDGE (2026-11-09 audit R-17): a thread's words, its pills and this toggle all start
+            // at 80 (16 + 40 photo + 10 + 14 bubble inset); an answer's words, pills and "View more"
+            // at 114 (the same sum on a 28 photo, 46 in).
+            .padding(.leading, Self.threadTextEdge).padding(.bottom, 10)
         case .moreAnswers(let t):
             Button { Task { await model.loadAnswers(t, more: true) } } label: {
                 Text("Show more replies").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .padding(.leading, 108).padding(.bottom, 8)
+            .padding(.leading, Self.answerTextEdge).padding(.bottom, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -1710,12 +1729,20 @@ struct PostThreadSheet: View {
     /// Editing is open for 15 minutes after a reply is sent (the server holds the same limit).
     private static let editWindow: TimeInterval = 15 * 60
 
+    /// Where a thread's words start (row 16 + photo 40 + 10 + bubble inset 14), and an answer's
+    /// (row 16 + indent 46 + photo 28 + 10 + 14). Pills, toggles and "View more" line up on them.
+    private static let threadTextEdge: CGFloat = 16 + 40 + 10 + 14
+    private static let answerTextEdge: CGFloat = 16 + ReplyThreadLine.answerIndent + 28 + 10 + 14
+
     private func actions(_ r: PostReply, thread: String?) -> ReplyRow.Actions {
         ReplyRow.Actions(
             like: { model.toggleLike(r, thread: thread) },
             react: { e in model.react(r, emoji: e, thread: thread) },
             // On an answer, the send also says which answer it answers ("@name" on the new one).
-            reply: model.off ? nil : {
+            // Not on my own reply until it is sent: an answer to a reply the server does not have
+            // yet is refused (2026-11-09 audit R-10).
+            reply: (model.off || r.send != .sent) ? nil : {
+                focusTick &+= 1
                 editing = nil
                 answering = ReplyTarget(thread: thread ?? r.id, name: r.name, to: thread == nil ? nil : r.id, mine: r.mine)
             },
@@ -1982,13 +2009,15 @@ private struct ReplyRow: View {
                     .background(Color(.secondarySystemBackground),
                                 in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                     .opacity(reply.held || reply.send != .sent ? 0.55 : 1)
-                    .onTapGesture(count: 2) { if reply.send == .sent { actions.like() } }
+                    // Beside the words' own links, not over them (2026-11-09 audit R-18): a plain
+                    // count-2 tap made a tap on an "@handle" wait for the double tap to fail.
+                    .simultaneousGesture(TapGesture(count: 2).onEnded { if reply.send == .sent { actions.like() } })
                     .contextMenu { menu }
             }
             Spacer(minLength: 24)
           }
             footer
-                .padding(.leading, side + 10 + 8).padding(.top, 2)
+                .padding(.leading, side + 10 + 14).padding(.top, 2)   // the bubble's text edge (R-17)
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
         // Drawn from where the photo really is, so a reply of several lines still lines up.
@@ -2131,6 +2160,8 @@ private struct ReplyRow: View {
 private struct ReplyComposer: View {
     let off: Bool
     let loaded: Bool
+    /// Every Reply tap: the keyboard comes up even for the row already being answered (R-12).
+    let focusTick: Int
     @Binding var answering: ReplyTarget?
     @Binding var editing: ReplyEdit?
     let onSend: (String, ReplyTarget?) -> Void
@@ -2139,6 +2170,28 @@ private struct ReplyComposer: View {
     @FocusState private var focused: Bool
     /// People offered while an "@..." is being typed (owner 2026-11-09).
     @State private var mentionHits: [UserProfile] = []
+
+    /// ⛔ 250 THE WAY THE SERVER COUNTS (2026-11-09 audit R-13): it cuts at 250 code points
+    /// (`Array.from`), and one flag or family emoji is several, so the field let through more than the
+    /// server kept and the tail was lost in silence. Counted in Unicode scalars (the same unit), and
+    /// cut only between whole characters, so an emoji is never split.
+    static let maxScalars = 250
+    static func capped(_ v: String) -> String {
+        guard v.unicodeScalars.count > maxScalars else { return v }
+        var out = ""
+        var n = 0
+        for ch in v {
+            let k = ch.unicodeScalars.count
+            if n + k > maxScalars { break }
+            out.append(ch)
+            n += k
+        }
+        return out
+    }
+
+    /// A short screen (iPhone SE, mini): fewer people offered, so the field and the row being
+    /// answered still fit above the keyboard (2026-11-09 audit R-16).
+    private var mentionRows: Int { UIScreen.main.bounds.height < 700 ? 3 : 5 }
 
     /// The "@word" being typed at the end of the field, without the "@"; nil when there is none.
     private var mentionToken: String? {
@@ -2189,7 +2242,7 @@ private struct ReplyComposer: View {
                 // a tap puts "@handle " in its place.
                 if let token = mentionToken, !token.isEmpty, !mentionHits.isEmpty {
                     VStack(spacing: 0) {
-                        ForEach(mentionHits.prefix(5), id: \.id) { u in
+                        ForEach(mentionHits.prefix(mentionRows), id: \.id) { u in
                             Button {
                                 if let at = draft.lastIndex(of: "@") { draft = String(draft[..<at]) + "@" + u.handle + " " }
                                 mentionHits = []
@@ -2242,7 +2295,10 @@ private struct ReplyComposer: View {
                             mentionHits = hits.filter { !$0.handle.isEmpty }
                         }
                         // At most 250 characters, the server's limit too (owner 2026-11-07).
-                        .onChange(of: draft) { _, v in if v.count > 250 { draft = String(v.prefix(250)) } }
+                        .onChange(of: draft) { _, v in
+                            let c = Self.capped(v)
+                            if c != v { draft = c }
+                        }
                         .padding(.vertical, 12)
                     // The chat's send: a white arrow on the blue pill (owner 2026-11-07), shown once
                     // there is something to send.
@@ -2283,9 +2339,11 @@ private struct ReplyComposer: View {
             }
             .padding(.vertical, 8)
             .onChange(of: answering) { _, a in if a != nil { focused = true } }
+            // The same row again (an equal target changes nothing above): the tap still focuses.
+            .onChange(of: focusTick) { _, _ in if answering != nil { focused = true } }
             // Edit: the reply's words go in the field; leaving edit empties it again.
             .onChange(of: editing) { was, e in
-                if let e { draft = String(e.text.prefix(250)); focused = true } else if was != nil { draft = "" }
+                if let e { draft = Self.capped(e.text); focused = true } else if was != nil { draft = "" }
             }
         }
     }
@@ -2320,53 +2378,25 @@ private struct RepliesSkeleton: View {
     private var fill: Color { Color.primary.opacity(0.08) }
 }
 
-/// ⛔ THREAD LINES UNDER A REPLY (owner 2026-11-07, his reference picture): a thin line down from
-/// the reply's photo, curving into each answer's photo and into "View N replies" / "Hide replies".
-/// Answers sit `answerIndent` in; the parent's photo is 40 wide at 16 from the edge, so its line runs
-/// at x = 36 in list coordinates.
+/// ⛔ THREAD LINES BETWEEN ANSWERS (owner 2026-11-09, his reference: the long line from a comment
+/// down past its answers is gone). Only a short line joining an answer's photo to the answer it
+/// answers, when they are neighbours (`chainLinks`). Answers sit `answerIndent` in. The old kinds
+/// (`below`, `answer`, the toggle's elbow) drew the removed line and went with it (2026-11-09 audit R-17).
 enum ReplyThreadLine: Equatable {
-    case none, below, answer
+    case none
     /// Between neighbouring answers where one answers the other (owner 2026-11-09): a short line
     /// into this photo from the row above, and/or out of it to the row below.
     case chain(above: Bool, below: Bool)
 
-    static let parentX: CGFloat = 36
     static let answerIndent: CGFloat = 46
     // Solid, not see-through: where two rows' lines meet, a see-through grey showed a darker overlap.
     static let color = Color(.systemGray3)
-    /// The corner's radius: a wide, round bend into the answer or the toggle, as in the owner's
-    /// reference (2026-11-07: "the line's round doesn't look good").
-    /// The corner's radius, as iOS's own `.continuous` rounded rectangles use it.
-    private static let radius: CGFloat = 12
-    /// How far the bend reaches along each line: a continuous corner starts 1.53 radii out.
-    private static let bend: CGFloat = radius * 1.52866483
-
-    /// ⛔ APPLE'S CONTINUOUS CORNER, NOT A CIRCLE (owner 2026-11-08: "still that line is not smooth,
-    /// use Apple rounded design"). A circular arc meets the straight line with a jump in curvature,
-    /// which reads as a kink. These are the three curves of iOS's continuous rounded-rectangle
-    /// corner, so the line eases into the bend and out of it. From the vertical line at `x`, `bend`
-    /// above `y`, to `bend` right of `x` on `y`.
-    private static func addContinuousBend(_ p: inout Path, x: CGFloat, y: CGFloat) {
-        let r = radius
-        p.addCurve(to: CGPoint(x: x + 0.07491100 * r, y: y - 0.63149399 * r),
-                   control1: CGPoint(x: x, y: y - 1.08849323 * r),
-                   control2: CGPoint(x: x + 0.02229519 * r, y: y - 0.86840689 * r))
-        p.addCurve(to: CGPoint(x: x + 0.63149399 * r, y: y - 0.07491100 * r),
-                   control1: CGPoint(x: x + 0.16905899 * r, y: y - 0.37282392 * r),
-                   control2: CGPoint(x: x + 0.37282392 * r, y: y - 0.16905899 * r))
-        p.addCurve(to: CGPoint(x: x + bend, y: y),
-                   control1: CGPoint(x: x + 0.86840689 * r, y: y - 0.02229519 * r),
-                   control2: CGPoint(x: x + 1.08849323 * r, y: y))
-    }
 
     /// In the row's own coordinates (`avatar` is that row's photo).
     static func path(_ kind: ReplyThreadLine, avatar r: CGRect, height: CGFloat) -> Path {
         var p = Path()
         switch kind {
         case .none: break
-        case .below:
-            p.move(to: CGPoint(x: r.midX, y: r.maxY + 2))   // right under the photo, no visible gap
-            p.addLine(to: CGPoint(x: r.midX, y: height))
         case .chain(let above, let below):
             if above {
                 p.move(to: CGPoint(x: r.midX, y: 0))
@@ -2376,28 +2406,7 @@ enum ReplyThreadLine: Equatable {
                 p.move(to: CGPoint(x: r.midX, y: r.maxY + 2))
                 p.addLine(to: CGPoint(x: r.midX, y: height))
             }
-        case .answer:
-            let x = parentX - answerIndent   // the parent's line, left of this row's own frame
-            p.move(to: CGPoint(x: x, y: 0))
-            p.addLine(to: CGPoint(x: x, y: height))   // on past this answer to the next
-            p.move(to: CGPoint(x: x, y: r.midY - bend))
-            addContinuousBend(&p, x: x, y: r.midY)
-            p.addLine(to: CGPoint(x: r.minX - 4, y: r.midY))
         }
-        return p
-    }
-
-    /// The last bend, into the toggle's label (the label starts 62 in, its text 28 further).
-    static func toggleElbow(height: CGFloat) -> Path {
-        var p = Path()
-        let x = parentX - 62, mid = height / 2
-        // The row is short, so the bend may start above it, on the line coming down from the reply:
-        // a full round corner instead of a cramped one.
-        let start = min(0, mid - bend)
-        p.move(to: CGPoint(x: x, y: start))
-        p.addLine(to: CGPoint(x: x, y: mid - bend))
-        addContinuousBend(&p, x: x, y: mid)
-        p.addLine(to: CGPoint(x: 20, y: mid))
         return p
     }
 }
