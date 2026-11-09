@@ -32,6 +32,12 @@ struct GroupTypeView: View {
     @State private var confirmPrivate = false
     @State private var saveError: String?
     @State private var seeded = false
+    /// Owner 2026-11-09: switching to Public only greyed Save, and nothing said a link was needed.
+    /// The field now takes the keyboard, is pre-filled from the name, and a Save tapped too early
+    /// shakes it and turns the line red (`explainSave`).
+    @FocusState private var linkFocused: Bool
+    @State private var nudges: CGFloat = 0
+    @State private var askedForLink = false
 
     @State private var ownConv: Conversation?
     @State private var convListener: ListenerRegistration?
@@ -71,17 +77,23 @@ struct GroupTypeView: View {
             ToolbarItem(placement: .confirmationAction) {
                 if saving { ProgressView() } else if let next = setupNext {
                     // Public: the link must be free first. Private: straight on.
+                    // Public: the link must be free first. Too early, it says why instead of nothing.
+                    let blocked = showPublic && (name.isEmpty || (nameChanged && check != .available))
                     Button("Next") {
-                        if showPublic, nameChanged { save(name) } else { next() }
+                        if blocked { explainSave() } else if showPublic, nameChanged { save(name) } else { next() }
                     }
-                    .disabled(showPublic && (name.isEmpty || (nameChanged && check != .available)))
                     .buttonStyle(.glassProminent).tint(Color.fariinAction)
                     .foregroundStyle(Color.onFariinAction)
+                    .opacity(blocked ? 0.45 : 1)
                 } else {
-                    // Blue, as the tag page's Done (owner 2026-10-20).
-                    Button("Save") { save(name) }.disabled(!canSave)
+                    // Blue, as the tag page's Done (owner 2026-10-20). Tappable while Public waits
+                    // for a good link, so a tap can say what is missing (owner 2026-11-09).
+                    let waiting = showPublic && !canSave && (name.isEmpty || nameChanged)
+                    Button("Save") { if canSave { save(name) } else { explainSave() } }
+                        .disabled(!canSave && !waiting)
                         .buttonStyle(.glassProminent).tint(Color.fariinAction)
                         .foregroundStyle(Color.onFariinAction)
+                        .opacity(canSave ? 1 : 0.45)
                 }
             }
         }
@@ -296,7 +308,9 @@ struct GroupTypeView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.asciiCapable)
+                    .focused($linkFocused)
             }
+            .modifier(LinkShake(animatableData: nudges))
         } header: {
             Text("Public Link")
         } footer: {
@@ -324,9 +338,36 @@ struct GroupTypeView: View {
             }
             .foregroundStyle(checkColor)
             .transition(.opacity)
+        } else if name.isEmpty {
+            // Public with no link yet: say it is needed; red once Save was tapped without one.
+            Text("A public \(noun) needs a link. Pick one of \(GroupDirectory.nameMin) to \(GroupDirectory.nameMax) characters: letters, numbers and _.")
+                .foregroundStyle(askedForLink ? Color.red : Color.secondary)
         } else {
             Text("Pick a link of \(GroupDirectory.nameMin) to \(GroupDirectory.nameMax) characters: letters, numbers and _.")
         }
+    }
+
+    /// Save or Next tapped before the link is good: the field shakes, the phone buzzes, the
+    /// keyboard comes up, and the line under it says what is wrong (red).
+    private func explainSave() {
+        askedForLink = true
+        Haptics.notify(.error)
+        withAnimation(.linear(duration: 0.4)) { nudges += 1 }
+        linkFocused = true
+    }
+
+    /// A first link from the name: lower case, spaces to _, only letters, numbers and _, the
+    /// right length. Only a suggestion; the live check still says whether it is free.
+    private func suggestedLink() -> String {
+        let title = (conv?.displayName(me) ?? "").lowercased()
+        var out = ""
+        for ch in title {
+            if ch == " " || ch == "-" { if !out.hasSuffix("_") { out.append("_") } }
+            else if ch.isASCII, ch.isLetter || ch.isNumber || ch == "_" { out.append(ch) }
+        }
+        out = out.trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+        if out.count < GroupDirectory.nameMin { out += out.isEmpty ? noun : "_\(noun)" }
+        return String(out.prefix(GroupDirectory.nameMax))
     }
 
     private var checkColor: Color {
@@ -353,7 +394,19 @@ struct GroupTypeView: View {
     }
 
     private func pick(publicType: Bool) {
-        if publicType { wantsPublic = true; return }
+        if publicType {
+            wantsPublic = true
+            // No link yet: offer one from the name and bring the keyboard up, so the next step is
+            // obvious (owner 2026-11-09).
+            if name.isEmpty {
+                name = suggestedLink()
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 350_000_000)   // after the section slides in
+                    linkFocused = true
+                }
+            }
+            return
+        }
         // Going private gives the link up, so it asks first. A group that was never public just
         // shows Private again.
         if isPublicNow { confirmPrivate = true } else { wantsPublic = false }
@@ -393,5 +446,13 @@ struct GroupTypeView: View {
             }
             saving = false
         }
+    }
+}
+
+/// The link field's "not yet" shake: two quick swings side to side per nudge.
+private struct LinkShake: GeometryEffect {
+    var animatableData: CGFloat
+    func effectValue(size: CGSize) -> ProjectionTransform {
+        ProjectionTransform(CGAffineTransform(translationX: 7 * sin(animatableData * .pi * 4), y: 0))
     }
 }
