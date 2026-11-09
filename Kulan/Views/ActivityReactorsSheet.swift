@@ -23,8 +23,12 @@ struct ActivityReactorsSheet: View {
     @State private var tab = ""              // "" = All, else one emoji
     @State private var people: [Person] = []
     @State private var next = ""
-    @State private var loading = false
+    @State private var loading = true   // the first page is asked for at once (no "No reactions" flash)
     @State private var failed = false
+    /// The comment is gone (the server answered not-found): no retry, say so.
+    @State private var gone = false
+    /// Bumped by every fresh load (a tab change, Try Again): an answer for an older one is dropped.
+    @State private var generation = 0
     @State private var counts: [ActivityItem.Count] = []
     @State private var total = 0
     @State private var profile: Person?
@@ -109,6 +113,7 @@ struct ActivityReactorsSheet: View {
         return Button {
             guard tab != key else { return }
             tab = key
+            people = []   // the old tab's people never stand under the new chip
             Task { await load(reset: true) }
         } label: {
             Text(title)
@@ -123,7 +128,11 @@ struct ActivityReactorsSheet: View {
     }
 
     @ViewBuilder private var list: some View {
-        if failed && people.isEmpty {
+        if gone {
+            Text("This comment was deleted")
+                .font(.system(size: 15)).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity).padding(.top, 40)
+        } else if failed && people.isEmpty {
             VStack(spacing: 6) {
                 Text("Couldn't load reactions").font(.system(size: 15, weight: .semibold))
                 Text("Check your connection and try again.").font(.system(size: 13)).foregroundStyle(.secondary)
@@ -133,6 +142,10 @@ struct ActivityReactorsSheet: View {
             .frame(maxWidth: .infinity).padding(.top, 40)
         } else if loading && people.isEmpty {
             ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
+        } else if people.isEmpty {
+            Text("No reactions")
+                .font(.system(size: 15)).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity).padding(.top, 40)
         } else {
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -177,32 +190,61 @@ struct ActivityReactorsSheet: View {
         .contentShape(Rectangle())
     }
 
+    /// ⛔ ONE ANSWER PER TAB (audit A8): a tab tapped while a page was loading used to be dropped
+    /// (`guard !loading`), and the old tab's people then filled the new tab. A fresh load always
+    /// starts and bumps `generation`; an answer whose generation is no longer current is thrown away.
+    /// ⛔ AND A PAGE WITH NOBODY IN IT IS NOT THE END (audit A7): the server reads a page of
+    /// reactions and then keeps one emoji's, so a tab can get an empty page with more behind it.
+    /// More rows load only from the last row's `onAppear`, which never fires with no rows, so the
+    /// pages are walked here until someone shows up or there are no more.
     private func load(reset: Bool) async {
-        guard !loading else { return }
+        if reset {
+            generation += 1
+        } else if loading || next.isEmpty {
+            return
+        }
+        let gen = generation
         loading = true
-        defer { loading = false }
+        defer { if gen == generation { loading = false } }
         let aid = item.mine.aid == item.mine.rid ? "" : item.mine.aid
-        let args: [String: Any] = ["cid": item.cid, "mid": item.mid, "rid": item.mine.rid, "aid": aid,
-                                   "emoji": tab, "cursor": reset ? "" : next]
+        var cursor = reset ? "" : next
+        var found: [Person] = []
         do {
-            let res = try await Functions.functions(region: "me-central1")
-                .httpsCallable("getReplyReactors").call(args)
-            let d = res.data as? [String: Any] ?? [:]
-            let page: [Person] = (d["people"] as? [[String: Any]] ?? []).map { r in
-                Person(uid: r["u"] as? String ?? "", name: r["n"] as? String ?? "Someone",
-                       photo: r["p"] as? String ?? "", handle: r["h"] as? String ?? "",
-                       emoji: r["e"] as? String ?? "❤️",
-                       at: Date(timeIntervalSince1970: ((r["at"] as? NSNumber)?.doubleValue ?? 0) / 1000))
+            for _ in 0..<20 {
+                let args: [String: Any] = ["cid": item.cid, "mid": item.mid, "rid": item.mine.rid, "aid": aid,
+                                           "emoji": tab, "cursor": cursor]
+                let res = try await Functions.functions(region: "me-central1")
+                    .httpsCallable("getReplyReactors").call(args)
+                guard gen == generation else { return }
+                let d = res.data as? [String: Any] ?? [:]
+                let page: [Person] = (d["people"] as? [[String: Any]] ?? []).map { r in
+                    Person(uid: r["u"] as? String ?? "", name: r["n"] as? String ?? "Someone",
+                           photo: r["p"] as? String ?? "", handle: r["h"] as? String ?? "",
+                           emoji: r["e"] as? String ?? "❤️",
+                           at: Date(timeIntervalSince1970: ((r["at"] as? NSNumber)?.doubleValue ?? 0) / 1000))
+                }
+                if let rx = d["rx"] as? [String: Any] {
+                    counts = rx.compactMap { k, v in (v as? NSNumber).map { ActivityItem.Count(emoji: k, count: $0.intValue) } }
+                        .filter { $0.count > 0 }.sorted { $0.count > $1.count }
+                }
+                if let t = (d["total"] as? NSNumber)?.intValue { total = t }
+                found += page
+                cursor = d["next"] as? String ?? ""
+                if !page.isEmpty || cursor.isEmpty { break }
             }
-            if let rx = d["rx"] as? [String: Any] {
-                counts = rx.compactMap { k, v in (v as? NSNumber).map { ActivityItem.Count(emoji: k, count: $0.intValue) } }
-                    .filter { $0.count > 0 }.sorted { $0.count > $1.count }
-            }
-            if let t = (d["total"] as? NSNumber)?.intValue { total = t }
-            next = d["next"] as? String ?? ""
-            people = reset ? page : people + page.filter { p in !people.contains(where: { $0.id == p.id }) }
+            next = cursor
+            let base = reset ? [] : people
+            var seen = Set(base.map(\.id))
+            people = base + found.filter { seen.insert($0.id).inserted }
             failed = false
+            gone = false
         } catch {
+            guard gen == generation else { return }
+            // The comment was deleted since the row was written (getReplyReactors: not-found).
+            let ns = error as NSError
+            if ns.domain == FunctionsErrorDomain, ns.code == FunctionsErrorCode.notFound.rawValue {
+                gone = true
+            }
             failed = true
         }
     }
