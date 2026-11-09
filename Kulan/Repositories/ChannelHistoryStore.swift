@@ -263,23 +263,47 @@ struct ChannelHistory<Post: ChannelHistoryPost>: Codable {
 
     /// Keep the newest `n` visible posts (and the hidden ones among them). Older rows go, and the
     /// ranges are cut at the same place, so what went is a hole again, read back when needed.
+    /// The cut is at the oldest post KEPT: only posts strictly older than it go, so a post sharing
+    /// its stamp (a batch write, a forward) stays with it (audit C7: it was dropped and read back).
     @discardableResult
     mutating func bound(keepVisible n: Int, _ isVisible: (Post) -> Bool) -> Int {
         var shown = 0
-        var cut: Date?
+        var oldestKept: Date?
+        var more = false
         for p in sortedPosts.reversed() {
-            if shown >= n { cut = p.createdAt; break }
+            if shown >= n { more = true; break }
             if isVisible(p) { shown += 1 }
+            oldestKept = p.createdAt
         }
-        guard let c = cut else { return 0 }
-        let gone = posts.values.filter { $0.createdAt <= c }.map(\.id)
+        guard more, let keepFrom = oldestKept else { return 0 }
+        let gone = posts.values.filter { $0.createdAt < keepFrom }.map(\.id)
+        guard !gone.isEmpty else { return 0 }
         for id in gone {
             posts[id] = nil
             postChg[id] = nil
             unverified.remove(id)
         }
-        ranges = ranges.compactMap { r in r.hi <= c ? nil : Range(lo: max(r.lo, c), hi: r.hi) }
+        // The hole's upper edge is the kept post's own stamp: a hole read starts AT it (inclusive),
+        // so the kept rows come back harmlessly and every older one is read.
+        ranges = ranges.compactMap { r in r.hi <= keepFrom ? nil : Range(lo: max(r.lo, keepFrom), hi: r.hi) }
         return gone.count
+    }
+
+    // MARK: - Long absence
+
+    /// Hard-delete and clear records live 90 days on the server (`CHANGE_KEEP_MS`, TTL on
+    /// `expireAt`). Past this long without a server answer, records this store still needed may be
+    /// gone, so its rows can no longer be trusted by the change log alone (audit C6).
+    static var changeRecordsKeep: TimeInterval { 85 * 86_400 }
+
+    /// The last time the server answered the change listener for this store. nil: an older file,
+    /// before this was kept (treated as recent; the next answer sets it).
+    var syncedAt: Date?
+
+    /// Away so long that hard-delete records may have expired: re-verify ("too long").
+    func changeRecordsMayHaveExpired(now: Date) -> Bool {
+        guard let syncedAt else { return false }
+        return now.timeIntervalSince(syncedAt) > Self.changeRecordsKeep
     }
 }
 
@@ -295,6 +319,22 @@ final class ChannelHistoryBox<Post: ChannelHistoryPost> {
     private var saveQueued = false
     /// Set by `ChannelHistoryRegistry.removeAll`: a sign-out happened, never write again.
     fileprivate var retired = false
+    /// The screens (repositories) showing this channel now, held weakly. A held store never leaves
+    /// the registry's memory, so a second open of the same channel finds this very store instead of
+    /// building another over the same file (audit C4).
+    private let holders = NSHashTable<AnyObject>.weakObjects()
+
+    var isHeld: Bool { !holders.allObjects.isEmpty }
+
+    func hold(_ owner: AnyObject) { holders.add(owner) }
+
+    /// `owner` stops showing this channel. The last one out trims memory to what the disk keeps:
+    /// a reader who paged far back does not leave thousands of decoded posts behind (audit C4).
+    func release(_ owner: AnyObject) {
+        holders.remove(owner)
+        guard !isHeld else { return }
+        history.bound(keepVisible: diskKeep, diskVisible)
+    }
 
     init(history: ChannelHistory<Post>, url: URL, io: DispatchQueue,
          diskKeep: Int, diskVisible: @escaping (Post) -> Bool) {
@@ -480,8 +520,11 @@ final class ChannelHistoryRegistry<Post: ChannelHistoryPost> {
         boxes[k] = box
         touch(k)
         if boxes.count > memoryCap {
-            // The least recently opened one leaves memory; its file stays.
-            if let old = touched.min(by: { $0.value < $1.value })?.key, old != k {
+            // The least recently opened one leaves memory; its file stays. Never one a screen still
+            // shows (audit C4): that screen keeps writing to it, and a reopen would build a second
+            // store over the same file. Past the cap for a while is the lesser harm.
+            let free = touched.filter { $0.key != k && boxes[$0.key]?.isHeld == false }
+            if let old = free.min(by: { $0.value < $1.value })?.key {
                 boxes[old]?.saveNow()
                 boxes[old] = nil
                 touched[old] = nil
