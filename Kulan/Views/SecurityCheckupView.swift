@@ -362,7 +362,7 @@ struct SecurityCheckupSheet: View {
             .background(Color(.systemGroupedBackground))
             .safeAreaInset(edge: .bottom) {
                 Button { close() } label: {
-                    Text("Continue")
+                    Text("Done")   // owner 2026-11-09: it closes back to Devices, nothing continues
                         .font(.body.weight(.semibold))
                         .foregroundStyle(Color.onFariinAction)
                         .frame(maxWidth: .infinity, minHeight: 52)
