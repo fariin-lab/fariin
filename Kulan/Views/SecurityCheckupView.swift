@@ -105,6 +105,16 @@ final class SecurityCheckup {
     /// Those devices themselves, for the "Is this you?" page.
     private(set) var unreviewed: [DeviceSession] = []
     private var running = false
+    /// When each check's answer last landed ("passkey", "password", "devices", "chatKey"). The
+    /// sheet's scan (owner 2026-11-09) turns a row only once ITS answer from this scan is in.
+    private(set) var answered: [String: Date] = [:]
+
+    /// A real scan now, for the sheet's live check: waits for one already running, then asks again.
+    func scanNow() async {
+        if scannedUid != Auth.auth().currentUser?.uid { resetForNewAccount() }
+        while running { try? await Task.sleep(for: .milliseconds(60)) }
+        await run()
+    }
 
     func run() async {
         guard !running else { return }
@@ -127,14 +137,15 @@ final class SecurityCheckup {
         async let b = Self.checkChatKey()
         async let c = Self.checkPassword()
         async let d = Self.checkDevices()
-        let pa = await a; if usable(pa) { passkey = pa }
-        let ck = await b; if usable(ck) { chatKey = ck }
-        let pw = await c; if usable(pw) { password = pw }
+        let pa = await a; if usable(pa) { passkey = pa; answered["passkey"] = Date() }
+        let ck = await b; if usable(ck) { chatKey = ck; answered["chatKey"] = Date() }
+        let pw = await c; if usable(pw) { password = pw; answered["password"] = Date() }
         let (status, list) = await d
         // A Yes that landed while this was in flight wins over this older answer; ask again.
         if usable(status), !rerun {
             devices = status
             unreviewed = list
+            answered["devices"] = Date()
         }
         // "Checked just now" only for a scan where every answer landed and was shown.
         let clean = allLanded && !rerun
@@ -238,6 +249,21 @@ struct SecurityCheckupSheet: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var check: SecurityCheckup
     @State private var open: Item?
+    // ⛔ THE LIVE SCAN — owner 2026-11-09 ("make it like banks: tap, it scans, then shows what you
+    // did well or what is missing"), approved on the Pixel first. This REVERSES 2026-10-15's "show
+    // the latest results at once, no spinner". Every open asks the server again (`scanNow`); a row
+    // turns only when its own answer from this scan has landed. The only addition is pacing: rows
+    // at least 280 ms apart, the first at 450 ms, the whole scan at least 1.5 s.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var rowSpace
+    @State private var revealed: [String] = []     // rows on screen during the scan, in order
+    @State private var resolved: Set<String> = []  // rows whose fresh answer is in
+    @State private var finishing = false           // the ring is closing
+    @State private var ringClose: CGFloat = 0
+    @State private var ringShown = true
+    @State private var badge = false
+    @State private var settled = false             // the final grouped layout is up
+    @State private var scanned = false             // one scan per presentation
     /// ⛔ ONE SHEET, ALREADY ANSWERED — owner 2026-10-14: "it has two sheets, the loading one and the
     /// first one". It opened on four "Checking…" rows and then re-laid itself out (and resized) when
     /// the answers came. The Devices page now runs the check BEFORE presenting and hands it in here.
@@ -312,68 +338,25 @@ struct SecurityCheckupSheet: View {
             ScrollView {
                 VStack(spacing: 24) {
                     header
-                    let missing = entries.filter { $0.status == .missing }
-                    let failed = entries.filter { $0.status == .failed }
-                    let rest = entries.filter { $0.status != .missing && $0.status != .failed }
-
-                    if !missing.isEmpty {
-                        section(nil, footer: "Set these up to keep your account safe if your phone is lost or someone learns your password.") {
-                            ForEach(missing) { e in
-                                row(icon: "exclamationmark.circle", tint: .blue,
-                                    title: e.missingTitle, subtitle: e.why, action: e.open)
-                                if e.id != missing.last?.id { divider }
-                            }
-                        }
+                    if !settled {
+                        scanCard
+                    } else {
+                        settledSections
                     }
-                    if !failed.isEmpty {
-                        section("Couldn't check", footer: nil) {
-                            ForEach(failed) { e in
-                                row(icon: "exclamationmark.triangle", tint: .orange,
-                                    title: e.title, subtitle: "Check your connection and try again.",
-                                    action: { Task { await check.run() } })
-                                if e.id != failed.last?.id { divider }
-                            }
-                        }
-                    }
-                    if !rest.isEmpty {
-                        // "Everything is set up" only once nothing is still being checked.
-                        section(rest.contains { $0.status == .checking } ? "Checking your account…"
-                                : missing.isEmpty && failed.isEmpty ? "Everything is set up" : "Set up",
-                                footer: nil) {
-                            ForEach(rest) { e in
-                                if case .done(let line) = e.status {
-                                    row(icon: "checkmark.circle", tint: .green,
-                                        title: e.title, subtitle: line, action: e.open)
-                                } else {
-                                    row(icon: nil, tint: .secondary,
-                                        title: e.title, subtitle: "Checking…", action: nil)
-                                }
-                                if e.id != rest.last?.id { divider }
-                            }
-                        }
-                    }
-                    // ⛔ THE REST OF THE TOOLS — 2026-10-15: fariin.com/safety. People reading this
-                    // sheet are already thinking about their account; the page shows everything
-                    // else (requests, block, report, scams). Inside the measured content, so the
-                    // sheet's fitted height includes it.
-                    Button { if let u = URL(string: "https://fariin.com/safety") { WebLink.open(u) } } label: {
-                        Text("How Fariin keeps you safe")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Color.fariinAction)
-                    }
-                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 28)
                 .padding(.bottom, 24)
                 // Measured for the NEXT open (see `openHeight`): an open sheet never changes height.
+                // Only the settled layout is measured: it is the height the sheet must hold.
                 .background(
                     GeometryReader { g in
                         Color.clear
-                            .onAppear { Self.lastContentH = g.size.height }
-                            .onChange(of: g.size.height) { _, h in Self.lastContentH = h }
+                            .onChange(of: g.size.height) { _, h in if settled { Self.lastContentH = h } }
+                            .onChange(of: settled) { _, s in if s { Self.lastContentH = g.size.height } }
                     }
                 )
+                .frame(maxHeight: .infinity, alignment: .top)
             }
             .scrollBounceBehavior(.basedOnSize)   // it fits, so it does not wobble or show a scroll bar
             .background(Color(.systemGroupedBackground))
@@ -386,6 +369,9 @@ struct SecurityCheckupSheet: View {
                         .background(Color.fariinAction, in: Capsule())
                 }
                 .buttonStyle(.plain)
+                .disabled(!settled)
+                .opacity(settled ? 1 : 0.4)
+                .animation(.easeOut(duration: 0.2), value: settled)
                 .padding(.horizontal, 20)
                 .padding(.top, 8)
                 .padding(.bottom, 8)
@@ -393,75 +379,204 @@ struct SecurityCheckupSheet: View {
             }
             .toolbar(.hidden, for: .navigationBar)
         }
-        // ⛔ FROM THE BOTTOM, NOT THE RIGHT — owner 2026-10-14: "page is coming right side, make it
-        // coming bottom". Each setup page is its own sheet over the checkup (it used to be pushed
-        // inside it), with its own bar and an X, and its own dismiss() closes just that sheet.
-        .sheet(item: $open, onDismiss: { check.refreshIfStale() }) { item in
-            NavigationStack {
-                Group {
-                    switch item {
-                    case .passkey: PasskeysView()
-                    case .chatKey: ChatPinPage()
-                    case .password:
-                        PasswordView(address: AuthService.shared.passwordAddress ?? "",
-                                     isFirstPassword: check.password == .missing)
-                    case .devices:
-                        DeviceReviewPage(devices: check.unreviewed,
-                                         onYes: {
-                                             check.confirmDevices()
-                                             open = nil   // back to the checkup, which asks again
-                                         },
-                                         onNo: {
-                                             // The Devices page is behind the checkup: close both.
-                                             open = nil
-                                             close()
-                                         })
-                    }
-                }
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        // A plain button: the bar draws the glass circle itself. `CloseXButton`
-                        // brought a second circle of its own, so the X wore two rings (owner
-                        // 2026-10-14, "two duplicate X buttons").
-                        Button { open = nil } label: {
-                            Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
-                        }
-                    }
-                }
-            }
-            .presentationDragIndicator(.visible)
-        }
-        // ⛔ TALL ENOUGH FOR EVERYTHING — owner 2026-10-14: at 70% the last rows needed a scroll;
-        // "always show all of it". The sheet is the content's own height (rows + Continue), never
-        // taller than the screen allows. ONE height: with a second, taller stop the sheet could be
-        // dragged up and the Continue bar was left floating mid-sheet (owner's screenshot).
-        // ⛔ ONLY AS TALL AS ITS CONTENT, AND IT SLIDES UP AT THAT HEIGHT (owner 2026-10-14: "use our
-        // logic, the sheet uses enough size only", and it must come from the bottom). A full-height
-        // sheet was tried and he wants the fitted one back. The slide looked like it came from the
-        // middle when the detent changed during it; the height it presents at is the last one
-        // measured on this phone (kept across launches) and the answers are ready before it opens,
-        // so the height it opens at is the height it keeps. A real change later (a row answered
-        // differently) still follows the content.
-        // ⛔ APPLE'S OWN SHEET — owner 2026-10-15: "why does it look custom, use Apple's native one".
-        // A drawn bottom sheet (fitted AND on the edge) was tried the same morning and REJECTED. On
-        // iOS 26 Apple floats any sheet shorter than the screen; that is the native look he chose.
+        .modifier(SubSheets(open: $open, check: check, close: close))
         .presentationDetents([.height(openHeight)])
         .presentationDragIndicator(.visible)
-        // The answers are kept ready by `SecurityCheckup.shared`; opening asks nothing unless they
-        // are stale, and a refresh keeps the rows on screen until the new answers land.
-        .task { check.refreshIfStale() }
+        .task {
+            guard !scanned else { check.refreshIfStale(); return }
+            scanned = true
+            await runScan()
+        }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { check.refreshIfStale() }
+            if phase == .active, settled { check.refreshIfStale() }
         }
     }
 
+    // MARK: The scan
+
+    /// During the scan: one card, the rows in a fixed order, each sliding in and turning when its
+    /// answer lands.
+    private var scanCard: some View {
+        VStack(spacing: 0) {
+            ForEach(entries.filter { revealed.contains($0.id) }) { e in
+                scanRow(e)
+                    .matchedGeometryEffect(id: e.id, in: rowSpace)
+                    .transition(.offset(y: 8).combined(with: .opacity))
+                if e.id != revealed.last { divider }
+            }
+        }
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .opacity(revealed.isEmpty ? 0 : 1)
+    }
+
+    @ViewBuilder private func scanRow(_ e: Entry) -> some View {
+        if resolved.contains(e.id) {
+            switch e.status {
+            case .done(let line):
+                row(icon: "checkmark.circle", tint: .green, title: e.title, subtitle: line, action: nil, popIn: true)
+            case .missing:
+                row(icon: "exclamationmark.circle", tint: .blue, title: e.missingTitle, subtitle: e.why, action: nil, popIn: true)
+            case .failed:
+                row(icon: "exclamationmark.triangle", tint: .orange, title: e.title, subtitle: "Couldn't check", action: nil, popIn: true)
+            case .checking:
+                row(icon: nil, tint: .secondary, title: e.title, subtitle: "Checking…", action: nil)
+            }
+        } else {
+            row(icon: nil, tint: .secondary, title: e.title, subtitle: "Checking…", action: nil)
+        }
+    }
+
+    private var allGood: Bool { !entries.contains { $0.status == .missing || $0.status == .failed } }
+
+    private var resultLine: String {
+        let n = entries.filter { $0.status == .missing }.count
+        if n == 0 { return entries.contains { $0.status == .failed } ? "Couldn't check everything" : "Everything is set up" }
+        return n == 1 ? "1 thing to set up" : "\(n) things to set up"
+    }
+
+    private func sleep(until t: Date) async {
+        let s = t.timeIntervalSinceNow
+        if s > 0 { try? await Task.sleep(for: .milliseconds(Int(s * 1000))) }
+    }
+
+    @MainActor private func runScan() async {
+        let order = entries.map(\.id)
+        if reduceMotion {
+            await check.scanNow()
+            revealed = order; resolved = Set(order)
+            UINotificationFeedbackGenerator().notificationOccurred(allGood ? .success : .warning)
+            ringShown = false; badge = allGood; finishing = true; settled = true
+            return
+        }
+        let start = Date()
+        Task { await check.scanNow() }
+        var last = start
+        for (i, id) in order.enumerated() {
+            await sleep(until: (i == 0 ? start.addingTimeInterval(0.45) : last.addingTimeInterval(0.28)))
+            withAnimation(.easeOut(duration: 0.22)) { revealed.append(id) }
+            // Its own answer from THIS scan (12 s at most; then the row shows what the check holds).
+            while (check.answered[id] ?? .distantPast) < start, Date().timeIntervalSince(start) < 12 {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { _ = resolved.insert(id) }
+            switch entries.first(where: { $0.id == id })?.status {
+            case .done?: UISelectionFeedbackGenerator().selectionChanged()          // a light tick
+            case .missing?: UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.55)
+            default: UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            }
+            last = Date()
+        }
+        await sleep(until: start.addingTimeInterval(1.5))
+        finishing = true
+        withAnimation(.easeInOut(duration: 0.25)) { ringClose = 1 }
+        UINotificationFeedbackGenerator().notificationOccurred(allGood ? .success : .warning)
+        try? await Task.sleep(for: .milliseconds(250))
+        withAnimation(.easeOut(duration: 0.2)) { ringShown = false }
+        if allGood { withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { badge = true } }
+        try? await Task.sleep(for: .milliseconds(300))
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.86)) { settled = true }
+    }
+
+    // MARK: Settled
+
+    @ViewBuilder private var settledSections: some View {
+        let missing = entries.filter { $0.status == .missing }
+        let failed = entries.filter { $0.status == .failed }
+        let rest = entries.filter { $0.status != .missing && $0.status != .failed }
+        // Only the groups that have rows (owner 2026-11-09): all set up means no "Set these up" card.
+        if !missing.isEmpty {
+            section(nil, footer: "Set these up to keep your account safe if your phone is lost or someone learns your password.") {
+                ForEach(missing) { e in
+                    row(icon: "exclamationmark.circle", tint: .blue,
+                        title: e.missingTitle, subtitle: e.why, action: e.open)
+                        .matchedGeometryEffect(id: e.id, in: rowSpace)
+                    if e.id != missing.last?.id { divider }
+                }
+            }
+        }
+        if !failed.isEmpty {
+            section("Couldn't check", footer: nil) {
+                ForEach(failed) { e in
+                    row(icon: "exclamationmark.triangle", tint: .orange,
+                        title: e.title, subtitle: "Check your connection and try again.",
+                        action: { Task { await check.run() } })
+                        .matchedGeometryEffect(id: e.id, in: rowSpace)
+                    if e.id != failed.last?.id { divider }
+                }
+            }
+        }
+        if !rest.isEmpty {
+            section(rest.contains { $0.status == .checking } ? "Checking your account…"
+                    : missing.isEmpty && failed.isEmpty ? "Everything is set up" : "Set up",
+                    footer: nil) {
+                ForEach(rest) { e in
+                    Group {
+                        if case .done(let line) = e.status {
+                            row(icon: "checkmark.circle", tint: .green,
+                                title: e.title, subtitle: line, action: e.open)
+                        } else {
+                            row(icon: nil, tint: .secondary,
+                                title: e.title, subtitle: "Checking…", action: nil)
+                        }
+                    }
+                    .matchedGeometryEffect(id: e.id, in: rowSpace)
+                    if e.id != rest.last?.id { divider }
+                }
+            }
+        }
+        // ⛔ THE REST OF THE TOOLS — 2026-10-15: fariin.com/safety. People reading this sheet are
+        // already thinking about their account; the page shows everything else (requests, block,
+        // report, scams). Inside the measured content, so the sheet's fitted height includes it.
+        Button { if let u = URL(string: "https://fariin.com/safety") { WebLink.open(u) } } label: {
+            Text("How Fariin keeps you safe")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.fariinAction)
+        }
+        .buttonStyle(.plain)
+        .transition(.opacity)
+    }
+
+    /// The photo with the scan ring: an arc running round it while the checks run, closing into a
+    /// full ring at the end and fading; a small tick badge when everything is fine.
     private var header: some View {
         VStack(spacing: 10) {
-            AvatarView(name: profile.me?.name ?? "", photoUrl: profile.me?.photoUrl, size: 96)
+            ZStack {
+                AvatarView(name: profile.me?.name ?? "", photoUrl: profile.me?.photoUrl, size: 96)
+                if ringShown && !reduceMotion {
+                    if finishing {
+                        Circle().trim(from: 0, to: 0.28 + 0.72 * ringClose)
+                            .stroke(Color.fariinAction, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                            .frame(width: 106, height: 106)
+                    } else {
+                        SpinningArc(color: UIColor(Color.fariinAction), lineWidth: 3, fraction: 0.28, period: 0.9)
+                            .frame(width: 106, height: 106)
+                    }
+                }
+            }
+            .frame(width: 108, height: 108)
+            .overlay(alignment: .bottomTrailing) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 26))
+                    .foregroundStyle(Color.onFariinAction, Color.fariinAction)
+                    .background(Circle().fill(Color(.systemGroupedBackground)).padding(-2))
+                    .scaleEffect(badge ? 1 : 0.6)
+                    .opacity(badge ? 1 : 0)
+                    .offset(x: -4, y: -4)
+            }
             Text("Security Checkup").font(.title2.weight(.bold))
-            Text(checkedLine)
-                .font(.subheadline).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            Text(finishing ? resultLine : "Checking your account…")
+                .font(.subheadline.weight(finishing ? .semibold : .regular))
+                .foregroundStyle(finishing ? Color.primary : Color.secondary)
+                .contentTransition(.opacity)
+                .animation(.easeInOut(duration: 0.2), value: finishing)
+            if finishing {
+                Text(checkedLine)
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .transition(.opacity)
+            }
         }
         .frame(maxWidth: .infinity)
     }
@@ -494,14 +609,16 @@ struct SecurityCheckupSheet: View {
     }
 
     private func row(icon: String?, tint: Color, title: String, subtitle: String,
-                     action: (() -> Void)?) -> some View {
+                     action: (() -> Void)?, popIn: Bool = false) -> some View {
         Button { action?() } label: {
             HStack(spacing: 14) {
                 Group {
                     if let icon {
                         Image(systemName: icon).font(.system(size: 22, weight: .regular)).foregroundStyle(tint)
+                            // The scan's spinner turning into the answer (owner 2026-11-09).
+                            .transition(popIn ? .scale(scale: 0.6).combined(with: .opacity) : .identity)
                     } else {
-                        ProgressView()
+                        ProgressView().transition(.opacity)
                     }
                 }
                 .frame(width: 26)
@@ -522,6 +639,50 @@ struct SecurityCheckupSheet: View {
         }
         .buttonStyle(.plain)
         .disabled(action == nil)
+    }
+}
+
+/// Each setup page as its own sheet over the checkup, with an X (owner 2026-10-14: "make it coming
+/// bottom"). Moved out of the checkup's body unchanged when the live scan arrived (2026-11-09).
+private struct SubSheets: ViewModifier {
+    @Binding var open: SecurityCheckupSheet.Item?
+    let check: SecurityCheckup
+    let close: () -> Void
+
+    func body(content: Content) -> some View {
+        content.sheet(item: $open, onDismiss: { check.refreshIfStale() }) { item in
+            NavigationStack {
+                Group {
+                    switch item {
+                    case .passkey: PasskeysView()
+                    case .chatKey: ChatPinPage()
+                    case .password:
+                        PasswordView(address: AuthService.shared.passwordAddress ?? "",
+                                     isFirstPassword: check.password == .missing)
+                    case .devices:
+                        DeviceReviewPage(devices: check.unreviewed,
+                                         onYes: {
+                                             check.confirmDevices()
+                                             open = nil   // back to the checkup, which asks again
+                                         },
+                                         onNo: {
+                                             // The Devices page is behind the checkup: close both.
+                                             open = nil
+                                             close()
+                                         })
+                    }
+                }
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        // A plain button: the bar draws the glass circle itself (one ring, not two).
+                        Button { open = nil } label: {
+                            Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
+                        }
+                    }
+                }
+            }
+            .presentationDragIndicator(.visible)
+        }
     }
 }
 
