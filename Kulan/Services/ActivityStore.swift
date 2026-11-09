@@ -7,7 +7,7 @@ import FirebaseFunctions
 /// One row of the Activity page: someone answered or reacted to one of my comments on a channel post.
 /// Written only by the server (`users/{me}/activity/{id}`); see fariin-activity/SPEC.md.
 struct ActivityItem: Identifiable, Equatable {
-    enum Kind: String { case reply, react, quote, comment }
+    enum Kind: String { case reply, react, quote, comment, mention }
     /// A place in a post's Replies: the thread id and the answer id ("" = the thread itself).
     struct Ref: Equatable {
         var rid = ""
@@ -57,7 +57,7 @@ struct ActivityItem: Identifiable, Equatable {
     var mineIsAnswer: Bool { !mine.aid.isEmpty && mine.aid != mine.rid }
 
     /// The comment the tap should land on: their reply, or mine for a reaction.
-    var target: Ref { kind == .reply || kind == .comment ? newRef : mine }
+    var target: Ref { kind == .reply || kind == .comment || kind == .mention ? newRef : mine }
 
     init?(id: String, data d: [String: Any]) {
         guard let k = Kind(rawValue: d["kind"] as? String ?? "") else { return nil }
@@ -129,6 +129,9 @@ struct ActivitySummary: Equatable {
         let name = lastName.isEmpty ? "Someone" : lastName
         if lastKind == "comment" {
             return lastText.isEmpty ? "\(name) commented on your post" : "\(name) commented: \(lastText)"
+        }
+        if lastKind == "mention" {
+            return lastText.isEmpty ? "\(name) mentioned you" : "\(name) mentioned you: \(lastText)"
         }
         if lastKind == "quote" {
             return lastText.isEmpty ? "\(name) quoted your post" : "\(name) quoted your post: \(lastText)"

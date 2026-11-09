@@ -131,7 +131,12 @@ struct ActivityRowView: View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 1) {
                     titleLine
-                    if item.kind == .comment {
+                    if item.kind == .mention {
+                        // Their words with each @handle in the accent colour, then where.
+                        Text(mentionWords).font(.system(size: 15)).foregroundStyle(.primary).lineLimit(1)
+                        Text("In \(channel)" + (item.post.isEmpty ? "" : " · On the post: \(item.post)"))
+                            .font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(1)
+                    } else if item.kind == .comment {
                         // Owner 2026-11-09: comments on my channel's post, one row per post.
                         Text(item.text.isEmpty ? " " : item.text)
                             .font(.system(size: 15)).foregroundStyle(.primary).lineLimit(1)
@@ -181,9 +186,10 @@ struct ActivityRowView: View {
     /// "Nan in VE3", "Nan reacted", "Nan and 3 others reacted"; the time sits on the right, or in
     /// this line after a dot when the post's picture takes the right edge.
     private var titleLine: some View {
-        var rest = item.kind == .reply ? " in \(channel)"
+        var rest: String = item.kind == .reply ? " in \(channel)"
             : item.kind == .quote ? " quoted your post"
-            : item.kind == .comment ? (item.others > 0 ? " commented" : " commented in \(channel)") : ""
+            : item.kind == .comment ? (item.others > 0 ? " commented" : " commented in \(channel)")
+            : item.kind == .mention ? " mentioned you" : ""
         if hasThumb && item.kind != .react { rest += " · " + ActivityTime.age(item.at) }
         return HStack(spacing: 8) {
             (Text(who).font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
@@ -236,7 +242,16 @@ struct ActivityRowView: View {
 
     /// Reply: the channel's own squircle. React: the latest emoji in a small circle.
     @ViewBuilder private var badge: some View {
-        if item.kind == .quote {
+        if item.kind == .mention {
+            Text("@")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 24, height: 24)
+                .background(Color(.systemGray4), in: Circle())
+                .padding(2)
+                .background(Color(.systemBackground), in: Circle())
+                .offset(x: 5, y: 5)
+        } else if item.kind == .quote {
             // The app's own quote marks (ic_quote), the badge the approved design drew.
             Image("ic_quote").renderingMode(.template).resizable().scaledToFit()
                 .frame(width: 12, height: 12)
@@ -261,6 +276,21 @@ struct ActivityRowView: View {
                 .background(Color(.systemBackground), in: Circle())
                 .offset(x: 6, y: 6)
         }
+    }
+
+    /// A mention's words with every "@handle" in the accent colour.
+    private var mentionWords: AttributedString {
+        var out = AttributedString()
+        var rest = Substring(item.text.isEmpty ? " " : item.text)
+        while let r = rest.range(of: "@[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)*", options: .regularExpression) {
+            out += AttributedString(String(rest[rest.startIndex..<r.lowerBound]))
+            var handle = AttributedString(String(rest[r]))
+            handle.foregroundColor = Color.accentColor
+            out += handle
+            rest = rest[r.upperBound...]
+        }
+        out += AttributedString(String(rest))
+        return out
     }
 
     /// Up to three counts, most used first, in the Replies sheet's reaction-pill look.
