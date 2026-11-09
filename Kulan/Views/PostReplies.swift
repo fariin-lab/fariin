@@ -175,9 +175,14 @@ struct ReplyEdit: Equatable {
     private func setServerCount(_ n: Int) {
         serverCount = max(0, n)
         if myDelta != 0 {
+            // The server catching up on PART of my changes takes that part off what I still add
+            // (5-pass check 2026-11-09: two sends, the server at +1, showed one too many for 90 s).
             let moved = serverCount - myDeltaBase
+            let absorbed = myDelta > 0 ? min(max(moved, 0), myDelta) : max(min(moved, 0), myDelta)
+            myDelta -= absorbed
+            myDeltaBase = serverCount
             let stale = myDeltaAt.map { Date().timeIntervalSince($0) > 90 } ?? true
-            if stale || (myDelta > 0 ? moved >= myDelta : moved <= myDelta) { myDelta = 0; myDeltaAt = nil }
+            if stale || myDelta == 0 { myDelta = 0; myDeltaAt = nil }
         }
         count = max(0, serverCount + myDelta)
     }
@@ -532,18 +537,13 @@ struct ReplyEdit: Equatable {
             let now = Date()
             let keepMine: (PostReply) -> Bool = { r in
                 r.send != .sent || self.recentMine[r.id].map { now.timeIntervalSince($0) < 8 } == true }
-            // Gone (deleted here or elsewhere, held after reports, banned): when page one is the whole
-            // list, any row not on it. Otherwise a row that was on page one and is not now, while a
-            // row that stood below it still is; at the page's tail a missing row may only have been
-            // pushed down to page two by one that rose, so it stays.
+            // Gone (deleted here or elsewhere, held after reports, banned): only when page one is the
+            // whole list, any row not on it. With more pages a missing row may just have been pushed
+            // to page two (Top order moves as others gain reactions, and a row below it can rise past
+            // it), so it stays until the sheet reopens (5-pass check 2026-11-09).
             var gone = Set<String>()
             if wholeList {
                 gone = Set(threads.map(\.id)).subtracting(newIds)
-            } else {
-                var belowStays = false
-                for id in lastTopPageIds.reversed() {
-                    if newIds.contains(id) { belowStays = true } else if belowStays { gone.insert(id) }
-                }
             }
             var list = threads.filter { r in newIds.contains(r.id) || keepMine(r) || !gone.contains(r.id) }
             // Only replies newer than any held are new; one rising into page one from a page not
@@ -574,7 +574,7 @@ struct ReplyEdit: Equatable {
         let keepMine: (PostReply) -> Bool = { $0.send != .sent || self.recentMine[$0.id] != nil }
         guard let oldestShown = page.first?.at else {
             // Nothing visible on the newest page: only rows newer than what that page covered can go.
-            if next.isEmpty { threads.removeAll { !keepMine($0) }; heldBack = [] }
+            if next.isEmpty { threads.removeAll { !keepMine($0) }; unseenNew = max(0, unseenNew - heldBack.count); heldBack = [] }
             applyPinned(d)   // a pin or unpin still lands when the newest page is empty
             dropStaleAnswers(page)
             return
@@ -585,11 +585,15 @@ struct ReplyEdit: Equatable {
         var list: [PostReply]
         if overlaps {
             list = threads.filter { keepMine($0) || ids.contains($0.id) || ($0.at < oldestShown && !standIns.contains($0.id)) }
+            let heldBefore = heldBack.count
             heldBack.removeAll { !ids.contains($0.id) }   // deleted before it was shown
+            unseenNew = max(0, unseenNew - (heldBefore - heldBack.count))   // the pill counts only what is left
         } else {
             // More arrived than one page: start again from this page, older ones load on scroll.
+            // The held ones come back through the page below and are counted there again.
             list = threads.filter(keepMine)
             olderCursor = next
+            unseenNew = max(0, unseenNew - heldBack.count)
             heldBack = []
         }
         standIns = []

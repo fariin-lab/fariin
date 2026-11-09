@@ -514,6 +514,8 @@ enum OpenGate {
             do {
                 let snap = try await conv.getDocument()
                 guard snap.exists else { return .chatGone }
+                // A deleted channel keeps its doc, archived (server grouparchive): gone, not refused.
+                if snap.data()?["archivedAt"] != nil { return .chatGone }
                 guard let users = snap.data()?["users"] as? [String] else { return .refused }
                 // A public channel opens for anyone (2026-11-06 audit: a reply alert to someone who
                 // replied without following was dropped).
