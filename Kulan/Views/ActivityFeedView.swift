@@ -15,6 +15,8 @@ struct ActivityFeedView: View {
     /// Items that were unread when the page opened: what the Unread chip shows. Taken once.
     @State private var unreadAtOpen: Set<String> = []
     @State private var tookSnapshot = false
+    /// The page is the one on screen (not under a channel opened from a row).
+    @State private var visible = false
     /// A reaction row with more than one person: who reacted, as a sheet (owner 2026-11-09, design 3).
     @State private var reactors: ActivityItem?
 
@@ -34,7 +36,18 @@ struct ActivityFeedView: View {
             }
             .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 6)
 
-            if store.loaded && shown.isEmpty {
+            if store.failed && store.items.isEmpty {
+                // The listener ended with an error (audit A20): say so, with a way back.
+                Spacer()
+                VStack(spacing: 6) {
+                    Text("Couldn't load activity").font(.system(size: 15, weight: .semibold))
+                    Text("Check your connection and try again.").font(.system(size: 13)).foregroundStyle(.secondary)
+                    Button("Try Again") { store.retry() }
+                        .font(.system(size: 15, weight: .semibold)).padding(.top, 8)
+                }
+                .padding(.bottom, 80)
+                Spacer()
+            } else if store.loaded && shown.isEmpty {
                 Spacer()
                 Text(chipFilter == .all ? "No activity yet" : "Nothing unread")
                     .font(.subheadline).foregroundStyle(.secondary)
@@ -48,6 +61,8 @@ struct ActivityFeedView: View {
                                 if item.kind == .react && item.others > 0 { reactors = item } else { store.open(item) }
                             } label: { ActivityRowView(item: item) }
                                 .buttonStyle(ActivityRowPress())
+                                // Older items, a page at a time (audit A20).
+                                .onAppear { if item.id == shown.last?.id { store.loadMore() } }
                         }
                     }
                 }
@@ -77,8 +92,25 @@ struct ActivityFeedView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { store.open(item) }
             }
         }
-        .onAppear { takeSnapshotIfReady() }
+        .onAppear {
+            visible = true
+            let back = tookSnapshot   // a return to the page, not its first open
+            takeSnapshotIfReady()
+            if back { markNewRead() }
+        }
+        .onDisappear { visible = false }
         .onChange(of: store.loaded) { _, _ in takeSnapshotIfReady() }
+        // Items that arrive while the page is on screen are seen too.
+        .onChange(of: store.summary?.unread ?? 0) { _, _ in markNewRead() }
+    }
+
+    /// ⛔ COMING BACK, OR SITTING HERE, READS WHAT IS NEW (audit X13). The snapshot is taken once
+    /// per page, so items that came in while a channel opened from a row was on top stayed unread,
+    /// and the chat-list row had its badge again after Back. The Unread chip keeps the snapshot.
+    private func markNewRead() {
+        guard visible, tookSnapshot, (store.summary?.unread ?? 0) > 0 || store.items.contains(where: { !$0.read })
+        else { return }
+        Task { await store.markAllRead() }
     }
 
     /// Remembers what was unread, then marks everything read (the chat-list row goes away).

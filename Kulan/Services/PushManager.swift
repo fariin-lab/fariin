@@ -287,6 +287,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
             await MainActor.run { InAppBannerCenter.shared.showNudge(shown) }
             return [.sound]
         }
+        // ⛔ A REPLY ALERT (answer, mention, reaction, quote) IS NOT A CHAT MESSAGE (audit X5). It was
+        // hidden whenever its channel was on screen, though the reply sits in a sheet that is not; and
+        // otherwise it drew our chat banner, with the channel's last message as its words and a tap
+        // that opened the channel only. It takes the system banner: the server's own words, and a tap
+        // that goes through `didReceive` to the post's Replies at the comment. The in-app toggles and
+        // the screen-capture rule below apply to it too.
+        if Self.isReplyAlert(content.userInfo) {
+            let d = UserDefaults.standard
+            let captured = await MainActor.run { UIScreen.main.isCaptured }
+            let preview = !captured && (d.object(forKey: "notif.inAppPreview") as? Bool ?? true)
+            var opts: UNNotificationPresentationOptions = [.list]
+            if preview { opts.insert(.banner) }
+            if d.object(forKey: "notif.inAppSound") as? Bool ?? true { opts.insert(.sound) }
+            return opts
+        }
         let cid = content.userInfo["cid"] as? String
         if let cid, cid == AppRouter.shared.activeChatId { return [] }
         // A CHAT notification gets OUR banner, not the system one. The iOS drop-down reads as
@@ -363,27 +378,72 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         }
         // A cid becomes a Firestore document id in ThreadView, where an empty or slashed one raises
         // an uncatchable exception (audit, 2026-09-24). Our own pushes never carry one; refuse it anyway.
-        if let cid = response.notification.request.content.userInfo["cid"] as? String,
-           !cid.isEmpty, !cid.contains("/"),
-           await Self.mayOpenFromPush(cid) {
+        let tapInfo = response.notification.request.content.userInfo
+        // The Activity item this alert is about (audit A13): read once tapped, as a tap on its
+        // Activity row would be. Sent by the server as `act` ("r_<aid>", "x_<rid>_<aid>", ...).
+        if let act = tapInfo["act"] as? String, !act.isEmpty, !act.contains("/"), Self.isReplyAlert(tapInfo) {
+            Task { @MainActor in await ActivityStore.shared.markRead(ids: [act]) }
+        }
+        // A quote of my post made in a public channel (audit X6): the push lands where the Activity
+        // row for the same quote does, the quoting message in that channel. `wcid`/`wmid` are sent
+        // only for a public channel, like the row's `where`.
+        if tapInfo["kind"] as? String == "postQuote",
+           let wcid = tapInfo["wcid"] as? String, let wmid = tapInfo["wmid"] as? String,
+           !wcid.isEmpty, !wcid.contains("/"), !wmid.isEmpty, !wmid.contains("/") {
+            let gate = await OpenGate.check(cid: wcid, mid: wmid)
+            let wtitle = tapInfo["wtitle"] as? String ?? ""
+            await MainActor.run {
+                let r = AppRouter.shared
+                r.pendingRepliesPost = nil
+                r.pendingReplyTarget = nil
+                switch gate {
+                case .open:
+                    r.pendingOpenMid = r.activeChatId == wcid ? nil : (wcid, wmid, Date())
+                    r.pendingChatName = wtitle.isEmpty ? nil : wtitle
+                    r.pendingChatId = wcid
+                case .postGone:
+                    // The quoting message was deleted: the channel opens at its newest, and says so.
+                    r.pendingOpenMid = nil
+                    r.pendingChatId = wcid
+                    ToastNotice.show("This message was deleted")
+                case .chatGone, .refused:
+                    let note = OpenGate.notice(gate)
+                    if !note.isEmpty { ToastNotice.show(note) }
+                }
+            }
+            return
+        }
+        if let cid = tapInfo["cid"] as? String,
+           !cid.isEmpty, !cid.contains("/") {
             // A reply alert (owner 2026-11-06): the channel opens, then that post's Replies.
-            let info = response.notification.request.content.userInfo
+            let info = tapInfo
             let mid = info["mid"] as? String ?? ""
             let rid = info["rid"] as? String ?? ""
-            // A push with a reply id is a reply alert too, whatever its kind says.
             let kind = info["kind"] as? String ?? ""
-            // A reaction to my comment (2026-11-09, the server sends kind "replyReact") opens the same way, at my comment.
-            let isReply = kind == "postReplies" || kind == "replyAnswer" || kind == "postMention" || kind == "replyReact" || kind == "react" || kind == "postQuote" || !rid.isEmpty
+            let isReply = Self.isReplyAlert(info)
+            // ⛔ A REPLY ALERT ABOUT A POST THAT IS GONE (audit X1/X9): the channel opens without the
+            // sheet, and says the post was deleted, instead of a sheet saying "Couldn't load replies".
+            let postValid = isReply && !mid.isEmpty && !mid.contains("/")
+            let gate = await OpenGate.check(cid: cid, mid: postValid ? mid : nil)
+            guard gate == .open || gate == .postGone else {
+                let note = OpenGate.notice(gate)
+                if isReply, !note.isEmpty { await MainActor.run { ToastNotice.show(note) } }
+                return
+            }
             // On a reply alert `aid` is the answer, when the alert is about one.
             let aid = (info["aid"] as? String).flatMap { $0.isEmpty || $0.contains("/") ? nil : $0 }
             await MainActor.run {
-                // Not when that channel is already on screen: it would not re-open, and the Replies
-                // would pop up later by surprise the next time it does (2026-11-06 audit).
-                if isReply, !mid.isEmpty, !mid.contains("/"),
-                   AppRouter.shared.activeChatId != cid {
-                    AppRouter.shared.pendingRepliesPost = (cid, mid, Date())
+                if gate == .postGone { ToastNotice.show(OpenGate.notice(gate)) }
+                if postValid, gate == .open {
+                    // A quote opens the post's sheet on its Quotes tab (audit A14/X6).
+                    AppRouter.shared.pendingRepliesPost = (cid, mid, Date(), kind == "postQuote")
                     // Then that comment, its thread open (an older server sends no rid: the top).
                     AppRouter.shared.pendingReplyTarget = rid.isEmpty || rid.contains("/") ? nil : (mid, rid, aid, Date())
+                    // ⛔ THE CHANNEL ALREADY ON SCREEN (audit X5): it will not appear again to spend
+                    // the intent, so it is told to now. It opens the sheet (closing any other first).
+                    if AppRouter.shared.activeChatId == cid {
+                        NotificationCenter.default.post(name: .openPendingReplies, object: nil)
+                    }
                 } else {
                     AppRouter.shared.pendingRepliesPost = nil   // any other alert replaces an older one
                     AppRouter.shared.pendingReplyTarget = nil
@@ -402,35 +462,87 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         }
     }
 
-    /// 2026-09-24 audit: a notification can outlive its account. Sign out of A, sign in as B, tap A's
-    /// banner, and B was pushed onto a chat it is not in (a blank screen the rules refuse to fill).
-    /// A chat already in this account's list is fine; otherwise ask the server, and drop the tap
-    /// only when it says no (refused, missing, or not a member). Offline or any other error still
-    /// opens, because a real chat the list has not loaded yet must not become a dead tap.
-    private static func mayOpenFromPush(_ cid: String) async -> Bool {
-        guard let me = Auth.auth().currentUser?.uid else { return false }
+    /// A reply alert: an answer, a mention, a reaction or a quote about a channel post (they open
+    /// that post's Replies), not a message alert. A push with a reply id is one whatever its kind.
+    /// A reaction to my comment (2026-11-09) comes as kind "replyReact".
+    static func isReplyAlert(_ info: [AnyHashable: Any]) -> Bool {
+        let kind = info["kind"] as? String ?? ""
+        let rid = info["rid"] as? String ?? ""
+        return ["postReplies", "replyAnswer", "postMention", "replyReact", "react", "postQuote"].contains(kind) || !rid.isEmpty
+    }
+}
+
+/// ⛔ MAY THIS CHAT (AND THIS POST IN IT) BE OPENED? One gate for a notification tap and an Activity
+/// row tap (audit X1/A5: a row about a deleted post or channel opened a channel, then a sheet that
+/// said "Couldn't load replies" and "This reply was deleted"; a deleted channel pushed a blank chat).
+/// 2026-09-24 audit: a notification can also outlive its account (sign out of A, sign in as B, tap
+/// A's banner, and B was pushed onto a chat it is not in). A chat already in this account's list is
+/// fine; otherwise the server is asked. Only a definite answer refuses: offline or any other error
+/// still opens, because a real chat the list has not loaded yet must not become a dead tap.
+enum OpenGate {
+    enum Result: Equatable {
+        case open
+        /// Not this account's to open (not a member of a private chat, banned, refused by the rules).
+        case refused
+        /// The chat is no longer there.
+        case chatGone
+        /// The chat is there; the post is not (deleted, or never was).
+        case postGone
+    }
+
+    /// The message to show for a refusal, "" for none.
+    static func notice(_ r: Result) -> String {
+        switch r {
+        case .open, .refused: return ""
+        case .chatGone: return "This channel is no longer available"
+        case .postGone: return "This post was deleted"
+        }
+    }
+
+    static func check(cid: String, mid: String?) async -> Result {
+        guard let me = Auth.auth().currentUser?.uid else { return .refused }
         // ⛔ THE OFFICIAL CHAT HAS NO CONVERSATION DOCUMENT (2026-09-28). It is built on the phone
         // from the announcements, so it is never in the chat list's repository and never at
         // `conversations/official-fariin`, and the checks below dropped every tap on its banner.
         // Every signed-in account has it; there is no one it could be the wrong chat for.
-        if cid == OfficialChannel.cid { return true }
+        if cid == OfficialChannel.cid { return .open }
+        let conv = FirestoreHub.db.collection("conversations").document(cid)
         // A channel I follow is not in the chat repository (2026-11-06: reply alerts go to followers).
         let known = await MainActor.run { ConversationsRepository.shared.conversations.contains { $0.id == cid }
             || ChannelFollows.shared.conversations.contains { $0.id == cid } }
-        if known { return true }
-        do {
-            let snap = try await FirestoreHub.db.collection("conversations").document(cid).getDocument()
-            guard snap.exists, let users = snap.data()?["users"] as? [String] else { return false }
-            // A public channel opens for anyone (2026-11-06 audit: a reply alert to someone who replied
-            // without following was dropped).
-            if snap.data()?["channel"] as? Bool == true, snap.data()?["isPublic"] as? Bool == true { return true }
-            return users.contains(me)
-        } catch {
-            // 7 = permissionDenied, by wire number (see StoriesService on why not the SDK enum).
-            let ns = error as NSError
-            return !(ns.domain == FirestoreErrorDomain && ns.code == 7)
+        if !known {
+            do {
+                let snap = try await conv.getDocument()
+                guard snap.exists else { return .chatGone }
+                guard let users = snap.data()?["users"] as? [String] else { return .refused }
+                // A public channel opens for anyone (2026-11-06 audit: a reply alert to someone who
+                // replied without following was dropped).
+                let publicChannel = snap.data()?["channel"] as? Bool == true && snap.data()?["isPublic"] as? Bool == true
+                if !publicChannel, !users.contains(me) { return .refused }
+            } catch {
+                // 7 = permissionDenied, by wire number (see StoriesService on why not the SDK enum).
+                let ns = error as NSError
+                return ns.domain == FirestoreErrorDomain && ns.code == 7 ? .refused : .open
+            }
         }
+        // The post: gone when its document is missing or is a tombstone. A read that fails (offline,
+        // refused) does not decide anything; the chat opens and says what it can.
+        if let mid, !mid.isEmpty, !mid.contains("/") {
+            if let m = try? await conv.collection("messages").document(mid).getDocument(),
+               m.metadata.isFromCache == false,
+               !m.exists || m.data()?["deleted"] as? Bool == true {
+                return .postGone
+            }
+        }
+        return .open
     }
+}
+
+extension Notification.Name {
+    /// A reply alert was tapped for the channel already on screen: that channel's `ThreadView`
+    /// spends `AppRouter.pendingRepliesPost` / `pendingReplyTarget` now (audit X5), since it will not
+    /// appear again to do it on its own.
+    static let openPendingReplies = Notification.Name("AppRouter.openPendingReplies")
 }
 
 // App-wide navigation intents (deep links) + which chat is on screen.
@@ -477,7 +589,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     var pendingMessageId: String?
     /// A reply alert tapped: open this post's Replies once its channel is on screen.
     /// `at` lets a stale one (its channel never opened) be ignored later (2026-11-06 verify pass).
-    var pendingRepliesPost: (cid: String, mid: String, at: Date)?
+    /// `quotes`: the sheet opens on its Quotes tab (a "quoted your post" alert or Activity row, audit A14).
+    var pendingRepliesPost: (cid: String, mid: String, at: Date, quotes: Bool)?
     /// The comment a reply alert was about (thread `rid`, answer `aid`): once that post's Replies are
     /// open, the sheet scrolls to it with its thread open and flashes it. Spent by `PostThreadSheet`.
     var pendingReplyTarget: (mid: String, rid: String, aid: String?, at: Date)?

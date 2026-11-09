@@ -107,6 +107,8 @@ struct ActivityItem: Identifiable, Equatable {
 /// `users/{me}/activityMeta/summary`: what the chat list's Activity row shows.
 struct ActivitySummary: Equatable {
     var unread: Int
+    /// The item `last` was copied from ("" from an older server).
+    var lastId: String
     var lastKind: String
     var lastName: String
     var lastText: String
@@ -117,6 +119,7 @@ struct ActivitySummary: Equatable {
     init(data d: [String: Any]) {
         unread = max(0, (d["unread"] as? NSNumber)?.intValue ?? 0)
         let l = d["last"] as? [String: Any] ?? [:]
+        lastId = l["id"] as? String ?? ""
         lastKind = l["kind"] as? String ?? ""
         lastName = l["n"] as? String ?? ""
         lastText = l["text"] as? String ?? ""
@@ -156,32 +159,76 @@ final class ActivityStore {
 
     private(set) var summary: ActivitySummary?
     private(set) var items: [ActivityItem] = []
-    /// The first answer for the items has come in.
+    /// The first answer for the items has come in (or the listener failed: `failed`).
     private(set) var loaded = false
+    /// The items listener ended with an error (audit A20): the page says so and offers Try Again
+    /// instead of showing only its chips.
+    private(set) var failed = false
 
     @ObservationIgnored private var summaryListener: ListenerRegistration?
     @ObservationIgnored private var listListener: ListenerRegistration?
     @ObservationIgnored private var uid: String?
+    /// How many of the newest items the listener holds; grows a page at a time as the page is
+    /// scrolled to its end (`loadMore`).
+    @ObservationIgnored private var limit = ActivityStore.pageSize
+    private nonisolated static let pageSize = 100
+    /// The limit the items now in `items` were read under (a larger `limit` is on its way after `loadMore`).
+    @ObservationIgnored private var itemsLimit = ActivityStore.pageSize
 
     private init() {}
 
     /// The chat list's Activity row (owner 2026-11-09): there whenever I have any activity at all,
     /// like a chat, with its badge only while something is unread. nil = no activity, no row.
+    ///
+    /// ⛔ THE ROW FOLLOWS THE ITEMS THIS PHONE CAN SEE (audit A2/A3/A19/X7/X10/X11). The server's
+    /// summary can name an item that is gone (expired after 30 days, a quote taken back, a deleted
+    /// post) and count unread that no longer exists, and it counts people I blocked after they
+    /// acted. When the whole list is here (fewer items than the listener holds) the row is worked
+    /// out from the items alone: newest visible item, unread visible items, no row when none. With a
+    /// longer list the summary stands, minus the unread from blocked people, and a `last` naming a
+    /// blocked person's item gives way to the newest visible one.
     var rowSummary: ActivitySummary? {
-        if let s = summary, s.lastAtMillis > 0 { return s }
-        guard let first = items.first else { return nil }
+        let blocks = BlockList.shared
+        let visible = items.filter { $0.fromUid.isEmpty || !blocks.contains($0.fromUid) }
+        if loaded, !failed, items.count < itemsLimit {
+            guard let first = visible.first else { return nil }
+            var s = Self.summaryOf(first, base: summary)
+            s.unread = visible.filter { !$0.read }.count
+            return s
+        }
+        if var s = summary, s.lastAtMillis > 0 {
+            if loaded, !failed {
+                let hidden = items.filter { !$0.read && !$0.fromUid.isEmpty && blocks.contains($0.fromUid) }.count
+                s.unread = max(0, s.unread - hidden)
+                if !s.lastId.isEmpty, let it = items.first(where: { $0.id == s.lastId }),
+                   !it.fromUid.isEmpty, blocks.contains(it.fromUid), let first = visible.first {
+                    let unread = s.unread
+                    s = Self.summaryOf(first, base: s)
+                    s.unread = unread
+                }
+            }
+            return s
+        }
+        guard let first = visible.first else { return nil }
         // No summary yet (or an old one without `last`): the newest item stands in.
-        var s = summary ?? ActivitySummary(data: [:])
-        s.lastKind = first.kind.rawValue
-        s.lastName = first.fromName
-        s.lastText = first.text
-        s.lastEmoji = first.emoji
-        s.lastAtMillis = first.at.timeIntervalSince1970 * 1000
+        return Self.summaryOf(first, base: summary)
+    }
+
+    /// The chat-list line for one item, on top of `base` (its unread count kept).
+    private static func summaryOf(_ item: ActivityItem, base: ActivitySummary?) -> ActivitySummary {
+        var s = base ?? ActivitySummary(data: [:])
+        s.lastId = item.id
+        s.lastKind = item.kind.rawValue
+        s.lastName = item.fromName
+        s.lastText = item.kind == .react ? "" : item.text
+        s.lastEmoji = item.kind == .react ? item.emoji : ""
+        s.lastAtMillis = item.at.timeIntervalSince1970 * 1000
         return s
     }
 
     /// The row pinned at the top of Pinned. Kept on this phone per account (the app cannot write
-    /// to the activity documents); `SessionWipe` clears it through `wipe()`.
+    /// to the activity documents). Sign-out keeps it (audit A21): the key is per account, so it
+    /// is that account's again when it signs back in, and no other account reads it.
     private(set) var pinned = false
 
     private static func pinKey(_ uid: String) -> String { "activityPinned.\(uid)" }
@@ -193,9 +240,8 @@ final class ActivityStore {
         else { UserDefaults.standard.removeObject(forKey: Self.pinKey(uid)) }
     }
 
-    /// Sign-out: the listeners, and this account's pin.
+    /// Sign-out: the listeners and what they held. The pin stays on disk under this account's key.
     func wipe() {
-        if let uid { UserDefaults.standard.removeObject(forKey: Self.pinKey(uid)) }
         stop()
     }
 
@@ -215,17 +261,53 @@ final class ActivityStore {
                     if self.summary != s { self.summary = s }
                 }
             }
-        listListener = me.collection("activity")
+        limit = Self.pageSize
+        itemsLimit = Self.pageSize
+        attachList(uid)
+    }
+
+    private func attachList(_ uid: String) {
+        listListener?.remove()
+        let lim = limit
+        listListener = FirestoreHub.db.collection("users").document(uid).collection("activity")
             .order(by: "at", descending: true)
-            .limit(to: 100)
-            .addSnapshotListener { [weak self] snap, _ in
+            .limit(to: lim)
+            .addSnapshotListener { [weak self] snap, error in
+                let list = snap?.documents.compactMap { ActivityItem(id: $0.documentID, data: $0.data()) }
+                let failedNow = snap == nil && error != nil
+                let why = error?.localizedDescription ?? ""
                 Task { @MainActor in
-                    guard let self, self.uid == uid, let snap else { return }
-                    let list = snap.documents.compactMap { ActivityItem(id: $0.documentID, data: $0.data()) }
-                    if self.items != list { self.items = list }
+                    guard let self, self.uid == uid, self.limit == lim else { return }
+                    if let list {
+                        self.itemsLimit = lim
+                        if self.items != list { self.items = list }
+                        self.failed = false
+                    } else if failedNow {
+                        // A listener that errors is over (audit A20): say so rather than a blank page.
+                        DiagLog.add("activity: list listener failed \(why)")
+                        self.failed = true
+                    } else {
+                        return
+                    }
                     self.loaded = true
                 }
             }
+    }
+
+    /// The page reached its last row: the next page of older items (audit A20: only the newest 100
+    /// were ever shown). The listener is attached again with a larger limit.
+    func loadMore() {
+        guard let uid, !failed, items.count >= limit else { return }
+        limit += Self.pageSize
+        attachList(uid)
+    }
+
+    /// Try Again after the items listener failed.
+    func retry() {
+        guard let uid else { return }
+        failed = false
+        loaded = false
+        attachList(uid)
     }
 
     /// Sign-out: the listeners and everything they held go with the account.
@@ -237,6 +319,9 @@ final class ActivityStore {
         summary = nil
         items = []
         loaded = false
+        failed = false
+        limit = Self.pageSize
+        itemsLimit = Self.pageSize
     }
 
     /// Opening the Activity page reads everything. The row's badge goes at once; the
@@ -244,6 +329,11 @@ final class ActivityStore {
     func markAllRead() async {
         guard uid != nil else { return }
         if var s = summary, s.unread > 0 { s.unread = 0; summary = s }
+        // The row is worked out from the items when they are all here (`rowSummary`), so they are
+        // read on this phone at once too.
+        if items.contains(where: { !$0.read }) {
+            items = items.map { var i = $0; i.read = true; return i }
+        }
         do {
             _ = try await Functions.functions(region: "me-central1")
                 .httpsCallable("markActivityRead").call([String: Any]())
@@ -252,12 +342,57 @@ final class ActivityStore {
         }
     }
 
+    /// Some items read (audit A13: the alert for them was tapped).
+    func markRead(ids: [String]) async {
+        guard uid != nil else { return }
+        let set = Set(ids.filter { !$0.isEmpty && !$0.contains("/") })
+        guard !set.isEmpty else { return }
+        if items.contains(where: { set.contains($0.id) && !$0.read }) {
+            items = items.map { var i = $0; if set.contains(i.id) { i.read = true }; return i }
+        }
+        do {
+            _ = try await Functions.functions(region: "me-central1")
+                .httpsCallable("markActivityRead").call(["ids": Array(set)])
+        } catch {
+            DiagLog.add("activity: markActivityRead(ids) failed \(error.localizedDescription)")
+        }
+    }
+
     /// A tap on an item: the same route a "replied to you" push takes (PushManager's tap handler).
     /// The channel opens on top of the Activity page, then that post's Replies, scrolled to the
     /// comment and flashing it (`PostThreadSheet` spends `pendingReplyTarget`).
+    ///
+    /// ⛔ CHECKED BEFORE IT OPENS (audit X1/A5), with the gate a notification tap uses (`OpenGate`):
+    /// a row about a post or a channel that is gone says so and stays on this page, instead of a
+    /// channel with a sheet that cannot load, or a blank chat. Offline it opens as before.
     func open(_ item: ActivityItem) {
         let bad: (String) -> Bool = { $0.isEmpty || $0.contains("/") }
-        guard !bad(item.cid), !bad(item.mid) else { return }
+        guard !bad(item.cid), !bad(item.mid), opening == nil else { return }
+        let atWhere = item.kind == .quote && !bad(item.whereCid) && !bad(item.whereMid)
+        let cid = atWhere ? item.whereCid : item.cid
+        let mid = atWhere ? item.whereMid : item.mid
+        opening = item.id
+        Task { @MainActor in
+            let gate = await OpenGate.check(cid: cid, mid: mid)
+            opening = nil
+            switch gate {
+            case .open:
+                route(item)
+            case .postGone:
+                ToastNotice.show(atWhere ? "This message was deleted" : "This post was deleted")
+            case .chatGone:
+                ToastNotice.show("This channel is no longer available")
+            case .refused:
+                ToastNotice.show("You can't open this channel")
+            }
+        }
+    }
+
+    /// The row being checked before it opens: a second tap meanwhile does nothing.
+    @ObservationIgnored private var opening: String?
+
+    private func route(_ item: ActivityItem) {
+        let bad: (String) -> Bool = { $0.isEmpty || $0.contains("/") }
         let r = AppRouter.shared
         // A quote (owner 2026-11-09): opens where it was posted when that is a public channel, at
         // the quoting message; otherwise my post, with its Replies and Quotes sheet.
@@ -272,7 +407,8 @@ final class ActivityStore {
             return
         }
         let t = item.kind == .quote ? ActivityItem.Ref() : item.target
-        r.pendingRepliesPost = (item.cid, item.mid, Date())
+        // A quote opens the sheet on its Quotes tab (audit A14), the rest on Replies.
+        r.pendingRepliesPost = (item.cid, item.mid, Date(), item.kind == .quote)
         r.pendingReplyTarget = bad(t.rid) ? nil
             : (item.mid, t.rid, (t.aid.isEmpty || t.aid.contains("/")) ? nil : t.aid, Date())
         r.pendingOpenMid = nil
