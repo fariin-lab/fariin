@@ -316,6 +316,30 @@ final class ThreadRepository {
     @ObservationIgnored private var olderNeedsRetry = false
     @ObservationIgnored private var networkObserver: NSObjectProtocol?
 
+    // ⛔ CHANNEL SYNC (owner 2026-11-09, CHANNEL-SYNC-SPEC.md 5-9). A channel keeps its history in
+    // `ChannelHistoryStore` and follows the change counter instead of a 60-doc window. Groups and
+    // 1:1 chats never set any of this (see the extension at the end of this file).
+    enum ChannelSyncMode { case off, probing, synced }
+    /// `.probing`: today's window listener runs until the server's first window shows whether the
+    /// channel's docs carry `chg`; `.synced`: the store and the `chg` listener own the rows.
+    @ObservationIgnored private var chMode: ChannelSyncMode = .off
+    @ObservationIgnored private var chBox: ChannelHistoryBox<Message>?
+    @ObservationIgnored private var chGoneListener: ListenerRegistration?
+    @ObservationIgnored private var chHeadListener: ListenerRegistration?
+    /// The `chg` query was refused (rules or index not there yet): today's path for this repository.
+    @ObservationIgnored private var chRefused = false
+    @ObservationIgnored private var chStartGen = 0
+    @ObservationIgnored private var chChgToken = 0
+    @ObservationIgnored private var chGoneToken = 0
+    @ObservationIgnored private var chHeadToken = 0
+    /// The next server answer of the `chg` listener is its first since a fresh attach.
+    @ObservationIgnored private var chFirstServer = true
+    @ObservationIgnored private var chTooLongRunning = false
+    @ObservationIgnored private var chAttachedAt = Date.distantPast
+    @ObservationIgnored private var chSyncLogs = 0
+    /// The newest snapshot of each post's doc, so a key that lands late can decrypt it again.
+    @ObservationIgnored private var chDocs: [String: QueryDocumentSnapshot] = [:]
+
     // Decrypt cache: id -> built message, plus the raw (encrypted) reactions we last
     // saw, so we only rebuild a message when its one mutable field actually changes.
     private var byId: [String: Message] = [:]
@@ -505,7 +529,20 @@ final class ThreadRepository {
         // messages before the push: it pushes, loads on a background queue, and shows the list when
         // the load lands. A miss now does the same; the reveal veil already holds the list hidden
         // until it has something to show, and the live listener still reconciles after.
-        if let cached = ThreadMessageCache.shared.memoryMessages(for: cid), !cached.isEmpty {
+        // ⛔ A CHANNEL OPENS FROM ITS OWN STORE (CHANNEL-SYNC-SPEC.md 5 and 9): memory at once, or
+        // its file read off the main thread. ThreadMessageCache's 60-row tail is not used for it.
+        let chUid = (!warmOnly && !cid.contains("_")) ? Auth.auth().currentUser?.uid : nil
+        if let chUid, let box = ChannelHistoryStore.shared.memory(uid: chUid, cid: cid), box.history.isSynced {
+            NSLog("[REOPEN] repo seed from CHANNEL STORE rows=%ld", box.history.posts.count)
+            seedFromChannel(box)
+        } else if let chUid, ChannelHistoryStore.shared.hasFile(uid: chUid, cid: cid) {
+            ChannelHistoryStore.shared.open(uid: chUid, cid: cid) { [weak self] box in
+                guard let self, box.history.isSynced, !self.didInitialLoad || self.messages.isEmpty,
+                      self.chMode != .synced else { return }
+                NSLog("[REOPEN] repo seed from CHANNEL STORE (disk) rows=%ld", box.history.posts.count)
+                self.seedFromChannel(box)
+            }
+        } else if let cached = ThreadMessageCache.shared.memoryMessages(for: cid), !cached.isEmpty {
             // ⚠️ TEMPORARY, with the list's [REOPEN] lines: 60 rows here means the cache was cut on backgrounding.
             NSLog("[REOPEN] repo seed from MEMORY rows=%ld", cached.count)
             seed(cached)
@@ -910,6 +947,8 @@ final class ThreadRepository {
                     self?.sweepExpired()
                     // Owner, 2026-10-08: back in the foreground, bring back any listener that died.
                     self?.reattachIfDead(includePresence: false)
+                    // A channel picks its changes up again from the last one applied (spec 7).
+                    self?.chReattachFromLastChg(why: "foreground")
                 }
         }
         // And a forward can ARRIVE while its chat is open — forwarding back into the chat you are
@@ -953,6 +992,12 @@ final class ThreadRepository {
         if keyObserver == nil {
             keyObserver = NotificationCenter.default.addObserver(
                 forName: .peerKeyChanged, object: nil, queue: .main) { [weak self] n in
+                    // A synced channel keeps no window: its posts' own docs are decrypted again.
+                    if let self, self.chMode == .synced, let who = n.object as? String,
+                       self.byId.values.contains(where: { $0.authorId == who }) {
+                        self.chRedecrypt()
+                        return
+                    }
                     guard let self, let who = n.object as? String, !self.lastDocs.isEmpty,
                           who == self.otherUid || self.byId.values.contains(where: { $0.authorId == who })
                     else { return }
@@ -1004,6 +1049,7 @@ final class ThreadRepository {
                 forName: .networkCameBack, object: nil, queue: .main) { [weak self] _ in
                     self?.resumeHeld = false   // #69: the resume read may try the server again
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        self?.chReattachFromLastChg(why: "network")
                         // A thin history (the top-up stopped on the failed page) asks again too.
                         guard let self, self.olderNeedsRetry,
                               self.readerAwayFromBottom || (!self.cid.contains("_") && self.items.count < self.topUpMinRows),
@@ -1197,6 +1243,56 @@ final class ThreadRepository {
         // The two notification observers a few lines above ARE guarded, which is the tell that
         // re-entry was considered for one half of this method and not the other.
         listener?.remove()
+        listener = nil
+        // ⛔ A CHANNEL FOLLOWS ITS CHANGE COUNTER (CHANNEL-SYNC-SPEC.md 7); everything else, and a
+        // channel whose docs carry no `chg` yet, keeps the window listener exactly as before.
+        if channelSyncEligible {
+            startChannelSync(uid: uid)
+        } else {
+            chBox = nil
+            chMode = .off
+            attachWindowListener()
+        }
+        // Load keys in the BACKGROUND (in parallel). Warming the recipient's key here also
+        // means the first send is instant instead of blocking on the fetch. Once the key
+        // arrives, re-decrypt the current window (existing chats may briefly show "…").
+        // [weak self] + stored + cancelled by `stop()` (audit C6): this used to hold `self` strongly
+        // and outlive the screen that started it, so leaving and quickly reopening the same chat let
+        // the OLD run's re-decrypt land after the new screen had already rebuilt from a fresh cache.
+        keyPreloadTask?.cancel()
+        keyPreloadTask = Task { [weak self] in
+            try? await Crypto.shared.ensureReady()
+            guard !Task.isCancelled else { return }
+            // Preload EVERY member's public key (groups), not just a cid-derived "other" —
+            // group messages can only be decrypted with their author's key, so all members'
+            // keys must be cached or their messages render as "…".
+            let members = await Self.memberUids(cid: cid, fallbackOther: other)
+            await withTaskGroup(of: Void.self) { g in
+                for m in members where m != uid { g.addTask { _ = await Crypto.shared.preloadKey(m) } }
+            }
+            await MainActor.run {
+                // A synced channel keeps no window: its posts' own docs are decrypted again.
+                if let self, !Task.isCancelled, self.chMode == .synced { self.chRedecrypt(); return }
+                // Bail if this run was cancelled (chat left) or already gone before landing its write.
+                guard let self, !Task.isCancelled, !self.lastDocs.isEmpty else { return }
+                // Force a re-decrypt of the window (keys just arrived) WITHOUT clearing byId: emptying it
+                // blanked the whole list until the off-main decrypt finished AND dropped any paged-older
+                // history. Clearing only the sig cache makes applyLiveSnapshot re-decrypt the window while
+                // byId stays populated, so nothing ever goes blank and older messages are preserved.
+                self.rawReactions.removeAll()
+                // Owner audit 2026-10-06 chat #19: replay the window AS WHAT IT WAS. This said
+                // `fromCache: false` always, so a window that came from the local cache was treated as
+                // the server's answer and its delete pass removed newer messages until the real
+                // server snapshot put them back.
+                self.applyLiveSnapshot(self.lastDocs, fromCache: self.lastDocsFromCache, redecrypt: true)
+            }
+        }
+    }
+
+    /// The live listener over the newest window (moved out of `start()` unchanged, 2026-11-09, so a
+    /// channel still probing for `chg` can attach it after its store has loaded).
+    private func attachWindowListener() {
+        listener?.remove()
         listener = db.collection("conversations").document(cid).collection("messages")
             .order(by: "createdAt", descending: true)
             .limit(to: pageSize)
@@ -1234,38 +1330,6 @@ final class ThreadRepository {
                 // gone for a few seconds then comes back" bug).
                 self.applyLiveSnapshot(snap.documents, fromCache: snap.metadata.isFromCache)
             }
-        // Load keys in the BACKGROUND (in parallel). Warming the recipient's key here also
-        // means the first send is instant instead of blocking on the fetch. Once the key
-        // arrives, re-decrypt the current window (existing chats may briefly show "…").
-        // [weak self] + stored + cancelled by `stop()` (audit C6): this used to hold `self` strongly
-        // and outlive the screen that started it, so leaving and quickly reopening the same chat let
-        // the OLD run's re-decrypt land after the new screen had already rebuilt from a fresh cache.
-        keyPreloadTask?.cancel()
-        keyPreloadTask = Task { [weak self] in
-            try? await Crypto.shared.ensureReady()
-            guard !Task.isCancelled else { return }
-            // Preload EVERY member's public key (groups), not just a cid-derived "other" —
-            // group messages can only be decrypted with their author's key, so all members'
-            // keys must be cached or their messages render as "…".
-            let members = await Self.memberUids(cid: cid, fallbackOther: other)
-            await withTaskGroup(of: Void.self) { g in
-                for m in members where m != uid { g.addTask { _ = await Crypto.shared.preloadKey(m) } }
-            }
-            await MainActor.run {
-                // Bail if this run was cancelled (chat left) or already gone before landing its write.
-                guard let self, !Task.isCancelled, !self.lastDocs.isEmpty else { return }
-                // Force a re-decrypt of the window (keys just arrived) WITHOUT clearing byId: emptying it
-                // blanked the whole list until the off-main decrypt finished AND dropped any paged-older
-                // history. Clearing only the sig cache makes applyLiveSnapshot re-decrypt the window while
-                // byId stays populated, so nothing ever goes blank and older messages are preserved.
-                self.rawReactions.removeAll()
-                // Owner audit 2026-10-06 chat #19: replay the window AS WHAT IT WAS. This said
-                // `fromCache: false` always, so a window that came from the local cache was treated as
-                // the server's answer and its delete pass removed newer messages until the real
-                // server snapshot put them back.
-                self.applyLiveSnapshot(self.lastDocs, fromCache: self.lastDocsFromCache, redecrypt: true)
-            }
-        }
     }
 
     // All member uids for a cid: prefer the loaded conversation; fall back to fetching the
@@ -1492,8 +1556,9 @@ final class ThreadRepository {
     /// on them here, then `start()` attaches the same four listeners to the fresh client.
     private func reattachAfterSwap() {
         guard !cid.isEmpty, !DemoMode.isDemoConversation(cid), listener != nil || listenerFailed else { return }
-        FirestoreHub.drop([listener, convListener, userListener, presenceListener])
+        FirestoreHub.drop([listener, convListener, userListener, presenceListener, chGoneListener, chHeadListener])
         listener = nil; convListener = nil; userListener = nil; presenceListener = nil
+        chGoneListener = nil; chHeadListener = nil
         // The older-page cursor is a snapshot of the stuck client, and the held resume query was built
         // on it: page on by value from the oldest message held instead (the same path as after a trim).
         if oldestDoc != nil { windowTrimmed = true }
@@ -1532,6 +1597,8 @@ final class ThreadRepository {
     // Apply the live (recent-window) snapshot: refresh/insert the window's messages,
     // reconcile deletes within the window's time range, keep paged-older messages.
     private func applyLiveSnapshot(_ docs: [QueryDocumentSnapshot], fromCache: Bool, redecrypt: Bool = false) {
+        // A channel that moved to its change counter: a late answer of the old window is not applied.
+        guard chMode != .synced else { return }
         lastDocs = docs   // remember the window so we can re-decrypt once the key arrives
         lastDocsFromCache = fromCache   // #19: and where it came from
         snapshotSeq += 1
@@ -1574,6 +1641,7 @@ final class ThreadRepository {
     // on the main thread AFTER the (off-main) decryption merges its results into the cache.
     private func commitSnapshot(_ docs: [QueryDocumentSnapshot], seq: Int, fromCache: Bool, redecrypt: Bool = false) {
         guard seq >= committedSeq else { return }   // never let an older snapshot overwrite a newer one
+        guard chMode != .synced else { return }     // the window was let go for the change counter
         committedSeq = seq
         // owner 2026-10-21 (the open jump): what this window IS, for the list. A cache window before the
         // server has answered is still the open; the server's first window is the settle; a replay
@@ -1673,6 +1741,14 @@ final class ThreadRepository {
         // was unplayable until a relaunch — by which time the upload had long finished.
         //
         // A message that is still uploading is not an echo yet. It is a promise.
+        dropEchoedPending()
+        // A channel's first SERVER window decides whether it moves to the change counter (spec 7).
+        if chMode == .probing, !fromCache, !redecrypt { chProbe(docs) }
+        topUpIfThin(lastPageAddedRows: true)
+    }
+
+    /// Pending sends the server now holds (see the note above, in `commitSnapshot`).
+    private func dropEchoedPending() {
         let echoed = Set(byId.values.filter { !$0.uploading }.compactMap { $0.clientId })
         // ⛔ KEPT ASIDE, NOT FORGOTTEN (owner 2026-10-21: "the message disappears in seconds"). The
         // echo above is Firestore's LOCAL copy, delivered before the server has answered. When the
@@ -1684,7 +1760,6 @@ final class ThreadRepository {
         }
         if echoedPending.count > 50 { echoedPending.removeAll() }
         pending.removeAll { p in p.clientId.map(echoed.contains) ?? false }
-        topUpIfThin(lastPageAddedRows: true)
     }
     private var echoedPending: [String: Message] = [:]
 
@@ -1992,7 +2067,12 @@ final class ThreadRepository {
         guard sorted != messages else { refreshHistoryStart(record: true); scheduleNextBurn(); return }
         messages = sorted
         refreshHistoryStart(record: true)   // before the publish, so the card comes with the rows
-        ThreadMessageCache.shared.store(cid, messages)   // keep the warm cache fresh for the next open (instant render)
+        // A synced channel saves its own store instead (CHANNEL-SYNC-SPEC.md 5).
+        if chMode == .synced, let box = chBox {
+            box.scheduleSave()
+        } else {
+            ThreadMessageCache.shared.store(cid, messages)   // keep the warm cache fresh for the next open (instant render)
+        }
         refreshItems(reason: reason)
         // The message set just changed, so the next expiry may have too. Cheap: one timer.
         scheduleNextBurn()
@@ -2056,6 +2136,8 @@ final class ThreadRepository {
     /// Page in the next older window (called on scroll-to-top). `completion` runs after
     /// the list updates so the view can restore the scroll anchor (no jump).
     func loadOlder(completion: @escaping () -> Void = {}) {
+        // A synced channel reads the hole under its newest block instead (CHANNEL-SYNC-SPEC.md 6).
+        if chMode == .synced { chLoadOlder(completion); return }
         guard canLoadOlder else { completion(); return }
         // Owner audit 2026-10-06 chat #1: BUSY IS NOT DONE. A call while a page is already in flight
         // used to run its completion at once, as if a page had landed. `ensureLoaded` counted that as
@@ -2142,6 +2224,10 @@ final class ThreadRepository {
                     self.byId[doc.documentID] == nil || self.rawReactions[doc.documentID] != sigs[doc.documentID]
                 }
                 let finish = {
+                    // A page asked for before a channel moved to its store: kept, not yet proven.
+                    if self.chMode == .synced, let box = self.chBox {
+                        box.history.adoptUnverified(Array(self.byId.values))
+                    }
                     self.loadingOlder = false
                     let rowsBefore = self.items.count
                     self.rebuild(reason: .olderPage)
@@ -2190,6 +2276,7 @@ final class ThreadRepository {
     /// page on their own), never twice at once, at most `topUpCap` pages per open. Groups and
     /// channels only. The scroll-driven paging is unchanged.
     private func thinHistoryNet(_ delay: Double) {
+        if chMode == .synced { channelFill(); return }
         guard listener != nil, holders > 0, canLoadOlder, !historyStartReached,
               items.count < topUpMinRows, !loadingOlder, !jumpPagingInFlight else { return }
         DiagLog.add("TOPUP# net t=\(delay)s cid=\(cid.suffix(5)) rows=\(items.count) sawServer=\(sawServerWindow) cursor=\(oldestDoc != nil || windowTrimmed) retry=\(olderNeedsRetry) pages=\(topUpPages) running=\(historyTopUpRunning) cacheWhole=\(cacheLooksWhole)")
@@ -2199,6 +2286,7 @@ final class ThreadRepository {
     }
 
     private func topUpIfThin(lastPageAddedRows: Bool) {
+        if chMode == .synced { channelFill(); return }
         // `listener != nil`: never on a chat that was closed (or an account switched away) while a
         // page was out (verify pass 3, 2026-11-08).
         guard listener != nil, !warmOnly, !cid.contains("_"), sawServerWindow, canLoadOlder, !historyStartReached,
@@ -2251,7 +2339,7 @@ final class ThreadRepository {
         var pages = 0
         while !items.contains(where: { $0.rowId == rowId }) && canLoadOlder && pages < maxPages {
             guard !Task.isCancelled, Date() < deadline else { break }
-            guard oldestDoc != nil || windowTrimmed else {
+            guard oldestDoc != nil || windowTrimmed || chMode == .synced else {
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 continue
             }
@@ -2291,6 +2379,7 @@ final class ThreadRepository {
     @MainActor
     static func clearedOnServer(_ cid: String) {
         if let r = live[cid]?.value { r.clearAllLocally() }
+        else if let uid = Auth.auth().currentUser?.uid { ChannelHistoryStore.shared.forget(uid: uid, cid: cid) }
         for m in ThreadMessageCache.shared.memoryMessages(for: cid) ?? [] {
             ChatService.forgetLocalCopies(of: m, cid: cid)
         }
@@ -2305,6 +2394,9 @@ final class ThreadRepository {
         rawReactions.removeAll()
         locallyDeleted.removeAll()
         lastDocs = []   // or a key arriving later re-decrypts the old window back onto the screen
+        chDocs = [:]
+        // A channel's store knows the history is now empty (and keeps its change counter).
+        if let box = chBox { box.history.clearAll(); box.scheduleSave() }
         pinnedMessageIds = []
         pinnedPreviews = [:]
         rebuild()
@@ -2319,7 +2411,7 @@ final class ThreadRepository {
         holders += 1
         // The thin-history top-up's budget is per OPEN, not per re-attach: `start()` also runs on
         // every retry and network recovery, which gave a flapping network a fresh 10 pages each time.
-        if holders == 1 { topUpPages = 0; windowLogs = 0 }
+        if holders == 1 { topUpPages = 0; windowLogs = 0; chSyncLogs = 0 }
         start()
         // ⛔ THE NET UNDER THE TOP-UP (owner 2026-11-09, VE3 again: one open showed only the newest
         // post for 5 s and more, LISTGEO# rows=1 throughout, while the next open paged "Hello Guys"
@@ -2347,6 +2439,12 @@ final class ThreadRepository {
 
     func stop() {
         listener?.remove(); listener = nil
+        // Channel sync: its two other listeners, and any answer still on its way is let go.
+        chGoneListener?.remove(); chGoneListener = nil
+        chHeadListener?.remove(); chHeadListener = nil
+        chStartGen += 1; chChgToken += 1; chGoneToken += 1; chHeadToken += 1
+        chTooLongRunning = false
+        if chMode == .synced { chBox?.scheduleSave() }
         if let outboxObserver { NotificationCenter.default.removeObserver(outboxObserver) }
         outboxObserver = nil
         if let outboxAddObserver { NotificationCenter.default.removeObserver(outboxAddObserver) }
@@ -2383,11 +2481,518 @@ final class ThreadRepository {
     // block being released ON FIRESTORE'S OWN QUEUE, and remove() from there trips its assertion.
     // `FirestoreHub.drop` removes on a utility queue instead.
     deinit {
-        FirestoreHub.drop([listener, convListener, userListener, presenceListener])
+        FirestoreHub.drop([listener, convListener, userListener, presenceListener, chGoneListener, chHeadListener])
         keyPreloadTask?.cancel()
         // Timers belong to the main run loop; invalidated there when this dies elsewhere.
         let timers = [expiryTimer, burnTimer, typingExpiry]
         if Thread.isMainThread { timers.forEach { $0?.invalidate() } }
         else { DispatchQueue.main.async { timers.forEach { $0?.invalidate() } } }
+    }
+}
+
+// MARK: - Channel sync (CHANNEL-SYNC-SPEC.md 5-9, owner 2026-11-09)
+//
+// The thin adapter between Firestore and `ChannelHistoryStore`, used ONLY for a channel that a
+// member or follower opens. Groups, 1:1 chats, visitors (`previewOnly`), warm-ups and a channel
+// whose docs carry no `chg` yet all keep the window path above, untouched.
+//
+// - Open: the store's rows at once (init, `seedFromChannel`), then the listeners.
+// - Sync: `messages where chg > lastChg order by chg limit 200`, each doc applied as add / edit /
+//   delete; hard deletes from `changes`; the newest 10 posts listened to as well, so my own send
+//   and anything not yet stamped show at once. Nothing here ever drops a row for being absent.
+// - Fill: while fewer than 40 visible posts sit above the first hole, read the hole (pages of 60,
+//   createdAt-descending), whole span marked read, deleted posts included.
+// - Too long: 200 changes waiting at attach. The newest page goes on top, a hole under it, and the
+//   old rows stay on screen until a page proves them current.
+extension ThreadRepository {
+    private static let chLimit = 200
+    private static let chRebaseAt = 150
+    private static let chWantVisible = 40
+
+    /// A channel this account follows or runs, opened as a chat (not a visitor's preview).
+    private var channelSyncEligible: Bool {
+        guard !cid.contains("_"), !warmOnly, !previewOnly, !lockedGuest, !moderationLocked, !chRefused,
+              !DemoMode.isDemoConversation(cid) else { return false }
+        return channelHint || Conversation.Right.isChannel(cid)
+            || ChannelFollows.shared.conversations.contains { $0.id == cid }
+    }
+
+    private static func chgOf(_ d: DocumentSnapshot) -> Int? {
+        (d.get("chg") as? NSNumber)?.intValue
+    }
+
+    private func chLog(_ line: String) {
+        guard chSyncLogs < 40 else { return }
+        chSyncLogs += 1
+        DiagLog.add(line)
+    }
+
+    // MARK: Open
+
+    /// The store's rows, before any listener (init, or the file landing just after it).
+    private func seedFromChannel(_ box: ChannelHistoryBox<Message>) {
+        chBox = box
+        byId = box.history.posts
+        didInitialLoad = true
+        canLoadOlder = !box.history.reachedStart
+        rebuild(reason: .initial)
+        scheduleNextBurn()
+    }
+
+    private func startChannelSync(uid: String) {
+        let gen = chStartGen
+        ChannelHistoryStore.shared.open(uid: uid, cid: cid) { [weak self] box in
+            guard let self, self.chStartGen == gen else { return }
+            self.chBox = box
+            if box.history.isSynced {
+                self.chMode = .synced
+                // The store is the truth: rows seeded from anywhere else give way to it.
+                self.chMirrorAll()
+                self.chLog("SYNC# open cid=\(self.cid.suffix(5)) rows=\(box.history.posts.count) lastChg=\(box.history.lastChg ?? -1) hole=\(box.history.topHole != nil)")
+                self.attachChannelListeners()
+                self.finishChannelCommit(reason: self.sawServerWindow ? .live : .initial)
+            } else {
+                // Not synced yet: today's window, whose first server answer decides (`chProbe`).
+                self.chMode = .probing
+                self.attachWindowListener()
+            }
+        }
+    }
+
+    /// The window's first SERVER answer. Docs carrying `chg`: the store starts from this window
+    /// (top range = the window, `lastChg` = its newest change) and the change listeners take over.
+    /// None: today's path for the rest of this visit.
+    private func chProbe(_ docs: [QueryDocumentSnapshot]) {
+        guard let box = chBox, let top = docs.compactMap({ Self.chgOf($0) }).max() else {
+            chMode = .off
+            chBox = nil
+            chLog("SYNC# legacy cid=\(cid.suffix(5)) docs=\(docs.count) (no chg yet)")
+            return
+        }
+        let now = Date()
+        let windowIds = Set(docs.map(\.documentID))
+        let page = docs.map { d in
+            ChannelDoc(post: byId[d.documentID] ?? Message(id: d.documentID, data: d.data(), cid: cid, crypto: Crypto.shared),
+                       chg: Self.chgOf(d))
+        }
+        let r = box.history.applyPage(page, upper: .distantFuture, full: docs.count >= pageSize, fromServer: true, now: now)
+        // Older pages already loaded by scrolling: kept, not yet proven by this store.
+        box.history.adoptUnverified(byId.values.filter { !windowIds.contains($0.id) })
+        box.history.lastChg = max(box.history.lastChg ?? top, top)
+        box.history.lastGoneChg = max(box.history.lastGoneChg ?? top, top)
+        for d in docs where box.history.posts[d.documentID] != nil { chDocs[d.documentID] = d }
+        chMode = .synced
+        FirestoreHub.drop([listener])
+        listener = nil
+        lastDocs = []
+        chLog("SYNC# start cid=\(cid.suffix(5)) docs=\(docs.count) add=\(r.added) del=\(r.removed) lastChg=\(top) start=\(box.history.reachedStart)")
+        attachChannelListeners()
+        chMirrorAll()
+        box.scheduleSave()
+        finishChannelCommit(reason: .live)
+    }
+
+    // MARK: Listeners
+
+    private func attachChannelListeners() {
+        chFirstServer = true
+        chAttachedAt = Date()
+        attachChgListener(fresh: true)
+        attachGoneListener()
+        attachHeadListener()
+    }
+
+    /// `fresh`: a new attach (open, foreground, network back), whose first full answer means "too
+    /// long". Otherwise a re-base from `lastChg` after a run of changes while open.
+    private func attachChgListener(fresh: Bool = false) {
+        guard let from = chBox?.history.lastChg else { return }
+        chChgToken += 1
+        let token = chChgToken
+        if !fresh { chFirstServer = false }
+        FirestoreHub.drop([listener])
+        listener = db.collection("conversations").document(cid).collection("messages")
+            .whereField("chg", isGreaterThan: from)
+            .order(by: "chg")
+            .limit(to: Self.chLimit)
+            .addSnapshotListener { [weak self] snap, error in
+                self?.onChgSnapshot(snap, error, token: token)
+            }
+    }
+
+    private func onChgSnapshot(_ snap: QuerySnapshot?, _ error: Error?, token: Int) {
+        guard token == chChgToken else { return }
+        guard let snap else {
+            let ns = error as NSError?
+            let code = ns?.code ?? -1
+            chLog("SYNC# chg listener error cid=\(cid.suffix(5)) code=\(code)")
+            if ns?.domain == FirestoreErrorDomain, code == 7 || code == 9 {
+                // Refused, or the index is missing: today's window path for this repository. A
+                // refusal of the whole session is reported by that path in its turn.
+                chRefused = true
+                DispatchQueue.main.async { [weak self] in self?.start() }
+                return
+            }
+            didInitialLoad = true
+            listenerFailed = true
+            if moderationLocked { return }
+            Task { @MainActor in SessionRecovery.noteRefusal(error, "chat") }
+            retryStartSoon()
+            return
+        }
+        listenerRetries = 0
+        listenerFailed = false
+        let fromCache = snap.metadata.isFromCache
+        let docs = snap.documents
+        chDecode(docs) { [weak self] built, sigs in
+            guard let self, token == self.chChgToken, let box = self.chBox else { return }
+            let reason = self.chReason(fromCache: fromCache, docs: docs)
+            let firstServer = !fromCache && self.chFirstServer
+            let n = self.chApply(docs, built: built, sigs: sigs, box: box)
+            // Only the server's answer moves the counter: the local cache can miss a change.
+            if !fromCache, let top = docs.compactMap({ Self.chgOf($0) }).max() {
+                box.history.lastChg = max(box.history.lastChg ?? top, top)
+            }
+            if firstServer { self.chFirstServer = false }
+            if !fromCache, !self.sawServerWindow {
+                self.sawServerWindow = true
+                self.serverWindowSettled = true
+            }
+            if docs.count > 0 || firstServer {
+                self.chLog("SYNC# chg cid=\(self.cid.suffix(5)) cache=\(fromCache) docs=\(docs.count) add=\(n.added) edit=\(n.edited) del=\(n.removed) lastChg=\(box.history.lastChg ?? -1)")
+            }
+            self.finishChannelCommit(reason: reason)
+            box.scheduleSave()
+            if !fromCache, docs.count >= Self.chLimit {
+                if firstServer { self.chTooLong() } else { self.attachChgListener() }
+            } else if !fromCache, docs.count >= Self.chRebaseAt {
+                self.attachChgListener()
+            }
+        }
+    }
+
+    /// Hard deletes: `changes/{chg} = {mid, gone: true}`.
+    private func attachGoneListener() {
+        guard let box = chBox, let from = box.history.lastGoneChg ?? box.history.lastChg else { return }
+        chGoneToken += 1
+        let token = chGoneToken
+        FirestoreHub.drop([chGoneListener])
+        chGoneListener = db.collection("conversations").document(cid).collection("changes")
+            .whereField("chg", isGreaterThan: from)
+            .order(by: "chg")
+            .limit(to: Self.chLimit)
+            .addSnapshotListener { [weak self] snap, error in
+                guard let self, token == self.chGoneToken, let box = self.chBox else { return }
+                guard let snap else {
+                    // Not readable yet (server or rules still to deploy): deletes for everyone still
+                    // arrive as edits carrying `deleted`; only hard deletes wait.
+                    self.chLog("SYNC# gone listener error cid=\(self.cid.suffix(5)) code=\((error as NSError?)?.code ?? -1)")
+                    return
+                }
+                var removed = 0
+                let now = Date()
+                for d in snap.documents where (d.get("gone") as? Bool) == true {
+                    guard let mid = d.get("mid") as? String else { continue }
+                    let old = box.history.posts[mid]
+                    if box.history.remove(mid, chg: Self.chgOf(d) ?? Int(d.documentID), now: now) == .removed {
+                        removed += 1
+                        if let old { self.chForgetLocalCopies(old) }
+                    }
+                }
+                if !snap.metadata.isFromCache,
+                   let top = snap.documents.compactMap({ Self.chgOf($0) ?? Int($0.documentID) }).max() {
+                    box.history.lastGoneChg = max(box.history.lastGoneChg ?? top, top)
+                }
+                if removed > 0 {
+                    self.chMirrorAll()
+                    self.chLog("SYNC# gone cid=\(self.cid.suffix(5)) removed=\(removed)")
+                    self.finishChannelCommit(reason: .live)
+                }
+                box.scheduleSave()
+                if !snap.metadata.isFromCache, snap.documents.count >= Self.chRebaseAt { self.attachGoneListener() }
+            }
+    }
+
+    /// The newest 10 posts, applied as changes only (never a delete pass): my own send, edit or
+    /// delete shows at once from the local write, before the server has stamped its `chg`.
+    private func attachHeadListener() {
+        chHeadToken += 1
+        let token = chHeadToken
+        FirestoreHub.drop([chHeadListener])
+        chHeadListener = db.collection("conversations").document(cid).collection("messages")
+            .order(by: "createdAt", descending: true)
+            .limit(to: 10)
+            .addSnapshotListener { [weak self] snap, _ in
+                guard let self, token == self.chHeadToken, let snap else { return }
+                let docs = snap.documents
+                self.chDecode(docs) { [weak self] built, sigs in
+                    guard let self, token == self.chHeadToken, let box = self.chBox else { return }
+                    let n = self.chApply(docs, built: built, sigs: sigs, box: box)
+                    guard n.added + n.edited + n.removed > 0 else { return }
+                    self.finishChannelCommit(reason: self.sawServerWindow ? .live : .initial)
+                }
+            }
+    }
+
+    /// Back in the foreground, or the network came back: pick up from the last change applied.
+    private func chReattachFromLastChg(why: String) {
+        guard chMode == .synced, listener != nil, !listenerFailed,
+              Date().timeIntervalSince(chAttachedAt) > 2 else { return }
+        chLog("SYNC# reattach cid=\(cid.suffix(5)) why=\(why) lastChg=\(chBox?.history.lastChg ?? -1)")
+        attachChannelListeners()
+    }
+
+    /// More than 200 changes waited. The conversation's `chSeq` first (so a change made during the
+    /// read comes again), then the newest page on top; the rows already held stay, below a hole.
+    private func chTooLong() {
+        guard !chTooLongRunning, chBox != nil else { return }
+        chTooLongRunning = true
+        let gen = chStartGen
+        let conv = db.collection("conversations").document(cid)
+        chLog("SYNC# toolong cid=\(cid.suffix(5)) lastChg=\(chBox?.history.lastChg ?? -1) rows=\(items.count)")
+        conv.getDocument(source: .server) { [weak self] cs, _ in
+            guard let self, gen == self.chStartGen else { return }
+            let seq = (cs?.get("chSeq") as? NSNumber)?.intValue
+            conv.collection("messages")
+                .order(by: "createdAt", descending: true)
+                .limit(to: self.pageSize)
+                .getDocuments(source: .server) { [weak self] snap, _ in
+                    guard let self, gen == self.chStartGen else { return }
+                    guard let snap else { self.chTooLongRunning = false; return }   // tried again on the next attach
+                    let docs = snap.documents
+                    self.chDecode(docs) { [weak self] built, sigs in
+                        guard let self, gen == self.chStartGen, let box = self.chBox else { return }
+                        self.chTooLongRunning = false
+                        box.history.resetForTooLong()
+                        let page = docs.map { d in
+                            ChannelDoc(post: built[d.documentID] ?? self.byId[d.documentID]
+                                        ?? Message(id: d.documentID, data: d.data(), cid: self.cid, crypto: Crypto.shared),
+                                       chg: Self.chgOf(d))
+                        }
+                        let r = box.history.applyPage(page, upper: .distantFuture, full: docs.count >= self.pageSize,
+                                                      fromServer: true, now: Date())
+                        for d in docs where box.history.posts[d.documentID] != nil {
+                            self.chDocs[d.documentID] = d
+                            self.rawReactions[d.documentID] = sigs[d.documentID] ?? ""
+                        }
+                        let newLast = seq ?? docs.compactMap({ Self.chgOf($0) }).max() ?? (box.history.lastChg ?? 0)
+                        box.history.lastChg = max(box.history.lastChg ?? newLast, newLast)
+                        if let seq { box.history.lastGoneChg = max(box.history.lastGoneChg ?? seq, seq) }
+                        self.chMirrorAll()
+                        self.chLog("SYNC# toolong done cid=\(self.cid.suffix(5)) seq=\(seq ?? -1) add=\(r.added) dropped=\(r.dropped) hole=\(box.history.topHole != nil) rows=\(box.history.posts.count)")
+                        self.finishChannelCommit(reason: .live)
+                        box.scheduleSave()
+                        self.attachChgListener()
+                        if seq != nil { self.attachGoneListener() }
+                    }
+                }
+        }
+    }
+
+    // MARK: History
+
+    /// The hole under the newest block, one page (CHANNEL-SYNC-SPEC.md 6).
+    private func chLoadOlder(_ completion: @escaping () -> Void) {
+        guard let box = chBox, let hole = box.history.topHole else {
+            if canLoadOlder { canLoadOlder = false }
+            completion()
+            return
+        }
+        if loadingOlder { olderWaiters.append(completion); return }
+        loadingOlder = true
+        var query: Query = db.collection("conversations").document(cid).collection("messages")
+            .order(by: "createdAt", descending: true)
+        if hole.upper < .distantFuture { query = query.start(at: [Timestamp(date: hole.upper)]) }
+        let gen = chStartGen
+        query.limit(to: pageSize).getDocuments { [weak self] snap, _ in
+            guard let self else { return }
+            let docs = snap?.documents ?? []
+            let fromServer = snap.map { !$0.metadata.isFromCache } ?? false
+            self.chDecode(docs) { [weak self] built, sigs in
+                guard let self else { completion(); return }
+                let rowsBefore = self.items.count
+                if gen == self.chStartGen, let box = self.chBox, self.chMode == .synced {
+                    let page = docs.map { d in
+                        ChannelDoc(post: built[d.documentID] ?? self.byId[d.documentID]
+                                    ?? Message(id: d.documentID, data: d.data(), cid: self.cid, crypto: Crypto.shared),
+                                   chg: Self.chgOf(d))
+                    }
+                    let r = box.history.applyPage(page, upper: hole.upper, full: docs.count >= self.pageSize,
+                                                  fromServer: fromServer, now: Date())
+                    for d in docs where box.history.posts[d.documentID] != nil {
+                        self.chDocs[d.documentID] = d
+                        self.rawReactions[d.documentID] = sigs[d.documentID] ?? ""
+                    }
+                    self.chMirrorAll()
+                    box.scheduleSave()
+                    let more = box.history.topHole != nil
+                    if self.canLoadOlder != more { self.canLoadOlder = more }
+                    self.chLog("SYNC# hole cid=\(self.cid.suffix(5)) server=\(fromServer) docs=\(docs.count) add=\(r.added) del=\(r.removed) dropped=\(r.dropped) visible=\(box.history.visibleCount(self.chVisiblePredicate())) more=\(more)")
+                }
+                // A failed or cache-only page is asked again when the network comes back.
+                self.olderNeedsRetry = !fromServer
+                self.loadingOlder = false
+                self.rebuild(reason: .olderPage)
+                completion()
+                let waiters = self.olderWaiters
+                self.olderWaiters = []
+                waiters.forEach { $0() }
+                if self.items.count != rowsBefore { self.chLog("SYNC# rows \(rowsBefore)->\(self.items.count) cid=\(self.cid.suffix(5))") }
+                self.channelFill()
+            }
+        }
+    }
+
+    /// Fewer than 40 visible posts above the first hole: read the hole (spec 6). Bounded per open
+    /// (`topUpCapWhenEmpty` pages), never during a jump, never twice at once.
+    private func channelFill() {
+        guard chMode == .synced, let box = chBox, listener != nil, !warmOnly, !loadingOlder,
+              !jumpPagingInFlight, !olderNeedsRetry, topUpPages < topUpCapWhenEmpty,
+              box.history.needsFill(want: Self.chWantVisible, chVisiblePredicate()) else {
+            if historyTopUpRunning, !loadingOlder { historyTopUpRunning = false }
+            return
+        }
+        topUpPages += 1
+        historyTopUpRunning = true
+        loadOlder()
+        if !loadingOlder { historyTopUpRunning = false }
+    }
+
+    /// What the reader would see of a post (the same filters `rebuild` and `refreshItems` apply).
+    private func chVisiblePredicate() -> (Message) -> Bool {
+        let hides = hidesChannelNotices
+        let cut = Self.cuts(cid).start?.addingTimeInterval(-2)
+        return { m in
+            guard !m.deleted, !HiddenMessages.isHidden(m.id), let shown = Self.channelNotice(m) else { return false }
+            if hides, shown.isSystem || shown.pinNotice != nil { return false }
+            if let cut, m.createdAt < cut { return false }
+            return true
+        }
+    }
+
+    // MARK: Applying
+
+    /// Docs from a listener, in order, as changes to the store; then `byId` follows the store.
+    private func chApply(_ docs: [QueryDocumentSnapshot], built: [String: Message], sigs: [String: String],
+                         box: ChannelHistoryBox<Message>) -> ChannelHistory<Message>.PageResult {
+        var n = ChannelHistory<Message>.PageResult()
+        let now = Date()
+        for doc in docs {
+            let id = doc.documentID
+            let m = built[id] ?? byId[id] ?? Message(id: id, data: doc.data(), cid: cid, crypto: Crypto.shared)
+            let old = box.history.posts[id]
+            switch box.history.applyChange(ChannelDoc(post: m, chg: Self.chgOf(doc)), now: now) {
+            case .added:
+                n.added += 1
+                chDocs[id] = doc; rawReactions[id] = sigs[id] ?? ""
+            case .edited:
+                n.edited += 1
+                chDocs[id] = doc; rawReactions[id] = sigs[id] ?? ""
+            case .unchanged:
+                if box.history.posts[id] != nil { chDocs[id] = doc; rawReactions[id] = sigs[id] ?? "" }
+            case .removed:
+                n.removed += 1
+                if let old { chForgetLocalCopies(old) }
+            case .ignored:
+                break
+            }
+        }
+        chMirrorAll()
+        return n
+    }
+
+    /// `byId` holds exactly the store's posts (pending sends and overlays live elsewhere).
+    private func chMirrorAll() {
+        guard let posts = chBox?.history.posts else { return }
+        let gone = byId.keys.filter { posts[$0] == nil }
+        for id in gone {
+            byId[id] = nil
+            rawReactions[id] = nil
+            chDocs[id] = nil
+        }
+        for (id, p) in posts where byId[id] != p { byId[id] = p }
+    }
+
+    private func chReason(fromCache: Bool, docs: [QueryDocumentSnapshot]) -> MessageListUpdateReason {
+        if sawServerWindow { return .live }
+        if fromCache { return .initial }
+        // A post the list has not shown, newer than all it shows, is an arrival (see commitSnapshot).
+        if let newestShown = items.map(\.createdAt).max(), docs.contains(where: { d in
+            indexById[d.documentID] == nil
+                && ((d.get("createdAt") as? Timestamp)?.dateValue() ?? .distantPast) > newestShown
+        }) { return .live }
+        return .serverSettle
+    }
+
+    /// Everything a listener or page round needs after the store changed.
+    private func finishChannelCommit(reason: MessageListUpdateReason) {
+        if !locallyDeleted.isEmpty {
+            locallyDeleted = locallyDeleted.filter { byId[$0]?.deleted == false }
+        }
+        if !didInitialLoad { didInitialLoad = true }
+        if let box = chBox {
+            let more = box.history.topHole != nil
+            if canLoadOlder != more { canLoadOlder = more }
+        }
+        chTrimIfNeeded()
+        noteSentSound()
+        rebuild(reason: reason)
+        dropEchoedPending()
+        channelFill()
+    }
+
+    /// The in-memory bound (as `trimWindowIfNeeded`): the oldest rows go, and become a hole again.
+    private func chTrimIfNeeded() {
+        guard !readerAwayFromBottom, !jumpPagingInFlight, let box = chBox,
+              box.history.posts.count > windowHighWater else { return }
+        let n = box.history.bound(keepVisible: windowCap) { _ in true }
+        chMirrorAll()
+        chLog("SYNC# trim cid=\(cid.suffix(5)) removed=\(n)")
+    }
+
+    private func chForgetLocalCopies(_ old: Message) {
+        let id = old.id, cid = cid
+        Task { @MainActor in
+            ChatService.forgetLocalCopies(of: old, cid: cid)
+            NotificationCleaner.remove(messageId: id)
+        }
+    }
+
+    /// Decode (decrypt) the docs that are new or changed, off the main thread; back on main.
+    private func chDecode(_ docs: [QueryDocumentSnapshot],
+                          _ done: @escaping (_ built: [String: Message], _ sigs: [String: String]) -> Void) {
+        let knownSigs = rawReactions
+        let knownIds = Set(byId.keys)
+        let cidLocal = cid
+        Task.detached(priority: .userInitiated) {
+            let sigs = Dictionary(docs.map { ($0.documentID, Self.changeSig($0.data())) },
+                                  uniquingKeysWith: { a, _ in a })
+            let need = docs.filter { doc in
+                !knownIds.contains(doc.documentID) || knownSigs[doc.documentID] != sigs[doc.documentID]
+            }
+            let built = Dictionary(need.map { doc in
+                (doc.documentID, Message(id: doc.documentID, data: doc.data(), cid: cidLocal, crypto: Crypto.shared))
+            }, uniquingKeysWith: { a, _ in a })
+            await MainActor.run { done(built, sigs) }
+        }
+    }
+
+    /// A key landed after these posts were decrypted: decrypt their docs again.
+    private func chRedecrypt() {
+        let docs = Array(chDocs.values)
+        guard !docs.isEmpty else { return }
+        for d in docs { rawReactions[d.documentID] = nil }
+        let gen = chStartGen
+        chDecode(docs) { [weak self] built, sigs in
+            guard let self, gen == self.chStartGen, let box = self.chBox else { return }
+            let now = Date()
+            for d in docs {
+                let id = d.documentID
+                guard let m = built[id], box.history.posts[id] != nil else { continue }
+                let r = box.history.applyChange(ChannelDoc(post: m, chg: Self.chgOf(d)), now: now)
+                if r == .edited || r == .unchanged { self.rawReactions[id] = sigs[id] ?? "" }
+            }
+            self.chMirrorAll()
+            self.rebuild(reason: .redecrypt)
+        }
     }
 }

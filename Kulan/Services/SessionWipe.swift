@@ -173,6 +173,7 @@ enum SessionWipe {
         // and clearing it is also what puts the first-run skeleton back for whoever signs in next.
         GlowStoriesCache.clear()
         ThreadMessageCache.shared.removeAll()   // decrypted messages
+        ChannelHistoryStore.shared.removeAll()   // 2026-11-09: channel stores (decrypted posts), memory + disk
         GalleryCache.removeAll()   // 2026-10-17: All Media's decrypted items, memory + disk
         StickerStore.shared.wipe() // 2026-10-17: my made stickers + recents belong to the account
         ProfileStore.shared.me = nil

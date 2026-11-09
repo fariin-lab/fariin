@@ -3771,11 +3771,20 @@ enum ChatService {
     /// now skips deleted messages in a group. Best effort.
     static func repairGroupDeletedPreview(cid: String) async {
         guard !cid.contains("_") else { return }
+        if serverOwnsPreview(cid) { return }
         let convRef = db.collection("conversations").document(cid)
         await rewriteSummaryGuarded(convRef) { await summaryOfNewest(convRef) }
     }
 
+    /// ⛔ A CHANNEL'S PREVIEW IS THE SERVER'S (CHANNEL-SYNC-SPEC.md 3-4, owner 2026-11-09): it is
+    /// recomputed there from the newest post that is not deleted, scanning as far as needed. The
+    /// app no longer rewrites it after a delete; groups and 1:1 chats are unchanged.
+    private static func serverOwnsPreview(_ cid: String) -> Bool {
+        !cid.contains("_") && Conversation.Right.isChannel(cid)
+    }
+
     private static func clearSummaryIfNewest(cid: String, deletedId: String) async {
+        if serverOwnsPreview(cid) { return }
         let convRef = db.collection("conversations").document(cid)
         // 2026-09-24 audit: through `rewriteSummaryGuarded`, so a message sent while this was
         // reading is not overwritten by the summary of the one before it.
@@ -3881,6 +3890,7 @@ enum ChatService {
     private static var repairedSummaries = Set<String>()
     @MainActor static func repairBlankSummary(_ cid: String) {
         guard repairedSummaries.insert(cid).inserted else { return }
+        if serverOwnsPreview(cid) { return }
         let convRef = db.collection("conversations").document(cid)
         Task {
             await rewriteSummaryGuarded(convRef) {
