@@ -490,7 +490,7 @@ final class PillBubbleView: UIView {
         }()
         one.isHidden = ring != .one
         one.frame = rect
-        one.font = .systemFont(ofSize: max(9, rect.height * 0.5), weight: .bold)
+        one.font = .systemFont(ofSize: max(9, rect.height * 0.47), weight: .bold)   // 14 in the 30pt ring
         one.textColor = color
         one.text = "1"
     }

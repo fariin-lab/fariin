@@ -666,10 +666,13 @@ enum MessageRowLayout {
             //   OPENED (ring `.empty`): one line, a 24pt empty ring and "Opened" in italic.
             let scale = BubbleMetrics.bodyFont.pointSize / 17   // follows the phone's text size
             let big = p.onceRing == .one
-            let padV: CGFloat = big ? 14 : 9, padH: CGFloat = big ? 18 : 14
-            let ringW = ceil((big ? 40 : 24) * scale)
-            let ringGap: CGFloat = big ? 12 : 10, metaGap: CGFloat = 12
-            let titleFont = big ? UIFont.systemFont(ofSize: 18 * scale, weight: .semibold)
+            // owner 2026-11-09: the unopened card was too big for both sides. Compact, the same
+            // numbers as Android: a 30pt ring, 10 gap, a 16pt title, no extra gap under it, near
+            // one-line height, at least 140 wide.
+            let padV: CGFloat = big ? 4 : 9, padH: CGFloat = 14
+            let ringW = ceil((big ? 30 : 24) * scale)
+            let ringGap: CGFloat = 10, metaGap: CGFloat = 12
+            let titleFont = big ? UIFont.systemFont(ofSize: 16 * scale, weight: .semibold)
                                 : UIFont.italicSystemFont(ofSize: BubbleMetrics.bodyFont.pointSize)
             let attr = NSAttributedString(string: p.label, attributes: [
                 .font: titleFont, .foregroundColor: big ? textColor : metaColor])
@@ -682,11 +685,11 @@ enum MessageRowLayout {
             let textCap = max(1, maxBubble - textX - padH)
             let titleSize = lineSizeOf(attr, cap: textCap)
             let subSize = subAttr.map { lineSizeOf($0, cap: max(1, textCap - metaGap - metaSizeO.width)) } ?? .zero
-            let lineGap: CGFloat = 2
+            let lineGap: CGFloat = 0
             // The line the footer rides: the subtitle on the card, the word on the small one.
             let footLineW = big ? subSize.width : titleSize.width
             let textW = max(big ? titleSize.width : 0, footLineW + metaGap + metaSizeO.width)
-            let bubbleWO = min(maxBubble, max(big ? 190 : 0, textX + textW + padH))
+            let bubbleWO = min(maxBubble, max(big ? 140 : 0, textX + textW + padH))
             let textH = big ? titleSize.height + lineGap + subSize.height : titleSize.height
             let rowH = max(ringW, textH)
             let bubbleHO = rowH + padV * 2
@@ -700,7 +703,7 @@ enum MessageRowLayout {
             // Unopened: green on theirs, my text colour (white) on mine. Opened: the footer's grey.
             let ringColor: UIColor = !big ? metaColor : (b.isMe ? textColor : BubblePalette.viewOnceGreen)
             var outO = BubblePlan(
-                bubble: rectO, radii: .uniform(big ? 22 : bubbleHO / 2), isCapsule: !big,
+                bubble: rectO, radii: .uniform(big ? 18 : bubbleHO / 2), isCapsule: !big,
                 fill: b.fill, rim: b.rim,
                 text: .zero,
                 meta: CGRect(x: bubbleWO - padH - metaSizeO.width, y: metaY,
