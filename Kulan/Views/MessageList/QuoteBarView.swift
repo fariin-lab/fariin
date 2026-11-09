@@ -7,6 +7,15 @@ import UIKit
 final class QuoteBarView: UIView {
     private let divider = UIView()
     private let faces = PollFaceStack()
+    /// Face size, and the gap after the faces or icon. `MessageRowLayout` sizes the bubble with these.
+    static let faceSide: CGFloat = 30
+    static let gap: CGFloat = 10
+    /// The width of the faces (or the 24 pt icon) plus the gap after them.
+    static func lead(faces n: Int, icon: Bool) -> CGFloat {
+        if icon { return 24 + gap }
+        guard n > 0 else { return 0 }
+        return faceSide + CGFloat(n - 1) * (faceSide * 0.68) + gap   // PollFaceStack's step
+    }
     private let label = UILabel()
     private let chevron = UIImageView(image: UIImage(systemName: "chevron.right",
         withConfiguration: UIImage.SymbolConfiguration(pointSize: 12, weight: .semibold)))
@@ -33,8 +42,9 @@ final class QuoteBarView: UIView {
         label.attributedText = attr
         if icon.superview == nil { addSubview(icon) }
         icon.isHidden = !showIcon
-        // Bigger (owner 2026-11-07: "text and avatar look small"): a little bigger, not much: 24pt faces, 15pt words.
-        faces.set(showIcon ? [] : urls.prefix(3).map { (people ? "?" : "Channel", $0.isEmpty ? nil : $0) }, side: 24)
+        // Bigger (owner 2026-11-07: "text and avatar look small"; 2026-11-09 again "preview user size
+        // looks small"): 30 pt faces, 15 pt words.
+        faces.set(showIcon ? [] : urls.prefix(3).map { (people ? "?" : "Channel", $0.isEmpty ? nil : $0) }, side: Self.faceSide)
         setNeedsLayout()
     }
 
@@ -45,10 +55,10 @@ final class QuoteBarView: UIView {
         var x = pad
         if !icon.isHidden {
             icon.frame = CGRect(x: x, y: (bounds.height - 24) / 2, width: 24, height: 24)
-            x += 24 + 9
+            x += 24 + Self.gap
         } else if !faces.isHidden, faces.frame.width > 0 {
             faces.frame.origin = CGPoint(x: x, y: (bounds.height - faces.frame.height) / 2)
-            x += faces.frame.width + 9
+            x += faces.frame.width + Self.gap
         }
         let size = label.sizeThatFits(CGSize(width: bounds.width, height: bounds.height))
         label.frame = CGRect(x: x, y: (bounds.height - size.height) / 2,
