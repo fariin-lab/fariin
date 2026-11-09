@@ -1603,6 +1603,9 @@ private struct ReplyRow: View {
                 .accessibilityHidden(true)
                 .onTapGesture { actions.openAuthor?() }
                 .anchorPreference(key: ReplyAvatarBounds.self, value: .bounds) { $0 }
+                // Down a little (owner 2026-11-09: level with the name's top it read as raised
+                // above the name): its top now sits by the name's middle, its body by the bubble.
+                .padding(.top, 6)
             VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Text(reply.name).font(.footnote.weight(.semibold)).lineLimit(1)
