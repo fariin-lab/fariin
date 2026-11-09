@@ -2414,6 +2414,7 @@ service cloud.firestore {
       // message still writes (it looks "sent" to them), but the blocker's client
       // hides it and the push function skips their notification. You may delete
       // only your own message.
+      match /changes/{x} { allow read: if signedIn() && (request.auth.uid in convData().users || follows(convData())); }
       match /messages/{mid} {
         // 2026-09-24 feature-audit: THE GROUP ADMIN'S "Delete messages" RIGHT. The owner could switch
         // it on for an admin and nothing honoured it. Same test as `adminCan` on the client: the
