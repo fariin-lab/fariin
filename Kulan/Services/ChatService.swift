@@ -299,11 +299,10 @@ enum ChatService {
             // background engine writes its own record, so only the ordinary path does it here.
             // A kill skips the `defer`, which is exactly when the record has to stay.
             var foregroundJob: String?
-            if let attach, !UploadEngine.backgroundEnabled,
-               let bucket = FirebaseApp.app()?.options.storageBucket {
+            if let attach, !UploadEngine.backgroundEnabled {
                 let id = UUID().uuidString
                 PendingUploadStore.add(PendingUpload(id: id, uploadURL: URL(string: "about:blank")!,
-                                                     bucket: bucket, storagePath: path,
+                                                     bucket: ref.bucket, storagePath: path,
                                                      filePath: tmp.path, cid: attach.cid,
                                                      messageId: attach.messageId,
                                                      urlField: attach.urlField, enc: attach.enc,
