@@ -2095,6 +2095,16 @@ struct ChatsView: View {
     // filter picker, Select Chats, Message Requests, Chat Key, Archive, Mark All Read.
     private var avatarMenu: some View {
         Menu {
+            // ⛔ THE TOP BAR'S ONE MENU, ON THE LEFT — owner, 2026-11-09 (Android builds the same):
+            // Select Chats (what the old "Edit" pill did), Mark All as Read, then a "Show" section with
+            // the filters. The entries that leave the list (requests, Chat Key, Archive) stay at the
+            // bottom so none of them loses its only door.
+            Button { withAnimation(.smooth(duration: 0.35)) { selecting = true } } label: {
+                Label { Text("Select Chats") } icon: { MenuIcon(system: "checkmark.circle") }
+            }
+            Button { markAllRead() } label: {
+                Label { Text("Mark All as Read") } icon: { MenuIcon(system: "checkmark.bubble") }
+            }
             // ⛔ THE THREE FILTERS ARE A `Picker` NOW, AND THAT IS WHAT LETS THEM CARRY ICONS —
             // owner, 2026-09-11: "add icons to All, Unread, Groups… use my custom icons only".
             //
@@ -2110,18 +2120,20 @@ struct ChatsView: View {
             // choice of mine. Groups takes `person.2.fill`, which is the glyph this app already
             // means "a group" with (New Group in the compose sheet, the My Friends story audience);
             // he has no drawing of his own for it and asked for the one that already fits.
-            Picker("", selection: $chatFilter) {
-                Label { Text("All") } icon: { MenuIcon("ic_menu_read") }.tag(0)
-                Label { Text("Unread") } icon: { MenuIcon("ic_menu_unread") }.tag(1)
-                if Flags.groupsEnabled {
-                    // The owner's group icon, as on the New group / Group Type rows (2026-10-21).
-                    Label { Text("Groups") } icon: { MenuIcon("ic_gs_group_type") }.tag(2)
-                    // Channels apart from groups (owner 2026-10-29). No drawing of his yet: the
-                    // megaphone the app already uses for a channel.
-                    Label { Text("Channels") } icon: { MenuIcon(system: "megaphone") }.tag(3)
+            Section("Show") {
+                Picker("", selection: $chatFilter) {
+                    Label { Text("All Chats") } icon: { MenuIcon("ic_menu_read") }.tag(0)
+                    Label { Text("Unread") } icon: { MenuIcon("ic_menu_unread") }.tag(1)
+                    if Flags.groupsEnabled {
+                        // The owner's group icon, as on the New group / Group Type rows (2026-10-21).
+                        Label { Text("Groups") } icon: { MenuIcon("ic_gs_group_type") }.tag(2)
+                        // Channels apart from groups (owner 2026-10-29). No drawing of his yet: the
+                        // megaphone the app already uses for a channel.
+                        Label { Text("Channels") } icon: { MenuIcon(system: "megaphone") }.tag(3)
+                    }
                 }
+                .pickerStyle(.inline)
             }
-            .pickerStyle(.inline)
             Divider()
             // Select Chats left this menu on 2026-09-25: the Edit button on the left does it now.
             // ⛔ MESSAGE REQUESTS — owner, 2026-09-09: "Message Requests put when users click ...
@@ -2165,15 +2177,8 @@ struct ChatsView: View {
             Button { path.append(ArchiveRoute.archive) } label: {
                 Label { Text("Archive") } icon: { MenuIcon("ic_archive") }
             }
-            // ⛔ LAST, NOT FIRST — owner, 2026-09-11, who wrote the order out in full. It sat at the
-            // top with a divider under it, which put the one ACTION in this menu above the things
-            // that only change what you are looking at. On its own at the bottom it reads the way a
-            // menu's one irreversible-ish entry should: after everything you might have come here
-            // for, not in front of them.
-            Divider()
-            Button { markAllRead() } label: {
-                Label { Text("Mark All Read") } icon: { MenuIcon(system: "checkmark.circle") }
-            }
+            // Mark All as Read moved to the top, under Select Chats (owner 2026-11-09 spec; it
+            // was last here since 2026-09-11).
             // ⛔ NO "ADD STORY" HERE — owner, 2026-09-02, with the entry ringed. Posting a story is
             // the Stories tab's job and that tab now opens with its own add button in the header;
             // this menu belongs to the chat list, and every other thing in it acts on the chat list.
@@ -2188,10 +2193,12 @@ struct ChatsView: View {
             Image(systemName: "line.3.horizontal.decrease")
         }
     }
-    // ⛔ "EDIT" ON THE LEFT — owner, 2026-09-25. It goes straight into selecting chats, which is
-    // what Edit means on every iOS list.
-    private var editButton: some View {
-        Button("Edit") { withAnimation(.smooth(duration: 0.35)) { selecting = true } }
+    // ⛔ EXPLORE IS A ROUND GLASS BUTTON ON THE RIGHT — owner, 2026-11-09. The "Edit" pill on the
+    // left is gone (Select Chats lives in the filter menu, which took its place). This opens the
+    // same Find Channels page the empty list's button does; the Chats tab is the one way in.
+    private var exploreButton: some View {
+        Button { showFindChannelsFromEmpty = true } label: { Image(systemName: "safari") }
+            .accessibilityLabel("Explore")
     }
     // The two right items: the filter menu, then compose at the trailing edge (owner, 2026-09-25;
     // the camera that stood here left the header, stories are posted from the Stories tab). Plain
@@ -2264,10 +2271,13 @@ struct ChatsView: View {
             // `SwipeFade` stands in for the system's own bar-item pop transition: it drops the
             // items to opacity 0 the instant a chat is pushed and brings them back on return.
             // (The deployment target is iOS 26, so there is no pre-26 branch to keep here.)
-            ToolbarItem(placement: .topBarLeading) { editButton.modifier(SwipeFade(on: showHeaderIcons)) }
+            // Left: the filter menu's glass circle (owner 2026-11-09, where "Edit" stood).
+            ToolbarItem(placement: .topBarLeading) {
+                avatarMenu.tint(.primary).modifier(SwipeFade(on: showHeaderIcons))
+            }
             // Two buttons, not one shared capsule (owner 2026-10-25): a fixed spacer splits the glass.
             ToolbarItem(placement: .topBarTrailing) {
-                avatarMenu.tint(.primary).modifier(SwipeFade(on: showHeaderIcons))
+                exploreButton.tint(.primary).modifier(SwipeFade(on: showHeaderIcons))
             }
             ToolbarSpacer(.fixed, placement: .topBarTrailing)
             ToolbarItem(placement: .topBarTrailing) {
@@ -2373,6 +2383,12 @@ struct ChatsView: View {
         })
         out.append(UIAction(title: "Archive", image: ChatListIcon.asset("ic_archive")) { _ in
             Task { await Self.archive(conv.id) }
+        })
+        // ⛔ SELECT FROM THE LONG PRESS — owner, 2026-11-09. The long press already opens this menu
+        // over the chat's preview, so select mode is one row in it (the Calls page's own "Select"),
+        // with this chat ticked, rather than taking the press away from the preview.
+        out.append(UIAction(title: "Select", image: ChatListIcon.symbol("checkmark.circle")) { _ in
+            withAnimation(.smooth(duration: 0.35)) { selecting = true; selection = [conv.id] }
         })
         // `.destructive` reddens the row itself, which is what `MenuIcon(ink: .systemRed)` was doing
         // by hand on the SwiftUI side. The delete still goes through the app's own alert.
