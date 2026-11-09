@@ -2507,20 +2507,30 @@ struct UsernameEditView: View {
             switch status {
             case .quiet:
                 EmptyView()
+            // One ring the whole time (owner 2026-11-09: "this tool in the username change page
+            // also"): it spins while the server is asked, then closes green with a tick drawing in,
+            // or red with a cross, the sign-up page's and the channel link page's ring.
             case .checking:
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.mini)
+                HStack(spacing: 7) {
+                    HandleCheckRing(state: .checking)
                     Text("Checking username…")
                 }
                 .transition(.opacity)
             case .available(let name):
-                Text("\(name) is available.").foregroundStyle(.green)
-                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                HStack(spacing: 7) {
+                    HandleCheckRing(state: .free)
+                    Text("\(name) is available.")
+                }
+                .foregroundStyle(.green)
+                .transition(.opacity)
             case .taken:
                 // Plain and short, no "Sorry" (owner 2026-10-31: read like the big apps).
-                Label("This username is taken.", systemImage: "exclamationmark.circle.fill")
-                    .foregroundStyle(.red)
-                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                HStack(spacing: 7) {
+                    HandleCheckRing(state: .taken)
+                    Text("This username is taken.")
+                }
+                .foregroundStyle(.red)
+                .transition(.opacity)
                 if !suggestions.isEmpty {
                     HStack(spacing: 6) {
                         Text("Free:")
