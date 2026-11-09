@@ -109,6 +109,8 @@ struct ReplyTarget: Equatable {
     var thread: String
     var name: String
     var to: String?
+    /// My own reply: the line says "Replying to yourself" (owner 2026-11-09).
+    var mine = false
 }
 
 /// A reply of mine being edited in the field.
@@ -1379,7 +1381,7 @@ struct PostThreadSheet: View {
             // On an answer, the send also says which answer it answers ("@name" on the new one).
             reply: model.off ? nil : {
                 editing = nil
-                answering = ReplyTarget(thread: thread ?? r.id, name: r.name, to: thread == nil ? nil : r.id)
+                answering = ReplyTarget(thread: thread ?? r.id, name: r.name, to: thread == nil ? nil : r.id, mine: r.mine)
             },
             edit: (r.mine && r.send == .sent && !model.off && Date().timeIntervalSince(r.at) < Self.editWindow) ? {
                 guard Date().timeIntervalSince(r.at) < Self.editWindow else { show("Replies can be edited for 15 minutes."); return }
@@ -1759,12 +1761,18 @@ private struct ReplyComposer: View {
                     }
                     .padding(.horizontal, 20)
                 } else if let a = answering {
-                    HStack {
-                        Text("Replying to \(a.name)").font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Button { answering = nil } label: { Image(systemName: "xmark").font(.caption.weight(.semibold)) }
-                            .foregroundStyle(.secondary)
-                            .accessibilityLabel("Cancel reply")
+                    // "Replying to yourself · Cancel" on my own reply, the name otherwise, and Cancel as a
+                    // word right after it (owner 2026-11-09).
+                    HStack(spacing: 4) {
+                        Text(a.mine ? "Replying to yourself" : "Replying to \(a.name)")
+                            .font(.footnote).foregroundStyle(.primary).lineLimit(1)
+                        Text("·").font(.footnote).foregroundStyle(.secondary)
+                        Button { answering = nil } label: {
+                            Text("Cancel").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Cancel reply")
+                        Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 20)
                 }
