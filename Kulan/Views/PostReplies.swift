@@ -203,8 +203,24 @@ struct ReplyEdit: Equatable {
     private var recentMine: [String: Date] = [:]
     /// Sends (by client id) already counted in `count` and the thread's answers.
     private var counted: Set<String> = []
-    /// Is the end of the list on screen? New replies then scroll in instead of counting in the pill.
-    var atEnd = true
+    /// The list's two edges on screen now (set by their sentinels). Kept apart, so a sort switch does
+    /// not have to guess (2026-11-09 audit R-07: `atEnd` was written and never read, and the pill
+    /// counted a reply already in plain view).
+    var startSeen = false
+    var endSeen = false
+    /// Is the edge where new replies land on screen (the top for Newest, the bottom for Top)? New
+    /// ones then show where I am looking, and the pill does not count them.
+    var atEnd: Bool { sort == .new ? startSeen : endSeen }
+    /// Top's page one as it was last read: a thread on it then and not now was deleted, held or
+    /// banned (2026-11-09 audit R-03: Top never dropped a row).
+    private var lastTopPageIds: [String] = []   // in the server's order
+    /// Top rows standing in for Newest until its first page lands (`setSort`): never kept past it
+    /// (2026-11-09 audit R-04: they stayed between the newest and the older pages, out of order).
+    private var standIns: Set<String> = []
+    /// ⛔ SOMEONE ELSE'S NEW REPLY NEVER MOVES MY LIST, NEWEST TOO (2026-11-09 audit R-08): in Newest
+    /// they land above what I am reading, which pushed it down. While the top is off screen they wait
+    /// here, counted by the pill; they go in when the pill is tapped or the top comes into view.
+    private var heldBack: [PostReply] = []
 
     /// Top (the server's best first, shown in its order) or Newest (newest at the top). Top is the
     /// default. A server from before sorting ignores it and sends newest first.
@@ -267,7 +283,13 @@ struct ReplyEdit: Equatable {
 
     /// A new sort: the list starts again from its first page (pinned stays first).
     func setSort(_ s: Sort) {
-        guard s != sort else { return }
+        guard prepareSort(s) else { return }
+        Task { await loadFirst() }
+    }
+
+    /// The switch itself, without the load (a reply alert awaits the load itself). False: no change.
+    private func prepareSort(_ s: Sort) -> Bool {
+        guard s != sort else { return false }
         sort = s
         refreshGen &+= 1
         let mineSending = threads.filter { $0.send != .sent }
@@ -277,12 +299,34 @@ struct ReplyEdit: Equatable {
         // reversed), until the server's page replaces them.
         let saved = Self.cache[cacheKey] ?? []
         let standIn = saved.isEmpty ? threads.sorted { $0.at < $1.at } : saved + mineSending
+        standIns = saved.isEmpty ? Set(threads.filter { $0.send == .sent }.map(\.id)) : []
         threads = placed(standIn)
         olderCursor = ""
         unseenNew = 0
-        atEnd = true
+        heldBack = []
         loaded = !threads.isEmpty
-        Task { await loadFirst() }
+        return true
+    }
+
+    /// The pill tapped: replies held back go in now.
+    func showNew() {
+        releaseHeld()
+        unseenNew = 0
+    }
+
+    private func releaseHeld() {
+        guard !heldBack.isEmpty else { return }
+        let have = Set(threads.map(\.id))
+        threads = placed(threads + heldBack.filter { !have.contains($0.id) && !deletedIds.contains($0.id) })
+        heldBack = []
+    }
+
+    /// An edge sentinel came into view or left it.
+    func edgeSeen(top: Bool, seen: Bool) {
+        if top { startSeen = seen } else { endSeen = seen }
+        guard seen, top == (sort == .new) else { return }
+        releaseHeld()
+        unseenNew = 0
     }
 
     static func reset() { cache.removeAll(); pinCache.removeAll() }
@@ -322,12 +366,25 @@ struct ReplyEdit: Equatable {
                 let rev = (snap?.data()?["rev"] as? NSNumber)?.intValue ?? 0
                 Task { @MainActor in self?.headChanged(rev) }
             }
+        // The signal back: a first page that failed, or a reply alert still waiting, is read again.
+        netObserver = NotificationCenter.default.addObserver(forName: .networkCameBack, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.networkCameBack() }
+        }
     }
 
     func stop() {
         headListener?.remove()
         headListener = nil
         refreshTask?.cancel()
+        if let o = netObserver { NotificationCenter.default.removeObserver(o) }
+        netObserver = nil
+    }
+
+    private var netObserver: NSObjectProtocol?
+
+    private func networkCameBack() {
+        guard failed || pendingFocus != nil else { return }
+        Task { await loadFirst() }
     }
 
     private func headChanged(_ rev: Int) {
@@ -382,28 +439,61 @@ struct ReplyEdit: Equatable {
                 let kept = threads.filter { r in !ids.contains(r.id)
                     && (r.send != .sent || recentMine[r.id].map { now.timeIntervalSince($0) < 8 } == true) }
                 threads = page + kept
+                lastTopPageIds = page.map(\.id)
                 Self.cache[cacheKey] = page
             } else {
                 let page = Array(rows(d).reversed())
                 ids = Set(page.map(\.id))
                 if threads.isEmpty || olderCursor.isEmpty { olderCursor = d["next"] as? String ?? "" }
-                // Pages loaded further down stay (a Try Again or a switch flip used to drop them).
+                // Pages loaded further down stay (a Try Again or a switch flip used to drop them);
+                // Top's rows standing in for this order do not.
                 let firstAt = page.first?.at
-                let kept = threads.filter { r in !ids.contains(r.id) && (r.send != .sent || (firstAt.map { r.at < $0 } ?? true)) }
+                let kept = threads.filter { r in !ids.contains(r.id)
+                    && (r.send != .sent || (!standIns.contains(r.id) && (firstAt.map { r.at < $0 } ?? true))) }
                 threads = (kept + page).sorted { $0.at < $1.at }
                 Self.cache[cacheKey] = page
             }
+            standIns = []
+            heldBack = []
             applyPinned(d)
             if lastRev < 0 { lastRev = (d["rev"] as? NSNumber)?.intValue ?? 0 }
             loaded = true
             failed = false
+            goneMessage = nil
             prefetchAnswers()
+            firstDone = true
+            resumeFocus()
+            return
         } catch {
             guard s == sort else { return }
             failed = true
             loaded = true
+            // The server refused for a reason it explains (the post was deleted, the channel can't be
+            // seen): that, not "check your connection". A dropped line leaves it nil.
+            goneMessage = Self.serverMessage(error, codes: [.failedPrecondition, .notFound, .permissionDenied])
         }
         firstDone = true
+    }
+
+    /// Why the first page was refused, in the server's words, when it was not the connection.
+    private(set) var goneMessage: String?
+
+    /// A reply alert whose jump failed on a read (offline): run again once a first page lands.
+    private var pendingFocus: (rid: String, aid: String?)?
+
+    private func resumeFocus() {
+        guard let p = pendingFocus else { return }
+        pendingFocus = nil
+        Task { await focus(rid: p.rid, aid: p.aid) }
+    }
+
+    /// A jump that could not finish. ⛔ A FAILED READ IS NOT "DELETED" (2026-11-09 audit X8/X1:
+    /// offline, or the post itself gone, said "This reply was deleted"). The server's reason when it
+    /// gave one; otherwise the connection, and the jump runs again when the line or a page is back.
+    private func focusFailed(rid: String, aid: String?) {
+        if let m = goneMessage { notice = m; return }
+        notice = "Couldn't load replies. Check your connection."
+        pendingFocus = (rid, aid)
     }
 
     /// ⛔ "VIEW N REPLIES" OPENS AT ONCE (owner 2026-11-07: it opened late). Right after the first page,
@@ -434,15 +524,41 @@ struct ReplyEdit: Equatable {
         if sort == .top {
             // Merged in place by id: rows keep their spot, new ones go below (the pill counts them).
             let page = rows(d)
-            var list = threads
+            let newIds = Set(page.map(\.id))
+            let wholeList = (d["next"] as? String ?? "").isEmpty
+            let now = Date()
+            let keepMine: (PostReply) -> Bool = { r in
+                r.send != .sent || self.recentMine[r.id].map { now.timeIntervalSince($0) < 8 } == true }
+            // Gone (deleted here or elsewhere, held after reports, banned): when page one is the whole
+            // list, any row not on it. Otherwise a row that was on page one and is not now, while a
+            // row that stood below it still is; at the page's tail a missing row may only have been
+            // pushed down to page two by one that rose, so it stays.
+            var gone = Set<String>()
+            if wholeList {
+                gone = Set(threads.map(\.id)).subtracting(newIds)
+            } else {
+                var belowStays = false
+                for id in lastTopPageIds.reversed() {
+                    if newIds.contains(id) { belowStays = true } else if belowStays { gone.insert(id) }
+                }
+            }
+            var list = threads.filter { r in newIds.contains(r.id) || keepMine(r) || !gone.contains(r.id) }
+            // Only replies newer than any held are new; one rising into page one from a page not
+            // read yet is not (2026-11-09 audit R-07).
+            let newestHeld = threads.filter { $0.send == .sent }.map(\.at).max()
             var added = 0
             for r in page {
                 if let i = list.firstIndex(where: { $0.id == r.id }) { list[i] = r }
-                else { list.append(r); if !r.mine { added += 1 } }
+                else {
+                    list.append(r)
+                    if !r.mine, newestHeld.map({ r.at > $0 }) ?? true { added += 1 }
+                }
             }
             threads = list
+            lastTopPageIds = page.map(\.id)
             applyPinned(d)
-            if added > 0 { unseenNew += added }   // never a scroll for someone else's reply (below)
+            // Never a scroll for someone else's reply (below); the pill only when the end is off screen.
+            if added > 0 && !atEnd { unseenNew += added }
             Self.cache[cacheKey] = page
             dropStaleAnswers(page)
             await reloadChangedOpen(page)
@@ -455,7 +571,7 @@ struct ReplyEdit: Equatable {
         let keepMine: (PostReply) -> Bool = { $0.send != .sent || self.recentMine[$0.id] != nil }
         guard let oldestShown = page.first?.at else {
             // Nothing visible on the newest page: only rows newer than what that page covered can go.
-            if next.isEmpty { threads.removeAll { !keepMine($0) } }
+            if next.isEmpty { threads.removeAll { !keepMine($0) }; heldBack = [] }
             applyPinned(d)   // a pin or unpin still lands when the newest page is empty
             dropStaleAnswers(page)
             return
@@ -465,24 +581,31 @@ struct ReplyEdit: Equatable {
         let overlaps = newestKnown.map { $0 >= oldestShown } ?? true
         var list: [PostReply]
         if overlaps {
-            list = threads.filter { keepMine($0) || $0.at < oldestShown || ids.contains($0.id) }
+            list = threads.filter { keepMine($0) || ids.contains($0.id) || ($0.at < oldestShown && !standIns.contains($0.id)) }
+            heldBack.removeAll { !ids.contains($0.id) }   // deleted before it was shown
         } else {
             // More arrived than one page: start again from this page, older ones load on scroll.
             list = threads.filter(keepMine)
             olderCursor = next
+            heldBack = []
         }
+        standIns = []
+        // ⛔ SOMEONE ELSE'S NEW REPLY NEVER MOVES MY LIST (owner 2026-11-08, "exactly like TikTok"):
+        // on a post with thousands of replies a scroll per arrival is jumpy and costly. The pill
+        // counts it; while the top is off screen it waits in `heldBack`, since a row put in above
+        // what I am reading pushes it down.
         var added = 0
         for r in page {
+            let isNew = !r.mine && (newestKnown.map { r.at > $0 } ?? true)
             if let i = list.firstIndex(where: { $0.id == r.id }) { list[i] = r }
-            else { list.append(r); if !r.mine { added += 1 } }
+            else if let i = heldBack.firstIndex(where: { $0.id == r.id }) { heldBack[i] = r }
+            else if isNew && overlaps && !atEnd { heldBack.append(r); added += 1 }
+            else { list.append(r); if isNew { added += 1 } }
         }
         list.sort { $0.at < $1.at }
         threads = list
         applyPinned(d)
-        // ⛔ SOMEONE ELSE'S NEW REPLY NEVER MOVES MY LIST (owner 2026-11-08, "exactly like TikTok"):
-        // on a post with thousands of replies a scroll per arrival is jumpy and costly. It lands
-        // where it belongs and the "new" pill counts it.
-        if added > 0 { unseenNew += added }
+        if added > 0 && !atEnd { unseenNew += added }
         Self.cache[cacheKey] = page
         dropStaleAnswers(page)
         await reloadChangedOpen(page)
@@ -516,13 +639,15 @@ struct ReplyEdit: Equatable {
         }
     }
 
-    func loadOlder() async {
-        guard !olderCursor.isEmpty, !loadingOlder else { return }
+    /// False only when the read failed (nothing to load, or one already on its way, is not a failure).
+    @discardableResult
+    func loadOlder() async -> Bool {
+        guard !olderCursor.isEmpty, !loadingOlder else { return true }
         loadingOlder = true
         defer { loadingOlder = false }
         let s = sort
-        guard let res = try? await fn.httpsCallable("getReplies").call(listArgs(["cursor": olderCursor])) else { return }
-        guard s == sort else { return }
+        guard let res = try? await fn.httpsCallable("getReplies").call(listArgs(["cursor": olderCursor])) else { return false }
+        guard s == sort else { return true }
         let d = res.data as? [String: Any] ?? [:]
         let fresh = rows(d).filter { r in !threads.contains { $0.id == r.id } && r.id != pinned?.id }
         olderCursor = d["next"] as? String ?? ""
@@ -531,8 +656,10 @@ struct ReplyEdit: Equatable {
             let at = threads.firstIndex { $0.send != .sent } ?? threads.count
             threads.insert(contentsOf: fresh, at: at)
         } else {
-            threads.insert(contentsOf: fresh.reversed(), at: 0)
+            // In time order, not just at the old end (2026-11-09 audit R-04).
+            threads = (fresh + threads).sorted { $0.at < $1.at }
         }
+        return true
     }
 
     /// Finds a row (thread, pinned, or an answer) by id.
@@ -586,24 +713,37 @@ struct ReplyEdit: Equatable {
 
     /// A reply alert tapped: that thread (paging down to it if needed), opened, then the answer.
     func focus(rid: String, aid: String?) async {
+        pendingFocus = nil
         for _ in 0..<60 where !firstDone { try? await Task.sleep(nanoseconds: 100_000_000) }
+        // Still on its way (a slow line): the jump runs when it lands (`resumeFocus`).
+        guard firstDone else { pendingFocus = (rid, aid); return }
+        // Failed: a failed read proves nothing; the jump waits for a page.
+        guard !failed else { focusFailed(rid: rid, aid: aid); return }
+        releaseHeld()
+        // ⛔ AN ALERT'S REPLY IS FOUND BY TIME, NOT BY SCORE (2026-11-09 audit R-06): Top lists by
+        // score, so a new reply (no reactions yet) sits after every scored thread, pages down, and
+        // five pages could miss it. Not on Top's first page: over to Newest, where it is near the top.
+        if !isThread(rid), sort == .top, prepareSort(.new) {
+            await loadFirst()
+            guard !failed else { focusFailed(rid: rid, aid: aid); return }
+        }
         var pages = 0
         while !isThread(rid), !olderCursor.isEmpty, pages < 5 {
-            await loadOlder()
+            // A page my own scroll asked for first: wait for it, it is not one of these five.
+            for _ in 0..<100 where loadingOlder { try? await Task.sleep(nanoseconds: 100_000_000) }
+            guard !isThread(rid) else { break }
+            guard await loadOlder() else { focusFailed(rid: rid, aid: aid); return }
             pages += 1
         }
         guard isThread(rid) else {
-            // Gone, or too far down: the sheet stays at the top. Every page read and still not
-            // there means it was deleted (Activity, 2026-11-09).
-            // A failed first page proves nothing (offline): no "deleted" then.
-            if failed { notice = "Couldn't load replies. Check your connection." }
-            else if olderCursor.isEmpty { notice = "This reply was deleted" }
+            // Every page read and still not there: deleted. Too far down: the sheet stays at the top.
+            if olderCursor.isEmpty { notice = "This reply was deleted" }
             return
         }
         if let aid, !aid.isEmpty, aid != rid {
             let ok = await jumpTo(aid, inThread: rid)
             if !ok {
-                notice = "Couldn't load replies. Check your connection."
+                focusFailed(rid: rid, aid: aid)
             } else if answers[rid]?.contains(where: { $0.id == aid }) != true, (answerNext[rid] ?? "").isEmpty {
                 notice = "This reply was deleted"
             }
@@ -800,13 +940,22 @@ struct ReplyEdit: Equatable {
     /// A short line for the sheet's toast (the server's own words for a refusal it explains).
     var notice: String?
 
-    /// The server's message for a refusal it explains ("Too late to edit.", "This reply can't take
-    /// answers."): failed-precondition errors only, everything else gets our own words.
-    static func serverMessage(_ error: Error) -> String? {
+    /// The server's message for a refusal it explains ("Too late to edit.", "That reply was deleted.",
+    /// "You're replying too fast. Wait a moment."). These codes carry words written for people
+    /// (2026-11-09 audit R-09: only failed-precondition got through, the rest failed in silence);
+    /// everything else (a dropped line, a crash) gets our own words.
+    static let explainedCodes: [FunctionsErrorCode] = [.failedPrecondition, .notFound, .permissionDenied, .resourceExhausted]
+
+    static func serverMessage(_ error: Error, codes: [FunctionsErrorCode] = explainedCodes) -> String? {
         let ns = error as NSError
-        guard ns.domain == FunctionsErrorDomain, ns.code == FunctionsErrorCode.failedPrecondition.rawValue else { return nil }
+        guard ns.domain == FunctionsErrorDomain, codes.contains(where: { $0.rawValue == ns.code }) else { return nil }
         let m = ns.localizedDescription
         return m.isEmpty ? nil : m
+    }
+
+    static func isCode(_ error: Error, _ code: FunctionsErrorCode) -> Bool {
+        let ns = error as NSError
+        return ns.domain == FunctionsErrorDomain && ns.code == code.rawValue
     }
 
     func discard(_ r: PostReply, thread: String?) {
@@ -967,9 +1116,50 @@ struct ReplyEdit: Equatable {
     func ban(_ r: PostReply, thread: String?, all: Bool) async -> Bool {
         var a: [String: Any] = ["all": all]
         if let t = thread { a["rid"] = t; a["aid"] = r.id } else { a["rid"] = r.id }
-        guard (try? await fn.httpsCallable("banReplier").call(args(a))) != nil else { return false }
+        guard let res = try? await fn.httpsCallable("banReplier").call(args(a)) else { return false }
+        // ⛔ THEIR REPLIES LEAVE THE SCREEN NOW (2026-11-09 audit R-03: in Top the toast said "Their
+        // replies are gone" over rows still there). The one banned for, and with `all` every row of
+        // theirs held here (moderators have the author on each row).
+        var gone = 0
+        if let t = thread {
+            if answers[t]?.contains(where: { $0.id == r.id }) == true { gone += 1 }
+            dropLocally(r.id, thread: t)
+        } else {
+            gone += 1 + max(r.answers, answers[r.id]?.count ?? 0)
+            dropLocally(r.id, thread: nil)
+        }
+        if all, let u = r.uid, !u.isEmpty {
+            for row in threads + [pinned].compactMap({ $0 }) where row.uid == u {
+                gone += 1 + max(row.answers, answers[row.id]?.count ?? 0)
+                dropLocally(row.id, thread: nil)
+            }
+            let theirs = answers.flatMap { t, list in list.filter { $0.uid == u }.map { (t, $0.id) } }
+            for (t, aid) in theirs { gone += 1; dropLocally(aid, thread: t) }
+        }
+        // One ban: the server's own number for this post. All: it counts the whole channel, so the
+        // rows seen here are the guess until the server's recount lands.
+        let removed = ((res.data as? [String: Any])?["removed"] as? NSNumber)?.intValue
+        bumpCount(-((all ? nil : removed) ?? gone))
         await refreshNewest()
         return true
+    }
+
+    /// A row removed here for good (a ban): it never comes back from a page read before the ban.
+    private func dropLocally(_ id: String, thread: String?) {
+        deletedIds.insert(id)
+        if let t = thread {
+            guard answers[t]?.contains(where: { $0.id == id }) == true else { return }
+            answers[t]?.removeAll { $0.id == id }
+            update(t, thread: nil) { $0.answers = max(0, $0.answers - 1) }
+        } else {
+            threads.removeAll { $0.id == id }
+            answers[id] = nil
+            answerNext[id] = nil
+            answersLoaded.remove(id)
+            openThreads.remove(id)
+            mineOnTop.removeAll { $0 == id }
+            if pinned?.id == id { pinned = nil; Self.pinCache[mid] = nil }
+        }
     }
 
     @discardableResult
@@ -1030,6 +1220,10 @@ struct PostThreadSheet: View {
     /// Replies off right now: what the chat said at open, then whatever the server says (a switch
     /// flipped inside this sheet shows or hides the Replies tab and the field at once).
     @State private var offNow = false
+    /// Opened by a reply alert or an Activity row onto one reply: Replies stays the open tab.
+    @State private var openedOnReply = false
+    /// Bumped by every Reply tap, so a second tap on the same row brings the keyboard back (R-12).
+    @State private var focusTick = 0
 
     init(cid: String, mid: String, post: Message?, repliesOff: Bool = false, sourceTitle: String, sourcePhoto: String?,
          sourceVerified: Bool, picture: @escaping () async -> UIImage?, onOpen: @escaping (QuotedInItem) -> Void,
@@ -1090,8 +1284,10 @@ struct PostThreadSheet: View {
         .onChange(of: model.off) { _, off in offNow = off }
         .onChange(of: model.flagsLoaded) { _, l in if l { offNow = model.off } }
         // Off: Quotes is the only tab left. Turned on again: back to Replies, where the field is.
+        // ⛔ NOT WHEN OPENED ON A REPLY (2026-11-09 audit X12: an alert's reply on a post whose replies
+        // were turned off landed on Quotes, the flash on a hidden tab). It stays on Replies, read-only.
         .onChange(of: offNow) { was, off in
-            if off && !quotesOff { tab = .quotes } else if was { tab = .replies }
+            if off && !quotesOff { if !openedOnReply { tab = .quotes } } else if was { tab = .replies }
         }
         .onAppear {
             model.start()
@@ -1099,6 +1295,7 @@ struct PostThreadSheet: View {
             if let t = AppRouter.shared.pendingReplyTarget, t.mid == mid {
                 AppRouter.shared.pendingReplyTarget = nil
                 if Date().timeIntervalSince(t.at) < 60 {
+                    openedOnReply = true
                     tab = .replies
                     Task { await model.focus(rid: t.rid, aid: t.aid) }
                 }
@@ -1189,7 +1386,7 @@ struct PostThreadSheet: View {
             // Replies off (here or found off by the server): no Replies tab, Quotes alone.
             // With Quotes off too, Replies stays (read-only): something has to be shown.
             // With the count (owner 2026-11-08: "show count comments"), as the post's own row says it.
-            if !offNow || quotesOff { tabButton(repliesTitle, .replies) }
+            if !offNow || quotesOff || tab == .replies { tabButton(repliesTitle, .replies) }
             if !quotesOff { tabButton("Quotes", .quotes) }
             Spacer(minLength: 0)
             HStack(spacing: 10) {
@@ -1301,9 +1498,7 @@ struct PostThreadSheet: View {
 
     /// Where new replies land: the bottom for Top, the top for Newest.
     private func edgeSeen(top: Bool, seen: Bool) {
-        guard top == (model.sort == .new) else { return }
-        model.atEnd = seen
-        if seen { model.unseenNew = 0 }
+        model.edgeSeen(top: top, seen: seen)
     }
 
     /// "Top" and "Newest", small, over the list. Hidden until there is something to sort.
@@ -1411,8 +1606,11 @@ struct PostThreadSheet: View {
         if model.unseenNew > 0 {
             let up = model.sort == .new
             Button {
-                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(up ? "start" : "end", anchor: up ? .top : .bottom) }
-                model.unseenNew = 0
+                model.showNew()   // Newest: the ones held back go in first, then the list goes up to them
+                Task { @MainActor in
+                    await Task.yield()
+                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(up ? "start" : "end", anchor: up ? .top : .bottom) }
+                }
             } label: {
                 Label("\(model.unseenNew) new \(model.unseenNew == 1 ? "reply" : "replies")", systemImage: up ? "arrow.up" : "arrow.down")
                     .font(.footnote.weight(.semibold))
@@ -1579,7 +1777,8 @@ struct PostThreadSheet: View {
                     .padding(.bottom, 6)
                 Text("Couldn't load replies")
                     .font(.system(size: 15, weight: .semibold))
-                Text("Check your connection and try again.")
+                // The server's reason when it refused (the post deleted), not the connection.
+                Text(model.goneMessage ?? "Check your connection and try again.")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
