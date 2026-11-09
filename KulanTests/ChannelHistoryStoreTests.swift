@@ -243,7 +243,36 @@ final class ChannelHistoryStoreTests: XCTestCase {
         XCTAssertEqual(h.posts.count, 30)
         XCTAssertEqual(h.sortedPosts.first?.id, "p70")
         XCTAssertFalse(h.reachedStart, "what went is a hole again")
-        XCTAssertEqual(h.topHole?.upper, at(69))
+        XCTAssertEqual(h.topHole?.upper, at(70), "the hole starts at the oldest post kept (read inclusive)")
+    }
+
+    /// Audit C7: a post sharing its stamp with the oldest one kept stays (it was dropped and read back).
+    func testBoundKeepsPostsTiedWithTheOldestKept() {
+        var h = H()
+        var all = (0..<10).map { doc("p\($0)", Double($0), chg: $0 + 1) }
+        all.append(doc("twin", 5, chg: 20))   // same stamp as p5
+        h.applyPage(all, upper: .distantFuture, full: false, fromServer: true, now: now)
+        // Newest first: p9 p8 p7 p6 then p5 / twin (ties ordered by id): keeping 5 ends on one of them.
+        h.bound(keepVisible: 5, visible)
+        XCTAssertNotNil(h.posts["p5"])
+        XCTAssertNotNil(h.posts["twin"])
+        XCTAssertNil(h.posts["p4"])
+        XCTAssertEqual(h.topHole?.upper, at(5))
+        // Reading the hole from its edge brings back only what went.
+        let page = serverPage(all, upper: at(5))
+        let r = h.applyPage(page, upper: at(5), full: false, fromServer: true, now: now)
+        XCTAssertEqual(r.added, 5, "p0...p4")
+        XCTAssertTrue(h.reachedStart)
+    }
+
+    /// Audit C6: away longer than the server keeps its hard-delete records means re-verify.
+    func testChangeRecordsExpireAfterLongAbsence() {
+        var h = H()
+        XCTAssertFalse(h.changeRecordsMayHaveExpired(now: now), "an older file without a stamp is trusted")
+        h.syncedAt = now.addingTimeInterval(-10 * 86_400)
+        XCTAssertFalse(h.changeRecordsMayHaveExpired(now: now))
+        h.syncedAt = now.addingTimeInterval(-(H.changeRecordsKeep + 60))
+        XCTAssertTrue(h.changeRecordsMayHaveExpired(now: now))
     }
 
     // MARK: Disk and reopen
@@ -326,6 +355,32 @@ final class ChannelHistoryStoreTests: XCTestCase {
         let again = reg.openSync(uid: "u1", cid: "A")
         XCTAssertEqual(again.history.sortedPosts.map(\.id), ["a1", "a2"])
         XCTAssertEqual(again.history.lastChg, 2)
+    }
+
+    /// Audit C4: a store a screen still shows is never evicted (no second store over the same
+    /// file); once released it is trimmed to what the disk keeps and may leave memory.
+    func testHeldStoreIsNotEvictedAndReleaseTrims() {
+        final class Screen {}
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let reg = ChannelHistoryRegistry<P>(directory: dir, diskKeep: 10, memoryCap: 1)
+        let screen = Screen()
+        let a = reg.openSync(uid: "u1", cid: "A")
+        a.hold(screen)
+        a.history.applyPage((0..<50).map { doc("p\($0)", Double($0), chg: $0 + 1) },
+                            upper: .distantFuture, full: false, fromServer: true, now: now)
+        a.history.lastChg = 50
+        _ = reg.openSync(uid: "u1", cid: "B")
+        XCTAssertTrue(reg.memory(uid: "u1", cid: "A") === a, "held: stays in memory past the cap")
+        XCTAssertTrue(reg.openSync(uid: "u1", cid: "A") === a, "a second open finds the same store")
+        XCTAssertEqual(a.history.posts.count, 50)
+
+        a.release(screen)
+        XCTAssertFalse(a.isHeld)
+        XCTAssertEqual(a.history.posts.count, 10, "trimmed to the disk's keep on the way out")
+        _ = reg.openSync(uid: "u1", cid: "C")   // B goes first (opened before A was last touched)
+        _ = reg.openSync(uid: "u1", cid: "D")
+        XCTAssertNil(reg.memory(uid: "u1", cid: "A"), "no longer held: it may leave memory")
     }
 
     func testSignOutWipesEveryStore() {

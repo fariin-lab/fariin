@@ -150,6 +150,9 @@ final class LeaveGroupUndo {
                 case .deleteGroup, .deleteChannel: try await GroupInviteService.deleteGroup(cid: p.cid)
                 }
                 self?.save(nil)
+                // A channel left or deleted: its stored posts leave this phone (audit C5; a
+                // follower's unfollow goes the same way through `ChannelFollows`).
+                ThreadRepository.channelLeft(p.cid)
                 // Leave it hidden a moment longer: the list drops it when the server's copy arrives.
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 self?.unhide(p.cid)

@@ -457,7 +457,7 @@ final class ChannelFollows {
                                                mutedUntil: (data["mutedUntil"] as? NSNumber)?.doubleValue ?? 0)
                 }
                 self.followedAt = at
-                self.apply(next)
+                self.apply(next, fromServer: !snap.metadata.isFromCache)
                 self.followRx = rx
                 self.mergeRx()
             }
@@ -700,7 +700,7 @@ final class ChannelFollows {
             }
     }
 
-    private func apply(_ next: [String: Entry]) {
+    private func apply(_ next: [String: Entry], fromServer: Bool) {
         // A channel followed again by any road (link, public page, Follow): back in the list.
         for cid in next.keys where entries[cid] == nil {
             Task { @MainActor in LeaveGroupUndo.shared.reopen(cid) }
@@ -709,6 +709,15 @@ final class ChannelFollows {
         // at the next five-minute ask (2026-10-29).
         if listLoaded, Set(next.keys) != Set(entries.keys) {
             Task { @MainActor in StoriesRepository.shared.refreshChannelStories() }
+        }
+        // A channel no longer followed, by any road (my Unfollow, removed by an admin, the channel
+        // deleted): its decrypted posts leave this phone (audit C5). The server's answer only; a
+        // cache answer can simply be missing an entry.
+        if listLoaded, fromServer {
+            let left = entries.keys.filter { next[$0] == nil }
+            if !left.isEmpty {
+                Task { @MainActor in left.forEach { ThreadRepository.channelLeft($0) } }
+            }
         }
         listLoaded = true
         // A live document for the pinned channels first, then the most recently followed, up to

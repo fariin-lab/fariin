@@ -337,6 +337,18 @@ final class ThreadRepository {
     /// The next server answer of the `chg` listener is its first since a fresh attach.
     @ObservationIgnored private var chFirstServer = true
     @ObservationIgnored private var chTooLongRunning = false
+    /// Failed "too long" catch-ups in a row, for the retry's backoff (audit C2).
+    @ObservationIgnored private var chTooLongFails = 0
+    /// A post's Replies switch set here after the server said yes, until the store's copy carries
+    /// it (audit C3): the store is mirrored into `byId` on every change, and its older copy would
+    /// otherwise put the old switch back until the stamped echo lands.
+    @ObservationIgnored private var chRepliesOverlay: [String: (off: Bool, at: Date)] = [:]
+    /// A post's reply count as the Replies sheet last knew it (R-02), drawn over the post until a
+    /// listener brings the same number or 90 s pass. Any channel mode: applied in `rebuild`.
+    @ObservationIgnored private var replyCountOverlay: [String: (n: Int, at: Date)] = [:]
+    /// I unfollowed or left this channel while its screen was open: its store goes when the screen
+    /// closes (audit C5).
+    @ObservationIgnored private var chForgetOnClose = false
     @ObservationIgnored private var chAttachedAt = Date.distantPast
     @ObservationIgnored private var chSyncLogs = 0
     /// The newest snapshot of each post's doc, so a key that lands late can decrypt it again.
@@ -856,11 +868,39 @@ final class ThreadRepository {
     /// refresh"). Only the newest stretch of posts is listened to; an older post loaded by scrolling
     /// up never hears the server's change. Set here once the server has said yes; inside the live
     /// window the listener's echo writes the same value over it.
+    /// A synced channel (audit C3): `byId` follows the channel store on every change, so the switch
+    /// is kept as an overlay that `chMirrorAll` lays over the store's copy until that copy carries it.
     func setRepliesOffLocally(_ messageId: String, off: Bool) {
         guard var m = byId[messageId] else { return }
+        if chMode == .synced, chBox != nil { chRepliesOverlay[messageId] = (off, Date()) }
         m.setPostRepliesSwitch(off)
         byId[messageId] = m
         rebuild()
+    }
+
+    /// ⛔ THE REPLIES SHEET'S COUNT, SHOWN AT ONCE (R-02): the sheet closing reports how many replies
+    /// it saw, and the post's bar shows that number now instead of snapping back to an older one
+    /// until the server's count lands. Held until a listener carries the same number, or 90 s.
+    func setReplyCountLocally(_ id: String, _ n: Int) {
+        guard byId[id] != nil, n >= 0 else { return }
+        if byId[id]?.replyCount == n { replyCountOverlay[id] = nil; return }
+        replyCountOverlay[id] = (n, Date())
+        rebuild()
+    }
+
+    private func applyReplyCountOverlay(_ msgs: [Message]) -> [Message] {
+        let now = Date()
+        replyCountOverlay = replyCountOverlay.filter { id, o in
+            guard let m = byId[id] else { return false }
+            return m.replyCount != o.n && now.timeIntervalSince(o.at) < 90
+        }
+        guard !replyCountOverlay.isEmpty else { return msgs }
+        return msgs.map { m in
+            guard let o = replyCountOverlay[m.id] else { return m }
+            var c = m
+            c.replyCount = o.n
+            return c
+        }
     }
 
     /// The server refused my reaction: the row goes back to what it showed before the tap.
@@ -1251,7 +1291,7 @@ final class ThreadRepository {
         if channelSyncEligible {
             startChannelSync(uid: uid)
         } else {
-            chBox = nil
+            chUse(nil)
             chMode = .off
             attachWindowListener()
         }
@@ -2009,6 +2049,7 @@ final class ThreadRepository {
         recomputeClockOffsets(byId.values)
         var msgs = byId.values.filter { !hiddenByBlock($0) }
         if Conversation.Right.isChannel(cid) { msgs = msgs.compactMap(Self.channelNotice) }
+        if !replyCountOverlay.isEmpty { msgs = applyReplyCountOverlay(msgs) }
         // Deletes the user has made but the server has not confirmed yet (see markDeletedLocally).
         // Ids for messages that are no longer here at all cost nothing and are pruned on the next
         // confirmed snapshot.
@@ -2076,12 +2117,11 @@ final class ThreadRepository {
         guard sorted != messages else { refreshHistoryStart(record: true); scheduleNextBurn(); return }
         messages = sorted
         refreshHistoryStart(record: true)   // before the publish, so the card comes with the rows
-        // A synced channel saves its own store instead (CHANNEL-SYNC-SPEC.md 5).
-        if chMode == .synced, let box = chBox {
-            box.scheduleSave()
-        } else {
-            ThreadMessageCache.shared.store(cid, messages)   // keep the warm cache fresh for the next open (instant render)
-        }
+        // A synced channel saves its own store (CHANNEL-SYNC-SPEC.md 5), and the warm cache still
+        // gets its newest rows: channel info's media seed, the Storage page and the chat-list peek
+        // read that cache, and showed deleted or stale posts while it froze (audit C9).
+        if chMode == .synced, let box = chBox { box.scheduleSave() }
+        ThreadMessageCache.shared.store(cid, messages)   // keep the warm cache fresh for the next open (instant render)
         refreshItems(reason: reason)
         // The message set just changed, so the next expiry may have too. Cheap: one timer.
         scheduleNextBurn()
@@ -2443,7 +2483,32 @@ final class ThreadRepository {
         holders = max(0, holders - 1)
         guard holders == 0 else { return }
         stop()
+        // The channel store is no longer shown from here: it may leave memory, trimmed (audit C4).
+        chBox?.release(self)
+        if chForgetOnClose {
+            chForgetOnClose = false
+            Self.forgetChannelStore(cid)
+        }
         if Self.live[cid]?.value === self { Self.live[cid] = nil }
+    }
+
+    /// ⛔ A CHANNEL I NO LONGER READ TAKES ITS DECRYPTED POSTS WITH IT (audit C5). Unfollowed (by any
+    /// road: my tap, removed, the channel deleted), left, or deleted by me: the channel store and
+    /// the cached rows go now, or when its open screen closes. Following again syncs afresh.
+    @MainActor
+    static func channelLeft(_ cid: String) {
+        guard !cid.contains("_") else { return }
+        if let r = live[cid]?.value, r.holders > 0 {
+            r.chForgetOnClose = true
+            return
+        }
+        forgetChannelStore(cid)
+    }
+
+    private static func forgetChannelStore(_ cid: String) {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        ChannelHistoryStore.shared.forget(uid: uid, cid: cid)
+        ThreadMessageCache.shared.store(cid, [])
     }
 
     func stop() {
@@ -2453,6 +2518,7 @@ final class ThreadRepository {
         chHeadListener?.remove(); chHeadListener = nil
         chStartGen += 1; chChgToken += 1; chGoneToken += 1; chHeadToken += 1
         chTooLongRunning = false
+        chTooLongFails = 0
         if chMode == .synced { chBox?.scheduleSave() }
         if let outboxObserver { NotificationCenter.default.removeObserver(outboxObserver) }
         outboxObserver = nil
@@ -2538,9 +2604,17 @@ extension ThreadRepository {
 
     // MARK: Open
 
+    /// The store this screen shows (nil: none). Held while shown, so the registry never lets it go
+    /// from memory under this screen (audit C4); `close()` releases it.
+    private func chUse(_ box: ChannelHistoryBox<Message>?) {
+        if let old = chBox, old !== box { old.release(self) }
+        chBox = box
+        box?.hold(self)
+    }
+
     /// The store's rows, before any listener (init, or the file landing just after it).
     private func seedFromChannel(_ box: ChannelHistoryBox<Message>) {
-        chBox = box
+        chUse(box)
         byId = box.history.posts
         didInitialLoad = true
         canLoadOlder = !box.history.reachedStart
@@ -2552,7 +2626,7 @@ extension ThreadRepository {
         let gen = chStartGen
         ChannelHistoryStore.shared.open(uid: uid, cid: cid) { [weak self] box in
             guard let self, self.chStartGen == gen else { return }
-            self.chBox = box
+            self.chUse(box)
             if box.history.isSynced {
                 self.chMode = .synced
                 // The store is the truth: rows seeded from anywhere else give way to it.
@@ -2574,7 +2648,7 @@ extension ThreadRepository {
     private func chProbe(_ docs: [QueryDocumentSnapshot]) {
         guard let box = chBox, let top = docs.compactMap({ Self.chgOf($0) }).max() else {
             chMode = .off
-            chBox = nil
+            chUse(nil)
             chLog("SYNC# legacy cid=\(cid.suffix(5)) docs=\(docs.count) (no chg yet)")
             return
         }
@@ -2591,6 +2665,7 @@ extension ThreadRepository {
         let r = box.history.applyPage(page, upper: .distantFuture, full: docs.count >= pageSize, fromServer: true, now: now)
         box.history.lastChg = max(box.history.lastChg ?? top, top)
         box.history.lastGoneChg = max(box.history.lastGoneChg ?? top, top)
+        box.history.syncedAt = now
         for d in docs where box.history.posts[d.documentID] != nil { chDocs[d.documentID] = d }
         chMode = .synced
         FirestoreHub.drop([listener])
@@ -2642,7 +2717,7 @@ extension ThreadRepository {
                 chRefused = true
                 // The store can no longer follow this channel: it must not seed a later open frozen.
                 if let uid = Auth.auth().currentUser?.uid { ChannelHistoryStore.shared.forget(uid: uid, cid: cid) }
-                chBox = nil
+                chUse(nil)
                 chDropUnheld = true   // the window's first server answer drops rows it does not hold
                 DispatchQueue.main.async { [weak self] in self?.start() }
                 return
@@ -2662,10 +2737,17 @@ extension ThreadRepository {
             guard let self, token == self.chChgToken, let box = self.chBox else { return }
             let reason = self.chReason(fromCache: fromCache, docs: docs)
             let firstServer = !fromCache && self.chFirstServer
+            // Away longer than the server keeps its hard-delete records (audit C6): asked BEFORE this
+            // answer moves `syncedAt`.
+            let expired = firstServer && box.history.changeRecordsMayHaveExpired(now: Date())
             let n = self.chApply(docs, built: built, sigs: sigs, box: box)
             // Only the server's answer moves the counter: the local cache can miss a change.
             if !fromCache, let top = docs.compactMap({ Self.chgOf($0) }).max() {
                 box.history.lastChg = max(box.history.lastChg ?? top, top)
+            }
+            // Not while a re-verify is owed: a kill before it lands must ask again on the next open.
+            if !fromCache, !expired, !self.chTooLongRunning, self.chTooLongFails == 0 {
+                box.history.syncedAt = Date()
             }
             if firstServer { self.chFirstServer = false }
             if !fromCache, !self.sawServerWindow {
@@ -2677,7 +2759,10 @@ extension ThreadRepository {
             }
             self.finishChannelCommit(reason: reason)
             box.scheduleSave()
-            if !fromCache, docs.count >= Self.chLimit {
+            if expired {
+                self.chLog("SYNC# expired cid=\(self.cid.suffix(5)) (records may be gone)")
+                self.chTooLong()
+            } else if !fromCache, docs.count >= Self.chLimit {
                 if firstServer { self.chTooLong() } else { self.attachChgListener() }
             } else if !fromCache, docs.count >= Self.chRebaseAt {
                 self.attachChgListener()
@@ -2782,12 +2867,20 @@ extension ThreadRepository {
                 .limit(to: self.pageSize)
                 .getDocuments(source: .server) { [weak self] snap, _ in
                     guard let self, gen == self.chStartGen else { return }
-                    guard let snap else { self.chTooLongRunning = false; return }   // tried again on the next attach
+                    guard let snap else {
+                        // ⛔ NOT LEFT HANGING (audit C2): the `chg` listener is still pinned to the
+                        // oldest 200 changes, so nothing new would arrive for the rest of the visit.
+                        self.chTooLongRunning = false
+                        self.chTooLongRetryLater(gen: gen)
+                        return
+                    }
                     let docs = snap.documents
                     self.chDecode(docs) { [weak self] built, sigs in
                         guard let self, gen == self.chStartGen, let box = self.chBox else { return }
                         self.chTooLongRunning = false
+                        self.chTooLongFails = 0
                         box.history.resetForTooLong()
+                        box.history.syncedAt = Date()
                         let page = docs.map { d in
                             ChannelDoc(post: built[d.documentID] ?? self.byId[d.documentID]
                                         ?? Message(id: d.documentID, data: d.data(), cid: self.cid, crypto: Crypto.shared),
@@ -2813,6 +2906,19 @@ extension ThreadRepository {
         }
     }
 
+    /// The catch-up read failed: asked again after 2, 4, 8 ... 60 s while this channel stays open.
+    /// The foreground and the network coming back also re-attach, whose first full answer asks at
+    /// once; `chTooLongRunning` keeps the two from running together.
+    private func chTooLongRetryLater(gen: Int) {
+        chTooLongFails += 1
+        let delay = min(60, pow(2, Double(min(chTooLongFails, 6))))
+        chLog("SYNC# toolong failed cid=\(cid.suffix(5)) try=\(chTooLongFails) again in \(Int(delay))s")
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, gen == self.chStartGen, self.chMode == .synced, self.chBox != nil else { return }
+            self.chTooLong()
+        }
+    }
+
     // MARK: History
 
     /// The hole under the newest block, one page (CHANNEL-SYNC-SPEC.md 6).
@@ -2826,7 +2932,12 @@ extension ThreadRepository {
         loadingOlder = true
         var query: Query = db.collection("conversations").document(cid).collection("messages")
             .order(by: "createdAt", descending: true)
-        if hole.upper < .distantFuture { query = query.start(at: [Timestamp(date: hole.upper)]) }
+        // One microsecond ABOVE the edge (audit C8): the edge went through Date's Double (and the
+        // disk's seconds) and can come back a hair below the server's own stamp, which would skip
+        // every post sharing the edge post's stamp. The few rows read twice are applied harmlessly.
+        if hole.upper < .distantFuture {
+            query = query.start(at: [Timestamp(date: hole.upper.addingTimeInterval(0.000_001))])
+        }
         let gen = chStartGen
         query.limit(to: pageSize).getDocuments { [weak self] snap, _ in
             guard let self else { return }
@@ -2934,7 +3045,26 @@ extension ThreadRepository {
             rawReactions[id] = nil
             chDocs[id] = nil
         }
-        for (id, p) in posts where byId[id] != p { byId[id] = p }
+        guard !chRepliesOverlay.isEmpty else {
+            for (id, p) in posts where byId[id] != p { byId[id] = p }
+            return
+        }
+        // A Replies switch set here (audit C3) stays over the store's copy until that copy carries
+        // the same switch (the server's stamped echo), or a minute has passed.
+        let now = Date()
+        for (id, p) in posts {
+            var shown = p
+            if let o = chRepliesOverlay[id] {
+                // `channelDefault: !o.off` makes "no switch on the post" read as different.
+                if p.repliesOff(channelDefault: !o.off) == o.off || now.timeIntervalSince(o.at) > 60 {
+                    chRepliesOverlay[id] = nil
+                } else {
+                    shown.setPostRepliesSwitch(o.off)
+                }
+            }
+            if byId[id] != shown { byId[id] = shown }
+        }
+        chRepliesOverlay = chRepliesOverlay.filter { posts[$0.key] != nil }
     }
 
     private func chReason(fromCache: Bool, docs: [QueryDocumentSnapshot]) -> MessageListUpdateReason {
