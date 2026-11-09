@@ -28,6 +28,7 @@ struct ActivityReactorsSheet: View {
     @State private var counts: [ActivityItem.Count] = []
     @State private var total = 0
     @State private var profile: Person?
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
@@ -38,6 +39,17 @@ struct ActivityReactorsSheet: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(Color(.systemBackground))
+            // A standard sheet (owner 2026-11-09 "make it real apple sheet"): title bar with a close X.
+            .navigationTitle("Reactions")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark").font(.system(size: 15, weight: .semibold))
+                    }
+                    .accessibilityLabel("Close")
+                }
+            }
             .navigationDestination(item: $profile) { p in
                 ContactInfoView(cid: ChatService.convId(AuthService.shared.uid ?? "", p.uid), name: p.name,
                                 photoUrl: p.photo.isEmpty ? nil : p.photo, source: .calls)
@@ -52,28 +64,33 @@ struct ActivityReactorsSheet: View {
         }
     }
 
-    // The comment and its post; a tap opens the comment where it is.
+    // The comment and its post, as a card (owner 2026-11-09: the old one-line preview looked small);
+    // a tap opens the comment where it is.
     private var header: some View {
         Button(action: onOpenComment) {
-            HStack(spacing: 12) {
+            HStack(alignment: .center, spacing: 14) {
                 if !item.thumb.isEmpty {
                     ActivityThumb(url: item.thumb, video: item.thumbIsVideo)
-                        .frame(width: 44, height: 44)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .frame(width: 60, height: 60)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.mineText.isEmpty ? " " : item.mineText)
-                        .font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary).lineLimit(1)
+                VStack(alignment: .leading, spacing: 4) {
                     Text((item.mineIsAnswer ? "Your reply in " : "Your comment in ") + (item.chTitle.isEmpty ? "a channel" : item.chTitle))
-                        .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+                        .font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(item.mineText.isEmpty ? " " : item.mineText)
+                        .font(.system(size: 17)).foregroundStyle(.primary)
+                        .lineLimit(3).multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
-                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(.tertiary)
+                Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).foregroundStyle(.tertiary)
             }
-            .padding(.horizontal, 16).padding(.top, 18).padding(.bottom, 4)
-            .contentShape(Rectangle())
+            .padding(14)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .buttonStyle(.plain)
+        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 2)
     }
 
     // All, then one tab per emoji, most used first; the look of the Replies sheet's Top / Newest.

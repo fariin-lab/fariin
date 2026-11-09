@@ -459,7 +459,7 @@ struct ReplyEdit: Equatable {
             return r.answers != loadedAnswerCount(t)
         }
         await withTaskGroup(of: Void.self) { g in
-            for t in changed.prefix(5) { g.addTask { await self.loadAnswers(t, more: false) } }
+            for t in changed.prefix(5) { g.addTask { _ = await self.loadAnswers(t, more: false) } }
         }
     }
 
@@ -527,21 +527,25 @@ struct ReplyEdit: Equatable {
     }
 
     /// A tap on "@name": the answer it answers (or the thread, when it answers the thread itself).
-    func jumpTo(_ id: String, inThread t: String) async {
-        if id == t || isThread(id) { reveal(id, thread: nil); return }
+    /// False when a read failed on the way, so "not found" means nothing.
+    @discardableResult
+    func jumpTo(_ id: String, inThread t: String) async -> Bool {
+        if id == t || isThread(id) { reveal(id, thread: nil); return true }
+        var ok = true
         // ⛔ A NEW ANSWER IS NOT IN AN OLD LIST (owner 2026-11-09: an Activity tap on kream's fresh
         // answer opened the sheet and said "This reply was deleted"). The thread's answers loaded
         // earlier (a prefetch, an earlier visit) were read before that answer existed, so the search
         // ran over a stale list and gave up. Missing from what is held: the first page is read again.
         if !answersLoaded.contains(t) || answers[t]?.contains(where: { $0.id == id }) != true {
-            await loadAnswers(t, more: false)
+            ok = await loadAnswers(t, more: false)
         }
         var pages = 0
-        while answers[t]?.contains(where: { $0.id == id }) != true, !(answerNext[t] ?? "").isEmpty, pages < 5 {
-            await loadAnswers(t, more: true)
+        while ok, answers[t]?.contains(where: { $0.id == id }) != true, !(answerNext[t] ?? "").isEmpty, pages < 5 {
+            ok = await loadAnswers(t, more: true)
             pages += 1
         }
         if answers[t]?.contains(where: { $0.id == id }) == true { reveal(id, thread: t) } else { reveal(t, thread: nil) }
+        return ok
     }
 
     /// A reply alert tapped: that thread (paging down to it if needed), opened, then the answer.
@@ -555,12 +559,16 @@ struct ReplyEdit: Equatable {
         guard isThread(rid) else {
             // Gone, or too far down: the sheet stays at the top. Every page read and still not
             // there means it was deleted (Activity, 2026-11-09).
-            if olderCursor.isEmpty { notice = "This reply was deleted" }
+            // A failed first page proves nothing (offline): no "deleted" then.
+            if failed { notice = "Couldn't load replies. Check your connection." }
+            else if olderCursor.isEmpty { notice = "This reply was deleted" }
             return
         }
         if let aid, !aid.isEmpty, aid != rid {
-            await jumpTo(aid, inThread: rid)
-            if answers[rid]?.contains(where: { $0.id == aid }) != true, (answerNext[rid] ?? "").isEmpty {
+            let ok = await jumpTo(aid, inThread: rid)
+            if !ok {
+                notice = "Couldn't load replies. Check your connection."
+            } else if answers[rid]?.contains(where: { $0.id == aid }) != true, (answerNext[rid] ?? "").isEmpty {
                 notice = "This reply was deleted"
             }
         } else {
@@ -569,14 +577,23 @@ struct ReplyEdit: Equatable {
         }
     }
 
-    func loadAnswers(_ rid: String, more: Bool) async {
+    /// True when the answers came back (or one already on its way came back); false on a failed read.
+    @discardableResult
+    func loadAnswers(_ rid: String, more: Bool) async -> Bool {
         if !more {
-            guard !answersLoading.contains(rid) else { return }   // a prefetch already on its way
+            if answersLoading.contains(rid) {
+                // ⛔ WAIT FOR THE ONE ON ITS WAY (owner 2026-11-09: an Activity reply tap said "This
+                // reply was deleted" for a reply that was there). The sheet prefetches its top threads'
+                // answers the moment the first page lands; the Activity jump asked for the same thread
+                // a moment later, got back at once with nothing, and searched an empty list.
+                for _ in 0..<100 where answersLoading.contains(rid) { try? await Task.sleep(nanoseconds: 100_000_000) }
+                return !answersLoading.contains(rid) && answersLoaded.contains(rid)
+            }
             answersLoading.insert(rid)
         }
         defer { if !more { answersLoading.remove(rid) } }
         let cursor = more ? (answerNext[rid] ?? "") : ""
-        guard let res = try? await fn.httpsCallable("getReplyAnswers").call(args(["rid": rid, "cursor": cursor])) else { return }
+        guard let res = try? await fn.httpsCallable("getReplyAnswers").call(args(["rid": rid, "cursor": cursor])) else { return false }
         let d = res.data as? [String: Any] ?? [:]
         let page = rows(d)
         let next = d["next"] as? String ?? ""
@@ -606,6 +623,7 @@ struct ReplyEdit: Equatable {
         answers[rid] = list
         if !keepCursor { answerNext[rid] = next }
         answersLoaded.insert(rid)
+        return true
     }
 
     /// Threads whose answers came from the server at least once. A thread can hold my own answer
