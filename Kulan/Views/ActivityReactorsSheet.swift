@@ -4,7 +4,7 @@ import FirebaseFunctions
 /// ⛔ WHO REACTED TO MY COMMENT (owner 2026-11-09, design 3 "emoji tabs", as a sheet). A reaction
 /// row with more than one person opens this over the Activity page: my comment and its post at the
 /// top, All / one tab per emoji, then the people (face with their emoji, name, @handle, how long
-/// ago). A person opens their profile; the comment line opens the comment in the post's Replies.
+/// ago). A person is shown only (no profile opens); the comment line opens the comment in the post's Replies.
 /// The list comes from groups:getReplyReactors, which only the comment's author may call.
 struct ActivityReactorsSheet: View {
     let item: ActivityItem
@@ -31,7 +31,6 @@ struct ActivityReactorsSheet: View {
     @State private var generation = 0
     @State private var counts: [ActivityItem.Count] = []
     @State private var total = 0
-    @State private var profile: Person?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -53,10 +52,6 @@ struct ActivityReactorsSheet: View {
                     }
                     .accessibilityLabel("Close")
                 }
-            }
-            .navigationDestination(item: $profile) { p in
-                ContactInfoView(cid: ChatService.convId(AuthService.shared.uid ?? "", p.uid), name: p.name,
-                                photoUrl: p.photo.isEmpty ? nil : p.photo, source: .calls)
             }
         }
         .presentationDetents([.medium, .large])
@@ -150,8 +145,9 @@ struct ActivityReactorsSheet: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(people) { p in
-                        Button { if !p.uid.isEmpty { profile = p } } label: { row(p) }
-                            .buttonStyle(.plain)
+                        // A person here is only shown, not opened (owner 2026-11-09: "when i click
+                        // that profile avatar plz dont open profile").
+                        row(p)
                             .onAppear { if p == people.last, !next.isEmpty { Task { await load(reset: false) } } }
                     }
                 }
