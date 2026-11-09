@@ -801,8 +801,11 @@ service cloud.firestore {
       // A channel admin's own "post without sound" (2026-10-28); onNewMessage reads it.
       match /channelPrefs/{c} {
         allow read, delete: if signedIn() && request.auth.uid == uid;
-        allow create, update: if signedIn() && request.auth.uid == uid
+        // B5-08: an update touches `silent` only; the server's `replyNotifs` stays (merge writes).
+        allow create: if signedIn() && request.auth.uid == uid
           && request.resource.data.keys().hasOnly(['silent']) && request.resource.data.silent is bool;
+        allow update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['silent']) && request.resource.data.silent is bool;
       }
       // Activity (2026-11-09): written by the server only; mine to read.
       match /activity/{i} { allow read: if request.auth.uid == uid; }
@@ -1747,35 +1750,12 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys()
                .hasOnly(['accepted', 'startedBy', 'lastSender', 'unfriendedBy', 'unfriendedAt', 'reqOff']);
       }
-      // ⚠️ A CHAT THAT DOES NOT EXIST YET MUST READ AS EMPTY, OR NO NEW CHAT CAN EVER BE STARTED.
-      //
-      // This was the single `uid in resource.data.users` line, and on a document that is not there
-      // `resource` is null, so that test ERRORS and the read is refused. It silently broke starting
-      // a conversation for FIVE DAYS (2026-08-04 to 08-09, found from the owner's "Not delivered"
-      // screenshots; the live database had not gained a single new 1:1 in that window).
-      //
-      // The deadlock, with the message-request rules below:
-      //   1. `create` demands the chat be born stamped `startedBy` + `accepted:false`.
-      //   2. `openConversation` only stamps those when its pre-read ANSWERS, because it must not
-      //      stamp a chat that already exists and is merely unreachable (that would drop a real
-      //      friendship back to a pending request days later, when the queued write landed).
-      //   3. That pre-read is exactly the refused read. So it never answered, the stamp was never
-      //      written, and `create` refused the chat. Proving a chat was new required reading the
-      //      very thing you were not allowed to read.
-      // Every call site wraps `openConversation` in `try?`, so the refusal was thrown away and the
-      // chat screen opened as normal — the failure only surfaced later as a message that would not
-      // send, pointing at the wrong thing entirely.
-      //
-      // THE ID IS THE MEMBERSHIP, for a 1:1: the cid IS the two uids sorted and joined by "_", so
-      // "your uid is one of the two halves of this id" and "you are a member" say the same thing —
-      // and unlike the members list, the id is readable when the document is not there yet.
-      //
-      // ⚠️ DO NOT rewrite this as `resource == null && ...`. That form reads more precisely and does
-      // NOT work: measured against the live rules test service, a get on a missing document does not
-      // satisfy `resource == null`, so the branch never fires and new chats stay broken. This form
-      // was proven with 8 cases against the live ruleset (both members ALLOWED on a not-yet-existing
-      // chat, an outsider DENIED on the same, members/outsiders unchanged on existing 1:1s AND
-      // groups), with the previous rules as the control, where the two fix cases FAIL.
+      // ⚠️ A CHAT THAT DOES NOT EXIST YET MUST READ AS EMPTY, OR NO NEW CHAT CAN EVER BE STARTED
+      // (2026-08-04..09 outage: `uid in resource.data.users` errors on a missing doc, openConversation's
+      // pre-read was refused, and create never got its startedBy stamp). For a 1:1 the cid IS the two
+      // uids, so "my uid is half of the id" = membership, readable before the doc exists.
+      // ⚠️ DO NOT rewrite as `resource == null && ...`: a get on a missing doc does not satisfy it
+      // (proven with 8 cases against the live ruleset). Full story: git history of this comment.
       // A channel's followers are not in `users` (2026-10-28): conversations/{cid}/followers/{uid},
       // server-written by followChannel. They read the channel and its posts, nothing else.
       // 2026-10-29 audit S8: + ban list.
@@ -2154,13 +2134,10 @@ service cloud.firestore {
         // 2026-10-18 group moderation: `mod` and `verified` belong to the admin panel; no branch,
         // the owner's included, writes them. And what a restricted group still allows (groupModWriteOK).
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['mod', 'verified', 'verifiedType', 'noReport'])
-        // 2026-10-19 groups v2: Public/Private and the group's @name are server-only (setGroupUsername),
-        // on every branch, the owner's included: the name and the `usernames` record must move together.
-        // 2026-10-19 groups v2 step 2B: and whether a group is end-to-end encrypted (`e2ee`,
-        // `e2eeOffAt`) is the server's to change (the groupsE2eeOff migration). In the same list, not
-        // a line of its own: a second diff here pushed a busy admin write past the rules engine's
-        // 1,000-expression ceiling (rules-tests/role-1018).
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'repliesOff', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt', 'memberSince', 'endedAt', 'hideMembers', 'hideMembersBy', 'bubbleStylesOff', 'channel', 'followerCount', 'postCount', 'country'])
+        // Server-only on every branch, the owner's too: Public/@name (setGroupUsername), e2ee, and a
+        // channel's sync/preview/archive fields (audit B5-01). ONE list: a second diff here pushed a busy
+        // admin write past the 1,000-expression ceiling (rules-tests/role-1018).
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isPublic', 'repliesOff', 'username', 'usernameLower', 'joinApproval', 'e2ee', 'e2eeOffAt', 'memberSince', 'endedAt', 'hideMembers', 'hideMembersBy', 'bubbleStylesOff', 'channel', 'followerCount', 'postCount', 'country', 'chSeq', 'chClearBefore', 'archivedAt', 'postPreview', 'deletedPostSeqs', 'uncountedDeletes', 'quotesOff'])
         && groupModWriteOK()
         && groupAddOK()   // audit F4: no adding someone with a block either way
         // owner 2026-10-18: the group wallpaper, groups only and a known shape (groupWallpaperOK).
@@ -2414,7 +2391,8 @@ service cloud.firestore {
       // message still writes (it looks "sent" to them), but the blocker's client
       // hides it and the push function skips their notification. You may delete
       // only your own message.
-      match /changes/{x} { allow read: if signedIn() && (request.auth.uid in convData().users || follows(convData())); }
+      match /changes/{x} { allow read: if signedIn() && (request.auth.uid in convData().users || follows(convData())
+        || (convData().get('channel', false) == true && convData().get('isPublic', false) == true && !(request.auth.uid in convData().get('bannedUids', [])))); }   // B5-11 visitors
       match /messages/{mid} {
         // 2026-09-24 feature-audit: THE GROUP ADMIN'S "Delete messages" RIGHT. The owner could switch
         // it on for an admin and nothing honoured it. Same test as `adminCan` on the client: the
@@ -2683,7 +2661,7 @@ service cloud.firestore {
           // far-future time would have been an edit window that never closed.
           // 2026-10-23: nor with `rk`, the group keys only releaseGroupKeys writes (every update
           // branch below is an allowlist without it).
-          && !request.resource.data.keys().hasAny(['edits', 'editedAt', 'rk', 'views', 'quoteCount', 'quoteFaces', 'replyCount', 'repliesOff'])   // server-only
+          && !request.resource.data.keys().hasAny(['edits', 'editedAt', 'rk', 'views', 'quoteCount', 'quoteFaces', 'replyCount', 'repliesOff', 'chg', 'postSeq', 'reactionCounts', 'pollCounts', 'pollVoters', 'pollTallyAt', 'replyFaces', 'held'])   // server-only (B5-09)
           // ⛔ A STORY MENTION ONLY INTO A CHAT THAT ALREADY EXISTS — owner 2026-10-16: "mentioning
           // someone in my story must not message people I have never chatted with, and must not
           // create a chat". `exists`/`get` read the state BEFORE this write (and before the batch
