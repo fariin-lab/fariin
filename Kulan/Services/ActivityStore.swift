@@ -261,7 +261,7 @@ final class ActivityStore {
         if item.kind == .quote, !bad(item.whereCid), !bad(item.whereMid) {
             r.pendingRepliesPost = nil
             r.pendingReplyTarget = nil
-            r.pendingOpenMid = item.whereMid
+            r.pendingOpenMid = (item.whereCid, item.whereMid, Date())
             r.pendingChatName = item.whereTitle.isEmpty ? nil : item.whereTitle
             r.pendingChatPhoto = nil
             r.pendingChatPush = true
