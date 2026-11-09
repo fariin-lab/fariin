@@ -413,6 +413,9 @@ struct ChatListTable: UIViewControllerRepresentable {
     /// in the unpinned section, placed among the chats by the time of its latest event.
     var activity: ActivitySummary? = nil
     var onOpenActivity: () -> Void = {}
+    /// Pinned on this phone (owner 2026-11-09): the row then heads the Pinned section.
+    var activityPinned: Bool = false
+    var onToggleActivityPin: () -> Void = {}
     /// ⛔ THE VOICE BAR'S ROOM IS GIVEN HERE, EXPLICITLY — owner, 2026-09-29, the THIRD report of the
     /// playing-note bar over "Pinned". The page mounts this table with
     /// `.ignoresSafeArea(.container, edges: [.top, .bottom])` (rows run under the header's soft
@@ -443,7 +446,7 @@ struct ChatListTable: UIViewControllerRepresentable {
         // and a guarded comparison costs nothing. See `reassertNavChrome`.
         vc.reassertNavChrome()
         vc.setSearching(context.environment.isSearching)   // the footer hold while search opens/closes
-        vc.apply(state: .make(pinned: pinned.map(\.id),
+        vc.apply(state: .make(pinned: pinnedIds(),
                               unpinned: unpinnedIds(),
                               people: people.map(\.id)),
                  animated: true)
@@ -470,11 +473,21 @@ struct ChatListTable: UIViewControllerRepresentable {
         // place that knows whether the diff was structural.
     }
 
+    /// The pinned ids, with a pinned Activity row at the top (below a call that is running, which
+    /// outranks everything).
+    private func pinnedIds() -> [String] {
+        var ids = pinned.map(\.id)
+        guard activity != nil, activityPinned else { return ids }
+        let i = pinned.firstIndex { !onCall($0) } ?? pinned.count
+        ids.insert(ActivityStore.rowId, at: i)
+        return ids
+    }
+
     /// The unpinned ids, with the Activity row slotted in before the first chat older than it
     /// (never above a call that is running, which outranks everything).
     private func unpinnedIds() -> [String] {
         var ids = unpinned.map(\.id)
-        guard let a = activity, a.unread > 0 else { return ids }
+        guard let a = activity, !activityPinned else { return ids }
         let i = unpinned.firstIndex { !onCall($0) && $0.listSortDate(me) < a.lastAtMillis } ?? unpinned.count
         ids.insert(ActivityStore.rowId, at: i)
         return ids
@@ -1812,12 +1825,24 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// "no `swipeActions`" plus `.selectionDisabled(true)`. There is nothing to archive, mute or
     /// delete about somebody you have never spoken to.
     func tableView(_ tableView: UITableView, canEditRowAt indexPath: IndexPath) -> Bool {
-        // The Activity row has no swipes and no Select circle either.
-        ChatListSection(rawValue: indexPath.section) != .people && rowId(at: indexPath) != ActivityStore.rowId
+        // The Activity row swipes (Pin only) but has no Select circle: not editable in Select mode.
+        // `parent.selecting`, not `isEditing`, which a swipe itself turns on.
+        if rowId(at: indexPath) == ActivityStore.rowId { return !(host?.parent.selecting ?? false) }
+        return ChatListSection(rawValue: indexPath.section) != .people
     }
 
     func tableView(_ tableView: UITableView,
                    leadingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        // The Activity row (owner 2026-11-09): Pin / Unpin alone, drawn as the chats' pin action.
+        if rowId(at: indexPath) == ActivityStore.rowId, let p = host?.parent {
+            let pinned = p.activityPinned
+            let pin = UIContextualAction(style: .normal, title: pinned ? "Unpin" : "Pin") { _, _, done in
+                p.onToggleActivityPin(); done(true)
+            }
+            pin.image = pinned ? ChatListIcon.symbol("pin.slash.fill") : ChatListIcon.symbol("pin.fill")
+            pin.backgroundColor = .systemOrange
+            return UISwipeActionsConfiguration(actions: [pin])
+        }
         guard let c = conversation(at: indexPath), let p = host?.parent else { return nil }
         let read = UIContextualAction(style: .normal, title: c.hasUnreadMark(p.me) ? "Read" : "Unread") { _, _, done in
             p.onToggleRead(c); done(true)
@@ -1850,6 +1875,8 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 
     func tableView(_ tableView: UITableView,
                    trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        // The Activity row: nothing on this side (an empty set, so UIKit adds no default Delete).
+        if rowId(at: indexPath) == ActivityStore.rowId { return UISwipeActionsConfiguration(actions: []) }
         guard let c = conversation(at: indexPath), let p = host?.parent else { return nil }
         let archive = UIContextualAction(style: .normal, title: "Archive") { _, _, done in
             p.onArchive(c); done(true)

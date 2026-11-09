@@ -147,10 +147,38 @@ final class ActivityStore {
 
     private init() {}
 
-    /// The chat list shows its Activity row only while something is unread.
-    var unreadSummary: ActivitySummary? {
-        guard let s = summary, s.unread > 0 else { return nil }
+    /// The chat list's Activity row (owner 2026-11-09): there whenever I have any activity at all,
+    /// like a chat, with its badge only while something is unread. nil = no activity, no row.
+    var rowSummary: ActivitySummary? {
+        if let s = summary, s.lastAtMillis > 0 { return s }
+        guard let first = items.first else { return nil }
+        // No summary yet (or an old one without `last`): the newest item stands in.
+        var s = summary ?? ActivitySummary(data: [:])
+        s.lastKind = first.kind.rawValue
+        s.lastName = first.fromName
+        s.lastText = first.text
+        s.lastEmoji = first.emoji
+        s.lastAtMillis = first.at.timeIntervalSince1970 * 1000
         return s
+    }
+
+    /// The row pinned at the top of Pinned. Kept on this phone per account (the app cannot write
+    /// to the activity documents); `SessionWipe` clears it through `wipe()`.
+    private(set) var pinned = false
+
+    private static func pinKey(_ uid: String) -> String { "activityPinned.\(uid)" }
+
+    func setPinned(_ on: Bool) {
+        guard let uid else { return }
+        pinned = on
+        if on { UserDefaults.standard.set(true, forKey: Self.pinKey(uid)) }
+        else { UserDefaults.standard.removeObject(forKey: Self.pinKey(uid)) }
+    }
+
+    /// Sign-out: the listeners, and this account's pin.
+    func wipe() {
+        if let uid { UserDefaults.standard.removeObject(forKey: Self.pinKey(uid)) }
+        stop()
     }
 
     func start(uid: String) {
@@ -158,6 +186,7 @@ final class ActivityStore {
         stop()
         guard Auth.auth().currentUser?.uid == uid else { return }
         self.uid = uid
+        pinned = UserDefaults.standard.bool(forKey: Self.pinKey(uid))
         let me = FirestoreHub.db.collection("users").document(uid)
         summaryListener = me.collection("activityMeta").document("summary")
             .addSnapshotListener { [weak self] snap, _ in
@@ -186,12 +215,13 @@ final class ActivityStore {
         summaryListener?.remove(); summaryListener = nil
         listListener?.remove(); listListener = nil
         uid = nil
+        pinned = false
         summary = nil
         items = []
         loaded = false
     }
 
-    /// Opening the Activity page reads everything. The row leaves the chat list at once; the
+    /// Opening the Activity page reads everything. The row's badge goes at once; the
     /// server's answer then comes back through the listeners.
     func markAllRead() async {
         guard uid != nil else { return }

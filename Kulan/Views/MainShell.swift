@@ -2642,12 +2642,24 @@ struct ChatsView: View {
             // asked for by scrolling and for a search or filter fetching the whole list.
             loadingMore: repo.loadingOlder || repo.loadingWholeList,
             chatOpen: !path.isEmpty,
-            // The Activity row (owner 2026-11-09): only on the All and Unread filters, not while
-            // searching, and only while something is unread.
-            activity: (chatFilter == 0 || chatFilter == 1) && searchTrimmed.isEmpty
-                ? ActivityStore.shared.unreadSummary : nil,
-            onOpenActivity: { path.append(ActivityRoute.page) }
+            activity: activityRow,
+            onOpenActivity: { path.append(ActivityRoute.page) },
+            activityPinned: ActivityStore.shared.pinned,
+            onToggleActivityPin: { ActivityStore.shared.setPinned(!ActivityStore.shared.pinned) }
         )
+    }
+
+    /// The Activity row (owner 2026-11-09): like a chat, there whenever I have any activity. On
+    /// All; on Unread only while unread; in a search when "Activity" matches the way a chat's
+    /// name does. Not on the Groups or Channels filters.
+    private var activityRow: ActivitySummary? {
+        guard let s = ActivityStore.shared.rowSummary else { return nil }
+        if !searchTrimmed.isEmpty, !ChatSearch.namePrefixMatch(query: chatSearch, name: "Activity") { return nil }
+        switch chatFilter {
+        case 0: return s
+        case 1: return s.unread > 0 ? s : nil
+        default: return nil
+        }
     }
 
     /// THE LOADED CHAT LIST: the table, the empty state over it, and every modifier they need.
