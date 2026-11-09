@@ -1,0 +1,192 @@
+import SwiftUI
+import FirebaseFunctions
+
+/// ⛔ WHO REACTED TO MY COMMENT (owner 2026-11-09, design 3 "emoji tabs", as a sheet). A reaction
+/// row with more than one person opens this over the Activity page: my comment and its post at the
+/// top, All / one tab per emoji, then the people (face with their emoji, name, @handle, how long
+/// ago). A person opens their profile; the comment line opens the comment in the post's Replies.
+/// The list comes from groups:getReplyReactors, which only the comment's author may call.
+struct ActivityReactorsSheet: View {
+    let item: ActivityItem
+    var onOpenComment: () -> Void
+
+    struct Person: Identifiable, Hashable {
+        let uid: String
+        let name: String
+        let photo: String
+        let handle: String
+        let emoji: String
+        let at: Date
+        var id: String { uid.isEmpty ? "ch-\(name)" : uid }
+    }
+
+    @State private var tab = ""              // "" = All, else one emoji
+    @State private var people: [Person] = []
+    @State private var next = ""
+    @State private var loading = false
+    @State private var failed = false
+    @State private var counts: [ActivityItem.Count] = []
+    @State private var total = 0
+    @State private var profile: Person?
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                header
+                tabs
+                list
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(Color(.systemBackground))
+            .navigationDestination(item: $profile) { p in
+                ContactInfoView(cid: ChatService.convId(AuthService.shared.uid ?? "", p.uid), name: p.name,
+                                photoUrl: p.photo.isEmpty ? nil : p.photo, source: .calls)
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .task {
+            counts = item.rx
+            total = item.rx.reduce(0) { $0 + $1.count }
+            await load(reset: true)
+        }
+    }
+
+    // The comment and its post; a tap opens the comment where it is.
+    private var header: some View {
+        Button(action: onOpenComment) {
+            HStack(spacing: 12) {
+                if !item.thumb.isEmpty {
+                    ActivityThumb(url: item.thumb, video: item.thumbIsVideo)
+                        .frame(width: 44, height: 44)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.mineText.isEmpty ? " " : item.mineText)
+                        .font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary).lineLimit(1)
+                    Text((item.mineIsAnswer ? "Your reply in " : "Your comment in ") + (item.chTitle.isEmpty ? "a channel" : item.chTitle))
+                        .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 16).padding(.top, 18).padding(.bottom, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // All, then one tab per emoji, most used first; the look of the Replies sheet's Top / Newest.
+    private var tabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                chip("All \(total)", "")
+                ForEach(counts, id: \.emoji) { c in chip("\(c.emoji) \(c.count)", c.emoji) }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+        }
+    }
+
+    private func chip(_ title: String, _ key: String) -> some View {
+        let on = tab == key
+        return Button {
+            guard tab != key else { return }
+            tab = key
+            Task { await load(reset: true) }
+        } label: {
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(on ? Color.primary : Color.secondary)
+                .padding(.horizontal, 14)
+                .frame(height: 32)
+                .background(on ? Color(.tertiarySystemFill) : Color.clear, in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder private var list: some View {
+        if failed && people.isEmpty {
+            VStack(spacing: 6) {
+                Text("Couldn't load reactions").font(.system(size: 15, weight: .semibold))
+                Text("Check your connection and try again.").font(.system(size: 13)).foregroundStyle(.secondary)
+                Button("Try Again") { Task { await load(reset: true) } }
+                    .font(.system(size: 15, weight: .semibold)).padding(.top, 8)
+            }
+            .frame(maxWidth: .infinity).padding(.top, 40)
+        } else if loading && people.isEmpty {
+            ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(people) { p in
+                        Button { if !p.uid.isEmpty { profile = p } } label: { row(p) }
+                            .buttonStyle(.plain)
+                            .onAppear { if p == people.last, !next.isEmpty { Task { await load(reset: false) } } }
+                    }
+                }
+            }
+        }
+    }
+
+    private func row(_ p: Person) -> some View {
+        HStack(spacing: 12) {
+            AvatarView(name: p.name, photoUrl: p.photo.isEmpty ? nil : p.photo, size: 48)
+                .frame(width: 48, height: 48)
+                .overlay(alignment: .bottomTrailing) {
+                    Text(p.emoji)
+                        .font(.system(size: 12))
+                        .frame(width: 22, height: 22)
+                        .background(Color(.systemGray5), in: Circle())
+                        .padding(2)
+                        .background(Color(.systemBackground), in: Circle())
+                        .offset(x: 5, y: 5)
+                }
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(p.name).font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary).lineLimit(1)
+                    if !p.handle.isEmpty {
+                        Text("@" + p.handle).font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+                Text(ActivityTime.age(p.at)).font(.system(size: 15)).foregroundStyle(.secondary)
+            }
+            .frame(maxHeight: .infinity)
+            .overlay(alignment: .bottom) { Rectangle().fill(Color(.separator)).frame(height: 0.5) }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 68)
+        .contentShape(Rectangle())
+    }
+
+    private func load(reset: Bool) async {
+        guard !loading else { return }
+        loading = true
+        defer { loading = false }
+        let aid = item.mine.aid == item.mine.rid ? "" : item.mine.aid
+        let args: [String: Any] = ["cid": item.cid, "mid": item.mid, "rid": item.mine.rid, "aid": aid,
+                                   "emoji": tab, "cursor": reset ? "" : next]
+        do {
+            let res = try await Functions.functions(region: "me-central1")
+                .httpsCallable("getReplyReactors").call(args)
+            let d = res.data as? [String: Any] ?? [:]
+            let page: [Person] = (d["people"] as? [[String: Any]] ?? []).map { r in
+                Person(uid: r["u"] as? String ?? "", name: r["n"] as? String ?? "Someone",
+                       photo: r["p"] as? String ?? "", handle: r["h"] as? String ?? "",
+                       emoji: r["e"] as? String ?? "❤️",
+                       at: Date(timeIntervalSince1970: ((r["at"] as? NSNumber)?.doubleValue ?? 0) / 1000))
+            }
+            if let rx = d["rx"] as? [String: Any] {
+                counts = rx.compactMap { k, v in (v as? NSNumber).map { ActivityItem.Count(emoji: k, count: $0.intValue) } }
+                    .filter { $0.count > 0 }.sorted { $0.count > $1.count }
+            }
+            if let t = (d["total"] as? NSNumber)?.intValue { total = t }
+            next = d["next"] as? String ?? ""
+            people = reset ? page : people + page.filter { p in !people.contains(where: { $0.id == p.id }) }
+            failed = false
+        } catch {
+            failed = true
+        }
+    }
+}

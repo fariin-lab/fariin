@@ -15,6 +15,8 @@ struct ActivityFeedView: View {
     /// Items that were unread when the page opened: what the Unread chip shows. Taken once.
     @State private var unreadAtOpen: Set<String> = []
     @State private var tookSnapshot = false
+    /// A reaction row with more than one person: who reacted, as a sheet (owner 2026-11-09, design 3).
+    @State private var reactors: ActivityItem?
 
     private var shown: [ActivityItem] {
         let blocks = BlockList.snapshot
@@ -42,7 +44,9 @@ struct ActivityFeedView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(shown) { item in
-                            Button { store.open(item) } label: { ActivityRowView(item: item) }
+                            Button {
+                                if item.kind == .react && item.others > 0 { reactors = item } else { store.open(item) }
+                            } label: { ActivityRowView(item: item) }
                                 .buttonStyle(ActivityRowPress())
                         }
                     }
@@ -64,6 +68,13 @@ struct ActivityFeedView: View {
                     Image(systemName: "ellipsis")
                 }
                 .accessibilityLabel("More")
+            }
+        }
+        .sheet(item: $reactors) { item in
+            ActivityReactorsSheet(item: item) {
+                // The comment itself: the sheet goes first, then the chat opens on it.
+                reactors = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { store.open(item) }
             }
         }
         .onAppear { takeSnapshotIfReady() }
@@ -246,7 +257,7 @@ struct ActivityRowView: View {
 
 /// The post's picture, 56 pt, rounded 12. Loaded through the app's cached loader (memory, disk,
 /// then one shared download), never AsyncImage.
-private struct ActivityThumb: View {
+struct ActivityThumb: View {
     let url: String
     let video: Bool
     @State private var image: UIImage?
