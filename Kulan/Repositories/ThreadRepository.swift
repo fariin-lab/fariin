@@ -2178,6 +2178,15 @@ final class ThreadRepository {
     /// visible, or the page just read showed nothing new. Never during a jump or a focus hunt (they
     /// page on their own), never twice at once, at most `topUpCap` pages per open. Groups and
     /// channels only. The scroll-driven paging is unchanged.
+    private func thinHistoryNet(_ delay: Double) {
+        guard listener != nil, holders > 0, canLoadOlder, !historyStartReached,
+              items.count < topUpMinRows, !loadingOlder, !jumpPagingInFlight else { return }
+        DiagLog.add("TOPUP# net t=\(delay)s cid=\(cid.suffix(5)) rows=\(items.count) sawServer=\(sawServerWindow) cursor=\(oldestDoc != nil || windowTrimmed) retry=\(olderNeedsRetry) pages=\(topUpPages) running=\(historyTopUpRunning) cacheWhole=\(cacheLooksWhole)")
+        historyTopUpRunning = true
+        loadOlder()
+        if !loadingOlder { historyTopUpRunning = false }
+    }
+
     private func topUpIfThin(lastPageAddedRows: Bool) {
         // `listener != nil`: never on a chat that was closed (or an account switched away) while a
         // page was out (verify pass 3, 2026-11-08).
@@ -2301,6 +2310,17 @@ final class ThreadRepository {
         // every retry and network recovery, which gave a flapping network a fresh 10 pages each time.
         if holders == 1 { topUpPages = 0 }
         start()
+        // ⛔ THE NET UNDER THE TOP-UP (owner 2026-11-09, VE3 again: one open showed only the newest
+        // post for 5 s and more, LISTGEO# rows=1 throughout, while the next open paged "Hello Guys"
+        // in at 0.35 s). `topUpIfThin` runs only from a server window or a landed page, behind nine
+        // conditions, and one open never got there. Twice after the open, a group or channel still
+        // showing fewer than `topUpMinRows` rows with history left asks for the next page itself;
+        // TOPUP# names the condition that held the top-up back, so the next log proves which.
+        if holders == 1, !cid.contains("_"), !warmOnly {
+            for delay in [1.5, 4.0] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.thinHistoryNet(delay) }
+            }
+        }
         // A group's old sealed items: release the keys this phone holds (2026-10-23; groups only).
         GroupKeyRelease.chatOpened(cid)
     }
