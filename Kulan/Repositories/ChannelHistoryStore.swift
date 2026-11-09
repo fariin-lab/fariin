@@ -119,8 +119,17 @@ struct ChannelHistory<Post: ChannelHistoryPost>: Codable {
     /// ignored, and a doc without `chg` never overwrites one that has it.
     @discardableResult
     mutating func applyChange(_ doc: ChannelDoc<Post>, now: Date) -> Outcome {
+        apply(doc, now: now, fromPage: false)
+    }
+
+    /// `fromPage`: a hole read, whose span is marked read right after. A listener's change for a
+    /// post not held, outside every read range, is NOT added: it would sit next to the newest block
+    /// with an unmarked gap between. The hole read brings it in later. A delete still goes to the
+    /// tombstones.
+    private mutating func apply(_ doc: ChannelDoc<Post>, now: Date, fromPage: Bool) -> Outcome {
         let id = doc.post.id
         if doc.post.deleted { return remove(id, chg: doc.chg, now: now) }
+        if !fromPage, posts[id] == nil, !isKnown(doc.post.createdAt) { return .ignored }
         if let tomb = tombs[id] {
             guard let tc = tomb.chg, let dc = doc.chg, dc > tc,
                   now.timeIntervalSince(tomb.at) > Self.tombGrace else { return .ignored }
@@ -166,7 +175,7 @@ struct ChannelHistory<Post: ChannelHistoryPost>: Codable {
                             fromServer: Bool, now: Date) -> PageResult {
         var r = PageResult()
         for d in docs {
-            switch applyChange(d, now: now) {
+            switch apply(d, now: now, fromPage: true) {
             case .added: r.added += 1
             case .edited: r.edited += 1
             case .removed: r.removed += 1
@@ -194,6 +203,20 @@ struct ChannelHistory<Post: ChannelHistoryPost>: Codable {
         }
         markKnown(lo: lo, hi: upper)
         return r
+    }
+
+    /// `createdAt` lies inside a range already read.
+    func isKnown(_ createdAt: Date) -> Bool {
+        ranges.contains { $0.lo < createdAt && createdAt <= $0.hi }
+    }
+
+    /// Clear Messages on the server (`changes` record `{clear: true, before}`): every post created at
+    /// or before `before` is gone. Returns the posts removed (their local copies go too).
+    @discardableResult
+    mutating func clearBefore(_ before: Date, now: Date) -> [Post] {
+        let gone = posts.values.filter { $0.createdAt <= before }
+        for p in gone { remove(p.id, chg: nil, now: now) }
+        return gone
     }
 
     /// Marks `lo < createdAt <= hi` read, merging with any range it touches.

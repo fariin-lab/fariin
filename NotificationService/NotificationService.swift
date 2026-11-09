@@ -107,7 +107,7 @@ final class NotificationService: UNNotificationServiceExtension {
         // ⛔ A REPLY OR REACTION ON A PHOTO POST SHOWS THE POST (owner 2026-11-09, Activity): the
         // server sends the post's picture as `thumb` (and mutable-content) only then. These pushes
         // carry no sender keys (`aid` there is the answer's id), so nothing else here applies.
-        if let kind = info["kind"] as? String, ["replyAnswer", "replyReact", "postReplies"].contains(kind) {
+        if let kind = info["kind"] as? String, ["replyAnswer", "replyReact", "postReplies", "postQuote", "postMention"].contains(kind) {
             guard let raw = info["thumb"] as? String, let url = URL(string: raw), url.scheme == "https",
                   let out = original.mutableCopy() as? UNMutableNotificationContent else { completion(nil); return }
             attachPreview(url, to: out) { completion($0) }

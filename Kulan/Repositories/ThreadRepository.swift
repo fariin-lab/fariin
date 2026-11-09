@@ -328,6 +328,8 @@ final class ThreadRepository {
     @ObservationIgnored private var chHeadListener: ListenerRegistration?
     /// The `chg` query was refused (rules or index not there yet): today's path for this repository.
     @ObservationIgnored private var chRefused = false
+    /// Set on a refused `chg` query: the store's rows not in the next server window are dropped.
+    @ObservationIgnored private var chDropUnheld = false
     @ObservationIgnored private var chStartGen = 0
     @ObservationIgnored private var chChgToken = 0
     @ObservationIgnored private var chGoneToken = 0
@@ -1663,6 +1665,13 @@ final class ThreadRepository {
             if arrived { reason = .live }
         }
         let windowIds = Set(docs.map { $0.documentID })
+        // Rows from a channel store whose `chg` query was refused: only what the window holds stays.
+        if chDropUnheld, !fromCache {
+            chDropUnheld = false
+            for id in Array(byId.keys) where !windowIds.contains(id) {
+                byId.removeValue(forKey: id); rawReactions.removeValue(forKey: id)
+            }
+        }
         // A doc missing from the window but newer than its oldest edge was deleted — but ONLY trust the
         // SERVER for this. A from-cache/resync snapshot can transiently omit a doc that still exists;
         // deleting on it made the message vanish for a few seconds until the next full snapshot re-added
@@ -2575,9 +2584,11 @@ extension ThreadRepository {
             ChannelDoc(post: byId[d.documentID] ?? Message(id: d.documentID, data: d.data(), cid: cid, crypto: Crypto.shared),
                        chg: Self.chgOf(d))
         }
-        let r = box.history.applyPage(page, upper: .distantFuture, full: docs.count >= pageSize, fromServer: true, now: now)
-        // Older pages already loaded by scrolling: kept, not yet proven by this store.
+        // Rows held outside the window (older pages, a cached copy): kept, not yet proven. Adopted
+        // BEFORE the page, so a short window (the whole channel) drops the ones the server no
+        // longer has.
         box.history.adoptUnverified(byId.values.filter { !windowIds.contains($0.id) })
+        let r = box.history.applyPage(page, upper: .distantFuture, full: docs.count >= pageSize, fromServer: true, now: now)
         box.history.lastChg = max(box.history.lastChg ?? top, top)
         box.history.lastGoneChg = max(box.history.lastGoneChg ?? top, top)
         for d in docs where box.history.posts[d.documentID] != nil { chDocs[d.documentID] = d }
@@ -2629,6 +2640,10 @@ extension ThreadRepository {
                 // Refused, or the index is missing: today's window path for this repository. A
                 // refusal of the whole session is reported by that path in its turn.
                 chRefused = true
+                // The store can no longer follow this channel: it must not seed a later open frozen.
+                if let uid = Auth.auth().currentUser?.uid { ChannelHistoryStore.shared.forget(uid: uid, cid: cid) }
+                chBox = nil
+                chDropUnheld = true   // the window's first server answer drops rows it does not hold
                 DispatchQueue.main.async { [weak self] in self?.start() }
                 return
             }
@@ -2670,7 +2685,8 @@ extension ThreadRepository {
         }
     }
 
-    /// Hard deletes: `changes/{chg} = {mid, gone: true}`.
+    /// Every change record, in `chg` order: hard deletes `{mid, gone: true}` and Clear Messages
+    /// `{clear: true, before: <ms>}` (the server writes no per-post record for what a clear covers).
     private func attachGoneListener() {
         guard let box = chBox, let from = box.history.lastGoneChg ?? box.history.lastChg else { return }
         chGoneToken += 1
@@ -2690,8 +2706,15 @@ extension ThreadRepository {
                 }
                 var removed = 0
                 let now = Date()
-                for d in snap.documents where (d.get("gone") as? Bool) == true {
-                    guard let mid = d.get("mid") as? String else { continue }
+                for d in snap.documents {
+                    if (d.get("clear") as? Bool) == true {
+                        guard let ms = (d.get("before") as? NSNumber)?.doubleValue else { continue }
+                        let gone = box.history.clearBefore(Date(timeIntervalSince1970: ms / 1000), now: now)
+                        removed += gone.count
+                        gone.forEach { self.chForgetLocalCopies($0) }
+                        continue
+                    }
+                    guard (d.get("gone") as? Bool) == true, let mid = d.get("mid") as? String else { continue }
                     let old = box.history.posts[mid]
                     if box.history.remove(mid, chg: Self.chgOf(d) ?? Int(d.documentID), now: now) == .removed {
                         removed += 1
@@ -2723,7 +2746,9 @@ extension ThreadRepository {
             .limit(to: 10)
             .addSnapshotListener { [weak self] snap, _ in
                 guard let self, token == self.chHeadToken, let snap else { return }
-                let docs = snap.documents
+                // Not my unconfirmed writes: the pending row shows the send, and a write the server
+                // refuses must not stay in the store.
+                let docs = snap.documents.filter { !$0.metadata.hasPendingWrites }
                 self.chDecode(docs) { [weak self] built, sigs in
                     guard let self, token == self.chHeadToken, let box = self.chBox else { return }
                     let n = self.chApply(docs, built: built, sigs: sigs, box: box)

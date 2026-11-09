@@ -176,6 +176,52 @@ final class ChannelHistoryStoreTests: XCTestCase {
         XCTAssertEqual(h.posts.count, 63)
     }
 
+    // MARK: Review fixes (2026-11-09)
+
+    /// Clear Messages: `{clear: true, before}` removes every post created at or before `before`.
+    func testClearRecordRemovesEverythingUpToBefore() {
+        var h = H()
+        h.applyPage((1...5).map { doc("p\($0)", Double($0), chg: $0) }, upper: .distantFuture, full: false, fromServer: true, now: now)
+        let gone = h.clearBefore(at(3), now: now)
+        XCTAssertEqual(Set(gone.map(\.id)), ["p1", "p2", "p3"])
+        XCTAssertEqual(h.sortedPosts.map(\.id), ["p4", "p5"])
+        // A page read before the clear cannot bring them back.
+        h.applyPage([doc("p2", 2, chg: 2)], upper: at(3), full: false, fromServer: true, now: now)
+        XCTAssertNil(h.posts["p2"])
+    }
+
+    /// A change for a post outside every read range is not added (no unmarked gap next to the
+    /// newest block); its delete is still remembered; the hole read brings it in.
+    func testChangeOutsideReadRangesWaitsForTheHoleRead() {
+        var h = H()
+        let newest = (100..<160).map { doc("n\($0)", Double($0), chg: $0) }
+        h.applyPage(newest, upper: .distantFuture, full: true, fromServer: true, now: now)
+        XCTAssertEqual(h.topHole?.upper, at(100))
+        XCTAssertEqual(h.applyChange(doc("old", 10, chg: 500, text: "edited"), now: now), .ignored)
+        XCTAssertNil(h.posts["old"])
+        XCTAssertEqual(h.applyChange(doc("gone", 20, chg: 501, deleted: true), now: now), .unchanged)
+        XCTAssertNotNil(h.tombs["gone"])
+        // Inside the read range a new post is still added.
+        XCTAssertEqual(h.applyChange(doc("new", 200, chg: 502), now: now), .added)
+        // The hole read brings the old post in, and keeps the deleted one out.
+        h.applyPage([doc("old", 10, chg: 500, text: "edited"), doc("gone", 20, chg: 400)],
+                    upper: at(100), full: false, fromServer: true, now: now)
+        XCTAssertEqual(h.posts["old"]?.text, "edited")
+        XCTAssertNil(h.posts["gone"])
+    }
+
+    /// The probe adopts cached rows before the window: a short window (the whole channel) then
+    /// drops a cached post the server hard-deleted.
+    func testAdoptBeforeShortWindowDropsHardDeletedCachedPost() {
+        var h = H()
+        h.adoptUnverified([P(id: "cachedGone", createdAt: at(1)), P(id: "kept", createdAt: at(2))])
+        h.applyPage([doc("kept", 2, chg: 2), doc("new", 3, chg: 3)], upper: .distantFuture, full: false, fromServer: true, now: now)
+        XCTAssertTrue(h.reachedStart)
+        XCTAssertNil(h.posts["cachedGone"])
+        XCTAssertEqual(h.sortedPosts.map(\.id), ["kept", "new"])
+        XCTAssertTrue(h.unverified.isEmpty)
+    }
+
     // MARK: Ranges and bound
 
     func testRangesMergeWhenAHoleIsRead() {
