@@ -92,8 +92,13 @@ struct QuoteCard: Equatable, Codable {
     private var fetchedAt: [String: Date] = [:]
     private var queued = Set<String>()
     private var inFlight = Set<String>()
-    /// qid -> "cid/mid" of the message the quote card sits in (`noteHost`), sent with `getQuotes`.
-    private var hosts: [String: String] = [:]
+    /// qid -> every "cid/mid" message the quote card sits in (`noteHost`), oldest first. The newest
+    /// is sent with `getQuotes`. A list, not one value (audit Q11): two rows with the same qid (a
+    /// pending row beside the landed one, a retried send) swapped one host for the other on every
+    /// model build, and each swap threw the answer away and asked the server again.
+    private var hosts: [String: [String]] = [:]
+    /// "private" answers for a card that has a host, asked again a few times (audit Q1).
+    private var privateTries: [String: Int] = [:]
 
     /// ⛔ A QUOTE IS SEEN BY WHOEVER SEES THE CHAT IT WAS POSTED IN (owner 2026-11-08: a private
     /// channel's post quoted into his public channel read "This channel is private" to its
@@ -102,11 +107,17 @@ struct QuoteCard: Equatable, Codable {
     func noteHost(_ qid: String, cid: String, mid: String) {
         guard Self.isQid(qid), !cid.isEmpty, !mid.isEmpty else { return }
         let h = cid + "/" + mid
-        guard hosts[qid] != h else { return }
-        let first = hosts[qid] == nil
-        hosts[qid] = h
-        // A card already answered "private" before its host was known: ask again with it.
-        if !first || cards[qid]?.state == .hidden { fetchedAt[qid] = nil }
+        var list = hosts[qid] ?? []
+        guard !list.contains(h) else { return }
+        list.append(h)
+        if list.count > 8 { list.removeFirst(list.count - 8) }
+        hosts[qid] = list
+        // Only a card that answered "private" is asked again with the new host; no other answer
+        // depends on where the card sits.
+        if cards[qid]?.state == .hidden {
+            fetchedAt[qid] = nil
+            privateTries[qid] = nil
+        }
     }
     private var flushScheduled = false
     /// How long an answer is trusted before the server is asked again (access can change).
@@ -170,9 +181,9 @@ struct QuoteCard: Equatable, Codable {
         }
         for t in pending.values { t.cancel() }
         cards.removeAll(); lastUsed.removeAll(); fetchedAt.removeAll(); queued.removeAll()
-        hosts.removeAll()
+        hosts.removeAll(); privateTries.removeAll()
         inFlight.removeAll()   // a call from the old account must not block the new one's cards
-        pending.removeAll(); done.removeAll()
+        pending.removeAll(); done.removeAll(); doneOrder.removeAll()
     }
 
     /// What the row signature carries for this quote.
@@ -213,16 +224,38 @@ struct QuoteCard: Equatable, Codable {
             let call = Functions.functions(region: "me-central1").httpsCallable("getQuotes")
             call.timeoutInterval = 15
             var hostsFor: [String: String] = [:]
-            for q in batch { if let h = hosts[q] { hostsFor[q] = h } }
+            for q in batch { if let h = hosts[q]?.last { hostsFor[q] = h } }
             let r = try await call.call(["qids": batch, "hosts": hostsFor])
             let got = ((r.data as? [String: Any])?["quotes"] as? [String: Any]) ?? [:]
             var changed = false
+            var askAgain: [String] = []
+            var tries = 0
             for q in batch {
                 fetchedAt[q] = Date()
                 guard let d = got[q] as? [String: Any], let card = QuoteCard(d) else { continue }
                 if cards[q] != card { cards[q] = card; changed = true }
+                // ⛔ "PRIVATE" FOR A CARD WITH A HOST IS NOT FINAL YET (audit Q1). The server lets a
+                // reader in through the hosting message only once that message's trigger has marked
+                // the quote as sent, a few seconds after the message lands. The recipient's phone draws
+                // the row before that, so the first answer was "private", trusted for two minutes.
+                // Asked again by itself a few times (3, 6, 12 s) while the trigger catches up.
+                if card.state == .hidden, hosts[q] != nil {
+                    let n = privateTries[q] ?? 0
+                    if n < 3 { privateTries[q] = n + 1; askAgain.append(q); tries = max(tries, n) }
+                } else {
+                    privateTries[q] = nil
+                }
             }
             if changed { trim(); LiveGroupCard.noteChanged(); scheduleSave() }
+            if !askAgain.isEmpty {
+                let wait = UInt64(3 << tries) * 1_000_000_000
+                let again = askAgain
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: wait)
+                    guard let self else { return }
+                    for q in again where self.cards[q]?.state == .hidden { self.request(q) }
+                }
+            }
         } catch {
             // Asked again on the next draw after a short pause, not in a loop.
             let retryAt = Date().addingTimeInterval(-fresh + 15)
@@ -251,6 +284,9 @@ struct QuoteCard: Equatable, Codable {
     /// Finished quotes by token, without their picture bytes (2026-11-06 audit: every Task kept its
     /// JPEG for the whole session). The few most recent are enough for a late send.
     private var done: [String: (qid: String, card: QuoteCard)] = [:]
+    /// `done`'s tokens, oldest first: past the limit only the oldest goes (audit Q9: the whole map was
+    /// emptied past 20, and a draft still holding an older token lost its quote).
+    private var doneOrder: [String] = []
 
     func start(cid: String, mid: String, picture: @escaping () async -> Data?) -> String {
         let token = UUID().uuidString
@@ -272,8 +308,9 @@ struct QuoteCard: Equatable, Codable {
         }
         if pending[token] != nil {
             pending[token] = nil
-            if done.count > 20 { done.removeAll() }
             done[token] = (m.qid, m.card)
+            doneOrder.append(token)
+            while doneOrder.count > 50 { done[doneOrder.removeFirst()] = nil }
         }
         return m
     }
