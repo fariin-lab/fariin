@@ -1773,7 +1773,8 @@ private struct ReplyComposer: View {
                         (Text("Replying to ") + Text(a.mine ? "yourself" : a.name).fontWeight(.semibold))
                             .font(.footnote).foregroundStyle(.primary).lineLimit(1)
                         Text("·").font(.footnote).foregroundStyle(.secondary)
-                        Button { answering = nil } label: {
+                        // Cancel ends the reply and puts the keyboard away (owner 2026-11-09).
+                        Button { answering = nil; focused = false } label: {
                             Text("Cancel").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
