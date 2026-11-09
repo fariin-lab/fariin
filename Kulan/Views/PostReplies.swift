@@ -1232,7 +1232,9 @@ struct PostThreadSheet: View {
                         Color.clear.frame(height: 1).id("start")
                             .onAppear { edgeSeen(top: true, seen: true) }
                             .onDisappear { edgeSeen(top: true, seen: false) }
-                        ForEach(items) { item in itemView(item).id(item.id) }
+                        let list = items
+                        let links = Self.chainLinks(list)
+                        ForEach(list) { item in itemView(item, links: links).id(item.id) }
                         Color.clear.frame(height: 6).id("end")
                             .onAppear { edgeSeen(top: false, seen: true) }
                             .onDisappear { edgeSeen(top: false, seen: false) }
@@ -1313,7 +1315,23 @@ struct PostThreadSheet: View {
         }
     }
 
-    @ViewBuilder private func itemView(_ item: Item) -> some View {
+    /// ⛔ A LINE ONLY BETWEEN AN ANSWER AND THE ANSWER IT ANSWERS, WHEN THEY ARE NEIGHBOURS (owner
+    /// 2026-11-09, his reference: "remove this line"). The long line from a comment down past all its
+    /// answers is gone. Ali answers, Salmo answers Ali right under him: one short line joins Ali's photo
+    /// to Salmo's. Anyone else's answer between them, or an answer to the comment itself: no line.
+    /// Per answer id: a line into its photo from above, and one out of it below.
+    private static func chainLinks(_ list: [Item]) -> [String: (above: Bool, below: Bool)] {
+        var out: [String: (above: Bool, below: Bool)] = [:]
+        for i in list.indices.dropFirst() {
+            guard case .answer(let r, let t) = list[i], case .answer(let prev, let pt) = list[i - 1],
+                  t == pt, let to = r.toId, to == prev.id, to != t else { continue }
+            out[r.id, default: (false, false)].above = true
+            out[prev.id, default: (false, false)].below = true
+        }
+        return out
+    }
+
+    @ViewBuilder private func itemView(_ item: Item, links: [String: (above: Bool, below: Bool)]) -> some View {
         switch item {
         case .older:
             Button { Task { await model.loadOlder() } } label: {
@@ -1330,10 +1348,13 @@ struct PostThreadSheet: View {
         case .thread(let r):
             // A line runs down from the photo when the reply has answers (shown or not yet).
             let hasAnswers = r.answers > 0 || !(model.answers[r.id] ?? []).isEmpty
-            ReplyRow(reply: r, small: false, actions: actions(r, thread: nil), line: hasAnswers ? .below : .none)
+            let _ = hasAnswers   // no line from a comment down any more (see `chainLinks`)
+            ReplyRow(reply: r, small: false, actions: actions(r, thread: nil), line: .none)
                 .background(flashFill(r.id))
         case .answer(let r, let t):
-            ReplyRow(reply: r, small: true, actions: actions(r, thread: t), line: .answer)
+            let link = links[r.id] ?? (false, false)
+            ReplyRow(reply: r, small: true, actions: actions(r, thread: t),
+                     line: link.above || link.below ? .chain(above: link.above, below: link.below) : .none)
                 .padding(.leading, ReplyThreadLine.answerIndent)
                 .background(flashFill(r.id))
         case .revealMore(let t, let n):
@@ -1344,10 +1365,6 @@ struct PostThreadSheet: View {
             .buttonStyle(.plain)
             .padding(.leading, 108).padding(.bottom, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(alignment: .leading) {   // the thread line passes by
-                Rectangle().fill(ReplyThreadLine.color).frame(width: 1.5)
-                    .padding(.leading, ReplyThreadLine.parentX - 0.75)
-            }
         case .toggle(let t, let n, let open):
             Button { withAnimation(.easeInOut(duration: 0.2)) { model.toggleThread(t) } } label: {
                 HStack(spacing: 8) {
@@ -1355,14 +1372,6 @@ struct PostThreadSheet: View {
                     Text(open ? (model.answersLoading.contains(t) ? "Loading…" : "Hide replies")
                               : "View \(n) \(n == 1 ? "reply" : "replies")")
                         .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-                }
-                // The thread line ends here, curving in from the parent photo's line.
-                .background(alignment: .leading) {
-                    GeometryReader { g in
-                        ReplyThreadLine.toggleElbow(height: g.size.height)
-                            .stroke(ReplyThreadLine.color, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-                    }
-                    .allowsHitTesting(false)
                 }
             }
             .buttonStyle(.plain)
@@ -1374,10 +1383,6 @@ struct PostThreadSheet: View {
             .buttonStyle(.plain)
             .padding(.leading, 108).padding(.bottom, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(alignment: .leading) {   // the thread line passes by
-                Rectangle().fill(ReplyThreadLine.color).frame(width: 1.5)
-                    .padding(.leading, ReplyThreadLine.parentX - 0.75)
-            }
         }
     }
 
@@ -1926,6 +1931,9 @@ private struct RepliesSkeleton: View {
 /// at x = 36 in list coordinates.
 enum ReplyThreadLine: Equatable {
     case none, below, answer
+    /// Between neighbouring answers where one answers the other (owner 2026-11-09): a short line
+    /// into this photo from the row above, and/or out of it to the row below.
+    case chain(above: Bool, below: Bool)
 
     static let parentX: CGFloat = 36
     static let answerIndent: CGFloat = 46
@@ -1964,6 +1972,15 @@ enum ReplyThreadLine: Equatable {
         case .below:
             p.move(to: CGPoint(x: r.midX, y: r.maxY + 2))   // right under the photo, no visible gap
             p.addLine(to: CGPoint(x: r.midX, y: height))
+        case .chain(let above, let below):
+            if above {
+                p.move(to: CGPoint(x: r.midX, y: 0))
+                p.addLine(to: CGPoint(x: r.midX, y: r.minY - 2))
+            }
+            if below {
+                p.move(to: CGPoint(x: r.midX, y: r.maxY + 2))
+                p.addLine(to: CGPoint(x: r.midX, y: height))
+            }
         case .answer:
             let x = parentX - answerIndent   // the parent's line, left of this row's own frame
             p.move(to: CGPoint(x: x, y: 0))
