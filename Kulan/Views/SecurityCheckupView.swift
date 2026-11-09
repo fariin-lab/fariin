@@ -337,19 +337,12 @@ struct SecurityCheckupSheet: View {
             ScrollView {
                 VStack(spacing: 24) {
                     header
-                    // ⛔ THE SETTLE IS A CROSSFADE, NOT ROWS FLYING BETWEEN CARDS (owner 2026-11-09, Pixel
-                    // video: an empty card flashed, then rows slid clipped inside a card that had
-                    // already jumped to its final size). The scan card fades out as the final cards
-                    // fade in, rising 8 pt into place.
-                    if !settled {
-                        scanCard
-                            .transition(.asymmetric(insertion: .identity,
-                                                    removal: .opacity.combined(with: .scale(scale: 0.98))))
-                    } else {
-                        settledSections
-                            .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 8)),
-                                                    removal: .identity))
-                    }
+                    // ⛔ ONE CARD, ONE ORDER, BEFORE AND AFTER (owner 2026-11-09, second Pixel video):
+                    // regrouping at the end read as the whole list jumping, crossfade or not. The list
+                    // the scan builds IS the result; a blue "!" marks what is missing. At the end only
+                    // the note, the safety link and Continue fade in below it.
+                    scanCard
+                    if settled { settledTail.transition(.opacity) }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 28)
@@ -420,11 +413,12 @@ struct SecurityCheckupSheet: View {
         if resolved.contains(e.id) {
             switch e.status {
             case .done(let line):
-                row(icon: "checkmark.circle", tint: .green, title: e.title, subtitle: line, action: nil, popIn: true)
+                row(icon: "checkmark.circle", tint: .green, title: e.title, subtitle: line, action: settled ? e.open : nil, popIn: true)
             case .missing:
-                row(icon: "exclamationmark.circle", tint: .blue, title: e.missingTitle, subtitle: e.why, action: nil, popIn: true)
+                row(icon: "exclamationmark.circle", tint: .blue, title: e.missingTitle, subtitle: e.why, action: settled ? e.open : nil, popIn: true)
             case .failed:
-                row(icon: "exclamationmark.triangle", tint: .orange, title: e.title, subtitle: "Couldn't check", action: nil, popIn: true)
+                row(icon: "exclamationmark.triangle", tint: .orange, title: e.title, subtitle: "Couldn't check",
+                    action: settled ? { Task { await check.run() } } : nil, popIn: true)
             case .checking:
                 row(icon: nil, tint: .secondary, title: e.title, subtitle: "Checking…", action: nil)
             }
@@ -481,63 +475,29 @@ struct SecurityCheckupSheet: View {
         withAnimation(.easeOut(duration: 0.2)) { ringShown = false }
         if allGood { withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { badge = true } }
         try? await Task.sleep(for: .milliseconds(300))
-        withAnimation(.easeOut(duration: 0.32)) { settled = true }
+        withAnimation(.easeOut(duration: 0.25)) { settled = true }
     }
 
     // MARK: Settled
 
-    @ViewBuilder private var settledSections: some View {
-        let missing = entries.filter { $0.status == .missing }
-        let failed = entries.filter { $0.status == .failed }
-        let rest = entries.filter { $0.status != .missing && $0.status != .failed }
-        // Only the groups that have rows (owner 2026-11-09): all set up means no "Set these up" card.
-        if !missing.isEmpty {
-            section(nil, footer: "Set these up to keep your account safe if your phone is lost or someone learns your password.") {
-                ForEach(missing) { e in
-                    row(icon: "exclamationmark.circle", tint: .blue,
-                        title: e.missingTitle, subtitle: e.why, action: e.open)
-                    if e.id != missing.last?.id { divider }
-                }
+    /// Under the card once the scan has settled: the note (only when something is missing) and the
+    /// link to fariin.com/safety. People reading this sheet are already thinking about their account;
+    /// that page shows everything else (requests, block, report, scams).
+    @ViewBuilder private var settledTail: some View {
+        VStack(spacing: 16) {
+            if entries.contains(where: { $0.status == .missing }) {
+                Text("Set these up to keep your account safe if your phone is lost or someone learns your password.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
             }
-        }
-        if !failed.isEmpty {
-            section("Couldn't check", footer: nil) {
-                ForEach(failed) { e in
-                    row(icon: "exclamationmark.triangle", tint: .orange,
-                        title: e.title, subtitle: "Check your connection and try again.",
-                        action: { Task { await check.run() } })
-                    if e.id != failed.last?.id { divider }
-                }
+            Button { if let u = URL(string: "https://fariin.com/safety") { WebLink.open(u) } } label: {
+                Text("How Fariin keeps you safe")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.fariinAction)
             }
+            .buttonStyle(.plain)
         }
-        if !rest.isEmpty {
-            section(rest.contains { $0.status == .checking } ? "Checking your account…"
-                    : missing.isEmpty && failed.isEmpty ? "Everything is set up" : "Set up",
-                    footer: nil) {
-                ForEach(rest) { e in
-                    Group {
-                        if case .done(let line) = e.status {
-                            row(icon: "checkmark.circle", tint: .green,
-                                title: e.title, subtitle: line, action: e.open)
-                        } else {
-                            row(icon: nil, tint: .secondary,
-                                title: e.title, subtitle: "Checking…", action: nil)
-                        }
-                    }
-                    if e.id != rest.last?.id { divider }
-                }
-            }
-        }
-        // ⛔ THE REST OF THE TOOLS — 2026-10-15: fariin.com/safety. People reading this sheet are
-        // already thinking about their account; the page shows everything else (requests, block,
-        // report, scams). Inside the measured content, so the sheet's fitted height includes it.
-        Button { if let u = URL(string: "https://fariin.com/safety") { WebLink.open(u) } } label: {
-            Text("How Fariin keeps you safe")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Color.fariinAction)
-        }
-        .buttonStyle(.plain)
-        .transition(.opacity)
     }
 
     /// The photo with the scan ring: an arc running round it while the checks run, closing into a
