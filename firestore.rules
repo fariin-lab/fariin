@@ -745,11 +745,7 @@ service cloud.firestore {
           && request.resource.data.get('admin', false) is bool;
       }
 
-      // 2026-09-24 decision D8: MY BLOCK LIST, one document per person I blocked, so blocking works
-      // for anyone, chat or no chat. Owner only, both ways: the blocked person must never be able to
-      // read that they are on it. The rules read it through `isBlockedByUser` (call create only;
-      // messages and new chats stay silent, 2026-09-24 decision D8), which ignores these read rules. The document carries only
-      // `at`, the server's time of the block.
+      // D8 (2026-09-24) block list: owner only (the blocked never learn it); isBlockedByUser reads it. Doc = {at}.
       // 1:1 audit r3 F2, 2026-10-08: the server's verdict on a call ringing me, `{allowed: bool}`,
       // written by onCallCreated in the same commit as the call's `screenedAt`. On the CALLEE's
       // side so the caller cannot read it (the call doc only says "the server has looked").
@@ -808,6 +804,9 @@ service cloud.firestore {
         allow create, update: if signedIn() && request.auth.uid == uid
           && request.resource.data.keys().hasOnly(['silent']) && request.resource.data.silent is bool;
       }
+      // Activity (2026-11-09): written by the server only; mine to read.
+      match /activity/{i} { allow read: if request.auth.uid == uid; }
+      match /activityMeta/{i} { allow read: if request.auth.uid == uid; }
       // My reactions in channels I run (owner/admin, 2026-10-29), written by reactChannelPost only.
       match /channelRx/{c} {
         allow read: if signedIn() && request.auth.uid == uid;
