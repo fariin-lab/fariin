@@ -4861,6 +4861,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
               let end = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
         else { return }
         if let bar = composerBar as? ChatComposerView, bar.gifSearchOpen || bar.holdsKeyboardForGifSearch { return }
+        // ⛔ A SHEET'S KEYS ARE NOT THIS CHAT'S KEYS, here too (owner 2026-11-09: open a post's
+        // Replies, tap the field, and the channel behind jumped up once the keyboard settled). The
+        // will-change feeder and the system feeder already refused them (`sheetCoversChat`); this
+        // did-show correction did not, so it "corrected" the guide up to the sheet's keyboard.
+        if sheetCoversChat { return }
         // Only with this view at rest in the window (the same test `adoptSystemKeyboardGuide` uses).
         guard view.convert(view.bounds, to: nil).maxY <= win.bounds.maxY + 1 else { return }
         let local = view.convert(end, from: nil)
