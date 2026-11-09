@@ -973,7 +973,7 @@ struct CallView: View {
                     }
                     if call.noAnswerHold {
                         noAnswerBar
-                            .padding(.bottom, winInsets.bottom + 22)
+                            .padding(.bottom, winInsets.bottom + 8)   // a sheet sits near the edge
                     } else {
                         controlBar
                             .frame(maxWidth: .infinity)        // centered control pill
@@ -1238,32 +1238,49 @@ struct CallView: View {
 
     // MARK: - No answer page
 
-    /// ⛔ THE NO ANSWER PAGE — owner, 2026-10-14; OUR OWN DESIGN since 2026-10-30 ("do not copy
-    /// it"): the first version was the reference app's row of three circles. A call I placed that
-    /// nobody picked up, or that never connected, stays on screen (`CallService.noAnswerHold`) with
-    /// the avatar, the name and "No answer" / "Couldn't connect" above, and one glass card below:
-    /// the main way forward as one wide green button (Call again, or Try again after a failed
-    /// connect), and under it Voice message (opens the chat with the recorder running) and Close.
+    /// ⛔ THE NO ANSWER PAGE — owner 2026-11-09 picked design "B · Sheet" from four ("the ugliest
+    /// design I had ever seen" for the 2026-10-30 green-button card). A call I placed that nobody
+    /// picked up, or that never connected, stays on screen (`CallService.noAnswerHold`) with a sheet
+    /// at the bottom: who (small photo, name), why (`endedText`: No answer, Couldn't connect...), an
+    /// X, then plain rows: Call again (white, the main one; Try again after a failed connect),
+    /// Record voice message, Send a message, and the other kind of call. No ring on the avatar.
+    ///
+    /// ONE glass surface only. The old card nested interactive glass buttons inside a glass card,
+    /// which on iOS 26 made taps lag or miss (owner: "when you tap it, it didn't work properly").
+    /// The rows are plain buttons with a press tint (`NoAnswerRowStyle`).
     private var noAnswerBar: some View {
-        let retry = call.endReason == .failed ? "Try again" : "Call again"
-        return VStack(spacing: 10) {
-            Button { callAgainAfterNoAnswer() } label: {
-                Label(retry, systemImage: call.isVideoCall ? "video.fill" : "phone.fill")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 54)
-                    .glassEffect(.regular.tint(Color(hex: 0x22C55E)).interactive(), in: .capsule)
+        let failed = call.endReason == .failed
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                AvatarView(name: call.otherName, photoUrl: call.otherPhotoUrl, size: 48)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(call.otherName).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                    Text("\(endedText) · \(call.isVideoCall ? "video call" : "voice call")")
+                        .font(.system(size: 13)).foregroundStyle(.white.opacity(0.65)).lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Button { call.closeNoAnswer() } label: {
+                    Image(systemName: "xmark").font(.system(size: 14, weight: .bold))
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(.white.opacity(0.14)))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(NoAnswerRowStyle(shape: Circle()))
+                .accessibilityLabel("Close")
             }
-            .buttonStyle(.plain)
-            HStack(spacing: 10) {
-                noAnswerSecondary("mic.fill", "Voice message") { recordVoiceNoteAfterNoAnswer() }
-                noAnswerSecondary("xmark", "Close") { call.closeNoAnswer() }
-            }
+            .padding(.horizontal, 6)
+            .padding(.bottom, 10)
+            noAnswerRow(call.isVideoCall ? "video.fill" : "phone.fill",
+                        failed ? "Try again" : "Call again", primary: true) { callAgainAfterNoAnswer() }
+            noAnswerRow("mic.fill", "Record voice message") { recordVoiceNoteAfterNoAnswer() }
+            noAnswerRow("bubble.left.fill", "Send a message") { openChatAfterNoAnswer() }
+            noAnswerRow(call.isVideoCall ? "phone.fill" : "video.fill",
+                        call.isVideoCall ? "Voice call instead" : "Video call instead") { switchKindAfterNoAnswer() }
         }
-        .padding(12)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
-        .padding(.horizontal, 16)
+        .foregroundStyle(.white)
+        .padding(14)
+        .glassEffect(.regular.tint(.black.opacity(0.35)), in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .padding(.horizontal, 8)
         .transition(.move(edge: .bottom).combined(with: .opacity))
         // Nobody is looking at it once the app has gone; it closes the way the old tail did.
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
@@ -1271,16 +1288,44 @@ struct CallView: View {
         }
     }
 
-    private func noAnswerSecondary(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
+    /// One row: an icon in a small rounded square, then the words. The main row is white with dark
+    /// text; the others are plain until pressed.
+    private func noAnswerRow(_ icon: String, _ label: String, primary: Bool = false,
+                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Label(label, systemImage: icon)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .frame(height: 46)
-                .glassEffect(.regular.interactive(), in: .capsule)
+            HStack(spacing: 14) {
+                Image(systemName: icon).font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.white)
+                    .frame(width: 34, height: 34)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(primary ? Color.black : Color.white.opacity(0.14)))
+                Text(label).font(.system(size: 16, weight: primary ? .semibold : .medium))
+                    .foregroundStyle(primary ? Color.black : Color.white)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 54)
+            .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(primary ? Color.white : Color.clear))
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(NoAnswerRowStyle(shape: RoundedRectangle(cornerRadius: 18, style: .continuous)))
+    }
+
+    /// The chat opens, nothing else (the voice row also starts the recorder).
+    private func openChatAfterNoAnswer() {
+        guard let me = AuthService.shared.uid, !call.otherUid.isEmpty else { call.closeNoAnswer(); return }
+        let cid = ChatService.convId(me, call.otherUid)
+        let router = AppRouter.shared
+        router.pendingChatName = call.otherName
+        router.pendingChatPhoto = call.otherPhotoUrl
+        call.closeNoAnswer()
+        router.pendingChatId = cid
+    }
+
+    /// Same person, the other kind of call. `startCall` closes the No answer page itself.
+    private func switchKindAfterNoAnswer() {
+        call.startCall(to: call.otherUid, name: call.otherName, photo: call.otherPhotoUrl, video: !call.isVideoCall)
     }
 
     /// Same person, same kind of call. `startCall` closes the No answer page itself.
@@ -2292,6 +2337,18 @@ struct LiveCallBarBackground: View {
 // MARK: - CallControlStyle
 
 // Press feedback: dips + dims on press, springs back.
+/// The No answer sheet's rows: an instant soft tint while pressed, cleared on lift. No glass, so
+/// nothing nests inside the sheet's own glass (that nesting was the lagging tap).
+struct NoAnswerRowStyle<S: Shape>: ButtonStyle {
+    let shape: S
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .overlay(shape.fill(Color.white.opacity(configuration.isPressed ? 0.12 : 0)).allowsHitTesting(false))
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
 struct CallControlStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
