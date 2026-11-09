@@ -74,7 +74,9 @@ struct AddToGroupView: View {
             HStack(spacing: 12) {
                 AvatarView(name: g.displayName(me), photoUrl: g.displayPhoto(me), size: 44)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(g.displayName(me)).foregroundStyle(already || blocked != nil ? .secondary : .primary)
+                    // owner 2026-11-08: a greyed-out row made the whole sheet look dead. The name and
+                    // photo stay full colour; only the grey line under it says why it can't be tapped.
+                    Text(g.displayName(me)).foregroundStyle(.primary)
                     Text(already ? "Already a member" : (blocked ?? g.memberCountLabel))
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -84,7 +86,9 @@ struct AddToGroupView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(already || blocked != nil || working != nil)
+        // No .disabled for "already a member" / "only admins": it fades the photo and name too. The
+        // tap guard above already ignores those rows.
+        .disabled(working != nil)
     }
 
     /// Why I can't add anyone to this group, said on the row before the tap instead of a server
