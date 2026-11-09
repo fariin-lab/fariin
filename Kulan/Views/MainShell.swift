@@ -2641,7 +2641,12 @@ struct ChatsView: View {
             // 2026-09-24 feature-audit: the loading-older row at the end of the list, for a page
             // asked for by scrolling and for a search or filter fetching the whole list.
             loadingMore: repo.loadingOlder || repo.loadingWholeList,
-            chatOpen: !path.isEmpty
+            chatOpen: !path.isEmpty,
+            // The Activity row (owner 2026-11-09): only on the All and Unread filters, not while
+            // searching, and only while something is unread.
+            activity: (chatFilter == 0 || chatFilter == 1) && searchTrimmed.isEmpty
+                ? ActivityStore.shared.unreadSummary : nil,
+            onOpenActivity: { path.append(ActivityRoute.page) }
         )
     }
 
@@ -3393,6 +3398,12 @@ struct ChatsView: View {
             // answers for `ChatTarget`; the page hands the tap back up here through `onOpenChat`.
             .navigationDestination(for: RequestsRoute.self) { _ in
                 MessageRequestsView(onOpenChat: { t in path.append(t) })
+                    .barFollowsPhone()
+            }
+            // Replies and reactions to my comments (owner 2026-11-09). A tap on an item opens its
+            // channel on top of this page through the push route (`ActivityStore.open`).
+            .navigationDestination(for: ActivityRoute.self) { _ in
+                ActivityView()
                     .barFollowsPhone()
             }
             .navigationDestination(for: ChatPinRoute.self) { _ in

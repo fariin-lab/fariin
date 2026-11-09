@@ -166,6 +166,7 @@ enum SessionWipe {
         // the PREVIOUS account has a relationship with. Left behind, the next account's Glowers
         // audience would resolve to a stranger's people and post to them.
         GlowService.shared.stop()
+        ActivityStore.shared.stop()   // 2026-11-09: the Activity page's items and the chat-list row
         // And the grid built FROM those uids, which is a file on disk naming the previous account's
         // glow people and holding their photographs. It is keyed per account so a stranger could not
         // read it anyway, but a signed-out account's own cache has no reason to outlive the session,

@@ -369,6 +369,7 @@ final class ConversationsRepository {
         startBehindServerCheck()
         listenerUid = uid
         ChannelFollows.shared.start(uid: uid)   // 2026-10-28: the channels I follow, beside the window
+        Task { @MainActor in ActivityStore.shared.start(uid: uid) }   // 2026-11-09: replies/reactions to my comments
         beginCatchUp()   // 2026-10-27: a fresh listener's first answers are a catch-up, not live moves
         let limit = windowLimit
         // Attach the listener IMMEDIATELY — never block the chat list behind ensureReady.

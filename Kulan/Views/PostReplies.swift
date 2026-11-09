@@ -546,9 +546,17 @@ struct ReplyEdit: Equatable {
             await loadOlder()
             pages += 1
         }
-        guard isThread(rid) else { return }   // gone, or too far down: the sheet stays at the top
+        guard isThread(rid) else {
+            // Gone, or too far down: the sheet stays at the top. Every page read and still not
+            // there means it was deleted (Activity, 2026-11-09).
+            if olderCursor.isEmpty { notice = "This reply was deleted" }
+            return
+        }
         if let aid, !aid.isEmpty, aid != rid {
             await jumpTo(aid, inThread: rid)
+            if answers[rid]?.contains(where: { $0.id == aid }) != true, (answerNext[rid] ?? "").isEmpty {
+                notice = "This reply was deleted"
+            }
         } else {
             if !openThreads.contains(rid) { toggleThread(rid) }
             reveal(rid, thread: nil)

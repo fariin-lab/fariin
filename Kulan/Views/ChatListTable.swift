@@ -409,6 +409,10 @@ struct ChatListTable: UIViewControllerRepresentable {
     var loadingMore: Bool = false
     /// Is a chat pushed over this list? Its true → false edge clears any grey row (2026-10-06).
     var chatOpen: Bool = false
+    /// The Activity row (owner 2026-11-09, fariin-activity/SPEC.md): nil hides it. A synthetic row
+    /// in the unpinned section, placed among the chats by the time of its latest event.
+    var activity: ActivitySummary? = nil
+    var onOpenActivity: () -> Void = {}
     /// ⛔ THE VOICE BAR'S ROOM IS GIVEN HERE, EXPLICITLY — owner, 2026-09-29, the THIRD report of the
     /// playing-note bar over "Pinned". The page mounts this table with
     /// `.ignoresSafeArea(.container, edges: [.top, .bottom])` (rows run under the header's soft
@@ -440,7 +444,7 @@ struct ChatListTable: UIViewControllerRepresentable {
         vc.reassertNavChrome()
         vc.setSearching(context.environment.isSearching)   // the footer hold while search opens/closes
         vc.apply(state: .make(pinned: pinned.map(\.id),
-                              unpinned: unpinned.map(\.id),
+                              unpinned: unpinnedIds(),
                               people: people.map(\.id)),
                  animated: true)
         // ⛔ THE TICKS ARE PUT BACK **AFTER** THE DIFF, AND THE ORDER IS A BUG FIX. A same-section
@@ -464,6 +468,16 @@ struct ChatListTable: UIViewControllerRepresentable {
         // sends updated rows to `reloadRows` INSIDE the block and the in-place path is taken only
         // when nothing structural happened. `apply` now makes that choice, which is also the only
         // place that knows whether the diff was structural.
+    }
+
+    /// The unpinned ids, with the Activity row slotted in before the first chat older than it
+    /// (never above a call that is running, which outranks everything).
+    private func unpinnedIds() -> [String] {
+        var ids = unpinned.map(\.id)
+        guard let a = activity, a.unread > 0 else { return ids }
+        let i = unpinned.firstIndex { !onCall($0) && $0.listSortDate(me) < a.lastAtMillis } ?? unpinned.count
+        ids.insert(ActivityStore.rowId, at: i)
+        return ids
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -656,6 +670,8 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// The theme the visible cells were built in. Not part of a row's content, and it changes all of
     /// them at once.
     private var configuredDark: Bool?
+    /// What the Activity row's cell was last given (see `configureActivityCell`).
+    private var configuredActivity: ActivitySummary?
 
     /// ⛔ ONE HEADER VIEW PER SECTION, KEPT, NOT REBUILT. Two reasons, and the second is the one that
     /// matters for the pin animation.
@@ -1558,6 +1574,12 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             return c
         }
 
+        if id == ActivityStore.rowId {
+            configureActivityCell(c)
+            if !tableView.isEditing { tableView.deselectRow(at: indexPath, animated: false) }
+            return c
+        }
+
         guard let conv = host.conversation(id) else { return cell }
         configureChatCell(c, id: id, content: host.content(for: conv))
         // Outside Select mode no row is ever built selected (nothing is held; see `didSelectRowAt`).
@@ -1602,6 +1624,19 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         cell.selectionStyle = .default
     }
 
+    /// The Activity row: not a conversation, so it has its own small builder. Same height and
+    /// two-line reserve as a chat row, so the in-place refresh stays safe.
+    private func configureActivityCell(_ cell: ChatListCell) {
+        let summary = host?.parent.activity
+        let dark = host?.parent.dark ?? false
+        configuredActivity = summary
+        cell.contentConfiguration = UIHostingConfiguration {
+            ActivityChatRow(summary: summary, dark: dark)
+        }
+        .margins(.all, 0)
+        cell.selectionStyle = .default
+    }
+
     /// ⛔ THEIR `updateCellContent`, AND THE PORT WAS BROKEN WITHOUT IT. See `ChatRowContent` for the
     /// five things that silently stopped working.
     ///
@@ -1640,6 +1675,10 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
                 guard let u = host.person(id), configuredPeople[id] != u else { continue }
                 configuredPeople[id] = u
                 cell.contentConfiguration = UIHostingConfiguration { p.personRow(u) }.margins(.all, 0)
+                continue
+            }
+            if id == ActivityStore.rowId {
+                if themeChanged || configuredActivity != p.activity { configureActivityCell(cell) }
                 continue
             }
             guard let conv = host.conversation(id) else { continue }
@@ -1773,7 +1812,8 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// "no `swipeActions`" plus `.selectionDisabled(true)`. There is nothing to archive, mute or
     /// delete about somebody you have never spoken to.
     func tableView(_ tableView: UITableView, canEditRowAt indexPath: IndexPath) -> Bool {
-        ChatListSection(rawValue: indexPath.section) != .people
+        // The Activity row has no swipes and no Select circle either.
+        ChatListSection(rawValue: indexPath.section) != .people && rowId(at: indexPath) != ActivityStore.rowId
     }
 
     func tableView(_ tableView: UITableView,
@@ -2232,7 +2272,11 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
                 tableView.deselectRow(at: indexPath, animated: false)
                 return
             }
-            guard let id = rowId(at: indexPath) else { return }
+            // Nor the Activity row: it is not a chat to archive or delete.
+            guard let id = rowId(at: indexPath), id != ActivityStore.rowId else {
+                tableView.deselectRow(at: indexPath, animated: false)
+                return
+            }
             host?.setSelected(id, true)
             return
         }
@@ -2256,6 +2300,10 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         if ChatListSection(rawValue: indexPath.section) == .people {
             guard let id = rowId(at: indexPath), let u = host?.person(id) else { return }
             host?.parent.onOpenPerson(u)
+            return
+        }
+        if rowId(at: indexPath) == ActivityStore.rowId {
+            host?.parent.onOpenActivity()
             return
         }
         guard let c = conversation(at: indexPath) else { return }
