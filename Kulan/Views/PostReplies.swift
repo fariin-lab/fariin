@@ -151,6 +151,37 @@ struct ReplyEdit: Equatable {
     private(set) var may = Rights()
     private(set) var staff = false
     private(set) var count = 0
+    /// ⛔ MY OWN SENDS AND DELETES STAY IN THE COUNT (2026-11-09 audit R-02/X4: the tab went 19, back
+    /// to 18 two seconds later, then 19 again). The server counts them in a buffer it writes to the
+    /// post about once a minute, and every page until then carries the old number. `count` is the
+    /// server's number plus my changes it has not taken in yet; they are dropped once its number has
+    /// moved by as much, or after 90 seconds.
+    private var serverCount = 0
+    private var myDelta = 0
+    private var myDeltaBase = 0
+    private var myDeltaAt: Date?
+    /// A send or delete of mine changed the count this visit: the post under the sheet is told on close.
+    private(set) var countTouched = false
+
+    private func bumpCount(_ d: Int) {
+        guard d != 0 else { return }
+        if myDelta == 0 { myDeltaBase = serverCount }
+        myDelta += d
+        myDeltaAt = Date()
+        countTouched = true
+        count = max(0, serverCount + myDelta)
+    }
+
+    private func setServerCount(_ n: Int) {
+        serverCount = max(0, n)
+        if myDelta != 0 {
+            let moved = serverCount - myDeltaBase
+            let stale = myDeltaAt.map { Date().timeIntervalSince($0) > 90 } ?? true
+            if stale || (myDelta > 0 ? moved >= myDelta : moved <= myDelta) { myDelta = 0; myDeltaAt = nil }
+        }
+        count = max(0, serverCount + myDelta)
+    }
+
     /// Replies by others that landed while I was reading further up ("N new replies" pill).
     var unseenNew = 0
     /// The id the list should bring into view next (my own new reply).
@@ -159,6 +190,10 @@ struct ReplyEdit: Equatable {
     private var pendingLikes: [String: String] = [:]    // key -> wanted emoji ("" = none), while in flight
     private var likeInFlight: Set<String> = []
     private var deletedIds: Set<String> = []
+    /// ⛔ DELETED WHILE "SENDING…" (2026-11-09 audit R-01: the server had no doc yet, said "removed 0",
+    /// and the send then saved it, live for everyone and hidden only from me). Client id -> its thread
+    /// ("" for a thread of its own). The send's answer deletes what it saved, success or not.
+    private var deleteAfterSave: [String: String] = [:]
     private var headListener: ListenerRegistration?
     private var lastRev = -1
     private var refreshTask: Task<Void, Never>?
@@ -214,6 +249,7 @@ struct ReplyEdit: Equatable {
         self.cid = cid
         self.mid = mid
         count = max(0, seedCount)
+        serverCount = count
         if let c = Self.cache["\(mid)|top"] { threads = c; loaded = true }
         pinned = Self.pinCache[mid]
     }
@@ -312,7 +348,7 @@ struct ReplyEdit: Equatable {
         channelOff = d["channelOff"] as? Bool ?? false
         postOff = d["postOff"] as? Bool ?? false
         staff = d["staff"] as? Bool ?? false
-        count = (d["count"] as? NSNumber)?.intValue ?? count
+        if let n = (d["count"] as? NSNumber)?.intValue { setServerCount(n) }
         let m = d["may"] as? [String: Any] ?? [:]
         may = Rights(del: m["del"] as? Bool ?? false, ban: m["ban"] as? Bool ?? false, settings: m["settings"] as? Bool ?? false)
     }
@@ -670,6 +706,13 @@ struct ReplyEdit: Equatable {
             if let to, thread != nil { a["to"] = ["id": to.id, "name": to.name] }
             do {
                 let res = try await fn.httpsCallable("addReply").call(args(a))
+                // Deleted while it was on its way: what was just saved goes again, never counted.
+                if deleteAfterSave.removeValue(forKey: id) != nil {
+                    counted.insert(id)
+                    let savedId = ((res.data as? [String: Any])?["reply"] as? [String: Any])?["id"] as? String ?? id
+                    await removeAfterSave(savedId, row: (res.data as? [String: Any])?["reply"] as? [String: Any], thread: thread)
+                    return
+                }
                 guard let d = (res.data as? [String: Any])?["reply"] as? [String: Any], var saved = PostReply(d) else {
                     mark(id, thread: thread, .failed)   // an answer it cannot read: Retry, not a row stuck sending
                     return
@@ -685,14 +728,46 @@ struct ReplyEdit: Equatable {
                 recentMine[saved.id] = Date()
                 if firstTime {
                     if let t = thread { update(t, thread: nil) { $0.answers += 1 } }
-                    count += 1
+                    bumpCount(1)
                 }
             } catch {
+                // Deleted while it was on its way, and the send failed: nothing to show. A lost answer
+                // may still have saved it, so it is deleted on the server all the same (a no-op if not).
+                if deleteAfterSave.removeValue(forKey: id) != nil {
+                    await removeAfterSave(id, row: nil, thread: thread)
+                    return
+                }
                 mark(id, thread: thread, .failed)
                 // A held thread refuses answers: say so, the server's words.
                 if let m = Self.serverMessage(error) { notice = m }
             }
         }
+    }
+
+    /// A reply deleted while "Sending…" was saved after all: it is deleted now. If that fails it comes
+    /// back on screen as sent (it is live for everyone), so it can be deleted again.
+    private func removeAfterSave(_ savedId: String, row: [String: Any]?, thread: String?) async {
+        deletedIds.insert(savedId)
+        var a: [String: Any] = [:]
+        if let t = thread { a["rid"] = t; a["aid"] = savedId } else { a["rid"] = savedId }
+        for attempt in 0..<3 {
+            if attempt > 0 { try? await Task.sleep(nanoseconds: UInt64(attempt) * 2_000_000_000) }
+            if (try? await fn.httpsCallable("deleteReply").call(args(a))) != nil { return }
+        }
+        // Never saved (no row came back): nothing is live, nothing to show.
+        guard let row, let saved = PostReply(row).map(overlay) else { return }
+        deletedIds.remove(savedId)
+        if let t = thread {
+            if answers[t]?.contains(where: { $0.id == saved.id }) != true {
+                answers[t, default: []].append(saved)
+                answers[t]?.sort { $0.at < $1.at }
+                update(t, thread: nil) { $0.answers += 1 }
+            }
+        } else if !threads.contains(where: { $0.id == saved.id }) {
+            threads = placed(threads + [saved])
+        }
+        bumpCount(1)
+        notice = "Couldn't delete the reply."
     }
 
     func retry(_ r: PostReply, thread: String?) {
@@ -804,6 +879,16 @@ struct ReplyEdit: Equatable {
     }
 
     func delete(_ r: PostReply, thread: String?) async {
+        // Still on its way (the row as it is now, not as the menu saw it): it goes from the screen
+        // at once and the send deletes it on the server when it lands (`deleteAfterSave`). Nothing
+        // was counted for it yet, so no count moves.
+        if let live = find(r.id, thread: thread), live.send == .sending {
+            deletedIds.insert(r.id)
+            deleteAfterSave[r.id] = thread ?? ""
+            if let t = thread { answers[t]?.removeAll { $0.id == r.id } }
+            else { threads.removeAll { $0.id == r.id }; mineOnTop.removeAll { $0 == r.id } }
+            return
+        }
         deletedIds.insert(r.id)
         let threadsBefore = threads, answersBefore = answers[thread ?? ""]
         let wasPinned = thread == nil && pinned?.id == r.id ? pinned : nil
@@ -820,7 +905,7 @@ struct ReplyEdit: Equatable {
         do {
             let res = try await fn.httpsCallable("deleteReply").call(args(a))
             let removed = ((res.data as? [String: Any])?["removed"] as? NSNumber)?.intValue ?? 0
-            count = max(0, count - removed)
+            bumpCount(-removed)
         } catch {
             deletedIds.remove(r.id)
             if let t = thread { update(t, thread: nil) { $0.answers += 1 } }
@@ -923,6 +1008,9 @@ struct PostThreadSheet: View {
     var quotesOff: Bool = false
     /// This post's replies switch changed here: the chat updates the post at once (owner 2026-11-07).
     var onPostRepliesChanged: (Bool) -> Void = { _ in }
+    /// The sheet closed after a send or delete of mine: the count it showed, so the post's own bar
+    /// says the same at once instead of waiting for the server's next write (2026-11-09 audit R-02).
+    var onCountChanged: (Int) -> Void = { _ in }
     /// A tap on a reply's photo or name: that person's profile (uid, name), or the channel's own page
     /// for a Creator reply. The chat closes this sheet first, then opens it.
     var onOpenPerson: (String, String) -> Void = { _, _ in }
@@ -1016,7 +1104,10 @@ struct PostThreadSheet: View {
                 }
             }
         }
-        .onDisappear { model.stop() }
+        .onDisappear {
+            model.stop()
+            if model.countTouched { onCountChanged(model.count) }
+        }
         .onChange(of: model.notice) { _, m in
             guard let m else { return }
             model.notice = nil
