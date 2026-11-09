@@ -7,7 +7,7 @@ enum ActivityRoute: Hashable { case page }
 /// Replies and reactions to my comments on channel posts (owner 2026-11-09, design "4 + reactions",
 /// contract in fariin-activity/SPEC.md). Opening it reads everything; a tap opens the post's Replies
 /// at that comment.
-struct ActivityView: View {
+struct ActivityFeedView: View {
     private enum Filter { case all, unread }
 
     private var store: ActivityStore { .shared }

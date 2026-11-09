@@ -3403,7 +3403,7 @@ struct ChatsView: View {
             // Replies and reactions to my comments (owner 2026-11-09). A tap on an item opens its
             // channel on top of this page through the push route (`ActivityStore.open`).
             .navigationDestination(for: ActivityRoute.self) { _ in
-                ActivityView()
+                ActivityFeedView()
                     .barFollowsPhone()
             }
             .navigationDestination(for: ChatPinRoute.self) { _ in
