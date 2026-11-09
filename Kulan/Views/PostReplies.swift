@@ -1366,9 +1366,15 @@ struct PostThreadSheet: View {
 
     /// The short background flash on a row brought into view.
     private func flashFill(_ id: String) -> some View {
-        Color.accentColor.opacity(model.flash == id ? 0.14 : 0)
-            .animation(.easeInOut(duration: 0.3), value: model.flash == id)
-            .allowsHitTesting(false)
+        // The reply being answered stays shaded grey while the field is open (owner 2026-11-09).
+        let answered = answering.map { ($0.to ?? $0.thread) == id } ?? false
+        return ZStack {
+            Color(.secondarySystemFill).opacity(answered ? 1 : 0)
+                .animation(.easeInOut(duration: 0.2), value: answered)
+            Color.accentColor.opacity(model.flash == id ? 0.14 : 0)
+                .animation(.easeInOut(duration: 0.3), value: model.flash == id)
+        }
+        .allowsHitTesting(false)
     }
 
     /// Editing is open for 15 minutes after a reply is sent (the server holds the same limit).
@@ -1764,7 +1770,7 @@ private struct ReplyComposer: View {
                     // "Replying to yourself · Cancel" on my own reply, the name otherwise, and Cancel as a
                     // word right after it (owner 2026-11-09).
                     HStack(spacing: 4) {
-                        Text(a.mine ? "Replying to yourself" : "Replying to \(a.name)")
+                        (Text("Replying to ") + Text(a.mine ? "yourself" : a.name).fontWeight(.semibold))
                             .font(.footnote).foregroundStyle(.primary).lineLimit(1)
                         Text("·").font(.footnote).foregroundStyle(.secondary)
                         Button { answering = nil } label: {
@@ -1778,7 +1784,17 @@ private struct ReplyComposer: View {
                 }
                 let hasText = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 HStack(alignment: .bottom, spacing: 8) {
-                    TextField("Add a reply…", text: $draft, axis: .vertical)
+                    // Their name, blue, at the start of the field (owner 2026-11-09, his reference
+                    // picture). Drawn, not typed: the sent reply already names who it answers
+                    // ("A ▸ B"), so it is never sent as text. Cancel above takes it away.
+                    if editing == nil, let a = answering, !a.mine {
+                        Text(a.name).foregroundStyle(Color(.systemBlue)).lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .frame(maxWidth: 160, alignment: .leading)
+                            .padding(.vertical, 12)
+                            .transition(.opacity)
+                    }
+                    TextField(answering == nil ? "Add a reply…" : "", text: $draft, axis: .vertical)
                         .lineLimit(1...5)
                         .focused($focused)
                         // At most 250 characters, the server's limit too (owner 2026-11-07).
