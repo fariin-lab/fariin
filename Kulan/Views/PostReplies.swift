@@ -151,6 +151,37 @@ struct ReplyEdit: Equatable {
     private(set) var may = Rights()
     private(set) var staff = false
     private(set) var count = 0
+    /// ⛔ MY OWN SENDS AND DELETES STAY IN THE COUNT (2026-11-09 audit R-02/X4: the tab went 19, back
+    /// to 18 two seconds later, then 19 again). The server counts them in a buffer it writes to the
+    /// post about once a minute, and every page until then carries the old number. `count` is the
+    /// server's number plus my changes it has not taken in yet; they are dropped once its number has
+    /// moved by as much, or after 90 seconds.
+    private var serverCount = 0
+    private var myDelta = 0
+    private var myDeltaBase = 0
+    private var myDeltaAt: Date?
+    /// A send or delete of mine changed the count this visit: the post under the sheet is told on close.
+    private(set) var countTouched = false
+
+    private func bumpCount(_ d: Int) {
+        guard d != 0 else { return }
+        if myDelta == 0 { myDeltaBase = serverCount }
+        myDelta += d
+        myDeltaAt = Date()
+        countTouched = true
+        count = max(0, serverCount + myDelta)
+    }
+
+    private func setServerCount(_ n: Int) {
+        serverCount = max(0, n)
+        if myDelta != 0 {
+            let moved = serverCount - myDeltaBase
+            let stale = myDeltaAt.map { Date().timeIntervalSince($0) > 90 } ?? true
+            if stale || (myDelta > 0 ? moved >= myDelta : moved <= myDelta) { myDelta = 0; myDeltaAt = nil }
+        }
+        count = max(0, serverCount + myDelta)
+    }
+
     /// Replies by others that landed while I was reading further up ("N new replies" pill).
     var unseenNew = 0
     /// The id the list should bring into view next (my own new reply).
@@ -159,6 +190,10 @@ struct ReplyEdit: Equatable {
     private var pendingLikes: [String: String] = [:]    // key -> wanted emoji ("" = none), while in flight
     private var likeInFlight: Set<String> = []
     private var deletedIds: Set<String> = []
+    /// ⛔ DELETED WHILE "SENDING…" (2026-11-09 audit R-01: the server had no doc yet, said "removed 0",
+    /// and the send then saved it, live for everyone and hidden only from me). Client id -> its thread
+    /// ("" for a thread of its own). The send's answer deletes what it saved, success or not.
+    private var deleteAfterSave: [String: String] = [:]
     private var headListener: ListenerRegistration?
     private var lastRev = -1
     private var refreshTask: Task<Void, Never>?
@@ -168,8 +203,24 @@ struct ReplyEdit: Equatable {
     private var recentMine: [String: Date] = [:]
     /// Sends (by client id) already counted in `count` and the thread's answers.
     private var counted: Set<String> = []
-    /// Is the end of the list on screen? New replies then scroll in instead of counting in the pill.
-    var atEnd = true
+    /// The list's two edges on screen now (set by their sentinels). Kept apart, so a sort switch does
+    /// not have to guess (2026-11-09 audit R-07: `atEnd` was written and never read, and the pill
+    /// counted a reply already in plain view).
+    var startSeen = false
+    var endSeen = false
+    /// Is the edge where new replies land on screen (the top for Newest, the bottom for Top)? New
+    /// ones then show where I am looking, and the pill does not count them.
+    var atEnd: Bool { sort == .new ? startSeen : endSeen }
+    /// Top's page one as it was last read: a thread on it then and not now was deleted, held or
+    /// banned (2026-11-09 audit R-03: Top never dropped a row).
+    private var lastTopPageIds: [String] = []   // in the server's order
+    /// Top rows standing in for Newest until its first page lands (`setSort`): never kept past it
+    /// (2026-11-09 audit R-04: they stayed between the newest and the older pages, out of order).
+    private var standIns: Set<String> = []
+    /// ⛔ SOMEONE ELSE'S NEW REPLY NEVER MOVES MY LIST, NEWEST TOO (2026-11-09 audit R-08): in Newest
+    /// they land above what I am reading, which pushed it down. While the top is off screen they wait
+    /// here, counted by the pill; they go in when the pill is tapped or the top comes into view.
+    private var heldBack: [PostReply] = []
 
     /// Top (the server's best first, shown in its order) or Newest (newest at the top). Top is the
     /// default. A server from before sorting ignores it and sends newest first.
@@ -214,6 +265,7 @@ struct ReplyEdit: Equatable {
         self.cid = cid
         self.mid = mid
         count = max(0, seedCount)
+        serverCount = count
         if let c = Self.cache["\(mid)|top"] { threads = c; loaded = true }
         pinned = Self.pinCache[mid]
     }
@@ -231,7 +283,13 @@ struct ReplyEdit: Equatable {
 
     /// A new sort: the list starts again from its first page (pinned stays first).
     func setSort(_ s: Sort) {
-        guard s != sort else { return }
+        guard prepareSort(s) else { return }
+        Task { await loadFirst() }
+    }
+
+    /// The switch itself, without the load (a reply alert awaits the load itself). False: no change.
+    private func prepareSort(_ s: Sort) -> Bool {
+        guard s != sort else { return false }
         sort = s
         refreshGen &+= 1
         let mineSending = threads.filter { $0.send != .sent }
@@ -241,12 +299,34 @@ struct ReplyEdit: Equatable {
         // reversed), until the server's page replaces them.
         let saved = Self.cache[cacheKey] ?? []
         let standIn = saved.isEmpty ? threads.sorted { $0.at < $1.at } : saved + mineSending
+        standIns = saved.isEmpty ? Set(threads.filter { $0.send == .sent }.map(\.id)) : []
         threads = placed(standIn)
         olderCursor = ""
         unseenNew = 0
-        atEnd = true
+        heldBack = []
         loaded = !threads.isEmpty
-        Task { await loadFirst() }
+        return true
+    }
+
+    /// The pill tapped: replies held back go in now.
+    func showNew() {
+        releaseHeld()
+        unseenNew = 0
+    }
+
+    private func releaseHeld() {
+        guard !heldBack.isEmpty else { return }
+        let have = Set(threads.map(\.id))
+        threads = placed(threads + heldBack.filter { !have.contains($0.id) && !deletedIds.contains($0.id) })
+        heldBack = []
+    }
+
+    /// An edge sentinel came into view or left it.
+    func edgeSeen(top: Bool, seen: Bool) {
+        if top { startSeen = seen } else { endSeen = seen }
+        guard seen, top == (sort == .new) else { return }
+        releaseHeld()
+        unseenNew = 0
     }
 
     static func reset() { cache.removeAll(); pinCache.removeAll() }
@@ -286,12 +366,25 @@ struct ReplyEdit: Equatable {
                 let rev = (snap?.data()?["rev"] as? NSNumber)?.intValue ?? 0
                 Task { @MainActor in self?.headChanged(rev) }
             }
+        // The signal back: a first page that failed, or a reply alert still waiting, is read again.
+        netObserver = NotificationCenter.default.addObserver(forName: .networkCameBack, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.networkCameBack() }
+        }
     }
 
     func stop() {
         headListener?.remove()
         headListener = nil
         refreshTask?.cancel()
+        if let o = netObserver { NotificationCenter.default.removeObserver(o) }
+        netObserver = nil
+    }
+
+    private var netObserver: NSObjectProtocol?
+
+    private func networkCameBack() {
+        guard failed || pendingFocus != nil else { return }
+        Task { await loadFirst() }
     }
 
     private func headChanged(_ rev: Int) {
@@ -312,7 +405,7 @@ struct ReplyEdit: Equatable {
         channelOff = d["channelOff"] as? Bool ?? false
         postOff = d["postOff"] as? Bool ?? false
         staff = d["staff"] as? Bool ?? false
-        count = (d["count"] as? NSNumber)?.intValue ?? count
+        if let n = (d["count"] as? NSNumber)?.intValue { setServerCount(n) }
         let m = d["may"] as? [String: Any] ?? [:]
         may = Rights(del: m["del"] as? Bool ?? false, ban: m["ban"] as? Bool ?? false, settings: m["settings"] as? Bool ?? false)
     }
@@ -346,28 +439,64 @@ struct ReplyEdit: Equatable {
                 let kept = threads.filter { r in !ids.contains(r.id)
                     && (r.send != .sent || recentMine[r.id].map { now.timeIntervalSince($0) < 8 } == true) }
                 threads = page + kept
+                lastTopPageIds = page.map(\.id)
                 Self.cache[cacheKey] = page
             } else {
                 let page = Array(rows(d).reversed())
                 ids = Set(page.map(\.id))
                 if threads.isEmpty || olderCursor.isEmpty { olderCursor = d["next"] as? String ?? "" }
-                // Pages loaded further down stay (a Try Again or a switch flip used to drop them).
+                // Pages loaded further down stay (a Try Again or a switch flip used to drop them);
+                // Top's rows standing in for this order do not.
                 let firstAt = page.first?.at
-                let kept = threads.filter { r in !ids.contains(r.id) && (r.send != .sent || (firstAt.map { r.at < $0 } ?? true)) }
+                let kept = threads.filter { r in !ids.contains(r.id)
+                    && (r.send != .sent || (!standIns.contains(r.id) && (firstAt.map { r.at < $0 } ?? true))) }
                 threads = (kept + page).sorted { $0.at < $1.at }
                 Self.cache[cacheKey] = page
             }
+            standIns = []
+            heldBack = []
             applyPinned(d)
             if lastRev < 0 { lastRev = (d["rev"] as? NSNumber)?.intValue ?? 0 }
             loaded = true
             failed = false
+            goneMessage = nil
             prefetchAnswers()
+            firstDone = true
+            resumeFocus()
+            return
         } catch {
             guard s == sort else { return }
             failed = true
             loaded = true
+            // The server refused for a reason it explains (the post was deleted, the channel can't be
+            // seen): that, not "check your connection". A dropped line leaves it nil.
+            // getReplies refuses a deleted post with failed-precondition ("can't take replies"):
+            // say plainly what happened (2026-11-09 audit X1).
+            goneMessage = Self.isCode(error, .failedPrecondition) ? "This post was deleted."
+                : Self.serverMessage(error, codes: [.notFound, .permissionDenied])
         }
         firstDone = true
+    }
+
+    /// Why the first page was refused, in the server's words, when it was not the connection.
+    private(set) var goneMessage: String?
+
+    /// A reply alert whose jump failed on a read (offline): run again once a first page lands.
+    private var pendingFocus: (rid: String, aid: String?)?
+
+    private func resumeFocus() {
+        guard let p = pendingFocus else { return }
+        pendingFocus = nil
+        Task { await focus(rid: p.rid, aid: p.aid) }
+    }
+
+    /// A jump that could not finish. ⛔ A FAILED READ IS NOT "DELETED" (2026-11-09 audit X8/X1:
+    /// offline, or the post itself gone, said "This reply was deleted"). The server's reason when it
+    /// gave one; otherwise the connection, and the jump runs again when the line or a page is back.
+    private func focusFailed(rid: String, aid: String?) {
+        if let m = goneMessage { notice = m; return }
+        notice = "Couldn't load replies. Check your connection."
+        pendingFocus = (rid, aid)
     }
 
     /// ⛔ "VIEW N REPLIES" OPENS AT ONCE (owner 2026-11-07: it opened late). Right after the first page,
@@ -398,15 +527,41 @@ struct ReplyEdit: Equatable {
         if sort == .top {
             // Merged in place by id: rows keep their spot, new ones go below (the pill counts them).
             let page = rows(d)
-            var list = threads
+            let newIds = Set(page.map(\.id))
+            let wholeList = (d["next"] as? String ?? "").isEmpty
+            let now = Date()
+            let keepMine: (PostReply) -> Bool = { r in
+                r.send != .sent || self.recentMine[r.id].map { now.timeIntervalSince($0) < 8 } == true }
+            // Gone (deleted here or elsewhere, held after reports, banned): when page one is the whole
+            // list, any row not on it. Otherwise a row that was on page one and is not now, while a
+            // row that stood below it still is; at the page's tail a missing row may only have been
+            // pushed down to page two by one that rose, so it stays.
+            var gone = Set<String>()
+            if wholeList {
+                gone = Set(threads.map(\.id)).subtracting(newIds)
+            } else {
+                var belowStays = false
+                for id in lastTopPageIds.reversed() {
+                    if newIds.contains(id) { belowStays = true } else if belowStays { gone.insert(id) }
+                }
+            }
+            var list = threads.filter { r in newIds.contains(r.id) || keepMine(r) || !gone.contains(r.id) }
+            // Only replies newer than any held are new; one rising into page one from a page not
+            // read yet is not (2026-11-09 audit R-07).
+            let newestHeld = threads.filter { $0.send == .sent }.map(\.at).max()
             var added = 0
             for r in page {
                 if let i = list.firstIndex(where: { $0.id == r.id }) { list[i] = r }
-                else { list.append(r); if !r.mine { added += 1 } }
+                else {
+                    list.append(r)
+                    if !r.mine, newestHeld.map({ r.at > $0 }) ?? true { added += 1 }
+                }
             }
             threads = list
+            lastTopPageIds = page.map(\.id)
             applyPinned(d)
-            if added > 0 { unseenNew += added }   // never a scroll for someone else's reply (below)
+            // Never a scroll for someone else's reply (below); the pill only when the end is off screen.
+            if added > 0 && !atEnd { unseenNew += added }
             Self.cache[cacheKey] = page
             dropStaleAnswers(page)
             await reloadChangedOpen(page)
@@ -419,7 +574,7 @@ struct ReplyEdit: Equatable {
         let keepMine: (PostReply) -> Bool = { $0.send != .sent || self.recentMine[$0.id] != nil }
         guard let oldestShown = page.first?.at else {
             // Nothing visible on the newest page: only rows newer than what that page covered can go.
-            if next.isEmpty { threads.removeAll { !keepMine($0) } }
+            if next.isEmpty { threads.removeAll { !keepMine($0) }; heldBack = [] }
             applyPinned(d)   // a pin or unpin still lands when the newest page is empty
             dropStaleAnswers(page)
             return
@@ -429,24 +584,31 @@ struct ReplyEdit: Equatable {
         let overlaps = newestKnown.map { $0 >= oldestShown } ?? true
         var list: [PostReply]
         if overlaps {
-            list = threads.filter { keepMine($0) || $0.at < oldestShown || ids.contains($0.id) }
+            list = threads.filter { keepMine($0) || ids.contains($0.id) || ($0.at < oldestShown && !standIns.contains($0.id)) }
+            heldBack.removeAll { !ids.contains($0.id) }   // deleted before it was shown
         } else {
             // More arrived than one page: start again from this page, older ones load on scroll.
             list = threads.filter(keepMine)
             olderCursor = next
+            heldBack = []
         }
+        standIns = []
+        // ⛔ SOMEONE ELSE'S NEW REPLY NEVER MOVES MY LIST (owner 2026-11-08, "exactly like TikTok"):
+        // on a post with thousands of replies a scroll per arrival is jumpy and costly. The pill
+        // counts it; while the top is off screen it waits in `heldBack`, since a row put in above
+        // what I am reading pushes it down.
         var added = 0
         for r in page {
+            let isNew = !r.mine && (newestKnown.map { r.at > $0 } ?? true)
             if let i = list.firstIndex(where: { $0.id == r.id }) { list[i] = r }
-            else { list.append(r); if !r.mine { added += 1 } }
+            else if let i = heldBack.firstIndex(where: { $0.id == r.id }) { heldBack[i] = r }
+            else if isNew && overlaps && !atEnd { heldBack.append(r); added += 1 }
+            else { list.append(r); if isNew { added += 1 } }
         }
         list.sort { $0.at < $1.at }
         threads = list
         applyPinned(d)
-        // ⛔ SOMEONE ELSE'S NEW REPLY NEVER MOVES MY LIST (owner 2026-11-08, "exactly like TikTok"):
-        // on a post with thousands of replies a scroll per arrival is jumpy and costly. It lands
-        // where it belongs and the "new" pill counts it.
-        if added > 0 { unseenNew += added }
+        if added > 0 && !atEnd { unseenNew += added }
         Self.cache[cacheKey] = page
         dropStaleAnswers(page)
         await reloadChangedOpen(page)
@@ -480,13 +642,15 @@ struct ReplyEdit: Equatable {
         }
     }
 
-    func loadOlder() async {
-        guard !olderCursor.isEmpty, !loadingOlder else { return }
+    /// False only when the read failed (nothing to load, or one already on its way, is not a failure).
+    @discardableResult
+    func loadOlder() async -> Bool {
+        guard !olderCursor.isEmpty, !loadingOlder else { return true }
         loadingOlder = true
         defer { loadingOlder = false }
         let s = sort
-        guard let res = try? await fn.httpsCallable("getReplies").call(listArgs(["cursor": olderCursor])) else { return }
-        guard s == sort else { return }
+        guard let res = try? await fn.httpsCallable("getReplies").call(listArgs(["cursor": olderCursor])) else { return false }
+        guard s == sort else { return true }
         let d = res.data as? [String: Any] ?? [:]
         let fresh = rows(d).filter { r in !threads.contains { $0.id == r.id } && r.id != pinned?.id }
         olderCursor = d["next"] as? String ?? ""
@@ -495,8 +659,10 @@ struct ReplyEdit: Equatable {
             let at = threads.firstIndex { $0.send != .sent } ?? threads.count
             threads.insert(contentsOf: fresh, at: at)
         } else {
-            threads.insert(contentsOf: fresh.reversed(), at: 0)
+            // In time order, not just at the old end (2026-11-09 audit R-04).
+            threads = (fresh + threads).sorted { $0.at < $1.at }
         }
+        return true
     }
 
     /// Finds a row (thread, pinned, or an answer) by id.
@@ -550,24 +716,37 @@ struct ReplyEdit: Equatable {
 
     /// A reply alert tapped: that thread (paging down to it if needed), opened, then the answer.
     func focus(rid: String, aid: String?) async {
+        pendingFocus = nil
         for _ in 0..<60 where !firstDone { try? await Task.sleep(nanoseconds: 100_000_000) }
+        // Still on its way (a slow line): the jump runs when it lands (`resumeFocus`).
+        guard firstDone else { pendingFocus = (rid, aid); return }
+        // Failed: a failed read proves nothing; the jump waits for a page.
+        guard !failed else { focusFailed(rid: rid, aid: aid); return }
+        releaseHeld()
+        // ⛔ AN ALERT'S REPLY IS FOUND BY TIME, NOT BY SCORE (2026-11-09 audit R-06): Top lists by
+        // score, so a new reply (no reactions yet) sits after every scored thread, pages down, and
+        // five pages could miss it. Not on Top's first page: over to Newest, where it is near the top.
+        if !isThread(rid), sort == .top, prepareSort(.new) {
+            await loadFirst()
+            guard !failed else { focusFailed(rid: rid, aid: aid); return }
+        }
         var pages = 0
         while !isThread(rid), !olderCursor.isEmpty, pages < 5 {
-            await loadOlder()
+            // A page my own scroll asked for first: wait for it, it is not one of these five.
+            for _ in 0..<100 where loadingOlder { try? await Task.sleep(nanoseconds: 100_000_000) }
+            guard !isThread(rid) else { break }
+            guard await loadOlder() else { focusFailed(rid: rid, aid: aid); return }
             pages += 1
         }
         guard isThread(rid) else {
-            // Gone, or too far down: the sheet stays at the top. Every page read and still not
-            // there means it was deleted (Activity, 2026-11-09).
-            // A failed first page proves nothing (offline): no "deleted" then.
-            if failed { notice = "Couldn't load replies. Check your connection." }
-            else if olderCursor.isEmpty { notice = "This reply was deleted" }
+            // Every page read and still not there: deleted. Too far down: the sheet stays at the top.
+            if olderCursor.isEmpty { notice = "This reply was deleted" }
             return
         }
         if let aid, !aid.isEmpty, aid != rid {
             let ok = await jumpTo(aid, inThread: rid)
             if !ok {
-                notice = "Couldn't load replies. Check your connection."
+                focusFailed(rid: rid, aid: aid)
             } else if answers[rid]?.contains(where: { $0.id == aid }) != true, (answerNext[rid] ?? "").isEmpty {
                 notice = "This reply was deleted"
             }
@@ -670,6 +849,13 @@ struct ReplyEdit: Equatable {
             if let to, thread != nil { a["to"] = ["id": to.id, "name": to.name] }
             do {
                 let res = try await fn.httpsCallable("addReply").call(args(a))
+                // Deleted while it was on its way: what was just saved goes again, never counted.
+                if deleteAfterSave.removeValue(forKey: id) != nil {
+                    counted.insert(id)
+                    let savedId = ((res.data as? [String: Any])?["reply"] as? [String: Any])?["id"] as? String ?? id
+                    await removeAfterSave(savedId, row: (res.data as? [String: Any])?["reply"] as? [String: Any], thread: thread)
+                    return
+                }
                 guard let d = (res.data as? [String: Any])?["reply"] as? [String: Any], var saved = PostReply(d) else {
                     mark(id, thread: thread, .failed)   // an answer it cannot read: Retry, not a row stuck sending
                     return
@@ -685,14 +871,53 @@ struct ReplyEdit: Equatable {
                 recentMine[saved.id] = Date()
                 if firstTime {
                     if let t = thread { update(t, thread: nil) { $0.answers += 1 } }
-                    count += 1
+                    bumpCount(1)
                 }
             } catch {
+                // Deleted while it was on its way, and the send failed: nothing to show. A lost answer
+                // may still have saved it, so it is deleted on the server all the same (a no-op if not).
+                if deleteAfterSave.removeValue(forKey: id) != nil {
+                    await removeAfterSave(id, row: nil, thread: thread)
+                    return
+                }
                 mark(id, thread: thread, .failed)
-                // A held thread refuses answers: say so, the server's words.
+                // A refusal says why, in the server's words: a held thread, a deleted one, a blocked
+                // author, too fast (2026-11-09 audit R-09).
                 if let m = Self.serverMessage(error) { notice = m }
+                // The thread or the answer it answered is gone: read the list again, so a deleted
+                // thread leaves the screen (with this failed answer) instead of hiding it.
+                if let t = thread, Self.isCode(error, .notFound) {
+                    await refreshNewest()
+                    if isThread(t) { _ = await loadAnswers(t, more: false) }
+                }
             }
         }
+    }
+
+    /// A reply deleted while "Sending…" was saved after all: it is deleted now. If that fails it comes
+    /// back on screen as sent (it is live for everyone), so it can be deleted again.
+    private func removeAfterSave(_ savedId: String, row: [String: Any]?, thread: String?) async {
+        deletedIds.insert(savedId)
+        var a: [String: Any] = [:]
+        if let t = thread { a["rid"] = t; a["aid"] = savedId } else { a["rid"] = savedId }
+        for attempt in 0..<3 {
+            if attempt > 0 { try? await Task.sleep(nanoseconds: UInt64(attempt) * 2_000_000_000) }
+            if (try? await fn.httpsCallable("deleteReply").call(args(a))) != nil { return }
+        }
+        // Never saved (no row came back): nothing is live, nothing to show.
+        guard let row, let saved = PostReply(row).map(overlay) else { return }
+        deletedIds.remove(savedId)
+        if let t = thread {
+            if answers[t]?.contains(where: { $0.id == saved.id }) != true {
+                answers[t, default: []].append(saved)
+                answers[t]?.sort { $0.at < $1.at }
+                update(t, thread: nil) { $0.answers += 1 }
+            }
+        } else if !threads.contains(where: { $0.id == saved.id }) {
+            threads = placed(threads + [saved])
+        }
+        bumpCount(1)
+        notice = "Couldn't delete the reply."
     }
 
     func retry(_ r: PostReply, thread: String?) {
@@ -725,13 +950,22 @@ struct ReplyEdit: Equatable {
     /// A short line for the sheet's toast (the server's own words for a refusal it explains).
     var notice: String?
 
-    /// The server's message for a refusal it explains ("Too late to edit.", "This reply can't take
-    /// answers."): failed-precondition errors only, everything else gets our own words.
-    static func serverMessage(_ error: Error) -> String? {
+    /// The server's message for a refusal it explains ("Too late to edit.", "That reply was deleted.",
+    /// "You're replying too fast. Wait a moment."). These codes carry words written for people
+    /// (2026-11-09 audit R-09: only failed-precondition got through, the rest failed in silence);
+    /// everything else (a dropped line, a crash) gets our own words.
+    static let explainedCodes: [FunctionsErrorCode] = [.failedPrecondition, .notFound, .permissionDenied, .resourceExhausted]
+
+    static func serverMessage(_ error: Error, codes: [FunctionsErrorCode] = explainedCodes) -> String? {
         let ns = error as NSError
-        guard ns.domain == FunctionsErrorDomain, ns.code == FunctionsErrorCode.failedPrecondition.rawValue else { return nil }
+        guard ns.domain == FunctionsErrorDomain, codes.contains(where: { $0.rawValue == ns.code }) else { return nil }
         let m = ns.localizedDescription
         return m.isEmpty ? nil : m
+    }
+
+    static func isCode(_ error: Error, _ code: FunctionsErrorCode) -> Bool {
+        let ns = error as NSError
+        return ns.domain == FunctionsErrorDomain && ns.code == code.rawValue
     }
 
     func discard(_ r: PostReply, thread: String?) {
@@ -804,8 +1038,22 @@ struct ReplyEdit: Equatable {
     }
 
     func delete(_ r: PostReply, thread: String?) async {
+        // Still on its way (the row as it is now, not as the menu saw it): it goes from the screen
+        // at once and the send deletes it on the server when it lands (`deleteAfterSave`). Nothing
+        // was counted for it yet, so no count moves.
+        if let live = find(r.id, thread: thread), live.send == .sending {
+            deletedIds.insert(r.id)
+            deleteAfterSave[r.id] = thread ?? ""
+            if let t = thread { answers[t]?.removeAll { $0.id == r.id } }
+            else { threads.removeAll { $0.id == r.id }; mineOnTop.removeAll { $0 == r.id } }
+            return
+        }
         deletedIds.insert(r.id)
         let threadsBefore = threads, answersBefore = answers[thread ?? ""]
+        // A thread's own answers, put back with it if the delete fails (2026-11-09 audit R-11: they
+        // came back empty, and `answersLoaded` kept a reload from fixing it).
+        let ownAnswers = thread == nil ? answers[r.id] : nil
+        let ownNext = thread == nil ? answerNext[r.id] : nil
         let wasPinned = thread == nil && pinned?.id == r.id ? pinned : nil
         if let t = thread {
             answers[t]?.removeAll { $0.id == r.id }
@@ -820,10 +1068,18 @@ struct ReplyEdit: Equatable {
         do {
             let res = try await fn.httpsCallable("deleteReply").call(args(a))
             let removed = ((res.data as? [String: Any])?["removed"] as? NSNumber)?.intValue ?? 0
-            count = max(0, count - removed)
+            bumpCount(-removed)
         } catch {
             deletedIds.remove(r.id)
             if let t = thread { update(t, thread: nil) { $0.answers += 1 } }
+            if thread == nil {
+                if let own = ownAnswers, answers[r.id] == nil {
+                    answers[r.id] = own
+                    answerNext[r.id] = ownNext
+                } else if answers[r.id] == nil {
+                    answersLoaded.remove(r.id)   // never held: the next open reads them
+                }
+            }
             if let p = wasPinned { pinned = p; Self.pinCache[mid] = p; return }
             // Only the one row comes back, never a whole saved list over newer arrivals.
             if let t = thread, let before = answersBefore, let row = before.first(where: { $0.id == r.id }) {
@@ -882,9 +1138,50 @@ struct ReplyEdit: Equatable {
     func ban(_ r: PostReply, thread: String?, all: Bool) async -> Bool {
         var a: [String: Any] = ["all": all]
         if let t = thread { a["rid"] = t; a["aid"] = r.id } else { a["rid"] = r.id }
-        guard (try? await fn.httpsCallable("banReplier").call(args(a))) != nil else { return false }
+        guard let res = try? await fn.httpsCallable("banReplier").call(args(a)) else { return false }
+        // ⛔ THEIR REPLIES LEAVE THE SCREEN NOW (2026-11-09 audit R-03: in Top the toast said "Their
+        // replies are gone" over rows still there). The one banned for, and with `all` every row of
+        // theirs held here (moderators have the author on each row).
+        var gone = 0
+        if let t = thread {
+            if answers[t]?.contains(where: { $0.id == r.id }) == true { gone += 1 }
+            dropLocally(r.id, thread: t)
+        } else {
+            gone += 1 + max(r.answers, answers[r.id]?.count ?? 0)
+            dropLocally(r.id, thread: nil)
+        }
+        if all, let u = r.uid, !u.isEmpty {
+            for row in threads + [pinned].compactMap({ $0 }) where row.uid == u {
+                gone += 1 + max(row.answers, answers[row.id]?.count ?? 0)
+                dropLocally(row.id, thread: nil)
+            }
+            let theirs = answers.flatMap { t, list in list.filter { $0.uid == u }.map { (t, $0.id) } }
+            for (t, aid) in theirs { gone += 1; dropLocally(aid, thread: t) }
+        }
+        // One ban: the server's own number for this post. All: it counts the whole channel, so the
+        // rows seen here are the guess until the server's recount lands.
+        let removed = ((res.data as? [String: Any])?["removed"] as? NSNumber)?.intValue
+        bumpCount(-((all ? nil : removed) ?? gone))
         await refreshNewest()
         return true
+    }
+
+    /// A row removed here for good (a ban): it never comes back from a page read before the ban.
+    private func dropLocally(_ id: String, thread: String?) {
+        deletedIds.insert(id)
+        if let t = thread {
+            guard answers[t]?.contains(where: { $0.id == id }) == true else { return }
+            answers[t]?.removeAll { $0.id == id }
+            update(t, thread: nil) { $0.answers = max(0, $0.answers - 1) }
+        } else {
+            threads.removeAll { $0.id == id }
+            answers[id] = nil
+            answerNext[id] = nil
+            answersLoaded.remove(id)
+            openThreads.remove(id)
+            mineOnTop.removeAll { $0 == id }
+            if pinned?.id == id { pinned = nil; Self.pinCache[mid] = nil }
+        }
     }
 
     @discardableResult
@@ -923,6 +1220,9 @@ struct PostThreadSheet: View {
     var quotesOff: Bool = false
     /// This post's replies switch changed here: the chat updates the post at once (owner 2026-11-07).
     var onPostRepliesChanged: (Bool) -> Void = { _ in }
+    /// The sheet closed after a send or delete of mine: the count it showed, so the post's own bar
+    /// says the same at once instead of waiting for the server's next write (2026-11-09 audit R-02).
+    var onCountChanged: (Int) -> Void = { _ in }
     /// A tap on a reply's photo or name: that person's profile (uid, name), or the channel's own page
     /// for a Creator reply. The chat closes this sheet first, then opens it.
     var onOpenPerson: (String, String) -> Void = { _, _ in }
@@ -942,6 +1242,10 @@ struct PostThreadSheet: View {
     /// Replies off right now: what the chat said at open, then whatever the server says (a switch
     /// flipped inside this sheet shows or hides the Replies tab and the field at once).
     @State private var offNow = false
+    /// Opened by a reply alert or an Activity row onto one reply: Replies stays the open tab.
+    @State private var openedOnReply = false
+    /// Bumped by every Reply tap, so a second tap on the same row brings the keyboard back (R-12).
+    @State private var focusTick = 0
 
     init(cid: String, mid: String, post: Message?, repliesOff: Bool = false, sourceTitle: String, sourcePhoto: String?,
          sourceVerified: Bool, picture: @escaping () async -> UIImage?, onOpen: @escaping (QuotedInItem) -> Void,
@@ -1002,8 +1306,10 @@ struct PostThreadSheet: View {
         .onChange(of: model.off) { _, off in offNow = off }
         .onChange(of: model.flagsLoaded) { _, l in if l { offNow = model.off } }
         // Off: Quotes is the only tab left. Turned on again: back to Replies, where the field is.
+        // ⛔ NOT WHEN OPENED ON A REPLY (2026-11-09 audit X12: an alert's reply on a post whose replies
+        // were turned off landed on Quotes, the flash on a hidden tab). It stays on Replies, read-only.
         .onChange(of: offNow) { was, off in
-            if off && !quotesOff { tab = .quotes } else if was { tab = .replies }
+            if off && !quotesOff { if !openedOnReply { tab = .quotes } } else if was { tab = .replies }
         }
         .onAppear {
             model.start()
@@ -1011,12 +1317,16 @@ struct PostThreadSheet: View {
             if let t = AppRouter.shared.pendingReplyTarget, t.mid == mid {
                 AppRouter.shared.pendingReplyTarget = nil
                 if Date().timeIntervalSince(t.at) < 60 {
+                    openedOnReply = true
                     tab = .replies
                     Task { await model.focus(rid: t.rid, aid: t.aid) }
                 }
             }
         }
-        .onDisappear { model.stop() }
+        .onDisappear {
+            model.stop()
+            if model.countTouched { onCountChanged(model.count) }
+        }
         .onChange(of: model.notice) { _, m in
             guard let m else { return }
             model.notice = nil
@@ -1098,7 +1408,7 @@ struct PostThreadSheet: View {
             // Replies off (here or found off by the server): no Replies tab, Quotes alone.
             // With Quotes off too, Replies stays (read-only): something has to be shown.
             // With the count (owner 2026-11-08: "show count comments"), as the post's own row says it.
-            if !offNow || quotesOff { tabButton(repliesTitle, .replies) }
+            if !offNow || quotesOff || tab == .replies { tabButton(repliesTitle, .replies) }
             if !quotesOff { tabButton("Quotes", .quotes) }
             Spacer(minLength: 0)
             HStack(spacing: 10) {
@@ -1210,9 +1520,7 @@ struct PostThreadSheet: View {
 
     /// Where new replies land: the bottom for Top, the top for Newest.
     private func edgeSeen(top: Bool, seen: Bool) {
-        guard top == (model.sort == .new) else { return }
-        model.atEnd = seen
-        if seen { model.unseenNew = 0 }
+        model.edgeSeen(top: top, seen: seen)
     }
 
     /// "Top" and "Newest", small, over the list. Hidden until there is something to sort.
@@ -1304,7 +1612,7 @@ struct PostThreadSheet: View {
             }
             // Off as the post already says, from the first frame (owner 2026-11-07: the field showed for
             // a second, then turned into the off line when the server answered).
-            ReplyComposer(off: offNow, loaded: model.loaded, answering: $answering, editing: $editing,
+            ReplyComposer(off: offNow, loaded: model.loaded, focusTick: focusTick, answering: $answering, editing: $editing,
                           onSend: { text, target in
                               let me = ProfileStore.shared.me
                               let to = target?.to.map { (id: $0, name: target?.name ?? "") }
@@ -1320,8 +1628,11 @@ struct PostThreadSheet: View {
         if model.unseenNew > 0 {
             let up = model.sort == .new
             Button {
-                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(up ? "start" : "end", anchor: up ? .top : .bottom) }
-                model.unseenNew = 0
+                model.showNew()   // Newest: the ones held back go in first, then the list goes up to them
+                Task { @MainActor in
+                    await Task.yield()
+                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(up ? "start" : "end", anchor: up ? .top : .bottom) }
+                }
             } label: {
                 Label("\(model.unseenNew) new \(model.unseenNew == 1 ? "reply" : "replies")", systemImage: up ? "arrow.up" : "arrow.down")
                     .font(.footnote.weight(.semibold))
@@ -1381,25 +1692,25 @@ struct PostThreadSheet: View {
                     .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .padding(.leading, 108).padding(.bottom, 8)
+            .padding(.leading, Self.answerTextEdge).padding(.bottom, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
         case .toggle(let t, let n, let open):
             Button { withAnimation(.easeInOut(duration: 0.2)) { model.toggleThread(t) } } label: {
-                HStack(spacing: 8) {
-                    Color.clear.frame(width: 20, height: 1)
-                    Text(open ? (model.answersLoading.contains(t) ? "Loading…" : "Hide replies")
-                              : "View \(n) \(n == 1 ? "reply" : "replies")")
-                        .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-                }
+                Text(open ? (model.answersLoading.contains(t) ? "Loading…" : "Hide replies")
+                          : "View \(n) \(n == 1 ? "reply" : "replies")")
+                    .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .padding(.leading, 62).padding(.bottom, 10)
+            // ⛔ ONE EDGE (2026-11-09 audit R-17): a thread's words, its pills and this toggle all start
+            // at 80 (16 + 40 photo + 10 + 14 bubble inset); an answer's words, pills and "View more"
+            // at 114 (the same sum on a 28 photo, 46 in).
+            .padding(.leading, Self.threadTextEdge).padding(.bottom, 10)
         case .moreAnswers(let t):
             Button { Task { await model.loadAnswers(t, more: true) } } label: {
                 Text("Show more replies").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .padding(.leading, 108).padding(.bottom, 8)
+            .padding(.leading, Self.answerTextEdge).padding(.bottom, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -1421,12 +1732,20 @@ struct PostThreadSheet: View {
     /// Editing is open for 15 minutes after a reply is sent (the server holds the same limit).
     private static let editWindow: TimeInterval = 15 * 60
 
+    /// Where a thread's words start (row 16 + photo 40 + 10 + bubble inset 14), and an answer's
+    /// (row 16 + indent 46 + photo 28 + 10 + 14). Pills, toggles and "View more" line up on them.
+    private static let threadTextEdge: CGFloat = 16 + 40 + 10 + 14
+    private static let answerTextEdge: CGFloat = 16 + ReplyThreadLine.answerIndent + 28 + 10 + 14
+
     private func actions(_ r: PostReply, thread: String?) -> ReplyRow.Actions {
         ReplyRow.Actions(
             like: { model.toggleLike(r, thread: thread) },
             react: { e in model.react(r, emoji: e, thread: thread) },
             // On an answer, the send also says which answer it answers ("@name" on the new one).
-            reply: model.off ? nil : {
+            // Not on my own reply until it is sent: an answer to a reply the server does not have
+            // yet is refused (2026-11-09 audit R-10).
+            reply: (model.off || r.send != .sent) ? nil : {
+                focusTick &+= 1
                 editing = nil
                 answering = ReplyTarget(thread: thread ?? r.id, name: r.name, to: thread == nil ? nil : r.id, mine: r.mine)
             },
@@ -1488,7 +1807,8 @@ struct PostThreadSheet: View {
                     .padding(.bottom, 6)
                 Text("Couldn't load replies")
                     .font(.system(size: 15, weight: .semibold))
-                Text("Check your connection and try again.")
+                // The server's reason when it refused (the post deleted), not the connection.
+                Text(model.goneMessage ?? "Check your connection and try again.")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -1692,13 +2012,15 @@ private struct ReplyRow: View {
                     .background(Color(.secondarySystemBackground),
                                 in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                     .opacity(reply.held || reply.send != .sent ? 0.55 : 1)
-                    .onTapGesture(count: 2) { if reply.send == .sent { actions.like() } }
+                    // Beside the words' own links, not over them (2026-11-09 audit R-18): a plain
+                    // count-2 tap made a tap on an "@handle" wait for the double tap to fail.
+                    .simultaneousGesture(TapGesture(count: 2).onEnded { if reply.send == .sent { actions.like() } })
                     .contextMenu { menu }
             }
             Spacer(minLength: 24)
           }
             footer
-                .padding(.leading, side + 10 + 8).padding(.top, 2)
+                .padding(.leading, side + 10 + 14).padding(.top, 2)   // the bubble's text edge (R-17)
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
         // Drawn from where the photo really is, so a reply of several lines still lines up.
@@ -1841,6 +2163,8 @@ private struct ReplyRow: View {
 private struct ReplyComposer: View {
     let off: Bool
     let loaded: Bool
+    /// Every Reply tap: the keyboard comes up even for the row already being answered (R-12).
+    let focusTick: Int
     @Binding var answering: ReplyTarget?
     @Binding var editing: ReplyEdit?
     let onSend: (String, ReplyTarget?) -> Void
@@ -1849,6 +2173,28 @@ private struct ReplyComposer: View {
     @FocusState private var focused: Bool
     /// People offered while an "@..." is being typed (owner 2026-11-09).
     @State private var mentionHits: [UserProfile] = []
+
+    /// ⛔ 250 THE WAY THE SERVER COUNTS (2026-11-09 audit R-13): it cuts at 250 code points
+    /// (`Array.from`), and one flag or family emoji is several, so the field let through more than the
+    /// server kept and the tail was lost in silence. Counted in Unicode scalars (the same unit), and
+    /// cut only between whole characters, so an emoji is never split.
+    static let maxScalars = 250
+    static func capped(_ v: String) -> String {
+        guard v.unicodeScalars.count > maxScalars else { return v }
+        var out = ""
+        var n = 0
+        for ch in v {
+            let k = ch.unicodeScalars.count
+            if n + k > maxScalars { break }
+            out.append(ch)
+            n += k
+        }
+        return out
+    }
+
+    /// A short screen (iPhone SE, mini): fewer people offered, so the field and the row being
+    /// answered still fit above the keyboard (2026-11-09 audit R-16).
+    private var mentionRows: Int { UIScreen.main.bounds.height < 700 ? 3 : 5 }
 
     /// The "@word" being typed at the end of the field, without the "@"; nil when there is none.
     private var mentionToken: String? {
@@ -1899,7 +2245,7 @@ private struct ReplyComposer: View {
                 // a tap puts "@handle " in its place.
                 if let token = mentionToken, !token.isEmpty, !mentionHits.isEmpty {
                     VStack(spacing: 0) {
-                        ForEach(mentionHits.prefix(5), id: \.id) { u in
+                        ForEach(mentionHits.prefix(mentionRows), id: \.id) { u in
                             Button {
                                 if let at = draft.lastIndex(of: "@") { draft = String(draft[..<at]) + "@" + u.handle + " " }
                                 mentionHits = []
@@ -1952,7 +2298,10 @@ private struct ReplyComposer: View {
                             mentionHits = hits.filter { !$0.handle.isEmpty }
                         }
                         // At most 250 characters, the server's limit too (owner 2026-11-07).
-                        .onChange(of: draft) { _, v in if v.count > 250 { draft = String(v.prefix(250)) } }
+                        .onChange(of: draft) { _, v in
+                            let c = Self.capped(v)
+                            if c != v { draft = c }
+                        }
                         .padding(.vertical, 12)
                     // The chat's send: a white arrow on the blue pill (owner 2026-11-07), shown once
                     // there is something to send.
@@ -1993,9 +2342,11 @@ private struct ReplyComposer: View {
             }
             .padding(.vertical, 8)
             .onChange(of: answering) { _, a in if a != nil { focused = true } }
+            // The same row again (an equal target changes nothing above): the tap still focuses.
+            .onChange(of: focusTick) { _, _ in if answering != nil { focused = true } }
             // Edit: the reply's words go in the field; leaving edit empties it again.
             .onChange(of: editing) { was, e in
-                if let e { draft = String(e.text.prefix(250)); focused = true } else if was != nil { draft = "" }
+                if let e { draft = Self.capped(e.text); focused = true } else if was != nil { draft = "" }
             }
         }
     }
@@ -2030,53 +2381,25 @@ private struct RepliesSkeleton: View {
     private var fill: Color { Color.primary.opacity(0.08) }
 }
 
-/// ⛔ THREAD LINES UNDER A REPLY (owner 2026-11-07, his reference picture): a thin line down from
-/// the reply's photo, curving into each answer's photo and into "View N replies" / "Hide replies".
-/// Answers sit `answerIndent` in; the parent's photo is 40 wide at 16 from the edge, so its line runs
-/// at x = 36 in list coordinates.
+/// ⛔ THREAD LINES BETWEEN ANSWERS (owner 2026-11-09, his reference: the long line from a comment
+/// down past its answers is gone). Only a short line joining an answer's photo to the answer it
+/// answers, when they are neighbours (`chainLinks`). Answers sit `answerIndent` in. The old kinds
+/// (`below`, `answer`, the toggle's elbow) drew the removed line and went with it (2026-11-09 audit R-17).
 enum ReplyThreadLine: Equatable {
-    case none, below, answer
+    case none
     /// Between neighbouring answers where one answers the other (owner 2026-11-09): a short line
     /// into this photo from the row above, and/or out of it to the row below.
     case chain(above: Bool, below: Bool)
 
-    static let parentX: CGFloat = 36
     static let answerIndent: CGFloat = 46
     // Solid, not see-through: where two rows' lines meet, a see-through grey showed a darker overlap.
     static let color = Color(.systemGray3)
-    /// The corner's radius: a wide, round bend into the answer or the toggle, as in the owner's
-    /// reference (2026-11-07: "the line's round doesn't look good").
-    /// The corner's radius, as iOS's own `.continuous` rounded rectangles use it.
-    private static let radius: CGFloat = 12
-    /// How far the bend reaches along each line: a continuous corner starts 1.53 radii out.
-    private static let bend: CGFloat = radius * 1.52866483
-
-    /// ⛔ APPLE'S CONTINUOUS CORNER, NOT A CIRCLE (owner 2026-11-08: "still that line is not smooth,
-    /// use Apple rounded design"). A circular arc meets the straight line with a jump in curvature,
-    /// which reads as a kink. These are the three curves of iOS's continuous rounded-rectangle
-    /// corner, so the line eases into the bend and out of it. From the vertical line at `x`, `bend`
-    /// above `y`, to `bend` right of `x` on `y`.
-    private static func addContinuousBend(_ p: inout Path, x: CGFloat, y: CGFloat) {
-        let r = radius
-        p.addCurve(to: CGPoint(x: x + 0.07491100 * r, y: y - 0.63149399 * r),
-                   control1: CGPoint(x: x, y: y - 1.08849323 * r),
-                   control2: CGPoint(x: x + 0.02229519 * r, y: y - 0.86840689 * r))
-        p.addCurve(to: CGPoint(x: x + 0.63149399 * r, y: y - 0.07491100 * r),
-                   control1: CGPoint(x: x + 0.16905899 * r, y: y - 0.37282392 * r),
-                   control2: CGPoint(x: x + 0.37282392 * r, y: y - 0.16905899 * r))
-        p.addCurve(to: CGPoint(x: x + bend, y: y),
-                   control1: CGPoint(x: x + 0.86840689 * r, y: y - 0.02229519 * r),
-                   control2: CGPoint(x: x + 1.08849323 * r, y: y))
-    }
 
     /// In the row's own coordinates (`avatar` is that row's photo).
     static func path(_ kind: ReplyThreadLine, avatar r: CGRect, height: CGFloat) -> Path {
         var p = Path()
         switch kind {
         case .none: break
-        case .below:
-            p.move(to: CGPoint(x: r.midX, y: r.maxY + 2))   // right under the photo, no visible gap
-            p.addLine(to: CGPoint(x: r.midX, y: height))
         case .chain(let above, let below):
             if above {
                 p.move(to: CGPoint(x: r.midX, y: 0))
@@ -2086,28 +2409,7 @@ enum ReplyThreadLine: Equatable {
                 p.move(to: CGPoint(x: r.midX, y: r.maxY + 2))
                 p.addLine(to: CGPoint(x: r.midX, y: height))
             }
-        case .answer:
-            let x = parentX - answerIndent   // the parent's line, left of this row's own frame
-            p.move(to: CGPoint(x: x, y: 0))
-            p.addLine(to: CGPoint(x: x, y: height))   // on past this answer to the next
-            p.move(to: CGPoint(x: x, y: r.midY - bend))
-            addContinuousBend(&p, x: x, y: r.midY)
-            p.addLine(to: CGPoint(x: r.minX - 4, y: r.midY))
         }
-        return p
-    }
-
-    /// The last bend, into the toggle's label (the label starts 62 in, its text 28 further).
-    static func toggleElbow(height: CGFloat) -> Path {
-        var p = Path()
-        let x = parentX - 62, mid = height / 2
-        // The row is short, so the bend may start above it, on the line coming down from the reply:
-        // a full round corner instead of a cramped one.
-        let start = min(0, mid - bend)
-        p.move(to: CGPoint(x: x, y: start))
-        p.addLine(to: CGPoint(x: x, y: mid - bend))
-        addContinuousBend(&p, x: x, y: mid)
-        p.addLine(to: CGPoint(x: 20, y: mid))
         return p
     }
 }
