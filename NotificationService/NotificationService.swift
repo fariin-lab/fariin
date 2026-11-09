@@ -167,34 +167,37 @@ final class NotificationService: UNNotificationServiceExtension {
         let photos = Avatars.load([senderPhoto, groupPhoto], timeout: 4)
 
         // 3. The Communication Notification. If iOS refuses, the readable text above still shows.
-        let sender = INPerson(personHandle: INPersonHandle(value: aid, type: .unknown),
-                              nameComponents: nil, displayName: shownSender,
-                              // No photo: a grey person circle, so the banner still has a face with
-                              // the small app badge (owner 2026-10-31, as the reference app does).
-                              image: INImage(imageData: photos[0] ?? Avatars.placeholder(group: false)),
-                              contactIdentifier: nil, customIdentifier: aid)
+        // ⛔ A GROUP'S BANNER IS THE GROUP (owner 2026-11-09, screenshot: the sender's face and name
+        // on top, the group's name under them). In a group the GROUP is drawn as the one speaking: its
+        // photo and its name on top, "adnan abdi: ..." as the words (the body above already says who).
+        // iOS draws a group conversation with the sender's face, so a group is sent as a one-to-one
+        // conversation whose other side is the group itself.
+        let sender = isGroup
+            ? INPerson(personHandle: INPersonHandle(value: cid, type: .unknown),
+                       nameComponents: nil, displayName: groupName,
+                       image: INImage(imageData: photos[1] ?? Avatars.placeholder(group: true)),
+                       contactIdentifier: nil, customIdentifier: cid)
+            : INPerson(personHandle: INPersonHandle(value: aid, type: .unknown),
+                       nameComponents: nil, displayName: shownSender,
+                       // No photo: a grey person circle, so the banner still has a face with
+                       // the small app badge (owner 2026-10-31, as the reference app does).
+                       image: INImage(imageData: photos[0] ?? Avatars.placeholder(group: false)),
+                       contactIdentifier: nil, customIdentifier: aid)
         let mePerson = INPerson(personHandle: INPersonHandle(value: me.isEmpty ? "me" : me, type: .unknown),
                                 nameComponents: nil, displayName: nil, image: nil,
                                 contactIdentifier: nil, customIdentifier: me.isEmpty ? nil : me,
                                 isMe: true, suggestionType: .none)
-        // A group needs more than one recipient for iOS to draw it as a group conversation.
-        let recipients: [INPerson] = isGroup
-            ? [mePerson, INPerson(personHandle: INPersonHandle(value: cid, type: .unknown),
-                                  nameComponents: nil, displayName: groupName, image: nil,
-                                  contactIdentifier: nil, customIdentifier: cid)]
-            : [mePerson]
+        // One recipient (me) in every case: the group itself is the sender above, so iOS draws its
+        // photo and name rather than a member's.
+        let recipients: [INPerson] = [mePerson]
         let intent = INSendMessageIntent(recipients: recipients,
                                          outgoingMessageType: .outgoingMessageText,
                                          content: copy.body,
-                                         speakableGroupName: isGroup ? INSpeakableString(spokenPhrase: groupName) : nil,
+                                         speakableGroupName: nil,
                                          conversationIdentifier: cid,
                                          serviceName: nil,
                                          sender: sender,
                                          attachments: nil)
-        if isGroup {
-            intent.setImage(INImage(imageData: photos[1] ?? Avatars.placeholder(group: true)),
-                            forParameterNamed: \.speakableGroupName)
-        }
         let interaction = INInteraction(intent: intent, response: nil)
         interaction.direction = .incoming
         interaction.donate { _ in
