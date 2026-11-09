@@ -4265,13 +4265,35 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // Empty on first layout (cold decrypt in flight): reveal WITH content if it lands within ~0.6s (via
     // the normal open path), else reveal the empty state so the composer still shows.
+    //
+    // ⛔ ROWS THAT ARRIVED BUT HAVE NOT LANDED ARE NOT SHOWN (owner video IMG_1636, 2026-11-09: a chat
+    // opened on its OLDEST rows, perfectly still, for 1.1 s, then snapped to the newest). This timer
+    // was armed while the list was empty; by the time it fired the rows were there but the land had
+    // not run, so revealing showed the window's top at the unlanded offset. Now: rows present and not
+    // landed means try the land and wait for it (checked every 0.1 s); the empty state is revealed only
+    // for a list that really is empty, and a land that never comes is revealed at 2 s so the screen
+    // never stays blank.
     private func scheduleEmptyReveal() {
         guard !scheduledEmptyReveal else { return }
         scheduledEmptyReveal = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            guard let self, !self.didReveal else { return }
-            self.reveal()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.emptyRevealTick(waited: 0.6) }
+    }
+
+    private func emptyRevealTick(waited: Double) {
+        guard !didReveal else { return }
+        if !currentIds.isEmpty, !didFirstLand {
+            performFirstLandIfReady()
+            if !didFirstLand {
+                if waited == 0.6 { DiagLog.add("REVEALWAIT# cid=\(cid.suffix(5)) rows=\(currentIds.count) hold=\(holdFirstLand) insets=\(isUpdatingInsets) w=\(Int(collectionView.bounds.width))") }
+                if waited < 2.0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.emptyRevealTick(waited: waited + 0.1) }
+                    return
+                }
+                DiagLog.add("REVEALWAIT# cid=\(cid.suffix(5)) gave up at 2 s, revealing unlanded")
+            }
         }
+        guard !didReveal else { return }   // the land above reveals on its own path
+        reveal()
     }
 
     // MARK: - Geometry helpers
@@ -4579,6 +4601,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // button in a new chat with no messages. With the content shorter than the screen there is no
         // newer place to go; a passing offset while the keyboard rises must not summon it.
         guard maxContentOffsetY > minContentOffsetY + 1 else { return false }
+        // Not before the land (owner video IMG_1636, 2026-11-09): the offset before it is no place
+        // the reader is, and the arrow showed over a still-empty chat.
+        guard didFirstLand else { return false }
         let distance = maxContentOffsetY - collectionView.contentOffset.y
         return jumpButtonVisible ? distance > Self.jumpButtonHideDistance
                                  : distance > Self.jumpButtonShowDistance
