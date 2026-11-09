@@ -1562,6 +1562,24 @@ enum MessageRowLayout {
             } else {
                 plan.quoteBarFaces = qb.faces
             }
+            // ⛔ THE BUBBLE IS AT LEAST AS WIDE AS ITS BAR (owner 2026-11-09, screenshot: posts "1", "2"
+            // and "test" cut the bar to "Re..." and "5 Repl..."). The bar's own pieces (QuoteBarView:
+            // padding, the icon or up to three 24 pt faces, 9 pt, the words, the chevron, padding)
+            // decide a minimum; a narrower bubble grows to it, never past the column. The time is
+            // laid out from the bubble's trailing edge, so it moves with it.
+            if let words = plan.quoteBarAttr {
+                let faceCount = plan.quoteBarIcon ? 1 : min(3, plan.quoteBarFaces.count)
+                let lead: CGFloat = faceCount == 0 ? 0 : 24 + CGFloat(max(0, faceCount - 1)) * 16 + 9
+                let need = ceil(words.size().width) + lead + BubbleMetrics.hPad * 2 + 12 + 16
+                let grow = min(need, columnW) - grown.width
+                if grow > 0.5 {
+                    grown.size.width += grow
+                    if b.isMe { grown.origin.x -= grow }
+                    plan.bubble = grown
+                    if plan.meta != .zero { plan.meta = plan.meta.offsetBy(dx: grow, dy: 0) }
+                    plan.quoteBar = CGRect(x: 0, y: top, width: grown.width, height: barH)
+                }
+            }
             y = max(y, grown.maxY, plan.reactions.map(\.maxY).max() ?? 0)
         }
 
