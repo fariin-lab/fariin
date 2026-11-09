@@ -255,7 +255,6 @@ struct SecurityCheckupSheet: View {
     // turns only when its own answer from this scan has landed. The only addition is pacing: rows
     // at least 280 ms apart, the first at 450 ms, the whole scan at least 1.5 s.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Namespace private var rowSpace
     @State private var revealed: [String] = []     // rows on screen during the scan, in order
     @State private var resolved: Set<String> = []  // rows whose fresh answer is in
     @State private var finishing = false           // the ring is closing
@@ -338,10 +337,18 @@ struct SecurityCheckupSheet: View {
             ScrollView {
                 VStack(spacing: 24) {
                     header
+                    // ⛔ THE SETTLE IS A CROSSFADE, NOT ROWS FLYING BETWEEN CARDS (owner 2026-11-09, Pixel
+                    // video: an empty card flashed, then rows slid clipped inside a card that had
+                    // already jumped to its final size). The scan card fades out as the final cards
+                    // fade in, rising 8 pt into place.
                     if !settled {
                         scanCard
+                            .transition(.asymmetric(insertion: .identity,
+                                                    removal: .opacity.combined(with: .scale(scale: 0.98))))
                     } else {
                         settledSections
+                            .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 8)),
+                                                    removal: .identity))
                     }
                 }
                 .padding(.horizontal, 16)
@@ -400,7 +407,6 @@ struct SecurityCheckupSheet: View {
         VStack(spacing: 0) {
             ForEach(entries.filter { revealed.contains($0.id) }) { e in
                 scanRow(e)
-                    .matchedGeometryEffect(id: e.id, in: rowSpace)
                     .transition(.offset(y: 8).combined(with: .opacity))
                 if e.id != revealed.last { divider }
             }
@@ -475,7 +481,7 @@ struct SecurityCheckupSheet: View {
         withAnimation(.easeOut(duration: 0.2)) { ringShown = false }
         if allGood { withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { badge = true } }
         try? await Task.sleep(for: .milliseconds(300))
-        withAnimation(.spring(response: 0.45, dampingFraction: 0.86)) { settled = true }
+        withAnimation(.easeOut(duration: 0.32)) { settled = true }
     }
 
     // MARK: Settled
@@ -490,7 +496,6 @@ struct SecurityCheckupSheet: View {
                 ForEach(missing) { e in
                     row(icon: "exclamationmark.circle", tint: .blue,
                         title: e.missingTitle, subtitle: e.why, action: e.open)
-                        .matchedGeometryEffect(id: e.id, in: rowSpace)
                     if e.id != missing.last?.id { divider }
                 }
             }
@@ -501,7 +506,6 @@ struct SecurityCheckupSheet: View {
                     row(icon: "exclamationmark.triangle", tint: .orange,
                         title: e.title, subtitle: "Check your connection and try again.",
                         action: { Task { await check.run() } })
-                        .matchedGeometryEffect(id: e.id, in: rowSpace)
                     if e.id != failed.last?.id { divider }
                 }
             }
@@ -520,7 +524,6 @@ struct SecurityCheckupSheet: View {
                                 title: e.title, subtitle: "Checking…", action: nil)
                         }
                     }
-                    .matchedGeometryEffect(id: e.id, in: rowSpace)
                     if e.id != rest.last?.id { divider }
                 }
             }
