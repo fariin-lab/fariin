@@ -131,7 +131,14 @@ struct ActivityRowView: View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 1) {
                     titleLine
-                    if item.kind == .reply {
+                    if item.kind == .quote {
+                        // Their words (only from a public channel), then which post of mine.
+                        if !item.text.isEmpty {
+                            Text(item.text).font(.system(size: 15)).foregroundStyle(.primary).lineLimit(1)
+                        }
+                        Text("Your post in \(channel)" + (item.post.isEmpty ? "" : ": \(item.post)"))
+                            .font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(1)
+                    } else if item.kind == .reply {
                         Text(item.text.isEmpty ? " " : item.text)
                             .font(.system(size: 15)).foregroundStyle(.primary)
                             .lineLimit(1)
@@ -168,8 +175,8 @@ struct ActivityRowView: View {
     /// "Nan in VE3", "Nan reacted", "Nan and 3 others reacted"; the time sits on the right, or in
     /// this line after a dot when the post's picture takes the right edge.
     private var titleLine: some View {
-        var rest = item.kind == .reply ? " in \(channel)" : ""
-        if hasThumb && item.kind == .reply { rest += " · " + ActivityTime.age(item.at) }
+        var rest = item.kind == .reply ? " in \(channel)" : (item.kind == .quote ? " quoted your post" : "")
+        if hasThumb && item.kind != .react { rest += " · " + ActivityTime.age(item.at) }
         return HStack(spacing: 8) {
             (Text(who).font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
              + Text(rest).font(.system(size: 17)).foregroundStyle(.secondary))
@@ -221,7 +228,17 @@ struct ActivityRowView: View {
 
     /// Reply: the channel's own squircle. React: the latest emoji in a small circle.
     @ViewBuilder private var badge: some View {
-        if item.kind == .reply {
+        if item.kind == .quote {
+            // The app's own quote marks (ic_quote), the badge the approved design drew.
+            Image("ic_quote").renderingMode(.template).resizable().scaledToFit()
+                .frame(width: 12, height: 12)
+                .foregroundStyle(.white)
+                .frame(width: 24, height: 24)
+                .background(Color(.systemGray4), in: Circle())
+                .padding(2)
+                .background(Color(.systemBackground), in: Circle())
+                .offset(x: 5, y: 5)
+        } else if item.kind == .reply {
             AvatarView(name: channel, photoUrl: item.chPhoto.isEmpty ? nil : item.chPhoto, size: 24)
                 .avatarSquircle(true)
                 .padding(2)

@@ -7,7 +7,7 @@ import FirebaseFunctions
 /// One row of the Activity page: someone answered or reacted to one of my comments on a channel post.
 /// Written only by the server (`users/{me}/activity/{id}`); see fariin-activity/SPEC.md.
 struct ActivityItem: Identifiable, Equatable {
-    enum Kind: String { case reply, react }
+    enum Kind: String { case reply, react, quote }
     /// A place in a post's Replies: the thread id and the answer id ("" = the thread itself).
     struct Ref: Equatable {
         var rid = ""
@@ -48,6 +48,10 @@ struct ActivityItem: Identifiable, Equatable {
     /// The post's picture ("" for a text post) and whether it is a video.
     var thumb: String
     var thumbIsVideo: Bool
+    /// Quote: where it was posted, only when that is a public channel ("" otherwise).
+    var whereCid = ""
+    var whereMid = ""
+    var whereTitle = ""
 
     /// True when my comment was an answer in a thread, not the thread itself.
     var mineIsAnswer: Bool { !mine.aid.isEmpty && mine.aid != mine.rid }
@@ -92,6 +96,11 @@ struct ActivityItem: Identifiable, Equatable {
         rx = counts.sorted { $0.count != $1.count ? $0.count > $1.count : $0.emoji < $1.emoji }
         thumb = d["thumb"] as? String ?? ""
         thumbIsVideo = (d["thumbKind"] as? String ?? "") == "video"
+        if let w = d["where"] as? [String: Any] {
+            whereCid = w["cid"] as? String ?? ""
+            whereMid = w["mid"] as? String ?? ""
+            whereTitle = w["title"] as? String ?? ""
+        }
     }
 }
 
@@ -118,6 +127,9 @@ struct ActivitySummary: Equatable {
     /// "Nan replied to your comment: thanks" / "Nan reacted ❤️ to your comment".
     var preview: String {
         let name = lastName.isEmpty ? "Someone" : lastName
+        if lastKind == "quote" {
+            return lastText.isEmpty ? "\(name) quoted your post" : "\(name) quoted your post: \(lastText)"
+        }
         if lastKind == "react" {
             return lastEmoji.isEmpty ? "\(name) reacted to your comment"
                                      : "\(name) reacted \(lastEmoji) to your comment"
@@ -240,8 +252,20 @@ final class ActivityStore {
     func open(_ item: ActivityItem) {
         let bad: (String) -> Bool = { $0.isEmpty || $0.contains("/") }
         guard !bad(item.cid), !bad(item.mid) else { return }
-        let t = item.target
         let r = AppRouter.shared
+        // A quote (owner 2026-11-09): opens where it was posted when that is a public channel, at
+        // the quoting message; otherwise my post, with its Replies and Quotes sheet.
+        if item.kind == .quote, !bad(item.whereCid), !bad(item.whereMid) {
+            r.pendingRepliesPost = nil
+            r.pendingReplyTarget = nil
+            r.pendingOpenMid = item.whereMid
+            r.pendingChatName = item.whereTitle.isEmpty ? nil : item.whereTitle
+            r.pendingChatPhoto = nil
+            r.pendingChatPush = true
+            r.pendingChatId = item.whereCid
+            return
+        }
+        let t = item.kind == .quote ? ActivityItem.Ref() : item.target
         r.pendingRepliesPost = (item.cid, item.mid, Date())
         r.pendingReplyTarget = bad(t.rid) ? nil
             : (item.mid, t.rid, (t.aid.isEmpty || t.aid.contains("/")) ? nil : t.aid, Date())

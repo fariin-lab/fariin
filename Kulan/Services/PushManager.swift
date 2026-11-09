@@ -373,7 +373,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
             // A push with a reply id is a reply alert too, whatever its kind says.
             let kind = info["kind"] as? String ?? ""
             // A reaction to my comment (2026-11-09, the server sends kind "replyReact") opens the same way, at my comment.
-            let isReply = kind == "postReplies" || kind == "replyAnswer" || kind == "replyReact" || kind == "react" || !rid.isEmpty
+            let isReply = kind == "postReplies" || kind == "replyAnswer" || kind == "replyReact" || kind == "react" || kind == "postQuote" || !rid.isEmpty
             // On a reply alert `aid` is the answer, when the alert is about one.
             let aid = (info["aid"] as? String).flatMap { $0.isEmpty || $0.contains("/") ? nil : $0 }
             await MainActor.run {
