@@ -2035,12 +2035,14 @@ struct ContactInfoView: View {
     /// Name, @handle and bio, sitting on the photo. Same content and the same anti-jump trick as the
     /// classic hero: the @handle line is always reserved, so the async profile fetch fills it in
     /// without pushing the buttons down.
-    private func posterCaption(_ text: Color) -> some View {
-        // ⛔ A HALO IN THE PAGE'S OWN COLOUR (owner 2026-11-09, a black-and-white photo: the name,
-        // @handle and bio crossed white and black parts of the picture and could not be read). The
-        // words keep their colour; a soft glow of the colour the photo fades into sits behind each
-        // line, so they stand on any photo. On the plain page it is invisible.
-        let halo = posterFadeInto
+    private func posterCaption(_ pageInk: Color) -> some View {
+        // ⛔ WHITE WORDS ON A SOFT DARK FADE (owner 2026-11-09, a black-and-white photo: the name,
+        // @handle and bio crossed white and black parts of the picture and could not be read; a glow
+        // in the page colour was tried and refused). He picked white text on a dark fade, "the best
+        // one, and the user does not feel a big change": the fade is a blurred band behind the words
+        // only, light enough that the photo still reads through it, and nothing else on the page moves.
+        let text = Color.white
+        _ = pageInk
         return VStack(spacing: 3) {
             // The poster header draws the same name as the classic hero, so it carries the same
             // mark. Two headers with one of them missing a badge is how a verified account looks
@@ -2062,10 +2064,21 @@ struct ContactInfoView: View {
             }
             ProfileLinkChips(links: links, tint: linkTint)
         }
-        .shadow(color: halo.opacity(0.95), radius: 2)
-        .shadow(color: halo.opacity(0.85), radius: 7)
-        .shadow(color: halo.opacity(0.6), radius: 14)
+        .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
         .frame(maxWidth: .infinity)
+        .background {
+            LinearGradient(stops: [
+                .init(color: .black.opacity(0), location: 0),
+                .init(color: .black.opacity(0.34), location: 0.35),
+                .init(color: .black.opacity(0.34), location: 0.7),
+                .init(color: .black.opacity(0), location: 1),
+            ], startPoint: .top, endPoint: .bottom)
+            .padding(.vertical, -28)
+            .padding(.horizontal, -60)
+            .blur(radius: 14)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
         .animation(.easeOut(duration: 0.22), value: gatedAbout)
     }
 
