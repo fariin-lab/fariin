@@ -1148,7 +1148,14 @@ private struct LogOutSheet: View {
             Button {
                 guard !signingOut else { return }
                 signingOut = true
-                Task { await onConfirm() }
+                // ⛔ THE SHEET GOES FIRST (owner 2026-11-09): tapping Log Out closes this sheet, and
+                // only then does the logging-out screen take over, instead of a spinner in the sheet
+                // with the next screen loading underneath it.
+                dismiss()
+                Task {
+                    try? await Task.sleep(nanoseconds: 350_000_000)   // the sheet's slide down
+                    await onConfirm()
+                }
             } label: {
                 ZStack {
                     Text("Log Out").opacity(signingOut ? 0 : 1)
