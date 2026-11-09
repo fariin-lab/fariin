@@ -296,6 +296,13 @@ final class BlockList {
                 if !current.contains(other) {
                     try await listRef.setData(["at": FieldValue.serverTimestamp()])
                 }
+                // A live 1:1 call with them ends the way my own End button ends it, so their phone
+                // sees an ordinary "call ended", with no sign of the block. Group and link calls
+                // live in other services and are not touched.
+                await MainActor.run {
+                    let call = CallService.shared
+                    if call.isLive, call.otherUid == other { call.endLocally() }
+                }
                 // REVOKE MY ACTIVE STORIES FROM THEM (audit). The audience is frozen into
                 // recipientUids at post time, so blocking has to reach back into live stories.
                 await StoriesRepository.shared.revokeAudience(for: other)
