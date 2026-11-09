@@ -1436,13 +1436,27 @@ struct PostThreadSheet: View {
 
     @ViewBuilder private var repliesOverlay: some View {
         if model.failed && model.threads.isEmpty && model.pinned == nil {
-            ContentUnavailableView {
-                Label("Couldn't load replies", systemImage: "bubble.left.and.bubble.right")
-            } description: {
+            // The same icon and sizes as "No replies yet" below (owner 2026-11-09: the system's
+            // empty view here was too big and not his icon).
+            VStack(spacing: 6) {
+                Image("ic_reply_comment")
+                    .renderingMode(.template)
+                    .resizable().scaledToFit()
+                    .frame(width: 40, height: 40)
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 6)
+                Text("Couldn't load replies")
+                    .font(.system(size: 15, weight: .semibold))
                 Text("Check your connection and try again.")
-            } actions: {
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
                 Button("Try Again") { Task { await model.loadFirst() } }
+                    .font(.system(size: 15, weight: .semibold))
+                    .padding(.top, 8)
             }
+            .padding(.horizontal, 32)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if !model.loaded && model.threads.isEmpty && model.pinned == nil {
             // The loading shapes only over an empty sheet, never over replies already drawn.
             RepliesSkeleton()

@@ -113,18 +113,41 @@ struct QuotesPage: View {
 
     @ViewBuilder private var overlay: some View {
         if failed {
-            ContentUnavailableView {
-                Label("Couldn't load quotes", image: "ic_quote")
-            } description: {
-                Text("Check your connection and try again.")
-            } actions: {
-                Button("Try Again") { Task { failed = false; await load() } }
+            note("Couldn't load quotes", "Check your connection and try again.") {
+                Task { failed = false; await load() }
             }
         } else if !loaded {
             QuotesSkeleton()
         } else if items.isEmpty && hidden == 0 {
-            ContentUnavailableView("No quotes yet", image: "ic_quote")
+            note("No quotes yet", nil, retry: nil)
         }
+    }
+
+    /// The Replies tab's look (owner 2026-11-09: the system's empty view was too big): his quote
+    /// icon at 40 pt, a 15 pt title, 13 pt grey words, an optional Try Again.
+    private func note(_ title: String, _ words: String?, retry: (() -> Void)?) -> some View {
+        VStack(spacing: 6) {
+            Image("ic_quote")
+                .renderingMode(.template)
+                .resizable().scaledToFit()
+                .frame(width: 40, height: 40)
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 6)
+            Text(title).font(.system(size: 15, weight: .semibold))
+            if let words {
+                Text(words)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            if let retry {
+                Button("Try Again", action: retry)
+                    .font(.system(size: 15, weight: .semibold))
+                    .padding(.top, 8)
+            }
+        }
+        .padding(.horizontal, 32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// The post's own count, and how many of them are in public channels (the ones listed). Never a
