@@ -1572,6 +1572,16 @@ private struct ReplyRow: View {
         // the bubble's middle, the heart and Reply under it.
         let side: CGFloat = small ? 28 : 40
         VStack(alignment: .leading, spacing: 4) {
+          // ⛔ THE PHOTO STARTS ON THE NAME'S LINE (owner 2026-11-09, screenshot: name and photo were
+          // not on one line, the name sat above the photo's row). Photo on the left, the name line
+          // and the bubble stacked beside it, their tops level with the photo's top.
+          HStack(alignment: .top, spacing: 10) {
+            AvatarView(name: reply.name, photoUrl: reply.photoUrl.isEmpty ? nil : reply.photoUrl, size: side)
+                .avatarSquircle(reply.creator)   // the channel's photo, shaped as channels are
+                .accessibilityHidden(true)
+                .onTapGesture { actions.openAuthor?() }
+                .anchorPreference(key: ReplyAvatarBounds.self, value: .bounds) { $0 }
+            VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Text(reply.name).font(.footnote.weight(.semibold)).lineLimit(1)
                     .onTapGesture { actions.openAuthor?() }
@@ -1598,14 +1608,7 @@ private struct ReplyRow: View {
                     Text("· edited").font(.footnote).foregroundStyle(.secondary)
                 }
             }
-            .padding(.leading, side + 10 + 14)
-            // The photo stays at the top beside the name, even when the words run long (owner 2026-11-07).
-            HStack(alignment: .top, spacing: 10) {
-                AvatarView(name: reply.name, photoUrl: reply.photoUrl.isEmpty ? nil : reply.photoUrl, size: side)
-                    .avatarSquircle(reply.creator)   // the channel's photo, shaped as channels are
-                    .accessibilityHidden(true)
-                    .onTapGesture { actions.openAuthor?() }
-                    .anchorPreference(key: ReplyAvatarBounds.self, value: .bounds) { $0 }
+            .padding(.leading, 14)
                 bodyText
                     .font(small ? .subheadline : .body)
                     .environment(\.openURL, OpenURLAction { url in
@@ -1619,8 +1622,9 @@ private struct ReplyRow: View {
                     .opacity(reply.held || reply.send != .sent ? 0.55 : 1)
                     .onTapGesture(count: 2) { if reply.send == .sent { actions.like() } }
                     .contextMenu { menu }
-                Spacer(minLength: 24)
             }
+            Spacer(minLength: 24)
+          }
             footer
                 .padding(.leading, side + 10 + 8).padding(.top, 2)
         }
