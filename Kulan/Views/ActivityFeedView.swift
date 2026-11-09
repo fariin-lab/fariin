@@ -171,10 +171,21 @@ struct ActivityRowView: View {
         }
     }
 
-    private var face: some View {
-        AvatarView(name: name, photoUrl: item.fromPhoto.isEmpty ? nil : item.fromPhoto, size: 56)
-            .frame(width: 56, height: 56)
-            .overlay(alignment: .bottomTrailing) { badge }
+    /// ⛔ A REACTION ROW SHOWS THE REACTION, NOT A FACE (owner 2026-11-09: "react notifications don't
+    /// put avatar"). Its left side is the latest emoji, large in a plain circle; a reply keeps the
+    /// person's face with the channel's squircle on it.
+    @ViewBuilder private var face: some View {
+        if item.kind == .react {
+            Text(item.emoji.isEmpty ? "❤️" : item.emoji)
+                .font(.system(size: 30))
+                .frame(width: 56, height: 56)
+                .background(Color(.systemGray5), in: Circle())
+                .accessibilityHidden(true)
+        } else {
+            AvatarView(name: name, photoUrl: item.fromPhoto.isEmpty ? nil : item.fromPhoto, size: 56)
+                .frame(width: 56, height: 56)
+                .overlay(alignment: .bottomTrailing) { badge }
+        }
     }
 
     /// Reply: the channel's own squircle. React: the latest emoji in a small circle.
