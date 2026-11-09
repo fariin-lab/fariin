@@ -355,23 +355,6 @@ struct DevicesView: View {
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 4, trailing: 16))
             }
 
-            // Security Checkup as a row (owner 2026-11-09), not the big button it was.
-            Section {
-                Button { openCheckup() } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Security Checkup").foregroundStyle(.primary)
-                            Text("Review your account").font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-
             Section {
                 if let this = sessions.first(where: { $0.isThisDevice }) {
                     Button { detail = this } label: { row(this) }
@@ -1019,6 +1002,15 @@ private struct DevicesHeader: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .onTapGesture { onCheckup() }
+            // Back to the wide button (owner 2026-11-09, after trying it as a row on the Pixel).
+            Button(action: onCheckup) {
+                Text("Security Checkup")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Color.onFariinAction)
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .background(Color.fariinAction, in: Capsule())
+            }
+            .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity)
     }
