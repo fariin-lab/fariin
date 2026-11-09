@@ -3960,6 +3960,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         reopenLog("LAND open#\(openNumber) of this chat this run, rows=\(rowCount) seededHeights=\(seeded) estimated=\(estimatedIds.count) pagedHold=\(firstLandWasHeld) liveSettled=\(liveWindowSettled) id=\(initId) offset=\(initTop) savedTop=\(initialScrollTopInset.map { String(format: "%.1f", $0) } ?? "nil") top=\(String(format: "%.1f", collectionView.adjustedContentInset.top)) bottom=\(String(format: "%.1f", collectionView.adjustedContentInset.bottom)) y=\(String(format: "%.1f", collectionView.contentOffset.y)) appeared=\(isViewCompletelyAppeared)")
         revealWhenLandingIsFinal()
         geoLogs = 0
+        jumpLogs = 0
+        lastJumpLogY = collectionView.contentOffset.y
+        DiagLog.add("LAND# cid=\(cid.suffix(5)) rows=\(rowCount) id=\(initId) offset=\(initTop) held=\(firstLandWasHeld) clampedNewest=\((landedTarget?.id ?? nil) == nil && initialScrollId != nil) unreadPin=\(pinUnreadLanding) y=\(Int(collectionView.contentOffset.y)) max=\(Int(maxContentOffsetY))")
         logGeometry("land")
         for delay in [0.6, 2.0, 5.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.logGeometry("settle\(delay)") }
@@ -4137,6 +4140,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// when the screen is empty: offset against both bounds, insets, content height, header card,
     /// visible and hidden cells, the topmost cell in view coordinates. Capped per open.
     private var geoLogs = 0
+    private var jumpLogs = 0
+    private var lastJumpLogY: CGFloat = 0
     private func logGeometry(_ why: String) {
         guard isViewLoaded, geoLogs < 24 else { return }
         geoLogs += 1
@@ -6871,6 +6876,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        // ⚠️ DIAGNOSTIC (owner 2026-11-09, video IMG_1520: a chat opens on old messages, then snaps
+        // to the newest half a second later). A big move in the first 5 s after the land, not by
+        // a finger, with every flag that names a mover.
+        let jumpY = scrollView.contentOffset.y
+        if didFirstLand, !scrollView.isTracking, !scrollView.isDragging,
+           Date().timeIntervalSince(landedAt) < 5, abs(jumpY - lastJumpLogY) > 150, jumpLogs < 6 {
+            jumpLogs += 1
+            DiagLog.add("JUMP# cid=\(cid.suffix(5)) y \(Int(lastJumpLogY))->\(Int(jumpY)) max=\(Int(maxContentOffsetY)) t=\(Int(Date().timeIntervalSince(landedAt) * 1000))ms send=\(sendAnimating) prog=\(programmaticScrollAnimating) newestJump=\(pendingNewestJump.map { "\($0)" } ?? "nil") repin=\(awaitingInitialRepin) pinUnread=\(pinUnreadLanding) held=\(Date() < landingHoldUntil) dist=\(lastKnownDistanceFromBottom.map { "\(Int($0))" } ?? "nil") rows=\(currentIds.count) target=\((landedTarget?.id ?? nil).map { String($0.suffix(5)) } ?? "nil")")
+        }
+        lastJumpLogY = jumpY
         RxTrace.log("scroll y=\(scrollView.contentOffset.y) insetTop=\(scrollView.contentInset.top) h=\(scrollView.contentSize.height)")
         // A finger on the list ends the one-shot re-pin: whatever the insets do from here, this
         // reader has chosen where they are. See `repinIfTopInsetArrived`.
