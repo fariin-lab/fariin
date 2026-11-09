@@ -529,7 +529,13 @@ struct ReplyEdit: Equatable {
     /// A tap on "@name": the answer it answers (or the thread, when it answers the thread itself).
     func jumpTo(_ id: String, inThread t: String) async {
         if id == t || isThread(id) { reveal(id, thread: nil); return }
-        if !answersLoaded.contains(t) { await loadAnswers(t, more: false) }
+        // ⛔ A NEW ANSWER IS NOT IN AN OLD LIST (owner 2026-11-09: an Activity tap on kream's fresh
+        // answer opened the sheet and said "This reply was deleted"). The thread's answers loaded
+        // earlier (a prefetch, an earlier visit) were read before that answer existed, so the search
+        // ran over a stale list and gave up. Missing from what is held: the first page is read again.
+        if !answersLoaded.contains(t) || answers[t]?.contains(where: { $0.id == id }) != true {
+            await loadAnswers(t, more: false)
+        }
         var pages = 0
         while answers[t]?.contains(where: { $0.id == id }) != true, !(answerNext[t] ?? "").isEmpty, pages < 5 {
             await loadAnswers(t, more: true)
