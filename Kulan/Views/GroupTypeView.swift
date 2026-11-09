@@ -303,7 +303,9 @@ struct GroupTypeView: View {
     private var linkSection: some View {
         Section {
             HStack(spacing: 0) {
-                Text("fariin.com/").foregroundStyle(.secondary)
+                // In the label colour, owner 2026-11-09: grey read as a placeholder, not as the
+                // start of the link the person finishes.
+                Text("fariin.com/").foregroundStyle(.primary)
                 TextField("link", text: $name)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
