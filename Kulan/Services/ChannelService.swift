@@ -840,7 +840,8 @@ final class ChannelPosting {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         silent[cid] = on
         FirestoreHub.db.collection("users").document(uid).collection("channelPrefs").document(cid)
-            .setData(["silent": on]) { [weak self] err in
+            // Merge (audit B5-08): the same doc holds the post-reply alert switch; an overwrite wiped it.
+            .setData(["silent": on], merge: true) { [weak self] err in
                 guard let err else { return }
                 print("[channel] silent not saved:", err.localizedDescription)
                 DispatchQueue.main.async {
