@@ -370,7 +370,7 @@ struct ChannelFollowersView: View {
         _count = State(initialValue: count)
     }
 
-    struct Follower: Identifiable, Equatable {
+    struct Follower: Identifiable, Hashable {
         let uid: String; let name: String; let photoUrl: String?
         /// The @username under the name (owner 2026-11-08); empty when they have none.
         var username: String = ""
@@ -401,6 +401,8 @@ struct ChannelFollowersView: View {
     /// People whose own settings refused the add: offered the link instead (`InviteInsteadSheet`).
     @State private var linkInstead: [CallMember] = []
     @State private var shareText: String?
+    /// The person whose profile a row tap opens (owner 2026-11-09: tapping a follower did nothing).
+    @State private var profileOf: Follower?
     /// May I add people: the owner, or an admin holding "Add users" (the server's own test).
     private var mayInvite: Bool { conv?.adminCan(AuthService.shared.uid ?? "", .inviteUsers) == true }
     /// ⛔ THE ADMINS ARE ON THE LIST AND IN ITS COUNT (owner 2026-10-29: the page said "3 Followers",
@@ -443,6 +445,11 @@ struct ChannelFollowersView: View {
                         Text(uid == conv?.createdBy ? "Owner" : "Admin")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        guard uid != AuthService.shared.uid else { return }
+                        profileOf = Follower(uid: uid, name: conv?.names[uid] ?? "", photoUrl: conv?.photos[uid])
+                    }
                 }
                 ForEach(followerRows) { f in
                     HStack(spacing: 12) {
@@ -455,6 +462,8 @@ struct ChannelFollowersView: View {
                         }
                         Spacer(minLength: 0)
                     }
+                    .contentShape(Rectangle())
+                    .onTapGesture { if f.uid != AuthService.shared.uid { profileOf = f } }
                     // Only an admin who may remove people (the server now asks for `banUsers`,
                     // 2026-10-29 review fix); others see the list without the swipe.
                     .swipeActions(edge: .trailing) {
@@ -496,6 +505,11 @@ struct ChannelFollowersView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Followers")
         .navigationBarTitleDisplayMode(.inline)
+        // The same profile page a group member's row opens (GroupInfoView `profileOf`).
+        .navigationDestination(item: $profileOf) { f in
+            ContactInfoView(cid: ChatService.convId(AuthService.shared.uid ?? "", f.uid), name: f.name,
+                            photoUrl: f.photoUrl, source: .calls)
+        }
         .refreshable { rows = []; more = true; await load() }
         .task { if rows.isEmpty { await load() } }
         // The words come from `confirmBan`, set when the alert opens and never cleared (owner
