@@ -185,11 +185,10 @@ struct WallpaperPickerSheet: View {
                     withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(tileID(w), anchor: .center) }
                 }
             }
-            // In a group or a channel the colour row shows greyed out and can't be used (owner 2026-11-07).
-            chatColorSection
-                .disabled(sharedGroup || channel)
-                .opacity(sharedGroup || channel ? 0.35 : 1)
-                .saturation(sharedGroup || channel ? 0 : 1)
+            // In a group the colour row works (owner 2026-11-09): the colour is this person's own,
+            // kept on their phone; Apply sends nothing to the group (see the bottom bar). In a
+            // channel there is no colour row at all (owner 2026-11-09; was greyed out since 11-07).
+            if !channel { chatColorSection }
             if showsBubbleRow { bubbleStyleSection }
         }
         .frame(maxHeight: .infinity, alignment: .top)
