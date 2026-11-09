@@ -128,7 +128,10 @@ struct ActivityRowView: View {
                             .font(.system(size: 15)).foregroundStyle(.secondary)
                             .lineLimit(1)
                     } else {
-                        Text("In \(channel) · " + mineLabel + item.mineText)
+                        // Design 3 (owner 2026-11-09): "reacted to your comment in VE3", the age after
+                        // a dot when the post's picture takes the right edge.
+                        Text("reacted to " + (item.mineIsAnswer ? "your reply" : "your comment") + " in \(channel)"
+                             + (hasThumb ? " · " + ActivityTime.age(item.at) : ""))
                             .font(.system(size: 15)).foregroundStyle(.secondary)
                             .lineLimit(1)
                         if showsPills { pills.padding(.top, 3) }
@@ -154,10 +157,8 @@ struct ActivityRowView: View {
     /// "Nan in VE3", "Nan reacted", "Nan and 3 others reacted"; the time sits on the right, or in
     /// this line after a dot when the post's picture takes the right edge.
     private var titleLine: some View {
-        let who = item.kind == .react && item.others > 0
-            ? "\(name) and \(item.others) \(item.others == 1 ? "other" : "others")" : name
-        var rest = item.kind == .reply ? " in \(channel)" : " reacted"
-        if hasThumb { rest += " · " + ActivityTime.age(item.at) }
+        var rest = item.kind == .reply ? " in \(channel)" : ""
+        if hasThumb && item.kind == .reply { rest += " · " + ActivityTime.age(item.at) }
         return HStack(spacing: 8) {
             (Text(who).font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
              + Text(rest).font(.system(size: 17)).foregroundStyle(.secondary))
@@ -172,11 +173,32 @@ struct ActivityRowView: View {
         }
     }
 
+    /// "Abdi", "Abdi and 3 others", or with a second face "Abdi, Nan and 12 others" (design 3).
+    private var who: String {
+        guard item.kind == .react else { return name }
+        let second = item.from2Name.isEmpty ? "Someone" : item.from2Name
+        let rest = item.hasFrom2 ? item.others - 1 : item.others
+        let head = item.hasFrom2 ? "\(name), \(second)" : name
+        guard rest > 0 else { return item.hasFrom2 ? "\(name) and \(second)" : name }
+        return "\(head) and \(rest) \(rest == 1 ? "other" : "others")"
+    }
+
     /// ⛔ A REACTION ROW: THE PERSON'S FACE, NOTHING ON IT (owner 2026-11-09, his edited picture,
     /// after a big-emoji circle was tried and refused). The emojis are in the count pills below the
     /// words; a reply keeps the person's face with the channel's squircle on it.
     @ViewBuilder private var face: some View {
-        if item.kind == .react {
+        if item.kind == .react && item.hasFrom2 {
+            // ⛔ TWO FACES STACKED (owner 2026-11-09, design 3): the one before top-left, the newest
+            // bottom-right over it, ringed in the page colour.
+            ZStack(alignment: .topLeading) {
+                AvatarView(name: item.from2Name, photoUrl: item.from2Photo.isEmpty ? nil : item.from2Photo, size: 40)
+                AvatarView(name: name, photoUrl: item.fromPhoto.isEmpty ? nil : item.fromPhoto, size: 40)
+                    .padding(2.5)
+                    .background(Color(.systemBackground), in: Circle())
+                    .offset(x: 13.5, y: 13.5)
+            }
+            .frame(width: 56, height: 56, alignment: .topLeading)
+        } else if item.kind == .react {
             AvatarView(name: name, photoUrl: item.fromPhoto.isEmpty ? nil : item.fromPhoto, size: 56)
                 .frame(width: 56, height: 56)
         } else {

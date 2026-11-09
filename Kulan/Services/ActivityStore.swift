@@ -30,6 +30,10 @@ struct ActivityItem: Identifiable, Equatable {
     var fromUid: String
     var fromName: String
     var fromPhoto: String
+    /// The person shown before `from` on a reaction row (design 3, two faces stacked); "" = none.
+    var from2Name: String = ""
+    var from2Photo: String = ""
+    var hasFrom2: Bool = false
     /// Reply: their words, and where their reply is.
     var text: String
     var newRef: Ref
@@ -69,6 +73,11 @@ struct ActivityItem: Identifiable, Equatable {
         fromUid = f["u"] as? String ?? ""
         fromName = f["n"] as? String ?? ""
         fromPhoto = f["p"] as? String ?? ""
+        if let f2 = d["from2"] as? [String: Any] {
+            hasFrom2 = true
+            from2Name = f2["n"] as? String ?? ""
+            from2Photo = f2["p"] as? String ?? ""
+        }
         text = d["text"] as? String ?? ""
         let n = d["new"] as? [String: Any] ?? [:]
         newRef = Ref(rid: n["rid"] as? String ?? "", aid: n["aid"] as? String ?? "")
