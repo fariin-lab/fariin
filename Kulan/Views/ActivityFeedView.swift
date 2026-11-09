@@ -107,7 +107,8 @@ private struct ActivityRowPress: ButtonStyle {
 struct ActivityRowView: View {
     let item: ActivityItem
 
-    private var showsPills: Bool { item.kind == .react && item.others > 0 && !item.rx.isEmpty }
+    /// Every reaction row shows its counts (owner 2026-11-09, his edited picture: "👍 2" under one person too).
+    private var showsPills: Bool { item.kind == .react && !item.rx.isEmpty }
     private var hasThumb: Bool { !item.thumb.isEmpty }
     private var channel: String { item.chTitle.isEmpty ? "a channel" : item.chTitle }
     private var name: String { item.fromName.isEmpty ? "Someone" : item.fromName }
@@ -171,16 +172,13 @@ struct ActivityRowView: View {
         }
     }
 
-    /// ⛔ A REACTION ROW SHOWS THE REACTION, NOT A FACE (owner 2026-11-09: "react notifications don't
-    /// put avatar"). Its left side is the latest emoji, large in a plain circle; a reply keeps the
-    /// person's face with the channel's squircle on it.
+    /// ⛔ A REACTION ROW: THE PERSON'S FACE, NOTHING ON IT (owner 2026-11-09, his edited picture,
+    /// after a big-emoji circle was tried and refused). The emojis are in the count pills below the
+    /// words; a reply keeps the person's face with the channel's squircle on it.
     @ViewBuilder private var face: some View {
         if item.kind == .react {
-            Text(item.emoji.isEmpty ? "❤️" : item.emoji)
-                .font(.system(size: 30))
+            AvatarView(name: name, photoUrl: item.fromPhoto.isEmpty ? nil : item.fromPhoto, size: 56)
                 .frame(width: 56, height: 56)
-                .background(Color(.systemGray5), in: Circle())
-                .accessibilityHidden(true)
         } else {
             AvatarView(name: name, photoUrl: item.fromPhoto.isEmpty ? nil : item.fromPhoto, size: 56)
                 .frame(width: 56, height: 56)
