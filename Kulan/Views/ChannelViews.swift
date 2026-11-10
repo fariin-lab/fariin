@@ -264,6 +264,9 @@ struct DiscoverChannelsView: View {
             }
     }
 
+    /// Find Channels pushed from the chat list's compass (owner 2026-11-10: slides in from the right).
+    struct Route: Hashable {}
+
     private func row(_ c: ChannelService.Discovered) -> some View {
         HStack(spacing: 12) {
             Button {
@@ -306,7 +309,9 @@ struct DiscoverChannelsView: View {
             .buttonStyle(.plain)
             followButton(c)
         }
-        .padding(.vertical, 4)
+        // Closer rows (owner 2026-11-10: the gap between channels was too big): the list's own row
+        // padding replaced by 8 pt above and below, so 52 pt faces sit 16 pt apart.
+        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
         // No lines between rows (owner 2026-11-10).
         .listRowSeparator(.hidden)
     }

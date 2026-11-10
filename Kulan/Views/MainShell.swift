@@ -3466,13 +3466,18 @@ struct ChatsView: View {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 showFindChannelsFromEmpty = true
             }
-            // Full screen (owner 2026-11-10: "open fully, now it's only a sub sheet"); its X closes it.
-            .fullScreenCover(isPresented: $showFindChannelsFromEmpty) {
-                // A channel opens behind the cover, as from New chat.
+            // ⛔ PUSHED, NOT A COVER (owner 2026-11-10: "use slide right, don't use bottom"): the page
+            // slides in from the right in the chat list's own stack, with the system Back; a channel
+            // opened from it pushes on top, so Back returns to the list.
+            .onChange(of: showFindChannelsFromEmpty) { _, on in
+                guard on else { return }
+                showFindChannelsFromEmpty = false
+                path.append(DiscoverChannelsView.Route())
+            }
+            .navigationDestination(for: DiscoverChannelsView.Route.self) { _ in
                 DiscoverChannelsView(onOpen: { cid, handle in
-                    showFindChannelsFromEmpty = false
                     path.append(PublicGroupTarget(cid: cid, name: handle))
-                }, opensInPlace: true)
+                }, opensInPlace: true, embedded: true)
             }
             .sheet(isPresented: $showNew) {
                 NewChatView(onOpenPublic: { t in
