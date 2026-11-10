@@ -276,6 +276,7 @@ struct PasswordView: View {
         } actions: {
             Button("Try Again") { Task { await proveItIsYou() } }
                 .buttonStyle(.borderedProminent)
+                .tint(Color.fariinAction).foregroundStyle(Color.onFariinAction)   // not white on white at night
         }
     }
 
@@ -303,6 +304,7 @@ struct PasswordView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
+            .tint(Color.fariinAction).foregroundStyle(Color.onFariinAction)   // not white on white at night
         }
     }
 

@@ -3348,6 +3348,7 @@ struct ThreadView: View {
             !HiddenMessages.isHidden(id) && !repo.pinnedGone.contains(id)
                 && repo.items.first(where: { $0.id == id })?.deleted != true
                 && repo.pinnedPreviews[id]?.deleted != true
+                && !(repo.pinnedPreviews[id].map(repo.isClearedForMe) ?? false)   // Clear Chat
         }
     }
 

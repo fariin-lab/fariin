@@ -2887,7 +2887,10 @@ struct ChatsView: View {
                                     } description: {
                                         Text("Check your connection and try again.")
                                     } actions: {
+                                        // The fill is the app's tint, white at night, and the system
+                                        // label is white too: white on white (audit M22).
                                         Button("Try Again") { repo.start() }.buttonStyle(.borderedProminent)
+                                            .tint(Color.fariinAction).foregroundStyle(Color.onFariinAction)
                                     }
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 } else if chatFilter == 0 {
@@ -4879,6 +4882,10 @@ struct ChatRow: View, Equatable {
         return "\(n.split(separator: " ").first.map(String.init) ?? n): "
     }
     private var unread: Int { conv.isBlockedByMe(me) ? 0 : conv.unread(me) }   // silent block: no badge
+    /// The last message is from before my Clear Chat (`clearedAt`), so the row does not preview it.
+    private var clearedByMe: Bool {
+        conv.updatedAtMillis > 0 && conv.updatedAtMillis <= (conv.clearedAt[me] ?? 0)
+    }
     private var muted: Bool { conv.isMuted(me, now: Date().timeIntervalSince1970 * 1000) }
 
     // The last message is media we can thumbnail (ANY 📷/🎥 marker — single, album, or multi-video —
@@ -4983,6 +4990,10 @@ struct ChatRow: View, Equatable {
             .accessibilityElement(children: .combine)
         } else if let r = reactionPreview {
             Text(r).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)   // the quoted words may wrap
+        } else if clearedByMe {
+            // Clear Chat in a group I am still in (audit H3): the row stays, its last message does
+            // not, the same as inside the chat. A message after the clear shows again.
+            EmptyView()
         } else if isPhotoPreview {
             HStack(spacing: 5) {
                 // ⛔ AN ALBUM IS A STACK — owner, 2026-10-04: "send 2, show 2 overlapping; send 10,

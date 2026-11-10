@@ -1933,6 +1933,35 @@ enum ChatService {
     /// nothing enforced it anywhere. This is the rule, so the sentence is now true.
     static let maxAlbumUploadsInFlight = 10
 
+    /// ⛔ TEN UPLOADS, TWO DECODES (audit M16). Each album photo is decoded at full size to be
+    /// resized, about 48 MB for a 12 MP picture, and all ten tiles used to do it together: over
+    /// a gigabyte for a ten-photo album, enough for the system to end the app mid-send. The
+    /// uploads still run ten at a time; only the resize waits its turn here.
+    actor AlbumEncodeGate {
+        static let shared = AlbumEncodeGate(limit: 2)
+        private let limit: Int
+        private var running = 0
+        private var waiting: [CheckedContinuation<Void, Never>] = []
+        init(limit: Int) { self.limit = limit }
+
+        /// `work` runs in the caller's task, not on this actor, so two can run side by side.
+        static func run<T>(_ work: () -> T) async -> T {
+            await shared.acquire()
+            let out = work()
+            await shared.release()
+            return out
+        }
+
+        private func acquire() async {
+            if running < limit { running += 1; return }
+            await withCheckedContinuation { waiting.append($0) }
+        }
+
+        private func release() {
+            if waiting.isEmpty { running -= 1 } else { waiting.removeFirst().resume() }
+        }
+    }
+
     /// Pixel size WITHOUT decoding the image.
     ///
     /// An album writes its tile aspects before uploading anything, and `UIImage(data:)` on every
@@ -2187,7 +2216,8 @@ enum ChatService {
                     try Task.checkCancellation()
                     let itemKey = clientId.map { MediaSend.itemKey($0, i) }
                     if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { return nil }
-                    let data = sendJPEG(raw, quality: quality)
+                    // Ten uploads at once, but only two full-size decodes (audit M16).
+                    let data = await AlbumEncodeGate.run { sendJPEG(raw, quality: quality) }
                     let cipher: Data, meta: EncMeta
                     if let sealMembers { (cipher, meta) = try await Crypto.shared.sealBytesForGroup(data, members: sealMembers, cid: cid) }
                     else { (cipher, meta) = try await Crypto.shared.encryptBytes(cid, data) }
@@ -2209,8 +2239,11 @@ enum ChatService {
                     }
                     // The X can land in the instant the upload completes — honour it even then.
                     if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { return nil }
-                    if let ui = UIImage(data: raw) { DiskImageCache.shared.store(ui, for: url, owned: true) }   // instant reconcile
-                    let sz = UIImage(data: data)?.size ?? CGSize(width: 1, height: 1)
+                    // Instant reconcile from the bytes that were SENT: caching the camera original
+                    // decoded and re-encoded it full size, once per tile, all at the same time.
+                    let sent = UIImage(data: data)
+                    if let sent { DiskImageCache.shared.store(sent, data: data, for: url, owned: true) }
+                    let sz = sent?.size ?? CGSize(width: 1, height: 1)
                     return AlbumTile(index: i, imageUrl: url, imageEnc: meta,
                                      width: Double(sz.width), height: Double(sz.height),
                                      videoUrl: nil, videoEnc: nil, duration: 0)
@@ -2394,11 +2427,12 @@ enum ChatService {
                     }
                     switch item {
                     case .image(let raw):
-                        let data = sendJPEG(raw, quality: quality)
+                        let data = await AlbumEncodeGate.run { sendJPEG(raw, quality: quality) }   // audit M16
                         let (cipher, meta) = try await seal(data)
                         guard let url = try await uploadItem(cipher, "\(i)", keyed: true) else { return nil }
-                        if let ui = UIImage(data: raw) { DiskImageCache.shared.store(ui, for: url, owned: true) }
-                        let sz = UIImage(data: data)?.size ?? CGSize(width: 1, height: 1)
+                        let sent = UIImage(data: data)   // the sent bytes, not the original (see sendAlbum)
+                        if let sent { DiskImageCache.shared.store(sent, data: data, for: url, owned: true) }
+                        let sz = sent?.size ?? CGSize(width: 1, height: 1)
                         return AlbumTile(index: i, imageUrl: url, imageEnc: meta,
                                          width: Double(sz.width), height: Double(sz.height),
                                          videoUrl: nil, videoEnc: nil, duration: 0)
@@ -2897,10 +2931,19 @@ enum ChatService {
         if members == nil, !cid.contains("_") { members = try await groupDocMembers(cid) }
         let convRef = db.collection("conversations").document(cid)
         let cipher: Data, meta: EncMeta
+        // ⛔ A 1:1 DOCUMENT'S NAME IS SEALED LIKE ITS TEXT (audit M11): "passport_scan.pdf" was
+        // readable on the server in an end-to-end encrypted chat. The real name rides in
+        // `fileNameEnc`; `fileName` keeps only "Document" and the extension, for builds that do not
+        // read the sealed one yet (they still open the file with the right type). Groups are not
+        // end-to-end encrypted and keep the plain name. Sealed before any upload starts.
+        var plainName = fileName
+        var sealedName: String?
         if let members {
             (cipher, meta) = try await Crypto.shared.sealBytesForGroup(rawData, members: members, cid: cid)
         } else {
             (cipher, meta) = try await Crypto.shared.encryptBytes(cid, rawData)
+            sealedName = try await Crypto.shared.encryptForConversation(cid, fileName)
+            plainName = Self.fileNameStandIn(fileName)
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
             try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
         }
@@ -2940,10 +2983,11 @@ enum ChatService {
         let thumbFields: [String: Any] = await thumbTask
         let batch = db.batch()
         var msg: [String: Any] = [
-            "type": "file", "fileName": fileName, "fileSize": rawData.count,
+            "type": "file", "fileName": plainName, "fileSize": rawData.count,
             "enc": meta.asDict, "text": "", "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
             "clientTs": clientTs, "uploading": true,
         ]
+        if let sealedName { msg["fileNameEnc"] = sealedName }
         for (k, v) in thumbFields { msg[k] = v }
         if let clientId { msg["clientId"] = clientId }
         if forwarded {
@@ -3184,26 +3228,61 @@ enum ChatService {
             // The all-or-nothing rule is unchanged: any item that cannot be rebuilt throws, and a
             // throw inside the group cancels the siblings and propagates, so a partial album still
             // cannot be delivered.
+            //
+            // ⛔ TWO AT A TIME, FROM THE PHONE FIRST, CLIPS ON DISK (audit M17). Every item fetched
+            // together held each clip twice (ciphertext and clear) for the whole album at once: a few
+            // long videos passed a gigabyte. Now two items are fetched at a time, a copy already on
+            // this phone (VideoCache, DiskImageCache) is used before the network, and each clip is
+            // handed on memory-mapped from a file, so its bytes are read from disk as they are sealed
+            // instead of sitting in memory for the whole send.
+            let sourceId = m.id
+            let album = m.album
+            let spill = FileManager.default.temporaryDirectory
+                .appendingPathComponent("forward-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: spill) }
             var indexed: [(Int, AlbumSendItem)] = try await withThrowingTaskGroup(
                 of: (Int, AlbumSendItem).self
             ) { group in
-                for (idx, it) in m.album.enumerated() {
+                var started = 0
+                func startItem(_ idx: Int) {
+                    let it = album[idx]
                     group.addTask {
-                        guard let purl = URL(string: it.imageUrl),
-                              let (pCipher, _) = try? await MediaSession.shared.data(from: purl),
-                              let poster = await Crypto.shared.decryptBytes(sourceCid, cipher: pCipher, meta: it.enc)
-                        else { throw ForwardError.sourceUnavailable }
+                        let poster: Data
+                        if let local = await DiskImageCache.shared.rawData(for: it.imageUrl), !local.isEmpty {
+                            poster = local
+                        } else {
+                            guard let purl = URL(string: it.imageUrl),
+                                  let (pCipher, _) = try? await MediaSession.shared.data(from: purl),
+                                  let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: pCipher, meta: it.enc)
+                            else { throw ForwardError.sourceUnavailable }
+                            poster = dec
+                        }
                         guard it.isVideo else { return (idx, .image(poster)) }
-                        guard let vs = it.videoUrl, let vurl = URL(string: vs), let venc = it.videoEnc,
-                              let (vCipher, _) = try? await MediaSession.shared.data(from: vurl),
-                              let clip = await Crypto.shared.decryptBytes(sourceCid, cipher: vCipher, meta: venc)
-                        else { throw ForwardError.sourceUnavailable }
+                        let clipFile: URL
+                        if let cached = VideoCache.url(for: "\(sourceId)-\(idx)") {
+                            clipFile = cached
+                        } else {
+                            guard let vs = it.videoUrl, let vurl = URL(string: vs), let venc = it.videoEnc,
+                                  let (vCipher, _) = try? await MediaSession.shared.data(from: vurl),
+                                  let clip = await Crypto.shared.decryptBytes(sourceCid, cipher: vCipher, meta: venc)
+                            else { throw ForwardError.sourceUnavailable }
+                            try FileManager.default.createDirectory(at: spill, withIntermediateDirectories: true)
+                            let f = spill.appendingPathComponent("\(idx).mp4")
+                            try clip.write(to: f, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                            clipFile = f
+                        }
+                        let clip = try Data(contentsOf: clipFile, options: .alwaysMapped)
                         return (idx, .video(clip, thumbnail: poster, duration: it.duration,
                                             width: it.width, height: it.height))
                     }
+                    started += 1
                 }
+                while started < album.count && started < 2 { startItem(started) }
                 var out: [(Int, AlbumSendItem)] = []
-                for try await pair in group { out.append(pair) }
+                for try await pair in group {
+                    out.append(pair)
+                    if started < album.count { startItem(started) }
+                }
                 return out
             }
             indexed.sort { $0.0 < $1.0 }
@@ -3306,6 +3385,7 @@ enum ChatService {
             let snap = try await db.collection("conversations").document(cid).collection("messages")
                 .order(by: "createdAt", descending: true)
                 .limit(to: 200).getDocuments()
+            let clearedMs = await clearedAtMillis(cid)
             // Albums COUNT as media (user report: a single photo showed here, a multi-photo album never
             // did — this filter dropped album messages before any view could see them) and are expanded
             // into their individual photos/videos.
@@ -3314,6 +3394,7 @@ enum ChatService {
                 // Never a view-once item (bug search 2026-11-01): the gallery has always left them out,
                 // this strip did not, and a tap here opened one without spending it.
                 .filter { ($0.isImage || $0.isVideo || $0.isAlbum) && !$0.viewOnce }
+                .filter { $0.createdAt.timeIntervalSince1970 * 1000 > clearedMs }   // Clear Chat
                 .flatMap { $0.expandedGalleryItems(cid: cid) }
             await MainActor.run {
                 sharedMediaCache[cid] = out
@@ -3367,10 +3448,21 @@ enum ChatService {
             let snap = try await db.collection("conversations").document(cid).collection("messages")
                 .order(by: "createdAt", descending: true)
                 .limit(to: limit).getDocuments()
+            let clearedMs = await clearedAtMillis(cid)
             return snap.documents
                 .map { Message(id: $0.documentID, data: $0.data(), cid: cid, crypto: Crypto.shared) }
+                .filter { $0.createdAt.timeIntervalSince1970 * 1000 > clearedMs }   // Clear Chat
         } catch {
             return nil
+        }
+    }
+
+    /// My Clear Chat watermark for `cid` (server ms, 0 when never cleared). Media lists read the
+    /// messages straight from the server, so they leave out what the chat no longer shows.
+    static func clearedAtMillis(_ cid: String) async -> Double {
+        let me = uid
+        return await MainActor.run {
+            ConversationsRepository.shared.conversations.first { $0.id == cid }?.clearedAt[me] ?? 0
         }
     }
 
@@ -3935,8 +4027,14 @@ enum ChatService {
         switch type {
         case "image": return viewOnce ? "View-once photo" : "📷 Photo"
         case "album":
-            let n = (d["album"] as? [Any])?.count ?? 0
-            return n > 1 ? "📷 \(n) Photos" : "📷 Photo"
+            // The same words the album sends write, so a mixed album keeps "Media" after one of
+            // its items is deleted (audit M12).
+            let items = d["album"] as? [[String: Any]] ?? []
+            let videos = items.filter { ($0["kind"] as? String) == "video" }.count
+            let photos = items.count - videos
+            if videos > 0 && photos > 0 { return "🎬 \(items.count) Media" }
+            if videos > 0 { return "🎥 \(videos) Video\(videos > 1 ? "s" : "")" }
+            return photos > 1 ? "📷 \(photos) Photos" : "📷 Photo"
         case "video": return "🎥 Video"
         case "audio": return viewOnce ? "🎤 One-time voice message" : "🎤 Voice message"
         case "file": return "📄 File"
@@ -4047,6 +4145,25 @@ enum ChatService {
                     try? await Storage.storage().safeReference(forURL: s)?.delete()
                 }
             }
+            // This phone's decrypted copy of the removed item goes too (audit M12).
+            let removedImage = removed["imageUrl"] as? String ?? ""
+            await MainActor.run {
+                if !removedImage.isEmpty { DiskImageCache.shared.remove(url: removedImage) }
+                VideoCache.remove("\(parentId)-\(index)")
+                MessageSearch.invalidateChat(cid)
+            }
+            // A clip's local copy is keyed by its PLACE in the album ("<id>-<i>"), and every item
+            // after the removed one has just moved up a place: their copies move with them, or the
+            // viewer and a forward would take the wrong clip.
+            for j in (index + 1)..<(album.count + 1) {
+                guard let src = VideoCache.url(for: "\(parentId)-\(j)") else { continue }
+                let dst = src.deletingLastPathComponent().appendingPathComponent("\(parentId)-\(j - 1).mp4")
+                try? FileManager.default.removeItem(at: dst)
+                try? FileManager.default.moveItem(at: src, to: dst)
+            }
+            // The chat list draws the newest album's first tiles and its count ("3 Photos"), so it
+            // is rebuilt from the album as it is now, the way a whole-message delete rebuilds it.
+            await clearSummaryIfNewest(cid: cid, deletedId: parentId)
             return true
         } catch {
             #if DEBUG
@@ -4054,6 +4171,14 @@ enum ChatService {
             #endif
             return false
         }
+    }
+
+    /// The plain name a sealed 1:1 document shows on builds that cannot read `fileNameEnc`:
+    /// "Document" plus the real extension, so the file still opens in the right app.
+    static func fileNameStandIn(_ name: String) -> String {
+        let ext = (name as NSString).pathExtension
+        guard !ext.isEmpty, ext.count <= 10, ext.allSatisfy({ $0.isLetter || $0.isNumber }) else { return "Document" }
+        return "Document." + ext
     }
 
     /// 2026-09-24 feature-audit: an edit refused before it is written (the message was deleted).
@@ -4664,10 +4789,35 @@ enum ChatService {
             catch { await MainActor.run { ToastNotice.show("Couldn't leave the channel. Try again.") } }
             return
         }
+        // SERVER time, not the phone's: the watermark is compared with server stamps (`updatedAt`,
+        // each message's `createdAt`). A phone running fast hid the next incoming message too.
+        let clearedMs = ServerClock.now.timeIntervalSince1970 * 1000
+        // The open chat and this phone's copies go now; the write below reaches my other devices.
+        await MainActor.run { forgetClearedLocally(cid, atMillis: clearedMs) }
         try? await db.collection("conversations").document(cid).setData([
-            "clearedAt": [uid: Date().timeIntervalSince1970 * 1000],
+            "clearedAt": [uid: clearedMs],
             "unreadCount": [uid: 0],
         ], merge: true)
+    }
+
+    /// Clear Chat on this phone: the open chat hides everything up to `ms`, and the cached and
+    /// decrypted copies of those messages are dropped, as Clear Messages does for a whole chat.
+    @MainActor
+    private static func forgetClearedLocally(_ cid: String, atMillis ms: Double) {
+        ThreadRepository.clearedForMe(cid, atMillis: ms)
+        let all = ThreadMessageCache.shared.memoryMessages(for: cid) ?? []
+        let gone = all.filter { $0.sendState == nil && $0.hasServerTime && $0.createdAt.timeIntervalSince1970 * 1000 <= ms }
+        for m in gone { forgetLocalCopies(of: m, cid: cid) }
+        if !gone.isEmpty {
+            let goneIds = Set(gone.map(\.id))
+            ThreadMessageCache.shared.store(cid, all.filter { !goneIds.contains($0.id) })
+        }
+        // The media pages' decrypted copies, memory and disk: the next open reads them again,
+        // leaving out the cleared range (`clearedAtMillis`).
+        sharedMediaCache[cid] = nil
+        GalleryCache.store[cid] = nil
+        GalleryDiskCache.shared.store(cid, [])
+        MessageSearch.invalidateChat(cid)
     }
 
     // MARK: - Discovery

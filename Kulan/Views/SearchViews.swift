@@ -417,6 +417,8 @@ enum MessageSearch {
                     // regardless, so a blocked person's new messages were fully readable here and
                     // tapping one opened a thread that doesn't contain it (audit).
                     let blockCutoff = c.isBlockedByMe(me) ? c.blockedAtMillis(me) : 0
+                    // Clear Chat: nothing up to my `clearedAt` is in the chat, so nothing is found.
+                    let clearedMs = c.clearedAt[me] ?? 0
                     let found = snap.documents.compactMap { doc -> SearchableMessage? in
                         let data = doc.data()
                         // View-once is NEVER searchable — the in-chat corpus in this same file
@@ -435,6 +437,7 @@ enum MessageSearch {
                         let date = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
                         if blockCutoff > 0, author != me,
                            date.timeIntervalSince1970 * 1000 > blockCutoff { return nil }
+                        if date.timeIntervalSince1970 * 1000 <= clearedMs { return nil }
                         // 2026-09-26 block rebuild: the thread's own rule (`BlockList.hides`): past
                         // blocks too, and a blocked member's messages in a group.
                         if author != me,
@@ -511,6 +514,10 @@ extension MessageSearch {
             let other = cid.split(separator: "_").map(String.init).first { $0 != me } ?? ""
             _ = await Crypto.shared.preloadKey(other)
         }
+        // Clear Chat: what the chat no longer shows, its search does not find.
+        let clearedMs = await MainActor.run {
+            ConversationsRepository.shared.conversations.first { $0.id == cid }?.clearedAt[me] ?? 0
+        }
         let out = snap.documents.compactMap { doc -> InChatMessage? in
             let data = doc.data()
             let author = data["authorId"] as? String ?? ""
@@ -533,6 +540,7 @@ extension MessageSearch {
             // a message both sides were told was destroyed.
             if data["deleted"] as? Bool == true { return nil }
             let date = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+            if date.timeIntervalSince1970 * 1000 <= clearedMs { return nil }
             // Same raw-marker guard as the global corpus: index/display the safe label.
             let safe = quoteSafeLabel(text)
             return InChatMessage(id: doc.documentID, text: safe, authorId: author, date: date,

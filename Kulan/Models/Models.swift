@@ -936,6 +936,13 @@ struct Message: Identifiable, Equatable, Codable {
         self.thumbEnc = (data["thumbEnc"] as? [String: Any]).flatMap(EncMeta.init(map:))
         self.fileUrl = data["fileUrl"] as? String
         self.fileName = data["fileName"] as? String
+        // A 1:1 document's real name, sealed like the text (audit M11). Older messages, and the
+        // other app until it seals too, carry only the plain `fileName` above, which stays. An
+        // unreadable seal (key not here yet, "…"; wrong key, "🔒") keeps the plain stand-in.
+        if let sealedName = data["fileNameEnc"] as? String, !sealedName.isEmpty {
+            let clear = crypto.decrypt(sealedName, cid: cid, authorId: data["authorId"] as? String ?? "")
+            if !clear.isEmpty, clear != "…", clear != "🔒" { self.fileName = clear }
+        }
         self.fileSize = (data["fileSize"] as? NSNumber)?.intValue
         self.duration = MediaDuration.clean((data["duration"] as? NSNumber)?.doubleValue)
         self.waveform = (data["waveform"] as? [Int])
@@ -1074,6 +1081,13 @@ struct Message: Identifiable, Equatable, Codable {
             stickerPack = data["stickerPack"] as? String
             stickerId = data["stickerId"] as? String
             stickerEmoji = data["emoji"] as? String
+            // The sealed `text` of a built-in sticker is its emoji too (StickerSend). Read from there
+            // when the plain field is missing, so a send that stops writing the plain copy in a 1:1
+            // (audit L13) still labels the sticker here. Sentinels and the marker are not an emoji.
+            if (stickerEmoji ?? "").isEmpty, !text.isEmpty, text.count <= 8, text != "…", text != "🔒",
+               text != StickerSend.oldBuildMarker {
+                stickerEmoji = text
+            }
             stickerAnimated = data["animated"] as? Bool
             // The sealed `text` is only what an OLDER build shows instead (StickerSend), never a
             // caption: dropped here so Copy, Edit, search and previews never see it.
@@ -1433,6 +1447,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var lastPlayedVoice: [String: Double]
     /// 2026-09-25 delivered ticks: per member, the `updatedAt` (ms) their phone confirmed it had.
     var delivered: [String: Double]
+    /// uid -> when that member last READ the chat (ms, from the `lastRead` server timestamps). Written
+    /// only while their Read Receipts are on (`ChatService.markRead`), so it is the receipt itself.
+    var lastRead: [String: Double] = [:]
     /// The newest message was held by a block on the recipient's side (server-written). Its sender
     /// keeps one tick in the list, whatever `delivered` / `unreadCount` say after an unblock.
     var lastHeld: Bool
@@ -1686,6 +1703,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.pinOrder = doubleMap(data["pinOrder"])
         self.lastPlayedVoice = doubleMap(data["lastPlayedVoice"])
         self.delivered = doubleMap(data["delivered"])
+        self.lastRead = (data["lastRead"] as? [String: Any] ?? [:]).compactMapValues {
+            ($0 as? Timestamp).map { $0.dateValue().timeIntervalSince1970 * 1000 }
+        }
         self.lastHeld = data["lastHeld"] as? Bool ?? false
         self.markedUnread = boolMap(data["markedUnread"])   // 2026-09-24 decision D13
         self.pinnedMessageId = data["pinnedMessageId"] as? String ?? ""
@@ -2150,20 +2170,29 @@ struct Conversation: Identifiable, Equatable, Hashable {
     }
     /// My message is the most recent one — show delivery/read ticks for it in the list.
     func lastIsMine(_ me: String) -> Bool { !lastSender.isEmpty && lastSender == me }
-    /// The other person has read my last message once their unread count hits 0.
-    /// In a group, "read" = every other member's unread count is 0.
-    /// `<= 0`, not `== 0`: somebody who marks YOUR chat unread on their side writes a negative flag,
-    /// and they have still read your message — taking your second tick away because they wanted a
-    /// reminder would be a lie about them.
     /// My last message reached the other person's phone (1:1 only; a group has no delivered state).
     func lastDeliveredToOther(_ me: String) -> Bool {
         guard !isGroup, updatedAtMillis > 0, !lastHeld else { return false }
         return (delivered[otherUid(me)] ?? 0) >= updatedAtMillis
     }
+    /// The other person has read my last message once their unread count hits 0.
+    /// In a group, "read" = every other member's unread count is 0.
+    /// `<= 0`, not `== 0`: somebody who marks YOUR chat unread on their side writes a negative flag,
+    /// and they have still read your message — taking your second tick away because they wanted a
+    /// reminder would be a lie about them.
+    ///
+    /// ⛔ READ RECEIPTS OFF HIDE THE BLUE HERE TOO (audit H4). Opening a chat zeroes the unread count
+    /// whatever the setting, so the count alone turned the list blue for a reader who had switched
+    /// receipts off, while the chat's own ticks (from `lastRead`) stayed grey. Read now also needs
+    /// their `lastRead` at or after the last message, the stamp the chat screen reads.
     func lastReadByOther(_ me: String) -> Bool {
-        if isGroup { return others(me).allSatisfy { (unreadCount[$0] ?? 0) <= 0 } }
+        guard updatedAtMillis > 0 else { return false }
+        if isGroup {
+            return others(me).allSatisfy { (unreadCount[$0] ?? 0) <= 0 && (lastRead[$0] ?? 0) >= updatedAtMillis }
+        }
         if lastHeld { return false }   // unblocking zeroes their unread count; it was never read
-        return (unreadCount[otherUid(me)] ?? 0) <= 0
+        let other = otherUid(me)
+        return (unreadCount[other] ?? 0) <= 0 && (lastRead[other] ?? 0) >= updatedAtMillis
     }
     /// HAS SOMEBODY ELSE PLAYED MY VOICE NOTE? The reference app turns the sender's mic icon blue for exactly
     /// this, and it is the one voice-note signal we had nothing for: you could send a two-minute note

@@ -244,7 +244,7 @@ final class ThreadRepository {
     /// `messages` holds every page loaded so far, and never on the saved copy's word alone.
     private func refreshHistoryStart(record: Bool) {
         let proven = !canLoadOlder || holdsChannelStart || holdsConversationBirth || holdsJoinCut
-            || (cacheLooksWhole && sawServerWindow)
+            || holdsClearCut || (cacheLooksWhole && sawServerWindow)
         let reached = proven || cacheLooksWhole
         if historyStartReached != reached { historyStartReached = reached }
         if record, proven, let first = messages.first?.id { Self.saveWholeFrom(cid, first) }
@@ -432,6 +432,9 @@ final class ThreadRepository {
     private var legacyBlocked = false
     private var myBlockedAtMillis: Double = 0       // when I blocked
     private var myBlockClearedAtMillis: Double = 0  // when I unblocked (end of the hide window)
+    /// Clear Chat / Delete Chat for me (`Conversation.clearedAt[me]`, server ms): every message
+    /// written at or before it is gone for me, in a 1:1 and in a group. Only moves forward.
+    private(set) var myChatClearedAtMillis: Double = 0
     var pinnedMessageIds: [String] = []   // up to 5 pinned messages (standard)
 
     // THE PINNED MESSAGES THEMSELVES, fetched by id and independent of how far back the chat is
@@ -582,6 +585,12 @@ final class ThreadRepository {
         if cid.contains("_"), let me = Auth.auth().currentUser?.uid {
             otherUid = cid.split(separator: "_").map(String.init).first { $0 != me } ?? ""
         }
+        // A cleared chat must not draw its old messages on the first frame, before the chat's own
+        // listener brings `clearedAt`: the copy in the chat list already holds it.
+        if let me = Auth.auth().currentUser?.uid,
+           let conv = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) {
+            myChatClearedAtMillis = conv.clearedAt[me] ?? 0
+        }
         // Restore anything still unsent from a previous visit to this chat, BEFORE the cached window is
         // seeded, so a pending message is on screen from the very first frame with its sending/failed
         // state intact and its retry affordance available.
@@ -643,7 +652,7 @@ final class ThreadRepository {
         // first frame and vanished when the first snapshot landed. Same filter, and the burn timer
         // armed for whatever is still counting down.
         let now = Date()
-        messages = cached.filter { m in m.expiresAt.map { now < $0 } ?? true }
+        messages = cached.filter { m in (m.expiresAt.map { now < $0 } ?? true) && !isClearedForMe(m) }
         if let first = messages.first?.id, Self.savedWholeFrom(cid) == first { cacheLooksWhole = true }
         didInitialLoad = true
         refreshItems(reason: .initial)
@@ -1255,18 +1264,26 @@ final class ThreadRepository {
                 let newPinned: [String] = (d?["pinnedMessageIds"] as? [String])
                     ?? ((d?["pinnedMessageId"] as? String).flatMap { $0.isEmpty ? nil : [$0] } ?? [])
                 let newDisappear = (d?["disappearSeconds"] as? NSNumber)?.intValue ?? 0
+                // Clear Chat, from this phone or another of mine (a watermark: never moves back).
+                let newChatCleared = max(self.myChatClearedAtMillis,
+                                         ((d?["clearedAt"] as? [String: Any])?[uid] as? NSNumber)?.doubleValue ?? 0)
                 let pinsChanged = newPinned != self.pinnedMessageIds
                 let needsRebuild = newBlocked   != self.iBlocked               ||
                                    newBlockedAt != self.myBlockedAtMillis      ||
                                    newClearedAt != self.myBlockClearedAtMillis ||
                                    newPinned    != self.pinnedMessageIds       ||
-                                   newDisappear != self.disappearSeconds
+                                   newDisappear != self.disappearSeconds       ||
+                                   newChatCleared != self.myChatClearedAtMillis
                 self.iBlocked               = newBlocked
                 self.legacyBlocked          = legacyBlocked
                 self.myBlockedAtMillis      = newBlockedAt
                 self.myBlockClearedAtMillis = newClearedAt
                 self.pinnedMessageIds       = newPinned
                 self.disappearSeconds       = newDisappear
+                if newChatCleared != self.myChatClearedAtMillis {
+                    self.myChatClearedAtMillis = newChatCleared
+                    self.refreshHistoryStart(record: false)
+                }
                 // Restricted while ANYONE'S own switch is on (`restrictedBy`), or an older build's
                 // shared fields still say so — the same rule `Conversation` reads.
                 let anyone = ((d?["restrictedBy"] as? [String: Any]) ?? [:]).values.contains { ($0 as? Bool) == true }
@@ -2116,7 +2133,7 @@ final class ThreadRepository {
         // window rather than the filtered view, so a blocked or expired message still contributes a
         // sample. `refreshItems` reuses whatever this leaves behind.
         recomputeClockOffsets(byId.values)
-        var msgs = byId.values.filter { !hiddenByBlock($0) }
+        var msgs = byId.values.filter { !hiddenByBlock($0) && !isClearedForMe($0) }
         if Conversation.Right.isChannel(cid) { msgs = msgs.compactMap(Self.channelNotice) }
         if !replyCountOverlay.isEmpty { msgs = applyReplyCountOverlay(msgs) }
         // Deletes the user has made but the server has not confirmed yet (see markDeletedLocally).
@@ -2235,6 +2252,35 @@ final class ThreadRepository {
         return t > myBlockedAtMillis && t <= myBlockClearedAtMillis
     }
 
+    /// Written at or before my Clear Chat (`myChatClearedAtMillis`). Server-stamped messages only:
+    /// a send still pending, or one whose time is still this phone's guess, is newer than the clear.
+    func isClearedForMe(_ m: Message) -> Bool {
+        myChatClearedAtMillis > 0 && m.sendState == nil && m.hasServerTime
+            && m.createdAt.timeIntervalSince1970 * 1000 <= myChatClearedAtMillis
+    }
+
+    /// The window already holds a message from before my Clear Chat, so nothing older can show.
+    private var holdsClearCut: Bool {
+        guard myChatClearedAtMillis > 0,
+              let oldest = byId.values.lazy.map(\.createdAt).min() else { return false }
+        return oldest.timeIntervalSince1970 * 1000 <= myChatClearedAtMillis
+    }
+
+    /// Clear Chat from this phone: hide at once, before the chat document's echo comes back.
+    @MainActor
+    static func clearedForMe(_ cid: String, atMillis ms: Double) {
+        guard let r = live[cid]?.value else { return }
+        r.applyChatCleared(ms)
+        for m in r.byId.values where r.isClearedForMe(m) { ChatService.forgetLocalCopies(of: m, cid: cid) }
+    }
+
+    private func applyChatCleared(_ ms: Double) {
+        guard ms > myChatClearedAtMillis else { return }
+        myChatClearedAtMillis = ms
+        refreshHistoryStart(record: false)
+        rebuild()
+    }
+
     /// Is `id` a message the block window hides? A reply quoting one shows "Not available" and its
     /// tap does not try to reach it (owner, 2026-10-04). Answers for messages fetched so far.
     func isHiddenByBlock(id: String) -> Bool {
@@ -2257,6 +2303,8 @@ final class ThreadRepository {
         // A synced channel reads the hole under its newest block instead (CHANNEL-SYNC-SPEC.md 6).
         if chMode == .synced { chLoadOlder(completion); return }
         guard canLoadOlder else { completion(); return }
+        // Everything older than what is held was cleared for me: paging it in shows nothing.
+        if holdsClearCut, !loadingOlder { canLoadOlder = false; completion(); return }
         // Owner audit 2026-10-06 chat #1: BUSY IS NOT DONE. A call while a page is already in flight
         // used to run its completion at once, as if a page had landed. `ensureLoaded` counted that as
         // a page and spent its whole budget in microseconds, so a quote, search or pin jump tapped
