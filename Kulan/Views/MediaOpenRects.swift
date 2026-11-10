@@ -427,8 +427,49 @@ struct MediaRectReporter: ViewModifier {
     static var isHolding: Bool { closing && queued != nil }
 
     static func present(_ block: @escaping () -> Void) {
+        // ⛔ THE KEYBOARD GOES DOWN FIRST, THEN THE PHOTO OPENS (owner 2026-11-10, the reference
+        // app's order). Opened over a typing keyboard, the viewer came up and the keyboard slid away
+        // under it afterwards. Now a tap with the keyboard up lowers it, waits for it to be gone
+        // (its own did-hide, or 0.45 s at most), and opens then, from where the photo has settled.
+        if let field = typingField() {
+            var token: NSObjectProtocol?
+            var done = false
+            let go = {
+                guard !done else { return }
+                done = true
+                if let token { NotificationCenter.default.removeObserver(token) }
+                gatedPresent(block)
+            }
+            token = NotificationCenter.default.addObserver(forName: UIResponder.keyboardDidHideNotification,
+                                                           object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { go() }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { MainActor.assumeIsolated { go() } }
+            field.resignFirstResponder()
+            return
+        }
+        gatedPresent(block)
+    }
+
+    private static func gatedPresent(_ block: @escaping () -> Void) {
         guard closing else { block(); return }
         queued = block   // newest tap wins; an older queued open is stale by definition
+    }
+
+    /// The text field or text view that has the keyboard up right now, if any.
+    private static func typingField() -> UIResponder? {
+        firstResponderProbe = nil
+        UIApplication.shared.sendAction(#selector(UIResponder.fariinReportFirstResponder(_:)), to: nil, from: nil, for: nil)
+        guard let r = firstResponderProbe, r is UITextView || r is UITextField else { return nil }
+        return r
+    }
+    fileprivate static weak var firstResponderProbe: UIResponder?
+}
+
+extension UIResponder {
+    /// Answers `MediaPresentGate.typingField()`: sent to nil, this lands on the first responder.
+    @objc fileprivate func fariinReportFirstResponder(_ sender: Any?) {
+        MediaPresentGate.firstResponderProbe = self
     }
 }
 
